@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Pressable, Text } from 'react-native';
+import { Pressable, StyleSheet, Text } from 'react-native';
+import * as Unistyles from 'react-native-unistyles';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +10,8 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 
 import { WidgetFrame } from './WidgetFrame';
+import { renderWidgetSizeMenuSection } from './WidgetSizeControl';
+import { darkTheme, lightTheme } from '@/theme';
 import { SessionBoardDeclarativeContent } from '@/components/sessions/board/SessionBoardDeclarativeContent';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -48,6 +51,21 @@ async function renderFrame(props: Partial<React.ComponentProps<typeof WidgetFram
 }
 
 describe('WidgetFrame', () => {
+    it.each([['light', lightTheme], ['dark', darkTheme]] as const)('renders the size menu heading in the %s theme primary ink', async (_name, theme) => {
+        const runtime = Unistyles.useUnistyles();
+        const themedRuntime = vi.spyOn(Unistyles, 'useUnistyles').mockReturnValue({ ...runtime, theme });
+        try {
+            const screen = await renderScreen(renderWidgetSizeMenuSection({
+                surface: 'home', sizes: ['small', 'medium'], size: 'small', onSet: () => {},
+            }, 'size', 'frame.size'));
+            const label = screen.root.findAll(node => typeof node.type === 'string' && node.props.children === 'widgetAdd.size')[0];
+            expect(label).toBeDefined();
+            // Accessibility regression: an unset host ink paints black on the dark floating surface.
+            expect(StyleSheet.flatten(label!.props.style)?.color).toBe(theme.colors.text.primary);
+        } finally {
+            themedRuntime.mockRestore();
+        }
+    });
     it('retains domain body input and header actions across controlled disclosure', async () => {
         let mounts = 0;
         const about = vi.fn();

@@ -27,7 +27,7 @@ export function WidgetSizeControl(props: WidgetSizeControl & Readonly<{ testID: 
     ), [testID]);
     if (props.sizes.length === 0) return null;
     return <View style={{ gap: 6 }}>
-        {props.showLabel ? <Text>{t('widgetAdd.size')}</Text> : null}
+        {props.showLabel ? <Text style={{ color: theme.colors.text.primary }}>{t('widgetAdd.size')}</Text> : null}
         <WidgetSizePicker testID={props.testID} accessibilityLabel={t('widgetAdd.size')} value={props.size}
             disabled={props.disabled}
             renderCompact={renderCompact}
