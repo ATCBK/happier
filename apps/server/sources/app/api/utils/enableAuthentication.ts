@@ -176,13 +176,13 @@ export function enableAuthentication(app: Fastify) {
                 if ('authentication' in verified.principal) {
                     request.userId = verified.principal.accountId;
                     request.authTokenKind = verified.principal.authentication.kind;
-                    request.authAuthority = verified.principal.authority;
                     request.authTokenEpoch = verified.principal.authentication.tokenEpoch;
                     request.authTokenLegacy = false;
                     request.authTokenAuthenticationEvidence = verified.principal.authentication.evidence;
                 } else {
                     stampApiTokenPrincipal(request, verified.principal);
                 }
+                request.authAuthority = verified.effectiveAuthority;
                 if (isApiTokenRequestOriginDenied(request)) {
                     return reply.code(403).send({ error: "credential_origin_denied" });
                 }

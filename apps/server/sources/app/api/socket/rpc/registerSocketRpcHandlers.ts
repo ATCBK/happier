@@ -1279,7 +1279,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
             const requestAuthentication = verifiedExternalAction
                 ? {
                     env: process.env,
-                    authority: verifiedExternalAction.principal.authority,
+                    authority: verifiedExternalAction.effectiveAuthority,
                     authenticationEvidence: verifiedExternalAction.principal.authenticationEvidence,
                     ...('grant' in verifiedExternalAction.binding ? { callerInputConstraints: {
                         models: verifiedExternalAction.binding.grant.models,
@@ -1715,7 +1715,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                         || workspaceSyncRouting.accountServerId !== binding.serverIdentityId
                         || claimed.machineId !== binding.machineId || claimed.installationId !== binding.installationId
                         || claimed.actorAccountId !== binding.accountId || claimed.custodianAccountId !== binding.custodianAccountId
-                        || workspaceSyncContext.callerAuthority !== verifiedExternalAction.principal.authority
+                        || workspaceSyncContext.callerAuthority !== verifiedExternalAction.effectiveAuthority
                         || !isDeepStrictEqual(workspaceSyncContext.sessionActionOrigin, binding.sessionActionOrigin)
                         || ('grant' in binding && !isDeepStrictEqual(workspaceSyncContext.callerInputConstraints, {
                             models: binding.grant.models, permissionModes: binding.grant.permissionModes,
@@ -1896,7 +1896,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 ...(workspaceSyncContext ? {
                     callerAuthority: sessionActionOrigin ? 'account_automation' as const : workspaceSyncContext.callerAuthority,
                 } : isHandoffCurrent && verifiedExternalAction
-                    ? { callerAuthority: verifiedExternalAction.principal.authority } : {}),
+                    ? { callerAuthority: verifiedExternalAction.effectiveAuthority } : {}),
                 ...(explicitMachineStopRequest
                     ? { transportResponseEnvelopeVersion: 1 as const }
                     : {}),

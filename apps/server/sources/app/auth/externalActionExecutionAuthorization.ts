@@ -148,6 +148,16 @@ export function projectExternalActionBoundPrincipal(binding: ExternalActionExecu
         credentialId: binding.credentialId, grant: binding.grant };
 }
 
+/** Keep verified private facts while the signed root owns immutable public provenance. */
+function projectVerifiedExternalActionBoundPrincipal(binding: ExternalActionExecutionAuthorizationBindingV1,
+    current: VerifiedExternalActionPrincipal): VerifiedExternalActionPrincipal | null {
+    const bound = projectExternalActionBoundPrincipal(binding, current);
+    if (!bound) return null;
+    // Signed facts were read from this exact binding by the credential owner.
+    if ('authentication' in current) return current;
+    return 'authentication' in bound ? null : { ...current, ...bound };
+}
+
 function readHandoffContinuationIssuanceAction(path: string): string | null {
     if (!path.startsWith(EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1) || !path.endsWith('/execution-authorization')) return null;
     try {
@@ -366,6 +376,8 @@ export type VerifiedExternalActionExecutionRequest = Readonly<{
     effectActionId: string;
     target: ExternalActionTargetV1;
     principal: VerifiedExternalActionPrincipal;
+    /** Request-local ceiling; never rewrites verified credential provenance. */
+    effectiveAuthority: VerifiedExternalActionPrincipal['authority'];
     /** Home-derived private phase, never a caller-authored guest grant. */
     managedGuestActivity?: Readonly<{ machineId: string; installationId: string; encryptionMode: 'plain' | 'e2ee' }>;
 }>;
@@ -596,7 +608,8 @@ async function verifyCommon(
 
     // Login eligibility may await a provider; publisher currentness is checked
     // afterwards, followed by the current persisted credential and admissions.
-    const principal = await verifyCurrentExternalActionPrincipalForPurpose(binding, purpose);
+    const currentPrincipal = await verifyCurrentExternalActionPrincipalForPurpose(binding, purpose);
+    const principal = currentPrincipal && projectVerifiedExternalActionBoundPrincipal(binding, currentPrincipal);
     if (!principal || !await hasCurrentExecutionMachineAdmission(binding)) return null;
     if (!purpose && !await hasCurrentExternalActionSessionSource(binding, proof.resolveCurrentSessionMachine)) return null;
     if (!await readCurrentExternalActionPrincipal(binding, db, purpose)
@@ -605,7 +618,7 @@ async function verifyCommon(
         const current = await readCustody();
         if (!current || current.installationPublicKey !== custody?.installationPublicKey) return null;
     }
-    return { binding, effectActionId: effectActionId.data, target, principal };
+    return { binding, effectActionId: effectActionId.data, target, principal, effectiveAuthority: principal.authority };
 }
 
 /** Quota reads consume B's canonical request schemas, not a generic Account read privilege. */
@@ -740,7 +753,7 @@ export async function verifyExternalActionDomainExecutionRequest(
         ? PublicActionIdSchema.safeParse(readExternalActionCredentialActionId(verified.binding)) : effect;
     if (!effect.success || !credentialAction.success || !resolveCredentialActionAdmissionV1({
         spec: getActionSpec(credentialAction.data),
-        authority: verified.principal.authority, grant: 'grant' in verified.binding ? verified.binding.grant : null }).ok) return null;
+        authority: verified.effectiveAuthority, grant: 'grant' in verified.binding ? verified.binding.grant : null }).ok) return null;
     return managedGuestActivity ? { ...verified, managedGuestActivity } : verified;
 }
 
@@ -810,7 +823,7 @@ async function readCurrentWorkspaceSyncSourceAuthorization(binding: ExternalActi
         || ('grant' in binding && !sameManagedInput(context.callerInputConstraints,
             { models: binding.grant.models, permissionModes: binding.grant.permissionModes }))) return null;
     const current = await verifyCurrentExternalActionPrincipal(binding);
-    const principal = current && projectExternalActionBoundPrincipal(binding, current);
+    const principal = current && projectVerifiedExternalActionBoundPrincipal(binding, current);
     if (!principal || narrowCredentialAuthority(principal.authority, context.callerAuthority) !== context.callerAuthority
         || !await hasCurrentExecutionMachineAdmission(binding)
         || !resolveCredentialActionAdmissionV1({ spec: getActionSpec(action.data), authority: context.callerAuthority,
@@ -824,7 +837,7 @@ async function readCurrentWorkspaceSyncSourceAuthorization(binding: ExternalActi
     if (source.kind !== 'admitted' || source.custodianAccountId !== claimed.custodianAccountId
         || source.installationId !== claimed.installationId || source.encryptionMode !== claimed.encryptionMode) return null;
     if (!await hasCurrentExternalActionSessionSource(binding, resolveCurrentSessionMachine)) return null;
-    return { binding, principal: { ...principal, authority: context.callerAuthority }, effectActionId: binding.actionId, target: binding.target };
+    return { binding, principal, effectiveAuthority: context.callerAuthority, effectActionId: binding.actionId, target: binding.target };
 }
 
 /** Only an installed D proof or its retained original packet can attest this exact Project purpose. */
@@ -1100,7 +1113,8 @@ export async function verifyExternalActionMachineRpcExecution(
             signature: execution.machineSignature,
         })
     ) return null;
-    const principal = await verifyCurrentExternalActionPrincipal(binding);
+    const currentPrincipal = await verifyCurrentExternalActionPrincipal(binding);
+    const principal = currentPrincipal && projectVerifiedExternalActionBoundPrincipal(binding, currentPrincipal);
     if (!principal || !await hasCurrentExternalActionSessionSource(binding, request.resolveCurrentSessionMachine)) return null;
     const credentialAction = binding.handoffContinuation
         ? PublicActionIdSchema.safeParse(readExternalActionCredentialActionId(binding)) : effect;
@@ -1113,7 +1127,7 @@ export async function verifyExternalActionMachineRpcExecution(
     if (managedGuestActivity && (!guestMachineId || !guestTarget?.success && !encryptedGuestParams
         || !sameManagedInput(managedGuestActivity, await readCurrentManagedGuestActivityInTx(db, binding, guestMachineId,
             guestTarget?.success ? guestTarget.data : undefined)))) return null;
-    return { binding, effectActionId: execution.effectActionId, target: execution.target, principal,
+    return { binding, effectActionId: execution.effectActionId, target: execution.target, principal, effectiveAuthority: principal.authority,
         ...(managedGuestActivity ? { managedGuestActivity } : {}) };
 }
 
@@ -1133,6 +1147,6 @@ export async function verifyExternalActionExecutionAuthorizationCurrentness(
         ? PublicActionIdSchema.safeParse(readExternalActionCredentialActionId(verified.binding)) : effect;
     if (!effect.success || !credentialAction.success || !resolveCredentialActionAdmissionV1({
         spec: getActionSpec(credentialAction.data),
-        authority: verified.principal.authority, grant: 'grant' in verified.binding ? verified.binding.grant : null }).ok) return null;
+        authority: verified.effectiveAuthority, grant: 'grant' in verified.binding ? verified.binding.grant : null }).ok) return null;
     return verified;
 }

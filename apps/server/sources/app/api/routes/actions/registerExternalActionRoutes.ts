@@ -430,18 +430,8 @@ async function readManagedGuestContinuation(
             }
         }
     });
-    let continuationPrincipal: ExternalActionServerPrincipalV1;
-    if ('authentication' in principal) {
-        continuationPrincipal = principal.authority === 'account_automation' && 'sessionActionOrigin' in principal
-            ? { accountId: principal.accountId, authority: principal.authority, authentication: principal.authentication,
-                sessionActionOrigin: principal.sessionActionOrigin }
-            : { accountId: principal.accountId, authority: principal.authority, authentication: principal.authentication };
-    } else {
-        if ('authentication' in root) return null;
-        // Preserve the original root grant, never a subsequently widened PAT.
-        continuationPrincipal = { accountId: root.accountId, authority: principal.authority,
-            principalId: root.principalId, credentialId: root.credentialId, grant: root.grant };
-    }
+    const continuationPrincipal = projectExternalActionBoundPrincipal(root, principal);
+    if (!continuationPrincipal) return null;
     return { principal: continuationPrincipal,
         ...(root.sessionActionOrigin ? { sessionActionSource: root.sessionActionSource } : {}),
         managedContinuation: { ...body.managedContinuation, controller,
