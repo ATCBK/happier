@@ -7,13 +7,14 @@ import { isSessionFollowActionIdV1 } from '../sessions/follow/actions.js';
 import { MACHINE_POOL_ACTION_IDS_V1 } from '../machines/pools/actionsV1.js';
 import { EPHEMERAL_RUNNER_ACTION_IDS_V1 } from '../ephemeralRunner/actionIdsV1.js';
 import { isRemoteHostActionIdV1 } from '../remoteHosts/remoteHostActionIdsV1.js';
+import type { ActionExecutorContext } from './executor/types.js';
 
-// Native navigation mutates the page just like the automation family. Human
-// sidecar commands are a separate entry point, not automation Actions.
-const browserAutomationActionIds: ReadonlySet<string> = new Set([
-  ...ACTION_ID_FAMILIES_V1.browser_automation,
+// The same navigation Action serves Agent automation and present-human UI
+// browsing. Trusted execution context distinguishes those capability tiers.
+const browserNavigationActionIds: ReadonlySet<string> = new Set([
   'browser.navigate', 'browser.goBack', 'browser.goForward', 'browser.reload', 'browser.stop',
 ]);
+const browserAutomationActionIds: ReadonlySet<string> = new Set(ACTION_ID_FAMILIES_V1.browser_automation);
 
 // These are the same owner-declared vocabularies used by the enum schemas.
 // Membership misses are ordinary catalog branching, not validation failures:
@@ -37,13 +38,19 @@ const ephemeralRunnerActionIds: readonly string[] = EPHEMERAL_RUNNER_ACTION_IDS_
  * Effect-time access, currentness and encryption readiness remain owned by each
  * Action adapter; this is availability only.
  */
-export function getActionRequiredServerFeatureId(actionId: string): FeatureId | null {
+export function getActionRequiredServerFeatureId(
+  actionId: string,
+  context?: Readonly<Pick<ActionExecutorContext, 'surface' | 'authority'>>,
+): FeatureId | null {
   // Device-local trust withdrawal and resource cleanup do not use the Home's
   // management service, and must remain available after that service is disabled.
   if (actionId === 'remote_hosts.trusted_keys.list' || actionId === 'remote_hosts.trusted_keys.remove'
     || actionId === 'remote_hosts.trusted_keys.clear' || actionId === 'remote_hosts.tunnel.stop') return null;
   if (isRemoteHostActionIdV1(actionId)) return 'remoteHosts.management';
-  if (browserAutomationActionIds.has(actionId)) return 'browser.automation';
+  const presentHumanUi = context?.surface === 'ui' && context.authority === 'present_user';
+  if (browserAutomationActionIds.has(actionId) || (browserNavigationActionIds.has(actionId) && !presentHumanUi)) {
+    return 'browser.automation';
+  }
   if (actionId.startsWith('artifact.public_link.')) return 'sharing.public';
   if (workflowActionIds.includes(actionId)) return 'workflows';
   // Item Actions also serve transcript visuals; their operands decide layout

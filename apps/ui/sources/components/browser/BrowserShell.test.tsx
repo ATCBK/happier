@@ -28,6 +28,10 @@ import {
 } from '@/sync/domains/browser/diagnostics';
 import type { BrowserLaunchpadRow } from '@/sync/domains/browser/targets';
 import type { PluginBrowserProjectionModel } from '@/sync/domains/plugins/browser/actions';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
+import { createBrowserRuntimeActionExecutor } from '@/sync/domains/browser/actions/runtimeActionExecutor';
+import { browserControlActionId } from '@/sync/domains/browser/actions/controlActionId';
 
 const testState = vi.hoisted(() => ({
     useLocalServicePreviewState: vi.fn(),
@@ -1551,12 +1555,20 @@ describe('BrowserShell', () => {
         });
         await Promise.resolve();
 
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            runtimeActionExecute: createBrowserRuntimeActionExecutor({
+                control: { readState: () => state, applyDispatchResult: () => {} },
+                automation: { controlService },
+            }),
+        }));
         const screen = await renderScreen(
             <BrowserShell
                 browserSessionId="browser_session_1"
                 platform="web"
                 state={state}
-                onCommand={vi.fn()}
+                onCommand={command => executor.execute(browserControlActionId(command), command, {
+                    surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+                })}
                 browserAutomation={{
                     controlService,
                     enabled: true,
@@ -1591,15 +1603,17 @@ describe('BrowserShell', () => {
         const { BrowserShell } = await import('./BrowserShell');
         const state = await createShellState();
         const view = state.viewsById.view_1;
-        const sendCommand = vi.fn(); // Machine RPC transport boundary.
+        const onCommand = vi.fn(); // The shell's admitted host callback, not a daemon transport.
+        const sendCommand = vi.fn(); // Machine RPC transport boundary must not be called by chrome.
         const screen = await renderScreen(<BrowserShell browserSessionId="browser_session_1" platform="web"
             state={{ ...state, viewsById: { ...state.viewsById, view_1: { ...view, adapterKind: 'chromiumSidecar',
                 automationController: { browserSessionId: 'browser_session_1', viewId: 'view_1', controller: 'human', controlEpoch: 1 } } } }}
-            onCommand={vi.fn()} testID="browser-shell" browserContext={{ state: createBrowserContextState(),
+            onCommand={onCommand} testID="browser-shell" browserContext={{ state: createBrowserContextState(),
                 contextCapabilities, onStateChange: vi.fn(), daemonControl: { sendCommand } }} />);
         expect(screen.findByTestId('browser-shell-presence-hand-back')).toBeTruthy();
         await screen.pressByTestIdAsync('browser-shell-presence-hand-back');
-        expect(sendCommand).toHaveBeenCalledWith(expect.objectContaining({ kind: 'handBack', browserSessionId: 'browser_session_1', viewId: 'view_1' }));
+        expect(onCommand).toHaveBeenCalledWith(expect.objectContaining({ kind: 'handBack', browserSessionId: 'browser_session_1', viewId: 'view_1' }));
+        expect(sendCommand).not.toHaveBeenCalled();
     });
 
     it('mounts daemon browser diagnostics snapshots into the default product diagnostics panel', async () => {

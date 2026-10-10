@@ -54,6 +54,15 @@ describe('getActionRequiredServerFeatureId', () => {
       expect(getActionRequiredServerFeatureId(id)).toBeNull();
     }
   });
+  it('keeps present-human UI browsing independent of automation without granting that exemption to Agent Actions', () => {
+    for (const id of ['browser.navigate', 'browser.goBack', 'browser.goForward', 'browser.reload', 'browser.stop']) {
+      expect(getActionRequiredServerFeatureId(id, { surface: 'ui', authority: 'present_user' })).toBeNull();
+      expect(getActionRequiredServerFeatureId(id, { surface: 'ui', authority: 'account_automation' })).toBe('browser.automation');
+      expect(getActionRequiredServerFeatureId(id, { surface: 'agent', authority: 'present_user' })).toBe('browser.automation');
+    }
+    expect(getActionRequiredServerFeatureId('browser.automation.reload', { surface: 'ui', authority: 'present_user' }))
+      .toBe('browser.automation');
+  });
   it('owns the server feature required by each gated Action family', () => {
     expect(getActionRequiredServerFeatureId('workflow.run.start')).toBe('workflows');
     expect(getActionRequiredServerFeatureId('workflow.definition.get')).toBe('workflows');

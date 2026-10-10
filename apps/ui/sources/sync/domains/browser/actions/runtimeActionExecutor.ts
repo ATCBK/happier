@@ -13,7 +13,7 @@ import {
     type BrowserControlCommandDispatchOptions,
 } from '../control/commands';
 import type { BrowserDaemonControlDispatchClientResult } from '../control/machineRpc';
-import { openBrowserExternalTabSelection } from '../adapters/selection';
+import { buildOpenExternalTabSelection, openBrowserExternalTabSelection } from '../adapters/selection';
 import type { BrowserControlState } from '../control/state';
 import {
     createBrowserRecordingAttachExecutor,
@@ -58,7 +58,7 @@ export type BrowserRuntimeAutomationAdapter = Readonly<{
 
 export type CreateBrowserRuntimeActionExecutorInput = Readonly<{
     control?: BrowserRuntimeControlAdapter;
-    resolveControl?: (command: BrowserCommandV1) => BrowserRuntimeControlAdapter | null | undefined;
+    resolveControl?: (input: Readonly<{ browserSessionId: string; viewId: string; kind?: BrowserCommandV1['kind'] }>) => BrowserRuntimeControlAdapter | null | undefined;
     automation?: BrowserRuntimeAutomationAdapter;
     resolveAutomation?: (
         input: Readonly<{ browserSessionId: string; viewId?: string }>,
@@ -195,6 +195,24 @@ async function executeBrowserControlAction(
 ): Promise<unknown> {
     const parsed = parseRuntimeActionInput(args);
     if (!parsed.ok) return parsed.result;
+
+    if (args.actionId === 'browser.view.openExternal') {
+        const viewInput = readBrowserViewInput(parsed.input);
+        if (!viewInput || !parsed.input || typeof parsed.input !== 'object' || !('commandId' in parsed.input)
+            || typeof parsed.input.commandId !== 'string') return invalidParametersResult;
+        const control = input.control ?? input.resolveControl?.(viewInput);
+        const view = control?.readState()?.viewsById[viewInput.viewId];
+        if (!view || view.browserSessionId !== viewInput.browserSessionId
+            || (view.target.kind !== 'externalUrl' && view.target.kind !== 'localServicePreview')) {
+            return browserRuntimeActionDisabledResult('browser_view_unavailable');
+        }
+        const url = view.pendingUrl ?? view.currentUrl ?? (view.target.kind === 'externalUrl' ? view.target.url : null);
+        if (!url || !await openBrowserExternalTabSelection(buildOpenExternalTabSelection(url))) {
+            return browserRuntimeActionDisabledResult('browser_adapter_unavailable');
+        }
+        return BrowserCommandDispatchResultV1Schema.parse({ v: 1, commandId: parsed.input.commandId,
+            status: 'dispatched', adapterKind: 'externalUrl', events: [] });
+    }
 
     const command = BrowserCommandV1Schema.safeParse(parsed.input);
     if (!command.success) {

@@ -141,6 +141,23 @@ function openViewState(input: Readonly<{
 }
 
 describe('browser runtime action executor', () => {
+    it('opens the exact mounted page in the system browser without navigating or replacing it', async () => {
+        const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+        const state = openViewState({ adapterKind: 'localPreview', engineKind: 'webIframe', target: localPreviewTarget,
+            capabilities: localPreviewCapabilities, currentUrl: 'https://preview.example.test/page' });
+        const applyDispatchResult = vi.fn();
+        const execute = createBrowserRuntimeActionExecutor({ control: { readState: () => state, applyDispatchResult } });
+        expect(await execute(runtimeArgs({ actionId: 'browser.view.openExternal', input: {
+            browserSessionId: 'browser_session_1', viewId: 'view_1', commandId: 'open-current-page',
+        } }))).toMatchObject({ status: 'dispatched', commandId: 'open-current-page' });
+        expect(openExternalUrl).toHaveBeenCalledWith('https://preview.example.test/page');
+        expect(applyDispatchResult).not.toHaveBeenCalled();
+        vi.mocked(openExternalUrl).mockClear();
+        expect(await execute(runtimeArgs({ actionId: 'browser.view.openExternal', input: {
+            browserSessionId: 'another-session', viewId: 'view_1', commandId: 'wrong-source',
+        } }))).toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+        expect(openExternalUrl).not.toHaveBeenCalled();
+    });
     it('fulfills an allowed OS-tab handoff below browser.view.open without materializing a view', async () => {
         const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
         const state = createBrowserControlState();

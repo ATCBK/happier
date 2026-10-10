@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { buildBrowserAdapterCapabilities } from '@/sync/domains/browser/adapters/capabilities';
 import type { BrowserControlViewState } from '@/sync/domains/browser/control';
+import { createBrowserControlState } from '@/sync/domains/browser/control';
+import { createBrowserRuntimeActionExecutor } from '@/sync/domains/browser/actions/runtimeActionExecutor';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 
 import { ExternalUrlTarget } from './ExternalUrlTarget';
 
@@ -50,6 +54,18 @@ function createExternalUrlView(): BrowserControlViewState {
     };
 }
 
+function openInSystemBrowser(view: BrowserControlViewState) {
+    const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+        runtimeActionExecute: createBrowserRuntimeActionExecutor({ control: {
+            readState: () => ({ ...createBrowserControlState(), viewsById: { [view.viewId]: view } }),
+            applyDispatchResult: () => {},
+        } }),
+    }));
+    return () => { void executor.execute('browser.view.openExternal', {
+        browserSessionId: view.browserSessionId, viewId: view.viewId, commandId: 'frame-system-browser',
+    }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } }); };
+}
+
 describe('ExternalUrlTarget (web)', () => {
     beforeEach(() => {
         openExternalUrlMock.mockClear();
@@ -75,8 +91,9 @@ describe('ExternalUrlTarget (web)', () => {
 
     it('keeps a slow page loading with a quiet hint and an escape, and drops the hint when it loads (E-OE F07)', async () => {
         vi.useFakeTimers();
+        const view = createExternalUrlView();
         const screen = await renderScreen(
-            <ExternalUrlTarget testID="external-url" view={createExternalUrlView()} />,
+            <ExternalUrlTarget testID="external-url" view={view} onOpenInSystemBrowser={openInSystemBrowser(view)} />,
         );
         // Nothing covers the page while it loads normally.
         expect(screen.findHostByTestId('external-url-slow-hint')).toBeNull();
@@ -107,8 +124,9 @@ describe('ExternalUrlTarget (web)', () => {
     });
 
     it('shows the non-framable fallback and opens the system browser when the frame reports an error', async () => {
+        const view = createExternalUrlView();
         const screen = await renderScreen(
-            <ExternalUrlTarget testID="external-url" view={createExternalUrlView()} />,
+            <ExternalUrlTarget testID="external-url" view={view} onOpenInSystemBrowser={openInSystemBrowser(view)} />,
         );
 
         await act(async () => {

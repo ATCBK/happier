@@ -24,7 +24,7 @@ import {
 } from '@happier-dev/protocol/plugins/ui';
 import { act } from 'react-test-renderer';
 import { AppState } from 'react-native';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AnnotationCaptureSurface } from '@/components/browser/annotation';
 import { createPluginReactNativeBundleCache } from '@/components/plugins/reactNative/bundleCache';
@@ -58,17 +58,26 @@ import { createPluginUiProjectedActionResolver } from '@/sync/domains/plugins/ui
 import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } from '@/sync/domains/plugins/ui/projectionUnion';
 
+// The visibility owner installs one app-lifetime watch. Keep one OS emitter for
+// the whole suite so eager executor imports cannot bind it to a discarded stub.
+const browserAppState = createReactNativeAppStateEmitter('active');
+const restoreBrowserAppState = browserAppState.install(AppState);
+afterAll(restoreBrowserAppState);
 installTerminalRouteCommonModuleMocks();
 
+const actionModuleLoader = vi.hoisted(() => ({
+    createDefaultExecutor: null as typeof import('@/sync/ops/actions/defaultActionExecutor').createDefaultActionExecutor | null,
+}));
+const browserSystemOpen = vi.hoisted(() => vi.fn(async () => true));
+vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: browserSystemOpen }));
 // Metro's lazy require is a module-loading boundary absent in Vitest. Inject the
 // actual executor through the existing port; policy and Browser owners stay real.
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
     return { ...actual, createFrontDoorActionExecute: (
         executor?: Parameters<typeof actual.createFrontDoorActionExecute>[0],
         options?: Parameters<typeof actual.createFrontDoorActionExecute>[1],
-    ) => actual.createFrontDoorActionExecute(executor ?? createDefaultActionExecutor(options), options) };
+    ) => actual.createFrontDoorActionExecute(executor ?? actionModuleLoader.createDefaultExecutor?.(options), options) };
 });
 
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
@@ -152,6 +161,8 @@ vi.mock('@/modal', async () => {
 });
 
 await initializeTerminalRouteRuntimeForTests();
+const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+actionModuleLoader.createDefaultExecutor = createDefaultActionExecutor;
 const { BrowserSurfaceHost } = await import('./BrowserSurfaceHost');
 
 const target = {
@@ -538,6 +549,8 @@ let browserAccountConnection: Awaited<ReturnType<typeof restoreServerAccountForT
 let restoreBrowserStorage: (() => void) | undefined;
 let restoreBrowserLocks: (() => void) | undefined;
 beforeEach(async () => {
+    browserAppState.emit('active');
+    browserSystemOpen.mockClear();
     browserPreviewBoundary.response = null;
     browserActionModal.show.mockClear();
     browserActionModal.hide.mockClear();
@@ -580,7 +593,9 @@ describe('BrowserSurfaceHost', () => {
         const { storage } = await import('@/sync/domains/state/storage');
         const previous = storage.getState().settings.actionsSettingsV1;
         storage.setState({ settings: { ...storage.getState().settings,
-            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: { 'browser.reload': { enabled: false } } }),
+            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {
+                'browser.reload': { enabled: false }, 'browser.view.openExternal': { enabled: false },
+            } }),
         } });
         try {
             const screen = await renderScreen(<BrowserSurfaceHost browserSessionId="browser_session_default"
@@ -597,6 +612,10 @@ describe('BrowserSurfaceHost', () => {
                 });
             });
             expect(commandResult).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+            expect(await screen.findByType(BrowserShell).props.onOpenInSystemBrowser({
+                browserSessionId: 'browser_session_default', viewId: 'browser_view:preview_1',
+            })).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+            expect(browserSystemOpen).not.toHaveBeenCalled();
             await flushHookEffects();
             expect(screen.findByType('iframe').props['data-browser-navigation-key']).toBe(previousNavigation);
         } finally {
@@ -605,8 +624,8 @@ describe('BrowserSurfaceHost', () => {
     });
 
     it('subscribes only while both the host and browser surface are visible', async () => {
-        const appState = createReactNativeAppStateEmitter('background');
-        const restore = appState.install(AppState);
+        const appState = browserAppState;
+        appState.emit('background');
         const { BrowserSurfaceHost } = await import('./BrowserSurfaceHost');
         browserStreamBoundary.views = [{
             browserSessionId: 'session_1', viewId: 'view_streamed', sourceId: 'browser-streamed-1',
@@ -642,7 +661,6 @@ describe('BrowserSurfaceHost', () => {
             expect(browserStreamBoundary.listeners.size).toBe(0);
         } finally {
             appState.emit('active');
-            restore();
             browserStreamBoundary.views = [];
         }
     });
@@ -710,6 +728,8 @@ describe('BrowserSurfaceHost', () => {
 
     it('does not enter a client Action handler after its Account retires during confirmation', async () => {
         const composition = getInstalledPluginUiClientExecutableComposition();
+        const accountLifetime = captureActiveServerAccountScopeLifetime();
+        if (!accountLifetime) throw new Error('Expected the real Browser Account lifetime');
         const handler = vi.fn(async () => ({ shouldNotRun: true }));
         const fixture = createBrowserClientActionFixture(handler);
         const initialBrowserState = openBrowserTarget(createBrowserViewState(), target, {
@@ -736,6 +756,7 @@ describe('BrowserSurfaceHost', () => {
                     localServicePreviewState={createLocalServicePreviewState()}
                     pluginUiProjection={fixture.pluginUiProjection}
                     pluginUiInteractionEnabled
+                    pluginAccountLifetime={accountLifetime}
                     pluginBrowserProjection={fixture.pluginBrowserProjection}
                     pluginBrowserActionContext={{
                         machineId: target.machineId,
@@ -801,6 +822,7 @@ describe('BrowserSurfaceHost', () => {
             ]);
             const invoking = executePluginBrowserAction({
                 action: browserAction, machineId: target.machineId,
+                accountLifetime,
                 serverId: accountLifetime.scope.serverId, sessionId: target.sessionId,
                 input: { targetId: target.targetId },
                 policyContext: { profileMode: 'session', isFeatureEnabled: () => true },
@@ -1221,9 +1243,9 @@ describe('BrowserSurfaceHost', () => {
             await screen.pressByTestIdAsync('browser-surface-reload');
         });
 
-        expect(screen.findByType('iframe').props['data-browser-navigation-key']).toEqual(
+        await vi.waitFor(() => expect(screen.findByType('iframe').props['data-browser-navigation-key']).toEqual(
             expect.stringContaining('browser_command:browser_view:preview_1:reload:'),
-        );
+        ));
 
         await act(async () => {
             screen.changeTextByTestId('browser-surface-address', 'https://preview.happier.test/dashboard');
@@ -1232,7 +1254,7 @@ describe('BrowserSurfaceHost', () => {
             screen.findByTestId('browser-surface-address')?.props.onSubmitEditing?.();
         });
 
-        expect(screen.findByType('iframe').props.src).toBe('https://preview.happier.test/dashboard');
+        await vi.waitFor(() => expect(screen.findByType('iframe').props.src).toBe('https://preview.happier.test/dashboard'));
     });
 
     it('navigates a streamed daemon view across origins without replacing its exact stream target', async () => {
@@ -1254,9 +1276,9 @@ describe('BrowserSurfaceHost', () => {
             screen.changeTextByTestId('browser-surface-address', 'https://next.test/');
         });
         await act(async () => { screen.findByTestId('browser-surface-address')?.props.onSubmitEditing?.(); });
-        expect(sendDaemonCommand).toHaveBeenCalledWith(expect.objectContaining({
+        await vi.waitFor(() => expect(sendDaemonCommand).toHaveBeenCalledWith(expect.objectContaining({
             kind: 'navigate', browserSessionId: 'session_1', viewId: 'agent-view', url: 'https://next.test/',
-        }), expect.any(Function));
+        }), expect.any(Function)));
         expect(onViewTargetChange).not.toHaveBeenCalled();
         expect(screen.findByTestId('browser-surface-address')?.props.value).toBe('first.test');
     });
@@ -1342,7 +1364,7 @@ describe('BrowserSurfaceHost', () => {
             screen.findByTestId('browser-surface-address')?.props.onSubmitEditing?.();
         });
 
-        expect(screen.findByType('iframe').props.src).toBe('https://preview.happier.test/dashboard');
+        await vi.waitFor(() => expect(screen.findByType('iframe').props.src).toBe('https://preview.happier.test/dashboard'));
 
         await screen.update(renderHost('https://preview.happier.test/refreshed'));
 
@@ -1497,6 +1519,7 @@ describe('BrowserSurfaceHost', () => {
                 }}
                 launchpadRows={launchpadRows}
                 localServicePreviewState={createLocalServicePreviewState()}
+                browserFeatureDecision={enabledBrowserDecision}
                 onViewTargetChange={onViewTargetChange}
                 testID="browser-surface"
             />,
@@ -1506,7 +1529,7 @@ describe('BrowserSurfaceHost', () => {
             await screen.pressByTestIdAsync('browser-surface-launchpad-card:localService:preview_1');
         });
 
-        expect(screen.findByTestId('browser-surface-launchpad')).toBeNull();
+        await vi.waitFor(() => expect(screen.findByTestId('browser-surface-launchpad')).toBeNull());
         // Blurred address field shows the pretty display URL (scheme/trailing-slash trimmed).
         expect(screen.findByTestId('browser-surface-address')?.props.value).toBe('preview.happier.test/current-registration');
         expect(screen.findByType('iframe').props.src).toBe(registeredUrl);
@@ -1708,6 +1731,6 @@ describe('BrowserSurfaceHost', () => {
         // (Blurred after submit, so it shows the pretty display URL — scheme/trailing-slash trimmed.)
         expect(screen.findByTestId('browser-surface-launchpad')).toBeNull();
         expect(screen.findByTestId('browser-surface-view-frame')).not.toBeNull();
-        expect(screen.findByTestId('browser-surface-address')?.props.value).toBe('docs.happier.test/changelog');
+        await vi.waitFor(() => expect(screen.findByTestId('browser-surface-address')?.props.value).toBe('docs.happier.test/changelog'));
     });
 });

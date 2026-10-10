@@ -69,8 +69,11 @@ decision, or action approval requirements.
 In current development source, native agent navigation Actions consume the same
 `browser.automation` decision through the shared Action-to-feature policy. A disabled or
 unavailable decision returns typed Action unavailability; it does not remove the Action's
-declared surface. Human manual browsing, takeover and hand back remain sidecar controls and
-do not require automation. Keep the two capability tiers independent rather than making
+declared surface. Human manual browsing enters the same navigation Actions with trusted
+`surface: 'ui'`, `authority: 'present_user'` context and does not require automation. The shared
+Action-to-feature owner defaults missing context to the Agent automation floor; UI execution
+supplies its admitted context. Explicit `browser.automation.*` Actions retain their gate even
+for human callers. Takeover and hand back remain manual controls too. Keep the two capability tiers independent rather than making
 `browser.sidecar` depend on `browser.automation`.
 
 ### External Sessions feature id
