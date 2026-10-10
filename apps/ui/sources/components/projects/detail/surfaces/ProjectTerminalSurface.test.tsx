@@ -54,13 +54,13 @@ describe('Project terminal through the incumbent pane workspace', () => {
             const screen = await renderScreen(<AppPaneProvider><WorkspaceEmbeddedTerminalPane scopeId="expiry-terminal"
                 machineId={machine.id} serverId={serverId} rootPath={workspace.rootPath} workspace={workspace}
                 attachedTerminalId={null} terminalKey="expiry-terminal" /></AppPaneProvider>);
-            expect(screen.root.findByType(EmbeddedTerminalPane).props.controller.status).toBe('connecting');
+            expect(screen.findByType(EmbeddedTerminalPane).props.controller.status).toBe('connecting');
             await act(async () => { vi.advanceTimersByTime(60_001); });
-            expect(screen.root.findByType(EmbeddedTerminalPane).props.controller).toMatchObject({ status: 'error', error: 'terminal_machine_unreachable' });
-            expect(screen.root.findByType(EmbeddedTerminalPane).props.nativeSurfaceKey).toBe('expiry-terminal');
+            expect(screen.findByType(EmbeddedTerminalPane).props.controller).toMatchObject({ status: 'error', error: 'terminal_machine_unreachable' });
+            expect(screen.findByType(EmbeddedTerminalPane).props.nativeSurfaceKey).toBe('expiry-terminal');
             const heartbeat = { ...machine, activeAt: Date.now() };
             await act(async () => { storage.setState({ machines: { [machine.id]: heartbeat }, machineListByServerId: { [serverId]: [heartbeat] } }); });
-            expect(screen.root.findByType(EmbeddedTerminalPane).props.controller.status).toBe('connecting');
+            expect(screen.findByType(EmbeddedTerminalPane).props.controller.status).toBe('connecting');
             await screen.unmount();
         } finally { vi.useRealTimers(); storage.setState(previous); home.dispose(); }
     });
