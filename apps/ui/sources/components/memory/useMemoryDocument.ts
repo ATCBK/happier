@@ -66,9 +66,15 @@ type Loaded = Readonly<{
 
 const NO_REFRESH = async () => null;
 
-function reviewedWriteTarget(view: MemoryDocumentView, serverId: string, topic?: string): MemoryDocumentTarget | null {
-  if (view.access === null || view.access === 'view') return null;
-  return { ref: view.ref, serverId, expectedRevision: view.revision,
+function reviewedWriteTarget(
+  view: MemoryDocumentView,
+  serverId: string,
+  authority: Pick<Loaded, 'accountId' | 'isCurrent'>,
+  topic?: string,
+): MemoryDocumentTarget | null {
+  if (view.access === null || view.access === 'view' || authority.accountId === null) return null;
+  return { ref: view.ref, serverId, accountId: authority.accountId, isCurrent: authority.isCurrent,
+    expectedRevision: view.revision,
     ...(topic === undefined ? {} : { topic }) };
 }
 const LOCKED_CODES = new Set([
@@ -181,12 +187,13 @@ export function useMemoryDocument(
                 topic: null,
               };
         const capturedLifetime = account.accountOnlyLifetime;
+        const isCurrent = () => currentness.isCurrent() && capturedLifetime.isCurrent();
         displayedAccount.current?.dispose();
         displayedAccount.current = account;
         setLoaded({ key, identity, accountId: account.accountId,
-          isCurrent: () => currentness.isCurrent() && capturedLifetime.isCurrent(),
+          isCurrent,
           status: 'ready', view, stale: false });
-        return capturedLifetime.isCurrent() ? reviewedWriteTarget(view, homeId, topic) : null;
+        return isCurrent() ? reviewedWriteTarget(view, homeId, { accountId: account.accountId, isCurrent }, topic) : null;
       } catch (error) {
         if (controller.signal.aborted || !currentness.isCurrent()) return null;
         const failure = (status: MemoryDocumentStatus): Loaded => ({ key, identity, accountId: null,
@@ -274,8 +281,8 @@ export function useMemoryDocument(
       view,
       stale: current.stale,
       target:
-        view && current.status === 'ready' && current.key === key
-          ? reviewedWriteTarget(view, homeId, topic)
+        view && loaded && current.status === 'ready' && current.key === key
+          ? reviewedWriteTarget(view, homeId, loaded, topic)
           : null,
       refresh,
     };

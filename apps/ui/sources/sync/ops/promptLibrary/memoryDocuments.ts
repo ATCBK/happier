@@ -31,6 +31,9 @@ export type MemoryDocumentRevision = Readonly<{
 export type MemoryDocumentTarget = Readonly<{
   ref: PromptDocArtifactRefV1;
   serverId: string;
+  /** The Account that admitted this reviewed document; a replacement cannot inherit its intent. */
+  accountId: string;
+  isCurrent: () => boolean;
   expectedRevision: MemoryDocumentRevision;
   topic?: string;
 }>;
@@ -71,6 +74,7 @@ async function execute(
   input: Readonly<Record<string, unknown>>,
   serverId: string,
   signal?: AbortSignal,
+  expectedAccountId?: string,
 ): Promise<ActionExecuteResult> {
   const { createDefaultActionExecutor } =
     await import('@/sync/ops/actions/defaultActionExecutor');
@@ -78,6 +82,7 @@ async function execute(
     serverId,
     surface: 'ui',
     authority: 'present_user',
+    ...(expectedAccountId === undefined ? {} : { expectedAccountId }),
     ...(signal ? { signal } : {}),
   });
 }
@@ -114,6 +119,7 @@ export const memoryDocumentActions = {
       { ...documentInput(target), ...draft },
       target.serverId,
       signal,
+      target.accountId,
     ),
   /** No document is attached yet: the host picks (and lazily creates) the Session's own target. */
   rememberInSession: (
@@ -141,6 +147,7 @@ export const memoryDocumentActions = {
       { ...documentInput(target), ...input },
       target.serverId,
       signal,
+      target.accountId,
     ),
   restore: (
     target: MemoryDocumentTarget,
@@ -159,6 +166,7 @@ export const memoryDocumentActions = {
       },
       target.serverId,
       signal,
+      target.accountId,
     ),
   forget: (
     target: MemoryDocumentTarget,
@@ -170,6 +178,7 @@ export const memoryDocumentActions = {
       { ...documentInput(target), factId },
       target.serverId,
       signal,
+      target.accountId,
     ),
   setSessionMemory: (
     target: MemorySessionTarget,
