@@ -32,7 +32,7 @@ describe('Project context through the default Account Action host', () => {
             ref: { kind: 'doc' as const, artifactId: 'memory' } };
         let rowMachineId = 'stale-machine';
         let rootPath = '/stale-repo';
-        homes.answer(serverId, `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { select: () => ({ body: {
+        homes.answer(serverId, `POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { select: () => ({ body: {
             status: 'listed', coverage: 'complete', rows: [
                 { key: workspaceKey, revision: 1, content: { t: 'plain', v: { key: workspaceKey, value: {
                     id: 'checkout', serverId, machineId: rowMachineId, rootPath, projectKey: 'project', createdAtMs: 1,
@@ -48,6 +48,9 @@ describe('Project context through the default Account Action host', () => {
                 code: 'preparation_pending', reason: 'project_association_unavailable',
             });
             rowMachineId = 'actual-machine';
+            await expect(readUiMemoryInheritedContext(account, snapshot, { surface: 'ui' })).rejects.toMatchObject({
+                code: 'preparation_pending', reason: 'project_association_unavailable',
+            });
             rootPath = '/agent';
             await expect(readUiMemoryInheritedContext(account, snapshot, { surface: 'ui' })).resolves.toMatchObject({
                 projectEntries: [{ ...memoryEntry, ref: { ...memoryEntry.ref, serverId } }],
@@ -78,7 +81,7 @@ describe('Project context through the default Account Action host', () => {
         } });
         const workspaceKey = { kind: 'workspace-ref' as const, serverId, id: 'checkout' };
         const projectKey = { kind: 'project-organization' as const, serverId, projectKey: 'project' };
-        homes.answer(serverId, `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { body: { status: 'listed', coverage: 'complete', rows: [
+        homes.answer(serverId, `POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { body: { status: 'listed', coverage: 'complete', rows: [
             { key: workspaceKey, revision: 1, content: { t: 'plain', v: { key: workspaceKey, value: {
                 id: 'checkout', serverId, machineId: 'actual-machine', rootPath: '/repo', projectKey: 'project', createdAtMs: 1,
             } } } },
@@ -167,7 +170,7 @@ describe('Project context through the default Account Action host', () => {
         } } } };
         const listPath = `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`;
         const mutatePath = `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/mutate`;
-        homes.answer(serverId, listPath, { select: () => ({ body: { status: 'listed', coverage: 'complete', rows: [row] } }) });
+        homes.answer(serverId, `POST ${listPath}`, { select: () => ({ body: { status: 'listed', coverage: 'complete', rows: [row] } }) });
         homes.answer(serverId, mutatePath, { select: input => {
             const mutation = ProjectAccountRowMutationRequestV1Schema.parse(input).mutations[0]!;
             expect(mutation.key).toEqual(key);
