@@ -52,11 +52,13 @@ describe('machine inventory lifecycle boundary', () => {
             id, title: id, capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
         }])) });
         const probed = new Set<string>();
-        rpc.mockImplementation(async ({ method, payload }: { method: string; payload?: { requests?: { id: string }[] } }) => {
+        rpc.mockImplementation(async ({ method, payload }: { method: string; payload?: { requests?: { id: string; params?: { includeLoginStatus?: boolean } }[] } }) => {
             if (method.includes('contributionRegistryProjection.describe')) return { protocolVersion: 1, projection };
-            if (method === 'capabilities.detect') return { protocolVersion: 1, results: Object.fromEntries((payload?.requests ?? []).map(({ id }) => {
+            if (method === 'capabilities.detect') return { protocolVersion: 1, results: Object.fromEntries((payload?.requests ?? []).map(({ id, params }) => {
                 probed.add(id);
-                return [id, { ok: true, checkedAt: 12, data: { ...item, agentId: id.slice(4) } }];
+                // Mirrors cliSnapshot.ts: a login-status request also returns isLoggedIn/authStatus.
+                const loginStatus = params?.includeLoginStatus ? { isLoggedIn: true, authStatus: { state: 'logged_in' as const, checkedAt: 12 } } : {};
+                return [id, { ok: true, checkedAt: 12, data: { ...item, agentId: id.slice(4), ...loginStatus } }];
             })) };
             return { jobs: [] };
         });
