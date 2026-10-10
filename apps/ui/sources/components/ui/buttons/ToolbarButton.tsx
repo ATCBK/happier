@@ -149,7 +149,7 @@ export const ToolbarButton = React.memo((props: ToolbarButtonProps) => {
                 // Native caller styles cross the portable adapter unchanged.
                 props.style as HappierSurfaceProps['style'],
                 callerBackground !== undefined && typeof callerBackground !== 'string' ? null : {
-                    backgroundColor: paintColor(callerBackground ?? (isPrimary ? theme.colors.button.primary.background : pressed && !props.disabled ? theme.colors.surface.selected : props.active || hovered && !props.disabled ? theme.colors.surface.pressed : theme.colors.surface.base)),
+                    backgroundColor: paintColor(callerBackground ?? (isPrimary ? theme.colors.button.primary.background : pressed && !props.disabled ? theme.colors.surface.selected : props.active || hovered && !props.disabled ? theme.colors.surface.pressed : theme.colors.surface.base), undefined, isPrimary || callerBackground !== undefined ? 'solidControl' : 'surface'),
                 },
                 Platform.OS === 'web' ? happierSurfaceGradientWebStyle(resolveThemeSurfaceFinish(theme, isPrimary ? 'primaryButton' : 'secondaryButton', { pressed, focused, disabled: props.disabled || props.active }), !theme.dark) : null,
             ]}
@@ -164,7 +164,7 @@ export const ToolbarButton = React.memo((props: ToolbarButtonProps) => {
                     isPrimary ? styles.primaryLabel : null,
                     tone === 'danger' ? styles.dangerLabel : null,
                     props.labelColor ? { color: props.labelColor } : null,
-                    isPrimary && !props.labelColor ? { color: paintColor(theme.colors.button.primary.tint, theme.colors.text.primary) } : null,
+                    isPrimary && !props.labelColor ? { color: paintColor(theme.colors.button.primary.tint, theme.colors.text.primary, 'solidControl') } : null,
                 ]}
             >
                 {props.label}

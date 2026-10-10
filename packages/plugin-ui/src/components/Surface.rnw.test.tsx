@@ -38,7 +38,7 @@ function resolveRenderedColor(
 }
 
 describe('Surface and Card', () => {
-  it('lets descendant fields, segments and badges inherit material paint without fading their content', () => {
+  it('materializes fields and surfaces while preserving solid controls with equal colour values', () => {
     const host: PluginUiPresentationHost = {
       renderMarkdown: () => null, renderCodeBlock: () => null, renderPopover: () => null, renderIcon: () => null,
       // The platform paint boundary returns a concrete translucent fill; field anatomy stays real.
@@ -48,12 +48,13 @@ describe('Surface and Card', () => {
     const mount = mountSurface(<PluginUiPresentationHostProviderInternal host={host}>
       <HappierMaterialRoleProvider role="floating" resolveMaterialColor={host.resolveMaterialColor}>
       <HappierMaterialSurface materialRole="floating">
-        <HappierFieldTextBox colors={{ backgroundColor: '#112233', borderColor: '#445566' }}><Text value="Field content" /></HappierFieldTextBox>
+        <HappierFieldTextBox colors={{ backgroundColor: context.theme.colors.accent, borderColor: '#445566' }}><View testID="inner-field-content"><Text value="Field content" /></View></HappierFieldTextBox>
         <HappierSearchFieldBox testID="inner-search" colors={{ backgroundColor: '#112233', borderColor: '#445566' }} radius={8} onFocusInput={() => {}}><Text value="Search content" /></HappierSearchFieldBox>
-        <HappierSegmentedChoice accessibilityLabel="Mode" colors={{ track: '#112233', thumb: '#112233', label: '#445566', activeLabel: '#445566', focusRing: '#445566' }} segments={[{ key: 'one', label: 'One', selected: true, disabled: false }]} onSelect={() => {}} />
+        <HappierSegmentedChoice testID="inner-segments" accessibilityLabel="Mode" colors={{ track: '#112233', thumb: '#ffffff', label: '#445566', activeLabel: '#445566', focusRing: '#445566' }} segments={[{ key: 'one', label: 'One', selected: true, disabled: false }]} onSelect={() => {}} />
         <HappierBadge backgroundColor="#112233" color="#445566">Badge</HappierBadge>
         <HappierBanner title="Notice" tone="neutral" backgroundColor="#112233" theme={context.theme} />
         <Button testID="inner-primary" title="Continue" onPress={() => {}} />
+        <Button testID="inner-disabled" title="Unavailable" disabled onPress={() => {}} />
         <HappierSelect label="Choice" options={[{ value: 'one', label: 'One' }]} value="one" onChange={() => {}} theme={{ ...context.theme, colors: { ...context.theme.colors, elevatedSurface: '#112233' } }} />
         <HappierSelectionTiles variant="card" accessibilityLabel="Tiles" options={[{ id: 'one', title: 'One' }]} value="one" onChange={() => {}} colors={{ tileBackground: '#112233', tileBorder: '#445566', selection: '#445566', glyph: '#445566', ring: '#445566', previewBackground: '#112233', actionBackground: '#112233', actionBorderHovered: '#445566' }} renderText={({ text }) => <Text value={text} />} renderGlyph={() => null} />
       </HappierMaterialSurface>
@@ -64,7 +65,11 @@ describe('Surface and Card', () => {
     expect(backgrounds).toContain(resolveRenderedColor('backgroundColor', 'rgba(235, 230, 225, 0.1)'));
     expect(mount.container.textContent).toContain('Field content');
     expect(mount.container.textContent).toContain('Search content');
-    expect(getComputedStyle(mount.container.querySelector<HTMLElement>('[data-testid="inner-primary"]')!).backgroundColor).toBe(resolveRenderedColor('backgroundColor', 'rgba(235, 230, 225, 0.1)'));
+    // Equal colour values do not make a field into a solid primary control.
+    expect(getComputedStyle(mount.container.querySelector<HTMLElement>('[data-testid="inner-field-content"]')!.parentElement!).backgroundColor).toBe(resolveRenderedColor('backgroundColor', 'rgba(235, 230, 225, 0.1)'));
+    expect(getComputedStyle(mount.container.querySelector<HTMLElement>('[data-testid="inner-primary"]')!).backgroundColor).toBe(resolveRenderedColor('backgroundColor', context.theme.colors.accent));
+    expect(getComputedStyle(mount.container.querySelector<HTMLElement>('[data-testid="inner-disabled"]')!).backgroundColor).toBe(resolveRenderedColor('backgroundColor', context.theme.colors.controlDisabled));
+    expect(getComputedStyle(mount.container.querySelector<HTMLElement>('[data-testid="inner-segments"] [role="radio"]')!).backgroundColor).toBe(resolveRenderedColor('backgroundColor', '#ffffff'));
     mount.unmount();
   });
   it('does not invent a containing finish when a standalone surface declares nested topology', () => {

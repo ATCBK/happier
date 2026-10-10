@@ -6,18 +6,25 @@ import { renderScreen } from '@/dev/testkit';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { flattenTestStyle } from '@/dev/testkit';
 import { HappierMaterialRoleProvider } from '@happier-dev/plugin-ui/presentation';
+import { lightTheme } from '@/theme';
+import { useGlassMaterialColorResolver } from '@/components/ui/glass/useGlassSurfaceColor';
+
+function FloatingButtonScene() {
+    const resolveMaterialColor = useGlassMaterialColorResolver('floating');
+    return <HappierMaterialRoleProvider role="floating" translucentColor="rgba(235, 230, 225, 0.1)" resolveMaterialColor={resolveMaterialColor}>
+        <RoundButton title="Add widget" testID="glass-primary" />
+        <RoundButton title="Unavailable" disabled testID="glass-disabled" />
+    </HappierMaterialRoleProvider>;
+}
 
 const { RoundButton, RoundButtonSizeScope } = await import('./RoundButton');
 
 describe('RoundButton', () => {
-    it('keeps primary and disabled controls translucent with readable ink in glass', async () => {
-        const screen = await renderScreen(<HappierMaterialRoleProvider role="floating" translucentColor="rgba(235, 230, 225, 0.1)" resolveMaterialColor={(input) => input.translucentColor ?? input.color}>
-            <RoundButton title="Add widget" testID="glass-primary" />
-            <RoundButton title="Unavailable" disabled testID="glass-disabled" />
-        </HappierMaterialRoleProvider>);
-        for (const id of ['glass-primary', 'glass-disabled']) {
+    it('keeps the primary and disabled primary solid inside floating material', async () => {
+        const screen = await renderScreen(<FloatingButtonScene />);
+        for (const [id, fill] of [['glass-primary', lightTheme.colors.button.primary.background], ['glass-disabled', lightTheme.colors.button.primary.disabled]]) {
             const pill = screen.findByTestId(id)!.findAll(node => String(node.type) === 'Animated.View')[0]!;
-            expect(flattenTestStyle(pill.props.style).backgroundColor).toBe('rgba(235, 230, 225, 0.1)');
+            expect(flattenTestStyle(pill.props.style).backgroundColor).toBe(fill);
         }
     });
     it('forwards the press event to modifier-aware actions', async () => {

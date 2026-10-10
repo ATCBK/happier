@@ -264,8 +264,9 @@ export const RoundButton = React.memo((props: {
     const display: (typeof displays)[RoundButtonDisplay] = disabledPrimary
         ? { textColor: theme.colors.text.tertiary, backgroundColor: theme.colors.button.primary.disabled, borderColor: 'transparent' }
         : baseDisplay;
-    const textColor = (props.display ?? 'default') === 'default' && !disabledPrimary ? paintColor(display.textColor, theme.colors.text.primary) : display.textColor;
+    const textColor = (props.display ?? 'default') === 'default' && !disabledPrimary ? paintColor(display.textColor, theme.colors.text.primary, 'solidControl') : display.textColor;
     const pillBackgroundColor = callerBackgroundColor ?? display.backgroundColor;
+    const paintRole = (props.display ?? 'default') === 'default' || callerBackgroundColor !== undefined ? 'solidControl' : 'surface';
     const titleLines = props.titleNumberOfLines ?? 1;
     // `undefined` is React Native's "as many lines as it takes"; `0` is not portable
     // across the platforms this primitive renders on.
@@ -304,7 +305,7 @@ export const RoundButton = React.memo((props: {
                     style={[
                         styles.pill,
                         {
-                            backgroundColor: typeof pillBackgroundColor === 'string' ? paintColor(pillBackgroundColor) : pillBackgroundColor,
+                            backgroundColor: typeof pillBackgroundColor === 'string' ? paintColor(pillBackgroundColor, undefined, paintRole) : pillBackgroundColor,
                             borderColor: display.borderColor,
                         },
                         props.capsuleHeight !== undefined
@@ -327,8 +328,8 @@ export const RoundButton = React.memo((props: {
                     >
                         {display.gradient ? (
                             <GradientSurface
-                                fallbackColor={paintColor(display.backgroundColor)}
-                                gradient={happierMaterialGradient(display.gradient, paintColor)}
+                                fallbackColor={paintColor(display.backgroundColor, undefined, 'solidControl')}
+                                gradient={happierMaterialGradient(display.gradient, color => paintColor(color, undefined, 'solidControl'))}
                                 overlay={resolveThemeSurfaceFinish(theme, 'primaryButton', { pressed: state.pressed, focused: state.focused, disabled: state.disabled })}
                                 clipToPaddingBox={!theme.dark}
                                 borderRadius={theme.borderRadius.md}

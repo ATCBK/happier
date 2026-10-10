@@ -55,7 +55,7 @@ export const PrimaryCircleIconButton = React.memo(
     const backgroundColor = props.active
       ? (primary?.background ?? theme.colors.surface.inset ?? theme.colors.surface.base)
       : (primary?.disabled ?? theme.colors.border.default);
-    const tintColor = paintColor(primary?.tint ?? theme.colors.text.primary, theme.colors.text.primary);
+    const tintColor = paintColor(primary?.tint ?? theme.colors.text.primary, theme.colors.text.primary, 'solidControl');
 
     return (
       <View style={[styles.root, props.style]}>
@@ -75,7 +75,7 @@ export const PrimaryCircleIconButton = React.memo(
             styles.inner,
             {
               borderRadius: 16,
-              backgroundColor: paintColor(backgroundColor),
+              backgroundColor: paintColor(backgroundColor, undefined, 'solidControl'),
               opacity: pressed ? motionTokens.press.opacity : 1,
               overflow: 'hidden',
               ...(Platform.OS === 'web' && !primary?.gradient ? happierSurfaceGradientWebStyle(resolveThemeSurfaceFinish(theme, 'primaryButton', { pressed, focused, disabled: computedDisabled || !props.active }), !theme.dark) : null),
@@ -85,8 +85,8 @@ export const PrimaryCircleIconButton = React.memo(
           {({ pressed, focused }) => <>
           {props.active && primary?.gradient ? (
             <GradientSurface
-              fallbackColor={paintColor(backgroundColor)}
-              gradient={props.active ? happierMaterialGradient(primary?.gradient, paintColor) : undefined}
+              fallbackColor={paintColor(backgroundColor, undefined, 'solidControl')}
+              gradient={props.active ? happierMaterialGradient(primary?.gradient, color => paintColor(color, undefined, 'solidControl')) : undefined}
               overlay={resolveThemeSurfaceFinish(theme, 'primaryButton', { pressed, focused, disabled: computedDisabled || !props.active })}
               clipToPaddingBox={!theme.dark}
               borderRadius={16}

@@ -24,7 +24,7 @@ export function HappierMaterialRoleProvider(props: Readonly<Omit<HappierMaterial
   return <MaterialRoleContext.Provider value={plane}>{props.children}</MaterialRoleContext.Provider>;
 }
 
-/** Descendant paint, shared by native host controls and hosted web controls. */
+/** Descendant paint. Solid control roles keep their own fill and contrasting ink on every plane. */
 export function useHappierMaterialColorResolver() {
   const plane = useContext(MaterialRoleContext);
   const host = useOptionalPluginUiPresentationHost();
@@ -32,7 +32,9 @@ export function useHappierMaterialColorResolver() {
   const resolver = plane?.resolveMaterialColor ?? (Platform.OS === 'web' ? undefined : host?.resolveMaterialColor);
   const role = plane?.role;
   const defaultTranslucentColor = plane?.translucentColor ?? theme?.colors.divider ?? 'transparent';
-  return useCallback((color: string, translucentColor = defaultTranslucentColor) => {
+  return useCallback((color: string, translucentColor = defaultTranslucentColor, paintRole: 'surface' | 'solidControl' = 'surface') => {
+    // Intent cannot be inferred from a colour value: a field and a primary may share it.
+    if (paintRole === 'solidControl') return color;
     if (role === undefined) return color;
     if (Platform.OS === 'web' && color.startsWith('var(--happier-glass-')) return color;
     return resolver?.({ color, role, nested: true, translucentColor })

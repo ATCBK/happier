@@ -46,12 +46,12 @@ beforeEach(() => {
 afterEach(() => Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform }));
 
 describe('PrimaryCircleIconButton', () => {
-    it('does not add an opaque primary gradient inside its containing glass plane', async () => {
+    it('keeps its solid primary gradient inside its containing glass plane', async () => {
         const { PrimaryCircleIconButton } = await import('./PrimaryCircleIconButton');
         const screen = await renderScreen(<HappierMaterialRoleProvider role="chrome" resolveMaterialColor={() => 'rgba(235, 230, 225, 0.1)'}>
             <PrimaryCircleIconButton testID="glass-circle" active accessibilityLabel="Send" onPress={() => {}}><span /></PrimaryCircleIconButton>
         </HappierMaterialRoleProvider>);
-        expect(screen.findByTestId('glass-circle')!.findAllByType('Stop' as never).slice(0, 2).map(node => node.props.stopColor)).toEqual(['rgba(235, 230, 225, 0.1)', 'rgba(235, 230, 225, 0.1)']);
+        expect(screen.findByTestId('glass-circle')!.findAllByType('Stop' as never).slice(0, 2).map(node => node.props.stopColor)).toEqual(['#000', '#111']);
     });
     it('forwards testID to the Pressable', async () => {
         const { PrimaryCircleIconButton } = await import('./PrimaryCircleIconButton');

@@ -49,14 +49,14 @@ export const FAB = React.memo((props: { onPress: () => void; accessibilityLabel?
             >
                 {({ pressed, focused }) => (
                     <GradientSurface
-                        fallbackColor={paintColor(pressed ? theme.colors.fab.backgroundPressed : theme.colors.fab.background)}
-                        gradient={pressed ? undefined : happierMaterialGradient(theme.colors.fab.gradient, paintColor)}
+                        fallbackColor={paintColor(pressed ? theme.colors.fab.backgroundPressed : theme.colors.fab.background, undefined, 'solidControl')}
+                        gradient={pressed ? undefined : happierMaterialGradient(theme.colors.fab.gradient, color => paintColor(color, undefined, 'solidControl'))}
                         overlay={resolveThemeSurfaceFinish(theme, 'primaryButton', { pressed, focused })}
                         clipToPaddingBox={!theme.dark}
                         borderRadius={20}
                         style={styles.surface}
                     >
-                        <Icon name="plus" size={24} color={paintColor(theme.colors.fab.icon, theme.colors.text.primary)} />
+                        <Icon name="plus" size={24} color={paintColor(theme.colors.fab.icon, theme.colors.text.primary, 'solidControl')} />
                     </GradientSurface>
                 )}
             </HappierPressable>

@@ -38,8 +38,8 @@ export function ReviewCommentInlineComposer(props: {
                 <Pressable onPress={props.onCancel} style={[styles.secondaryButton, { backgroundColor: paintColor(theme.colors.surface.pressed ?? theme.colors.surface.base) }]}>
                     <Text style={styles.secondaryText}>{t('common.cancel')}</Text>
                 </Pressable>
-                <Pressable onPress={props.onSave} style={[styles.primaryButton, { backgroundColor: paintColor(theme.colors.button?.primary?.background ?? theme.colors.text.primary) }]}>
-                    <Text style={[styles.primaryText, { color: paintColor(theme.colors.button?.primary?.tint ?? theme.colors.surface.base, theme.colors.text.primary) }]}>{t('common.save')}</Text>
+                <Pressable onPress={props.onSave} style={[styles.primaryButton, { backgroundColor: paintColor(theme.colors.button?.primary?.background ?? theme.colors.text.primary, undefined, 'solidControl') }]}>
+                    <Text style={[styles.primaryText, { color: paintColor(theme.colors.button?.primary?.tint ?? theme.colors.surface.base, theme.colors.text.primary, 'solidControl') }]}>{t('common.save')}</Text>
                 </Pressable>
             </View>
         </View>

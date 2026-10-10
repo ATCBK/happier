@@ -427,11 +427,11 @@ function SlidingThumb(props: Readonly<{
         <Animated.View
             testID={props.testID}
             pointerEvents="none"
-            style={[styles.thumb, props.compact ? styles.thumbCompact : null, props.plain ? styles.plainThumb : null, { backgroundColor: paintColor(props.plain ? theme.colors.surface.selected : theme.colors.segmentedControl.activeBackground) }, animatedStyle]}
+            style={[styles.thumb, props.compact ? styles.thumbCompact : null, props.plain ? styles.plainThumb : null, { backgroundColor: paintColor(props.plain ? theme.colors.surface.selected : theme.colors.segmentedControl.activeBackground, undefined, props.plain ? undefined : 'solidControl') }, animatedStyle]}
         >
             {props.plain ? null : <GradientSurface
-                fallbackColor={paintColor(theme.colors.segmentedControl.activeBackground)}
-                gradient={happierMaterialGradient(theme.colors.segmentedControl.activeGradient, paintColor)}
+                fallbackColor={paintColor(theme.colors.segmentedControl.activeBackground, undefined, 'solidControl')}
+                gradient={happierMaterialGradient(theme.colors.segmentedControl.activeGradient, color => paintColor(color, undefined, 'solidControl'))}
                 borderRadius={HAPPIER_SEGMENTED_METRICS.segmentRadiusPx[props.compact ? 'compact' : 'default']}
                 style={StyleSheet.absoluteFillObject}
             />}
@@ -673,15 +673,15 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                     plain && showOwnActiveSurface ? styles.plainActive : null,
                                     pills ? styles.pillSurface : null,
                                     pills && active ? styles.pillActive : null,
-                                    showOwnActiveSurface ? { backgroundColor: paintColor(pills ? theme.colors.surface.inset : plain ? theme.colors.surface.selected : theme.colors.segmentedControl.activeBackground) } : null,
+                                    showOwnActiveSurface ? { backgroundColor: paintColor(pills ? theme.colors.surface.inset : plain ? theme.colors.surface.selected : theme.colors.segmentedControl.activeBackground, undefined, pills || plain ? undefined : 'solidControl') } : null,
                                     happierFocusRingStyle({ visible: !tabDisabled && focusedTabId === tab.id, color: theme.colors.border.focus }),
                                     !disabled && tab.disabled === true ? styles.tabDisabled : null,
                                 ]}
                             >
                                 {showOwnActiveSurface && !pills && !plain ? (
                                     <GradientSurface
-                                        fallbackColor={paintColor(theme.colors.segmentedControl.activeBackground)}
-                                        gradient={happierMaterialGradient(theme.colors.segmentedControl.activeGradient, paintColor)}
+                                        fallbackColor={paintColor(theme.colors.segmentedControl.activeBackground, undefined, 'solidControl')}
+                                        gradient={happierMaterialGradient(theme.colors.segmentedControl.activeGradient, color => paintColor(color, undefined, 'solidControl'))}
                                         borderRadius={HAPPIER_SEGMENTED_METRICS.segmentRadiusPx[compact ? 'compact' : 'default']}
                                         style={StyleSheet.absoluteFillObject}
                                     />

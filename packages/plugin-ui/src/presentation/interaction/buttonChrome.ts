@@ -64,7 +64,7 @@ export function resolveHappierButtonChrome(input: Readonly<{
   gloss?: HappierRaisedEdge | null;
   dark?: boolean;
   secondaryFill?: string;
-  resolveColor?: (color: string, translucentColor?: string) => string;
+  resolveColor?: (color: string, translucentColor?: string, paintRole?: 'surface' | 'solidControl') => string;
 }>): Readonly<{ style: HappierPortableStyle; foreground: string; gradient: HappierSurfaceGradient | null }> {
   const { theme, variant } = input;
   const small = input.size === 'small';
@@ -80,7 +80,7 @@ export function resolveHappierButtonChrome(input: Readonly<{
     state: { disabled: input.disabled, focused: input.focused, pressed: input.pressed },
   });
   return {
-    foreground: variant === 'primary' ? input.resolveColor?.(foreground, theme.colors.text) ?? foreground : foreground,
+    foreground: variant === 'primary' ? input.resolveColor?.(foreground, theme.colors.text, 'solidControl') ?? foreground : foreground,
     gradient,
     style: {
       minHeight: small
@@ -93,7 +93,7 @@ export function resolveHappierButtonChrome(input: Readonly<{
       paddingHorizontal: small ? theme.spacing.medium : theme.spacing.large,
       paddingVertical: small ? 0 : BUTTON_PADDING_VERTICAL,
       borderRadius: theme.radii.control,
-      backgroundColor: input.resolveColor?.(background) ?? background,
+      backgroundColor: input.resolveColor?.(background, undefined, variant === 'primary' || input.disabled ? 'solidControl' : 'surface') ?? background,
       ...(Platform.OS === 'web' ? happierSurfaceGradientWebStyle(gradient, input.dark !== true) : null),
       borderWidth: BUTTON_EDGE_WIDTH,
       borderColor: 'transparent',

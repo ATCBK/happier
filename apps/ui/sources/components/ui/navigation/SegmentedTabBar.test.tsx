@@ -5,12 +5,23 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SegmentedTab } from './SegmentedTabBar';
 import { installNavigationCommonModuleMocks } from './navigationTestHelpers';
 import { renderScreen } from '@/dev/testkit';
-import { lightTheme } from '@/theme';
+import { darkTheme, lightTheme } from '@/theme';
+import { HappierMaterialRoleProvider } from '@happier-dev/plugin-ui/presentation';
+
+const materialThemeState = vi.hoisted(() => ({ dark: false }));
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 installNavigationCommonModuleMocks({
+    unistyles: async () => {
+        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+        const boundary = await createUnistylesMock();
+        return {
+            ...boundary,
+            useUnistyles: () => ({ ...boundary.useUnistyles(), theme: materialThemeState.dark ? darkTheme : lightTheme }),
+        };
+    },
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
@@ -22,6 +33,9 @@ installNavigationCommonModuleMocks({
     },
 });
 
+const { useGlassMaterialColorResolver } = await import('@/components/ui/glass/useGlassSurfaceColor');
+const { useUnistyles } = await import('react-native-unistyles');
+
 const theme = lightTheme;
 
 const TABS: ReadonlyArray<SegmentedTab<'alpha' | 'beta' | 'gamma'>> = [
@@ -29,6 +43,14 @@ const TABS: ReadonlyArray<SegmentedTab<'alpha' | 'beta' | 'gamma'>> = [
     { id: 'beta', label: 'Beta' },
     { id: 'gamma', label: 'Gamma' },
 ];
+
+function FloatingSegmentScene(props: Readonly<{ children: React.ReactNode }>) {
+    const { theme } = useUnistyles();
+    const resolveMaterialColor = useGlassMaterialColorResolver('floating');
+    return <HappierMaterialRoleProvider role="floating" translucentColor={theme.colors.surface.selected} resolveMaterialColor={resolveMaterialColor}>
+        {props.children}
+    </HappierMaterialRoleProvider>;
+}
 
 type RenderedScreen = Awaited<ReturnType<typeof renderScreen>>;
 
@@ -113,6 +135,34 @@ const ICON_TABS: ReadonlyArray<SegmentedTab<'alpha' | 'beta' | 'gamma'>> = TABS.
 const WCAG_MINIMUM_TARGET_PX = 24;
 
 describe('SegmentedTabBar', () => {
+    it.each([false, true])('keeps the selected thumb and its gradient solid inside floating material (dark=%s)', async (dark) => {
+        const { SegmentedTabBar } = await import('./SegmentedTabBar');
+        const activeTheme = dark ? darkTheme : lightTheme;
+        materialThemeState.dark = dark;
+        try {
+            for (const slidingThumb of [false, true]) {
+                const screen = await renderScreen(<FloatingSegmentScene>
+                    <SegmentedTabBar tabs={TABS} activeTabId="beta" onSelectTab={() => {}} testIDPrefix="material-seg" slidingThumb={slidingThumb} />
+                </FloatingSegmentScene>);
+                if (slidingThumb) {
+                    await act(async () => {
+                        requireTab(screen, 'material-seg:beta').props.onLayout({ nativeEvent: { layout: { x: 46, width: 44, y: 2, height: 24 } } });
+                    });
+                }
+                const thumb = slidingThumb ? screen.findByTestId('material-seg:thumb')! : requireTabSurface(screen, 'material-seg:beta');
+                expect(flattenStyle(thumb.props.style).backgroundColor).toBe(activeTheme.colors.segmentedControl.activeBackground);
+                const gradient = thumb.findAllByType('View' as never).map(node => flattenStyle(node.props.style))
+                    .find(style => typeof style.backgroundImage === 'string');
+                for (const color of activeTheme.colors.segmentedControl.activeGradient?.colors ?? []) {
+                    expect(gradient?.backgroundImage).toContain(color);
+                }
+                await screen.unmount();
+            }
+        } finally {
+            materialThemeState.dark = false;
+        }
+    });
+
     it('renders all tab labels', async () => {
         const { SegmentedTabBar } = await import('./SegmentedTabBar');
         const screen = await renderScreen(

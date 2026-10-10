@@ -173,7 +173,7 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
               paddingHorizontal: horizontalPadding,
               borderRadius: HAPPIER_SEGMENTED_METRICS.segmentRadiusPx[size],
               ...happierFocusRingStyle({ visible: state.focused, color: props.colors.focusRing }),
-              backgroundColor: segment.selected ? paintColor(props.colors.thumb) : 'transparent',
+              backgroundColor: segment.selected ? paintColor(props.colors.thumb, undefined, 'solidControl') : 'transparent',
               ...(segment.selected && !state.pressed ? props.colors.thumbLift : undefined),
               opacity: !groupDisabled && segment.disabled
                 ? HAPPIER_SEGMENTED_METRICS.disabledOpacity

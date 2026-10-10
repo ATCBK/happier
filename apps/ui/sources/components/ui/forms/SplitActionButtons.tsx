@@ -57,14 +57,14 @@ export const SplitActionButtons = React.memo(function SplitActionButtons(props: 
                     accessibilityRole="button"
                     accessibilityLabel={props.primaryLabel}
                     style={({ pressed }) => ({
-                        backgroundColor: paintColor(theme.colors.button.primary.background),
+                        backgroundColor: paintColor(theme.colors.button.primary.background, undefined, 'solidControl'),
                         borderRadius: 10,
                         paddingVertical: 12,
                         alignItems: 'center',
                         opacity: props.primaryDisabled ? 0.5 : (pressed ? motionTokens.press.opacitySubtle : 1),
                     })}
                 >
-                    <Text style={{ color: paintColor(theme.colors.button.primary.tint, theme.colors.text.primary), ...Typography.default('semiBold') }}>
+                    <Text style={{ color: paintColor(theme.colors.button.primary.tint, theme.colors.text.primary, 'solidControl'), ...Typography.default('semiBold') }}>
                         {props.primaryLabel}
                     </Text>
                 </Pressable>

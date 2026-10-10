@@ -220,11 +220,11 @@ export function IconButton(props: Readonly<{
             focus: theme.colors.border.focus,
         } : {
             // The fill is its own edge: the outline the chrome draws matches it.
-            background: paintColor(fillColor),
+            background: paintColor(fillColor, undefined, 'solidControl'),
             border: fillColor,
-            hover: paintColor(props.fill === 'danger' ? fillColor : theme.colors.state.neutral.border),
-            pressed: paintColor(props.fill === 'danger' ? fillColor : theme.colors.state.neutral.border),
-            selected: paintColor(theme.colors.state.neutral.border),
+            hover: paintColor(props.fill === 'danger' ? fillColor : theme.colors.state.neutral.border, undefined, 'solidControl'),
+            pressed: paintColor(props.fill === 'danger' ? fillColor : theme.colors.state.neutral.border, undefined, 'solidControl'),
+            selected: paintColor(theme.colors.state.neutral.border, undefined, 'solidControl'),
             focus: theme.colors.border.focus,
         },
     });

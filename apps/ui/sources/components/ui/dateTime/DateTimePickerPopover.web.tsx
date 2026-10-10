@@ -106,14 +106,14 @@ function CalendarPicker(props: DateTimePickerPopoverProps) {
                     }}
                     style={({ pressed }) => [
                         styles.day,
-                        selected ? { backgroundColor: paintColor(theme.colors.button.primary.background) } : null,
+                        selected ? { backgroundColor: paintColor(theme.colors.button.primary.background, undefined, 'solidControl') } : null,
                         ordinal === todayOrdinal && !selected ? { borderWidth: 1, borderColor: theme.colors.border.default } : null,
                         pressed && !selected ? { backgroundColor: paintColor(theme.colors.surface.pressed) } : null,
                     ]}
                 >
                     <Text style={[
                         styles.dayText,
-                        { color: selected ? paintColor(theme.colors.button.primary.tint, theme.colors.text.primary) : theme.colors.text.primary },
+                        { color: selected ? paintColor(theme.colors.button.primary.tint, theme.colors.text.primary, 'solidControl') : theme.colors.text.primary },
                         outsideMonth ? { opacity: 0.38 } : null,
                         disabled ? { opacity: 0.22 } : null,
                     ]}>{day.getDate()}</Text>
