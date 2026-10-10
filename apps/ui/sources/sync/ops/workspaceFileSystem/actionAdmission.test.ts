@@ -32,6 +32,8 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc', () => 
 const { storage } = await import('@/sync/domains/state/storage');
 const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/actionSettings');
 const { workspaceCreateDirectory } = await import('./directoryBrowsing');
+const { workspaceListDirectory, workspaceGetDirectoryTree } = await import('./directoryBrowsing');
+const { workspaceWriteFile } = await import('./fileReadWrite');
 const { workspaceRenamePath, workspaceDeletePath } = await import('./pathMetadataMutations');
 type Target = Parameters<typeof workspaceCreateDirectory>[0];
 const operations = [
@@ -58,6 +60,33 @@ afterEach(async () => {
 });
 
 describe('shared workspace filesystem Action admission', () => {
+    it('routes bounded directory reads through the same Action policy choke point', async () => {
+        filesystem.response = { success: true, entries: [] };
+        expect(await workspaceListDirectory(target, 'src')).toEqual({ success: true, entries: [] });
+        filesystem.response = { success: true, tree: { name: 'src', path: '/repo/src', type: 'directory' } };
+        expect(await workspaceGetDirectoryTree(target, 'src', 2)).toMatchObject({ success: true, tree: { name: 'src' } });
+        expect(filesystem.calls).toEqual([
+            expect.objectContaining({ method: 'listDirectory', payload: { rootPath: '/repo', path: '/repo/src' } }),
+            expect.objectContaining({ method: 'daemon.filesystem.getDirectoryTree', payload: { rootPath: '/repo', path: '/repo/src', maxDepth: 2 } }),
+        ]);
+    });
+
+    it('keeps an inline file write behind Ask-first admission and executes the exact rooted bytes only after approval', async () => {
+        await homes.requireUiApproval(serverId, 'daemon.filesystem.writeFile');
+        const pending = await workspaceWriteFile(target, 'created.txt', 'hello');
+        expect(pending).toMatchObject({ success: false, errorCode: 'approval_required', approvalArtifactId: expect.any(String) });
+        expect(filesystem.calls).toEqual([]);
+        if (!('approvalArtifactId' in pending) || typeof pending.approvalArtifactId !== 'string') throw new Error('Expected approval custody');
+        filesystem.response = { success: true, hash: 'sha256:inline' };
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        expect(await createDefaultActionExecutor().execute('approval.request.decide', {
+            artifactId: pending.approvalArtifactId, decision: 'approve',
+        }, { surface: 'ui', serverId })).toMatchObject({ ok: true, result: { status: 'executed' } });
+        expect(filesystem.calls).toEqual([expect.objectContaining({ method: 'daemon.filesystem.writeFile', payload: {
+            rootPath: '/repo', path: '/repo/created.txt', content: 'aGVsbG8=',
+        } })]);
+    });
+
     it.each(['rename', 'delete'] as const)('retires the real %s prompt before it can borrow a newly signed-in Account', async operation => {
         let release = () => {};
         filesystem.promptGate = new Promise<void>(resolve => { release = resolve; });

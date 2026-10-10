@@ -1,10 +1,9 @@
-import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
-import { assertRpcResponseWithSuccess } from '@/sync/runtime/assertRpcResponseWithSuccess';
 import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
-import { callGuardedMachineRpcWithPolicy } from '@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc';
-import { invokeWorkspaceFileSystemMutation, type WorkspaceFileSystemMutationResponse } from './actionInvocation';
+import { FilesystemGetDirectoryTreeOutputSchema, FilesystemListDirectoryOutputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import { invokeWorkspaceFileSystemAction, invokeWorkspaceFileSystemMutation, type WorkspaceFileSystemMutationResponse } from './actionInvocation';
 
 export type WorkspaceFileSystemTarget = Readonly<{
     machineId: string;
@@ -46,8 +45,6 @@ export async function workspaceCreateDirectory(
     }
 }
 
-type WorkspaceListDirectoryRequest = Readonly<{ path: string }>;
-
 export type WorkspaceDirectoryEntry = Readonly<{
     name: string;
     type: 'file' | 'directory' | 'other';
@@ -64,14 +61,13 @@ export async function workspaceListDirectory(
     path: string,
 ): Promise<WorkspaceListDirectoryResponse> {
     try {
-        const response = await callGuardedMachineRpcWithPolicy<unknown, WorkspaceListDirectoryRequest>({
-            machineId: target.machineId,
-            serverId: target.serverId,
-            method: RPC_METHODS.LIST_DIRECTORY,
-            payload: { path: resolveAbsoluteWorkspacePath({ rootPath: target.rootPath, agentRootPath: target.agentRootPath, requestPath: path }) },
+        const result = await invokeWorkspaceFileSystemAction(target, 'daemon.filesystem.listDirectory', {
+            rootPath: target.rootPath,
+            path: resolveAbsoluteWorkspacePath({ rootPath: target.rootPath, agentRootPath: target.agentRootPath, requestPath: path }),
         });
-
-        return assertRpcResponseWithSuccess<WorkspaceListDirectoryResponse>(response);
+        if (!result.ok) return { success: false, error: result.error, errorCode: result.errorCode };
+        const response = FilesystemListDirectoryOutputSchema.safeParse(result.result);
+        return response.success ? response.data : { success: false, error: 'The filesystem Action response could not be validated.', errorCode: 'invalid_action_output' };
     } catch (error) {
         return {
             success: false,
@@ -80,8 +76,6 @@ export async function workspaceListDirectory(
         };
     }
 }
-
-type WorkspaceGetDirectoryTreeRequest = Readonly<{ path: string; maxDepth: number }>;
 
 export type WorkspaceTreeNode = Readonly<{
     name: string;
@@ -102,17 +96,14 @@ export async function workspaceGetDirectoryTree(
     maxDepth: number,
 ): Promise<WorkspaceGetDirectoryTreeResponse> {
     try {
-        const response = await callGuardedMachineRpcWithPolicy<unknown, WorkspaceGetDirectoryTreeRequest>({
-            machineId: target.machineId,
-            serverId: target.serverId,
-            method: RPC_METHODS.GET_DIRECTORY_TREE,
-            payload: {
-                path: resolveAbsoluteWorkspacePath({ rootPath: target.rootPath, agentRootPath: target.agentRootPath, requestPath: path }),
-                maxDepth,
-            },
+        const result = await invokeWorkspaceFileSystemAction(target, 'daemon.filesystem.getDirectoryTree', {
+            rootPath: target.rootPath,
+            path: resolveAbsoluteWorkspacePath({ rootPath: target.rootPath, agentRootPath: target.agentRootPath, requestPath: path }),
+            maxDepth,
         });
-
-        return assertRpcResponseWithSuccess<WorkspaceGetDirectoryTreeResponse>(response);
+        if (!result.ok) return { success: false, error: result.error, errorCode: result.errorCode };
+        const response = FilesystemGetDirectoryTreeOutputSchema.safeParse(result.result);
+        return response.success ? response.data : { success: false, error: 'The filesystem Action response could not be validated.', errorCode: 'invalid_action_output' };
     } catch (error) {
         return {
             success: false,

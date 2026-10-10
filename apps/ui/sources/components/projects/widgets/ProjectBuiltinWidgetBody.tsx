@@ -13,6 +13,7 @@ import { buildProjectRouteHref, readProjectRouteStringParam } from '@/components
 import { resolveProjectCockpitRouteFromPathname } from '@/components/workspaceCockpit/project/projectCockpitState';
 import { useWorkspaceRefById } from '@/components/projects/detail/useWorkspaceRefById';
 import { useOpenProject } from '@/components/projects/useOpenProject';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { WorkspaceCodeBrowserView, type WorkspaceCodeLocation } from '@/components/projects/files/code/WorkspaceCodeBrowserView';
 import { useRepositoryTreeBrowserState } from '@/hooks/workspaces/files/repositoryTreeBrowserState';
 import { useWorkspaceRepositoryDirectoryRevision } from '@/hooks/workspaces/files/useWorkspaceRepositoryDirectoryRevision';
@@ -204,7 +205,7 @@ function CheckoutsBody(props: Props): React.ReactElement {
             onPress={() => navigation.router.push(navigation.href('overview', undefined, worktree.path, worktree.id) as Parameters<typeof navigation.router.push>[0])} />)}
         {others.map(ref => <WidgetGlanceRow key={`${ref.serverId}:${ref.machineId}:${ref.id}:${ref.rootPath}`} testID={`${props.testID}.checkout:${ref.id}`} mark="desktop"
             title={status(ref)?.branch ?? resolveWorkspaceRefDisplayName(ref)} {...fact(ref.machineId, ref)}
-            onPress={() => openProject(ref.id, { serverId: ref.serverId })} />)}
+            onPress={() => fireAndForget(openProject(ref.id, { serverId: ref.serverId }), { tag: 'ProjectWidget.openCheckout' })} />)}
         <WidgetGlanceRow testID={`${props.testID}.open-elsewhere`} variant="fact" mark="plus" title={t('projects.checkouts.openElsewhere')}
             onPress={() => navigateToOpen(buildProjectCheckoutOpenRoute(props.workspace, snapshot?.branch.head))} />
     </View>;

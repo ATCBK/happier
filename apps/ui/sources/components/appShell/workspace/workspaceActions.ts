@@ -87,14 +87,27 @@ export function createWorkspaceActionAdapter(input: Readonly<{
                     let cancelFind: (() => void) | undefined;
                     if (data.find) {
                         const target = input.navigation.resolveOpenTarget(data.href);
-                        const serverId = target?.params.serverId;
+                        const findTarget = data.find.target;
+                        const serverId = findTarget.kind === 'project-file' ? findTarget.serverId : target?.params.serverId;
                         const authority = serverId ? input.chatFind?.resolveAuthority(serverId) : null;
-                        if (target?.kind !== 'session' || !target.params.id || !input.chatFind || !authority?.isCurrent()
-                            || (target.params.accountId && target.params.accountId !== authority.scope.accountId)) {
+                        if (!input.chatFind || !authority?.isCurrent()
+                            || (target?.params.accountId && target.params.accountId !== authority.scope.accountId)) {
                             return workspaceActionFailure('workspace_find_unavailable');
                         }
-                        cancelFind = input.chatFind.handoff.stageChat({ sessionId: target.params.id,
-                            serverId: authority.scope.serverId, accountId: authority.scope.accountId }, data.find, authority);
+                        if (findTarget.kind === 'native-message') {
+                            if (target?.kind !== 'session' || !target.params.id) return workspaceActionFailure('workspace_find_unavailable');
+                            cancelFind = input.chatFind.handoff.stageChat({ sessionId: target.params.id,
+                                serverId: authority.scope.serverId, accountId: authority.scope.accountId }, data.find, authority);
+                        } else {
+                            if (target?.kind !== 'project' || target.params.workspaceRefId !== findTarget.workspaceRefId
+                                || (target.params.serverId && target.params.serverId !== findTarget.serverId)
+                                || authority.scope.serverId !== findTarget.serverId) return workspaceActionFailure('workspace_find_unavailable');
+                            cancelFind = input.chatFind.handoff.stage({ host: 'project', id: findTarget.workspaceRefId,
+                                accountId: authority.scope.accountId, scope: { serverId: findTarget.serverId,
+                                    machineId: findTarget.machineId, rootPath: findTarget.rootPath }, path: findTarget.path },
+                            { query: data.find.query, options: data.find.options ?? { matchCase: false, regex: false },
+                                target: { kind: 'file', path: findTarget.path, ...(findTarget.anchor ? { anchor: findTarget.anchor } : {}) } }, authority);
+                        }
                         if (!authority.isCurrent()) { cancelFind(); return workspaceActionFailure('workspace_find_unavailable'); }
                     }
                     try {

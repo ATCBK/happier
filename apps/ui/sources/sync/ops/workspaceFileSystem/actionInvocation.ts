@@ -1,5 +1,6 @@
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { FilesystemMutationOutputSchema, type FilesystemMutationActionId } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import { FilesystemMutationOutputSchema, type FilesystemActionId, type FilesystemMutationActionId } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -9,25 +10,34 @@ export type WorkspaceFileSystemMutationResponse =
     | Readonly<{ success: true }>
     | Readonly<{ success: false; error: string; errorCode?: string; approvalArtifactId?: string }>;
 
+/** One UI ingress for every filesystem Action; the caller retains result-domain parsing. */
+export async function invokeWorkspaceFileSystemAction(
+    target: WorkspaceFileSystemTarget,
+    actionId: FilesystemActionId,
+    input: unknown,
+): Promise<ActionExecuteResult> {
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    const serverId = target.serverId || lifetime?.scope.serverId;
+    if (!serverId) return { ok: false, errorCode: 'action_home_not_found', error: 'action_home_not_found' };
+    const activeTarget = lifetime && areServerProfileIdentifiersEquivalent(serverId, lifetime.scope.serverId);
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    if (activeTarget && !lifetime.isCurrent()) return {
+        ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed',
+    };
+    return await createFrontDoorActionExecute(createDefaultActionExecutor())(actionId, input, {
+        surface: 'ui', authority: 'present_user', serverId,
+        ...(activeTarget ? { expectedAccountId: lifetime.scope.accountId } : {}),
+        externalActionTarget: { kind: 'machine', machineId: target.machineId },
+    });
+}
+
 /** Admission owns policy and approval; its existing terminal owns the Machine RPC. */
 export async function invokeWorkspaceFileSystemMutation(
     target: WorkspaceFileSystemTarget,
     actionId: Exclude<FilesystemMutationActionId, 'daemon.filesystem.copy'>,
     input: unknown,
 ): Promise<WorkspaceFileSystemMutationResponse> {
-    const lifetime = captureActiveServerAccountScopeLifetime();
-    const serverId = target.serverId || lifetime?.scope.serverId;
-    if (!serverId) return { success: false, errorCode: 'action_home_not_found', error: 'action_home_not_found' };
-    const activeTarget = lifetime && areServerProfileIdentifiersEquivalent(serverId, lifetime.scope.serverId);
-    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-    if (activeTarget && !lifetime.isCurrent()) return { success: false,
-        errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
-    const result = await createFrontDoorActionExecute(createDefaultActionExecutor())(actionId, input, {
-        surface: 'ui', authority: 'present_user',
-        serverId,
-        ...(activeTarget ? { expectedAccountId: lifetime.scope.accountId } : {}),
-        externalActionTarget: { kind: 'machine', machineId: target.machineId },
-    });
+    const result = await invokeWorkspaceFileSystemAction(target, actionId, input);
     if (!result.ok) return { success: false, error: result.error, errorCode: result.errorCode };
     const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
     if (approval.success) return { success: false, errorCode: 'approval_required',

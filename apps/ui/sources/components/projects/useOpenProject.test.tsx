@@ -44,7 +44,6 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { useOpenProject } = await import('./useOpenProject');
 const { useWorkspaceRefById, useWorkspaceRefResolutionById } = await import('./detail/useWorkspaceRefById');
 const { AppPaneProvider, useAppPaneContext } = await import('@/components/appShell/panes/AppPaneProvider');
-const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { buildRealmQualifiedMobileSurfaceStorageKey } = await import('@/sync/domains/settings/mobileSurfacePersistence');
 
 function PaneWrapper(props: React.PropsWithChildren) { return React.createElement(AppPaneProvider, null, props.children); }
@@ -128,7 +127,7 @@ describe('useOpenProject', () => {
         workspaceRefs.current.push({ ...workspaceRefs.current[0]!, serverId: serverIdB, rootPath: '/other' });
         await refreshWorkspaceRefs();
         const hook = await renderHook(() => ({ open: useOpenProject(), ref: useWorkspaceRefById('wr_1') }), { wrapper: PaneWrapper });
-        expect(hook.getCurrent().open('wr_1')).toBe(false);
+        expect(await hook.getCurrent().open('wr_1')).toBe(false);
         expect(hook.getCurrent().open.resolution).toMatchObject({ kind: 'ambiguous', candidates: [
             { serverId: serverIdA, id: 'wr_1' }, { serverId: serverIdB, id: 'wr_1' },
         ] });
@@ -172,12 +171,12 @@ describe('useOpenProject', () => {
         const hook = await renderHook(() => ({ open: useOpenProject(), resolution: useWorkspaceRefResolutionById('wr_1'),
             pane: useAppPaneContext() }), { wrapper: PaneWrapper });
         expect(hook.getCurrent().resolution).toMatchObject({ kind: 'ambiguous', candidates: workspaceRefs.current });
-        expect(hook.getCurrent().open('wr_1', { initialResource: { kind: 'file', path: 'README.md' } })).toBe(false);
+        expect(await hook.getCurrent().open('wr_1', { initialResource: { kind: 'file', path: 'README.md' } })).toBe(false);
         expect(hook.getCurrent().pane.state.scopes).toEqual({});
         expect(routerPush).not.toHaveBeenCalled();
-        expect(hook.getCurrent().open('missing')).toBe(false);
+        expect(await hook.getCurrent().open('missing')).toBe(false);
         expect(hook.getCurrent().open.resolution).toEqual({ kind: 'missing' });
-        expect(hook.getCurrent().open('')).toBe(false);
+        expect(await hook.getCurrent().open('')).toBe(false);
         expect(hook.getCurrent().open.resolution).toMatchObject({ kind: 'invalid' });
     });
 
@@ -185,7 +184,7 @@ describe('useOpenProject', () => {
         workspaceRefs.current.push({ ...workspaceRefs.current[0]!, serverId: serverIdB, rootPath: '/other' });
         await refreshWorkspaceRefs();
         const hook = await renderHook(() => useOpenProject(), { wrapper: PaneWrapper });
-        expect(hook.getCurrent()('wr_1', { serverId: serverIdB,
+        expect(await hook.getCurrent()('wr_1', { serverId: serverIdB,
             initialResource: { kind: 'file', path: 'README.md' } })).toBe(true);
         const href = new URL(routerPush.mock.calls[0][0], 'https://happier.invalid');
         expect(href.pathname).toBe('/projects/wr_1/code');
@@ -198,7 +197,7 @@ describe('useOpenProject', () => {
         storage.getState().applyLocalSettings({ projectLastActiveRootPathByWorkspaceRefId: { wr_1: '/repo/feature' },
             projectLastActiveWorktreeIdByWorkspaceRefId: { wr_1: 'foreign-worktree' } });
         const hook = await renderHook(() => useOpenProject(), { wrapper: PaneWrapper });
-        expect(hook.getCurrent()('wr_1', { serverId: serverIdB })).toBe(true);
+        expect(await hook.getCurrent()('wr_1', { serverId: serverIdB })).toBe(true);
         expect(new URL(routerPush.mock.calls[0][0], 'https://happier.invalid').searchParams.get('worktreeId')).toBe('@root');
     });
 
@@ -208,9 +207,9 @@ describe('useOpenProject', () => {
         const key = buildRealmQualifiedMobileSurfaceStorageKey('project', { serverId: serverIdA, accountId: 'account-a' }, 'wr_1')!;
         storage.getState().applyLocalSettings({ projectLastMobileSurfaceByWorkspaceRefId: { [key]: 'context', wr_1: 'git' } });
         const hook = await renderHook(() => useOpenProject(), { wrapper: PaneWrapper });
-        expect(hook.getCurrent()('wr_1', { serverId: serverIdA })).toBe(true);
+        expect(await hook.getCurrent()('wr_1', { serverId: serverIdA })).toBe(true);
         expect(new URL(routerPush.mock.calls[0][0], 'https://happier.invalid').pathname).toBe('/projects/wr_1/context');
-        expect(hook.getCurrent()('wr_1', { serverId: serverIdB })).toBe(true);
+        expect(await hook.getCurrent()('wr_1', { serverId: serverIdB })).toBe(true);
         expect(new URL(routerPush.mock.calls[1][0], 'https://happier.invalid').pathname).toBe('/projects/wr_1/overview');
     });
 
@@ -221,14 +220,14 @@ describe('useOpenProject', () => {
         storage.getState().applyLocalSettings({ projectLastActiveRootPathByWorkspaceRefId: { [key]: '/other/feature', wr_1: '/repo/feature' },
             projectLastActiveWorktreeIdByWorkspaceRefId: { [key]: 'selected-worktree', wr_1: 'foreign-worktree' } });
         const hook = await renderHook(() => useOpenProject(), { wrapper: PaneWrapper });
-        expect(hook.getCurrent()('wr_1', { serverId: serverIdB })).toBe(true);
+        expect(await hook.getCurrent()('wr_1', { serverId: serverIdB })).toBe(true);
         expect(new URL(routerPush.mock.calls[0][0], 'https://happier.invalid').searchParams.get('worktreeId')).toBe('selected-worktree');
     });
 
     it('opens an initial saved-workspace file in the project details owner', async () => {
         const hook = await renderHook(() => ({ open: useOpenProject(), pane: useAppPaneContext() }), { wrapper: PaneWrapper });
 
-        expect(hook.getCurrent().open('wr_1', {
+        expect(await hook.getCurrent().open('wr_1', {
             activeRootPath: '/repo',
             initialResource: { kind: 'file', path: 'src/index.ts' },
         })).toBe(true);
@@ -238,24 +237,40 @@ describe('useOpenProject', () => {
         expect(href.pathname).toBe('/projects/wr_1/code');
         expect(Object.fromEntries(href.searchParams)).toMatchObject({ serverId: serverIdA, worktreeId: '@root', initialFile: 'src/index.ts' });
     });
-    it('stages direct same-Home file Find input and reuses Search input without replacing its lifetime', async () => {
-        const hook = await renderHook(() => ({ open: useOpenProject(), handoff: useAppPaneContext().fileFindSeedHandoff }), { wrapper: PaneWrapper });
-        const destination = { host: 'project' as const, id: 'wr_1', accountId: 'account-a', path: 'src/index.ts',
-            scope: { serverId: serverIdA, machineId: 'machine-a', rootPath: '/repo' } };
-        const find = { query: 'private needle', options: { matchCase: false, regex: false }, target: { kind: 'file' as const, path: destination.path } };
-        const options = { initialResource: { kind: 'file' as const, path: destination.path, find } };
-        expect(hook.getCurrent().open('wr_1', options)).toBe(true);
-        expect(hook.getCurrent().handoff.take(destination)).toEqual(find);
-        expect(routerPush.mock.calls[0][0]).not.toContain(find.query);
-        const authority = captureActiveServerAccountScopeLifetime();
-        if (!authority) throw new Error('Expected real Account lifetime');
-        const cancelSearch = hook.getCurrent().handoff.stage(destination, find, authority);
-        expect(hook.getCurrent().open('wr_1', options)).toBe(true);
-        cancelSearch();
-        expect(hook.getCurrent().handoff.take(destination)).toBeNull();
-        routerPush.mockImplementationOnce(() => { throw new Error('Route failed'); });
-        expect(() => hook.getCurrent().open('wr_1', options)).toThrow('Route failed');
-        expect(hook.getCurrent().handoff.take(destination)).toBeNull();
+    it('admits accepted Project navigation through the mounted Workspace Action owner', async () => {
+        const { registerMountedWorkspaceAction } = await import('@/components/appShell/workspace/workspaceActionRuntime');
+        const requests: unknown[] = [];
+        const release = registerMountedWorkspaceAction(async request => {
+            requests.push(request);
+            return { ok: true };
+        });
+        try {
+            const hook = await renderHook(() => useOpenProject(), { wrapper: PaneWrapper });
+            await expect(hook.getCurrent()('wr_1', {
+                activeRootPath: '/repo', initialResource: { kind: 'file', path: 'src/index.ts' },
+            })).resolves.toBe(true);
+            expect(requests).toEqual([expect.objectContaining({ actionId: 'workspace.tabs.open', input: expect.objectContaining({
+                href: expect.stringContaining('/projects/wr_1/code'),
+            }) })]);
+            expect(routerPush).not.toHaveBeenCalled();
+        } finally { release(); }
+    });
+    it('sends private same-Home file Find input to the mounted Workspace Action only', async () => {
+        const { registerMountedWorkspaceAction } = await import('@/components/appShell/workspace/workspaceActionRuntime');
+        const requests: unknown[] = [];
+        const release = registerMountedWorkspaceAction(async request => { requests.push(request); return { ok: true }; });
+        const hook = await renderHook(() => useOpenProject(), { wrapper: PaneWrapper });
+        const find = { query: 'private needle', options: { matchCase: false, regex: false },
+            target: { kind: 'file' as const, path: 'src/index.ts' } };
+        const options = { initialResource: { kind: 'file' as const, path: 'src/index.ts', find } };
+        expect(await hook.getCurrent()('wr_1', options)).toBe(true);
+        expect(requests).toEqual([expect.objectContaining({ actionId: 'workspace.tabs.open', input: expect.objectContaining({
+            href: expect.not.stringContaining(find.query),
+            find: { query: find.query, options: find.options, target: expect.objectContaining({
+                kind: 'project-file', workspaceRefId: 'wr_1', machineId: 'machine-a', rootPath: '/repo', path: 'src/index.ts',
+            }) },
+        }) })]);
+        release();
         await act(async () => {
             const otherHome = await homes.addHome({ name: 'Other Home', serverUrl: 'https://projects-open-other.test', accountId: 'account-a' });
             homes.answer(otherHome, '/v1/account/project-rows/list', { body: { status: 'listed', coverage: 'complete', rows: [] } });
@@ -263,6 +278,6 @@ describe('useOpenProject', () => {
             const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
             await restoreConnectionToActiveServer({ token: homes.findByServerUrl('https://projects-open-other.test')!.token! });
         });
-        expect(hook.getCurrent().open('wr_1', options)).toBe(false);
+        expect(await hook.getCurrent()('wr_1', options)).toBe(false);
     });
 });

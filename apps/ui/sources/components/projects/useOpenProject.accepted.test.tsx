@@ -30,7 +30,7 @@ describe('accepted Project Open focus', () => {
         const hook = await renderHook(() => useOpenProject(), { wrapper: Wrapper });
         // Refresh publication is real and may precede React's next render.
         applyProjectAccountRowsFixture(storage, { workspaceRefs: [ref] });
-        expect(hook.getCurrent()(ref.id, { workspaceAddress: { serverId: ref.serverId, workspaceId: ref.id,
+        expect(await hook.getCurrent()(ref.id, { workspaceAddress: { serverId: ref.serverId, workspaceId: ref.id,
             machineId: ref.machineId, rootPath: ref.rootPath }, activeRootPath: '/repo/accepted' })).toBe(true);
         const href = new URL(push.mock.calls[0]![0], 'https://happier.test');
         expect(href.searchParams.get('activeRootPath')).toBe('/repo/accepted');

@@ -606,7 +606,16 @@ disclosure and server-readable accounting fields.
 ### Filesystem mutations and finite transfers (development)
 
 The filesystem Action family addresses an exact Machine and reviewed workspace
-root. Create-directory, rename, delete and copy reuse the filesystem-policy and
+root. Bounded read-file, write-file, list-directory and directory-tree requests
+now enter through the same strict Action family as create-directory, rename,
+delete and copy. The existing daemon filesystem handlers remain the canonical
+path/security and size-limit owners; retained released RPC method names are
+carrier aliases, not a second policy path. Inline writes retain dangerous-Action
+approval and expected-hash enforcement. Bounded reads return their existing
+base64 or metadata-shaped result and do not move transfer bytes into an Action
+receipt.
+
+Create-directory, rename, delete and copy reuse the filesystem-policy and
 mutation owners; destructive effects retain configurable dangerous-Action
 approval (Ask first by default). Semantic RPC names refuse unsupported older
 daemons instead of delivering rooted instructions to an older handler that
@@ -679,6 +688,10 @@ is observed at that exact row, not blindly replayed. This row is not a global
 Account Settings binding or a client-owned settings cache.
 
 Machine work admission uses `finitePolicyV1` inside the existing Machine content
+Save As and clipboard placement remain client-local effects. The Action layer
+admits and references the existing transfer lifecycle, while the requester-owned
+driver keeps byte custody, destination finalization and cleanup.
+
 and metadata CAS. Its semantic writer preserves unrelated metadata and consumes
 the current mode/key and Manage admission owners. `runAtMost: null` means No limit
 only after valid content has been opened; unavailable content does not imply
@@ -946,6 +959,13 @@ notification plugin. Request requires present-user authority; Agent and MCP disc
 does not authorize automation to spend an OS permission prompt. The result reports
 the permission observed after the request, not a notification-delivery guarantee.
 These client-local declarations do not add a CLI, daemon or server permission path.
+
+Accepted Project/file Find navigation uses `workspace.tabs.open` with a private,
+strictly qualified launch seed. The mounted Workspace Action validates the
+Project destination and current Home/Account authority, stages the seed in the
+existing one-shot file Find handoff, and only then opens the route. Query text is
+never serialized into the URL or tab state. Session chat Find keeps the same
+private handoff and lifecycle under the same Workspace Action owner.
 
 `notifications.push.tokens.list/remove` addresses the captured Home’s existing push
 registration API. List returns registration ids, masked display fingerprints, timestamps,

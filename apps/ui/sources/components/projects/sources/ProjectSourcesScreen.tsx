@@ -197,11 +197,11 @@ const ProjectSourcesCollection = React.memo(function ProjectSourcesCollection(
         fireAndForget(seedAndOpenProjectDraft({ lifetime, selection, navigate: navigateToOpen }), { tag: 'ProjectSources.open' });
       }}
       onOpenCheckout={(workspaceRefId) => {
-        openProject(workspaceRefId, { serverId: props.scope.serverId });
+        fireAndForget(openProject(workspaceRefId, { serverId: props.scope.serverId }), { tag: 'ProjectSources.openCheckout' });
       }}
       onOpenDashboard={(sourceId, reference, workspaceAddress) => {
-        openProject(workspaceAddress.workspaceId, { serverId: props.scope.serverId, workspaceAddress,
-          attachedDashboard: { sourceId, artifactId: reference.artifactId } });
+        fireAndForget(openProject(workspaceAddress.workspaceId, { serverId: props.scope.serverId, workspaceAddress,
+          attachedDashboard: { sourceId, artifactId: reference.artifactId } }), { tag: 'ProjectSources.openDashboard' });
       }}
       onDeleted={() => navigate(projectSourceRoute(null), true)}
     />

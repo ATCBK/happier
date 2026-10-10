@@ -1,4 +1,5 @@
 import { readFile, stat } from 'fs/promises';
+import { resolve as resolvePath } from 'node:path';
 
 import { configuration } from '@/configuration';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
@@ -14,7 +15,7 @@ import { registerActionSpecRpcHandlers } from '../registerActionSpecRpcHandlers'
 import type { RpcActionExecutor } from '../_actionDispatchAdapter';
 import type { ActionId } from '@happier-dev/protocol';
 
-type ReadFileRequest = Readonly<{ path: string }>;
+type ReadFileRequest = Readonly<{ rootPath?: string; path: string }>;
 
 type ReadFileResponse =
   | Readonly<{ success: true; content: string }>
@@ -30,6 +31,9 @@ type ReadFileHandlerDeps = Readonly<{
 async function readFileForRpc(data: ReadFileRequest | undefined, deps: ReadFileHandlerDeps): Promise<ReadFileResponse> {
   const path = typeof data?.path === 'string' ? data.path : '';
   logger.debug('Read file request:', path);
+  if (data?.rootPath !== undefined && resolvePath(data.rootPath) !== resolvePath(deps.workingDirectory)) {
+    return { success: false, error: 'Workspace root does not match this filesystem owner' };
+  }
 
   const validation = validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedReadDirs(), deps.accessPolicy);
   let resolvedPath: string;
@@ -92,5 +96,9 @@ export function registerReadFileHandler(
     rpcHandlerManager,
     actionExecutor: deps.actionExecutor ?? createReadFileRpcActionExecutor(deps),
     actionIds: ['daemon.filesystem.readFile'],
+    mapRequestForMethod: ({ isAlias, input }) => ({ accepted: true,
+      input: isAlias && input && typeof input === 'object'
+        ? { ...(input as Record<string, unknown>), rootPath: deps.workingDirectory }
+        : input }),
   });
 }

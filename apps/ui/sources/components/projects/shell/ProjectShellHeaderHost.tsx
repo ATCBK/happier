@@ -159,7 +159,7 @@ export function useProjectShellCheckout(
         if (resolution.kind !== 'resolved') return;
         const selectedRef = resolution.ref;
         if (props.onSelectWorkspace) props.onSelectWorkspace(selectedRef);
-        else openProject(workspaceRefId, { serverId: selectedRef.serverId });
+        else fireAndForget(openProject(workspaceRefId, { serverId: selectedRef.serverId }), { tag: 'ProjectHeader.openCheckout' });
       }
       else if (id === OPEN_ELSEWHERE) {
         // 11's Open dialog, seeded with this exact checkout and its ref; the person picks the Machine.

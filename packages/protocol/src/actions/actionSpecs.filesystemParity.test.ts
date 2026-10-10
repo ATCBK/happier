@@ -12,6 +12,25 @@ const mutations = [
 ] as const;
 
 describe('filesystem Action parity', () => {
+  it('exposes bounded file reads, writes and directory reads through the same strict filesystem family', () => {
+    const cases = [
+      { id: 'daemon.filesystem.readFile', input: { rootPath: '/workspace', path: '/workspace/file.bin' }, safety: 'safe' },
+      { id: 'daemon.filesystem.writeFile', input: { rootPath: '/workspace', path: '/workspace/file.bin', content: 'AAE=', expectedHash: null }, safety: 'danger' },
+      { id: 'daemon.filesystem.listDirectory', input: { rootPath: '/workspace', path: '/workspace/src', includeGitIgnore: true }, safety: 'safe' },
+      { id: 'daemon.filesystem.getDirectoryTree', input: { rootPath: '/workspace', path: '/workspace/src', maxDepth: 2 }, safety: 'safe' },
+    ] as const;
+    for (const row of cases) {
+      const spec = getActionSpec(ActionIdSchema.parse(row.id));
+      expect(spec.inputSchema.parse(row.input)).toEqual(row.input);
+      expect(spec.inputSchema.safeParse({ ...row.input, callerAccountId: 'forged' }).success).toBe(false);
+      expect(spec.executionPlacement).toBe('machine');
+      expect(spec.surfaces).toMatchObject({ ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true });
+      expect(spec.bindings?.mcpToolName).toBeTruthy();
+      expect(spec.bindings?.voiceClientToolName).toBeTruthy();
+      expect(spec.safety).toBe(row.safety);
+    }
+  });
+
   it('exposes qualified strict filesystem mutations through the machine owner with Ask first', () => {
     for (const { id, input, method } of mutations) {
       const spec = getActionSpec(ActionIdSchema.parse(id));

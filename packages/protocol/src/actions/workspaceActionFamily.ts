@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 import type { ActionInputFieldHint, PreNormalizedActionSpec } from './actionSpecs.js';
 import { FindOptionsSchema } from './findActionSpecs.js';
+import { WorkspaceAnchorV1Schema } from '../workspace/anchors/v1.js';
 
 export const WORKSPACE_ACTION_IDS = [
   'workspace.tabs.list', 'workspace.tabs.open', 'workspace.tabs.activate', 'workspace.tabs.close',
@@ -17,10 +18,21 @@ export const WorkspaceChatFindSeedSchema = lazyZodSchema(() => z.object({
   query: z.string().min(1), options: FindOptionsSchema.optional(),
   target: z.object({ kind: z.literal('native-message'), agentId: id, remoteSessionId: id, sourceItemId: id }).strict(),
 }).strict());
+export const WorkspaceProjectFileFindSeedSchema = lazyZodSchema(() => z.object({
+  query: z.string().min(1), options: FindOptionsSchema.optional(),
+  target: z.object({
+    kind: z.literal('project-file'), workspaceRefId: id, serverId: id, machineId: id,
+    rootPath: z.string().min(1), path: z.string().min(1),
+    anchor: WorkspaceAnchorV1Schema.optional(),
+  }).strict(),
+}).strict());
+export const WorkspaceFindSeedSchema = lazyZodSchema(() => z.union([
+  WorkspaceChatFindSeedSchema, WorkspaceProjectFileFindSeedSchema,
+]));
 export const WORKSPACE_ACTION_INPUT_SCHEMAS = {
   'workspace.tabs.list': z.object({}).strict(),
   'workspace.tabs.open': z.object({ href: id.optional(), tabId: id.optional(), groupId: id.optional(),
-    find: WorkspaceChatFindSeedSchema.optional(),
+    find: WorkspaceFindSeedSchema.optional(),
     beforeTabId: id.nullable().optional(), reuseExisting: z.boolean().optional(),
     mode: z.enum(['preview', 'newTab', 'splitLeft', 'splitRight', 'splitUp', 'splitDown']).optional(),
   }).strict().refine(data => !data.mode?.startsWith('split') || (data.href !== undefined && data.tabId === undefined), {
@@ -91,7 +103,7 @@ const inputFields = {
   'workspace.tabs.list': [],
   'workspace.tabs.open': [
     { path: 'href', title: 'Destination', widget: 'text' }, { ...tabIdHint, required: false },
-    { path: 'find', title: 'Native conversation hit', widget: 'json', description: 'Query/options and native message identity for a qualified Session destination. Private launch input; not persisted in the URL or tab.' },
+    { path: 'find', title: 'Find target', widget: 'json', description: 'Query/options and an exact Session message or Project file target. Private launch input; not persisted in the URL or tab.' },
     { ...groupIdHint, required: false }, beforeTabHint,
     { path: 'reuseExisting', title: 'Go to an existing tab', widget: 'boolean' },
     { path: 'mode', title: 'Opening mode', widget: 'select', options: [

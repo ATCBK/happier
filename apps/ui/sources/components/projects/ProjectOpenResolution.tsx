@@ -123,7 +123,7 @@ export const ProjectOpenResolutionCard = React.memo(
 export function openProjectCandidate(
   openProject: ReturnType<typeof useOpenProject>,
   candidate: WorkspaceRefV1,
-): boolean {
+): Promise<boolean> {
   return openProject(candidate.id, {
     serverId: candidate.serverId,
     workspaceAddress: workspaceAddressFromRefV1(candidate),

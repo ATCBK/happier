@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve as resolvePath } from 'node:path';
 
 import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
@@ -8,7 +8,7 @@ import { logger } from '@/ui/logger';
 import { validatePath } from '../pathSecurity';
 import type { FilesystemAccessPolicy } from './accessPolicy/filesystemAccessPolicy';
 
-export type WriteFileRequest = Readonly<{ path: string; content: string; expectedHash?: string | null }>;
+export type WriteFileRequest = Readonly<{ rootPath?: string; path: string; content: string; expectedHash?: string | null }>;
 export type WriteFileResponse =
   | Readonly<{ success: true; hash: string }>
   | Readonly<{ success: false; error: string; errorCode?: 'hash_mismatch' | 'expected_file_missing' | 'expected_file_absent' }>;
@@ -22,6 +22,9 @@ export type WriteFileHandlerDeps = Readonly<{
 export async function writeFileForRpc(data: WriteFileRequest | undefined, deps: WriteFileHandlerDeps): Promise<WriteFileResponse> {
   const path = typeof data?.path === 'string' ? data.path : '';
   logger.debug('Write file request:', path);
+  if (data?.rootPath !== undefined && resolvePath(data.rootPath) !== resolvePath(deps.workingDirectory)) {
+    return { success: false, error: 'Workspace root does not match this filesystem owner' };
+  }
   const validation = validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedWriteDirs(), deps.accessPolicy);
   if (!validation.valid || !validation.resolvedPath) return { success: false, error: validation.error ?? 'Access denied' };
   const resolvedPath = validation.resolvedPath;

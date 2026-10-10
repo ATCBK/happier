@@ -6,16 +6,19 @@ import { digest } from '@/platform/digest';
 import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
 import {
     callDaemonWorkspaceStatFileRpc,
-    callDaemonWorkspaceWriteFileRpc,
     downloadDaemonWorkspaceFileToBase64,
     uploadDaemonWorkspaceFileFromReader,
 } from '@/sync/domains/transfers/runtime/transferRuntime';
+import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
 
 import type { WorkspaceFileSystemTarget } from './directoryBrowsing';
 import { runTransferFinalizeRecovery } from '@/components/transfers/recovery/runTransferFinalizeRecovery';
 import { t } from '@/text';
 import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferFinalizeRecovery';
 import type { WorkspaceFileUploadFinalizeResponse } from '@/sync/domains/transfers/runtime/transferRuntime/families/workspaceFileTransfers';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { FilesystemWriteFileOutputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import { invokeWorkspaceFileSystemAction } from './actionInvocation';
 
 const WORKSPACE_FILE_INLINE_MAX_BYTES_ENV_KEY = 'EXPO_PUBLIC_HAPPIER_SESSION_FILE_INLINE_MAX_BYTES';
 const DEFAULT_WORKSPACE_FILE_INLINE_MAX_BYTES = 256 * 1024;
@@ -127,7 +130,7 @@ type WorkspaceWriteFileRequest = Readonly<{
 
 export type WorkspaceWriteFileResponse =
   | Readonly<{ success: true; hash: string }>
-  | Readonly<{ success: false; error: string; errorCode?: string }>;
+  | Readonly<{ success: false; error: string; errorCode?: string; approvalArtifactId?: string }>;
 
 function normalizeWorkspaceWriteFileErrorCode(errorCode: string | undefined): string {
     const trimmed = typeof errorCode === 'string' ? errorCode.trim() : '';
@@ -161,21 +164,23 @@ export async function workspaceWriteFile(
                 ? { path, content: encodeBase64(contentBytes, 'base64') }
                 : { path, content: encodeBase64(contentBytes, 'base64'), expectedHash };
 
-        const response = await callDaemonWorkspaceWriteFileRpc({
-            machineId: target.machineId,
-            serverId: target.serverId,
+        const result = await invokeWorkspaceFileSystemAction(target, 'daemon.filesystem.writeFile', {
             rootPath: target.rootPath,
-            agentRootPath: target.agentRootPath,
-            request,
+            ...request,
+            path: resolveMachineAbsolutePath({ rootPath: target.rootPath, agentRootPath: target.agentRootPath,
+                requestPath: path, pathKind: 'workspace_entry' }),
         });
-        if (response.success !== true) {
+        if (!result.ok) {
             return {
                 success: false,
-                error: response.error,
-                errorCode: normalizeWorkspaceWriteFileErrorCode(response.errorCode),
+                error: result.error,
+                errorCode: normalizeWorkspaceWriteFileErrorCode(result.errorCode),
             };
         }
-        return response;
+        const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
+        if (approval.success) return { success: false, error: 'The Action awaits approval.', errorCode: 'approval_required', approvalArtifactId: approval.data.artifactId };
+        const response = FilesystemWriteFileOutputSchema.safeParse(result.result);
+        return response.success ? response.data : { success: false, error: 'The filesystem Action response could not be validated.', errorCode: 'invalid_action_output' };
     }
 
     try {

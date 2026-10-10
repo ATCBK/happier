@@ -38,7 +38,7 @@ export type UniversalSearchActivationOwners = Readonly<{
     /** Canonical router push for non-session destinations. */
     push: (path: string) => void;
     /** Canonical project opener, including persisted surface/worktree state. */
-    openProject: (workspaceRefId: string, options?: OpenProjectOptions) => boolean;
+    openProject: (workspaceRefId: string, options?: OpenProjectOptions) => Promise<boolean>;
     stageFileFindSeed?: (target: Extract<UniversalSearchTarget, { kind: 'workspaceFile' }>, seed: FindSeed) => (() => void) | null;
     /**
      * Re-resolves whether the exact target still exists for this reader RIGHT
@@ -79,7 +79,7 @@ export async function activateUniversalSearchResult(
             }
             case 'project': {
                 if (!target.workspaceRefId.trim()) return { ok: false, reason: 'unavailable' };
-                if (!owners.openProject(target.workspaceRefId, { serverId: target.serverId })) {
+                if (!await owners.openProject(target.workspaceRefId, { serverId: target.serverId })) {
                     return { ok: false, reason: 'unavailable' };
                 }
                 return { ok: true };
@@ -94,7 +94,7 @@ export async function activateUniversalSearchResult(
                 if (target.find && cancelSeed === null) return { ok: false, reason: 'unavailable' };
                 try {
                     if (target.workspaceRefId) {
-                        const opened = owners.openProject(target.workspaceRefId, {
+                        const opened = await owners.openProject(target.workspaceRefId, {
                             serverId: target.scope.serverId,
                             activeRootPath: target.scope.rootPath,
                             initialResource: { kind: 'file', path: target.path, ...(target.anchor ? { anchor: target.anchor } : {}),
@@ -125,7 +125,7 @@ export async function activateUniversalSearchResult(
             }
             case 'workspaceCommit': {
                 if (target.workspaceRefId) {
-                    return owners.openProject(target.workspaceRefId, {
+                    return await owners.openProject(target.workspaceRefId, {
                         serverId: target.scope.serverId,
                         activeRootPath: target.scope.rootPath,
                         initialResource: { kind: 'commit', sha: target.sha },

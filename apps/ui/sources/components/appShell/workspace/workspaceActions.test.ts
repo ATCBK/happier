@@ -20,6 +20,31 @@ vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
 });
 
 describe('workspace Action intent adapter', () => {
+    it('opens an exact Project file Find through the private handoff without putting the query in navigation state', () => {
+        let state = createWorkspaceState({ id: 'a', target: { kind: 'session', params: { id: 'a', serverId: 'home-a' } }, pinned: false, preview: false });
+        const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: true, friends: false }, pages: [] });
+        const navigation = createWorkspaceNavigationAdapter({ getState: () => state, getCatalog: () => catalog,
+            dispatch: action => { state = reduceWorkspaceState(state, action); }, transport: { commit: () => {} },
+            createId: () => 'new', onChange: () => {} });
+        const handoff = createFileFindSeedHandoff();
+        const authority: ServerAccountScopeLifetime = { scope: { serverId: 'home-a', accountId: 'account' },
+            isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        const execute = createWorkspaceActionAdapter({ getState: () => state, navigation, readCanvas: () => null,
+            createId: () => 'new', chatFind: { handoff, resolveAuthority: serverId => serverId === 'home-a' ? authority : null } });
+        const href = '/projects/wr_1/code?serverId=home-a&worktree=%2Frepo&initialFile=src%2Findex.ts';
+        const find = { query: 'private needle', options: { matchCase: false, regex: false }, target: {
+            kind: 'project-file' as const, workspaceRefId: 'wr_1', serverId: 'home-a', machineId: 'machine-a',
+            rootPath: '/repo', path: 'src/index.ts',
+        } };
+        expect(execute('workspace.tabs.open', { href, find })).toEqual({ ok: true });
+        expect(handoff.takeCurrent({ host: 'project', id: 'wr_1', path: 'src/index.ts',
+            scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' } })?.seed)
+            .toEqual({ query: 'private needle', options: { matchCase: false, regex: false },
+                target: { kind: 'file', path: 'src/index.ts' } });
+        expect(JSON.stringify(state)).not.toContain('private needle');
+        handoff.dispose();
+    });
+
     it('opens the exact native hit using the incumbent private chat handoff, never URL or tab persistence', () => {
         let state = createWorkspaceState({ id: 'a', target: { kind: 'session', params: { id: 'a', serverId: 'home-a' } }, pinned: false, preview: false });
         const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: true, friends: false }, pages: [] });

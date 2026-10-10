@@ -10,6 +10,10 @@ export const FILESYSTEM_MUTATION_ACTION_IDS = [
   'daemon.filesystem.copy',
 ] as const;
 export const FILESYSTEM_ACTION_IDS = [
+  'daemon.filesystem.readFile',
+  'daemon.filesystem.writeFile',
+  'daemon.filesystem.listDirectory',
+  'daemon.filesystem.getDirectoryTree',
   ...FILESYSTEM_MUTATION_ACTION_IDS,
   'daemon.filesystem.upload',
   'daemon.filesystem.download',
@@ -26,6 +30,53 @@ export type FilesystemTransferActionId = typeof FILESYSTEM_TRANSFER_ACTION_IDS[n
 export function isFilesystemActionId(value: string): value is FilesystemActionId {
   return (FILESYSTEM_ACTION_IDS as readonly string[]).includes(value);
 }
+
+const FilesystemFailureSchema = lazyZodSchema(() => z.object({
+  success: z.literal(false), error: z.string(), errorCode: z.string().optional(),
+}).strict());
+
+export const FilesystemReadFileInputSchema = lazyZodSchema(() => z.object({
+  rootPath: z.string().min(1), path: z.string().min(1),
+}).strict());
+export const FilesystemReadFileOutputSchema = lazyZodSchema(() => z.union([
+  z.object({ success: z.literal(true), content: z.string() }).strict(),
+  FilesystemFailureSchema,
+]));
+export const FilesystemWriteFileInputSchema = lazyZodSchema(() => z.object({
+  rootPath: z.string().min(1), path: z.string().min(1), content: z.string(),
+  expectedHash: z.string().nullable().optional(),
+}).strict());
+export const FilesystemWriteFileOutputSchema = lazyZodSchema(() => z.union([
+  z.object({ success: z.literal(true), hash: z.string().min(1) }).strict(),
+  FilesystemFailureSchema,
+]));
+export const FilesystemDirectoryEntrySchema = lazyZodSchema(() => z.object({
+  name: z.string(), type: z.enum(['file', 'directory', 'other']), size: z.number().optional(),
+  modified: z.number().optional(), gitIgnored: z.boolean().optional(),
+}).strict());
+export const FilesystemListDirectoryInputSchema = lazyZodSchema(() => z.object({
+  rootPath: z.string().min(1), path: z.string().min(1), includeGitIgnore: z.boolean().optional(),
+}).strict());
+export const FilesystemListDirectoryOutputSchema = lazyZodSchema(() => z.union([
+  z.object({ success: z.literal(true), entries: z.array(FilesystemDirectoryEntrySchema),
+    truncated: z.boolean().optional(), gitIgnoreAvailable: z.boolean().optional() }).strict(),
+  FilesystemFailureSchema,
+]));
+export type FilesystemTreeNode = Readonly<{
+  name: string; path: string; type: 'file' | 'directory'; size?: number; modified?: number;
+  children?: readonly FilesystemTreeNode[];
+}>;
+export const FilesystemTreeNodeSchema: z.ZodType<FilesystemTreeNode> = z.lazy(() => z.object({
+  name: z.string(), path: z.string(), type: z.enum(['file', 'directory']), size: z.number().optional(),
+  modified: z.number().optional(), children: z.array(FilesystemTreeNodeSchema).optional(),
+}).strict());
+export const FilesystemGetDirectoryTreeInputSchema = lazyZodSchema(() => z.object({
+  rootPath: z.string().min(1), path: z.string().min(1), maxDepth: z.number().int().nonnegative(),
+}).strict());
+export const FilesystemGetDirectoryTreeOutputSchema = lazyZodSchema(() => z.union([
+  z.object({ success: z.literal(true), tree: FilesystemTreeNodeSchema, truncated: z.boolean().optional() }).strict(),
+  FilesystemFailureSchema,
+]));
 
 // These are public Action schemas: their classic carriers supply the existing
 // author DTO/JSON-schema projections, constructed lazily at this public seam.
@@ -92,7 +143,7 @@ export const FilesystemCopyInputSchema = lazyZodSchema(() => z.union([
 ]));
 export const FilesystemMutationOutputSchema = lazyZodSchema(() => z.union([
   z.object({ success: z.literal(true) }).strict(),
-  z.object({ success: z.literal(false), error: z.string(), errorCode: z.string().optional() }).strict(),
+  FilesystemFailureSchema,
 ]));
 
 export type FilesystemCreateDirectoryInput = z.infer<typeof FilesystemCreateDirectoryInputSchema>;

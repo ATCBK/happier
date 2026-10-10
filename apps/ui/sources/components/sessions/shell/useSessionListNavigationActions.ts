@@ -8,6 +8,7 @@ import { storage, useSetting } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { useOpenProject } from '@/components/projects/useOpenProject';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import {
     useUniversalSearchRuntime,
     type UniversalSearchScopeSeed,
@@ -46,7 +47,7 @@ export function useSessionListNavigationActions(
 
     return {
         handleOpenProject(workspaceRefId: string, serverId?: string) {
-            openProject(workspaceRefId, { serverId });
+            fireAndForget(openProject(workspaceRefId, { serverId }), { tag: 'SessionList.openProject' });
         },
         handleCreateSessionFromWorkspaceScope(
             target: NewSessionGroupTarget,

@@ -23,7 +23,7 @@ import { ARTIFACT_FOLDER_ACTION_SPECS_V1 } from './specs/artifactFolders.js';
 import { ARTIFACT_FOLDER_ACTION_INPUT_SCHEMAS_V1, ARTIFACT_FOLDER_ACTION_OUTPUT_SCHEMAS_V1 } from '../prompts/library/promptFolderActionSchemasV1.js';
 import type { ArtifactFolderActionIdV1 } from '../prompts/library/artifactFolderActionIdsV1.js';
 import { PROFILE_ACTION_INPUT_SCHEMAS_V1, PROFILE_ACTION_OUTPUT_SCHEMAS_V1, type ProfileActionIdV1 } from '../profiles/profileActionsV1.js';
-import { FilesystemCreateDirectoryInputSchema, FilesystemRenameInputSchema, FilesystemDeleteInputSchema, FilesystemCopyInputSchema, FilesystemCopyOutputSchema, FilesystemMutationOutputSchema, FilesystemUploadInputSchema, FilesystemUploadOutputSchema, FilesystemDownloadInputSchema, FilesystemDownloadOutputSchema, FilesystemTransferCancelInputSchema, FilesystemTransferCancelOutputSchema, FILESYSTEM_ACTION_IDS } from './filesystemActionFamily.js';
+import { FilesystemReadFileInputSchema, FilesystemReadFileOutputSchema, FilesystemWriteFileInputSchema, FilesystemWriteFileOutputSchema, FilesystemListDirectoryInputSchema, FilesystemListDirectoryOutputSchema, FilesystemGetDirectoryTreeInputSchema, FilesystemGetDirectoryTreeOutputSchema, FilesystemCreateDirectoryInputSchema, FilesystemRenameInputSchema, FilesystemDeleteInputSchema, FilesystemCopyInputSchema, FilesystemCopyOutputSchema, FilesystemMutationOutputSchema, FilesystemUploadInputSchema, FilesystemUploadOutputSchema, FilesystemDownloadInputSchema, FilesystemDownloadOutputSchema, FilesystemTransferCancelInputSchema, FilesystemTransferCancelOutputSchema, FILESYSTEM_ACTION_IDS } from './filesystemActionFamily.js';
 import { OpenProjectInputV1Schema, OpenProjectResultV1Schema } from '../projects/openProjectV1.js';
 import { BotSetInputSchema } from '../sessions/identity/sessionBotV1.js';
 import { MANAGED_MACHINE_ACTION_SPECS } from './specs/managedMachines.js';
@@ -1293,22 +1293,6 @@ const DAEMON_ADMIN_INPUT_HINTS = Object.freeze({
 } satisfies ActionInputHints);
 
 const EmptyObjectSchema = lazyZodSchema(() => z.object({}).strict());
-const DaemonFilesystemReadFileInputSchema = lazyZodSchema(() => z.object({
-  path: z.string().min(1),
-}).passthrough());
-const DaemonFilesystemWriteFileInputSchema = lazyZodSchema(() => z.object({
-  path: z.string().min(1),
-  content: z.string(),
-  expectedHash: z.string().nullable().optional(),
-}).passthrough());
-const DaemonFilesystemListDirectoryInputSchema = lazyZodSchema(() => z.object({
-  path: z.string().min(1),
-  includeGitIgnore: z.boolean().optional(),
-}).passthrough());
-const DaemonFilesystemGetDirectoryTreeInputSchema = lazyZodSchema(() => z.object({
-  path: z.string().min(1),
-  maxDepth: z.number().int().min(0),
-}).passthrough());
 const BugReportGetLogTailInputSchema = lazyZodSchema(() => z.object({
   path: z.string().min(1).optional(),
   maxBytes: z.number().int().min(1024).max(1_000_000).optional(),
@@ -11458,12 +11442,15 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     description: 'Read a bounded file through daemon filesystem path authorization.',
     safety: 'safe',
     placements: [],
-    bindings: { rpcMethod: 'readFile' },
-    surfaces: DAEMON_ADMIN_RPC_SURFACES,
+    bindings: { rpcMethod: 'daemon.filesystem.readFile', rpcMethodAliases: [RPC_METHODS.READ_FILE], mcpToolName: 'daemon_filesystem_read_file', voiceClientToolName: 'daemonFilesystemReadFile' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     sideEffectClass: 'read',
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: DaemonFilesystemReadFileInputSchema,
-    inputHints: DAEMON_ADMIN_INPUT_HINTS,
+    outputSchema: FilesystemReadFileOutputSchema,
+    inputSchema: FilesystemReadFileInputSchema,
+    inputHints: { fields: [
+      { path: 'rootPath', title: 'Workspace root', widget: 'text', required: true },
+      { path: 'path', title: 'File path', widget: 'text', required: true },
+    ] },
   },
   {
     id: 'daemon.filesystem.writeFile',
@@ -11472,12 +11459,17 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     description: 'Write a bounded file through daemon filesystem path authorization.',
     safety: 'danger',
     placements: [],
-    bindings: { rpcMethod: 'writeFile' },
-    surfaces: DAEMON_ADMIN_RPC_SURFACES,
+    bindings: { rpcMethod: 'daemon.filesystem.writeFile', rpcMethodAliases: [RPC_METHODS.WRITE_FILE], mcpToolName: 'daemon_filesystem_write_file', voiceClientToolName: 'daemonFilesystemWriteFile' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     sideEffectClass: 'danger',
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: DaemonFilesystemWriteFileInputSchema,
-    inputHints: DAEMON_ADMIN_INPUT_HINTS,
+    outputSchema: FilesystemWriteFileOutputSchema,
+    inputSchema: FilesystemWriteFileInputSchema,
+    inputHints: { fields: [
+      { path: 'rootPath', title: 'Workspace root', widget: 'text', required: true },
+      { path: 'path', title: 'File path', widget: 'text', required: true },
+      { path: 'content', title: 'Base64 content', widget: 'text', required: true },
+      { path: 'expectedHash', title: 'Expected current SHA-256', widget: 'text' },
+    ] },
   },
   {
     id: 'daemon.filesystem.createDirectory',
@@ -11614,12 +11606,16 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     description: 'List a directory through daemon filesystem path authorization.',
     safety: 'safe',
     placements: [],
-    bindings: { rpcMethod: 'listDirectory' },
-    surfaces: DAEMON_ADMIN_RPC_SURFACES,
+    bindings: { rpcMethod: RPC_METHODS.LIST_DIRECTORY, mcpToolName: 'daemon_filesystem_list_directory', voiceClientToolName: 'daemonFilesystemListDirectory' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     sideEffectClass: 'read',
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: DaemonFilesystemListDirectoryInputSchema,
-    inputHints: DAEMON_ADMIN_INPUT_HINTS,
+    outputSchema: FilesystemListDirectoryOutputSchema,
+    inputSchema: FilesystemListDirectoryInputSchema,
+    inputHints: { fields: [
+      { path: 'rootPath', title: 'Workspace root', widget: 'text', required: true },
+      { path: 'path', title: 'Directory path', widget: 'text', required: true },
+      { path: 'includeGitIgnore', title: 'Include Git ignore state', widget: 'boolean' },
+    ] },
   },
   {
     id: 'daemon.filesystem.getDirectoryTree',
@@ -11627,12 +11623,16 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     description: 'Read a bounded directory tree through daemon filesystem path authorization.',
     safety: 'safe',
     placements: [],
-    bindings: { rpcMethod: 'getDirectoryTree' },
-    surfaces: DAEMON_ADMIN_RPC_SURFACES,
+    bindings: { rpcMethod: 'daemon.filesystem.getDirectoryTree', rpcMethodAliases: [RPC_METHODS.GET_DIRECTORY_TREE], mcpToolName: 'daemon_filesystem_get_directory_tree', voiceClientToolName: 'daemonFilesystemGetDirectoryTree' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     sideEffectClass: 'read',
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: DaemonFilesystemGetDirectoryTreeInputSchema,
-    inputHints: DAEMON_ADMIN_INPUT_HINTS,
+    outputSchema: FilesystemGetDirectoryTreeOutputSchema,
+    inputSchema: FilesystemGetDirectoryTreeInputSchema,
+    inputHints: { fields: [
+      { path: 'rootPath', title: 'Workspace root', widget: 'text', required: true },
+      { path: 'path', title: 'Directory path', widget: 'text', required: true },
+      { path: 'maxDepth', title: 'Maximum depth', widget: 'text', required: true },
+    ] },
   },
   {
     id: 'daemon.filesystem.listRoots',
@@ -14150,6 +14150,33 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze(
   }),
 );
 
+  'settings.list': '{"pageId":"notifications"}',
+  'settings.get': '{"anchor":"notifications.quietHours"}',
+  'settings.set': '{"anchor":"notifications.quietHours","value":{"enabled":false}}',
+  'settings.reset': '{"anchor":"notifications.quietHours"}',
+  'settings.invoke': '{"anchor":"diagnostics.enabled","input":{"kind":"diagnostics_enabled","enabled":true}}',
+  'localServices.inventory.list': '{"machineId":"{{machineId}}"}',
+  'localServices.inventory.refresh': '{"machineId":"{{machineId}}"}',
+  'localServices.launcher.snapshot': '{"machineId":"{{machineId}}"}',
+  'localServices.launcher.registerPreview': '{"machineId":"{{machineId}}","targetId":"service-1","scope":"workspace","workspaceRoot":"/workspace"}',
+  'localServices.launcher.history.clear': '{"machineId":"{{machineId}}","scope":"workspace","workspaceRoot":"/workspace"}',
+  'localServices.preview.openOrCreate': '{"machineId":"{{machineId}}","targetId":"listener-1"}',
+  'localServices.preview.status': '{"machineId":"{{machineId}}","previewId":"preview-1"}',
+  'localServices.preview.revoke': '{"machineId":"{{machineId}}","previewId":"preview-1"}',
+  'localServices.publicPreview.create': '{"machineId":"{{machineId}}","sessionId":"{{sessionId}}","previewId":"preview-1","mode":"secret_link","ttlMs":3600000}',
+  'localServices.publicPreview.status': '{"machineId":"{{machineId}}","exposureId":"exposure-1"}',
+  'localServices.publicPreview.revoke': '{"machineId":"{{machineId}}","exposureId":"exposure-1"}',
+  'machines.vitals.get': '{"machineId":"{{machineId}}","view":"summary"}',
+  'machines.vitals.summaries.list': '{"serverId":"{{serverId}}"}',
+  'machines.resources.policy.get': '{"machineId":"{{machineId}}"}',
+  'machines.storage.summary.get': '{"machineId":"{{machineId}}"}',
+  'machines.storage.category.list': '{"machineId":"{{machineId}}","categoryId":"logs"}',
+  'prompt_bundle.create': '{"title":"Example skill","bundleSchemaId":"skills.skill_md_v1","entries":[{"path":"SKILL.md","contentBase64":"IyBFeGFtcGxl","contentKind":"utf8"}]}',
+  'prompt_bundle.update': '{"artifactId":"bundle-1","title":"Example skill","skillMarkdown":"# Example"}',
+  'daemon.filesystem.readFile': '{"rootPath":"/workspace","path":"src/index.ts"}',
+  'daemon.filesystem.writeFile': '{"rootPath":"/workspace","path":"notes.txt","content":"SGVsbG8="}',
+  'daemon.filesystem.listDirectory': '{"rootPath":"/workspace","path":"src"}',
+  'daemon.filesystem.getDirectoryTree': '{"rootPath":"/workspace","path":"src","maxDepth":2}',
 assertPublicActionSdkMethodNames(ACTION_SPECS, PUBLIC_ACTION_ID_SET);
 
 const ACTION_SPECS_BY_ID = new Map(ACTION_SPECS.map((spec) => [spec.id, spec] as const));

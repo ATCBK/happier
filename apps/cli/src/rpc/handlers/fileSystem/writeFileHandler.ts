@@ -34,5 +34,9 @@ export function registerWriteFileHandler(
     rpcHandlerManager,
     actionExecutor: deps.actionExecutor ?? createWriteFileRpcActionExecutor(deps),
     actionIds: ['daemon.filesystem.writeFile'],
+    mapRequestForMethod: ({ isAlias, input }) => ({ accepted: true,
+      input: isAlias && input && typeof input === 'object'
+        ? { ...(input as Record<string, unknown>), rootPath: deps.workingDirectory }
+        : input }),
   });
 }

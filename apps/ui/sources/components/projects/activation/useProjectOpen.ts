@@ -49,7 +49,7 @@ export function useProjectOpen(options: UseProjectOpenOptions) {
                     return;
                 } finally { account?.dispose(); }
                 if (!isCurrent()) return;
-                const focused = openExistingRef.current(result.workspace.workspaceId, {
+                const focused = await openExistingRef.current(result.workspace.workspaceId, {
                     serverId: result.workspace.serverId, workspaceAddress: result.workspace, activeRootPath: result.directory,
                 });
                 setFocusUnavailable(!focused);

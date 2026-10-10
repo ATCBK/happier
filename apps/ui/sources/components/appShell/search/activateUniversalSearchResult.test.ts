@@ -14,7 +14,7 @@ async function expectSavedWorkspaceResourceOpensInProject(
     target: UniversalSearchTarget,
     initialResource: Readonly<{ kind: 'file'; path: string }> | Readonly<{ kind: 'commit'; sha: string }>,
 ): Promise<void> {
-    const openProject = vi.fn(() => true);
+    const openProject = vi.fn(async () => true);
     const outcome = await activateUniversalSearchResult(target, {
         navigateToSession: vi.fn(),
         push: vi.fn(),
@@ -37,7 +37,7 @@ describe('activateUniversalSearchResult', () => {
             machineId: 'machine-a', query: 'quartz', agentId: 'fixture-agent',
             source: { kind: 'fixture-source' }, candidate: { remoteSessionId: 'native', linkedSessionId: 'linked', updatedAtMs: 10 },
             sourceItemId: 'message-uuid' };
-        expect(await activateUniversalSearchResult(target, { navigateToSession: vi.fn(), push: vi.fn(), openProject: () => true,
+        expect(await activateUniversalSearchResult(target, { navigateToSession: vi.fn(), push: vi.fn(), openProject: async () => true,
             openExternalConversation: row => openExternalSessionCandidate({ candidate: row.candidate!, agentId: row.agentId,
                 source: row.source!, actionsAllowed: true, offline: false, isSelectionCurrent: () => true,
                 accountCurrentness: { isCurrent: () => true }, resolveCurrentTarget: () => ({ machineId: row.machineId, serverId: row.serverId }),
@@ -63,7 +63,7 @@ describe('activateUniversalSearchResult', () => {
                 serverId: 'producing-home', accountId: 'account-b',
                 ref: { kind: 'doc', artifactId: 'memory/b', serverId: 'home-b' },
                 location, factId: 'fact/b',
-            }, { push, navigateToSession, openProject: () => true });
+            }, { push, navigateToSession, openProject: async () => true });
             expect(outcome).toEqual({ ok: true });
             expect(push).toHaveBeenLastCalledWith(href);
         }
@@ -81,7 +81,7 @@ describe('activateUniversalSearchResult', () => {
                 workspaceRefId: host === 'project' ? destination.id : null,
                 sessionId: host === 'session' ? destination.id : null, serverId: scope.serverId, accountId: destination.accountId, find }, {
                 navigateToSession: async () => { throw new Error('Destination navigation failed'); },
-                openProject: () => false, push: () => {}, stageFileFindSeed: () => handoff.stage(destination, find, authority),
+                openProject: async () => false, push: () => {}, stageFileFindSeed: () => handoff.stage(destination, find, authority),
             });
             expect(outcome).toEqual({ ok: false, reason: host === 'session' ? 'failed' : 'unavailable' });
             expect(handoff.take(destination)).toBeNull();
@@ -95,7 +95,7 @@ describe('activateUniversalSearchResult', () => {
         const target = { kind: 'workspaceFile' as const, path: 'src/index.ts', anchor, find,
             scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' }, workspaceRefId: null,
             sessionId: 'session-a', serverId: 'home-a', accountId: 'account-a' };
-        expect(await activateUniversalSearchResult(target, { navigateToSession, push: vi.fn(), openProject: () => true, stageFileFindSeed })).toEqual({ ok: true });
+        expect(await activateUniversalSearchResult(target, { navigateToSession, push: vi.fn(), openProject: async () => true, stageFileFindSeed })).toEqual({ ok: true });
         expect(stageFileFindSeed).toHaveBeenCalledWith(target, find);
         const query = navigateToSession.mock.calls[0][1].query;
         expect(parseSessionPaneUrlState(query)?.details).toEqual({ kind: 'file', path: target.path, anchor });
@@ -105,7 +105,7 @@ describe('activateUniversalSearchResult', () => {
     it('keeps project file anchors and Find seeds on the canonical opener', async () => {
         const anchor = { kind: 'range' as const, filePath: 'src/index.ts', startLine: 12, endLine: 14 };
         const find = { query: 'needle', options: { matchCase: false, regex: false }, target: { kind: 'file' as const, path: 'src/index.ts', anchor } };
-        const openProject = vi.fn(() => true);
+        const openProject = vi.fn(async () => true);
         await activateUniversalSearchResult({ kind: 'workspaceFile', path: 'src/index.ts', anchor, anchorSource: 'diff', find,
             scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' }, workspaceRefId: 'wr_1',
             sessionId: null, serverId: 'home-a', accountId: 'account-a' }, { navigateToSession: vi.fn(), push: vi.fn(), openProject });
@@ -113,7 +113,7 @@ describe('activateUniversalSearchResult', () => {
     });
     it('opens project results through the canonical project-opening owner', async () => {
         const push = vi.fn();
-        const openProject = vi.fn(() => true);
+        const openProject = vi.fn(async () => true);
 
         const outcome = await activateUniversalSearchResult({
             kind: 'project',
@@ -144,7 +144,7 @@ describe('activateUniversalSearchResult', () => {
         }, {
             navigateToSession: vi.fn(),
             push: vi.fn(),
-            openProject: () => false,
+            openProject: async () => false,
         });
 
         expect(outcome).toEqual({ ok: false, reason: 'unavailable' });

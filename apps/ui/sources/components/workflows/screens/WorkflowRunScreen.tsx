@@ -1527,9 +1527,9 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         );
     }, [contentIdentity, isContentIdentityCurrent]);
 
-    const openWorkspace = React.useCallback((workspaceRefId: string, directory: string) => {
+    const openWorkspace = React.useCallback(async (workspaceRefId: string, directory: string) => {
         if (!activeAccountScope || !isContentIdentityCurrent(contentIdentity)) return;
-        const opened = openProject(workspaceRefId, { serverId: activeAccountScope.serverId, activeRootPath: directory });
+        const opened = await openProject(workspaceRefId, { serverId: activeAccountScope.serverId, activeRootPath: directory });
         if (!opened) {
             setControlError({
                 code: null,

@@ -1,5 +1,5 @@
 import { readdir, stat } from 'fs/promises';
-import { basename, join } from 'path';
+import { basename, join, resolve as resolvePath } from 'path';
 
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import { logger } from '@/ui/logger';
@@ -12,7 +12,7 @@ import { registerActionSpecRpcHandlers } from '../registerActionSpecRpcHandlers'
 import type { RpcActionExecutor } from '../_actionDispatchAdapter';
 import { registerFilesystemMutationActionHandlers, type FilesystemMutationActionIngress } from './pathMutationHandlers';
 
-type ListDirectoryRequest = Readonly<{ path: string; includeGitIgnore?: boolean }>;
+type ListDirectoryRequest = Readonly<{ rootPath?: string; path: string; includeGitIgnore?: boolean }>;
 
 type DirectoryEntry = Readonly<{
   name: string;
@@ -26,7 +26,7 @@ type ListDirectoryResponse =
   | Readonly<{ success: true; entries: DirectoryEntry[]; truncated?: boolean; gitIgnoreAvailable?: boolean }>
   | Readonly<{ success: false; error: string }>;
 
-type GetDirectoryTreeRequest = Readonly<{ path: string; maxDepth: number }>;
+type GetDirectoryTreeRequest = Readonly<{ rootPath?: string; path: string; maxDepth: number }>;
 
 type TreeNode = {
   name: string;
@@ -67,6 +67,9 @@ async function listDirectoryForRpc(
 ): Promise<ListDirectoryResponse> {
   const path = typeof data?.path === 'string' ? data.path : '';
   logger.debug('List directory request:', path);
+  if (data?.rootPath !== undefined && resolvePath(data.rootPath) !== resolvePath(deps.workingDirectory)) {
+    return { success: false, error: 'Workspace root does not match this filesystem owner' };
+  }
 
   const validation = validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedReadDirs(), deps.accessPolicy);
   if (!validation.valid || !validation.resolvedPath) {
@@ -108,6 +111,9 @@ async function getDirectoryTreeForRpc(
   const path = typeof data?.path === 'string' ? data.path : '';
   const requestedMaxDepth = typeof data?.maxDepth === 'number' ? data.maxDepth : Number(data?.maxDepth ?? 0);
   logger.debug('Get directory tree request:', path, 'maxDepth:', requestedMaxDepth);
+  if (data?.rootPath !== undefined && resolvePath(data.rootPath) !== resolvePath(deps.workingDirectory)) {
+    return { success: false, error: 'Workspace root does not match this filesystem owner' };
+  }
 
   const validation = validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedReadDirs(), deps.accessPolicy);
   if (!validation.valid || !validation.resolvedPath) {
@@ -219,5 +225,9 @@ export function registerDirectoryHandlers(
     rpcHandlerManager,
     actionExecutor: deps.actionExecutor ?? createDirectoryRpcActionExecutor(deps),
     actionIds: ['daemon.filesystem.listDirectory', 'daemon.filesystem.getDirectoryTree'],
+    mapRequestForMethod: ({ isAlias, input }) => ({ accepted: true,
+      input: isAlias && input && typeof input === 'object'
+        ? { ...(input as Record<string, unknown>), rootPath: deps.workingDirectory }
+        : input }),
   });
 }

@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { captureMountedWorkspaceAction } from '@/components/appShell/workspace/workspaceActionRuntime';
 
 import { useOptionalAppPaneContext } from '@/components/appShell/panes/AppPaneProvider';
 import { useMobileWorkspaceExperienceState } from '@/components/workspaceCockpit/useMobileWorkspaceExperienceState';
@@ -30,7 +31,7 @@ export type OpenProjectOptions = Readonly<{
 }>;
 
 /** Opens an existing project through the shared persisted surface/worktree policy. */
-export type OpenProject = ((workspaceRefId: string, options?: OpenProjectOptions) => boolean) & Readonly<{
+export type OpenProject = ((workspaceRefId: string, options?: OpenProjectOptions) => Promise<boolean>) & Readonly<{
     resolution: Exclude<WorkspaceRefResolutionV1, { kind: 'resolved' }> | null;
     dismissResolution(): void;
 }>;
@@ -51,7 +52,7 @@ export function useOpenProject(): OpenProject {
         setResolutionIssue(issue);
     }, []);
 
-    const open = React.useCallback((workspaceRefId: string, options?: OpenProjectOptions) => {
+    const open = React.useCallback(async (workspaceRefId: string, options?: OpenProjectOptions) => {
         const normalizedId = workspaceRefId.trim();
         if (options?.workspaceAddress && options.workspaceAddress.workspaceId !== normalizedId) {
             publishIssue({ kind: 'invalid', reason: 'workspace_address_id_mismatch' });
@@ -82,32 +83,27 @@ export function useOpenProject(): OpenProject {
             ? persistedWorktreeId
             : null;
         if (options?.attachedDashboard) {
-            router.push(buildProjectRouteHref({ workspaceRefId: workspaceRef.id, serverId: workspaceRef.serverId,
+            return await openHref(buildProjectRouteHref({ workspaceRefId: workspaceRef.id, serverId: workspaceRef.serverId,
                 segment: 'overview', activeRootPath, defaultRootPath: workspaceRef.rootPath, activeWorktreeId,
-                attachedDashboard: options.attachedDashboard }) as never);
-            return true;
+                attachedDashboard: options.attachedDashboard }));
         }
         if (options?.initialResource) {
             const tab = options.initialResource.kind === 'file'
                 ? createProjectFileDetailsTab(options.initialResource.path, options.initialResource.anchor, options.initialResource.anchorSource)
                 : createProjectCommitDetailsTab(options.initialResource.sha);
             if (!tab) return false;
-            let cancelSeed: (() => void) | undefined;
             const resource = options.initialResource;
+            let find: unknown;
             if (resource.kind === 'file' && resource.find) {
-                const handoff = paneContext?.fileFindSeedHandoff;
-                if (!handoff || resource.path !== resource.find.target.path) return false;
-                const destination = { host: 'project' as const, id: workspaceRef.id, path: resource.path,
-                    scope: { serverId: resolveServerProfileScopeIdForIdentifier(workspaceRef.serverId), machineId: workspaceRef.machineId, rootPath: activeRootPath } };
-                // Search already staged the exact credential-bound seed; do not replace its authority.
-                if (handoff.peekCurrent(destination) !== resource.find) {
-                    const authority = captureActiveServerAccountScopeLifetime();
-                    if (!authority?.isCurrent() || authority.scope.serverId !== destination.scope.serverId) return false;
-                    cancelSeed = handoff.stage({ ...destination, accountId: authority.scope.accountId }, resource.find, authority);
-                }
+                if (resource.path !== resource.find.target.path) return false;
+                find = { query: resource.find.query, options: resource.find.options, target: {
+                    kind: 'project-file', workspaceRefId: workspaceRef.id,
+                    serverId: resolveServerProfileScopeIdForIdentifier(workspaceRef.serverId),
+                    machineId: workspaceRef.machineId, rootPath: activeRootPath, path: resource.path,
+                    ...(resource.find.target.anchor ? { anchor: resource.find.target.anchor } : {}),
+                } };
             }
-            try {
-                router.push(buildProjectRouteHref({
+            return await openHref(buildProjectRouteHref({
                     workspaceRefId: workspaceRef.id,
                     serverId: workspaceRef.serverId,
                     segment: options.initialResource.kind === 'file' ? 'code' : 'changes',
@@ -118,14 +114,9 @@ export function useOpenProject(): OpenProject {
                     ...(deviceType === 'phone'
                         ? { sourceSurface: options.initialResource.kind === 'file' ? 'browse' as const : 'git' as const }
                         : {}),
-                }) as never);
-            } catch (error) {
-                cancelSeed?.();
-                throw error;
-            }
-            return true;
+                }), find);
         }
-        router.push(resolveProjectOpenHref({
+        return await openHref(resolveProjectOpenHref({
             workspaceRef,
             deviceType,
             cockpitEnabled,
@@ -133,8 +124,14 @@ export function useOpenProject(): OpenProject {
             persistedMobileSurface: readRealmQualifiedMobileSurface(lastMobileSurfaceByWorkspaceRefId, pagePreferenceKey),
             persistedActiveRootPath: activeRootPath,
             persistedWorktreeId: activeWorktreeId,
-        }) as never);
-        return true;
+        }));
+
+        async function openHref(href: string, find?: unknown): Promise<boolean> {
+            const execute = captureMountedWorkspaceAction();
+            if (!execute) { router.push(href as never); return true; }
+            const result = await execute({ actionId: 'workspace.tabs.open', input: { href, ...(find ? { find } : {}) } });
+            return result.ok;
+        }
     }, [cockpitEnabled, deviceType, lastActiveRootPathByWorkspaceRefId, lastActiveWorktreeIdByWorkspaceRefId, lastMobileSurfaceByWorkspaceRefId, paneContext, publishIssue, router, workspaceRefs]);
     return React.useMemo(() => Object.defineProperties(open, {
         resolution: { configurable: true, get: () => issueRef.current },
