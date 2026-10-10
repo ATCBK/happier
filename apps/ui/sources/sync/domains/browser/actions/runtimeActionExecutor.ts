@@ -239,7 +239,9 @@ async function executeBrowserControlAction(
 
     const externalTab = result.effects.find((effect) => effect.kind === 'openExternalTab');
     if (externalTab) {
-        await openBrowserExternalTabSelection(externalTab.selection);
+        if (!await openBrowserExternalTabSelection(externalTab.selection)) {
+            return browserRuntimeActionDisabledResult('browser_adapter_unavailable');
+        }
         return BrowserCommandDispatchResultV1Schema.parse({ v: 1, commandId: command.data.commandId,
             status: 'dispatched', adapterKind: externalTab.selection.adapterKind, events: [] });
     }
