@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import Ajv2020 from 'ajv/dist/2020.js';
 
 import * as protocol from '../../index.js';
+import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 
 type SafeParseSchema = {
   safeParse: (input: unknown) => { success: true; data: unknown } | { success: false };
@@ -152,16 +154,26 @@ describe('SystemTaskEventSchema', () => {
 
 describe('SystemTaskResultSchema', () => {
   it('accepts a successful result payload', () => {
-    const parsed = readSchema('SystemTaskResultSchema').safeParse({
+    const result = {
       protocolVersion: 1,
       taskId: 'task_123',
       ok: true,
       data: {
         daemonReady: true,
       },
-    });
+    };
+    const parsed = readSchema('SystemTaskResultSchema').safeParse(result);
 
     expect(parsed.success).toBe(true);
+
+    const validate = new Ajv2020({ strict: true }).compile(
+      zodSchemaToJsonSchemaObject(protocol.SystemTaskResultSchema),
+    );
+    expect(validate(JSON.parse(JSON.stringify(result)))).toBe(true);
+    const arrayResult = { ...result, data: [null, true, 1, 'ready', { daemonReady: true }] };
+    expect(readSchema('SystemTaskResultSchema').safeParse(arrayResult).success).toBe(true);
+    expect(validate(JSON.parse(JSON.stringify(arrayResult)))).toBe(true);
+    expect(validate({ ...result, unknown: true })).toBe(false);
   });
 
   it('accepts a failed result payload with a stable error shape', () => {
