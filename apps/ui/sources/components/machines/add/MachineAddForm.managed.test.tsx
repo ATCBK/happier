@@ -40,4 +40,26 @@ describe('Add machine Connect and Create entry', () => {
         expect(harness.requests.some(request => request.path.endsWith('/acquire'))).toBe(false);
         await screen.unmount();
     });
+
+    it('groups the ways in as Connect | Create on a phone, with the connection paths under Connect', async () => {
+        vi.spyOn(await import('react-native'), 'useWindowDimensions').mockReturnValue({ width: 390, height: 844, scale: 1, fontScale: 1 });
+        await harness.addHome({ name: 'Build', serverUrl: 'https://build-phone.example', serverIdentityId: 'srv_build_phone', accountId: 'owner' });
+        const { MachineAddForm } = await import('./MachineAddForm');
+        const screen = await renderScreen(<MachineAddForm layout="page" canCreate testID="settings.machines.draft.form" onClose={() => {}} onStartSession={() => {}} />);
+        await waitForHomeGovernance(() => expect(screen.tree.findAll(node => node.props.testID === 'settings.machines.draft.form.path:create').length).toBeGreaterThan(0));
+        const segments = (id: string) => screen.tree.findAll(node => node.props.testID === `settings.machines.draft.form.path:${id}`).length;
+        // Two segments at phone width (lab m-add Ap), not one per path.
+        expect(segments('connect')).toBeGreaterThan(0);
+        expect(segments('ssh')).toBe(0);
+        expect(segments('anotherComputer')).toBe(0);
+        // Every connection path stays one press away under Connect.
+        await act(async () => screen.pressByTestId('settings.machines.draft.form.connectPath.ssh'));
+        const { readMachineAddFlowDraft } = await import('./machineAddFlowStore');
+        expect(readMachineAddFlowDraft().path).toBe('ssh');
+        expect(readMachineAddFlowDraft().creating).toBe(false);
+        await act(async () => screen.pressByTestId('settings.machines.draft.form.path:create'));
+        expect(readMachineAddFlowDraft().creating).toBe(true);
+        expect(screen.tree.findAll(node => node.props.testID === 'settings.machines.draft.form.connectPath.ssh')).toHaveLength(0);
+        await screen.unmount();
+    });
 });

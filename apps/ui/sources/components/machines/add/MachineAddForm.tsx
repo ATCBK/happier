@@ -38,6 +38,7 @@ import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot'
 import { MachineProvisionerPicker } from '@/components/settings/machines/managed/MachineProvisionerPicker';
 import type { ManagedControllerScope } from '@/components/settings/machines/managed/useManagedControllerScope';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { useDeviceType } from '@/utils/platform/responsive';
 
 export type MachineAddFormLayout = 'page' | 'panel';
 
@@ -119,6 +120,9 @@ export function MachineAddFormWithFlow(props: MachineAddFormProps & Readonly<{ f
 
     const offerCreate = props.layout === 'page' && props.canCreate === true;
     const showCreate = offerCreate && (creating || paths.length === 0 || active === null);
+    // At phone width four ways in don't fit one bar: they group as Connect | Create, and the connection
+    // paths list under Connect (lab m-add Ap).
+    const grouped = useDeviceType() === 'phone' && offerCreate && paths.length > 0;
     const { choosePath } = flow;
     const setUpThisComputer = React.useCallback(() => {
         setCreating(false);
@@ -170,23 +174,43 @@ export function MachineAddFormWithFlow(props: MachineAddFormProps & Readonly<{ f
             {/* Two to four short ways in: one segmented bar, as wide as its words (lab m-add). Each pane
                 opens with its own lead line, so the bar carries names only. */}
             <View style={styles.paths}>
-            <SegmentedTabBar<MachineAddPathId | 'create'>
+            <SegmentedTabBar<MachineAddPathId | 'connect' | 'create'>
                 role="radiogroup"
                 segmentSizing="content"
                 testIDPrefix={`${props.testID}.path`}
                 accessibilityLabel={t('settings.addMachine')}
-                tabs={[
+                tabs={grouped ? [
+                    { id: 'connect', label: t('managedMachines.add.connect') },
+                    { id: 'create', label: t('managedMachines.add.create') },
+                ] : [
                     ...paths.map((path) => ({ id: path.id, label: path.chipLabel ?? path.title })),
                     ...(offerCreate ? [{ id: 'create' as const, label: t('managedMachines.add.createPath') }] : []),
                 ]}
-                activeTabId={showCreate || active === null ? 'create' : active}
+                activeTabId={showCreate || active === null ? 'create' : grouped ? 'connect' : active}
                 onSelectTab={(next) => {
                     if (next === 'create') setCreating(true);
+                    else if (next === 'connect') setCreating(false);
                     else { setCreating(false); flow.choosePath(next); }
                 }}
             />
             </View>
             </ItemGroup>
+            {grouped && !showCreate && active !== null && paths.length > 1 ? (
+                <ItemGroup>
+                    {paths.map((path) => (
+                        <Item
+                            key={path.id}
+                            testID={`${props.testID}.connectPath.${path.id}`}
+                            icon={path.glyph}
+                            title={path.title}
+                            subtitle={path.subtitle}
+                            selected={path.id === active}
+                            showChevron={false}
+                            onPress={() => flow.choosePath(path.id)}
+                        />
+                    ))}
+                </ItemGroup>
+            ) : null}
             {showCreate || active === null ? pane : <ItemGroup surface="none"><View style={styles.page}>{pane}</View></ItemGroup>}
         </View>
     );
