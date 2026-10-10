@@ -1,5 +1,6 @@
 import type { PromptFolderEntryV1, PromptFoldersV1 } from '@happier-dev/protocol';
 import { normalizeArtifactTagsV1 } from '@happier-dev/protocol/artifacts/artifactOrganizationV1';
+import type { ArtifactFolderCreateActionInputV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionSchemasV1';
 import { createPromptFolderV1,
   normalizePromptFolderNameV1, findPromptFolderByNameV1 } from '@happier-dev/protocol/prompts/library/promptFoldersV1';
 
@@ -57,4 +58,17 @@ export function ensurePromptFolderByName(
     promptFoldersV1: createPromptFolderV1(current, created),
     folderId: created.id,
   };
+}
+
+/** Pure save intent; the enclosing Action admits folder creation before either write. */
+export function resolvePromptFolderSaveIntent(
+  promptFolders: PromptFoldersV1,
+  folderName: string,
+  expectedRevision: number | 'absent',
+): Readonly<{ folderId: string | null; createFolder?: ArtifactFolderCreateActionInputV1 }> {
+  const ensured = ensurePromptFolderByName(promptFolders, folderName);
+  if (ensured.promptFoldersV1 === promptFolders) return { folderId: ensured.folderId };
+  const created = findPromptFolderById(ensured.promptFoldersV1, ensured.folderId);
+  if (!created) throw new Error('prompt_folder_intent_unavailable');
+  return { folderId: ensured.folderId, createFolder: { ...created, expectedRevision } };
 }

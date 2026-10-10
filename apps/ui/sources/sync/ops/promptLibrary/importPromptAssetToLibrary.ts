@@ -3,11 +3,10 @@ import type { PromptAssetReadResponseV1 } from '@happier-dev/protocol/prompts/li
 import type { PromptBundleSchemaIdV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import type { PromptExternalLinkEntryV1, PromptExternalLinksV1 } from '@happier-dev/protocol/prompts/library/promptExternalLinksV1';
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
-import { createPromptDocInLibrary, type PromptLibraryArtifactStore } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { createPromptBundleInLibrary, createPromptDocInLibrary, type PromptLibraryArtifactStore } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 
 import { randomUUID } from '@/platform/randomUUID';
 
-import { createPromptBundleArtifact } from './promptBundles';
 import { upsertPromptExternalLink } from './promptDocs';
 import { withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
 
@@ -71,12 +70,12 @@ export async function importPromptAssetToLibrary(args: Readonly<{
       };
     }
 
-    const artifactId = await createPromptBundleArtifact({
+    const { artifactId } = await createPromptBundleInLibrary({ store: current, request: {
       title: args.item.title,
       bundleSchemaId: args.item.bundleSchemaId as PromptBundleSchemaIdV1,
       entries: args.item.bundleBody.entries,
       origin: 'imported',
-    }, current);
+    } });
     return {
       artifactId,
       routeKind: 'bundle' as const,

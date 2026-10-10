@@ -13,7 +13,7 @@ import { createUiPromptLibraryArtifactStore } from '@/sync/ops/promptLibrary/pro
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
-import { requireUpdatedPromptLibraryMutation } from '@/sync/api/account/apiPromptLibraryCatalog';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import { MarkdownCodeEditorField } from '@/components/ui/markdown/editor/MarkdownCodeEditorField';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -46,7 +46,7 @@ import { usePromptLibraryEntryActions } from '@/components/settings/prompts/coll
 import { usePromptLibraryEntryMeta } from '@/components/settings/prompts/collection/usePromptLibraryEntryMeta';
 import { usePromptEditorDraftField } from '@/components/settings/prompts/shared/usePromptEditorDraftField';
 import { readSkillBundleArtifactState, type SkillBundleArtifactState } from '@/components/settings/prompts/skills/readSkillBundleArtifactState';
-import { ensurePromptFolderByName, findPromptFolderById, formatPromptTags, normalizePromptTags } from '@/sync/ops/promptLibrary/promptFolders';
+import { resolvePromptFolderSaveIntent, findPromptFolderById, formatPromptTags, normalizePromptTags } from '@/sync/ops/promptLibrary/promptFolders';
 
 const styles = StyleSheet.create((theme) => ({
   editorContainer: {
@@ -69,10 +69,11 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
   const targetServerId = props.serverId?.trim() || activeScope?.serverId;
   const targetActiveAccountId = targetServerId === activeScope?.serverId ? activeScope?.accountId : undefined;
   const [editingScope, setEditingScope] = React.useState<ServerAccountScope | null>(null);
+  const { execute } = useMountedActionExecution(editingScope);
   const accountRef = React.useRef<LazyActionAccountContext | null>(null);
   const documentRef = React.useRef<SkillBundleArtifactState | null>(null);
   const revisionRef = React.useRef<PromptLibraryStoredArtifact['revision'] | null>(null);
-  const { value: promptFoldersV1, write: writeFolders, status: foldersStatus, stale: foldersStale } = usePromptLibraryCatalogValue('folders', editingScope);
+  const { value: promptFoldersV1, revision: foldersRevision, status: foldersStatus, stale: foldersStale } = usePromptLibraryCatalogValue('folders', editingScope);
   const wrapLinesInDiffs = useSetting('wrapLinesInDiffs');
   const savedArtifactId = props.artifactId;
   const isNew = savedArtifactId === null;
@@ -298,7 +299,6 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
       setSaving(true);
       if (!account) throw new Error('action_account_scope_changed');
       account.assertCurrent();
-      const store = createUiPromptLibraryArtifactStore(account.workflowArtifacts, account);
       // Flush any debounced edit out of the active editor surface, then read the
       // freshest skill markdown from its handle (state may not have caught up yet).
       await editorRef.current?.flushPendingChange();
@@ -306,30 +306,39 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
       submittedMarkdown = latestSkillMarkdown;
       account.assertCurrent();
       let organization: { folderId?: string | null; tags?: readonly string[] } = {};
+      let createFolder: ReturnType<typeof resolvePromptFolderSaveIntent>['createFolder'];
       if (organizationWritable && promptFoldersV1) {
-        const ensuredFolder = ensurePromptFolderByName(promptFoldersV1, folderName);
-        if (ensuredFolder.promptFoldersV1 !== promptFoldersV1) {
-          requireUpdatedPromptLibraryMutation(await writeFolders(ensuredFolder.promptFoldersV1));
-        }
-        organization = { folderId: ensuredFolder.folderId, tags: normalizePromptTags(tagsText) };
+        const intent = resolvePromptFolderSaveIntent(promptFoldersV1, folderName, foldersRevision);
+        createFolder = intent.createFolder;
+        organization = { folderId: intent.folderId, tags: normalizePromptTags(tagsText) };
       }
+      const admission = { serverId: account.serverId, expectedAccountId: account.accountId, executeAction: execute,
+        ...(createFolder ? { createFolder } : {}) };
       if (!props.artifactId) {
-        const artifactId = await createSkillPromptBundle({ title: title.trim(), skillMarkdown: latestSkillMarkdown, ...organization }, store);
+        const artifactId = await createSkillPromptBundle({ title: title.trim(), skillMarkdown: latestSkillMarkdown, ...organization, ...admission });
+        if (accountRef.current !== account) throw new Error('action_account_scope_changed');
         account.assertCurrent();
+        setPristineTitle(title);
+        setPristineSkillMarkdown(latestSkillMarkdown);
+        if (organizationWritable) {
+          setPristineFolderName(folderName);
+          setPristineTagsText(tagsText);
+        }
         setPendingHref(promptCollectionItemHref('bundle', artifactId, { serverId: account.serverId }));
       } else {
         const expectedRevision = revisionRef.current;
         if (!expectedRevision) throw new Error('prompt_bundle_review_unavailable');
         const revision = await updateSkillPromptBundle({ artifactId: props.artifactId, expectedRevision,
-          title: title.trim(), skillMarkdown: latestSkillMarkdown, ...organization }, store);
+          title: title.trim(), skillMarkdown: latestSkillMarkdown, ...organization, ...admission });
+        if (accountRef.current !== account) throw new Error('action_account_scope_changed');
         account.assertCurrent();
         adoptContent(revision, latestSkillMarkdown);
-      }
-      setPristineTitle(title);
-      setPristineSkillMarkdown(latestSkillMarkdown);
-      if (organizationWritable) {
-        setPristineFolderName(folderName);
-        setPristineTagsText(tagsText);
+        applyExternalTitle(title, { preserveDirty: true });
+        applyExternalSkillMarkdown(latestSkillMarkdown, { preserveDirty: true });
+        if (organizationWritable) {
+          applyExternalFolderName(folderName, { preserveDirty: true });
+          applyExternalTagsText(tagsText, { preserveDirty: true });
+        }
       }
       return true;
     } catch (error) {
@@ -353,7 +362,7 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
     } finally {
       setSaving(false);
     }
-  }, [applyExternalSkillMarkdown, applyExternalTitle, contentValid, folderName, isNew, organizationWritable, promptFoldersV1, props.artifactId, saving, setPristineFolderName, setPristineSkillMarkdown, setPristineTagsText, setPristineTitle, writeFolders, skillMarkdown, tagsText, title]);
+  }, [applyExternalFolderName, applyExternalSkillMarkdown, applyExternalTagsText, applyExternalTitle, contentValid, execute, folderName, foldersRevision, isNew, organizationWritable, promptFoldersV1, props.artifactId, saving, setPristineFolderName, setPristineSkillMarkdown, setPristineTagsText, setPristineTitle, skillMarkdown, tagsText, title]);
 
   const leave = React.useCallback(() => setPendingHref(promptCollectionRoot('bundle')), []);
   const discard = React.useCallback(() => {
@@ -427,7 +436,8 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
                   artifactId: savedArtifactId,
                   path,
                   expectedRevision,
-                }, createUiPromptLibraryArtifactStore(account.workflowArtifacts, account));
+                  serverId: account.serverId, expectedAccountId: account.accountId, executeAction: execute,
+                });
                 account.assertCurrent();
                 if (accountRef.current !== account) throw new Error('action_account_scope_changed');
                 revisionRef.current = revision;
@@ -447,7 +457,7 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
         },
       ],
     );
-  }, [savedArtifactId]);
+  }, [execute, savedArtifactId]);
 
   return (
     <ItemList keyboardShouldPersistTaps="handled">

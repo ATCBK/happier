@@ -1,9 +1,8 @@
 import type { PromptRegistryConfiguredSourceV1, PromptRegistryFetchedItemV1 } from '@happier-dev/protocol';
-import type { PromptLibraryArtifactStore } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { createPromptBundleInLibrary, type PromptLibraryArtifactStore } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 
 import { machinePromptRegistriesDownloadItem } from '@/sync/ops/machinePromptRegistries';
 
-import { createPromptBundleArtifact } from './promptBundles';
 import { withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
 
 export type PromptRegistrySkillImportResult = Readonly<
@@ -22,12 +21,13 @@ export async function createPromptRegistrySkillArtifactFromFetchedItem(
     };
   }
 
-  const artifactId = await createPromptBundleArtifact({
+  const runImport = async (current: PromptLibraryArtifactStore) => createPromptBundleInLibrary({ store: current, request: {
     title: item.title,
     bundleSchemaId: item.bundleSchemaId,
     entries: item.bundleBody.entries,
     origin: 'imported',
-  }, store);
+  } });
+  const { artifactId } = await (store ? runImport(store) : withUiPromptLibraryArtifactStore(runImport));
 
   return {
     ok: true,

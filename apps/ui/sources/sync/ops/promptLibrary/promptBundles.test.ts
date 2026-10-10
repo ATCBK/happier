@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { PromptBundleBodyV1Schema } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
-import type { PromptLibraryArtifactStore, PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
-import type { PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
-import type { PromptLibraryCatalogSnapshotV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { createPromptBundleInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
 import {
   createPromptBundleArtifact,
   createSkillPromptBundle,
@@ -21,6 +21,15 @@ let fixture:
   | Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>
   | undefined;
 let catalog = createPromptLibraryCatalogBoundary();
+const bundleWriteSettings = { actionsSettingsV1: { v: 1, approvalWaivedSurfaces: {
+  'prompt_bundle.create': ['ui'], 'prompt_bundle.update': ['ui'],
+} } };
+// Transform the real Account/Sync graph outside the behavior-test deadline.
+beforeAll(async () => {
+  await import('@/sync/ops/actions/actionAccountContext');
+  await import('@/sync/domains/state/storage');
+  await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+}, 300_000);
 afterEach(() => {
   fixture?.dispose();
   fixture = undefined;
@@ -28,56 +37,69 @@ afterEach(() => {
 async function home() {
   catalog = createPromptLibraryCatalogBoundary({ records: [{ key: 'folders', value: { v: 1,
     folders: [{ id: 'folder-1', name: 'Personal' }] } }] });
-  return (fixture = await createPlainArtifactHomeFixture(
+  fixture = await createPlainArtifactHomeFixture(
     'https://prompt-bundle-operations.test',
-    { handleRequest: (path, init) => catalog.handle(path, init) },
-  ));
+    { handleRequest: (path, init) => path === '/v2/account/settings'
+      ? Promise.resolve(Response.json({ version: 2, content: { t: 'plain', v: bundleWriteSettings } }))
+      : catalog.handle(path, init) },
+  );
+  await fixture.hydrateAccountSettings();
+  return fixture;
 }
 
 describe('promptBundles qualified operations', () => {
+  it.each(['create', 'update', 'duplicate', 'edit', 'remove'] as const)('refuses a disabled %s without changing content or personal organization', async operation => {
+    const f = await home();
+    const { artifactId: id } = await withUiPromptLibraryArtifactStore(store => createPromptBundleInLibrary({ store, request: {
+      title: 'Original', bundleSchemaId: 'skills.skill_md_v1', entries: [
+        { path: 'SKILL.md', contentBase64: Buffer.from('Original').toString('base64'), contentKind: 'utf8' },
+        { path: 'reference.txt', contentBase64: Buffer.from('Reference').toString('base64'), contentKind: 'utf8' },
+      ],
+    } }));
+    const before = f.boundary.list();
+    const organizationBefore = catalog.read('folders');
+    const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+    setRuntimeFetch(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v2/account/settings') return Response.json({ version: 3, content: { t: 'plain', v: {
+        actionsSettingsV1: { v: 1, actions: { [operation === 'create' || operation === 'duplicate' ? 'prompt_bundle.create' : 'prompt_bundle.update']: { disabledSurfaces: ['ui'] } } },
+      } } });
+      if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+      if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ version: 0, updatedAt: 0, settingsVersion: 3 }));
+      return await catalog.handle(`${url.pathname}${url.search}`, init) ?? await f.boundary.handle(`${url.pathname}${url.search}`, init)
+        ?? Response.json({}, { status: 404 });
+    });
+    await f.hydrateAccountSettings();
+    const expectedRevision = { headerVersion: 1, bodyVersion: 1 };
+    const mutation = operation === 'create' ? createSkillPromptBundle({ title: 'Denied copy', skillMarkdown: 'Denied' })
+      : operation === 'duplicate' ? duplicatePromptBundle(id)
+      : operation === 'update' ? updateSkillPromptBundle({ artifactId: id, title: 'Denied', skillMarkdown: 'Denied', expectedRevision })
+      : operation === 'edit' ? updateSkillPromptBundleWithEntry({ artifactId: id, path: 'reference.txt', content: 'Denied', expectedRevision })
+      : removeSkillPromptBundleEntry({ artifactId: id, path: 'reference.txt', expectedRevision });
+    await expect(mutation).rejects.toMatchObject({ code: 'action_disabled' });
+    expect(f.boundary.list()).toEqual(before);
+    expect(catalog.read('folders')).toEqual(organizationBefore);
+  });
   it.each([false, true])('keeps bundle placement personal and retains the created identity if its row write conflicts (%s)', async conflict => {
-    let stored: PromptLibraryStoredArtifact | null = null;
-    let created = 0;
-    let record: Extract<PromptLibraryRecordV1, { key: 'folders' }> = {
-      key: 'folders', value: { v: 1, folders: [{ id: 'mine', name: 'Mine' }] },
-    };
-    const store = {
-      read: async () => stored,
-      create: async (input: Readonly<{ header: Readonly<Record<string, unknown>>; body: string }>) => {
-        created += 1;
-        stored = { id: 'created-bundle', header: input.header, body: input.body, revision: { headerVersion: 1, bodyVersion: 1 } };
-        return 'created-bundle';
-      },
-      update: async () => { throw new Error('Creation cannot update an Artifact'); },
-      organization: {
-        serverId: 'home', assertCurrent: () => {},
-        readCatalog: async () => ({ catalog: { status: 'ready', rows: [{ record, revision: 1 }], tombstones: [], diagnostics: [] } satisfies PromptLibraryCatalogSnapshotV1 }),
-        readArtifactHeader: async () => stored ? { header: stored.header ?? {}, owned: true } : null,
-        listArtifactHeaders: async () => ({ items: stored ? [{ artifactId: stored.id, header: stored.header ?? {}, owned: true }] : [], coverage: 'complete' as const }),
-        writeRecord: async (input: Readonly<{ record: PromptLibraryRecordV1; expectedRevision: number | 'absent' }>) => {
-          if (conflict || input.expectedRevision !== 1) return { status: 'conflict' as const, revision: 2 };
-          if (input.record.key !== 'folders') throw new Error('wrong-domain');
-          record = input.record;
-          return { status: 'updated' as const, revision: 2, cursor: 2 };
-        },
-      },
-    } satisfies PromptLibraryArtifactStore;
+    const f = await home();
+    if (conflict) catalog = createPromptLibraryCatalogBoundary({ records: [catalog.read('folders')], mutationOutcome: 'conflict', revision: 2 });
     const create = createPromptBundleArtifact({ title: 'Shared prompts', bundleSchemaId: 'bundle.generic_v1',
       entries: [{ path: 'review.md', contentBase64: Buffer.from('Review').toString('base64'), contentKind: 'utf8' }],
-      folderId: 'mine', tags: [' Personal '],
-    }, store);
+      folderId: 'folder-1', tags: [' Personal '],
+    });
     if (conflict) await expect(create).rejects.toMatchObject({ code: 'artifact_organization_failed', details: {
-      artifactId: 'created-bundle', organization: { status: 'conflict', revision: 2 },
+      organization: { status: 'conflict', revision: 2 },
     } });
     else {
-      await expect(create).resolves.toBe('created-bundle');
-      expect(record.value.artifactHeadersById?.['created-bundle']).toEqual({ folderId: 'mine', tags: ['Personal'] });
+      const id = await create;
+      expect(catalog.read('folders').value).toMatchObject({ artifactHeadersById: { [id]: { folderId: 'folder-1', tags: ['Personal'] } } });
     }
-    const saved = await store.read();
-    expect(saved?.header).not.toHaveProperty('folderId');
-    expect(saved?.header).not.toHaveProperty('tags');
-    expect(saved?.header).toMatchObject({ bundleSchemaId: 'bundle.generic_v1' });
-    expect(created).toBe(1);
+    const saved = f.boundary.list();
+    expect(saved).toHaveLength(1);
+    const header = decodePlainArtifactStoredContent(saved[0]!.header);
+    expect(header).not.toHaveProperty('folderId');
+    expect(header).not.toHaveProperty('tags');
+    expect(header).toMatchObject({ bundleSchemaId: 'bundle.generic_v1' });
   });
   it('creates a starter SKILL.md for empty authoring and preserves imported files on duplication', async () => {
     const f = await home();
@@ -92,7 +114,7 @@ describe('promptBundles qualified operations', () => {
         ),
       ),
     ).toContain('## When to use');
-    const importedId = await createPromptBundleArtifact({
+    const { artifactId: importedId } = await withUiPromptLibraryArtifactStore(store => createPromptBundleInLibrary({ store, request: {
       title: 'Imported',
       bundleSchemaId: 'skills.skill_md_v1',
       origin: 'imported',
@@ -110,7 +132,7 @@ describe('promptBundles qualified operations', () => {
           contentKind: 'utf8',
         },
       ],
-    });
+    } }));
     const copyId = await duplicatePromptBundle(importedId);
     expect(copyId).not.toBe(importedId);
     expect(
@@ -147,6 +169,30 @@ describe('promptBundles qualified operations', () => {
     const copyId = await duplicatePromptBundle(id);
     expect(decodePlainArtifactStoredContent(f.boundary.read(copyId)!.header)).toMatchObject({ bundleSchemaId: 'bundle.generic_v1' });
     expect(JSON.parse(f.boundary.readPlainBody(copyId)!).entries).toEqual(JSON.parse(f.boundary.readPlainBody(id)!).entries);
+  });
+
+  it.each(['duplicate', 'edit'] as const)('accepts retained bundle annotations when deriving a canonical %s', async operation => {
+    const f = await home();
+    const id = await createSkillPromptBundle({ title: 'Retained', skillMarkdown: 'Retained instructions' });
+    const body = JSON.parse(f.boundary.readPlainBody(id)!);
+    const response = await f.boundary.handle(`/v1/artifacts/${id}`, { method: 'POST', body: JSON.stringify({
+      body: encodePlainArtifactStoredContent({ body: JSON.stringify({ ...body, futureBodyHint: 'retained',
+        entries: body.entries.map((entry: Record<string, unknown>) => ({ ...entry, futureEntryHint: 'retained' })),
+      }) }),
+      expectedBodyVersion: 1,
+      provenance: null,
+      provenanceDataEncryptionKey: null,
+    }) });
+    expect(response?.ok).toBe(true);
+    let savedId = id;
+    if (operation === 'duplicate') savedId = await duplicatePromptBundle(id);
+    else await updateSkillPromptBundleWithEntry({ artifactId: id, path: 'reference.txt', content: 'Reference',
+      expectedRevision: { headerVersion: 1, bodyVersion: 2 } });
+    const saved = JSON.parse(f.boundary.readPlainBody(savedId)!);
+    expect(readSkillMarkdownFromPromptBundleBody(PromptBundleBodyV1Schema.parse(saved))).toBe('Retained instructions');
+    expect(saved).not.toHaveProperty('futureBodyHint');
+    expect(saved.entries[0]).not.toHaveProperty('futureEntryHint');
+    if (operation === 'edit') expect(listPromptBundleSupportingEntries(PromptBundleBodyV1Schema.parse(saved)).map(entry => entry.path)).toEqual(['reference.txt']);
   });
 
   it('updates SKILL.md and supporting files through current reads while preserving creation time and title', async () => {

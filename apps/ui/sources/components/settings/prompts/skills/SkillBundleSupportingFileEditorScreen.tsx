@@ -19,6 +19,8 @@ import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { captureLazyActionAccountContext, type LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { createUiPromptLibraryArtifactStore } from '@/sync/ops/promptLibrary/promptLibraryArtifactStore';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { promptCollectionItemHref } from '@/components/settings/prompts/collection/promptCollectionModel';
 
 import { readSkillBundleArtifactState, type SkillBundleArtifactState } from './readSkillBundleArtifactState';
@@ -45,6 +47,8 @@ export const SkillBundleSupportingFileEditorScreen = React.memo(function SkillBu
     const targetServerId = props.serverId?.trim() || activeScope?.serverId;
     const targetActiveAccountId = targetServerId === activeScope?.serverId ? activeScope?.accountId : undefined;
     const accountRef = React.useRef<LazyActionAccountContext | null>(null);
+    const [editingScope, setEditingScope] = React.useState<ServerAccountScope | null>(null);
+    const { execute } = useMountedActionExecution(editingScope);
     const [artifactState, setArtifactState] = React.useState<SkillBundleArtifactState | null>(null);
     const [path, setPath] = React.useState(props.path ?? '');
     const [content, setContent] = React.useState('');
@@ -60,6 +64,7 @@ export const SkillBundleSupportingFileEditorScreen = React.memo(function SkillBu
         let context: LazyActionAccountContext | null = null;
         let retirement: Readonly<{ dispose(): void }> | null = null;
         accountRef.current = null;
+        setEditingScope(null);
         setArtifactState(null);
         setPath(props.path ?? '');
         setContent('');
@@ -69,9 +74,10 @@ export const SkillBundleSupportingFileEditorScreen = React.memo(function SkillBu
                 context = await captureLazyActionAccountContext(targetServerId, controller.signal);
                 if (cancelled) { context.dispose(); return; }
                 accountRef.current = context;
+                setEditingScope({ serverId: context.serverId, accountId: context.accountId });
                 retirement = context.accountLifetime.onRetire(() => {
                     if (cancelled) return;
-                    accountRef.current = null; setArtifactState(null); setContent(''); setPath('');
+                    accountRef.current = null; setEditingScope(null); setArtifactState(null); setContent(''); setPath('');
                 });
                 context.assertCurrent();
                 const artifact = await createUiPromptLibraryArtifactStore(context.workflowArtifacts, context)
@@ -83,7 +89,7 @@ export const SkillBundleSupportingFileEditorScreen = React.memo(function SkillBu
                 setArtifactState(admitted);
                 setContent(props.path ? readPromptBundleUtf8Entry(admitted.body, props.path) ?? '' : '');
             } catch {
-                if (!cancelled) { accountRef.current = null; setArtifactState(null); }
+                if (!cancelled) { accountRef.current = null; setEditingScope(null); setArtifactState(null); }
             }
         })();
         return () => {
@@ -110,7 +116,8 @@ export const SkillBundleSupportingFileEditorScreen = React.memo(function SkillBu
                 path: path.trim(),
                 content: latestContent,
                 expectedRevision: artifactState.artifact.revision,
-            }, createUiPromptLibraryArtifactStore(account.workflowArtifacts, account));
+                serverId: account.serverId, expectedAccountId: account.accountId, executeAction: execute,
+            });
             account.assertCurrent();
             if (accountRef.current !== account) throw new Error('action_account_scope_changed');
             safeRouterBack({ router, navigation, fallbackHref: promptCollectionItemHref('bundle', props.artifactId, { serverId: account.serverId }) });
@@ -119,7 +126,7 @@ export const SkillBundleSupportingFileEditorScreen = React.memo(function SkillBu
         } finally {
             setSaving(false);
         }
-    }, [artifactState, canSave, content, navigation, path, props.artifactId, router]);
+    }, [artifactState, canSave, content, execute, navigation, path, props.artifactId, router]);
 
     return (
         <ItemList keyboardShouldPersistTaps="handled">

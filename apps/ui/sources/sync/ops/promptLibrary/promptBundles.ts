@@ -1,22 +1,40 @@
 import {
   PromptBundleBodyV1Schema,
   PromptBundleSchemaIdV1Schema,
-  validatePromptBundleBodyV1AgainstSchemaId,
+  projectPromptBundleActionEntriesV1,
   type PromptBundleBodyV1,
+  type PromptBundleCreateActionInputV1,
   type PromptBundleEntryV1,
-  type PromptBundleSchemaIdV1,
+  type PromptBundleUpdateActionInputV1,
 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import {
-  updatePromptBundleInLibrary,
-  createPromptBundleInLibrary,
-  type PromptLibraryArtifactStore,
   type PromptLibraryStoredArtifact,
 } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
-import { readArtifactOrganizationV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
+import { ArtifactOrganizationMutationFailureV1, ArtifactOrganizationMutationFailureDetailsV1Schema, readArtifactOrganizationV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
+import { PromptDocRevisionV1Schema } from '@happier-dev/protocol/prompts/library/promptDocV2';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { encodeBase64, decodeBase64 } from '@/encryption/base64';
-import type { ArtifactHeader } from '@/sync/domains/artifacts/artifactTypes';
+import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 import { withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
+
+type PromptBundleActionOptions = Readonly<{
+  serverId?: string | null;
+  expectedAccountId?: string;
+  signal?: AbortSignal;
+  executeAction?: MountedAuthoringActionExecute;
+}>;
+
+function readPromptBundleActionOutput(result: ActionExecuteResult): unknown {
+  if (!result.ok) {
+    if (result.errorCode === 'artifact_organization_failed') {
+      const details = ArtifactOrganizationMutationFailureDetailsV1Schema.safeParse(result.details);
+      if (details.success) throw new ArtifactOrganizationMutationFailureV1(details.data);
+    }
+    throw Object.assign(new Error(result.error), { code: result.errorCode, result });
+  }
+  return result.result;
+}
 
 export const DEFAULT_SKILL_PROMPT_MARKDOWN = `---
 name: skill
@@ -142,73 +160,65 @@ function normalizeNewSkillPromptMarkdown(value: string): string {
 }
 
 export async function createPromptBundleArtifact(
-  params: Readonly<{
-    title: string;
-    bundleSchemaId: PromptBundleSchemaIdV1;
-    entries: PromptBundleEntryV1[];
-    folderId?: string | null;
-    tags?: readonly string[];
-    origin?: 'built_in' | 'user' | 'imported';
-  }>,
-  store?: PromptLibraryArtifactStore,
+  params: PromptBundleCreateActionInputV1 & PromptBundleActionOptions,
 ): Promise<string> {
-  const create = async (current: PromptLibraryArtifactStore) => {
-    const result = await createPromptBundleInLibrary({ store: current, request: params });
-    return result.artifactId;
-  };
-  return store ? create(store) : withUiPromptLibraryArtifactStore(create);
+  const { serverId, expectedAccountId, signal, executeAction, ...request } = params;
+  const result = executeAction ? await executeAction('prompt_bundle.create', request, { signal })
+    : await (await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor().execute('prompt_bundle.create', request,
+      { surface: 'ui', serverId: serverId ?? undefined, expectedAccountId, signal });
+  const output = readPromptBundleActionOutput(result);
+  if (!output || typeof output !== 'object' || !('ok' in output) || output.ok !== true
+    || !('artifactId' in output) || typeof output.artifactId !== 'string') {
+    throw Object.assign(new Error('action_not_completed'), { code: 'action_not_completed', result });
+  }
+  return output.artifactId;
 }
 
 export async function createSkillPromptBundle(
-  params: Readonly<{
-    title: string;
+  params: Omit<PromptBundleCreateActionInputV1, 'bundleSchemaId' | 'entries'> & Readonly<{
     skillMarkdown: string;
-    folderId?: string | null;
-    tags?: readonly string[];
-  }>,
-  store?: PromptLibraryArtifactStore,
+  }> & PromptBundleActionOptions,
 ): Promise<string> {
+  const { skillMarkdown, ...request } = params;
   return await createPromptBundleArtifact({
-    title: params.title,
+    ...request,
     bundleSchemaId: 'skills.skill_md_v1',
     entries: upsertSkillMdEntry(
       [],
-      normalizeNewSkillPromptMarkdown(params.skillMarkdown),
+      normalizeNewSkillPromptMarkdown(skillMarkdown),
     ),
     folderId: params.folderId ?? null,
     tags: params.tags ?? [],
-    origin: 'user',
-  }, store);
+  });
 }
 
-export async function updateSkillPromptBundle(
-  params: Readonly<{
-    artifactId: string;
-    title: string;
-    skillMarkdown: string;
-    expectedRevision?: PromptLibraryStoredArtifact['revision'];
-    folderId?: string | null;
-    tags?: readonly string[];
-  }>,
-  store?: PromptLibraryArtifactStore,
+async function updatePromptBundleArtifact(
+  params: PromptBundleUpdateActionInputV1 & PromptBundleActionOptions,
 ): Promise<PromptLibraryStoredArtifact['revision']> {
   const artifactId = String(params.artifactId ?? '').trim();
   if (!artifactId) throw new Error('invalid_artifact_id');
-  const update = (current: PromptLibraryArtifactStore) =>
-    updatePromptBundleInLibrary({
-      store: current,
-      request: { ...params, artifactId },
-    });
-  const accepted = await (store ? update(store) : withUiPromptLibraryArtifactStore(update));
-  if (!accepted.revision) throw new Error('prompt_bundle_update_receipt_unavailable');
-  return accepted.revision;
+  const { serverId, expectedAccountId, signal, executeAction, ...request } = params;
+  const result = executeAction ? await executeAction('prompt_bundle.update', { ...request, artifactId }, { signal })
+    : await (await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor().execute('prompt_bundle.update', { ...request, artifactId },
+      { surface: 'ui', serverId: serverId ?? undefined, expectedAccountId, signal });
+  const output = readPromptBundleActionOutput(result);
+  const revision = output && typeof output === 'object' && 'revision' in output
+    ? PromptDocRevisionV1Schema.safeParse(output.revision) : null;
+  if (!revision?.success) throw new Error('prompt_bundle_update_receipt_unavailable');
+  return revision.data;
+}
+
+export async function updateSkillPromptBundle(
+  params: Extract<PromptBundleUpdateActionInputV1, { skillMarkdown: string }> & PromptBundleActionOptions,
+): Promise<PromptLibraryStoredArtifact['revision']> {
+  return updatePromptBundleArtifact(params);
 }
 
 export async function duplicatePromptBundle(
   artifactId: string,
-  options?: Readonly<{ serverId?: string | null; signal?: AbortSignal }>,
+  options?: PromptBundleActionOptions,
 ): Promise<string> {
-  return withUiPromptLibraryArtifactStore(async (store) => {
+  return withUiPromptLibraryArtifactStore(async (store, account) => {
     const existing = await store.read(artifactId, { signal: options?.signal });
     if (existing?.header?.kind !== 'prompt_bundle.v2')
       throw new Error('prompt_bundle_invalid_kind');
@@ -228,12 +238,19 @@ export async function duplicatePromptBundle(
       {
         title: `${baseTitle || 'Skill'} Copy`,
         bundleSchemaId: PromptBundleSchemaIdV1Schema.parse(existing.header.bundleSchemaId),
-        entries: parsed.data.entries,
+        entries: projectPromptBundleActionEntriesV1(parsed.data.entries),
         folderId: organization.header.folderId ?? null,
         tags: organization.header.tags ?? [],
-        origin: 'user',
+        serverId: account.serverId,
+        expectedAccountId: account.accountId,
+        signal: options?.signal,
+        executeAction: options?.executeAction ?? (async (actionId, request, execution) => {
+          const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+          return executeDefaultActionInCapturedAccount(account, actionId, request, {
+            surface: 'ui', serverId: account.serverId, expectedAccountId: account.accountId, signal: execution?.signal,
+          });
+        }),
       },
-      store,
     );
   }, options);
 }
@@ -244,61 +261,11 @@ export async function updateSkillPromptBundleWithEntry(
     path: string;
     content: string;
     expectedRevision?: PromptLibraryStoredArtifact['revision'];
-  }>,
-  currentStore?: PromptLibraryArtifactStore,
+  }> & PromptBundleActionOptions,
 ): Promise<PromptLibraryStoredArtifact['revision']> {
-  const artifactId = String(params.artifactId ?? '').trim();
-  if (!artifactId) throw new Error('invalid_artifact_id');
-
-  const update = async (store: PromptLibraryArtifactStore) => {
-    const artifact = await store.read(artifactId);
-    if (artifact?.header?.kind !== 'prompt_bundle.v2')
-      throw new Error('prompt_bundle_invalid_kind');
-    if (typeof artifact?.body !== 'string')
-      throw new Error('prompt_bundle_missing_body');
-    const bodyRaw = artifact.body;
-    const parsed = PromptBundleBodyV1Schema.safeParse(JSON.parse(bodyRaw));
-    if (!parsed.success) throw new Error('prompt_bundle_invalid_body');
-
-    const now = Date.now();
-    const nextBody: PromptBundleBodyV1 = {
-      ...parsed.data,
-      entries: upsertPromptBundleUtf8Entry(parsed.data.entries, {
-        path: params.path,
-        content: params.content,
-      }),
-      updatedAtMs: now,
-    };
-    PromptBundleBodyV1Schema.parse(nextBody);
-
-    const validation = validatePromptBundleBodyV1AgainstSchemaId({
-      bundleSchemaId: 'skills.skill_md_v1',
-      body: nextBody,
-    });
-    if (!validation.ok) throw new Error(validation.errorCode);
-
-    const headerTitle = readPromptBundleArtifactTitle({
-      header: artifact.header,
-    });
-    const baseHeader = artifact.header;
-    const header: ArtifactHeader = {
-      ...baseHeader,
-      v: 1,
-      kind: 'prompt_bundle.v2',
-      title: headerTitle,
-      bundleSchemaId: 'skills.skill_md_v1',
-    };
-
-    const receipt = await store.update({
-      artifactId,
-      expectedRevision: params.expectedRevision ?? artifact.revision,
-      header,
-      body: JSON.stringify(nextBody),
-    });
-    if (!receipt) throw new Error('prompt_bundle_update_receipt_unavailable');
-    return receipt.revision;
-  };
-  return currentStore ? update(currentStore) : withUiPromptLibraryArtifactStore(update);
+  return mutatePromptBundleEntries(params, entries => upsertPromptBundleUtf8Entry(entries, {
+    path: params.path, content: params.content,
+  }));
 }
 
 export async function removeSkillPromptBundleEntry(
@@ -306,14 +273,19 @@ export async function removeSkillPromptBundleEntry(
     artifactId: string;
     path: string;
     expectedRevision?: PromptLibraryStoredArtifact['revision'];
-  }>,
-  currentStore?: PromptLibraryArtifactStore,
+  }> & PromptBundleActionOptions,
+): Promise<PromptLibraryStoredArtifact['revision']> {
+  return mutatePromptBundleEntries(params, entries => removePromptBundleEntry(entries, params.path));
+}
+
+async function mutatePromptBundleEntries(
+  params: Readonly<{ artifactId: string; expectedRevision?: PromptLibraryStoredArtifact['revision'] }> & PromptBundleActionOptions,
+  change: (entries: PromptBundleEntryV1[]) => PromptBundleEntryV1[],
 ): Promise<PromptLibraryStoredArtifact['revision']> {
   const artifactId = String(params.artifactId ?? '').trim();
   if (!artifactId) throw new Error('invalid_artifact_id');
-
-  const remove = async (store: PromptLibraryArtifactStore) => {
-    const artifact = await store.read(artifactId);
+  return withUiPromptLibraryArtifactStore(async (store, account) => {
+    const artifact = await store.read(artifactId, { signal: params.signal });
     if (artifact?.header?.kind !== 'prompt_bundle.v2')
       throw new Error('prompt_bundle_invalid_kind');
     if (typeof artifact?.body !== 'string')
@@ -322,40 +294,20 @@ export async function removeSkillPromptBundleEntry(
     const parsed = PromptBundleBodyV1Schema.safeParse(JSON.parse(bodyRaw));
     if (!parsed.success) throw new Error('prompt_bundle_invalid_body');
 
-    const now = Date.now();
-    const nextBody: PromptBundleBodyV1 = {
-      ...parsed.data,
-      entries: removePromptBundleEntry(parsed.data.entries, params.path),
-      updatedAtMs: now,
-    };
-    PromptBundleBodyV1Schema.parse(nextBody);
-
-    const validation = validatePromptBundleBodyV1AgainstSchemaId({
-      bundleSchemaId: 'skills.skill_md_v1',
-      body: nextBody,
-    });
-    if (!validation.ok) throw new Error(validation.errorCode);
-
-    const headerTitle = readPromptBundleArtifactTitle({
-      header: artifact.header,
-    });
-    const baseHeader = artifact.header;
-    const header: ArtifactHeader = {
-      ...baseHeader,
-      v: 1,
-      kind: 'prompt_bundle.v2',
-      title: headerTitle,
-      bundleSchemaId: 'skills.skill_md_v1',
-    };
-
-    const receipt = await store.update({
+    return updatePromptBundleArtifact({
       artifactId,
+      title: readPromptBundleArtifactTitle(artifact),
+      entries: projectPromptBundleActionEntriesV1(change(parsed.data.entries)),
       expectedRevision: params.expectedRevision ?? artifact.revision,
-      header,
-      body: JSON.stringify(nextBody),
+      serverId: account.serverId,
+      expectedAccountId: account.accountId,
+      signal: params.signal,
+      executeAction: params.executeAction ?? (async (actionId, request, execution) => {
+        const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+        return executeDefaultActionInCapturedAccount(account, actionId, request, {
+          surface: 'ui', serverId: account.serverId, expectedAccountId: account.accountId, signal: execution?.signal,
+        });
+      }),
     });
-    if (!receipt) throw new Error('prompt_bundle_update_receipt_unavailable');
-    return receipt.revision;
-  };
-  return currentStore ? remove(currentStore) : withUiPromptLibraryArtifactStore(remove);
+  }, params);
 }
