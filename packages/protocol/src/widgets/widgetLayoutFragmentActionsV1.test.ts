@@ -12,17 +12,17 @@ const draft = WidgetLayoutFragmentDraftV1Schema.parse({ name: 'Checks', inputs: 
     ] } });
 
 describe('widget layout fragment semantic Actions', () => {
-    it('creates and discovers an agent-authored saved group, stamps provenance and keeps child definition references', async () => {
+    it.each(['agent', 'voice'] as const)('creates and discovers a %s-authored saved group, stamps provenance and keeps child definition references', async (surface) => {
         const b = createWorkBoardArtifactBoundary();
         const port = createWidgetLayoutFragmentArtifactPortV1({ ...b.transport,
             read: async (...args) => { const row = await b.transport.read(...args); return row ? { ...row, ownerAccountId: 'owner' } : null; },
             list: async args => { const page = await b.transport.list(args); return { ...page, items: page.items.map(row => ({ ...row, ownerAccountId: 'owner' })) }; },
         }, { accountId: 'owner' });
         const executor = createActionExecutor({ widgetAccountScope: () => account, widgetLayoutFragmentArtifacts: port });
-        const context = { surface: 'agent' as const, serverId: 'home', bypassApprovals: true };
+        const context = { surface, serverId: 'home', bypassApprovals: true };
         expect(await executor.execute('widgets.fragment.create', { account, artifactId: 'saved', fragment: draft }, context))
             .toMatchObject({ ok: true, result: { fragment: { id: 'saved', group: { frameStyle: 'card', dividers: 'hairline' },
-                provenance: { authorAccountId: 'owner', author: { kind: 'agent' }, createdAt: expect.any(Number) } } } });
+                provenance: { authorAccountId: 'owner', author: { kind: surface === 'agent' ? 'agent' : 'person' }, createdAt: expect.any(Number) } } } });
         expect(await executor.execute('widgets.fragment.list', { account }, context)).toMatchObject({ ok: true,
             result: { fragments: [{ artifactId: 'saved', childCount: 1, group: draft.group }] } });
         const copy = await executor.execute('widgets.fragment.duplicate', { account, artifactId: 'saved', newArtifactId: 'copy' }, context);

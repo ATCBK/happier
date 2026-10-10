@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '../actions/actionExecutor.js';
+import { ActionsSettingsV1Schema } from '../actions/actionSettings.js';
+import { isApprovalRequiredByActionsSettings } from '../actions/actionApprovalPolicy.js';
 import { createWorkBoardArtifactBoundary } from '../boards/workBoardArtifactV1.testkit.js';
 import { createWidgetDefinitionArtifactPortV1 } from './widgetDefinitionArtifactV1.js';
 import { createSessionWidgetDefinitionSourceReaderV1 } from './widgetDefinitionPromotionV1.js';
@@ -41,7 +43,7 @@ describe('widget definition semantic Actions', () => {
         expect(bound).toEqual({ status: 'ready', input: { session: { serverId: 'home', sessionId: 'session-b' } } });
         expect(saved?.body).toEqual(definition.body);
     });
-    it('copies exact Session content without removing it and makes its contextual Session read configurable', async () => {
+    it.each(['cli', 'voice'] as const)('copies exact Session content on %s without removing it and makes its contextual Session read configurable', async (surface) => {
         const b = createWorkBoardArtifactBoundary();
         const port = createWidgetDefinitionArtifactPortV1({ ...b.transport,
             read: async (...args) => { const row = await b.transport.read(...args); return row ? { ...row, ownerAccountId: 'owner' } : null; },
@@ -61,7 +63,7 @@ describe('widget definition semantic Actions', () => {
         });
         const executor = createActionExecutor({ widgetAccountScope: () => account, widgetDefinitionArtifacts: port, readSessionWidgetDefinitionSource: reader });
         const result = await executor.execute('widgets.definition.saveFromSession', { account, session: { serverId: 'home', sessionId: 'session-a' },
-            itemId: 'source-item', artifactId: 'promoted' }, { surface: 'cli', serverId: 'home', bypassApprovals: true });
+            itemId: 'source-item', artifactId: 'promoted' }, { surface, serverId: 'home', bypassApprovals: true });
         expect(result).toMatchObject({ ok: true, result: { definition: { id: 'promoted', inputs: descriptor.inputs,
             provenance: { source: { kind: 'session', serverId: 'home', sessionId: 'session-a', itemId: 'source-item' } } },
             suggestedBindings: { session: { kind: 'context', slot: 'session' } } } });
@@ -70,6 +72,41 @@ describe('widget definition semantic Actions', () => {
         expect(await port.get('promoted')).toMatchObject({ sessionInputPath: 'session' });
         const wrongAccount = await executor.execute('widgets.definition.get', { account: { ...account, accountId: 'other' }, artifactId: 'promoted' }, { surface: 'cli', serverId: 'home' });
         expect(wrongAccount).toMatchObject({ ok: false, errorCode: 'account_target_mismatch' });
+    });
+    it('uses Voice admission and Ask first before changing the Account library', async () => {
+        const boundary = createWorkBoardArtifactBoundary();
+        const port = createWidgetDefinitionArtifactPortV1({ ...boundary.transport,
+            read: async (...args) => { const row = await boundary.transport.read(...args); return row ? { ...row, ownerAccountId: 'owner' } : null; },
+            list: async args => { const page = await boundary.transport.list(args); return { ...page, items: page.items.map(row => ({ ...row, ownerAccountId: 'owner' })) }; },
+        }, { accountId: 'owner' });
+        const executor = createActionExecutor({ widgetAccountScope: () => account, widgetDefinitionArtifacts: port,
+            isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, context.actionsSettings ?? ActionsSettingsV1Schema.parse({ v: 1 }), context),
+            approvalsCreate: async () => ({ artifactId: 'definition-approval' }),
+            // Human approval delivery and persistence are host system boundaries.
+            approvalsWaitForDecision: async ({ request }) => {
+                expect((await port.get('by-voice'))?.name).toBe('Original');
+                return { decision: 'reject', request };
+            },
+            approvalsUpdate: async () => ({ ok: true }),
+        });
+        const context = { surface: 'voice' as const, serverId: 'home', actionCaller: { kind: 'host' as const }, actionRequestId: 'definition-update' };
+        const input = { account, artifactId: 'by-voice', definition: { name: 'Original', ...descriptor,
+            body: { kind: 'installed', surface: { pluginId: 'com.acme.test', localId: 'signups' } } } };
+        expect(await executor.execute('widgets.definition.create', input, context)).toMatchObject({ ok: true });
+        const update = { account, artifactId: input.artifactId, patch: { name: 'Changed' } };
+        const approval = await executor.execute('widgets.definition.update', update, context);
+        expect(approval).toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+        expect((await port.get(input.artifactId))?.name).toBe('Original');
+        expect(await executor.execute('widgets.definition.update', update, { ...context,
+            actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'widgets.definition.update': { enabled: false } } }),
+        })).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+        expect((await port.get(input.artifactId))?.name).toBe('Original');
+        expect(await executor.execute('widgets.definition.update', update, { ...context,
+            actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'widgets.definition.update': ['voice'] } }),
+        })).toMatchObject({ ok: true, result: { definition: { name: 'Changed' } } });
+        expect(await executor.execute('widgets.definition.list', { account }, context)).toMatchObject({
+            ok: true, result: { definitions: [{ artifactId: input.artifactId, name: 'Changed' }] },
+        });
     });
     it('admits an explicit shared copy while rejecting private selections inside copied definition bytes', () => {
         const definition = WidgetDefinitionV1Schema.parse({ sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' }, v: 1, id: 'original', name: 'Checks', body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Count' } } },

@@ -217,6 +217,16 @@ export const WIDGET_INSTANCE_ACTION_SPECS_V1: readonly (PreNormalizedActionSpec 
   } as const satisfies PreNormalizedActionSpec;
 });
 
+const WIDGET_DEFINITION_VOICE_EXAMPLES = {
+  'widgets.definition.list': '{"account":{"serverId":"home","accountId":"owner"}}',
+  'widgets.definition.get': '{"account":{"serverId":"home","accountId":"owner"},"artifactId":"definition-1"}',
+  'widgets.definition.create': '{"account":{"serverId":"home","accountId":"owner"},"artifactId":"definition-1","definition":{"name":"Checks","sizeDeclaration":{"sizes":["medium"],"defaultSize":"medium"},"body":{"kind":"declarative","document":{"version":1,"root":{"kind":"text","text":"Checks"}}},"inputs":{"fields":[]},"inputSchema":{"type":"object","additionalProperties":false}}}',
+  'widgets.definition.update': '{"account":{"serverId":"home","accountId":"owner"},"artifactId":"definition-1","patch":{"name":"Updated checks"}}',
+  'widgets.definition.duplicate': '{"account":{"serverId":"home","accountId":"owner"},"artifactId":"definition-1","newArtifactId":"definition-2"}',
+  'widgets.definition.delete': '{"account":{"serverId":"home","accountId":"owner"},"artifactId":"definition-1"}',
+  'widgets.definition.saveFromSession': '{"account":{"serverId":"home","accountId":"owner"},"session":{"serverId":"home","sessionId":"session-1"},"itemId":"item-1","artifactId":"definition-1"}',
+} as const satisfies Record<WidgetDefinitionActionIdV1, string>;
+
 export const WIDGET_DEFINITION_ACTION_SPECS_V1: readonly (PreNormalizedActionSpec & Readonly<{
   id: WidgetDefinitionActionIdV1; requiredAuthority: 'account_automation';
 }>)[] = WIDGET_DEFINITION_ACTION_IDS_V1.map(id => {
@@ -235,10 +245,11 @@ export const WIDGET_DEFINITION_ACTION_SPECS_V1: readonly (PreNormalizedActionSpe
     safety: id === 'widgets.definition.update' || id === 'widgets.definition.delete' ? 'danger' : 'safe',
     sideEffectClass: read ? 'read' : 'write', executionPlacement: 'account', requiredAuthority: 'account_automation',
     placements: [], bindings: { mcpToolName: id.replaceAll('.', '_'), rpcMethod: id },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: WidgetDefinitionActionInputSchemasV1[id], outputSchema: WidgetDefinitionActionOutputSchemasV1[id],
     inputHints: { description: WIDGET_DEFINITION_ACTION_COPY[id][1], fields: WIDGET_DEFINITION_ACTION_FIELDS[id] },
+    examples: { voice: { argsExample: WIDGET_DEFINITION_VOICE_EXAMPLES[id] } },
     cli: { acceptsServerId: true, commands: [{ path: id === 'widgets.definition.saveFromSession'
       ? ['widgets', 'definition', 'save-from-session'] : id.split('.'), visibility: 'canonical' }] },
   } as const satisfies PreNormalizedActionSpec;
@@ -252,7 +263,7 @@ export const WIDGET_SNAPSHOT_ACTION_SPECS_V1: readonly (PreNormalizedActionSpec 
   description: 'Publish the exact previewed frozen output and as-of provenance as an inert shared Session Board item. The approved payload is never queried again.',
   safety: 'danger', sideEffectClass: 'write', executionPlacement: 'account', requiredAuthority: 'account_automation',
   placements: [], bindings: { mcpToolName: 'widgets_snapshot_post', rpcMethod: 'widgets.snapshot.post' },
-  surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
+  surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
   toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
   inputSchema: WidgetSnapshotPostInputV1Schema, outputSchema: WidgetSnapshotPostOutputV1Schema,
   inputHints: { description: 'Put a frozen copy of what a widget shows now on a session board, for everyone who can see that session.', fields: [
@@ -265,6 +276,7 @@ export const WIDGET_SNAPSHOT_ACTION_SPECS_V1: readonly (PreNormalizedActionSpec 
       description: 'Target tab, view and owner-native placement for the new snapshot item.' },
   ] },
   cli: { acceptsServerId: true, commands: [{ path: ['widgets', 'snapshot', 'post'], visibility: 'canonical' }] },
+  examples: { voice: { argsExample: '{"surface":{"serverId":"home","accountId":"owner","owner":{"kind":"sessionBoard","sessionId":"session-1"}},"itemId":"snapshot-1","title":"Checks","preview":{"v":1,"document":{"version":1,"root":{"kind":"text","text":"All checks passed."}},"asOf":"2026-10-05T10:42:00.000Z","provenance":[{"label":"Checks"}]},"placement":{}}' } },
 }] as const satisfies readonly PreNormalizedActionSpec[];
 
 export const WIDGET_LAYOUT_FRAGMENT_ACTION_SPECS_V1: readonly (PreNormalizedActionSpec & Readonly<{

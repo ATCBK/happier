@@ -5,6 +5,11 @@ import { freezePluginDeclarativeDataNodeV1 } from '../plugins/contributions/ui/d
 import { PluginDeclarativeDocumentV1Schema } from '../plugins/contributions/ui/declarativeDocumentAuthoringV1.js';
 import { executeWidgetSnapshotPostV1 } from './executeWidgetSnapshotPostV1.js';
 import { MAX_PLUGIN_DECLARATIVE_DOCUMENT_NODES_V1 } from '../plugins/contributions/ui/declarativeDocumentPreflightV1.js';
+import { createActionExecutor } from '../actions/actionExecutor.js';
+import { ActionsSettingsV1Schema } from '../actions/actionSettings.js';
+import { isApprovalRequiredByActionsSettings } from '../actions/actionApprovalPolicy.js';
+import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import { SessionBoardItemUpsertInputV1Schema, type SessionBoardItemUpsertInputV1 } from '../sessions/board/actions.js';
 
 describe('frozen widget Board content', () => {
   const preview = { v: 1 as const, document: { version: 1 as const, root: { kind: 'metric' as const, label: 'Checks',
@@ -12,6 +17,43 @@ describe('frozen widget Board content', () => {
     asOf: '2026-10-05T01:00:00.000Z', provenance: [{ label: 'Checks summary' }] };
   const input = { surface: { serverId: 'home-a', accountId: 'viewer-a', owner: { kind: 'sessionBoard' as const, sessionId: 'session-a' } },
     itemId: 'snapshot-1', title: 'Checks', preview, placement: {} };
+
+  it('admits Voice snapshot publication only after Ask first and posts the exact frozen payload', async () => {
+    const published: SessionBoardItemUpsertInputV1[] = [];
+    const approvals: ApprovalRequest[] = [];
+    const executor = createActionExecutor({
+      widgetAccountScope: () => ({ serverId: 'home-a', accountId: 'viewer-a' }),
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, context.actionsSettings ?? ActionsSettingsV1Schema.parse({ v: 1 }), context),
+      approvalsCreate: async ({ request }) => { approvals.push(request); return { artifactId: 'snapshot-approval' }; },
+      // Human approval delivery and persistence are host system boundaries.
+      approvalsWaitForDecision: async ({ request }) => {
+        expect(published).toEqual([]);
+        return { decision: 'reject', request };
+      },
+      approvalsUpdate: async () => ({ ok: true }),
+      // The host's sealed Session Board HTTP port is the system boundary.
+      sessionBoardAction: async ({ input: boardInput }) => {
+        const upsert = SessionBoardItemUpsertInputV1Schema.parse(boardInput);
+        published.push(upsert);
+        return { v: 1, serverId: 'home-a', sessionId: 'session-a', result: { operation: 'upsert_item', itemId: upsert.itemId,
+          outcome: 'created', itemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ', layoutRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ' },
+          destination: { tabId: 'main', width: 'full' }, preview: { title: upsert.item.title, sourceKind: 'declarative' } };
+      },
+    });
+    const context = { surface: 'voice' as const, serverId: 'home-a', actionCaller: { kind: 'host' as const }, actionRequestId: 'snapshot-post' };
+    const approval = await executor.execute('widgets.snapshot.post', input, context);
+    expect(approval).toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+    expect(approvals).toMatchObject([{ actionId: 'widgets.snapshot.post', actionArgs: input, status: 'open' }]);
+    expect(published).toEqual([]);
+    expect(await executor.execute('widgets.snapshot.post', input, { ...context,
+      actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'widgets.snapshot.post': { enabled: false } } }),
+    })).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+    expect(published).toEqual([]);
+    expect(await executor.execute('widgets.snapshot.post', input, { ...context,
+      actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'widgets.snapshot.post': ['voice'] } }),
+    })).toMatchObject({ ok: true, result: { result: { outcome: 'created' } } });
+    expect(published).toEqual([buildWidgetSnapshotBoardUpsertV1(input)]);
+  });
 
   it('publishes exactly the admitted preview and rejects hidden live or executable state', () => {
     const upsert = buildWidgetSnapshotBoardUpsertV1(input);
