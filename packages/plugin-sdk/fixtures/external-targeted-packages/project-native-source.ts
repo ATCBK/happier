@@ -45,6 +45,26 @@ export const pixiRuntime: PluginProjectNativeAdapterRuntimeV1 = {
             launch: { executable: { kind: 'systemTool', id: 'pixi' }, args: ['run', '--', request.launch.command, ...request.launch.args], cwd: request.launch.cwd, reviewInputs: [config] },
         };
     },
+    // A fixture-native resource tool demonstrates recovery IO; these are not
+    // claimed Pixi CLI verbs, and recovery never reruns resolveCommand.
+    nativeServiceLifecycle: {
+        async inspect(instance, options, context) {
+            if (!context) throw new Error('Native lifecycle invocation is unavailable');
+            const result = await context.services.exec.run({ executable: { kind: 'systemTool', id: 'fixture-native' },
+                args: ['inspect', instance.nativeResourceId] }, options);
+            const observed: unknown = JSON.parse(new TextDecoder().decode(result.stdout));
+            if (!observed || typeof observed !== 'object' || !('phase' in observed)
+                || observed.phase !== 'running' && observed.phase !== 'stopped') throw new Error('Invalid native resource observation');
+            return { phase: observed.phase, readiness: 'not_reported', endpoint: null };
+        },
+        async stop(instance, options, context) {
+            if (!context) throw new Error('Native lifecycle invocation is unavailable');
+            const result = await context.services.exec.run({ executable: { kind: 'systemTool', id: 'fixture-native' },
+                args: ['stop', instance.nativeResourceId] }, options);
+            return { status: result.termination.observed.kind === 'exit' && result.termination.observed.exitCode === 0
+                ? 'stopped' : 'termination_incomplete' };
+        },
+    },
 };
 
 export const pixiPlugin = definePlugin({
@@ -52,9 +72,9 @@ export const pixiPlugin = definePlugin({
     entrypoints: { daemon: './daemon.js' },
     hostAccess: { required: [{ id: 'native-config', capability: 'filesystem', reason: 'Read selected native config',
         scope: { locations: [{ root: 'workspace', pathPrefix: 'pixi.toml' }], access: ['read'] } }], optional: [] },
-    systemTools: { pixi: { title: 'Pixi', executableNames: ['pixi'] } },
+    systemTools: { pixi: { title: 'Pixi', executableNames: ['pixi'] }, 'fixture-native': { title: 'Fixture native resource', executableNames: ['fixture-native-resource'] } },
     projectNativeAdapters: {
-        [pixiAdapter.localId]: { declaration: { files: ['pixi.toml'], roles: ['detect', 'resolveCommand', 'produceEnvironment'] }, runtime: pixiRuntime },
+        [pixiAdapter.localId]: { declaration: { files: ['pixi.toml'], roles: ['detect', 'resolveCommand', 'produceEnvironment', 'nativeServiceLifecycle'] }, runtime: pixiRuntime },
     },
 });
 

@@ -1,4 +1,7 @@
 import axios from 'axios';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
@@ -15,9 +18,16 @@ import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAc
 import { createPluginInvocationActionsService } from '@/plugins/runtime/invocation/services/actions';
 import { createCliActionExecutorHarness } from './createCliActionExecutorHarness';
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { ingestCanonicalPluginManifest } from '@/plugins/manifest/ingest';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { createProductionPluginInvocationServiceOwners } from '@/plugins/runtime/invocation/services/production';
+import { createPluginInvocationLifetime } from '@/plugins/runtime/invocation/lifetime';
+import { activatePluginRuntimeRegistry } from '@/plugins/runtime/lifecycle/manager';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
+import { resolveProjectNativeAdapter, type ProjectNativeAdapterInvocationContextFactoryV1 } from '@/plugins/runtime/lifecycle/contributions/targetProjectNativeAdapters';
 import {
     createPixiPrivatePreview, importedPixiTask, preparePixiProject, readPixiPublicPreview,
-    restartPixiService, runPixiScriptAndReadOutput, startPixiService, stopPixiService,
+    restartPixiService, runPixiScriptAndReadOutput, startPixiService, stopPixiService, pixiPlugin, pixiAdapter,
 } from '../../../../../packages/plugin-sdk/fixtures/external-targeted-packages/project-native-source';
 import {
     configureProjectServicePlacement, configureProjectWorkers, inspectProjectWorker,
@@ -66,6 +76,13 @@ function authorHost(respond: (method: string, request: unknown) => unknown | Pro
     });
     vi.spyOn(axios, 'get').mockImplementation(async url => {
         if (url === `${baseUrl}/v1/account/encryption`) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+        if (url === `${baseUrl}/v1/machines`) return { status: 200, data: [{ id: workspace.machineId, kind: 'persistent',
+            active: true, revokedAt: null, replacedByMachineId: null }, { id: 'unrelated-retired-child', kind: 'persistent',
+            active: false, revokedAt: 1, replacedByMachineId: null, devcontainerChild: {
+                relation: { managedMachineId: 'stale-child', managedMachineKind: 'devcontainer', parentMachineId: 'unrelated-parent' },
+                observation: { nativeResourceId: 'retired', user: 'coder', workspaceFolder: '/unrelated',
+                    storage: { kind: 'bind', hostPath: '/unrelated-host', childPath: '/unrelated' } },
+            } }] };
         expect(url).toBe(`${baseUrl}/v1/machines/${workspace.machineId}`);
         return { status: 200, data: { machine: { id: workspace.machineId, kind: 'persistent', storageMode: 'plain',
             metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
@@ -74,9 +91,13 @@ function authorHost(respond: (method: string, request: unknown) => unknown | Pro
     vi.spyOn(axios, 'post').mockImplementation(async url => {
         expect(url).toBe(`${baseUrl}/v1/account/project-rows/list`);
         const key = { kind: 'workspace-ref', serverId: workspace.serverId, id: workspace.workspaceId };
+        const unrelatedKey = { ...key, id: 'unrelated' };
         return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [{ key, revision: 0,
             content: { t: 'plain', v: { key, value: { id: workspace.workspaceId, serverId: workspace.serverId,
-                machineId: workspace.machineId, rootPath: workspace.rootPath, createdAtMs: 1 } } } }] } };
+                machineId: workspace.machineId, rootPath: workspace.rootPath, createdAtMs: 1 } } } },
+            { key: unrelatedKey, revision: 0, content: { t: 'plain', v: { key: unrelatedKey, value: {
+                id: unrelatedKey.id, serverId: workspace.serverId, machineId: 'unrelated-retired-child', rootPath: '/unrelated', createdAtMs: 1,
+            } } } }] } };
     });
     io.mockImplementation(() => createApiSessionSocketStub({ emitWithAck(event, payload) {
         expect(event).toBe(SOCKET_RPC_EVENTS.CALL);
@@ -124,6 +145,75 @@ function serviceControl(action: 'stop_managed' | 'restart_managed') {
 
 describe('public Project author Actions through the real CLI host', () => {
     afterEach(() => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot(); });
+
+    it('recovers a public native lifecycle through a fresh occurrence and admitted IO without replaying its starter', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-public-native-recovery-'));
+        const statePath = join(root, 'resource.json');
+        await writeFile(statePath, JSON.stringify({ phase: 'running' }));
+        const toolPath = join(root, 'fixture-native.cjs');
+        // A real script entrypoint keeps native verbs out of Node's CLI command position.
+        await writeFile(toolPath, "const fs=require('node:fs');const [operation,id]=process.argv.slice(2);if(operation==='inspect')process.stdout.write(fs.readFileSync(id,'utf8'));else if(operation==='stop')fs.writeFileSync(id,JSON.stringify({phase:'stopped'}));else process.exit(1);");
+        const instance = { adapter: pixiAdapter, nativeResourceId: statePath };
+        const ingested = ingestCanonicalPluginManifest(pixiPlugin.manifest, { sourceProvenance: 'registryCustodied' });
+        if (!ingested.ok) throw new Error(`Public author manifest was not admitted: ${JSON.stringify(ingested.diagnostics)}`);
+        const targets = [{ provenance: 'first_party' as const, source: { kind: 'bundled' as const }, pluginId: pixiAdapter.pluginId,
+            manifestPath: '/virtual/pixi/plugin.json', daemonEntryPath: '/virtual/pixi/daemon.js',
+            sourceSpec: { kind: 'package' as const, locator: '@acme/pixi-native', trustPolicy: 'local_trusted' as const, installPolicy: 'copy' as const },
+            activationEvents: [], manifest: ingested.manifest }];
+        const contributes = createResolvedContributionRegistry({ activationTargets: targets });
+        // The installed native tool is the OS boundary. A fixture tool records an
+        // exact resource on disk; manifest activation, admission and Exec stay real.
+        const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} }, exec: {
+            resolvePath: async () => root,
+            async resolveExecutable(reference) {
+                if (reference.kind !== 'systemTool' || reference.id !== 'fixture-native') throw new Error('A starter must not run during recovery');
+                return { command: process.execPath, args: [toolPath] };
+            },
+        } });
+        const createInvocationContext: ProjectNativeAdapterInvocationContextFactoryV1 = input => {
+            const lifetime = createPluginInvocationLifetime(input.signal);
+            const seed = { plugin: { id: pixiAdapter.pluginId, version: '1.0.0' },
+                contribution: { id: pixiAdapter.localId, qualifiedId: `${pixiAdapter.pluginId}/projectNativeAdapters/${pixiAdapter.localId}` },
+                occurrenceId: input.occurrenceId, correlationId: 'public-recovery', surface: 'cli' as const,
+                signal: lifetime.signal, redactionLifetimeSignal: lifetime.redactionLifetimeSignal, isOccurrenceCurrent: input.isCurrent };
+            return { context: { ...seed, invokedAtMs: lifetime.invokedAtMs, services: owners.createOperationServices(seed, {
+                filesystemRoots: { pluginData: root, workspace: root, projects: new Map() }, hostAccessRequests: [],
+            }) }, complete: () => lifetime.complete() };
+        };
+        const activate = (generation: number) => activatePluginRuntimeRegistry({ contributes, generation,
+            occurrenceIdsByPluginId: new Map([[pixiAdapter.pluginId, createPluginRuntimeOccurrenceId(pixiAdapter.pluginId)]]),
+            resolveActivationSource: () => ({ kind: 'bundled', moduleId: `@acme/pixi-native/${generation}`, load: async () => pixiPlugin }),
+        });
+        const original = await activate(1);
+        let replacement: Awaited<ReturnType<typeof activate>> | undefined;
+        const releases: Array<() => Promise<void>> = [];
+        try {
+            const selected = await resolveProjectNativeAdapter({ reference: pixiAdapter, role: 'nativeServiceLifecycle', targets, registry: original, createInvocationContext });
+            expect(selected.kind).toBe('ready');
+            if (selected.kind !== 'ready') throw new Error(selected.code);
+            const captured = selected.lease.captureNativeServiceLifecycle(instance, { root });
+            if (captured.kind !== 'ready') throw new Error(captured.code);
+            releases.push(captured.release);
+            expect(await captured.lifecycle.inspect(instance)).toEqual({ phase: 'running', readiness: 'not_reported', endpoint: null });
+            await original.dispose();
+            await expect(captured.lifecycle.inspect(instance)).rejects.toMatchObject({ code: 'native_adapter_retired' });
+            replacement = await activate(2);
+            const recovered = await resolveProjectNativeAdapter({ reference: pixiAdapter, role: 'nativeServiceLifecycle', targets, registry: replacement, createInvocationContext });
+            if (recovered.kind !== 'ready') throw new Error(recovered.code);
+            const current = recovered.lease.captureNativeServiceLifecycle(instance, { root });
+            if (current.kind !== 'ready') throw new Error(current.code);
+            releases.push(current.release);
+            expect(await current.lifecycle.stop({ ...instance, nativeResourceId: 'another-resource' })).toEqual({ status: 'unsupported' });
+            expect(JSON.parse(await readFile(statePath, 'utf8'))).toEqual({ phase: 'running' });
+            expect(await current.lifecycle.inspect(instance)).toMatchObject({ phase: 'running' });
+            expect(await current.lifecycle.stop(instance)).toEqual({ status: 'stopped' });
+            expect(await current.lifecycle.inspect(instance)).toMatchObject({ phase: 'stopped' });
+        } finally {
+            for (const release of releases) await release();
+            await replacement?.dispose(); await original.dispose(); await owners.dispose();
+            await rm(root, { recursive: true, force: true });
+        }
+    });
 
     it('retains accepted custody and reads the actual retained terminal without claiming completion', async () => {
         const output = { ok: true as const, terminalId: 'actual-terminal', frames: [{ t: 'bytes' as const,

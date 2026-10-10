@@ -107,7 +107,7 @@ export function createUiProjectWorkerActionV1(account: LazyActionAccountContext)
                 || !areServerProfileIdentifiersEquivalent(rows.scope.serverId, account.serverId)) return unavailable;
             const isCurrent = () => account.accountLifetime.isCurrent()
                 && readCurrentProjectAccountRows(storage.getState()) === rows;
-            let facts;
+            let facts: Awaited<ReturnType<typeof readUiWorkspaceSyncChildMachineFacts>>;
             try { facts = await readUiWorkspaceSyncChildMachineFacts(account, signal); }
             catch { return unavailable; }
             const actual = await observeProjectServicePlacementActualV1({ ...request, ...facts,
