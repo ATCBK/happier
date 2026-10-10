@@ -110,7 +110,7 @@ function usageLimitClassification(
   return {
     kind: 'usage_limit',
     limitCategory: 'usage_limit',
-    serviceId: 'openai-codex',
+    serviceId: 'happier.agent.codex/openai-codex',
     profileId: 'primary',
     groupId: 'codex-main',
     resetsAtMs: null,
@@ -195,7 +195,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     await scheduler.markProviderOutcomeProofByIdentity({
       sessionId: 'session-auth-proof-scope',
       proofKind: 'quota_probe_fresh',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'codex-main',
       groupGeneration: 3,
@@ -224,7 +224,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     await expect(scheduler.markProviderOutcomeProofByIdentity({
       sessionId: 'session-post-boundary',
       proofKind: 'quota_probe_fresh',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'team',
       observedAtMs: 1_999,
@@ -256,7 +256,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     await expect(scheduler.markProviderOutcomeProofByIdentity({
       sessionId: 'session-proof-time',
       proofKind: 'quota_probe_fresh',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'codex-main',
       groupGeneration: 3,
@@ -280,7 +280,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     await scheduler.markProviderOutcomeProofByIdentity({
       sessionId: 'session-exact-cancel',
       proofKind: 'provider_activity',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'codex-main',
       observedAtMs: 1_000,
@@ -382,7 +382,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
         status: 'recovery_action_required',
         action: {
           kind: 'reconnect_profile',
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           profileId: 'primary',
           groupId: 'codex-main',
           reason: 'usage_limit',
@@ -524,7 +524,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
         status: 'recovery_action_required',
         action: {
           kind: 'profile_action_required',
-          serviceId: 'claude-subscription',
+          serviceId: 'happier.agent.claude/claude-subscription',
           profileId: 'pinned-profile',
           groupId: null,
           reason: 'usage_limit',
@@ -539,7 +539,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       sessionId: 'sess_pinned',
       switchesThisTurn: 0,
       classification: usageLimitClassification({
-        serviceId: 'claude-subscription',
+        serviceId: 'happier.agent.claude/claude-subscription',
         profileId: 'pinned-profile',
         groupId: null,
         resetsAtMs: 3_600_000,
@@ -573,7 +573,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       sessionId: 'sess_native',
       switchesThisTurn: 0,
       classification: usageLimitClassification({
-        serviceId: 'claude-subscription',
+        serviceId: 'happier.agent.claude/claude-subscription',
         profileId: null,
         groupId: null,
         resetsAtMs: 7_200_000,
@@ -601,7 +601,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
         status: 'recovery_action_required',
         action: {
           kind: 'profile_action_required',
-          serviceId: 'claude-subscription',
+          serviceId: 'happier.agent.claude/claude-subscription',
           profileId: 'pinned-profile',
           groupId: null,
           reason: 'usage_limit',
@@ -613,7 +613,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       sessionId: 'sess_pinned_no_reset',
       switchesThisTurn: 0,
       classification: usageLimitClassification({
-        serviceId: 'claude-subscription',
+        serviceId: 'happier.agent.claude/claude-subscription',
         profileId: 'pinned-profile',
         groupId: null,
         resetsAtMs: null,
@@ -808,6 +808,8 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     const { RuntimeAuthRecoveryScheduler } = await loadModule();
     const unsafeClassification = {
       ...usageLimitClassification({
+        // Released scalar ingress is normalized before the current intent is retained.
+        serviceId: 'openai-codex',
         providerLimitId: 'Bearer secret-provider-limit-token',
         planType: 'enterprise secret plan',
         action: {
@@ -843,7 +845,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     expect(persisted).toMatchObject({
       classification: {
         kind: 'usage_limit',
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         profileId: 'primary',
         groupId: 'codex-main',
         providerLimitId: null,
@@ -915,7 +917,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
         transcriptEvent: expect.objectContaining({
           type: 'connected-service-runtime-auth-recovery',
           status: 'retry_scheduled',
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           profileId: 'primary',
           groupId: 'codex-main',
           terminal: false,
@@ -942,7 +944,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       sessionId: 'sess_1',
       switchesThisTurn: 1,
       classification: usageLimitClassification({
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         profileId: 'primary',
         groupId: 'codex-main',
       }),
@@ -952,7 +954,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       sessionId: 'sess_1',
       switchesThisTurn: 1,
       classification: usageLimitClassification({
-        serviceId: 'anthropic',
+        serviceId: 'happier.agent.claude/anthropic',
         profileId: 'claude-primary',
         groupId: 'claude-main',
       }),
@@ -961,18 +963,18 @@ describe('RuntimeAuthRecoveryScheduler', () => {
 
     await expect(scheduler.markSucceededByKey({
       sessionId: 'sess_1',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'codex-main',
     })).resolves.toMatchObject({
       status: 'waiting',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
     });
 
     expect(scheduler.readForSession('sess_1')).toEqual([
       expect.objectContaining({
         status: 'waiting',
-        serviceId: 'anthropic',
+        serviceId: 'happier.agent.claude/anthropic',
       }),
     ]);
   });
@@ -992,7 +994,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       sessionId: 'sess_1',
       switchesThisTurn: 1,
       classification: usageLimitClassification({
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         profileId: 'primary',
         groupId: 'codex-main',
       }),
@@ -1002,7 +1004,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       sessionId: 'sess_1',
       switchesThisTurn: 1,
       classification: usageLimitClassification({
-        serviceId: 'anthropic',
+        serviceId: 'happier.agent.claude/anthropic',
         profileId: 'claude-primary',
         groupId: 'claude-main',
       }),
@@ -1014,23 +1016,23 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     const cleared = await scheduler.markProviderOutcomeProofByIdentity({
       sessionId: 'sess_1',
       proofKind: 'provider_activity',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'backup',
       groupId: 'codex-main',
       observedAtMs: 1_000,
     });
 
     expect(cleared).toEqual([
-      expect.objectContaining({ serviceId: 'openai-codex', groupId: 'codex-main' }),
+      expect.objectContaining({ serviceId: 'happier.agent.codex/openai-codex', groupId: 'codex-main' }),
     ]);
     expect(scheduler.readForSession('sess_1')).toEqual([
-      expect.objectContaining({ status: 'waiting', serviceId: 'anthropic' }),
+      expect.objectContaining({ status: 'waiting', serviceId: 'happier.agent.claude/anthropic' }),
     ]);
     expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         event: 'runtime_auth_recovery_success',
         sessionId: 'sess_1',
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         groupId: 'codex-main',
       }),
     ]));
@@ -1050,7 +1052,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       switchesThisTurn: 1,
       classification: {
         ...usageLimitClassification({
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           profileId: 'primary',
           groupId: 'codex-main',
         }),
@@ -1063,7 +1065,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       switchesThisTurn: 1,
       classification: {
         ...usageLimitClassification({
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           profileId: 'backup',
           groupId: 'codex-main',
         }),
@@ -1099,7 +1101,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       sessionId: 'sess_exact',
       switchesThisTurn: 1,
       classification: usageLimitClassification({
-        serviceId: 'gemini',
+        serviceId: 'happier.agent.gemini/gemini-account',
         profileId: 'work',
         groupId: 'gemini-pool',
         groupGeneration: 7,
@@ -1119,7 +1121,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     const baseProof = {
       sessionId: 'sess_exact',
       proofKind: 'provider_activity',
-      serviceId: 'gemini',
+      serviceId: 'happier.agent.gemini/gemini-account',
       profileId: 'work',
       groupId: 'gemini-pool',
       groupGeneration: 7,
@@ -1150,7 +1152,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       ...baseProof,
       credentialRevision: 'csr_abcdefghijklmnopqrstuv',
     })).resolves.toEqual([
-      expect.objectContaining({ sessionId: 'sess_exact', serviceId: 'gemini' }),
+      expect.objectContaining({ sessionId: 'sess_exact', serviceId: 'happier.agent.gemini/gemini-account' }),
     ]);
   });
 
@@ -1196,7 +1198,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     const exactTarget = {
       sessionId: 'sess_switched_exact',
       proofKind: 'provider_activity',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'backup',
       groupId: 'codex-main',
       groupGeneration: 2,
@@ -1345,7 +1347,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     await expect(replacement.markProviderOutcomeProofByIdentity({
       sessionId: 'sess_old_shape',
       proofKind: 'provider_activity',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'backup',
       groupId: 'codex-main',
       groupGeneration: 2,
@@ -1371,7 +1373,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       sessionId: 'sess_1',
       switchesThisTurn: 1,
       classification: usageLimitClassification({
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         profileId: 'primary',
         groupId: 'codex-main',
       }),
@@ -1382,31 +1384,31 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     await expect(scheduler.markProviderOutcomeProofByIdentity({
       sessionId: 'sess_1',
       proofKind: 'fresh_candidate_selected',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'codex-main',
     })).resolves.toEqual([]);
     expect(scheduler.readForSession('sess_1')).toEqual([
-      expect.objectContaining({ status: 'waiting', serviceId: 'openai-codex' }),
+      expect.objectContaining({ status: 'waiting', serviceId: 'happier.agent.codex/openai-codex' }),
     ]);
 
     // A cancelled (terminal) intent stays a terminal record; provider activity must
     // not resurrect or clear it as succeeded.
     await scheduler.cancelByKey({
       sessionId: 'sess_1',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'codex-main',
     });
     await expect(scheduler.markProviderOutcomeProofByIdentity({
       sessionId: 'sess_1',
       proofKind: 'provider_activity',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'codex-main',
     })).resolves.toEqual([]);
     expect(scheduler.readForSession('sess_1')).toEqual([
-      expect.objectContaining({ status: 'cancelled', serviceId: 'openai-codex' }),
+      expect.objectContaining({ status: 'cancelled', serviceId: 'happier.agent.codex/openai-codex' }),
     ]);
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ event: 'runtime_auth_recovery_success' }),
@@ -1427,13 +1429,13 @@ describe('RuntimeAuthRecoveryScheduler', () => {
 
     await expect(scheduler.rearmAfterConfirmedEffectOwnerLossByKey({
       sessionId: 'sess_rearm',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'codex-main',
       authorization: 'fresh_user_action_after_owner_loss',
     })).resolves.toMatchObject({
       sessionId: 'sess_rearm',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       groupId: 'codex-main',
     });
   });
@@ -1472,14 +1474,14 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     const cleared = await scheduler.markProviderOutcomeProofByIdentity({
       sessionId: 'sess_1',
       proofKind: 'provider_activity',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'codex-main',
       observedAtMs: 1_000,
     });
 
     expect(cleared).toEqual([
-      expect.objectContaining({ serviceId: 'openai-codex', status: 'exhausted' }),
+      expect.objectContaining({ serviceId: 'happier.agent.codex/openai-codex', status: 'exhausted' }),
     ]);
     expect(scheduler.readForSession('sess_1')).toEqual([]);
     expect(diagnostics).toEqual(expect.arrayContaining([
@@ -1536,14 +1538,14 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     await expect(scheduler.markProviderOutcomeProofByIdentity({
       sessionId: 'sess_1',
       proofKind: 'fresh_candidate_selected',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'codex-main',
     })).resolves.toEqual([]);
     await expect(scheduler.markProviderOutcomeProofByIdentity({
       sessionId: 'sess_1',
       proofKind: 'terminal_exhausted',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'codex-main',
     })).resolves.toEqual([]);
@@ -1727,7 +1729,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       switchesThisTurn: 0,
       classification: usageLimitClassification({
         kind: 'auth_expired',
-        serviceId: 'claude-subscription',
+        serviceId: 'happier.agent.claude/claude-subscription',
         profileId: 'primary',
         groupId: 'claude',
         groupGeneration: 7,
@@ -1750,7 +1752,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     const exactCurrentBinding = {
       sessionId: 'sess_refresh_exact',
       proofKind: 'provider_activity',
-      serviceId: 'claude-subscription',
+      serviceId: 'happier.agent.claude/claude-subscription',
       profileId: 'primary',
       groupId: 'claude',
       groupGeneration: 8,
@@ -1798,7 +1800,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       switchesThisTurn: 0,
       classification: usageLimitClassification({
         kind: 'auth_expired',
-        serviceId: 'claude-subscription',
+        serviceId: 'happier.agent.claude/claude-subscription',
         profileId: 'primary',
         groupId: 'claude',
         limitCategory: undefined,
@@ -1810,7 +1812,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
 
     await expect(scheduler.markAwaitingProviderOutcomeProofByKey({
       sessionId: 'sess_claude_group',
-      serviceId: 'claude-subscription',
+      serviceId: 'happier.agent.claude/claude-subscription',
       profileId: 'primary',
       groupId: 'claude',
       expectedAttemptId: 'runtime-auth-attempt:stale',
@@ -1819,7 +1821,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
 
     await expect(scheduler.markAwaitingProviderOutcomeProofByKey({
       sessionId: 'sess_claude_group',
-      serviceId: 'claude-subscription',
+      serviceId: 'happier.agent.claude/claude-subscription',
       profileId: 'primary',
       groupId: 'claude',
       expectedAttemptId: intake.attemptId,
@@ -2208,7 +2210,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
         transcriptEvent: expect.objectContaining({
           type: 'connected-service-runtime-auth-recovery',
           status: 'dead_lettered',
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           profileId: 'primary',
           groupId: 'codex-main',
           terminal: true,
@@ -2324,7 +2326,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
         status: 'recovery_action_required' as const,
         action: {
           kind: 'reconnect_profile' as const,
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           profileId: 'primary',
           groupId: 'codex-main',
           reason: 'usage_limit' as const,
@@ -2385,7 +2387,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       sessionId: 'sess_group',
       switchesThisTurn: 1,
       classification: usageLimitClassification({
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         groupId: 'codex-main',
         profileId: 'member-a',
       }),
@@ -2395,7 +2397,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       sessionId: 'sess_group',
       switchesThisTurn: 2,
       classification: usageLimitClassification({
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         groupId: 'codex-main',
         profileId: 'member-b',
       }),
@@ -2403,7 +2405,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     });
 
     expect(scheduler.read('sess_group')).toMatchObject({
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       groupId: 'codex-main',
       profileId: 'member-b',
       switchesThisTurn: 2,
@@ -2891,7 +2893,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       recover: async () => ({
         status: 'recovery_superseded',
         reason: 'failing_profile_inactive',
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         groupId: 'codex-main',
         failingProfileId: 'primary',
         activeProfileId: 'backup',

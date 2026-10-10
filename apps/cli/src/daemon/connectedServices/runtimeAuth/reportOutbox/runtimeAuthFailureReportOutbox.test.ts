@@ -137,7 +137,7 @@ describe('runtimeAuthFailureReportOutbox', () => {
         classification: {
           kind: 'usage_limit',
           limitCategory: 'usage_limit',
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           profileId: 'primary',
           groupId: 'codex-group',
           resetsAtMs: 1_700_000_100_000,
@@ -208,7 +208,7 @@ describe('runtimeAuthFailureReportOutbox', () => {
       expect(items[0].classification).toEqual(expect.objectContaining({
         kind: 'usage_limit',
         limitCategory: 'usage_limit',
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         profileId: 'primary',
         groupId: 'codex-group',
         resetsAtMs: 1_700_000_100_000,
