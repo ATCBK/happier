@@ -69,6 +69,11 @@ describe('managed catalog original Account transport', () => {
     const token = await auth.createToken(account.id, undefined, { kind,
       authority: kind === 'account' ? 'present_user' : 'account_automation' });
     const credentials: StoredCredentials = { token, encryption: { type: 'legacy', secret } };
+    // Terminal pairing provisions the installed daemon with the Account data key,
+    // while the browser retains its recovery-key credential.
+    const installedCredentials: StoredCredentials = { token: await auth.createToken(account.id, undefined, {
+      kind: 'terminal', authority: 'account_automation',
+    }), encryption: { type: 'dataKey', machineKey, publicKey } };
     const serverUrl = 'https://fx16-home.example';
     const uiServerId = await home.addHome({ name: 'FX16', serverUrl, serverIdentityId: homeId, accountId: account.id,
       accountEncryptionMode: 'e2ee', currentAccount: true });
@@ -104,7 +109,7 @@ describe('managed catalog original Account transport', () => {
       acquireRuntimeRegistryLease: async () => ({ registry, source: 'active', durableRevision: 1, release: async () => {} }),
     });
     const executor = (admitted?: RequesterAccountActionContext) => createCliActionExecutorFromCredentials({
-      credentials, readCredentials: async () => credentials, machineId: controller.machineId, serverId: configuration.activeServerId,
+      credentials: installedCredentials, readCredentials: async () => installedCredentials, machineId: controller.machineId, serverId: configuration.activeServerId,
       serverApiUrl: serverUrl, serverIdentityId: homeId, managedMachineAction: native,
       actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1(admitted?.accountSettingsContext.settings.actionsSettingsV1),
         ...(admitted ? { getAccountSettings: () => admitted.accountSettingsContext.settings } : {}) },
@@ -152,7 +157,7 @@ describe('managed catalog original Account transport', () => {
         prepareRequesterAccountContext: async input => {
           const prepared = await prepareRequesterAccountActionContext({ authorization: input.authorization, purpose: { kind: 'external_action' },
             machineId: controller.machineId, installationId: controller.installationId, installationPrivateKey: installation.secretKey,
-            serverId: configuration.activeServerId, serverIdentityId: homeId, serverHttpBaseUrl: serverUrl, ownCredentials: credentials,
+            serverId: configuration.activeServerId, serverIdentityId: homeId, serverHttpBaseUrl: serverUrl, ownCredentials: installedCredentials,
             // Installed custody and its retained credential are the OS fixture.
             // Account mode, settings, authorization and crypto stay real.
             isCurrent: async () => true, createExecutor: executor });

@@ -176,9 +176,13 @@ describe('ordinary Account managed Action origination', () => {
         return instance;
     }
 
-    it('relays an original terminal catalog root only while its exact installation remains current', async () => {
+    it.each([
+        ['terminal', 'account_automation'], ['account', 'account_automation'], ['account', 'present_user'],
+    ] as const)('relays an original %s catalog root with %s authority only while its installation is current', async (kind, authority) => {
         const selected = await fixture(true);
-        const token = await auth.createToken(selected.account.id, undefined, { kind: 'terminal', authority: 'account_automation' });
+        const token = await auth.createToken(selected.account.id, undefined, {
+            kind, authority: kind === 'account' ? 'present_user' : 'account_automation',
+        });
         const envelope = { v: 1 as const, requestId: selected.requestId,
             target: { kind: 'machine' as const, machineId: selected.controller.machineId },
             input: { homeId, controller: selected.controller } };
@@ -186,16 +190,20 @@ describe('ordinary Account managed Action origination', () => {
         // exact installed custody and currentness remain the real Home owners.
         const instance = await app(async request => {
             const admitted = ExternalActionDaemonDispatchRequestSchema.parse(request.callParams);
-            expect(admitted.principal).toMatchObject({ accountId: selected.account.id, authority: 'account_automation',
-                authentication: { kind: 'terminal' } });
+            expect(admitted.principal).toMatchObject({ accountId: selected.account.id, authority,
+                authentication: { kind } });
             expect(admitted.executionAuthorization.binding).toMatchObject(selected.controller);
             return { ok: true, result: createExternalActionDaemonDispatchResponseV1(prepareExternalActionResponseEnvelopeV1({
                 v: 1, actionId: 'machines.provisioners.list', requestId: selected.requestId,
                 execution: { ok: true, result: { controller: selected.controller, provisioners: [] } },
             })) };
         });
-        const headers = { authorization: `Bearer ${token}`, [AUTHORITY_CEILING_HEADER_V1]: 'account_automation' };
+        const headers = { authorization: `Bearer ${token}`,
+            ...(authority === 'account_automation' ? { [AUTHORITY_CEILING_HEADER_V1]: authority } : {}) };
         try {
+            const direct = await instance.inject({ method: 'POST', url: '/v1/actions/machines.provisioners.list', headers,
+                payload: envelope });
+            expect(direct.statusCode, direct.body).toBe(200);
             const minted = await instance.inject({ method: 'POST',
                 url: bindExternalActionExecutionAuthorizationHttpPathV1('machines.provisioners.list'), headers,
                 payload: { v: 1, machineId: selected.controller.machineId, envelope } });
@@ -211,6 +219,77 @@ describe('ordinary Account managed Action origination', () => {
             const retired = await relay();
             expect(retired.statusCode, retired.body).toBe(401);
             expect(retired.json()).toMatchObject({ error: 'invalid_token' });
+        } finally { await instance.close(); }
+    });
+
+    it.each(['machines.work.summary.get', 'machines.terminal.list'] as const)(
+        'relays the original terminal %s root with automation authority and exact installed custody', async actionId => {
+        const selected = await fixture(true);
+        const token = await auth.createToken(selected.account.id, undefined, { kind: 'terminal', authority: 'account_automation' });
+        const envelope = { v: 1 as const, requestId: selected.requestId,
+            target: { kind: 'machine' as const, machineId: selected.controller.machineId },
+            input: { serverId: homeId, machineId: selected.controller.machineId } };
+        const result = actionId === 'machines.work.summary.get' ? { kind: 'current', requesters: [] } : { ok: true, terminals: [] };
+        const delivered: unknown[] = [];
+        const instance = await app(async request => {
+            const admitted = ExternalActionDaemonDispatchRequestSchema.parse(request.callParams);
+            expect(admitted.actionId).toBe(actionId);
+            expect(admitted.envelope).toEqual(envelope);
+            expect(admitted.principal).toMatchObject({ accountId: selected.account.id, authority: 'account_automation',
+                authentication: { kind: 'terminal' } });
+            expect(admitted.principal).not.toHaveProperty('sessionActionOrigin');
+            expect(admitted.executionAuthorization.binding).toMatchObject(selected.controller);
+            delivered.push(admitted);
+            return { ok: true, result: createExternalActionDaemonDispatchResponseV1(prepareExternalActionResponseEnvelopeV1({
+                v: 1, actionId, requestId: selected.requestId, execution: { ok: true, result },
+            })) };
+        });
+        const headers = { authorization: `Bearer ${token}`, [AUTHORITY_CEILING_HEADER_V1]: 'account_automation' };
+        try {
+            const direct = await instance.inject({ method: 'POST', url: `/v1/actions/${actionId}`, headers, payload: envelope });
+            expect(direct.statusCode, direct.body).toBe(200);
+            expect(direct.json()).toMatchObject({ execution: { ok: true, result } });
+            const minted = await instance.inject({ method: 'POST',
+                url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId), headers,
+                payload: { v: 1, machineId: selected.controller.machineId, envelope } });
+            expect(minted.statusCode, minted.body).toBe(200);
+            const executionAuthorization = ExternalActionExecutionAuthorizationV1Schema.parse(minted.json());
+            expect(await verifyCurrentExternalActionPrincipal(executionAuthorization.binding)).toMatchObject({
+                authority: 'account_automation', authentication: { kind: 'terminal' },
+            });
+            const relay = () => instance.inject({ method: 'POST', url: `/v1/actions/${actionId}`, headers,
+                payload: { v: 1, machineId: selected.controller.machineId, envelope, executionAuthorization } });
+            const current = await relay();
+            expect(current.statusCode, current.body).toBe(200);
+            expect(current.json()).toMatchObject({ execution: { ok: true, result } });
+            await db.machine.update({ where: { id: selected.controller.machineId }, data: { installationId: crypto.randomUUID(),
+                installationPublicKey: new Uint8Array(tweetnacl.sign.keyPair().publicKey) } });
+            const retired = await relay();
+            expect(retired.statusCode, retired.body).toBe(401);
+            expect(retired.json()).toMatchObject({ error: 'invalid_token' });
+            expect(delivered).toHaveLength(2);
+        } finally { await instance.close(); }
+    });
+
+    it.each(['computer.target.close', 'ui.current_context.read'] as const)(
+        'refuses the unadmitted %s root for an original terminal credential before delivery', async actionId => {
+        const selected = await fixture(true);
+        const token = await auth.createToken(selected.account.id, undefined, { kind: 'terminal', authority: 'account_automation' });
+        const envelope = { v: 1 as const, requestId: selected.requestId,
+            target: { kind: 'machine' as const, machineId: selected.controller.machineId },
+            input: actionId === 'computer.target.close' ? { machineId: selected.controller.machineId } : {} };
+        let delivered = false;
+        const instance = await app(async () => { delivered = true; return { ok: false, error: 'unexpected_delivery' }; });
+        const headers = { authorization: `Bearer ${token}`, [AUTHORITY_CEILING_HEADER_V1]: 'account_automation' };
+        try {
+            const direct = await instance.inject({ method: 'POST', url: `/v1/actions/${actionId}`, headers, payload: envelope });
+            expect(direct.statusCode, direct.body).toBe(401);
+            const minted = await instance.inject({ method: 'POST',
+                url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId), headers,
+                payload: { v: 1, machineId: selected.controller.machineId, envelope } });
+            expect(minted.statusCode, minted.body).toBe(401);
+            expect(minted.json()).toMatchObject({ error: 'invalid_token' });
+            expect(delivered).toBe(false);
         } finally { await instance.close(); }
     });
 

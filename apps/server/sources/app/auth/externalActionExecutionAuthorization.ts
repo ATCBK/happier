@@ -57,7 +57,10 @@ import { auth, type VerifiedApiTokenPrincipal } from "./auth";
 import { isAutomationOriginRunPublisherTx } from '@/app/automations/automationTriggerCauseChain';
 import { QualifiedProviderAccountUsageHistoryRequestV4Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { PendingResetStartsReadInputV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
-import { readExternalActionPendingResetStartPurpose } from './externalActionPendingResetStartPurpose';
+import { readExternalActionPendingResetStartPurpose, isExternalActionPendingResetStartReadPurpose } from './externalActionPendingResetStartPurpose';
+import { SessionBoardMutationV1Schema } from '@happier-dev/protocol/sessions/board/mutations';
+import { SessionSystemRecordAddressSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordAddress';
+import { projectExternalActionPendingResetStartAdmissionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 export type VerifiedExternalActionPrincipal = VerifiedApiTokenPrincipal
     | (Extract<ExternalActionServerPrincipalV1, { authentication: unknown }>
@@ -74,13 +77,15 @@ export function isOriginalAccountHandoffAction(actionId: string): boolean {
 }
 
 /** Interactive Account execution consumes the canonical signed-root catalog and declaration families. */
-export function isOriginalAccountExecutionAction(actionId: string): boolean {
+export function isOriginalAccountExecutionAction(actionId: string,
+    origin?: Pick<ExternalActionExecutionAuthorizationBindingV1, 'sessionActionOrigin' | 'sessionActionSource'>): boolean {
     const parsed = SignedRootActionIdSchema.safeParse(actionId);
     if (!parsed.success || parsed.data === 'session.spawn_new') return false;
     const spec = getActionSpec(parsed.data);
     return spec.executionPlacement === 'machine' || ManagedMachineActionIdV1Schema.safeParse(actionId).success
         || isOriginalAccountProjectAction(actionId) || isOriginalAccountHandoffAction(actionId)
         || isSettingsDeclarationActionIdV1(actionId)
+        || actionId === 'session.board.item.upsert' && Boolean(origin?.sessionActionOrigin && origin.sessionActionSource)
         || actionId === 'connectedServices.quota.get'
         || actionId === 'session.pending.resetStart.set' || actionId === 'session.pending.resetStart.cancel'
         // The private approval owner reaches the exact daemon recorded by its
@@ -88,10 +93,16 @@ export function isOriginalAccountExecutionAction(actionId: string): boolean {
         || spec.id === 'approval.request.decide';
 }
 
-/** Paired terminal roots retain automation authority and never invent a Session source. */
+/** Paired terminal roots consume catalog placement/policy without inventing a Session source. */
 export function isOriginalTerminalExecutionAction(actionId: string,
     origin?: Pick<ExternalActionExecutionAuthorizationBindingV1, 'sessionActionOrigin' | 'sessionActionSource' | 'workflowActionOrigin'>): boolean {
     return Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, actionId)
+        || actionId !== 'session.spawn_new' && SignedRootActionIdSchema.safeParse(actionId).success
+            && getActionSpec(actionId).executionPlacement === 'machine'
+            && resolveCredentialActionAdmissionV1({ spec: getActionSpec(actionId), authority: 'account_automation', grant: null }).ok
+        || actionId === 'session.board.item.upsert' && Boolean(origin?.sessionActionOrigin && origin.sessionActionSource)
+            && SignedRootActionIdSchema.safeParse(actionId).success
+            && resolveCredentialActionAdmissionV1({ spec: getActionSpec(actionId), authority: 'account_automation', grant: null }).ok
         || ManagedMachineActionIdV1Schema.safeParse(actionId).success
             && resolveCredentialActionAdmissionV1({ spec: getActionSpec(actionId), authority: 'account_automation', grant: null }).ok
         || (actionId === 'session.spawn_new' || isSettingsDeclarationActionIdV1(actionId))
@@ -113,7 +124,8 @@ function parseExternalActionEffectAction(binding: ExternalActionExecutionAuthori
     return binding.handoffContinuation && binding.handoffAdmission && binding.actionId === actionId
         && isOriginalAccountHandoffAction(actionId)
         ? ActionIdSchema.safeParse(actionId)
-        : 'authentication' in binding && binding.authentication.kind === 'account'
+        : 'authentication' in binding && (binding.authentication.kind === 'account'
+            || binding.actionId === 'session.board.item.upsert' && binding.sessionActionOrigin)
             ? SignedRootActionIdSchema.safeParse(actionId) : PublicActionIdSchema.safeParse(actionId);
 }
 
@@ -126,9 +138,10 @@ export function readExternalActionCredentialActionId(binding: ExternalActionExec
 
 export { isExternalActionAuthorizationBoundToEnvelope };
 
-/** Always project the signed root's immutable authority, never a later broader credential. */
+/** Project the signed root's authority, narrowed only by the authenticated invocation ceiling. */
 export function projectExternalActionBoundPrincipal(binding: ExternalActionExecutionAuthorizationBindingV1,
-    current: VerifiedExternalActionPrincipal): ExternalActionServerPrincipalV1 | null {
+    current: VerifiedExternalActionPrincipal,
+    authorityCeiling?: ExternalActionServerPrincipalV1['authority']): ExternalActionServerPrincipalV1 | null {
     if (current.accountId !== binding.accountId) return null;
     if ('authentication' in binding) {
         if (!('authentication' in current)) return null;
@@ -140,7 +153,8 @@ export function projectExternalActionBoundPrincipal(binding: ExternalActionExecu
         return binding.sessionActionOrigin
             ? { accountId: binding.accountId, authentication: binding.authentication,
                 authority: 'account_automation', sessionActionOrigin: binding.sessionActionOrigin }
-            : { accountId: binding.accountId, authentication: binding.authentication, authority: 'present_user' };
+            : { accountId: binding.accountId, authentication: binding.authentication,
+                authority: narrowCredentialAuthority('present_user', authorityCeiling) };
     }
     if ('authentication' in current) return null;
     return { accountId: binding.accountId, authority: 'account_automation', principalId: binding.principalId,
@@ -254,6 +268,9 @@ async function readCurrentExternalActionPrincipal(
             || binding.sessionActionOrigin.requestId !== binding.requestId
             || (purpose?.kind !== 'issued-managed-acquire-native-fact' && !await hasCurrentSessionActionRpcSourceBindingInTx(reader, { accountId: binding.accountId,
                 ...binding.sessionActionSource, sourceSessionId: binding.sessionActionOrigin.caller.sessionId }))) return null;
+        if (binding.actionId === 'session.board.item.upsert' && (binding.target.kind !== 'session'
+            || binding.target.sessionId !== binding.sessionActionOrigin.caller.sessionId
+            || binding.machineId !== binding.sessionActionSource.machineId)) return null;
         if (binding.handoffAdmission && (binding.sessionActionSource.machineId !== binding.handoffAdmission.sourceMachineId
             || binding.sessionActionSource.installationId !== binding.handoffAdmission.sourceInstallationId)) return null;
     }
@@ -298,7 +315,7 @@ async function readCurrentExternalActionPrincipal(
         }
     }
     if ('authentication' in binding) {
-        if (!isOriginalAccountExecutionAction(binding.actionId)
+        if (!isOriginalAccountExecutionAction(binding.actionId, binding)
             && !(binding.authentication.kind === 'terminal' && isOriginalTerminalExecutionAction(binding.actionId, binding))
             && !(['session.spawn_new', 'machines.environment.apply'].includes(binding.actionId) && binding.managedContinuation)
             && !(binding.actionId === 'session.spawn_new' && binding.handoffContinuation)
@@ -514,6 +531,7 @@ async function verifyCommon(
         resolvedTarget: target,
         selectedMachineId: binding.machineId,
     })) return null;
+    if (binding.actionId === 'session.pending.resetStart.set' && !binding.pendingResetStartAdmission) return null;
     if (!hasMatchingExecutionEffectFamily(binding.actionId, effectActionId.data)
         || ('authentication' in binding || binding.handoffContinuation || binding.handoffPreflight) && binding.actionId !== effectActionId.data) return null;
     if (binding.serverIdentityId !== await getOrCreateServerIdentityId()) return null;
@@ -698,12 +716,35 @@ export async function verifyExternalActionDomainExecutionRequest(
                 || child.data.handoffPreflight && path === bindExternalActionExecutionAuthorizationHttpPathV1('session.handoff'))) return null;
     } else if (verified.binding.actionId === 'connectedServices.quota.get') {
         if (verified.effectActionId !== verified.binding.actionId || !isQuotaReadHttpPurpose(proof)) return null;
+    } else if (verified.binding.actionId === 'session.board.item.upsert') {
+        const target = verified.binding.target;
+        const origin = verified.binding.sessionActionOrigin;
+        if (verified.effectActionId !== verified.binding.actionId || target.kind !== 'session'
+            || !origin || origin.caller.sessionId !== target.sessionId) return null;
+        const url = new URL(proof.path, 'http://home.invalid');
+        const sessionPath = `/v2/sessions/${encodeURIComponent(target.sessionId)}`;
+        const method = proof.method.toUpperCase();
+        const mutation = method === 'PUT' && url.pathname === `${sessionPath}/board` && url.search === ''
+            ? SessionBoardMutationV1Schema.safeParse(proof.body) : null;
+        const query = Object.fromEntries(url.searchParams);
+        const address = method === 'GET' && proof.body === undefined && url.pathname === `${sessionPath}/system-records/record`
+            && Object.keys(query).length === Array.from(url.searchParams).length
+            ? SessionSystemRecordAddressSchema.safeParse(query) : null;
+        const readsSurface = address?.success && address.data.owner === 'host' && address.data.namespace === 'surface'
+            && (address.data.kind === 'item.v1' || address.data.kind === 'layout.v1' && address.data.localId === 'layout');
+        const readsSession = method === 'GET' && proof.body === undefined && url.pathname === sessionPath
+            && (url.search === '' || url.search === '?accessProjectionVersion=1');
+        if (!readsSession && !readsSurface && !(mutation?.success && mutation.data.operation === 'upsert_item')) return null;
     } else if (verified.binding.actionId === 'session.pending.resetStart.set'
         || verified.binding.actionId === 'session.pending.resetStart.cancel') {
+        const admission = verified.binding.pendingResetStartAdmission;
         const purpose = readExternalActionPendingResetStartPurpose({ actionId: verified.effectActionId,
             method: proof.method, path: proof.path, body: proof.body });
-        if (verified.effectActionId !== verified.binding.actionId || !purpose
-            || verified.binding.target.kind !== 'session' || purpose.sessionId !== verified.binding.target.sessionId) return null;
+        const preparesReset = admission && isExternalActionPendingResetStartReadPurpose({ method: proof.method,
+            path: proof.path, body: proof.body, admission });
+        if (verified.effectActionId !== verified.binding.actionId
+            || !preparesReset && (!purpose || (admission ? !purpose.reset || !sameManagedInput(projectExternalActionPendingResetStartAdmissionV1(purpose), admission)
+                : verified.binding.target.kind !== 'session' || purpose.sessionId !== verified.binding.target.sessionId))) return null;
     } else if ('authentication' in verified.binding) {
         const path = proof.path.split('?')[0];
         const childPurpose = verified.binding.actionId === 'session.spawn_new' && verified.binding.managedContinuation
