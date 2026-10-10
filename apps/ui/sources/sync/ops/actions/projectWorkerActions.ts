@@ -57,7 +57,21 @@ export async function executeProjectWorkerActionV1<TActionId extends ProjectWork
                 return { approvalPending: true };
             },
             succeeded: parseReceipt,
-            failed: (code, failure) => ({ ok: false, error: new ProjectWorkerActionError(code, undefined, failure?.details) }),
+            failed: (code, failure) => {
+                // These settings callers already own conflict/unknown/locked UX.
+                // Preserve their native receipt without treating it as approval success.
+                const isSettingMutation = actionId === 'machines.worker.policy.set'
+                    || actionId === 'projects.worker.preferences.set'
+                    || actionId === 'projects.worker.preferences.reset'
+                    || actionId === 'projects.service.placement.set';
+                if (isSettingMutation) {
+                    const output = ProjectWorkerActionOutputSchemasV1[actionId].safeParse(failure?.details);
+                    if (output.success && 'status' in output.data && output.data.status === code) {
+                        return parseReceipt(output.data);
+                    }
+                }
+                return { ok: false, error: new ProjectWorkerActionError(code, undefined, failure?.details) };
+            },
             aborted: () => ({ ok: false, error: new ProjectWorkerActionError('cancelled') }),
         });
         if (!receipt.ok) throw receipt.error;

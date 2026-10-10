@@ -18,6 +18,31 @@ import { buildApprovalExecutionOriginV1 } from '../actions/actionExecutor.js';
 import { signExternalActionApprovalInputV1 } from '../actions/externalActionExecutionAuthorization.js';
 import tweetnacl from 'tweetnacl';
 
+it('replays only host-caused authenticated Home continuation requests at the deciding client', () => {
+  const actionId = 'account.home_continuation.invoke';
+  const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+    createdBy: { surface: 'agent' }, requestedSurface: 'agent', actionId,
+    actionArgs: { operation: 'refresh', commandId: 'current-ui:home' }, summary: 'Refresh Homes',
+    executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent', caller: { kind: 'host' },
+      serverId: 'home', accountId: 'alice', actionId, requestId: 'request-home' } });
+  for (const surface of ['agent', 'mcp'] as const) {
+    expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ ...request,
+      createdBy: { surface }, requestedSurface: surface,
+      executionOriginV1: { ...request.executionOriginV1, surface } }))).toBe(false);
+  }
+  for (const caller of [
+    { kind: 'session', sessionId: 'source', starterDepth: 0, turnDepth: 0 },
+    { kind: 'plugin', pluginId: 'custom.owner', contributionLocalId: 'step',
+      sourceCustody: { kind: 'managed', immutableGenerationId: 'generation', installSource: 'archive' } },
+  ] as const) {
+    expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ ...request,
+      executionOriginV1: { ...request.executionOriginV1, caller } }))).toBe(true);
+  }
+  expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ ...request, actionId: 'ui.current_context.command.invoke',
+    actionArgs: { commandId: 'current-ui:home' },
+    executionOriginV1: { ...request.executionOriginV1, actionId: 'ui.current_context.command.invoke' } }))).toBe(true);
+});
+
 it('retains genuine signed Account approval origins without replacing Session automation with present-user authority', () => {
   const target = { kind: 'machine' as const, machineId: 'controller' };
   const binding = { accountId: 'requester', authentication: { kind: 'account' as const, tokenEpoch: 7 },
@@ -38,6 +63,9 @@ it('retains genuine signed Account approval origins without replacing Session au
     context: { ...context, surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } }))
     .toMatchObject({ authority: 'present_user', surface: 'ui', caller: { kind: 'host' }, accountId: 'requester' });
   expect(ApprovalExecutionOriginV1Schema.parse(ui)).toEqual(ui);
+  expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+    createdBy: { surface: 'system' }, requestedSurface: 'ui', actionId: ui.actionId, actionArgs: {}, summary: 'Acquire Machine',
+    executionOriginV1: ui }))).toBe(true);
   for (const changed of [
     { serverIdentityId: 'srv_other' }, { accountId: 'other-requester' }, { machineId: 'other-machine' },
     { requestId: 'different-request' }, { target: { kind: 'machine', machineId: 'other-machine' } },
@@ -74,10 +102,65 @@ it('retains genuine signed Account approval origins without replacing Session au
       workspaceWrites: 'allow', sessionInputSource: { sourceSessionId: 'source', sourceTurnId: 'turn', via: 'action' },
       externalActionExecutionAuthorization: session.externalActionExecutionAuthorization,
     } })).toBeNull();
-  expect(ApprovalExecutionOriginV1Schema.safeParse({ ...ui, authority: 'account_automation' }).success).toBe(false);
+  const automatedUi = { ...ui, authority: 'account_automation' } as const;
+  expect(ApprovalExecutionOriginV1Schema.parse(automatedUi)).toEqual(automatedUi);
+  expect(buildApprovalExecutionOriginV1({ actionId: 'machines.managed.acquire', input: {}, targetSessionId: null,
+    context: { ...context, surface: 'ui', authority: 'account_automation', actionCaller: { kind: 'host' } } }))
+    .toMatchObject({ authority: 'account_automation', surface: 'ui', accountId: 'requester' });
+  for (const changed of [{ surface: 'voice' }, { accountId: 'other-requester' }, { requestId: 'different-request' }]) {
+    expect(ApprovalExecutionOriginV1Schema.safeParse({ ...automatedUi, ...changed }).success).toBe(false);
+  }
 });
 
 describe('ApprovalRequestV1Schema', () => {
+  it.each([
+    ['machines.presets.create', { kind: 'refused', code: 'provider_unavailable' }, 'provider_unavailable'],
+    ['machines.presets.update', { kind: 'conflict', currentRevision: 4 }, 'conflict'],
+    ['machines.managed.power.set', { kind: 'refused', code: 'provider_unavailable' }, 'provider_unavailable'],
+    ['machines.managed.rebuild', { kind: 'conflict', currentRevision: 4 }, 'intent_changed'],
+    ['machines.pools.resolve', { kind: 'unavailable', poolId: '123e4567-e89b-42d3-a456-426614174000', reason: 'presence_unavailable' }, 'presence_unavailable'],
+    ['machines.worker.policy.set', { status: 'conflict', policy: { accepting: false, runAtMost: null }, metadataVersion: 4 }, 'conflict'],
+    ['projects.worker.preferences.set', { status: 'outcomeUnknown' }, 'outcomeUnknown'],
+    ['projects.worker.preferences.reset', { status: 'locked' }, 'locked'],
+    ['projects.service.placement.set', { status: 'unavailable' }, 'unavailable'],
+    ['action.operations.cancel', { kind: 'unsupported' }, 'unsupported'],
+    ['action.operations.cancel', { kind: 'not_found' }, 'not_found'],
+  ] as const)('reads a typed unsuccessful domain result from executed %s history', (actionId, result, errorCode) => {
+    const request = ApprovalRequestV1Schema.parse({ v: 1, status: 'executed', createdAtMs: 1, updatedAtMs: 3,
+      createdBy: { surface: 'system' }, actionId, actionArgs: {}, summary: 'Machine action',
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution: { executedAtMs: 3, ok: true, result } });
+    expect(readApprovalExecutionFailure(request)).toMatchObject({ ok: false, errorCode, details: result });
+    expect(readApprovalExecutionFailure({ ...request, execution: { ...request.execution!, result: { ...result, future: true } } }))
+      .toEqual({ ok: false, errorCode, error: errorCode, details: result });
+  });
+
+  it('does not interpret arbitrary Action data as a machine refusal or trust malformed typed results', () => {
+    const request = ApprovalRequestV1Schema.parse({ v: 1, status: 'executed', createdAtMs: 1, updatedAtMs: 3,
+      createdBy: { surface: 'system' }, actionId: 'settings.get', actionArgs: {}, summary: 'Read setting',
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution: { executedAtMs: 3, ok: true,
+        result: { kind: 'refused', code: 'provider_unavailable' } } });
+    expect(readApprovalExecutionFailure(request)).toBeNull();
+    expect(readApprovalExecutionFailure({ ...request, actionId: 'machines.presets.list',
+      execution: { ...request.execution!, result: { kind: 'listed', presets: [] } } })).toBeNull();
+    expect(readApprovalExecutionFailure({ ...request, actionId: 'machines.presets.create',
+      execution: { ...request.execution!, result: { kind: 'refused', code: 'invented_code' } } }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
+    for (const status of ['applied', 'satisfied', 'unchanged']) {
+      expect(readApprovalExecutionFailure({ ...request, actionId: 'machines.worker.policy.set',
+        execution: { ...request.execution!, result: { status, policy: { accepting: true, runAtMost: null }, metadataVersion: 4 } } })).toBeNull();
+    }
+    expect(readApprovalExecutionFailure({ ...request, actionId: 'projects.worker.preferences.get',
+      execution: { ...request.execution!, result: { status: 'unavailable' } } })).toBeNull();
+    expect(readApprovalExecutionFailure({ ...request, actionId: 'projects.worker.status',
+      execution: { ...request.execution!, result: { eligible: false } } })).toBeNull();
+    for (const kind of ['requested', 'already_settled']) {
+      expect(readApprovalExecutionFailure({ ...request, actionId: 'action.operations.cancel',
+        execution: { ...request.execution!, result: { kind } } })).toBeNull();
+    }
+    expect(readApprovalExecutionFailure({ ...request, actionId: 'action.operations.get',
+      execution: { ...request.execution!, result: { kind: 'not_found' } } })).toBeNull();
+  });
+
   it('retains the bounded Account Settings validator reason without persisting opaque details', () => {
     const actionId = 'settings.set';
     const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,

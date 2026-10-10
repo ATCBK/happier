@@ -5,6 +5,7 @@ import { useRouter, type Href } from 'expo-router';
 import { joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
 
 import { approvalArtifactBodyMatchesHeaderV1, buildExecutionRunHostActionApprovalArtifactHeaderV1, buildTargetActionApprovalArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 import { ExecutionRunHostActionApprovalRequestV1Schema, type ExecutionRunHostActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/executionRunHostActionApprovalRequestV1';
 import { TargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import { WorkspaceSyncConflictResolutionResultV1Schema, WorkspaceSyncConflictResolutionV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
@@ -152,15 +153,18 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     if (matched?.family === 'built_in') return { kind: 'built_in' as const, request: matched.request };
     return null;
   }, [artifact]);
+  const builtInExecutionFailure = React.useMemo(() => (
+    parsed?.kind === 'built_in' ? readApprovalExecutionFailure(parsed.request) : null
+  ), [parsed]);
   const completionHandledRef = React.useRef(false);
   React.useEffect(() => {
-    if (completionHandledRef.current || parsed?.request.status !== 'executed' || !props.completionHref) return;
+    if (completionHandledRef.current || parsed?.request.status !== 'executed' || builtInExecutionFailure || !props.completionHref) return;
     completionHandledRef.current = true;
     if (props.completionFocusFrom && props.completionFocusTo) {
       retargetNavigationFocusReturn(props.completionFocusFrom, props.completionFocusTo);
     }
     router.dismissTo(props.completionHref);
-  }, [parsed?.request.status, props.completionFocusFrom, props.completionFocusTo, props.completionHref, retargetNavigationFocusReturn, router]);
+  }, [parsed?.request.status, builtInExecutionFailure, props.completionFocusFrom, props.completionFocusTo, props.completionHref, retargetNavigationFocusReturn, router]);
 
 
   // One reading of the arguments decides both what the card shows and whether the
@@ -287,6 +291,9 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     artifactId: artifact?.id ?? props.artifactId,
     actionId: parsed?.kind === 'built_in' ? String(parsed.request.actionId) : '',
     actionArgs: parsed?.kind === 'built_in' ? parsed.request.actionArgs : null,
+    approvedInput: parsed?.kind === 'built_in' && parsed.request.v === 2
+      && parsed.request.status !== 'open' && parsed.request.decision?.kind === 'approve'
+      ? parsed.request.decision.narrowedInput : undefined,
     preview: parsed?.kind === 'built_in' ? parsed.request.preview : null,
     sessionId,
     serverId: approvalServerId,
@@ -486,15 +493,15 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     );
   }
 
-  const statusLabel = formatApprovalStatusLabel(parsed.request.status);
+  const statusLabel = formatApprovalStatusLabel(builtInExecutionFailure ? 'failed' : parsed.request.status);
   const targetActionParts = parsed.kind === 'target'
     ? parsed.request.qualifiedActionId.split('/actions/')
     : null;
-  const executionFailure = parsed.kind === 'host_action'
+  const executionFailure = builtInExecutionFailure?.error ?? (parsed.kind === 'host_action'
     || parsed.request.status !== 'failed'
     || parsed.request.execution?.ok !== false
     ? null
-    : parsed.request.execution.error || parsed.request.execution.errorCode || null;
+    : parsed.request.execution.error || parsed.request.execution.errorCode || null);
   // Who is asking for what: the plugin and action of a target request, or the plugin and proposal
   // count of a host action. The action's name and exact identifiers are the Action row.
   const headerFacts: PageHeaderMetaFact[] = [];

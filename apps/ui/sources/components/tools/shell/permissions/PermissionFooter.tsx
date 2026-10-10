@@ -1,6 +1,6 @@
 import { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand';
 import { formatPermissionRequestSummary } from '@happier-dev/protocol/activity/agentRequestSummary';
-import type { SessionPermissionDecisionActorV1 } from '@happier-dev/protocol/sessions/permissions/v1';
+import { NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE, type SessionPermissionDecisionActorV1 } from '@happier-dev/protocol/sessions/permissions/v1';
 import React, { useRef, useState } from 'react';
 import { View, TouchableOpacity, Platform } from 'react-native';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
@@ -237,6 +237,9 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     const { theme } = useUnistyles();
     const source = useSessionTranscriptSource();
     const interaction = source.useInteraction();
+    const agentState = source.useAgentState();
+    const onceOnlyApproval = executionRun === undefined
+        && agentState?.requests?.[permission.id]?.source === NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE;
     const actions = source.actions;
     const canApprovePermissions = callerCanApprovePermissions !== false && (executionRun !== undefined
         ? executionRun.respond !== undefined
@@ -345,7 +348,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
         }
         return [];
     })();
-    const canApproveExecPolicy = permissionFooterBehavior?.supportsExecPolicyAmendment === true && execPolicyCommand.length > 0;
+    const canApproveExecPolicy = !onceOnlyApproval && permissionFooterBehavior?.supportsExecPolicyAmendment === true && execPolicyCommand.length > 0;
     const shouldHandleStopWithoutSessionAbort = permissionFooterBehavior?.stopHandling === 'denyOnly';
 
     if (disabledReason === 'inactive') {
@@ -454,6 +457,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     };
 
     const handleApproveAllEdits = async () => {
+        if (onceOnlyApproval) return;
         if (permission.status !== 'pending' || loadingButton !== null || loadingAllEdits || loadingForSession) return;
 
         await runPermissionAction('approve_all_edits', setLoadingAllEdits, async () => {
@@ -468,6 +472,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     };
 
     const handleApproveForSession = async () => {
+        if (onceOnlyApproval) return;
         if (permission.status !== 'pending' || loadingButton !== null || loadingAllEdits || loadingForSession || loadingForSessionPrefix || !toolName) return;
 
         await runPermissionAction('approve_for_session', setLoadingForSession, async () => {
@@ -476,6 +481,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     };
 
     const handleApproveForSessionSubcommand = async () => {
+        if (onceOnlyApproval) return;
         if (permission.status !== 'pending' || loadingButton !== null || loadingAllEdits || loadingForSession || loadingForSessionPrefix || loadingForSessionCommandName || !toolName) return;
 
         const command = extractShellCommand(toolInput);
@@ -516,6 +522,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     };
 
     const handleApproveForSessionCommandName = async () => {
+        if (onceOnlyApproval) return;
         if (permission.status !== 'pending' || loadingButton !== null || loadingAllEdits || loadingForSession || loadingForSessionPrefix || loadingForSessionCommandName || !toolName) return;
 
         const command = extractShellCommand(toolInput);
@@ -576,6 +583,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     };
     
     const handleDecisionApproveForSession = async () => {
+        if (onceOnlyApproval) return;
         if (permission.status !== 'pending' || loadingButton !== null || loadingForSession || loadingExecPolicy) return;
         
         await runPermissionAction('approve_for_session', setLoadingForSession, async () => {
@@ -957,6 +965,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                     )}
 
                     {/* Decision protocol: Yes, and don't ask for a session button */}
+                    {!onceOnlyApproval && (
                     <TouchableOpacity
                         testID="permission-footer.allow-for-session"
                         accessibilityRole="button"
@@ -993,6 +1002,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                             </View>
                         )}
                     </TouchableOpacity>
+                    )}
 
                     <TouchableOpacity
                         testID="permission-footer.deny"
@@ -1079,7 +1089,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     }
 
     // Render rule-update buttons for the non-decision protocol.
-    const showAllowForSessionSubcommand = isShellTool && typeof commandForShell === 'string' && (() => {
+    const showAllowForSessionSubcommand = !onceOnlyApproval && isShellTool && typeof commandForShell === 'string' && (() => {
         if (!isBroadShellGrantEligible(commandForShell)) return false;
         const parts = commandForShell.trim().split(/\s+/).filter(Boolean);
         const cmd = parts[0];
@@ -1087,7 +1097,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
         return Boolean(cmd) && Boolean(sub) && !String(sub).startsWith('-') && ['git', 'npm', 'yarn', 'pnpm', 'cargo', 'docker', 'kubectl', 'gh', 'brew'].includes(String(cmd));
     })();
     const showAllowForSessionCommandName =
-        isShellTool
+        !onceOnlyApproval && isShellTool
         && typeof commandForShell === 'string'
         && isBroadShellGrantEligible(commandForShell)
         && Boolean(commandForShell.trim().split(/\s+/).filter(Boolean)[0]);
@@ -1135,7 +1145,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                 </TouchableOpacity>
 
                 {/* Allow All Edits button - only show for edit/write tools */}
-                {(toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write' || toolName === 'NotebookEdit') && (
+                {!onceOnlyApproval && (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write' || toolName === 'NotebookEdit') && (
                     <TouchableOpacity
                         accessibilityRole="button"
                         accessibilityState={{
@@ -1174,7 +1184,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                 )}
 
                 {/* Allow for session button - only show for non-edit, non-exit-plan tools */}
-                {supportsSessionPermissionRule(toolName) && (
+                {!onceOnlyApproval && supportsSessionPermissionRule(toolName) && (
                     <TouchableOpacity
                         accessibilityRole="button"
                         accessibilityState={{

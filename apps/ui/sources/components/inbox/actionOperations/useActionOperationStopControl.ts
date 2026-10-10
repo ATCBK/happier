@@ -75,7 +75,14 @@ export function useActionOperationStopControl(
                         return { ok: true, result: ActionOperationCancelV1ResponseSchema.parse(response) };
                     },
                     succeeded: value => ({ ok: true, result: ActionOperationCancelV1ResponseSchema.parse(value) }),
-                    failed: errorCode => ({ ok: false, errorCode }),
+                    failed: (errorCode, failure) => {
+                        // A typed refusal still owns the Stop control's specific feedback,
+                        // but never means approval success or that the operation stopped.
+                        const output = ActionOperationCancelV1ResponseSchema.safeParse(failure?.details);
+                        return output.success && output.data.kind === errorCode
+                            ? { ok: true, result: output.data }
+                            : { ok: false, errorCode };
+                    },
                     aborted: () => ({ ok: false, errorCode: 'cancelled' }),
                 });
                 if (!result.ok) throw Object.assign(new Error(result.errorCode), { code: result.errorCode });

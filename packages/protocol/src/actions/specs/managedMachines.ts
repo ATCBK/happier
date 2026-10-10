@@ -6,6 +6,7 @@ import {
   type ManagedMachineActionIdV1,
 } from '../../machines/managed/actionsV1.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+import { MANAGED_MACHINE_INPUT_FIELDS } from './machineInputHints.js';
 
 const titles: Record<ManagedMachineActionIdV1, string> = {
   'machines.provisioners.list': 'List machine provisioners',
@@ -54,7 +55,7 @@ export const MANAGED_MACHINE_ACTION_SPECS = MANAGED_MACHINE_ACTION_IDS_V1.map((a
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     bindings: { mcpToolName: actionId.replaceAll('.', '_'), voiceClientToolName: actionId.replaceAll('.', '_'), rpcMethod: actionId },
     cli: { acceptsServerId: true, commands: [{ path: actionId.split('.'), visibility: 'canonical' }] },
-    inputHints: { title: titles[actionId], fields: [] },
+    inputHints: { title: titles[actionId], fields: MANAGED_MACHINE_INPUT_FIELDS[actionId] },
     inputSchema: ManagedMachineActionInputSchemasV1[actionId],
     outputSchema: ManagedMachineActionOutputSchemasV1[actionId],
     // This requester-private census is assembled by the Account's existing

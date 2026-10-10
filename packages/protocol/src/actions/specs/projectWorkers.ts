@@ -11,6 +11,7 @@ import { ProjectMemoryDemandV1Schema } from '../../workspaces/projectSetup/proje
 import { computeWorkspaceSyncPolicyDigest, WorkspaceSyncRelationshipV1Schema, WorkspaceSyncStatusV1Schema, WorkspaceSyncTargetBootstrapPrepareResultV1Schema } from '../../sessions/control/handoff/workspaceSyncSchemas.js';
 import { ProjectWorkerMemoryObservationV1Schema, WorkerLoadObservationV1Schema } from '../../workspaces/projectWorkerExecutionV1.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+import type { ActionInputFieldHint } from '../actionInputHintsRuntime.js';
 import { ProjectWorkerNoAcceptanceFailureDetailsV1Schema } from '../projectWorkerRefusal.js';
 import { RPC_METHODS } from '../../rpc/methods.js';
 import { WorkspaceSyncCommittedCopyPreviewV1Schema, WorkspaceSyncCommittedCopyPreviewResultV1Schema } from '../../sessions/control/handoff/workspaceSyncCommittedCopyV1.js';
@@ -131,6 +132,42 @@ const titles = {
   'projects.worker.copy.inspect': 'Review worker copy',
   'projects.worker.copy.retire': 'Retire worker copy',
 };
+const workspaceField = { path: 'workspace', title: 'Workspace', widget: 'json', required: true } as const;
+const machineFields = [
+  { path: 'serverId', title: 'Home', widget: 'text', required: true },
+  { path: 'machineId', title: 'Machine id', widget: 'text', required: true },
+] satisfies ActionInputFieldHint[];
+const preferenceExpectationFields = [workspaceField,
+  { path: 'expectedRevision', title: 'Expected revision', widget: 'json', required: true },
+  { path: 'expected', title: 'Reviewed worker preferences', widget: 'json', required: true },
+] satisfies ActionInputFieldHint[];
+const copyFields = [workspaceField,
+  { path: 'machineId', title: 'Controller machine id', widget: 'text', required: true },
+  { path: 'expectedRelationship', title: 'Reviewed copy relationship', widget: 'json', required: true },
+] satisfies ActionInputFieldHint[];
+// Structured operands retain their complete reviewed union arm, without asking
+// for destinations or values that the admitted arm deliberately omits.
+const inputFields = {
+  'projects.worker.preferences.get': [workspaceField],
+  'projects.worker.preferences.set': [...preferenceExpectationFields,
+    { path: 'next', title: 'New worker preferences', widget: 'json', required: true }],
+  'projects.worker.preferences.reset': preferenceExpectationFields,
+  'machines.worker.policy.get': machineFields,
+  'machines.worker.policy.set': [...machineFields,
+    { path: 'expectedMetadataVersion', title: 'Expected metadata version', widget: 'integer', required: true },
+    { path: 'expectedPolicy', title: 'Reviewed work policy', widget: 'json', required: true },
+    { path: 'policy', title: 'New work policy', widget: 'json', required: true }],
+  'projects.worker.status': [workspaceField,
+    { path: 'destination', title: 'Worker destination', widget: 'json', required: true },
+    { path: 'purpose', title: 'Execution purpose', widget: 'text', required: true },
+    { path: 'memoryDemand', title: 'Reviewed memory demand', widget: 'json' }],
+  'projects.worker.copy.inspect': [
+    { path: 'kind', title: 'Review kind', widget: 'text', required: true }, ...copyFields,
+    { path: 'targetMachineId', title: 'Target machine id', widget: 'text', required: true },
+    { path: 'targetWorkspaceRefId', title: 'Target workspace id', widget: 'text', required: true }],
+  'projects.worker.copy.retire': [...copyFields,
+    { path: 'removeTargetCopy', title: 'Reviewed copy removal', widget: 'json' }],
+} satisfies Record<keyof typeof titles, ActionInputFieldHint[]>;
 const exampleWorkspace = { serverId: 'home', refId: 'checkout' };
 const examplePreference = { enabled: false, unavailable: 'ask', allowAdHoc: false, scriptOverrides: {} } as const;
 const exampleContentPolicy = { v: 1, selection: 'all_files', extraIgnorePatterns: [], extraIncludePatterns: [] } as const;
@@ -176,7 +213,7 @@ export const PROJECT_WORKER_ACTION_SPECS = [...PROJECT_SERVICE_PLACEMENT_ACTION_
     bindings: { mcpToolName: id.replaceAll('.', '_'), voiceClientToolName: id.replaceAll('.', '_'),
       ...(machine ? { rpcMethod: id === 'projects.worker.copy.inspect' ? RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_INSPECT : id } : {}) },
     cli: { commands: [{ path: id.split('.'), visibility: 'canonical' }] },
-    inputHints: { title: titles[id], fields: [] },
+    inputHints: { title: titles[id], fields: inputFields[id] },
     examples: { voice: { argsExample: JSON.stringify(voiceInputs[id]) } },
     inputSchema: ProjectWorkerActionInputSchemasV1[id], outputSchema: ProjectWorkerActionOutputSchemasV1[id],
   };

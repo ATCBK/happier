@@ -43,6 +43,43 @@ describe('PermissionFooter source authority', () => {
     });
     afterEach(standardCleanup);
 
+    it.each([
+        { flavor: 'claude', tool: 'Bash', arguments: { command: 'git status' } },
+        { flavor: 'claude', tool: 'Edit', arguments: { file_path: 'example.ts' } },
+        { flavor: 'codex', tool: 'Bash', arguments: { command: 'git status', proposedExecpolicyAmendment: ['git', 'status'] } },
+    ])('offers no reusable grant for a host-admitted once-only $flavor $tool request', async ({ flavor, tool, arguments: toolInput }) => {
+        const respondToPermission = vi.fn(async () => {});
+        const source = createTestSessionTranscriptSource({ sessionId: 's1',
+            agentState: { requests: { p1: { tool, arguments: toolInput, source: 'native_tool_approval_once' } } },
+            interaction: { canApprovePermissions: true, canSendMessages: true },
+            actions: { respondToPermission, answerUserAction: vi.fn(), abort: vi.fn(), submitMessage: vi.fn() },
+        });
+        const screen = await renderWithSessionTranscriptSource(<PermissionFooter sessionId="s1"
+            permission={{ id: 'p1', status: 'pending' }} toolName={tool} toolInput={toolInput}
+            metadata={{ flavor }} canApprovePermissions />, source);
+        const choices = screen.findAll(node => typeof node.type === 'string' && node.props.accessibilityRole === 'button'
+            && typeof node.props.onPress === 'function');
+        expect(choices.filter(node => !['permission-footer.allow', 'permission-footer.deny', 'permission-footer.stop']
+            .includes(node.props.testID))).toHaveLength(0);
+        expect(screen.findHostByTestId('permission-footer.deny')).not.toBeNull();
+        await screen.pressByTestIdAsync('permission-footer.allow');
+        expect(respondToPermission).toHaveBeenCalledWith({ id: 'p1', approved: true,
+            ...(flavor === 'codex' ? { decision: 'approved' } : {}) });
+    });
+
+    it('retains reusable choices for a Session request that admits session persistence', async () => {
+        const source = createTestSessionTranscriptSource({ sessionId: 's1',
+            agentState: { requests: { p1: { tool: 'Bash', arguments: { command: 'git status' } } } },
+            interaction: { canApprovePermissions: true, canSendMessages: true },
+            actions: { respondToPermission: vi.fn(), answerUserAction: vi.fn(), abort: vi.fn(), submitMessage: vi.fn() },
+        });
+        const screen = await renderWithSessionTranscriptSource(<PermissionFooter sessionId="s1"
+            permission={{ id: 'p1', status: 'pending' }} toolName="Bash" toolInput={{ command: 'git status' }}
+            metadata={{ flavor: 'claude' }} canApprovePermissions />, source);
+        expect(screen.findAll(node => typeof node.type === 'string' && node.props.accessibilityRole === 'button'
+            && typeof node.props.onPress === 'function' && node.props.testID === undefined).length).toBeGreaterThan(0);
+    });
+
     it('accessibility-focuses a native primary choice even when its host exposes a no-op focus method', async () => {
         nativeFocusBoundary.platform = 'android';
         const native = await import('react-native');

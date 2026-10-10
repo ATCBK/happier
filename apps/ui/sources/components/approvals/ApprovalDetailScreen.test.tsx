@@ -84,6 +84,7 @@ describe('approval field semantics shared by card and page', () => {
 
 const backSpy = vi.fn();
 const pushSpy = vi.fn();
+const dismissToSpy = vi.fn();
 const executeSpy = vi.fn(async () => ({ ok: true as const, result: {} }));
 const createDefaultActionExecutorSpy = vi.fn();
 const replayApprovalRequestAtExactDaemonSpy = vi.fn(
@@ -606,7 +607,7 @@ installApprovalCommonModuleMocks({
   router: async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({
-      router: { back: backSpy, push: pushSpy },
+      router: { back: backSpy, push: pushSpy, dismissTo: dismissToSpy },
     }).module;
   },
   text: async () => {
@@ -777,10 +778,15 @@ vi.mock('@/components/ui/layout/layout', () => ({
   useLayoutMaxWidthStyle: () => ({ maxWidth: 960 }),
 }));
 
+// Load the real screen graph after boundary fixtures are initialized. Cold
+// transforms belong to collection, not the individual interaction's budget.
+const approvalDetailScreenModule = await import('./ApprovalDetailScreen');
+
 describe('ApprovalDetailScreen', () => {
   beforeEach(() => {
     backSpy.mockReset();
     pushSpy.mockReset();
+    dismissToSpy.mockReset();
     executeSpy.mockClear();
     createDefaultActionExecutorSpy.mockReset();
     replayApprovalRequestAtExactDaemonSpy.mockClear();
@@ -800,6 +806,18 @@ describe('ApprovalDetailScreen', () => {
     machineFixturesByServerId = { 'server-cache': machineFixtures };
     storageState = createStorageState();
     currentArtifact = createApprovalArtifact();
+  });
+
+  it('keeps an executed preset refusal visible as failure without completion navigation', async () => {
+    currentArtifact = createBuiltInApprovalArtifact({ actionId: 'machines.presets.archive',
+      actionArgs: { homeId: 'home-1', id: 'preset-1', expectedRevision: 0 }, summary: 'Archive preset',
+      executedResult: { kind: 'refused', code: 'provider_unavailable' } });
+    const { ApprovalDetailScreen } = approvalDetailScreenModule;
+    const screen = await renderScreen(<ApprovalDetailScreen artifactId="artifact-1" completionHref="/" />);
+    expect(screen.findByTestId('approvals.execution-failure')?.props.subtitle).toBe('provider_unavailable');
+    expect(readRenderedText(screen)).toContain('approvals.status.failed');
+    expect(readRenderedText(screen)).not.toContain('approvals.status.executed');
+    expect(dismissToSpy).not.toHaveBeenCalled();
   });
 
   it('renders an executing approval truthfully without decision controls', async () => {

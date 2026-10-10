@@ -27,6 +27,34 @@ beforeEach(async () => {
 afterEach(async () => { await homes.reset(); });
 
 describe('worker Actions through the captured UI Home', () => {
+  it('returns the native conflict observation after Ask-first worker preference approval', async () => {
+    const preference = { enabled: false, unavailable: 'fail', allowAdHoc: true, scriptOverrides: {} } as const;
+    homes.answer(serverId, '/v1/projects/execution/config/read', { body: {
+      status: 'present', revision: 4, content: { t: 'plain', v: { ...preference, services: {} } },
+    } });
+    const disposeExecutor = await installRealActionExecutorModuleLoader();
+    const { useActionApprovalContinuation } = await import('@/components/approvals/useActionApprovalContinuation');
+    const hook = await renderHook(() => useActionApprovalContinuation({ serverId, scopeKey: serverId, onExecuted: () => {} }));
+    const lifetime = new AbortController();
+    let pending: ReturnType<typeof executeProjectWorkerActionV1<'projects.worker.preferences.set'>>;
+    await act(async () => {
+      pending = executeProjectWorkerActionV1('projects.worker.preferences.set', {
+        workspace: { serverId, refId: 'checkout' }, expectedRevision: 'absent', expected: { kind: 'absent' },
+        next: { enabled: false, unavailable: 'ask', allowAdHoc: true, scriptOverrides: {} },
+      }, { expectedAccountId: 'owner', signal: lifetime.signal,
+        onApprovalPending: registration => hook.getCurrent().requestApproval(registration) });
+      void pending.catch(() => {});
+    });
+    try {
+      await waitForHomeGovernance(() => expect(hook.getCurrent().approvalStatus).toBe('open'));
+      await expect(decideApprovalAsInbox(serverId, hook.getCurrent().approvalId!, 'approve'))
+        .resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+      await act(async () => { await hook.getCurrent().refresh(); });
+      await expect(pending!).resolves.toEqual({ status: 'conflict', preference, revision: 4, provenance: 'saved' });
+      expect(rpc.machine).not.toHaveBeenCalled();
+    } finally { lifetime.abort(); await hook.unmount(); disposeExecutor(); }
+  });
+
   it.each([
     { errorCode: 'indeterminate', details: { kind: 'outcomeUnknown' } },
     { errorCode: 'workspace_sync_relationship_in_use', details: { dependencies: [{ workspaceRefId: 'copy', operationId: 'busy', state: 'running' }] } },

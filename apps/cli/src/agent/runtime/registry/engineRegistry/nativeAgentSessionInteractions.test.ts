@@ -162,12 +162,7 @@ describe('native Agent current-session interactions', () => {
             1,
             expect.any(String),
             'Bash',
-            {
-                title: 'Run Bash?',
-                description: 'Inspect the working tree',
-                subject: approvalRequest.subject,
-                allowedPersistenceScopes: ['session'],
-            },
+            approvalRequest.subject.input,
             expect.objectContaining({
                 owner: {
                     kind: 'plugin',

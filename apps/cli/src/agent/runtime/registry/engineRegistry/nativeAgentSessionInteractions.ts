@@ -20,6 +20,7 @@ import {
     type PluginMachineMaterializationRefV1,
 } from '@happier-dev/protocol';
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
 import { isWorkflowInteractionCapacityError } from '@/agent/permissions/interactionPersistenceError';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { createPluginInteractionsService } from '@/plugins/runtime/invocation/services/interactions';
@@ -116,14 +117,9 @@ function normalizeQuestionAnswers(
 
 function toPermissionInput(request: InteractionTransientRequestV1): unknown {
     if (request.kind === 'approval') {
-        return Object.freeze({
-            title: request.title,
-            ...(request.description ? { description: request.description } : {}),
-            subject: request.subject,
-            ...(request.allowedPersistenceScopes?.includes('session')
-                ? { allowedPersistenceScopes: request.allowedPersistenceScopes }
-                : {}),
-        });
+        // Native tool policy and presentation consume the actual operands. The
+        // transient owner retains the approval envelope and persistence ceiling.
+        return request.subject.input;
     }
     if (request.kind === 'questions') {
         return Object.freeze({
@@ -282,6 +278,9 @@ async function presentBoundPermissionRequest(
             toolName,
             toPermissionInput(request),
             {
+                ...(request.kind === 'approval' && request.allowedPersistenceScopes?.includes('session') !== true
+                    ? { source: NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE }
+                    : {}),
                 ...(permissionContext?.origin ? { origin: permissionContext.origin } : {}),
                 ...(permissionContext?.lifetime ? { lifetime: permissionContext.lifetime } : {}),
                 ...(hasTurnId && permissionContext

@@ -3,6 +3,7 @@ import { ProjectServicePlacementGetV1Schema, ProjectServicePlacementSetV1Schema,
   type ProjectServicePlacementGetV1, type ProjectServicePlacementSetV1,
 } from '../../workspaces/projectServicePlacementV1.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+import type { ActionInputFieldHint } from '../actionInputHintsRuntime.js';
 
 export const PROJECT_SERVICE_PLACEMENT_ACTION_IDS_V1 = [
   'projects.service.placement.get', 'projects.service.placement.set',
@@ -15,6 +16,17 @@ export const ProjectServicePlacementActionOutputSchemasV1 = {
   'projects.service.placement.get': ProjectServicePlacementGetResultV1Schema,
   'projects.service.placement.set': ProjectServicePlacementMutationResultV1Schema,
 } as const;
+const targetFields = [
+  { path: 'workspace', title: 'Workspace', widget: 'json', required: true },
+  { path: 'serviceName', title: 'Service', widget: 'text', required: true },
+] satisfies ActionInputFieldHint[];
+const inputFields = {
+  'projects.service.placement.get': targetFields,
+  'projects.service.placement.set': [...targetFields,
+    { path: 'expectedRevision', title: 'Expected revision', widget: 'json', required: true },
+    { path: 'expected', title: 'Reviewed service placement', widget: 'json', required: true },
+    { path: 'value', title: 'New service placement', widget: 'json', required: true }],
+} satisfies Record<typeof PROJECT_SERVICE_PLACEMENT_ACTION_IDS_V1[number], ActionInputFieldHint[]>;
 const voiceInputs = {
   'projects.service.placement.get': { workspace: { serverId: 'home', refId: 'checkout' }, serviceName: 'web' },
   'projects.service.placement.set': { workspace: { serverId: 'home', refId: 'checkout' }, serviceName: 'web',
@@ -30,7 +42,7 @@ export const PROJECT_SERVICE_PLACEMENT_ACTION_SPECS = PROJECT_SERVICE_PLACEMENT_
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     bindings: { mcpToolName: id.replaceAll('.', '_'), voiceClientToolName: id.replaceAll('.', '_') },
     cli: { commands: [{ path: id.split('.'), visibility: 'canonical' }] },
-    inputHints: { title, fields: [] }, inputSchema: ProjectServicePlacementActionInputSchemasV1[id],
+    inputHints: { title, fields: inputFields[id] }, inputSchema: ProjectServicePlacementActionInputSchemasV1[id],
     examples: { voice: { argsExample: JSON.stringify(voiceInputs[id]) } },
     outputSchema: ProjectServicePlacementActionOutputSchemasV1[id],
   };

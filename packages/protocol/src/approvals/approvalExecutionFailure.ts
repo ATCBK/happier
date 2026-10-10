@@ -19,6 +19,11 @@ import {
   parseStoredSessionBoardActionFailureV1,
 } from '../sessions/board/actions.js';
 import { SessionBoardActionIdV1Schema } from '../sessions/board/actionIds.js';
+import { MachinePresetActionIdV1Schema, MachinePresetActionOutputSchemasV1 } from '../machines/managed/machinePresetActionsV1.js';
+import { ManagedMachineActionIdV1Schema, ManagedMachineActionOutputSchemasV1 } from '../machines/managed/actionsV1.js';
+import { MachinePoolResolveResultV1Schema } from '../machines/pools/v1.js';
+import { ProjectWorkerActionOutputSchemasV1 } from '../actions/specs/projectWorkers.js';
+import { ActionOperationCancelV1ResponseSchema } from '../actions/operations/v1.js';
 import type {
   ApprovalExecutionV2,
   ApprovalRequest,
@@ -110,12 +115,53 @@ export function projectApprovalExecutionFailureV2(input: Readonly<{
   };
 }
 
+/**
+ * A successfully executed Action may still refuse its domain effect.
+ * Interpret only exact family outputs; arbitrary Action data can also have a kind or status.
+ * This is a read projection, not a rewrite of the durable execution receipt.
+ */
+function readDomainExecutionFailure(request: ApprovalRequest): ActionExecuteFailure | null {
+  const preset = MachinePresetActionIdV1Schema.safeParse(request.actionId);
+  const managed = ManagedMachineActionIdV1Schema.safeParse(request.actionId);
+  const mutationId = request.actionId === 'machines.worker.policy.set'
+    || request.actionId === 'projects.worker.preferences.set'
+    || request.actionId === 'projects.worker.preferences.reset'
+    || request.actionId === 'projects.service.placement.set'
+    ? request.actionId : null;
+  const schema = preset.success ? MachinePresetActionOutputSchemasV1[preset.data]
+    : managed.success ? ManagedMachineActionOutputSchemasV1[managed.data]
+      : request.actionId === 'machines.pools.resolve' ? MachinePoolResolveResultV1Schema
+        : mutationId ? ProjectWorkerActionOutputSchemasV1[mutationId]
+          : request.actionId === 'action.operations.cancel' ? ActionOperationCancelV1ResponseSchema : null;
+  if (!schema) return null;
+  const parsed = createStoredReadSchema(schema).safeParse(request.execution?.result);
+  if (!parsed.success) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+  const result: unknown = parsed.data;
+  if (mutationId && result && typeof result === 'object' && 'status' in result && typeof result.status === 'string') {
+    const errorCode = result.status;
+    return errorCode === 'applied' || errorCode === 'satisfied' || errorCode === 'unchanged'
+      ? null : { ok: false, errorCode, error: errorCode, details: result };
+  }
+  if (!result || typeof result !== 'object' || !('kind' in result)) return null;
+  if (request.actionId === 'action.operations.cancel' && (result.kind === 'unsupported' || result.kind === 'not_found')) {
+    return { ok: false, errorCode: result.kind, error: result.kind, details: result };
+  }
+  const errorCode = result.kind === 'refused' && 'code' in result && typeof result.code === 'string'
+    ? result.code
+    : result.kind === 'conflict' ? preset.success ? 'conflict' : 'intent_changed'
+      : result.kind === 'unavailable' && 'reason' in result && typeof result.reason === 'string'
+        ? result.reason : null;
+  return errorCode ? { ok: false, errorCode, error: errorCode, details: result } : null;
+}
+
 /** Read terminal history without trusting legacy or unvalidated opaque fields. */
 export function readApprovalExecutionFailure(
   request: ApprovalRequest,
 ): ActionExecuteFailure | null {
   const execution = request.execution;
-  if (!execution || execution.ok !== false) return null;
+  if (!execution) return null;
+  if (execution.ok === true) return readDomainExecutionFailure(request);
+  if (execution.ok !== false) return null;
   const errorCode = typeof execution.errorCode === 'string' && execution.errorCode.trim().length > 0
     ? execution.errorCode
     : 'approval_execution_failed';

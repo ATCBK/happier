@@ -257,6 +257,12 @@ export function createActionApprovalContinuation(
                 return 'consumed';
             }
 
+            const failure = readApprovalExecutionFailure(inspection.request);
+            if (failure) {
+                input.onFailed?.(failure.errorCode, failure);
+                return 'consumed';
+            }
+
             const outputSchema = getActionSpec(input.actionId).outputSchema;
             const output = outputSchema?.safeParse(inspection.request.execution?.result);
             if (!output?.success) {

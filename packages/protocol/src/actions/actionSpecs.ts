@@ -1,8 +1,11 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { MACHINE_PRESET_INPUT_FIELDS, MACHINE_POOL_INPUT_FIELDS } from './specs/machineInputHints.js';
 import { AccountHomeContinuationInputV1Schema, AccountHomeContinuationResultV1Schema } from './accountHomeContinuationV1.js';
 import { SessionForkRpcParamsSchema } from '../sessions/fork.js';
 import { USAGE_ACTION_IDS, USAGE_COACH_ACTION_IDS } from '../usage/usageActionIdsV1.js';
 import { PromptDocRevisionV1Schema, PromptDocCreateActionInputV1Schema } from '../prompts/library/promptDocV2.js';
+import { PromptBundleCreateActionInputV1Schema, PromptBundleUpdateActionInputV1Schema } from '../prompts/library/promptBundleSchemas.js';
+import { PromptLibrarySaveOrganizationFieldsV1, isPromptLibrarySaveFolderAssignmentV1 } from '../prompts/library/promptFolderActionSchemasV1.js';
 import { PromptLibraryStackUpdateInputV1Schema, PromptLibraryStackUpdateResultV1Schema } from '../prompts/library/promptStacksV1.js';
 import { readRecord } from '../inputs/inputRecords.js';
 import { SessionPendingWithdrawInputV1Schema, SessionPendingWithdrawResultV1Schema } from '../sessions/control/pendingWithdrawV1.js';
@@ -66,7 +69,7 @@ import { ScmComparisonSourceSchema } from '../scm/comparison.js';
 import { redactPublicShareCapabilityUrl } from '../crypto/publicShareCapabilityUrl.js';
 import { ExecutionRunWaitConditionSchema } from '../execution/runs/waitForTerminal.js';
 import { WaitActionInputV1Schema, WaitActionResultV1Schema, WAIT_CLI_PROJECTION } from './specs/wait.js';
-import { ComputerAccessV1Schema, ComputerTargetV1Schema } from '../computer/v1.js';
+import type { ApprovalNarrowing } from '../approvals/approvalNarrowing.js';
 import { WORK_BOARD_ACTION_IDS_V1, type WorkBoardActionIdV1 } from '../boards/actionIdsV1.js';
 import { WorkBoardActionInputSchemasV1, WorkBoardActionOutputSchemasV1 } from '../boards/actionsV1.js';
 import { DaemonProviderModelProjectionResponseV1Schema } from '../rpc/providers.js';
@@ -232,6 +235,7 @@ import {
   type ConversationTurnOriginV1,
 } from '../messages/structured/conversationTurnOriginV1.js';
 import { SubagentLaunchV1Schema } from '../messages/structured/subagentLaunchV1.js';
+import { SubagentCommandV1Schema } from '../messages/structured/subagentCommandV1.js';
 import {
   ACTION_IDS,
   ACTION_ID_FAMILIES_V1,
@@ -648,6 +652,11 @@ import { MACHINE_CONNECTION_ACTION_SPECS } from './specs/machineConnection.js';
 import { MACHINE_TERMINAL_ACTION_SPECS, MACHINE_TERMINAL_ACTION_IDS, MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS,
   MACHINE_TERMINAL_ACTION_OUTPUT_SCHEMAS, type MachineTerminalActionId } from './specs/machineTerminal.js';
 import { MACHINE_ACCESS_ACTION_SPECS } from './specs/machineAccess.js';
+import { MACHINE_VITALS_ACTION_SPECS } from './specs/machineVitals.js';
+import { MACHINE_PROCESSES_ACTION_SPECS } from './specs/machineProcesses.js';
+import { MACHINE_STORAGE_ACTION_SPECS } from './specs/storage.js';
+import { MACHINE_RESOURCES_ACTION_SPECS } from './specs/machineResources.js';
+import { MACHINE_GUARD_ACTION_SPECS } from './specs/machineGuard.js';
 import { TEAM_ACTION_SPECS } from './specs/teams.js';
 import { SHARED_SAVED_SECRET_ACTION_SPECS } from './specs/sharedSavedSecrets.js';
 import { CONNECTED_SERVICE_CONFIGURATION_ACTION_SPECS } from './specs/connectedServices.js';
@@ -676,6 +685,7 @@ import {
   SESSION_ARCHIVE_CLI_PROJECTION,
   SESSION_MODEL_SET_CLI_PROJECTION,
   SESSION_PERMISSION_MODE_SET_CLI_PROJECTION,
+  SessionPermissionModeSetApplyTimingSchema,
   SESSION_STATUS_GET_CLI_PROJECTION,
   SESSION_STOP_CLI_PROJECTION,
   SESSION_TITLE_SET_CLI_PROJECTION,
@@ -921,6 +931,10 @@ export const ActionSpecSchema = lazyZodSchema(() => z.object({
   }).passthrough().optional(),
   surfaceBindings: ActionSpecSurfaceBindingsSchema.optional(),
   outputSchema: ZodSchemaLike.optional(),
+  /** The deciding person's reduced operands; never an approval policy. */
+  approvalNarrowing: z.object({
+    narrow: z.custom<ApprovalNarrowing['narrow']>((value) => typeof value === 'function'),
+  }).strict().optional(),
   /** Host-private launch/terminal projection. Only its schema and awaits marker are frozen. */
   completion: z.discriminatedUnion('awaits', [
     z.object({
@@ -1233,6 +1247,7 @@ export type ActionSpecWithoutApproval = Readonly<{
   projectObservationOutput?: ParsedActionSpec['projectObservationOutput'];
   approvalResultCustody?: ParsedActionSpec['approvalResultCustody'];
   approvalInputCustody?: ParsedActionSpec['approvalInputCustody'];
+  approvalNarrowing?: ParsedActionSpec['approvalNarrowing'];
   projectSessionConfirmation?: ParsedActionSpec['projectSessionConfirmation'];
   execution?: ParsedActionSpec['execution'];
   sideEffectClass?: ParsedActionSpec['sideEffectClass'];
@@ -1268,6 +1283,9 @@ export type ActionSpecDefinition = Omit<ActionSpecWithoutApproval, 'surfaces'> &
 export type PreNormalizedActionSpec = ActionSpecDefinition;
 type NormalizedActionSpec = ActionSpecWithoutApproval;
 
+type ActionSpecProjectionKey = 'id' | 'inputSchema' | 'outputSchema' | 'surfaceBindings' | 'requiredAuthority';
+type ActionSpecProjectionMetadata = Omit<PreNormalizedActionSpec, ActionSpecProjectionKey>;
+
 /**
  * Keeps each registry row's literal id and concrete Zod schema types intact.
  * Runtime validation still goes through ActionSpecSchema; this helper exists so
@@ -1275,7 +1293,14 @@ type NormalizedActionSpec = ActionSpecWithoutApproval;
  */
 export function defineActionSpecs<const TSpecs extends readonly PreNormalizedActionSpec[]>(
   specs: TSpecs,
-): TSpecs {
+): {
+  readonly [Index in keyof TSpecs]: ActionSpecProjectionMetadata & {
+    readonly [Key in keyof TSpecs[Index] as Key extends ActionSpecProjectionKey ? Key : never]: TSpecs[Index][Key];
+  };
+};
+export function defineActionSpecs(
+  specs: readonly PreNormalizedActionSpec[],
+): readonly PreNormalizedActionSpec[] {
   return specs;
 }
 
@@ -1315,8 +1340,8 @@ const SessionTurnCancelInputSchema = lazyZodSchema(() => z.object({
 const SessionPermissionModeSetInputSchema = lazyZodSchema(() => z.object({
   sessionId: z.string().min(1),
   permissionMode: SessionPermissionModeInputSchema,
-  applyTiming: z.enum(['immediate', 'next_prompt']).optional(),
-}).passthrough());
+  applyTiming: SessionPermissionModeSetApplyTimingSchema.optional(),
+}).strict());
 
 export const SessionModelSetInputSchema = lazyZodSchema(() => z.object({
   sessionId: z.string().min(1),
@@ -2428,7 +2453,7 @@ const SessionSendUserTextInputSchema = lazyZodSchema(() => SessionSendUserTextIn
   .superRefine(requireSessionInputContent).superRefine(validateSessionSendProviderSelection));
 
 // Public callers author text and routing intent, never plugin source or attachment authority.
-const SessionSendMessagePublicInputSchema = lazyZodSchema(() => SessionSendUserTextInputFieldsSchema
+const SessionSendUserTextPublicInputSchema = lazyZodSchema(() => SessionSendUserTextInputFieldsSchema
   .omit({ idempotencyKey: true, source: true, attachments: true, toolAnswerDelivery: true })
   .superRefine(requireSessionInputContent)
   .superRefine(validateSessionSendProviderSelection));
@@ -2451,14 +2476,32 @@ const SessionSendSubagentLaunchPluginInputV1Schema = lazyZodSchema(() => z.objec
   idempotencyKey: PluginSessionInputIdempotencyKeyV1Schema,
 }).strict());
 
+const SessionSendSubagentCommandInputSchema = lazyZodSchema(() => z.object({
+  sessionId: z.string().min(1),
+  kind: z.literal('sessionSubagentCommand'),
+  command: SubagentCommandV1Schema,
+  idempotencyKey: PluginSessionInputIdempotencyKeyV1Schema.optional(),
+  localId: PendingLocalIdSchema.optional(),
+}).strict());
+
+const SessionSendSubagentCommandPluginInputV1Schema = lazyZodSchema(() => SessionSendSubagentCommandInputSchema
+  .omit({ localId: true }).extend({ idempotencyKey: PluginSessionInputIdempotencyKeyV1Schema }));
+
+const SessionSendMessagePublicInputSchema = lazyZodSchema(() => z.union([
+  SessionSendUserTextPublicInputSchema,
+  SessionSendSubagentCommandInputSchema,
+]));
+
 const SessionSendMessagePluginInputV1Schema = lazyZodSchema(() => z.union([
   SessionSendUserTextPluginInputV1Schema,
   SessionSendSubagentLaunchPluginInputV1Schema,
+  SessionSendSubagentCommandPluginInputV1Schema,
 ]));
 
 const SessionSendMessageInputSchema = lazyZodSchema(() => z.union([
   SessionSendUserTextInputSchema,
   SessionSendSubagentLaunchPluginInputV1Schema,
+  SessionSendSubagentCommandInputSchema,
 ]));
 
 const SessionPermissionRespondInputSchema = lazyZodSchema(() => z.object({
@@ -2889,9 +2932,8 @@ const ApprovalRequestGetInputSchema = lazyZodSchema(() => z.object({
 const ApprovalRequestDecideInputSchema = lazyZodSchema(() => z.object({
   artifactId: z.string().min(1),
   decision: z.enum(['approve', 'reject', 'cancel']),
-  /** Human picker choice for an open computer.target.select request; never caller authority. */
-  computerTarget: ComputerTargetV1Schema.optional(),
-  computerAccess: ComputerAccessV1Schema.optional(),
+  /** Reduced input admitted by the requested Action's narrowing declaration. */
+  narrowedInput: StrictJsonValueSchema.optional(),
   /** Immutable creator-local id from the persisted V2 origin; never a route selector. */
   originServerId: z.string().min(1).optional(),
   /** Stable Home identity selected by the current device before exact-daemon routing. */
@@ -2903,17 +2945,8 @@ const PromptDocUpdateInputSchema = lazyZodSchema(() => z.object({
   title: z.string().min(1),
   markdown: z.string(),
   expectedRevision: PromptDocRevisionV1Schema.optional(),
-  folderId: z.string().min(1).nullable().optional(),
-  tags: z.array(z.string().min(1)).optional(),
-}).strict());
-
-const PromptBundleUpdateInputSchema = lazyZodSchema(() => z.object({
-  artifactId: z.string().min(1),
-  title: z.string().min(1),
-  skillMarkdown: z.string(),
-  folderId: z.string().min(1).nullable().optional(),
-  tags: z.array(z.string().min(1)).optional(),
-}).passthrough());
+  ...PromptLibrarySaveOrganizationFieldsV1,
+}).strict().refine(isPromptLibrarySaveFolderAssignmentV1, { message: 'Folder assignment must match the reviewed folder creation' }));
 
 const PromptAssetExportInputSchema = lazyZodSchema(() => z.object({
   artifactId: z.string().min(1),
@@ -3040,6 +3073,7 @@ const RESULT_REQUIRED_DEFERRED_APPROVAL_ACTION_IDS = [
 ] as const satisfies readonly ActionId[];
 
 const RESULT_REQUIRED_APPROVAL_ACTION_IDS = [
+  'machines.processes.stop', 'machines.processes.kill', 'machines.processes.leftBehind.cleanUp',
   // The generated credential stays in live result custody, never in an Artifact.
   'plugin.webhook.endpoint.ensure',
   ...ACTION_ID_FAMILIES_V1.usage_sources,
@@ -3100,6 +3134,10 @@ const RESULT_REQUIRED_APPROVAL_ACTION_IDS = [
   ...ACTION_ID_FAMILIES_V1.machine_connection,
   ...ACTION_ID_FAMILIES_V1.machine_access,
   ...ACTION_ID_FAMILIES_V1.machine_work_summary,
+  ...ACTION_ID_FAMILIES_V1.machine_vitals,
+  ...ACTION_ID_FAMILIES_V1.machine_storage,
+  ...ACTION_ID_FAMILIES_V1.machine_resources,
+  ...ACTION_ID_FAMILIES_V1.machine_guard,
   ...ACTION_ID_FAMILIES_V1.scm_git,
   ...ROLE_ACTION_IDS_V1,
   ...MANAGED_GITHUB_APP_ACTION_IDS_V1,
@@ -3273,6 +3311,8 @@ const RESULT_REQUIRED_APPROVAL_ACTION_IDS = [
   'scm.diffSummary.reviewed.unmark',
   'browser.sandbox.install',
   'browser.view.open',
+  'browser.workspace.open',
+  'browser.view.openExternal',
   'browser.view.close',
   'browser.view.focus',
   'browser.target.set',
@@ -3392,6 +3432,7 @@ const RESULT_REQUIRED_APPROVAL_ACTION_IDS = [
 ] as const satisfies readonly ActionId[];
 
 const RESULT_NONE_APPROVAL_ACTION_IDS = [
+  'machines.processes.list', 'machines.processes.get', 'machines.processes.check', 'machines.processes.startAgain',
   ...ACTION_ID_FAMILIES_V1.workflow_event_catalog,
   'connectedServices.billing.open',
   'memory.clear_index',
@@ -3434,6 +3475,7 @@ const RESULT_NONE_APPROVAL_ACTION_IDS = [
   'prompt_doc.update',
   'prompt_doc.create',
   'prompt_doc.favorite.set',
+  'prompt_bundle.create',
   'prompt_bundle.update',
   'prompt_asset.export',
   'prompt_registry.install',
@@ -3480,6 +3522,8 @@ const RESULT_OPTIONAL_DEFERRED_APPROVAL_ACTION_IDS = [
   'projects.service.placement.set',
   'projects.worker.preferences.reset',
   'machines.worker.policy.set',
+  'machines.resources.policy.set',
+  'machines.resources.policy.get',
   'home.hub.layout.update',
   ...WORKFLOW_MUTATION_ACTION_IDS,
   'session.access.grant.set',
@@ -4447,11 +4491,22 @@ const REVIEW_COMMENT_ACTION_SUMMARIES: Readonly<Record<ReviewCommentActionIdV1, 
   'reviews.comments.claimPublicationDispatch': 'Reserve review comments for posting to the pull request, so they are posted only once.',
 });
 
+const REVIEW_COMMENT_ACTION_VOICE_EXAMPLES = {
+  'reviews.comments.create': '{"workspace":{"machineId":"machine-1","path":"/repo"},"anchor":{"kind":"file","filePath":"src/main.ts"},"snapshot":{"kind":"none","capturedAt":1},"body":"Check the failure path.","clientMutationId":"create-1"}',
+  'reviews.comments.list': '{"workspace":{"machineId":"machine-1","path":"/repo"}}',
+  'reviews.comments.get': '{"commentId":"comment-1"}',
+  'reviews.comments.transition': '{"workspace":{"machineId":"machine-1","path":"/repo"},"commentId":"comment-1","expectedServerRevision":1,"expectedState":"open","toState":"resolved","reason":"The regression test passes.","clientMutationId":"transition-1"}',
+  'reviews.comments.edit': '{"workspace":{"machineId":"machine-1","path":"/repo"},"commentId":"comment-1","expectedServerRevision":1,"expectedBodyVersion":1,"nextBody":"Check the cancellation path.","clientMutationId":"edit-1"}',
+  'reviews.comments.reply': '{"workspace":{"machineId":"machine-1","path":"/repo"},"parentCommentId":"comment-1","expectedParentServerRevision":1,"body":"Added a regression test.","clientMutationId":"reply-1"}',
+  'reviews.comments.redact': '{"workspace":{"machineId":"machine-1","path":"/repo"},"commentId":"comment-1","expectedServerRevision":1,"reason":"Contains private content.","clientMutationId":"redact-1"}',
+  'reviews.comments.setDisposition': '{"workspace":{"machineId":"machine-1","path":"/repo"},"commentId":"comment-1","expectedServerRevision":1,"disposition":"blocking","clientMutationId":"disposition-1"}',
+  'reviews.comments.attachEvidence': '{"workspace":{"machineId":"machine-1","path":"/repo"},"commentId":"comment-1","expectedServerRevision":1,"evidence":[{"kind":"reasoning","message":"Cancellation leaves the destination unchanged."}],"clientMutationId":"evidence-1"}',
+  'reviews.comments.bulkTransition': '{"workspace":{"machineId":"machine-1","path":"/repo"},"commentIds":["comment-1"],"expectedServerRevisions":{"comment-1":1},"expectedState":"open","toState":"resolved","reason":"The regression test passes.","clientMutationId":"bulk-1"}',
+} as const satisfies Record<Exclude<ReviewCommentActionIdV1, 'reviews.comments.claimPublicationDispatch'>, string>;
+
 function createReviewCommentActionSpec(actionId: ReviewCommentActionIdV1): PreNormalizedActionSpec {
   const isRead = actionId === 'reviews.comments.list' || actionId === 'reviews.comments.get';
-  const isVerdictAction = actionId === 'reviews.comments.list'
-    || actionId === 'reviews.comments.transition'
-    || actionId === 'reviews.comments.setDisposition';
+  const isPublicCommentAction = actionId !== 'reviews.comments.claimPublicationDispatch';
   return {
     id: actionId,
     title: REVIEW_COMMENT_ACTION_TITLES[actionId],
@@ -4461,17 +4516,17 @@ function createReviewCommentActionSpec(actionId: ReviewCommentActionIdV1): PreNo
     bindings: {
       rpcMethod: REVIEW_COMMENT_ACTION_RPC_METHODS[actionId],
       sdkMethod: REVIEW_COMMENT_ACTION_SDK_METHODS[actionId],
-      ...(isVerdictAction ? { mcpToolName: actionId.replaceAll('.', '_') } : {}),
+      ...(isPublicCommentAction ? { mcpToolName: actionId.replaceAll('.', '_') } : {}),
     },
     surfaces: {
       ui: true,
-      voice: false,
-      agent: isVerdictAction,
-      mcp: isVerdictAction,
-      cli: isVerdictAction,
+      voice: isPublicCommentAction,
+      agent: isPublicCommentAction,
+      mcp: isPublicCommentAction,
+      cli: isPublicCommentAction,
       rpc: true,
     },
-    ...(isVerdictAction ? { cli: { acceptsServerId: true, commands: [{
+    ...(isPublicCommentAction ? { cli: { acceptsServerId: true, commands: [{
       path: actionId.split('.').map((segment) => segment.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)),
       visibility: 'canonical' as const,
     }] } } : {}),
@@ -4479,6 +4534,9 @@ function createReviewCommentActionSpec(actionId: ReviewCommentActionIdV1): PreNo
     outputSchema: ReviewCommentActionOutputSchemasV1[actionId],
     inputSchema: ReviewCommentActionInputSchemasV1[actionId],
     inputHints: { description: REVIEW_COMMENT_ACTION_SUMMARIES[actionId], fields: [] },
+    ...(actionId === 'reviews.comments.claimPublicationDispatch' ? {} : {
+      examples: { voice: { argsExample: REVIEW_COMMENT_ACTION_VOICE_EXAMPLES[actionId] } },
+    }),
   };
 }
 
@@ -4643,7 +4701,7 @@ const PLUGIN_SESSION_HOOK_MANAGEMENT_ACTION_SPECS_V1 = [
 ] as const satisfies readonly PreNormalizedActionSpec[];
 
 const EXTERNAL_SESSION_OPERATION_REFERENCE_INPUT_HINT_FIELDS: ActionInputHints['fields'] = [
-  { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+  { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
   { path: 'operationId', title: 'Operation id', widget: 'text', required: true },
   { path: 'revision', title: 'Revision', widget: 'text', required: true },
 ];
@@ -4998,6 +5056,7 @@ const EXECUTION_RUN_SESSION_SCOPE_DESCRIPTION =
 const EXECUTION_RUN_SESSION_SCOPE_HINT = {
   path: 'sessionId',
   title: 'Session id',
+  prompt: 'Which session?',
   description: 'Use a nonempty value for an exact authorized Session. Omit it to inherit the current Action Session, or to select detached scope when no current Session exists. Set null to select detached scope even inside a current Session.',
   widget: 'text',
 } satisfies ActionInputFieldHint;
@@ -5121,6 +5180,15 @@ const WORKFLOW_ACTION_SPECS_V1: readonly PreNormalizedActionSpec[] = WORKFLOW_AC
     ...(voiceArgsExample ? { examples: { voice: { argsExample: voiceArgsExample } } } : {}),
     inputHints: { title: WORKFLOW_ACTION_TITLES[actionId], fields: actionId === 'workflow.trigger.add'
       ? [{ path: 'workflow', title: 'Workflow', widget: 'select', optionsSourceId: 'workflows.references.available' }]
+      : actionId === 'workflow.trigger.update'
+        ? ([
+          { path: 'automationId', title: 'Automation', widget: 'text', required: true },
+          { path: 'expectedRevision', title: 'Reviewed revision', widget: 'number', required: true },
+          { path: 'confirmLegacyConversion', title: 'Store reviewed workflow without end-to-end encryption', widget: 'boolean', required: true },
+          { path: 'patch.target', title: 'Reviewed workflow', widget: 'json', required: true },
+          { path: 'patch.project', title: 'Reviewed project', widget: 'json', required: true },
+          { path: 'patch.enabled', title: 'Enable after conversion', widget: 'boolean' },
+        ] satisfies ActionInputFieldHint[]).map((field) => ({ ...field, visibleWhen: { op: 'eq' as const, path: 'confirmLegacyConversion', value: true } }))
       : actionId === 'session.trigger.add'
         ? [{ path: 'target.ref', title: 'Workflow', widget: 'select', optionsSourceId: 'workflows.references.available' }]
       : actionId === 'workflow.run.start'
@@ -5251,6 +5319,11 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   | (typeof MACHINE_CONNECTION_ACTION_SPECS)[number]
   | (typeof MACHINE_TERMINAL_ACTION_SPECS)[number]
   | (typeof MACHINE_ACCESS_ACTION_SPECS)[number]
+  | (typeof MACHINE_VITALS_ACTION_SPECS)[number]
+  | (typeof MACHINE_PROCESSES_ACTION_SPECS)[number]
+  | (typeof MACHINE_STORAGE_ACTION_SPECS)[number]
+  | (typeof MACHINE_RESOURCES_ACTION_SPECS)[number]
+  | (typeof MACHINE_GUARD_ACTION_SPECS)[number]
   | (typeof TEAM_ACTION_SPECS)[number]
   | (typeof SHARED_SAVED_SECRET_ACTION_SPECS)[number]
   | (typeof CONNECTED_SERVICE_CONFIGURATION_ACTION_SPECS)[number]
@@ -5276,6 +5349,11 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   ...MACHINE_CONNECTION_ACTION_SPECS,
   ...MACHINE_TERMINAL_ACTION_SPECS,
   ...MACHINE_ACCESS_ACTION_SPECS,
+  ...MACHINE_VITALS_ACTION_SPECS,
+  ...MACHINE_PROCESSES_ACTION_SPECS,
+  ...MACHINE_STORAGE_ACTION_SPECS,
+  ...MACHINE_RESOURCES_ACTION_SPECS,
+  ...MACHINE_GUARD_ACTION_SPECS,
   ...TEAM_ACTION_SPECS,
   ...SHARED_SAVED_SECRET_ACTION_SPECS,
   ...CONNECTED_SERVICE_CONFIGURATION_ACTION_SPECS,
@@ -5294,7 +5372,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   ...WORKFLOW_EVENT_CATALOG_ACTION_SPECS_V1,
 ]);
 
-const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpecs([
+const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_OPENING = Object.freeze(defineActionSpecs([
   ...MEMORY_DOCUMENT_ACTION_SPECS_V1,
   ...PROJECT_ACTION_SPECS_V1,
   ...WORKFLOW_EFFECT_ACTION_SPECS_V1,
@@ -5313,6 +5391,50 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpec
   ...APP_UPDATE_ACTION_SPECS,
   ...VOICE_CONVERSATION_ACTION_SPECS,
   ...SCOPE_ACTION_SPECS,
+] as const));
+
+const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_MIDDLE = Object.freeze(defineActionSpecs([
+  ...WORK_BOARD_ACTION_SPECS_V1,
+  ...WIDGET_INSTANCE_ACTION_SPECS_V1,
+  ...WIDGET_DEFINITION_ACTION_SPECS_V1,
+  ...WIDGET_LAYOUT_FRAGMENT_ACTION_SPECS_V1,
+  ...WIDGET_SNAPSHOT_ACTION_SPECS_V1,
+  ...HOME_HUB_LAYOUT_ACTION_SPECS,
+  ...PROJECT_SOURCE_ACTION_SPECS_V1,
+  ...ARTIFACT_ACCESS_ACTION_SPECS,
+  ...ARTIFACT_ACTION_SPECS,
+  {
+    id: 'launch_profiles.publish', title: 'Publish launch profile', safety: 'danger',
+    placements: [], bindings: { rpcMethod: 'launch_profiles.publish', mcpToolName: 'launch_profiles_publish' },
+    requiredAuthority: 'account_automation', sideEffectClass: 'write',
+    surfaces: { ui: true, cli: true, agent: true, mcp: true, voice: false, rpc: true },
+    inputSchema: LaunchProfilePublishInputV1Schema, outputSchema: LaunchProfilePublishOutputV1Schema,
+    inputHints: { description: 'Make a launch profile ready to share with a Team. Its secrets stay with you.', title: 'Publish launch profile', fields: [
+      { path: 'profileId', title: 'Launch profile id', widget: 'text', required: true },
+    ] },
+    cli: { acceptsServerId: true, commands: [{ path: ['launch_profiles', 'publish'], visibility: 'canonical' }] },
+  },
+] as const));
+
+const CAPTURE_VIEW_ACTION_SPECS = Object.freeze(defineActionSpecs([
+  {
+    id: 'capture.view',
+    title: 'View host capture',
+    description: 'Allow one mounted plugin viewer to view the exact current host capture source. Approval is required by default and may be waived for that plugin in Actions settings.',
+    safety: 'safe',
+    approvalResultCustody: 'live_only',
+    projectObservationOutput: () => ({ admitted: true }),
+    placements: [],
+    surfaces: { ui: false, voice: false, agent: false, mcp: false, cli: false, rpc: false },
+    sideEffectClass: 'read',
+    inputSchema: lazyZodSchema(() => z.object({ sourceId: z.string().min(1), sourceOccurrenceId: z.string().min(1) }).strict()),
+    outputSchema: lazyZodSchema(() => z.object({ admitted: z.literal(true), sourceId: z.string().min(1), sourceOccurrenceId: z.string().min(1) }).strict()),
+    inputHints: { fields: [] },
+  },
+] as const));
+
+const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpecs([
+  ...ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_OPENING,
   ...SETTINGS_DECLARATION_ACTION_IDS_V1.map((id): PreNormalizedActionSpec => ({
     id, title: id === 'settings.list' ? 'List declared settings' : id === 'settings.get' ? 'Read a declared setting' : id === 'settings.reset' ? 'Reset a declared setting' : id === 'settings.invoke' ? 'Invoke a declared settings operation' : 'Change a declared setting',
     description: 'Discover declared settings, read or change bound preferences, or request a declared operation through its canonical owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.',
@@ -5337,33 +5459,14 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpec
       ] },
     cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' }] },
   })),
-  ...WORK_BOARD_ACTION_SPECS_V1,
-  ...WIDGET_INSTANCE_ACTION_SPECS_V1,
-  ...WIDGET_DEFINITION_ACTION_SPECS_V1,
-  ...WIDGET_LAYOUT_FRAGMENT_ACTION_SPECS_V1,
-  ...WIDGET_SNAPSHOT_ACTION_SPECS_V1,
-  ...HOME_HUB_LAYOUT_ACTION_SPECS,
-  ...PROJECT_SOURCE_ACTION_SPECS_V1,
-  ...ARTIFACT_ACCESS_ACTION_SPECS,
-  ...ARTIFACT_ACTION_SPECS,
-  {
-    id: 'launch_profiles.publish', title: 'Publish launch profile', safety: 'danger',
-    placements: [], bindings: { rpcMethod: 'launch_profiles.publish', mcpToolName: 'launch_profiles_publish' },
-    requiredAuthority: 'account_automation', sideEffectClass: 'write',
-    surfaces: { ui: true, cli: true, agent: true, mcp: true, voice: false, rpc: true },
-    inputSchema: LaunchProfilePublishInputV1Schema, outputSchema: LaunchProfilePublishOutputV1Schema,
-    inputHints: { description: 'Make a launch profile ready to share with a Team. Its secrets stay with you.', title: 'Publish launch profile', fields: [
-      { path: 'profileId', title: 'Launch profile id', widget: 'text', required: true },
-    ] },
-    cli: { acceptsServerId: true, commands: [{ path: ['launch_profiles', 'publish'], visibility: 'canonical' }] },
-  },
+  ...ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_MIDDLE,
   ...ROLE_ACTION_IDS_V1.map((id): PreNormalizedActionSpec => {
     const accountMutation = isAccountRoleMutationV1(id);
     const read = id === 'roles.list' || id === 'roles.get';
     const reports = id === 'session.roles.apply_to_reports';
     const fields: ActionInputFieldHint[] = [];
     if (id.startsWith('session.')) {
-      fields.push({ path: 'sessionId', title: 'Session id', widget: 'text', required: true });
+      fields.push({ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true });
     }
     if (id !== 'roles.list' && id !== 'session.notes.set' && !reports) {
       fields.push({ path: 'roleId', title: 'Role id', widget: 'text', required: id !== 'roles.create' });
@@ -5436,20 +5539,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpec
     };
   }),
   ...PLUGIN_DEV_LOOP_ACTION_IDS_V1.map(createPluginDevLoopActionSpec),
-  {
-    id: 'capture.view',
-    title: 'View host capture',
-    description: 'Allow one mounted plugin viewer to view the exact current host capture source. Approval is required by default and may be waived for that plugin in Actions settings.',
-    safety: 'safe',
-    approvalResultCustody: 'live_only',
-    projectObservationOutput: () => ({ admitted: true }),
-    placements: [],
-    surfaces: { ui: false, voice: false, agent: false, mcp: false, cli: false, rpc: false },
-    sideEffectClass: 'read',
-    inputSchema: lazyZodSchema(() => z.object({ sourceId: z.string().min(1), sourceOccurrenceId: z.string().min(1) }).strict()),
-    outputSchema: lazyZodSchema(() => z.object({ admitted: z.literal(true), sourceId: z.string().min(1), sourceOccurrenceId: z.string().min(1) }).strict()),
-    inputHints: { fields: [] },
-  },
+  ...CAPTURE_VIEW_ACTION_SPECS,
   ...PLUGIN_SETTINGS_ADMINISTRATION_ACTION_IDS_V1.map(createPluginSettingsAdministrationActionSpec),
   ...PLUGIN_PERMISSION_GRANT_ACTION_IDS_V1.map(createPluginPermissionGrantActionSpec),
   ...PLUGIN_WEBHOOK_ACTION_IDS_V1.map(createPluginWebhookActionSpec),
@@ -5472,7 +5562,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       bindings: { mcpToolName: `machines_presets_${verb}`, voiceClientToolName: `machines_presets_${verb}` },
       surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
       cli: { acceptsServerId: true, commands: [{ path: ['machines', 'presets', verb], visibility: 'canonical' }] },
-      inputHints: { title, fields: [] },
+      inputHints: { title, fields: MACHINE_PRESET_INPUT_FIELDS[id] },
       inputSchema: MachinePresetActionInputSchemasV1[id], outputSchema: MachinePresetActionOutputSchemasV1[id],
       serverTransport: { method: 'POST', path: machinePresetActionEndpointPathV1(id) },
     };
@@ -5517,7 +5607,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
           visibility: 'canonical',
         }],
       },
-      inputHints: { title: titles[actionId], fields: [] },
+      inputHints: { title: titles[actionId], fields: MACHINE_POOL_INPUT_FIELDS[actionId] },
       inputSchema: MachinePoolActionInputSchemasV1[actionId],
       outputSchema: MachinePoolActionOutputSchemasV1[actionId],
       serverTransport: {
@@ -6024,7 +6114,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
         { path: 'actionId', title: 'Action id', description: 'Optional when optionsSourceId is provided directly.', widget: 'text' },
         { path: 'fieldPath', title: 'Field path', description: 'Dot-path for the action input field.', widget: 'text' },
         { path: 'optionsSourceId', title: 'Options source id', description: 'Direct options source lookup when known.', widget: 'text' },
-        { path: 'sessionId', title: 'Session id', description: 'Omit to use the current invoking Session. Set only for an intentional authorized cross-Session target.', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', description: 'Omit to use the current invoking Session. Set only for an intentional authorized cross-Session target.', widget: 'text' },
         { path: 'draftInput', title: 'Partial action input', description: 'Partial input for dependent options, for example {"backendTargetKeys":["agent:pi"]} when resolving a model, configuration, or connected service.', widget: 'json' },
         { path: 'query', title: 'Query filter', description: 'Optional search text to filter the returned options.', widget: 'text' },
         { path: 'limit', title: 'Limit', description: 'Maximum number of options to return.', widget: 'text' },
@@ -7140,7 +7230,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       title: 'Open a session',
       fields: [
         { path: 'tabId', title: 'Workspace tab id (optional)', widget: 'text' },
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'sessionTitle', title: 'Session title', widget: 'text' },
         { path: 'approvedNewDirectoryCreation', title: 'Continue in a fresh folder if the private folder is missing', widget: 'boolean' },
       ],
@@ -7184,7 +7274,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       title: 'Fork a session',
       description: 'Fork from the latest state or a selected message, using Native or Replay.',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'strategy', title: 'Fork strategy (optional)', widget: 'select', options: [
           { value: 'native', label: 'Native' }, { value: 'replay', label: 'Replay' }, { value: 'auto', label: 'Automatic' },
         ] },
@@ -7240,7 +7330,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     inputHints: {
       title: 'Rollback a session conversation',
       description: 'Rewinds conversation state for the selected session.',
-      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text' }],
+      fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' }],
     },
     outputSchema: StrictJsonValueSchema,
     inputSchema: SessionRollbackInputSchema,
@@ -7264,7 +7354,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       title: 'Rollback session code to a checkpoint',
       description: 'Creates a mandatory backup checkpoint before applying a same-worktree reverse patch.',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'turnId', title: 'Turn id', widget: 'text', required: true },
         { path: 'cwd', title: 'Working directory', widget: 'text', required: true },
       ],
@@ -7291,7 +7381,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       title: 'Create a session checkpoint',
       description: 'Creates a checkpoint through a selected provider or Happier SCM source.',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'scopes', title: 'Scopes', widget: 'multiselect', options: CHECKPOINT_SCOPE_INPUT_OPTIONS, required: true },
       ],
     },
@@ -7317,7 +7407,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       title: 'Restore a session checkpoint',
       description: 'Restores from an explicit provider or Happier SCM checkpoint source.',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'scopes', title: 'Scopes', widget: 'multiselect', options: CHECKPOINT_SCOPE_INPUT_OPTIONS, required: true },
         { path: 'candidate.source', title: 'Source', widget: 'select', options: CHECKPOINT_SOURCE_INPUT_OPTIONS, required: true },
       ],
@@ -7357,7 +7447,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       title: 'Hand off a session',
       description: 'Moves the current session to another machine.',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'targetMachineId', title: 'Target machine id', widget: 'text' },
       ],
     },
@@ -7392,7 +7482,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       title: 'Prepare handoff target',
       fields: [
         { path: 'handoffId', title: 'Handoff id', widget: 'text', required: true },
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'sourceMachineId', title: 'Source machine id', widget: 'text', required: true },
       ],
     },
@@ -7812,7 +7902,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     inputSchema: ProjectContextUpdateInputV1Schema,
     outputSchema: ProjectContextUpdateOutputV1Schema,
     inputHints: { fields: [
-      { path: 'target', title: 'Qualified Project', widget: 'json', required: true },
+      { path: 'target', title: 'Qualified Project', prompt: 'Which project?', widget: 'json', required: true },
       { path: 'expectedRevision', title: 'Reviewed organization revision', widget: 'json', required: true },
       { path: 'intent', title: 'Personal context edit', widget: 'json', required: true },
     ] },
@@ -7826,7 +7916,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     cli: { commands: [{ path: ['projects', 'visibility', 'set'], visibility: 'canonical' }] },
     inputSchema: ProjectVisibilitySetInputV1Schema, outputSchema: ProjectVisibilitySetOutputV1Schema,
     inputHints: { fields: [
-      { path: 'target', title: 'Qualified Project', widget: 'json', required: true },
+      { path: 'target', title: 'Qualified Project', prompt: 'Which project?', widget: 'json', required: true },
       { path: 'expectedRevision', title: 'Reviewed organization revision', widget: 'json', required: true },
       { path: 'hidden', title: 'Hidden', widget: 'boolean', required: true },
     ] },
@@ -7841,7 +7931,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     inputSchema: ProjectWorkspaceUpdateInputV1Schema, outputSchema: ProjectWorkspaceUpdateOutputV1Schema,
     inputHints: { fields: [
       { path: 'serverId', title: 'Home id', widget: 'text', required: true },
-      { path: 'workspaceId', title: 'Workspace id', widget: 'text', required: true },
+      { path: 'workspaceId', title: 'Workspace id', prompt: 'Which workspace?', widget: 'text', required: true },
       { path: 'label', title: 'Label', widget: 'text' },
       { path: 'pinned', title: 'Pinned', widget: 'boolean' },
     ] },
@@ -7856,7 +7946,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     inputSchema: ProjectWorkspaceForgetInputV1Schema, outputSchema: ProjectWorkspaceForgetOutputV1Schema,
     inputHints: { fields: [
       { path: 'serverId', title: 'Home id', widget: 'text', required: true },
-      { path: 'workspaceId', title: 'Workspace id', widget: 'text', required: true },
+      { path: 'workspaceId', title: 'Workspace id', prompt: 'Which workspace?', widget: 'text', required: true },
     ] },
   },
   {
@@ -8055,7 +8145,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     inputHints: {
       title: 'List review engines',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'machineId', title: 'Machine id', widget: 'text' },
         { path: 'includeDisabled', title: 'Include disabled', widget: 'boolean' },
         { path: 'scope', title: 'Scope', widget: 'text' },
@@ -8103,7 +8193,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     safety: 'safe',
     placements: [],
     bindings: { mcpToolName: 'machines_agents_list' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'List agents on a machine',
       fields: [
@@ -8469,7 +8559,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       description: 'Send a message to the agent in a session.',
       title: 'Send a message',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'message', title: 'Message', widget: 'textarea', required: true },
         { path: 'recipient', title: 'Recipient', description: 'Optional participant routing identity; omit to send to the main Session.', widget: 'json' },
         { path: 'permissionModeOverride', title: 'Permission mode override (optional)', widget: 'text' },
@@ -8504,7 +8594,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
     inputHints: {
       title: 'Stop current turn',
-      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
+      fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
     },
     inputSchema: SessionTurnCancelInputSchema,
     outputSchema: StrictJsonValueSchema,
@@ -8531,7 +8621,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     inputHints: {
       description: 'Stop a running session.',
       title: 'Stop a session',
-      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
+      fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
     },
     outputSchema: StrictJsonValueSchema,
     inputSchema: SessionIdRequiredInputSchema,
@@ -8563,7 +8653,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       description: 'Clear the text waiting in a session\'s terminal composer.',
       title: 'Clear terminal composer',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'expectedStateAtMs', title: 'Expected state timestamp', widget: 'text' },
       ],
     },
@@ -8592,7 +8682,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       description: 'Interrupt what the agent is doing so your queued message runs now.',
       title: 'Interrupt and run now',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'localId', title: 'Pending message local id', widget: 'text', required: true },
         { path: 'expectedStateAtMs', title: 'Expected state timestamp', widget: 'text' },
       ],
@@ -8612,7 +8702,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PENDING: readonly PreNormalizedActionSpec[] 
     bindings: { mcpToolName: 'session_pending_withdraw', rpcMethod: 'session.pending.withdraw' },
     serverTransport: { method: 'POST', path: '/v2/sessions/:sessionId/pending/:localId/withdraw' },
     cli: { acceptsServerId: true, commands: [{ path: ['session', 'pending', 'withdraw'], visibility: 'canonical' }] },
-    inputHints: { description: 'Take back a queued message before the agent receives it.', fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+    inputHints: { description: 'Take back a queued message before the agent receives it.', fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'localId', title: 'Pending message id', widget: 'text', required: true }] },
     inputSchema: SessionPendingWithdrawInputV1Schema, outputSchema: SessionPendingWithdrawResultV1Schema,
   },
@@ -8624,7 +8714,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PENDING: readonly PreNormalizedActionSpec[] 
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     bindings: { mcpToolName: 'session_pending_reset_start_set' },
     cli: { acceptsServerId: true, commands: [] },
-    inputHints: { description: 'Hold a queued message until your usage limit resets, then send it.', fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+    inputHints: { description: 'Hold a queued message until your usage limit resets, then send it.', fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'localId', title: 'Pending message id', widget: 'text', required: true },
       { path: 'reset', title: 'Qualified accepted reset witness', widget: 'json', required: true }] },
     inputSchema: PendingResetStartSetInputV1Schema, outputSchema: PendingResetStartSetResultV1Schema,
@@ -8637,7 +8727,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PENDING: readonly PreNormalizedActionSpec[] 
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     bindings: { mcpToolName: 'session_pending_reset_start_cancel' },
     cli: { acceptsServerId: true, commands: [] },
-    inputHints: { description: 'Stop holding a queued message for a usage-limit reset.', fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+    inputHints: { description: 'Stop holding a queued message for a usage-limit reset.', fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'localId', title: 'Pending message id', widget: 'text', required: true }] },
     inputSchema: PendingResetStartCancelInputV1Schema, outputSchema: PendingResetStartCancelResultV1Schema,
   },
@@ -8708,7 +8798,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Read Board',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'itemIds', title: 'Exact item ids', widget: 'text_list', listSeparator: 'comma' },
         { path: 'cursor', title: 'Page cursor', widget: 'text' },
         { path: 'limit', title: 'Page size', widget: 'integer' },
@@ -8721,7 +8811,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
   {
     id: 'session.board.item.upsert',
     title: 'Show or update a Session visual',
-    description: 'Show or update one Session visual at a stable id. New visuals default to transcript; board and both destinations require atomic first placement. expectedItemRevision is the exact optimistic-concurrency operand.',
+    description: 'Show or update one Session visual at a stable id. Supply item content, or copySource with the exact same-Home source Session, item and revision to create an independent copy in another Session. Same-Session Pin uses layout.update. New visuals default to transcript; board and both destinations require atomic first placement. expectedItemRevision is the exact optimistic-concurrency operand.',
     safety: 'danger',
     sideEffectClass: 'write',
     placements: [],
@@ -8743,11 +8833,12 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Save a Board item',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'itemId', title: 'Item id', widget: 'text', required: true },
         { path: 'expectedItemRevision', title: 'Expected item revision', widget: 'text', required: true },
         { path: 'destination', title: 'Destination (transcript, board, both)', widget: 'text' },
-        { path: 'item', title: 'Item', widget: 'json', required: true },
+        { path: 'item', title: 'Item (or copy source)', widget: 'json' },
+        { path: 'copySource', title: 'Exact other-Session visual to copy', widget: 'json' },
         { path: 'placement', title: 'Placement', widget: 'json' },
       ],
     },
@@ -8780,7 +8871,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Remove a Board item',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'itemId', title: 'Item id', widget: 'text', required: true },
         { path: 'expectedItemRevision', title: 'Expected item revision', widget: 'text', required: true },
         { path: 'expectedLayoutRevision', title: 'Expected layout revision', widget: 'text' },
@@ -8815,7 +8906,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Organize the Board',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'expectedLayoutRevision', title: 'Expected layout revision', widget: 'text', required: true },
         { path: 'operation', title: 'Layout operation', widget: 'json', required: true },
       ],
@@ -8846,7 +8937,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'List discussions',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'state', title: 'State', widget: 'text' },
         { path: 'cursor', title: 'Page cursor', widget: 'text' },
         { path: 'limit', title: 'Page size', widget: 'integer' },
@@ -8872,7 +8963,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Read a discussion',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
       ],
     },
@@ -8896,7 +8987,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Read discussion messages',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
         { path: 'beforeSeq', title: 'Before sequence', widget: 'integer' },
         { path: 'afterSeq', title: 'After sequence', widget: 'integer' },
@@ -8919,7 +9010,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Start a discussion',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'title', title: 'Title', widget: 'text', required: true },
         { path: 'firstMessage', title: 'First message', widget: 'json', required: true },
       ],
@@ -8944,7 +9035,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Post to a discussion',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
         { path: 'content', title: 'Message', widget: 'json', required: true },
         { path: 'mentionedAccountIds', title: 'Mentioned Account ids', widget: 'text_list', listSeparator: 'comma' },
@@ -8966,7 +9057,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Rename a discussion',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
         { path: 'title', title: 'Title', widget: 'text', required: true },
       ],
@@ -8987,7 +9078,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Archive a discussion',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
       ],
     },
@@ -9007,7 +9098,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Restore a discussion',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
       ],
     },
@@ -9027,7 +9118,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Mark a discussion read',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
         { path: 'lastReadSeq', title: 'Last read sequence', widget: 'integer', required: true },
       ],
@@ -9059,7 +9150,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Rename a session.',
       title: 'Set title',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'title', title: 'Title', widget: 'text', required: true },
       ],
     },
@@ -9075,7 +9166,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     bindings: { mcpToolName: 'session_bot_set', voiceClientToolName: 'setSessionBot' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: { description: 'Turn a session into a bot, or back into a regular session.', title: 'Set Bot marker', fields: [
-      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'bot', title: 'Bot marker, or null for a regular session', widget: 'json', required: true },
     ] },
     inputSchema: BotSetInputSchema, outputSchema: StrictJsonValueSchema,
@@ -9088,7 +9179,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     bindings: { mcpToolName: 'session_memory_set', voiceClientToolName: 'setSessionMemory' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: { description: 'Choose whether a session uses your memory.', title: 'Use memory', fields: [
-      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'serverId', title: 'Home id', widget: 'text', required: true },
       { path: 'expectedMetadataRevision', title: 'Reviewed metadata revision', widget: 'number', required: true },
       { path: 'enabled', title: 'Use memory', widget: 'json', required: true },
@@ -9103,7 +9194,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     bindings: { mcpToolName: 'session_voice_preference_set', voiceClientToolName: 'setSessionVoicePreference' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: { description: 'Choose how Voice behaves in one session without changing your other sessions.', title: 'Session voice', fields: [
-      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'serverId', title: 'Home id', widget: 'text', required: true },
       { path: 'expectedMetadataRevision', title: 'Reviewed metadata revision', widget: 'number', required: true },
       { path: 'preference', title: 'Voice preference, or null to inherit', widget: 'json', required: true },
@@ -9118,7 +9209,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     bindings: { mcpToolName: 'session_context_update', voiceClientToolName: 'updateSessionContext' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: { description: 'Turn a piece of context on or off for a session.', title: 'Update context', fields: [
-      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'serverId', title: 'Home id', widget: 'text', required: true },
       { path: 'expectedMetadataRevision', title: 'Reviewed metadata revision', widget: 'number', required: true },
       { path: 'intent', title: 'Context intent', widget: 'json', required: true },
@@ -9133,7 +9224,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     bindings: { mcpToolName: 'session_instructions_set', voiceClientToolName: 'setSessionInstructions' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: { description: 'Choose the instructions a session follows, or remove them.', title: 'Set instructions', fields: [
-      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'serverId', title: 'Home id', widget: 'text', required: true },
       { path: 'expectedMetadataRevision', title: 'Reviewed metadata revision', widget: 'number', required: true },
       { path: 'ref', title: 'Document reference', description: 'Set it to null to detach the document.', widget: 'json', required: true },
@@ -9149,7 +9240,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     bindings: { voiceClientToolName: 'setSessionToolCalls' },
     surfaces: { ui: true, voice: true, agent: false, mcp: false, cli: true, rpc: false },
     inputHints: { description: 'Show or hide tool calls in a session\'s conversation.', title: 'Show tool calls', fields: [
-      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'showToolCalls', title: 'Show tool calls, or null to use the default', widget: 'json', required: true },
     ] },
     inputSchema: SessionToolCallsSetInputSchema, outputSchema: StrictJsonValueSchema,
@@ -9158,7 +9249,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
   {
     id: 'session.permission_mode.set',
     title: 'Set session permission mode',
-    description: `Update the permission intent (${SESSION_PERMISSION_INTENT_INPUTS.join('/')}) for the specified session. Compatible aliases are accepted.`,
+    description: `Immediately update the permission intent (${SESSION_PERMISSION_INTENT_INPUTS.join('/')}) for the specified session. Compatible aliases are accepted. To apply a mode with the next prompt, use session.message.send with permissionModeOverride.`,
     safety: 'safe',
     placements: [],
     bindings: { mcpToolName: 'session_permission_mode_set', rpcMethod: 'session.permission_mode.set' },
@@ -9177,11 +9268,10 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Choose how much a session\'s agent may do without asking you.',
       title: 'Set permission mode',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'permissionMode', title: 'Permission mode', widget: 'text', required: true },
         { path: 'applyTiming', title: 'Apply timing', widget: 'select', options: [
           { value: 'immediate', label: 'Immediately' },
-          { value: 'next_prompt', label: 'With the next prompt' },
         ] },
       ],
     },
@@ -9211,7 +9301,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Choose the model a session uses.',
       title: 'Set session model',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'modelId', title: 'Model id', widget: 'text', required: true },
         { path: 'providerConnectionId', title: 'Provider connection id', widget: 'text' },
       ],
@@ -9241,7 +9331,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       description: 'Move a session out of your list without deleting it.',
       title: 'Archive a session',
-      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
+      fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
     },
     outputSchema: StrictJsonValueSchema,
     inputSchema: SessionIdRequiredInputSchema,
@@ -9257,7 +9347,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     serverTransport: { method: 'DELETE', path: '/v1/sessions/:sessionId' },
     inputSchema: lazyZodSchema(() => z.object({ sessionId: z.string().trim().min(1) }).strict()),
     outputSchema: lazyZodSchema(() => z.object({ success: z.literal(true) }).strict()),
-    inputHints: { description: 'Permanently delete a session and the folders Happier made for it.', title: 'Delete a session', fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }] },
+    inputHints: { description: 'Permanently delete a session and the folders Happier made for it.', title: 'Delete a session', fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }] },
     cli: { commands: [{ path: ['session', 'delete'], positionals: ['sessionId'], visibility: 'canonical' }] },
   },
   {
@@ -9271,7 +9361,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputSchema: lazyZodSchema(() => SetSessionFolderAssignmentRequestSchema.extend({ sessionId: z.string().trim().min(1) })),
     outputSchema: SetSessionFolderAssignmentResponseSchema,
     inputHints: { description: 'Put a session in one of your folders, or take it out.', title: 'Assign session folder', fields: [
-      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'folderId', title: 'Folder id, or null to clear', widget: 'text', required: true },
     ] },
     cli: { commands: [{ path: ['session', 'folder', 'set'], positionals: ['sessionId', 'folderId'], visibility: 'canonical' }] },
@@ -9287,7 +9377,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputSchema: lazyZodSchema(() => SetSessionTagAssignmentsRequestSchema.extend({ sessionId: z.string().trim().min(1) })),
     outputSchema: SetSessionTagAssignmentsResponseSchema,
     inputHints: { description: 'Choose the tags on a session.', title: 'Assign session tags', fields: [
-      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'tagIds', title: 'Tag ids', widget: 'textarea', required: true },
     ] },
     cli: { commands: [{ path: ['session', 'tags', 'set'], positionals: ['sessionId'], visibility: 'canonical' }] },
@@ -9313,7 +9403,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       description: 'Bring an archived session back to your list.',
       title: 'Unarchive a session',
-      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
+      fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
     },
     outputSchema: StrictJsonValueSchema,
     inputSchema: SessionIdRequiredInputSchema,
@@ -9341,7 +9431,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'See whether a session is working, waiting or stopped.',
       title: 'Get session status',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'live', title: 'Live', widget: 'boolean' },
       ],
     },
@@ -9370,7 +9460,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       description: 'See a session\'s goal, current task and to-dos.',
       title: 'Get session work state',
-      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
+      fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
     },
     outputSchema: StrictJsonValueSchema,
     inputSchema: SessionIdRequiredInputSchema,
@@ -9397,7 +9487,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       description: 'See the goal a session is working towards.',
       title: 'Get session goal',
-      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
+      fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
     },
     outputSchema: StrictJsonValueSchema,
     inputSchema: SessionIdRequiredInputSchema,
@@ -9425,7 +9515,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Set the goal a session works towards.',
       title: 'Set session goal',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'objective', title: 'Objective', widget: 'textarea' },
         { path: 'status', title: 'Status', widget: 'text' },
         { path: 'tokenBudget', title: 'Token budget', widget: 'text' },
@@ -9456,7 +9546,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       description: 'Remove a session\'s goal.',
       title: 'Clear session goal',
-      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
+      fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
     },
     outputSchema: StrictJsonValueSchema,
     inputSchema: SessionIdRequiredInputSchema,
@@ -9538,7 +9628,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     sideEffectClass: 'danger',
     inputHints: { description: 'Choose which session leads this one, or let it stand on its own.', fields: [
-      { path: 'sessionId', title: 'Session', widget: 'text' },
+      { path: 'sessionId', title: 'Session', prompt: 'Which session?', widget: 'text' },
       { path: 'leadSessionId', title: 'Lead session', description: 'Leave empty to detach it from its lead.', widget: 'text' },
       { path: 'expectedLeadSessionId', title: 'Expected current lead', widget: 'text' },
     ] },
@@ -9819,7 +9909,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Mark a session read',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'state', title: 'Read state', widget: 'text', required: true },
       ],
     },
@@ -9850,7 +9940,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Continue a session automatically once your usage limit lifts.',
       title: 'Enable usage-limit wait resume',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'issueFingerprint', title: 'Issue fingerprint', widget: 'text' },
         { path: 'remember', title: 'Remember', widget: 'boolean' },
         {
@@ -9892,7 +9982,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Stop waiting to continue a session after a usage limit.',
       title: 'Cancel usage-limit wait resume',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'issueFingerprint', title: 'Issue fingerprint', widget: 'text' },
         { path: 'armedAtMs', title: 'Armed at (ms)', widget: 'number' },
         { path: 'runtimeAuthRecoveryAttemptId', title: 'Runtime auth recovery attempt id', widget: 'text' },
@@ -9923,7 +10013,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Check now whether a session\'s usage limit has lifted.',
       title: 'Check usage-limit recovery now',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         {
           path: 'provider',
           title: 'Provider',
@@ -9976,7 +10066,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Use a reset credit from your connected account to lift a session\'s usage limit now.',
       title: 'Apply reset credit',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         {
           path: 'provider',
           title: 'Provider',
@@ -10020,7 +10110,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'See the agent plugins a session can use.',
       title: 'List vendor plugins',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'cwd', title: 'Working directory', widget: 'text' },
       ],
     },
@@ -10049,7 +10139,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'See the skills a session\'s agent can use.',
       title: 'List skills',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'cwd', title: 'Working directory', widget: 'text' },
       ],
     },
@@ -10078,7 +10168,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Read a session\'s earlier events.',
       title: 'Get session history',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'limit', title: 'Limit', widget: 'text' },
         {
           path: 'format',
@@ -10120,7 +10210,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Read a session\'s conversation.',
       title: 'Get session transcript',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'limit', title: 'Limit', widget: 'text' },
         { path: 'cursor', title: 'Cursor', widget: 'text' },
         {
@@ -10176,7 +10266,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Look through everything that happened in a session, including tool calls, for troubleshooting.',
       title: 'Get session events',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'limit', title: 'Limit', widget: 'text' },
         { path: 'cursor', title: 'Cursor', widget: 'text' },
       ],
@@ -10207,7 +10297,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Wait until a session\'s agent has finished its turn.',
       title: 'Wait for idle',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'timeoutSeconds', title: 'Timeout seconds', widget: 'text' },
       ],
     },
@@ -10241,7 +10331,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Allow or deny something a session\'s agent asked to do.',
       title: 'Respond to permission request',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         {
           path: 'decision',
           title: 'Decision',
@@ -10269,7 +10359,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     placements: [],
     surfaces: { ui: true, cli: true, agent: false, mcp: false, voice: false, rpc: false },
     inputHints: { description: 'Let a reviewer agent look at a session\'s requests before they reach you.', title: 'Set session approval reviewer', fields: [
-      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'enabled', title: 'Enabled', widget: 'boolean', required: true },
     ] },
     inputSchema: lazyZodSchema(() => z.object({ sessionId: z.string().trim().min(1), enabled: z.boolean() }).strict()),
@@ -10291,7 +10381,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputHints: {
       title: 'Settle or snooze a session',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'standing', title: 'Keep in Needs you', widget: 'boolean' },
         { path: 'remindAt', title: 'Snooze until (epoch ms)', widget: 'integer' },
       ],
@@ -10319,7 +10409,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'See requests from a session that are waiting for someone else\'s answer.',
       title: 'List remotely mediated permission requests',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'sourceRef', title: 'Source reference', widget: 'text', required: true },
         { path: 'sourceRevisionOrEpoch', title: 'Source revision', widget: 'text', required: true },
         { path: 'cursor', title: 'Continuation cursor', widget: 'text' },
@@ -10347,7 +10437,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Answer a session\'s request on someone else\'s behalf.',
       title: 'Respond to a remotely mediated permission request',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'turnId', title: 'Turn id', widget: 'text', required: true },
         { path: 'requestId', title: 'Request id', widget: 'text', required: true },
         { path: 'sourceRef', title: 'Source reference', widget: 'text', required: true },
@@ -10399,7 +10489,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Answer a session\'s question on someone else\'s behalf.',
       title: 'Answer a remotely mediated user-action request',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'turnId', title: 'Turn id', widget: 'text', required: true },
         { path: 'requestId', title: 'Request id', widget: 'text', required: true },
         { path: 'sourceRef', title: 'Source reference', widget: 'text', required: true },
@@ -10430,7 +10520,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'See what has been allowed for a session on someone else\'s behalf.',
       title: 'List remotely mediated permission grants',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'limit', title: 'Maximum grants', widget: 'text' },
         { path: 'cursor', title: 'Continuation cursor', widget: 'text' },
       ],
@@ -10458,7 +10548,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Take back something allowed for a session on someone else\'s behalf.',
       title: 'Revoke a remotely mediated permission grant',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'turnId', title: 'Turn id', widget: 'text', required: true },
         { path: 'requestId', title: 'Request id', widget: 'text', required: true },
         { path: 'grantId', title: 'Grant id', widget: 'text', required: true },
@@ -10501,7 +10591,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Answer a question or review a request from a session\'s agent.',
       title: 'Respond to user-action request',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'requestId', title: 'Request id', widget: 'text' },
         {
           path: 'decision',
@@ -10555,7 +10645,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Switch a session\'s agent to another mode, such as planning.',
       title: 'Set session mode',
       fields: [
-        { path: 'sessionId', title: 'Session id', description: 'Optional when the active target session is already correct.', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', description: 'Optional when the active target session is already correct.', widget: 'text' },
         {
           path: 'modeId',
           title: 'Mode id',
@@ -10594,7 +10684,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       title: 'Set primary action session',
       fields: [
         { path: 'serverId', title: 'Home id', widget: 'text' },
-        { path: 'sessionId', title: 'Session id (or null)', widget: 'text' },
+        { path: 'sessionId', title: 'Session id (or null)', prompt: 'Which session?', widget: 'text' },
       ],
     },
     outputSchema: StrictJsonValueSchema,
@@ -10693,7 +10783,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'See a short summary of what a session has been doing.',
       title: 'Get session activity',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         {
           // Same canonical selector as `session.list`: every generated UI/CLI/SDK/MCP projection
           // offers awareness here instead of a caller composing it from a local digest.
@@ -10739,7 +10829,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       description: 'Read a session\'s latest messages.',
       title: 'Get recent messages',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'limit', title: 'Limit', widget: 'text' },
         { path: 'cursor', title: 'Cursor', widget: 'text' },
         { path: 'includeUser', title: 'Include user', widget: 'boolean' },
@@ -10812,12 +10902,13 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     sideEffectClass: 'write',
     description: 'Move the daemon-backed voice agent into the current or specified session root.',
     safety: 'safe',
+    requiredAuthority: 'account_automation',
     placements: ['voice_panel'],
-    bindings: { voiceClientToolName: 'teleportVoiceAgentToSessionRoot' },
+    bindings: { voiceClientToolName: 'teleportVoiceAgentToSessionRoot', mcpToolName: 'ui_voice_agent_teleport' },
     inputHints: {
       title: 'Teleport voice agent',
       description: 'Teleport the active voice agent into a session root. Defaults to the current action session when omitted.',
-      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text' }],
+      fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' }],
     },
     examples: {
       voice: { argsExample: '{"sessionId":"{{sessionId}}"}' },
@@ -10825,8 +10916,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     surfaces: {
       ui: true,
       voice: true,
-      agent: false,
-      mcp: false,
+      agent: true,
+      mcp: true,
       cli: false,
       rpc: false,
       },
@@ -10866,7 +10957,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     description: 'Request an exact mounted authenticated Account continuation: choose a Home, retry, refresh, stop waiting, relink or open the enrolled Home. A human in that Account decides; key, credential and QR acquisition remain human-only.',
     requiredAuthority: 'present_user', safety: 'safe', sideEffectClass: 'write', placements: [],
     bindings: { mcpToolName: 'account_home_continuation_invoke' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
     inputHints: { title: 'Continue Home connection', fields: [
       { path: 'operation', title: 'Continuation step', widget: 'text', required: true },
       { path: 'commandId', title: 'Current mounted command', widget: 'text', required: true },
@@ -11027,7 +11118,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       description: 'Read a Happier Session range or a native hit using its source, sourceItemId and optional cursor.',
       fields: [
         { path: 'machineId', title: 'Machine id', widget: 'text', required: true },
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'seqFrom', title: 'Seq from', widget: 'text' },
         { path: 'seqTo', title: 'Seq to', widget: 'text' },
         { path: 'source', title: 'Native transcript source', widget: 'json' },
@@ -11063,7 +11154,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       description: 'Forces the daemon memory worker to process new transcript content.',
       fields: [
         { path: 'machineId', title: 'Machine id', widget: 'text', required: true },
-        { path: 'sessionId', title: 'Session id (optional)', widget: 'text' },
+        { path: 'sessionId', title: 'Session id (optional)', prompt: 'Which session?', widget: 'text' },
       ],
     },
     surfaces: {
@@ -11180,11 +11271,16 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     inputSchema: PromptDocCreateActionInputV1Schema,
     outputSchema: lazyZodSchema(() => z.object({ ok: z.literal(true), artifactId: z.string().min(1) }).strict()),
     inputHints: { title: 'Create prompt document', fields: [
-      { path: 'title', title: 'Title', widget: 'text', required: true },
-      { path: 'markdown', title: 'Markdown', widget: 'textarea', required: true },
+      { path: 'starter', title: 'Built-in starter', widget: 'text',
+        visibleWhen: { op: 'eq', path: 'starter', value: 'happier_guide' } },
+      { path: 'title', title: 'Title', widget: 'text', required: true,
+        visibleWhen: { op: 'not', predicate: { op: 'eq', path: 'starter', value: 'happier_guide' } } },
+      { path: 'markdown', title: 'Markdown', widget: 'textarea', required: true,
+        visibleWhen: { op: 'not', predicate: { op: 'eq', path: 'starter', value: 'happier_guide' } } },
       { path: 'folderId', title: 'Folder id', widget: 'text' },
       { path: 'tags', title: 'Tags', widget: 'text_list', listSeparator: 'comma' },
       { path: 'favorite', title: 'Favourite', widget: 'boolean' },
+      { path: 'createFolder', title: 'New folder', widget: 'json' },
     ] },
   },
   {
@@ -11256,33 +11352,57 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
         { path: 'markdown', title: 'Markdown', widget: 'textarea', required: true },
         { path: 'expectedRevision.headerVersion', title: 'Reviewed header version', widget: 'text' },
         { path: 'expectedRevision.bodyVersion', title: 'Reviewed body version', widget: 'text' },
+        { path: 'createFolder', title: 'New folder', widget: 'json' },
         { path: 'folderId', title: 'Folder id', widget: 'text' },
         { path: 'tags', title: 'Tags', widget: 'text_list', listSeparator: 'comma' },
       ],
     },
   },
   {
+    id: 'prompt_bundle.create',
+    title: 'Create prompt bundle',
+    description: 'Create a prompt bundle with its reviewed files in the Happier prompt library.',
+    safety: 'danger', sideEffectClass: 'write', placements: [],
+    bindings: { mcpToolName: 'prompt_bundle_create', voiceClientToolName: 'createPromptBundle' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputSchema: PromptBundleCreateActionInputV1Schema,
+    outputSchema: lazyZodSchema(() => z.object({ ok: z.literal(true), artifactId: z.string().min(1) }).strict()),
+    inputHints: { title: 'Create prompt bundle', fields: [
+      { path: 'title', title: 'Title', widget: 'text', required: true },
+      { path: 'bundleSchemaId', title: 'Bundle schema', widget: 'text', required: true },
+      { path: 'createFolder', title: 'New folder', widget: 'json' },
+      { path: 'entries', title: 'Files', widget: 'json', required: true },
+      { path: 'folderId', title: 'Folder id', widget: 'text' },
+      { path: 'tags', title: 'Tags', widget: 'text_list', listSeparator: 'comma' },
+    ] },
+  },
+  {
     id: 'prompt_bundle.update',
     title: 'Update prompt bundle',
     description: 'Update a skill bundle stored in the Happier prompt library.',
-    safety: 'danger',
+    safety: 'danger', sideEffectClass: 'write',
     placements: [],
+    bindings: { mcpToolName: 'prompt_bundle_update', voiceClientToolName: 'updatePromptBundle' },
     surfaces: {
       ui: true,
-      voice: false,
-      agent: false,
-      mcp: false,
-      cli: false,
+      voice: true,
+      agent: true,
+      mcp: true,
+      cli: true,
       rpc: false,
       },
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: PromptBundleUpdateInputSchema,
+    outputSchema: lazyZodSchema(() => z.object({ ok: z.literal(true), artifactId: z.string().min(1), revision: PromptDocRevisionV1Schema.optional() }).strict()),
+    inputSchema: PromptBundleUpdateActionInputV1Schema,
     inputHints: {
       title: 'Update prompt bundle',
       fields: [
         { path: 'artifactId', title: 'Bundle artifact id', widget: 'text', required: true },
         { path: 'title', title: 'Title', widget: 'text', required: true },
-        { path: 'skillMarkdown', title: 'SKILL.md markdown', widget: 'textarea', required: true },
+        { path: 'skillMarkdown', title: 'SKILL.md markdown', widget: 'textarea' },
+        { path: 'entries', title: 'Files', widget: 'json' },
+        { path: 'createFolder', title: 'New folder', widget: 'json' },
+        { path: 'expectedRevision.headerVersion', title: 'Reviewed header version', widget: 'text' },
+        { path: 'expectedRevision.bodyVersion', title: 'Reviewed body version', widget: 'text' },
         { path: 'folderId', title: 'Folder id', widget: 'text' },
         { path: 'tags', title: 'Tags', widget: 'text_list', listSeparator: 'comma' },
       ],
@@ -11439,7 +11559,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
   {
     id: 'daemon.filesystem.readFile',
     title: 'Read file',
-    description: 'Read a bounded file through daemon filesystem path authorization.',
+    description: 'Read a bounded file under the explicitly admitted workspace root.',
     safety: 'safe',
     placements: [],
     bindings: { rpcMethod: 'daemon.filesystem.readFile', rpcMethodAliases: [RPC_METHODS.READ_FILE], mcpToolName: 'daemon_filesystem_read_file', voiceClientToolName: 'daemonFilesystemReadFile' },
@@ -11456,7 +11576,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     id: 'daemon.filesystem.writeFile',
     workspaceWrite: true,
     title: 'Write file',
-    description: 'Write a bounded file through daemon filesystem path authorization.',
+    description: 'Write a bounded file under the explicitly admitted workspace root.',
     safety: 'danger',
     placements: [],
     bindings: { rpcMethod: 'daemon.filesystem.writeFile', rpcMethodAliases: [RPC_METHODS.WRITE_FILE], mcpToolName: 'daemon_filesystem_write_file', voiceClientToolName: 'daemonFilesystemWriteFile' },
@@ -11603,7 +11723,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
   {
     id: 'daemon.filesystem.listDirectory',
     title: 'List directory',
-    description: 'List a directory through daemon filesystem path authorization.',
+    description: 'List a directory under the explicitly admitted workspace root.',
     safety: 'safe',
     placements: [],
     bindings: { rpcMethod: RPC_METHODS.LIST_DIRECTORY, mcpToolName: 'daemon_filesystem_list_directory', voiceClientToolName: 'daemonFilesystemListDirectory' },
@@ -11620,7 +11740,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
   {
     id: 'daemon.filesystem.getDirectoryTree',
     title: 'Get directory tree',
-    description: 'Read a bounded directory tree through daemon filesystem path authorization.',
+    description: 'Read a bounded directory tree under the explicitly admitted workspace root.',
     safety: 'safe',
     placements: [],
     bindings: { rpcMethod: 'daemon.filesystem.getDirectoryTree', rpcMethodAliases: [RPC_METHODS.GET_DIRECTORY_TREE], mcpToolName: 'daemon_filesystem_get_directory_tree', voiceClientToolName: 'daemonFilesystemGetDirectoryTree' },
@@ -11885,7 +12005,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       description: 'Read earlier parts of a session\'s conversation.',
       title: 'Page session transcript',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'cursor', title: 'Cursor', widget: 'text' },
         { path: 'maxBytes', title: 'Maximum bytes', widget: 'text' },
         { path: 'maxItems', title: 'Maximum items', widget: 'text' },
@@ -11914,7 +12034,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       description: 'Read what a session has said since a point in its conversation.',
       title: 'Read session transcript after cursor',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'cursor', title: 'Cursor', widget: 'text', required: true },
         { path: 'maxBytes', title: 'Maximum bytes', widget: 'text' },
         { path: 'maxItems', title: 'Maximum items', widget: 'text' },
@@ -11943,7 +12063,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       description: 'Keep up with a session\'s conversation as it happens.',
       title: 'Follow session transcript',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'cursor', title: 'Cursor', widget: 'text', required: true },
         { path: 'leaseId', title: 'Lease id', widget: 'text' },
         { path: 'maxBytes', title: 'Maximum bytes', widget: 'text' },
@@ -11974,7 +12094,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       description: 'Stop keeping up with a session\'s conversation.',
       title: 'Unfollow session transcript',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'leaseId', title: 'Lease id', widget: 'text', required: true },
       ],
     },
@@ -12001,7 +12121,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       description: 'Add messages to a session\'s conversation from another record of it.',
       title: 'Import session transcript rows',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'importId', title: 'Import id', widget: 'text' },
         { path: 'items', title: 'Transcript rows', widget: 'textarea', required: true },
         { path: 'maxItems', title: 'Maximum items', widget: 'text' },
@@ -12030,7 +12150,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       description: 'Search a session\'s conversation.',
       title: 'Search session transcript',
       fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'query', title: 'Query', widget: 'text', required: true },
         { path: 'cursor', title: 'Cursor', widget: 'text' },
         { path: 'maxBytes', title: 'Maximum bytes', widget: 'text' },
@@ -12492,6 +12612,7 @@ export type PluginProvenanceOnlyActionId = keyof typeof PLUGIN_PROVENANCE_ONLY_A
  * are intentionally absent from the generic API and trusted-plugin catalogs.
  */
 const CLIENT_EXECUTION_PLACEMENT_ACTION_IDS = [
+  'browser.workspace.open',
   ...ACTION_ID_FAMILIES_V1.account_home_continuation,
   ...ACTION_ID_FAMILIES_V1.session_authoring,
   ...ACTION_ID_FAMILIES_V1.composer_ingress,
@@ -12576,6 +12697,7 @@ const PRESENT_USER_REQUIRED_ACTION_ID_VALUES = [
   ...(Object.keys(PluginWebhookActionHttpPathsV1) as PluginWebhookPresentUserActionIdV1[]),
   'computer.target.close',
   'notifications.desktop.permission.request',
+  'notifications.push.permission.request',
 ] as const satisfies readonly ActionId[];
 
 type PresentUserRequiredActionId = typeof PRESENT_USER_REQUIRED_ACTION_ID_VALUES[number];
@@ -12589,6 +12711,7 @@ const PRESENT_USER_REQUIRED_ACTION_IDS = new Set<ActionId>(PRESENT_USER_REQUIRED
  * inherit a machine route merely because it was added to a neighboring family.
  */
 const RUNTIME_ACTION_IDS_WITHOUT_MACHINE_PLACEMENT = new Set<RuntimeActionIdV1>([
+  'browser.workspace.open',
   // Intentionally host-internal/fail-closed, so client placement is retained
   // only to keep the registry total while no external owner exists.
   'devices.simulator.input.orientation',
@@ -12665,6 +12788,7 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
     'prompts.invocations.list',
     'prompts.invocation.resolve',
     'prompt_doc.update',
+    'prompt_bundle.create',
     'prompt_bundle.update',
     // The custom ACP catalog is an Account setting: no machine has to be reachable to edit it.
     ...ACTION_ID_FAMILIES_V1.agent_acp_catalog,
@@ -12927,6 +13051,16 @@ type LiteralActionSpecTupleDefinition<TSpecs extends readonly PreNormalizedActio
 }[number];
 
 type DirectActionSpecDefinition =
+  | LiteralActionSpecTupleDefinition<typeof SESSION_ORGANIZATION_MOVE_ACTION_SPECS>
+  | LiteralActionSpecTupleDefinition<typeof LIST_REORDER_ACTION_SPECS>
+  | LiteralActionSpecTupleDefinition<typeof TODO_SESSION_LINK_ACTION_SPECS>
+  | LiteralActionSpecTupleDefinition<typeof APP_SHELL_ACTION_SPECS>
+  | LiteralActionSpecTupleDefinition<typeof HOME_HUB_LAYOUT_ACTION_SPECS>
+  | LiteralActionSpecTupleDefinition<typeof PROJECT_SOURCE_ACTION_SPECS_V1>
+  | LiteralActionSpecTupleDefinition<typeof WIDGET_SNAPSHOT_ACTION_SPECS_V1>
+  | LiteralActionSpecTupleDefinition<typeof ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_OPENING>
+  | LiteralActionSpecTupleDefinition<typeof ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_MIDDLE>
+  | LiteralActionSpecTupleDefinition<typeof CAPTURE_VIEW_ACTION_SPECS>
   | LiteralActionSpecTupleDefinition<typeof ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD>
   | LiteralActionSpecDefinition<(typeof ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES)[number]>
   | LiteralActionSpecTupleDefinition<typeof ACTION_SPECS_WITHOUT_APPROVAL_PREFIX>
@@ -13210,7 +13344,9 @@ type TeamCredentialActionSpecDefinition = {
   [TActionId in TeamCredentialActionIdV1]: CanonicalActionSchemaDefinition<
     TActionId,
     (typeof TEAM_CREDENTIAL_ACTION_INPUT_SCHEMAS_V1)[TActionId],
-    (typeof TEAM_CREDENTIAL_ACTION_OUTPUT_SCHEMAS_V1)[TActionId]
+    (typeof TEAM_CREDENTIAL_ACTION_OUTPUT_SCHEMAS_V1)[TActionId],
+    never,
+    TActionId extends 'teams.credentials.test' ? 'present_user' : 'account_automation'
   >;
 }[TeamCredentialActionIdV1];
 
@@ -13246,10 +13382,30 @@ type ManagedIdentityProviderActionSpecDefinition = {
  * Account Security rows are authored together above, but their shared map
  * deliberately widens to `PreNormalizedActionSpec` while it attaches the
  * common surface metadata. Keep the public/plugin author maps exact by
- * projecting the five wire schemas here rather than letting that implementation
+ * projecting their wire schemas here rather than letting that implementation
  * detail degrade their inputs and results to `unknown`.
  */
 type AccountSecurityActionSpecDefinition =
+  | CanonicalActionSchemaDefinition<
+      'account.plugins.data.erase',
+      typeof PluginAccountDataEraseActionInputV1Schema,
+      typeof PluginAccountDataEraseActionOutputV1Schema
+    >
+  | CanonicalActionSchemaDefinition<
+      'account.sessions.signOutEverywhere',
+      typeof AccountSessionsSignOutEverywhereActionInputV1Schema,
+      typeof AccountSessionsSignOutEverywhereActionOutputV1Schema
+    >
+  | CanonicalActionSchemaDefinition<
+      'account.encryption.automationTemplates.recover',
+      typeof AccountEncryptionAutomationTemplatesRecoverInputV1Schema,
+      typeof AccountEncryptionAutomationTemplatesRecoverResultV1Schema
+    >
+  | CanonicalActionSchemaDefinition<
+      'account.encryption.historicalKey.forget',
+      typeof AccountHistoricalEncryptionKeyForgetInputV1Schema,
+      typeof AccountHistoricalEncryptionKeyForgetResultV1Schema
+    >
   | CanonicalActionSchemaDefinition<
       'account.security.terminalPresentUser.set',
       typeof AccountTerminalPresentUserPolicySetRequestV1Schema,
@@ -13832,6 +13988,7 @@ const ACTION_PLUGIN_CALLER_POLICY_BY_ID: Readonly<
   'prompts.invocations.list': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompts.invocation.resolve': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompts.invocation.create': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
+  'prompt_bundle.create': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompt_bundle.update': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompt_asset.export': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompt_registry.install': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
@@ -14004,6 +14161,33 @@ function resolveBuiltInActionContextualDefaults(actionId: ActionId): ActionConte
 // authored examples remain on their rows; this catalog-owned supplement adds
 // only the missing examples, not a runtime sample generator or another catalog.
 const ACTION_VOICE_ARGS_EXAMPLES: Readonly<Partial<Record<ActionId, string>>> = {
+  'settings.list': '{"pageId":"notifications"}',
+  'settings.get': '{"anchor":"notifications.quietHours"}',
+  'settings.set': '{"anchor":"notifications.quietHours","value":{"enabled":false}}',
+  'settings.reset': '{"anchor":"notifications.quietHours"}',
+  'settings.invoke': '{"anchor":"diagnostics.enabled","input":{"kind":"diagnostics_enabled","enabled":true}}',
+  'localServices.inventory.list': '{"machineId":"{{machineId}}"}',
+  'localServices.inventory.refresh': '{"machineId":"{{machineId}}"}',
+  'localServices.launcher.snapshot': '{"machineId":"{{machineId}}"}',
+  'localServices.launcher.registerPreview': '{"machineId":"{{machineId}}","targetId":"service-1","scope":"workspace","workspaceRoot":"/workspace"}',
+  'localServices.launcher.history.clear': '{"machineId":"{{machineId}}","scope":"workspace","workspaceRoot":"/workspace"}',
+  'localServices.preview.openOrCreate': '{"machineId":"{{machineId}}","targetId":"listener-1"}',
+  'localServices.preview.status': '{"machineId":"{{machineId}}","previewId":"preview-1"}',
+  'localServices.preview.revoke': '{"machineId":"{{machineId}}","previewId":"preview-1"}',
+  'localServices.publicPreview.create': '{"machineId":"{{machineId}}","sessionId":"{{sessionId}}","previewId":"preview-1","mode":"secret_link","ttlMs":3600000}',
+  'localServices.publicPreview.status': '{"machineId":"{{machineId}}","exposureId":"exposure-1"}',
+  'localServices.publicPreview.revoke': '{"machineId":"{{machineId}}","exposureId":"exposure-1"}',
+  'machines.vitals.get': '{"machineId":"{{machineId}}","view":"summary"}',
+  'machines.vitals.summaries.list': '{"serverId":"{{serverId}}"}',
+  'machines.resources.policy.get': '{"machineId":"{{machineId}}"}',
+  'machines.storage.summary.get': '{"machineId":"{{machineId}}"}',
+  'machines.storage.category.list': '{"machineId":"{{machineId}}","categoryId":"logs"}',
+  'prompt_bundle.create': '{"title":"Example skill","bundleSchemaId":"skills.skill_md_v1","entries":[{"path":"SKILL.md","contentBase64":"IyBFeGFtcGxl","contentKind":"utf8"}]}',
+  'prompt_bundle.update': '{"artifactId":"bundle-1","title":"Example skill","skillMarkdown":"# Example"}',
+  'daemon.filesystem.readFile': '{"rootPath":"/workspace","path":"src/index.ts"}',
+  'daemon.filesystem.writeFile': '{"rootPath":"/workspace","path":"notes.txt","content":"SGVsbG8="}',
+  'daemon.filesystem.listDirectory': '{"rootPath":"/workspace","path":"src"}',
+  'daemon.filesystem.getDirectoryTree': '{"rootPath":"/workspace","path":"src","maxDepth":2}',
   "widgets.group.create": "{\"surface\":{\"serverId\":\"home\",\"accountId\":\"example\",\"owner\":{\"kind\":\"project\",\"projectId\":\"project-1\"}},\"groupId\":\"group-1\",\"instanceIds\":[\"widget-1\"]}",
   "widgets.group.add": "{\"surface\":{\"serverId\":\"home\",\"accountId\":\"example\",\"owner\":{\"kind\":\"project\",\"projectId\":\"project-1\"}},\"group\":{\"kind\":\"group\",\"id\":\"group-1\",\"children\":[{\"kind\":\"widget\",\"instance\":{\"v\":1,\"id\":\"widget-1\",\"definition\":{\"kind\":\"installed\",\"surface\":{\"pluginId\":\"example.widgets\",\"localId\":\"example\"}},\"bindings\":{}}}]}}",
   "widgets.group.ungroup": "{\"ref\":{\"surface\":{\"serverId\":\"home\",\"accountId\":\"example\",\"owner\":{\"kind\":\"project\",\"projectId\":\"project-1\"}},\"instanceId\":\"group-1\"}}",
@@ -14039,6 +14223,7 @@ const ACTION_VOICE_ARGS_EXAMPLES: Readonly<Partial<Record<ActionId, string>>> = 
   "widgets.item.rename": "{\"ref\":{\"surface\":{\"serverId\":\"home\",\"accountId\":\"example\",\"owner\":{\"kind\":\"home\"}},\"instanceId\":\"example\"},\"displayName\":\"example\"}",
   "widgets.item.size.set": "{\"ref\":{\"surface\":{\"serverId\":\"home\",\"accountId\":\"example\",\"owner\":{\"kind\":\"home\"}},\"instanceId\":\"example\"},\"size\":\"small\"}",
   "widgets.item.frame.set": "{\"ref\":{\"surface\":{\"serverId\":\"home\",\"accountId\":\"example\",\"owner\":{\"kind\":\"home\"}},\"instanceId\":\"example\"},\"frameStyle\":\"card\"}",
+  "widgets.item.network.set": "{\"ref\":{\"surface\":{\"serverId\":\"home\",\"accountId\":\"example\",\"owner\":{\"kind\":\"home\"}},\"instanceId\":\"example\"},\"network\":{\"network\":\"none\"}}",
   "widgets.item.inputs.get": "{\"ref\":{\"surface\":{\"serverId\":\"home\",\"accountId\":\"example\",\"owner\":{\"kind\":\"home\"}},\"instanceId\":\"example\"}}",
   "widgets.item.inputs.validate": "{\"ref\":{\"surface\":{\"serverId\":\"home\",\"accountId\":\"example\",\"owner\":{\"kind\":\"home\"}},\"instanceId\":\"example\"},\"bindings\":{}}",
   "widgets.item.inputs.set": "{\"ref\":{\"surface\":{\"serverId\":\"home\",\"accountId\":\"example\",\"owner\":{\"kind\":\"home\"}},\"instanceId\":\"example\"},\"bindings\":{}}",
@@ -14149,33 +14334,6 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze(
   }),
 );
 
-  'settings.list': '{"pageId":"notifications"}',
-  'settings.get': '{"anchor":"notifications.quietHours"}',
-  'settings.set': '{"anchor":"notifications.quietHours","value":{"enabled":false}}',
-  'settings.reset': '{"anchor":"notifications.quietHours"}',
-  'settings.invoke': '{"anchor":"diagnostics.enabled","input":{"kind":"diagnostics_enabled","enabled":true}}',
-  'localServices.inventory.list': '{"machineId":"{{machineId}}"}',
-  'localServices.inventory.refresh': '{"machineId":"{{machineId}}"}',
-  'localServices.launcher.snapshot': '{"machineId":"{{machineId}}"}',
-  'localServices.launcher.registerPreview': '{"machineId":"{{machineId}}","targetId":"service-1","scope":"workspace","workspaceRoot":"/workspace"}',
-  'localServices.launcher.history.clear': '{"machineId":"{{machineId}}","scope":"workspace","workspaceRoot":"/workspace"}',
-  'localServices.preview.openOrCreate': '{"machineId":"{{machineId}}","targetId":"listener-1"}',
-  'localServices.preview.status': '{"machineId":"{{machineId}}","previewId":"preview-1"}',
-  'localServices.preview.revoke': '{"machineId":"{{machineId}}","previewId":"preview-1"}',
-  'localServices.publicPreview.create': '{"machineId":"{{machineId}}","sessionId":"{{sessionId}}","previewId":"preview-1","mode":"secret_link","ttlMs":3600000}',
-  'localServices.publicPreview.status': '{"machineId":"{{machineId}}","exposureId":"exposure-1"}',
-  'localServices.publicPreview.revoke': '{"machineId":"{{machineId}}","exposureId":"exposure-1"}',
-  'machines.vitals.get': '{"machineId":"{{machineId}}","view":"summary"}',
-  'machines.vitals.summaries.list': '{"serverId":"{{serverId}}"}',
-  'machines.resources.policy.get': '{"machineId":"{{machineId}}"}',
-  'machines.storage.summary.get': '{"machineId":"{{machineId}}"}',
-  'machines.storage.category.list': '{"machineId":"{{machineId}}","categoryId":"logs"}',
-  'prompt_bundle.create': '{"title":"Example skill","bundleSchemaId":"skills.skill_md_v1","entries":[{"path":"SKILL.md","contentBase64":"IyBFeGFtcGxl","contentKind":"utf8"}]}',
-  'prompt_bundle.update': '{"artifactId":"bundle-1","title":"Example skill","skillMarkdown":"# Example"}',
-  'daemon.filesystem.readFile': '{"rootPath":"/workspace","path":"src/index.ts"}',
-  'daemon.filesystem.writeFile': '{"rootPath":"/workspace","path":"notes.txt","content":"SGVsbG8="}',
-  'daemon.filesystem.listDirectory': '{"rootPath":"/workspace","path":"src"}',
-  'daemon.filesystem.getDirectoryTree': '{"rootPath":"/workspace","path":"src","maxDepth":2}',
 assertPublicActionSdkMethodNames(ACTION_SPECS, PUBLIC_ACTION_ID_SET);
 
 const ACTION_SPECS_BY_ID = new Map(ACTION_SPECS.map((spec) => [spec.id, spec] as const));

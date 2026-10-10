@@ -9,6 +9,7 @@ import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '@happier-d
 import { ProviderEnforcedPermissionHandler } from './handler';
 import { __resetToolTraceForTests } from '@/agent/tools/trace/toolTrace';
 import { ServerBoundPermissionRpcHandlerManager } from '../testkit/serverBoundPermissionRpcHandlerManager';
+import { createNativeAgentSessionServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
 
 beforeEach(() => {
   resetActiveAccountSettingsSnapshotForTests();
@@ -73,6 +74,104 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
   ]);
   return result === pending ? 'pending' : result;
 }
+
+describe('native Agent tool approval policy', () => {
+  it('uses an existing session grant without widening a once-only native approval', async () => {
+    const session = new FakeSession();
+    // Session state/RPC is the transport boundary; grant policy and interaction owners remain real.
+    const handler = new ProviderEnforcedPermissionHandler(session as unknown as ConstructorParameters<typeof ProviderEnforcedPermissionHandler>[0], { logPrefix: '[Test]' });
+    const services = createNativeAgentSessionServices({
+      permissionHandler: handler,
+      pluginId: 'happier.agent.claude', contributionId: 'claude', runtimeId: 'claude',
+      sessionId: session.sessionId, occurrenceId: 'permission-occurrence',
+      signal: new AbortController().signal, isCurrent: () => true,
+    });
+    const request = {
+      kind: 'approval' as const, title: 'Claude permission',
+      subject: { kind: 'tool' as const, name: 'Bash', input: { command: 'echo granted' } },
+    };
+    const pending = services.interactions.requestApproval({ ...request, allowSessionPersistence: true });
+    await vi.waitFor(() => expect(Object.keys(session.agentState.requests)).toHaveLength(1));
+    const id = Object.keys(session.agentState.requests)[0]!;
+    await session.rpcHandlerManager.handlers.get('permission')?.({ id, approved: true, decision: 'approved_for_session' });
+    await expect(pending).resolves.toMatchObject({ status: 'approved', persistence: 'session' });
+
+    await expect(services.interactions.requestApproval(request)).resolves.toMatchObject({ status: 'approved', persistence: 'once' });
+    expect(Object.keys(session.agentState.requests)).toEqual([]);
+  });
+
+  it('rejects reusable grants before settling a once-only native tool approval', async () => {
+    const session = new FakeSession();
+    // Session state/RPC is the transport boundary; admission, grant policy and interaction owners remain real.
+    const handler = new ProviderEnforcedPermissionHandler(session as unknown as ConstructorParameters<typeof ProviderEnforcedPermissionHandler>[0], { logPrefix: '[Test]' });
+    const services = createNativeAgentSessionServices({
+      permissionHandler: handler,
+      pluginId: 'happier.agent.claude', contributionId: 'claude', runtimeId: 'claude',
+      sessionId: session.sessionId, occurrenceId: 'permission-occurrence',
+      signal: new AbortController().signal, isCurrent: () => true,
+    });
+    const request = {
+      kind: 'approval' as const, title: 'Claude permission',
+      subject: { kind: 'tool' as const, name: 'Bash', input: { command: 'echo once' } },
+    };
+    const pending = services.interactions.requestApproval(request);
+    await vi.waitFor(() => expect(Object.keys(session.agentState.requests)).toHaveLength(1));
+    const id = Object.keys(session.agentState.requests)[0]!;
+    const respond = session.rpcHandlerManager.handlers.get('permission');
+    for (const grant of [
+      { decision: 'approved_for_session' },
+      { allowedTools: ['Bash'] },
+    ]) {
+      await respond?.({ id, approved: true, ...grant });
+      expect(session.agentState.requests[id]).toBeDefined();
+      expect(session.agentState.completedRequests[id]).toBeUndefined();
+      expect(await settledState(pending)).toBe('pending');
+    }
+
+    await respond?.({ id, approved: true, decision: 'approved' });
+    await expect(pending).resolves.toMatchObject({ status: 'approved', persistence: 'once' });
+    const repeated = services.interactions.requestApproval(request);
+    let repeatedSettled = false;
+    void repeated.then(() => { repeatedSettled = true; });
+    await vi.waitFor(() => expect(repeatedSettled || Object.keys(session.agentState.requests).length > 0).toBe(true));
+    const repeatedIds = Object.keys(session.agentState.requests);
+    for (const repeatedId of repeatedIds) {
+      await respond?.({ id: repeatedId, approved: false, decision: 'denied' });
+    }
+    expect(repeatedIds).toHaveLength(1);
+    await expect(repeated).resolves.toMatchObject({ status: 'declined' });
+  });
+
+  it.each(['read-only', 'plan'] as const)('retains real Action input and its %s ceiling through transient approval', async (permissionMode) => {
+    const session = new FakeSession();
+    // The fixture is the Session API/network boundary; the permission and interaction owners remain real.
+    const handler = new ProviderEnforcedPermissionHandler(session as unknown as ConstructorParameters<typeof ProviderEnforcedPermissionHandler>[0], { logPrefix: '[Test]' });
+    handler.setPermissionMode(permissionMode);
+    const services = createNativeAgentSessionServices({
+      permissionHandler: handler,
+      pluginId: 'happier.agent.claude', contributionId: 'claude', runtimeId: 'claude',
+      sessionId: session.sessionId, occurrenceId: 'permission-occurrence',
+      signal: new AbortController().signal, isCurrent: () => true,
+    });
+    const pending = services.interactions.requestApproval({
+      kind: 'approval', title: 'Claude permission',
+      subject: { kind: 'tool', name: 'mcp__happier__action_execute', input: { actionId: 'session.board.item.remove' } },
+    });
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await vi.waitFor(() => expect(settled || Object.keys(session.agentState.requests).length > 0).toBe(true));
+    const requestIds = Object.keys(session.agentState.requests);
+    for (const id of requestIds) {
+      await session.rpcHandlerManager.handlers.get('permission')?.({ id, approved: false, decision: 'denied' });
+    }
+    await expect(pending).resolves.toMatchObject({ kind: 'approval', status: 'declined' });
+    expect(requestIds).toEqual([]);
+    await expect(services.interactions.requestApproval({
+      kind: 'approval', title: 'Claude permission',
+      subject: { kind: 'tool', name: 'mcp__happier__action_execute', input: { actionId: 'session.board.get' } },
+    })).resolves.toMatchObject({ kind: 'approval', status: 'approved' });
+  });
+});
 
 describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () => {
   it('keeps source-owned terminal-dialog trace redaction on the canonical Protocol policy seam', () => {

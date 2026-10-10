@@ -26,6 +26,7 @@ import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { SessionPermissionExternalHumanDecisionActorV1Schema, SessionPermissionRemoteRespondInputV1Schema, SessionUserActionRemoteAnswerInputV1Schema, SessionPermissionRequestIdV1Schema, SESSION_PERMISSION_REMOTE_QUESTION_CHOICE_UTF8_BYTES, SESSION_PERMISSION_REMOTE_QUESTION_TEXT_UTF8_BYTES, SESSION_PERMISSION_REMOTE_SUMMARY_DETAIL_UTF8_BYTES, SESSION_PERMISSION_REMOTE_SUMMARY_MAX_CHOICES_PER_QUESTION, SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS, SESSION_PERMISSION_REMOTE_SUMMARY_TITLE_UTF8_BYTES, SESSION_PERMISSION_REMOTE_SUMMARY_TOOL_LABEL_UTF8_BYTES } from '@happier-dev/protocol/sessions/permissions/v1';
 import { SessionPermissionRemoteGrantRecordV1Schema, SessionPermissionRemoteSettlementRecordV1Schema, SESSION_REMOTE_PERMISSION_ACTIVE_GRANTS_MAX, SESSION_REMOTE_PERMISSION_MEDIATION_ROWS_MAX } from '@happier-dev/protocol/sessions/permissions/mediationRecordsV1';
 import { SessionPermissionRespondRpcParamsV1Schema } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
+import { NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
 import { SessionInputCausalPermissionAuthorityV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { StructuredQuestionAnswersV1Schema } from '@happier-dev/protocol/tools/structuredQuestionAnswersV1';
 import { TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
@@ -523,6 +524,11 @@ function isPermissionResponseAuthorityValid(params: Readonly<{
     const deniedDecision = response.decision === 'denied' || response.decision === 'abort';
 
     if ((response.approved && deniedDecision) || (!response.approved && approvedDecision)) return false;
+
+    if (context.source === NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE && (
+        hasAllowedTools || hasUpdatedPermissions || hasExecPolicyAmendment
+        || response.decision === 'approved_for_session' || response.decision === 'approved_execpolicy_amendment'
+    )) return false;
 
     if (context.source === HAPPIER_ACTION_REQUEST_SOURCE) {
         return !hasAllowedTools && !hasUpdatedPermissions && !hasExecPolicyAmendment && !hasAnswers
@@ -1493,6 +1499,7 @@ export abstract class BasePermissionHandler {
                     context: {
                         toolName,
                         toolInput: entry.arguments,
+                        ...(typeof entry.source === 'string' ? { source: entry.source } : {}),
                     },
                 })) {
                     continue;
@@ -2539,7 +2546,8 @@ export abstract class BasePermissionHandler {
         if (
             params.input.decision === 'allow'
             && params.input.scope === 'session'
-            && sourceAuthority.remoteApprovalMaxScope !== 'session'
+            && (sourceAuthority.remoteApprovalMaxScope !== 'session'
+                || context.source === NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE)
         ) {
             return { status: 'rejected', code: 'scopeExceedsPolicy' };
         }
@@ -2732,7 +2740,8 @@ export abstract class BasePermissionHandler {
             return { status: 'rejected', code: 'remoteApprovalDisabled' };
         }
         if (input.decision === 'allow' && input.scope === 'session') {
-            if (sourceAuthority.remoteApprovalMaxScope !== 'session') {
+            if (sourceAuthority.remoteApprovalMaxScope !== 'session'
+                || context.source === NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE) {
                 return { status: 'rejected', code: 'scopeExceedsPolicy' };
             }
         }

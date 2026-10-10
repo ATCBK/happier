@@ -140,6 +140,30 @@ function failedArtifact(overrides?: Readonly<{
 }
 
 describe('createHomeActionApprovalContinuation', () => {
+    it('reports an executed preset refusal without invoking the success continuation', async () => {
+        const onSucceeded = vi.fn();
+        const onFailed = vi.fn();
+        const continuation = createActionApprovalContinuation({ artifactId: 'approval-1', actionId: 'machines.presets.archive',
+            scope: { serverId: 'home-1', accountId: 'account-1' }, onSucceeded, onFailed });
+        const result = { kind: 'refused', code: 'provider_unavailable' };
+        expect(await continuation.onExecuted(executedArtifact({ actionId: 'machines.presets.archive',
+            actionArgs: { homeId: 'home-1', id: 'preset-1', expectedRevision: 0 }, result }))).toBe('consumed');
+        expect(onSucceeded).not.toHaveBeenCalled();
+        expect(onFailed).toHaveBeenCalledWith('provider_unavailable', expect.objectContaining({ ok: false, details: result }));
+    });
+
+    it('delivers a successful preset read result unchanged', async () => {
+        const onSucceeded = vi.fn();
+        const onFailed = vi.fn();
+        const continuation = createActionApprovalContinuation({ artifactId: 'approval-1', actionId: 'machines.presets.list',
+            scope: { serverId: 'home-1', accountId: 'account-1' }, onSucceeded, onFailed });
+        const result = { kind: 'listed', presets: [] };
+        expect(await continuation.onExecuted(executedArtifact({ actionId: 'machines.presets.list',
+            actionArgs: { homeId: 'home-1' }, result }))).toBe('consumed');
+        expect(onSucceeded).toHaveBeenCalledWith(result);
+        expect(onFailed).not.toHaveBeenCalled();
+    });
+
     it('delivers an executed ACP receipt when transport omits native optional authoring members', async () => {
         // The mounted ACP editor explicitly sets auth to undefined for an agent without login.
         // The Home's JSON Artifact transport omits that optional native object member.
@@ -356,6 +380,20 @@ describe('createHomeActionApprovalContinuation', () => {
 });
 
 describe('createActionApprovalContinuation', () => {
+    it('does not report success for an executed worker policy conflict', async () => {
+        const actionId = 'machines.worker.policy.set';
+        const actionArgs = { serverId: 'home-1', machineId: 'worker', expectedMetadataVersion: 3,
+            expectedPolicy: { accepting: true, runAtMost: null }, policy: { accepting: false, runAtMost: null } };
+        const result = { status: 'conflict', policy: { accepting: true, runAtMost: 2 }, metadataVersion: 4 };
+        const onSucceeded = vi.fn();
+        const onFailed = vi.fn();
+        const continuation = createActionApprovalContinuation({ artifactId: 'approval-1', actionId,
+            scope: { serverId: 'home-1', accountId: 'account-1' }, expectedInput: actionArgs,
+            onSucceeded, onFailed });
+        expect(await continuation.onExecuted(executedArtifact({ actionId, actionArgs, result }))).toBe('consumed');
+        expect(onSucceeded).not.toHaveBeenCalled();
+        expect(onFailed).toHaveBeenCalledWith('conflict', { ok: false, errorCode: 'conflict', error: 'conflict', details: result });
+    });
     it('delivers strict deferred Board failure details through the canonical failure envelope', () => {
         const boardActionId = 'session.board.layout.update' as const;
         const boardInput = {

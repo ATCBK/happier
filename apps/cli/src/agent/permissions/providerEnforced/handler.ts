@@ -20,6 +20,7 @@ import {
 import type { ToolTraceProtocol } from '@/agent/tools/trace/toolTrace';
 import { resolveProviderPermissionForHappierAction } from '@/agent/tools/happierTools/resolveHappierActionForMcpToolName';
 import type { AccountSettings, CodingPromptBehaviorV1 } from '@happier-dev/protocol';
+import { NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
 import type { AcpPermissionCallContext } from '@/agent/acp/permissions/acpPermissionHandler';
 import {
   isSharedPermissionSafeToolName,
@@ -247,7 +248,7 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
     toolName: string,
     input: unknown,
     owner: PermissionRequestOwner | null,
-    context?: AcpPermissionCallContext,
+    context?: AcpPermissionCallContext & Readonly<{ source?: string | null }>,
   ): PermissionResult | null {
     const immediate = this.getImmediateDecision(toolCallId, toolName, input, context);
     if (immediate) return immediate;
@@ -258,7 +259,7 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
     });
     if (!effective.ok) return null;
     if (!effective.sourceAuthority && this.isAllowedForSessionForOwner(toolName, input, owner)) {
-      return { decision: 'approved_for_session' };
+      return { decision: context?.source === NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE ? 'approved' : 'approved_for_session' };
     }
     if (
       effective.sourceAuthority

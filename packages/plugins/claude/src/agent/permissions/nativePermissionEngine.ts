@@ -1,4 +1,5 @@
 import type { AgentRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import { AgentRuntimeJsonValueSchema } from '@happier-dev/plugin-sdk/agents/runtime';
 import type {
   InteractionTransientAuthorQuestionV1,
   InteractionTransientQuestionAnswerV1,
@@ -151,15 +152,19 @@ export function createClaudeNativePermissionEngine(
   context: AgentRuntimeContext,
 ): ClaudePermissionEngine {
   return Object.freeze({
-    async canCallTool(toolName, input) {
+    async canCallTool(toolName, input, options = {}) {
       if (isAskUserQuestionToolName(toolName)) {
         return await answerClaudeQuestions(context, input);
       }
-      const result = await context.services.interactions.confirm({
-        kind: 'confirmation',
+      const toolInput = AgentRuntimeJsonValueSchema.safeParse(isRecord(input) ? input : {});
+      if (!toolInput.success) {
+        return { behavior: 'deny', message: 'Claude supplied invalid tool input', interrupt: true };
+      }
+      const result = await context.services.interactions.requestApproval({
+        kind: 'approval',
         title: 'Claude permission',
-        message: `Allow Claude to use ${toolName}?`,
-      });
+        subject: { kind: 'tool', name: toolName, input: toolInput.data },
+      }, options.signal ? { signal: options.signal } : undefined);
       return result.status === 'approved'
         ? {
             behavior: 'allow' as const,

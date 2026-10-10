@@ -188,6 +188,7 @@ function startBlockedRemoteSettlement(params: Readonly<{
   owner?: { kind: 'plugin'; pluginId: string; runtimeId: string };
   signal?: AbortSignal;
   scope?: 'request' | 'session';
+  source?: string;
   respectAbort?: boolean;
   pauseAfterCreate?: boolean;
   pauseAfterInitialRead?: boolean;
@@ -258,6 +259,7 @@ function startBlockedRemoteSettlement(params: Readonly<{
     remoteApprovalMaxScope: params.scope === 'session' ? 'session' : 'request',
   } as const;
   const pending = handler.request(params.requestId, 'Bash', { command: ['bash', '-lc', 'echo race'] }, {
+    ...(params.source ? { source: params.source } : {}),
     ...(params.owner ? { owner: params.owner } : {}),
     ...(params.signal ? { signal: params.signal } : {}),
     causalPermissionContext: {
@@ -397,6 +399,23 @@ function activeRemoteMediationGrant(index: number): PermissionMediationStoredRec
 }
 
 describe('BasePermissionHandler allowlist', () => {
+  it('rejects a mediated session grant before durable write for a once-only native request', async () => {
+    // The in-memory System Record adapter models the persistence boundary; the mediation owner remains real.
+    const fixture = startBlockedRemoteSettlement({
+      requestId: 'native-once-remote', scope: 'session', source: 'native_tool_approval_once',
+    });
+    fixture.releaseRowCreate.resolve();
+    await expect(fixture.remote).resolves.toEqual({ status: 'rejected', code: 'scopeExceedsPolicy' });
+    expect(fixture.readStored()).toBeNull();
+    expect(fixture.session.agentState.requests['native-once-remote']).toBeDefined();
+    expect(fixture.handler.isAllowedByRemoteGrant('Bash', { command: ['bash', '-lc', 'echo race'] }, fixture.sourceAuthority)).toBe(false);
+    await expect(fixture.handler.respondToMediatedPendingPermission({
+      ...fixture.response, scope: 'request', idempotencyKey: 'native-once-allow',
+    })).resolves.toMatchObject({ status: 'applied', effect: { kind: 'allowOnce' } });
+    await expect(fixture.pending).resolves.toEqual({ decision: 'approved' });
+    expect(fixture.handler.isAllowedByRemoteGrant('Bash', { command: ['bash', '-lc', 'echo race'] }, fixture.sourceAuthority)).toBe(false);
+  });
+
   it('settles an automatic decision through the incumbent owner without activating a claim reservation', async () => {
     const session = new FakeSession();
     const handler = new TestPermissionHandler(session as any);

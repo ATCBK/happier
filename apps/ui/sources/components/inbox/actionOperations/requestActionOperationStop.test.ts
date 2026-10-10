@@ -105,6 +105,25 @@ describe('requestActionOperationStop', () => {
         expect(rpc.machine).not.toHaveBeenCalled();
     });
 
+    it.each(['unsupported', 'not_found'] as const)('keeps native %s feedback after an Ask-first Stop refusal', async kind => {
+        const serverId = await harness.addHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        await harness.requireUiApproval(serverId, 'action.operations.cancel');
+        const target = operation(serverId);
+        const hook = await renderHook(() => useActionOperationStopControl(target));
+        try {
+            act(() => hook.getCurrent().requestStop());
+            await waitForHomeGovernance(() => expect(hook.getCurrent().pendingApproval).not.toBeNull());
+            expect(rpc.machine).not.toHaveBeenCalled();
+            rpc.machine.mockResolvedValue({ kind });
+            await expect(decideApprovalAsInbox(serverId, hook.getCurrent().pendingApproval!.artifactId, 'approve'))
+                .resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+            await waitForHomeGovernance(() => expect(hook.getCurrent().pending).toBe(false));
+            expect(hook.getCurrent().feedback).toBe(kind);
+            expect(hook.getCurrent().stopRequested).toBe(false);
+            expect(target.snapshot.state).toBe('running');
+        } finally { await hook.unmount(); }
+    });
+
 
     it('holds the real row Stop through deferred approval without opening detail', async () => {
         const serverId = await harness.addHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });

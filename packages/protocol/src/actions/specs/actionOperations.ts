@@ -6,6 +6,7 @@ import { ActionOperationListV1RequestSchema, ActionOperationListV1ResponseSchema
   ActionOperationGetV1RequestSchema, ActionOperationGetV1ResponseSchema,
   ActionOperationCancelV1ResponseSchema } from '../operations/v1.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+import type { ActionInputFieldHint } from '../actionInputHintsRuntime.js';
 
 export const ACTION_OPERATION_ACTION_IDS_V1 = [
   'action.operations.list', 'action.operations.get', 'action.operations.cancel',
@@ -69,6 +70,36 @@ const summaries: Record<ActionOperationActionIdV1, string> = {
   'projects.execution.output.open': 'Show a command\'s output on this device.',
   'projects.execution.output.copy': 'Copy a command\'s output, so you can paste it elsewhere.',
 };
+const machineFields = [
+  { path: 'serverId', title: 'Home', widget: 'text', required: true },
+  { path: 'machineId', title: 'Machine id', widget: 'text', required: true },
+] satisfies ActionInputFieldHint[];
+const operationFields = [...machineFields,
+  { path: 'operationId', title: 'Operation id', widget: 'text', required: true },
+] satisfies ActionInputFieldHint[];
+const outputFields = [...operationFields,
+  { path: 'byteOffset', title: 'Output byte offset', widget: 'integer', required: true },
+  { path: 'controlCursor', title: 'Control cursor', widget: 'integer' },
+  { path: 'ackedByteOffset', title: 'Acknowledged byte offset', widget: 'integer' },
+  { path: 'creditBytes', title: 'Output credit (bytes)', widget: 'integer' },
+  { path: 'maxBytes', title: 'Maximum output bytes', widget: 'integer' },
+  { path: 'maxFrames', title: 'Maximum output frames', widget: 'integer' },
+  { path: 'rendererId', title: 'Renderer id', widget: 'text' },
+  { path: 'surfaceEpoch', title: 'Surface epoch', widget: 'integer' },
+] satisfies ActionInputFieldHint[];
+const inputFields = {
+  'action.operations.list': [...machineFields,
+    { path: 'states', title: 'Operation states', widget: 'json' },
+    { path: 'sessionId', title: 'Session id', widget: 'text' },
+    { path: 'cursor', title: 'Page cursor', widget: 'text' }],
+  'action.operations.get': [...operationFields,
+    { path: 'waitForTerminal', title: 'Wait for completion', widget: 'boolean' },
+    { path: 'includeSetupReview', title: 'Include setup review', widget: 'boolean' }],
+  'action.operations.cancel': operationFields,
+  'projects.execution.output.read': outputFields,
+  'projects.execution.output.open': operationFields,
+  'projects.execution.output.copy': outputFields,
+} satisfies Record<ActionOperationActionIdV1, ActionInputFieldHint[]>;
 export const ACTION_OPERATION_ACTION_SPECS = ACTION_OPERATION_ACTION_IDS_V1.map((id): PreNormalizedActionSpec => ({
   id, title: titles[id], description: summaries[id],
   safety: id === 'action.operations.cancel' ? 'danger' : 'safe',
@@ -77,6 +108,6 @@ export const ACTION_OPERATION_ACTION_SPECS = ACTION_OPERATION_ACTION_IDS_V1.map(
   surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
   bindings: { mcpToolName: id.replaceAll('.', '_'), voiceClientToolName: id.replaceAll('.', '_') },
   cli: { commands: [{ path: id.split('.'), visibility: 'canonical' }] },
-  inputHints: { title: titles[id], fields: [] },
+  inputHints: { title: titles[id], fields: inputFields[id] },
   inputSchema: ActionOperationActionInputSchemasV1[id], outputSchema: ActionOperationActionOutputSchemasV1[id],
 }));

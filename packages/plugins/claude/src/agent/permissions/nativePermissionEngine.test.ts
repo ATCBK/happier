@@ -59,26 +59,55 @@ describe('createClaudeNativePermissionEngine', () => {
     expect(askQuestions).toHaveBeenCalledOnce();
   });
 
-  it('uses the same current-session interaction owner for ordinary tool confirmation', async () => {
-    const confirm = vi.fn(async () => ({
-      requestId: 'confirmation-1',
-      kind: 'confirmation' as const,
+  it('preserves the native tool identity and input at the canonical approval owner', async () => {
+    const requestApproval = vi.fn(async () => ({
+      requestId: 'approval-1',
+      kind: 'approval' as const,
       status: 'declined' as const,
     }));
+    const confirm = vi.fn(async () => ({
+      requestId: 'confirmation-1', kind: 'confirmation' as const, status: 'declined' as const,
+    }));
     const context = {
-      services: { interactions: { confirm } },
+      services: { interactions: { requestApproval, confirm } },
     } as unknown as AgentSessionRuntimeContext;
     const engine = createClaudeNativePermissionEngine(context);
+    const signal = new AbortController().signal;
 
-    await expect(engine.canCallTool('Bash', { command: 'rm -rf build' })).resolves.toEqual({
+    await expect(engine.canCallTool('mcp__happier__action_execute', {
+      actionId: 'session.board.item.remove',
+    }, { signal })).resolves.toEqual({
       behavior: 'deny',
       message: 'Permission denied',
       interrupt: true,
     });
-    expect(confirm).toHaveBeenCalledWith({
-      kind: 'confirmation',
+    expect(requestApproval).toHaveBeenCalledWith({
+      kind: 'approval',
       title: 'Claude permission',
-      message: 'Allow Claude to use Bash?',
-    });
+      subject: {
+        kind: 'tool',
+        name: 'mcp__happier__action_execute',
+        input: { actionId: 'session.board.item.remove' },
+      },
+    }, { signal });
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('allows an approved tool with its unchanged operands', async () => {
+    const requestApproval = vi.fn(async () => ({
+      requestId: 'approval-allowed',
+      kind: 'approval' as const,
+      status: 'approved' as const,
+      persistence: 'once' as const,
+    }));
+    // The public host interaction service is the plugin's process boundary.
+    const context = {
+      services: { interactions: { requestApproval } },
+    } as unknown as AgentSessionRuntimeContext;
+    const input = { query: 'machine presets', surfaces: ['agent'] };
+
+    await expect(createClaudeNativePermissionEngine(context).canCallTool(
+      'mcp__happier__action_spec_search', input,
+    )).resolves.toEqual({ behavior: 'allow', updatedInput: input });
   });
 });
