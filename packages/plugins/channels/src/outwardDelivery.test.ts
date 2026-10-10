@@ -416,6 +416,23 @@ describe('Channels control-response outward custody', () => {
     await expect(isConversationPermissionMediationSourceCurrent(input)).resolves.toBe(false);
   });
 
+  it('preserves the caller cancellation reason while checking a mediated source', async () => {
+    const state = new MemoryAccountCollection();
+    const controller = new AbortController();
+    const reason = new Error('Source currentness caller cancelled');
+    controller.abort(reason);
+
+    await expect(isConversationPermissionMediationSourceCurrent({
+      stateCollection: state,
+      signal: controller.signal,
+      accepted: {
+        sourceRef: 'channels:binding:binding-1',
+        sourceRevisionOrEpoch: '4:7',
+        remoteApprovalMaxScope: 'off',
+      },
+    })).rejects.toBe(reason);
+  });
+
   it('invalidates an accepted mediated source when its binding authority rotates', async () => {
     const state = new MemoryAccountCollection();
     await state.put(providerConnectionRow(), { expectedRevision: 'absent' });

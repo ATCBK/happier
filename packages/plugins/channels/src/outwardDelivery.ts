@@ -2701,7 +2701,8 @@ async function readCurrentConversationPermissionWaitMediationSource(input: Reado
 /**
  * Exact source-currentness operation for host-owned delayed work. It delegates
  * all binding/connection eligibility to the same retained-row reader used by
- * live permission mediation and reveals only the fail-closed boolean result.
+ * live permission mediation. Verified currentness is a boolean; unavailable
+ * authority reads reject rather than assert revocation.
  */
 export async function readConversationPermissionMediationSourceCurrentnessForInvocation(
   input: JsonValue,
@@ -2738,6 +2739,10 @@ export async function isConversationPermissionMediationSourceCurrent(input: Read
     bindingId: bindingId.data,
     signal: input.signal,
   });
+  if (current.kind === 'unavailable') {
+    input.signal.throwIfAborted();
+    throw new Error('conversation_source_currentness_unavailable');
+  }
   return current.kind === 'ready'
     && current.source.sourceRef === input.accepted.sourceRef
     && current.source.sourceRevisionOrEpoch === input.accepted.sourceRevisionOrEpoch
