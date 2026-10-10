@@ -582,7 +582,7 @@ export function MachineProjectWorkSection(
           />
         }
       >
-        {[...freshCopies.notices.values()].filter(notice => false && (notice.filesUnknown || notice.filesPresent)
+        {[...freshCopies.notices.values()].filter(notice => (notice.filesUnknown || notice.filesPresent)
           && !freshCopies.copies?.some(copy => copy.relationship.relationshipId === notice.relationshipId)).map(notice => (
           <AttentionBanner
             key={notice.relationshipId}
