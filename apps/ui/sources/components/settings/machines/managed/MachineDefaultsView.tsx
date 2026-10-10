@@ -2,7 +2,6 @@ import * as React from 'react';
 import { useHappierCollectionLayout } from '@happier-dev/plugin-ui/presentation';
 import {
   MACHINE_RETENTION_CATEGORIES_V1,
-  updateMachineRetentionCategoryPreferenceV1,
   type MachineRetentionCategoryV1,
   type MachineRetentionPolicyV1,
 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
@@ -17,14 +16,17 @@ import {
   SettingRow,
 } from '@/components/settings/shell/SettingRow';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
+import { useDeclaredSettingsWrite } from '@/components/settings/shell/useDeclaredSettingsWrite';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Switch } from '@/components/ui/forms/Switch';
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
 import { useMachineListForServer } from '@/sync/domains/state/storage';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { t } from '@/text';
@@ -69,10 +71,13 @@ function categoryHref(category: MachineRetentionCategoryV1): string {
 /**
  * Machine defaults (D21, lab `m-defaults`): what Happier does with machines it created when nothing runs
  * on them, one row per billing category. Desktop opens a row in place; a phone pushes the category's
- * own page. Writes go through the canonical Account preference (the same writer Settings Actions use).
+ * own page. Declared Settings Actions own admission and the Account CAS preserves other categories.
  */
 export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
   const activeHome = useActiveServerSnapshot();
+  const router = useRouter();
+  const execution = useMountedActionExecution(activeHome.serverId);
+  const writeSetting = useDeclaredSettingsWrite(execution);
   const machines = useMachineListForServer(activeHome.serverId);
   const controllers = React.useMemo(() => (machines ?? []).flatMap(machine => machine.installationId
     ? [{ machineId: machine.id, installationId: machine.installationId }] : []), [machines]);
@@ -82,10 +87,10 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
   // Installed provisioners are per controller (no Home-global catalog), so names arrive after the
   // controllers answer. While they load, each row holds its subtitle line so nothing moves on arrival.
   const namesLoading = provisioners.loading;
-  const [creationEnabled, setCreationEnabled] = useSettingMutable(
+  const creationEnabled = useSetting(
     'managedMachineCreationEnabled',
   );
-  const [defaults, setDefaults] = useSettingMutable(
+  const defaults = useSetting(
     'machineRetentionDefaultsV1',
   );
   const categories = React.useMemo(
@@ -100,11 +105,10 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
       category: MachineRetentionCategoryV1,
       policy: MachineRetentionPolicyV1 | null,
     ) => {
-      setDefaults(
-        updateMachineRetentionCategoryPreferenceV1(defaults, category, policy),
-      );
+      const model = categories.find(entry => entry.category === category);
+      return model ? writeSetting(model.setting, policy) : Promise.resolve(false);
     },
-    [defaults, setDefaults],
+    [categories, writeSetting],
   );
 
   const layout = useHappierCollectionLayout();
@@ -114,10 +118,19 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
   const focusedModel = focused
     ? (categories.find((entry) => entry.category === focused) ?? null)
     : null;
+  const disabled = !execution.ready || execution.approval.approvalPending;
+  const approvalId = execution.approval.approvalId;
+  const approvalNotice = approvalId ? <AttentionBanner
+    testID="settings.machineDefaults.approval" tone="neutral"
+    title={t('approvals.title')} description={t('approvals.status.open')}
+    action={{ label: t('approvals.details'), onPress: () => router.push(
+      `/inbox/approvals/${encodeURIComponent(approvalId)}?serverId=${encodeURIComponent(activeHome.serverId)}` as never,
+    ) }} /> : null;
 
   if (focusedModel) {
     return (
       <ItemList>
+        {approvalNotice}
         <SettingsPageHeader
           testID="settings.machineDefaults.category.header"
           alwaysShowTitle
@@ -125,7 +138,7 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
           description={providerList(providerNames[focusedModel.category], namesLoading)}
         />
         <ItemGroup>
-          <CategoryKeepControl model={focusedModel} write={write} />
+          <CategoryKeepControl model={focusedModel} write={write} disabled={disabled} />
         </ItemGroup>
       </ItemList>
     );
@@ -133,6 +146,7 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
 
   return (
     <ItemList>
+      {approvalNotice}
       <SettingsPageHeader
         testID="settings.machineDefaults.header"
         alwaysShowTitle
@@ -159,6 +173,7 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
               model={model}
               providers={providerList(providerNames[model.category], namesLoading)}
               write={write}
+              disabled={disabled}
             />
           ),
         )}
@@ -172,7 +187,8 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
             <Switch
               testID="settings.machineDefaults.creationEnabled.switch"
               value={creationEnabled}
-              onValueChange={setCreationEnabled}
+              disabled={disabled}
+              onValueChange={value => writeSetting(MACHINES_DEFAULTS_SETTINGS.settings.creationEnabled, value)}
             />
           }
         />
@@ -208,7 +224,8 @@ const CategoryDisclosure = React.memo(function CategoryDisclosure(
     write: (
       category: MachineRetentionCategoryV1,
       policy: MachineRetentionPolicyV1 | null,
-    ) => void;
+    ) => Promise<boolean>;
+    disabled: boolean;
     showDivider?: boolean;
   }>,
 ) {
@@ -245,7 +262,7 @@ const CategoryDisclosure = React.memo(function CategoryDisclosure(
           />
         )}
       >
-        <CategoryKeepControl model={model} write={props.write} />
+        <CategoryKeepControl model={model} write={props.write} disabled={props.disabled} />
       </ExpandableItem>
     </SettingAnchor>
   );
@@ -257,7 +274,8 @@ function CategoryKeepControl(
     write: (
       category: MachineRetentionCategoryV1,
       policy: MachineRetentionPolicyV1 | null,
-    ) => void;
+    ) => Promise<boolean>;
+    disabled: boolean;
   }>,
 ) {
   const { model, write } = props;
@@ -269,6 +287,7 @@ function CategoryKeepControl(
       policy={model.policy}
       defaultPolicy={getMachineRetentionCategoryDefaultV1(model.category)}
       inherited={model.inherited}
+      disabled={props.disabled}
       consequence={() => help}
       onChange={(policy) => write(model.category, policy)}
       onReset={() => write(model.category, null)}

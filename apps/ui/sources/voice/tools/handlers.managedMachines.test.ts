@@ -121,6 +121,10 @@ describe('Machines advertised UI and eligible Voice execution', () => {
       recipe: { provider: { pluginId: 'happier.machine.lima', localId: 'lima' }, schemaVersion: 1, name: 'Guest', choices: { cores: 2 } },
       controller: { machineId: 'machine', installationId: 'installation' } };
     const presets = { kind: 'listed', presets: [preset] };
+    const managed = { id: 'managed', homeId, custodianAccountId: 'owner', controller: preset.controller,
+      launch: preset.recipe, resource: { contributionRef: preset.recipe.provider, schemaVersion: 1, value: {} },
+      desired: 'stop', desiredWhen: 'now', allocation: 'bound', creationState: 'active', intentRevision: 1,
+      retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false };
     const poolId = '06986bf6-681b-46f1-8d68-bb619ac0c7f0';
     const pool = { kind: 'resolved', poolId, machineId: 'machine', priorityTier: 1 };
     const settings = { experiments: true, featureToggles: { voice: true } };
@@ -129,6 +133,7 @@ describe('Machines advertised UI and eligible Voice execution', () => {
       { key: 'focused', serverUrl: `https://par-recipes-focused-${surface}.test`, accountId: 'other' },
     ], route: request => request.home === 'compute' && request.path === '/v1/features' ? Response.json(features)
       : request.home === 'compute' && request.path === '/v1/machines/presets/list' ? Response.json(presets)
+      : request.home === 'compute' && request.path === '/v1/machines/managed/actions/get' ? Response.json(managed)
       : request.home === 'compute' && request.path === '/v1/machines/pools/resolve' ? Response.json(pool) : undefined });
     try {
       // Discover the Home identity through the real metadata producer before capturing its Action lifetime.
@@ -148,11 +153,16 @@ describe('Machines advertised UI and eligible Voice execution', () => {
       // Pools do not advertise Voice; exercise their existing UI owner only.
       if (surface === 'ui') expect(await createDefaultActionExecutor().execute('machines.pools.resolve', input, context))
         .toEqual({ ok: true, result: pool });
+      // Managed inventory is Account-backed; Voice is not bound for this family.
+      if (surface === 'ui') expect(await createDefaultActionExecutor().execute('machines.managed.get',
+        { homeId, managedId: managed.id }, context)).toEqual({ ok: true, result: managed });
       expect(home.requests.filter(request => request.path.startsWith('/v1/machines/')).map(request => ({
         home: request.home, accountId: request.accountId, path: request.path, body: request.body,
       }))).toEqual([
         { home: 'compute', accountId: 'owner', path: '/v1/machines/presets/list', body: { homeId } },
         ...(surface === 'ui' ? [{ home: 'compute', accountId: 'owner', path: '/v1/machines/pools/resolve', body: input }] : []),
+        ...(surface === 'ui' ? [{ home: 'compute', accountId: 'owner', path: '/v1/machines/managed/actions/get',
+          body: { homeId, managedId: managed.id } }] : []),
       ]);
     } finally {
       home.dispose();
