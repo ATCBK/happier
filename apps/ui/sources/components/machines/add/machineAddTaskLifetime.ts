@@ -23,7 +23,7 @@ export function beginMachineAddWatch(serverId: string, path: MachineAddPathId): 
 /** The retained start promise is the one task-lifetime authority, independent of its presenter. */
 export function startMachineAddTask(kind: 'thisComputer' | 'ssh', runner: SystemTaskRunner,
     start: (isCurrent: () => boolean) => Promise<string | null>, observeCompletion?: MachineAddTaskHandle['observeCompletion'],
-    continuation?: MachineAddTaskHandle): Promise<string | null> {
+    continuation?: MachineAddTaskHandle, sshSubmission?: MachineAddTaskHandle['sshSubmission']): Promise<string | null> {
     const key = kind === 'ssh' ? 'sshTask' : 'thisComputerTask';
     const accountScope = continuation?.accountScope ?? storage.getState().settingsScope;
     if (continuation && !areAccountSettingsScopesEqual(accountScope, storage.getState().settingsScope)) return Promise.resolve(null);
@@ -52,6 +52,7 @@ export function startMachineAddTask(kind: 'thisComputer' | 'ssh', runner: System
         return null;
     });
     updateMachineAddFlowDraft((draft) => ({ ...draft, [key]: { runner, accountScope, taskId: continuation?.taskId ?? null,
-        starting: true, startError: null, startPromise: promise, observeCompletion } }));
+        starting: true, startError: null, startPromise: promise, observeCompletion,
+        sshSubmission: continuation?.sshSubmission ?? sshSubmission } }));
     return promise;
 }

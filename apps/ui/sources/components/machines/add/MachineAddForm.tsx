@@ -72,7 +72,7 @@ function describePath(path: Flow['paths'][number]): Omit<SetupPath<MachineAddPat
  * which ways this device can run, the command, the SSH draft, the running setup and the machine that
  * joins. Nothing navigates away; the machine arrives in the form.
  */
-export function MachineAddForm(props: Readonly<{
+type MachineAddFormProps = Readonly<{
     layout: MachineAddFormLayout;
     testID: string;
     initialPath?: MachineAddPathId;
@@ -88,9 +88,17 @@ export function MachineAddForm(props: Readonly<{
     managedScope?: ManagedControllerScope;
     /** Once, when a machine joins (first-run onboarding advances on it). */
     onArrived?: (machine: Readonly<{ machineId: string; serverId: string }>) => void;
-}>) {
-    const { theme } = useUnistyles();
+}>;
+
+export function MachineAddForm(props: MachineAddFormProps) {
     const flow = useMachineAddFlow({ initialPath: props.initialPath });
+    return <MachineAddFormWithFlow {...props} flow={flow} />;
+}
+
+/** The page header and form share one flow, including its mounted approval continuation. */
+export function MachineAddFormWithFlow(props: MachineAddFormProps & Readonly<{ flow: Flow }>) {
+    const { theme } = useUnistyles();
+    const { flow } = props;
     // "Create one" is the fourth way to add a machine, beside the paths (lab `m-add`), when this Home allows it.
     const creating = useMachineAddFlowDraftSelector((draft) => draft.creating);
     const setCreating = React.useCallback((next: boolean) => updateMachineAddFlowDraft((draft) => draft.creating === next ? draft : { ...draft, creating: next }), []);
@@ -192,6 +200,7 @@ function MachineAddPane(props: Readonly<{
     onStartSession: (machine: Readonly<{ machineId: string; serverId: string }>) => void;
 }>) {
     const { flow, pathId, testID } = props;
+    const router = useRouter();
     const path = flow.paths.find((candidate) => candidate.id === pathId) ?? null;
     const { startWatching } = flow;
     const runsCommand = path?.runs === 'command';
@@ -320,6 +329,8 @@ function MachineAddPane(props: Readonly<{
         }
         case 'ssh': {
             const host = flow.ssh.draft.host.trim();
+            const approvalNotice = flow.approval.approvalId ? <AttentionBanner title={t('approvals.title')} description={t('approvals.status.open')}
+                action={{ label: t('approvals.details'), onPress: () => router.push(`/inbox/approvals/${encodeURIComponent(flow.approval.approvalId!)}?serverId=${encodeURIComponent(flow.serverId)}` as never) }} /> : null;
             if (run) {
                 return (
                     <View style={styles.pane}>
@@ -340,6 +351,7 @@ function MachineAddPane(props: Readonly<{
                                 </View>
                             </View>
                         ) : null}
+                        {approvalNotice}
                         <MachineAddStepList testID={`${testID}.steps`} steps={run.steps} />
                         {run.running ? (
                             <View style={styles.actions}>
@@ -398,16 +410,19 @@ function MachineAddPane(props: Readonly<{
                             {watching}
                         </>
                     ) : (
+                        <>
                         <View style={styles.actions}>
                             <RoundButton
                                 testID={`${testID}.start`}
                                 size="small"
                                 title={host ? t('addFlows.setUpHost', { host }) : t('addFlows.pathSshTitle')}
-                                disabled={!flow.ssh.ready}
+                                disabled={!flow.ssh.ready || flow.approval.approvalPending}
                                 onPress={flow.startSsh}
                             />
                             <Text style={styles.note}>{t('addFlows.sshSavedNote')}</Text>
                         </View>
+                        {approvalNotice}
+                        </>
                     )}
                 </View>
             );

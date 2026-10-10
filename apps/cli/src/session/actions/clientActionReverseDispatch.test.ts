@@ -16,6 +16,7 @@ describe('client Action reverse delivery', () => {
         awaitingInput: true, prompt: { kind: 'ssh.password', message: 'Password needed', requiresPresentUser: false }, machineId: null, errorCode: null } },
       { actionId: 'machines.add.ssh.respond', input: { taskId: 'ssh-task', answer: { kind: 'ssh.password' } }, result: { taskId: 'ssh-task' } },
       { actionId: 'machines.add.ssh.cancel', input: { taskId: 'ssh-task' }, result: { taskId: 'ssh-task' } },
+      { actionId: 'machines.add.ssh.cancel', input: {}, result: { pendingCanceled: true } },
     ] as const;
     let delivered = 0;
     const client: ClientActionMachineRpc = {
@@ -23,6 +24,7 @@ describe('client Action reverse delivery', () => {
       // The other process is the boundary; the UI owner lifecycle runs in its own suite.
       callConnectedClientRpc: async (method, payload, options) => {
         const expected = operations[delivered++];
+        if (!expected) throw new Error('Unexpected SSH delivery');
         expect(method).toBe(RPC_METHODS.UI_ACTION_EXECUTE);
         expect(UiActionDispatchRequestV1Schema.parse(payload)).toMatchObject({ actionId: expected.actionId, input: expected.input,
           context: { surface, authority: 'account_automation' } });
@@ -35,9 +37,9 @@ describe('client Action reverse delivery', () => {
       expect(await executor(client).execute(operation.actionId, operation.input, context)).toEqual({ ok: true, result: operation.result });
       expect(await executor(null).execute(operation.actionId, operation.input, context)).toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
     }
-    expect(delivered).toBe(4);
+    expect(delivered).toBe(operations.length);
     expect((await executor(client).execute('machines.add.ssh.start', operations[0].input, { ...context, surface: 'cli' })).ok).toBe(false);
-    expect(delivered).toBe(4);
+    expect(delivered).toBe(operations.length);
   });
 
   it.each(['cli', 'agent', 'mcp'] as const)('delivers Machine metadata to the answering client for %s and refuses a disconnected client', async surface => {

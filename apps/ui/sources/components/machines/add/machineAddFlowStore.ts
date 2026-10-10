@@ -18,6 +18,8 @@ export type MachineAddTaskHandle = Readonly<{
     /** Completion subscription follows the actual task even with no presenter mounted. */
     observeCompletion?: (taskId: string) => (() => void);
     unsubscribeCompletion?: () => void;
+    /** Original SSH target/ref custody; later form edits cannot retarget a prompt. */
+    sshSubmission?: Readonly<{ draft: MachineAddSshDraft; savedHostRevision: number | 'absent' | null }>;
 }>;
 export type MachineAddSshDraft = SshCredentialsDraft & Readonly<{ privateKeyMaterial?: string; savedHostId?: string | null }>;
 export type MachineAddFlowDraft = Readonly<{
@@ -73,7 +75,8 @@ export function updateMachineAddFlowDraft(next: MachineAddFlowDraft | ((current:
 export function cancelMachineAddFlowTasks(): void {
     for (const handle of [draft.thisComputerTask, draft.sshTask]) {
         handle?.unsubscribeCompletion?.();
-        if (handle?.taskId && !handle.runner.getSnapshot(handle.taskId)?.result) {
+        const snapshot = handle?.taskId ? handle.runner.getSnapshot(handle.taskId) : null;
+        if (handle?.taskId && !snapshot?.result && !snapshot?.cancelRequested) {
             void handle.runner.cancel(handle.taskId).catch(() => {});
         }
     }

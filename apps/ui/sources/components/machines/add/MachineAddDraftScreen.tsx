@@ -11,15 +11,14 @@ import { seedAndOpenNewSession } from '@/components/sessions/new/newSessionSeedC
 import { buildNewSessionLaunchRouteParams } from '@/components/sessions/new/navigation/newSessionRouteParams';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { resolveHomeDisplayName } from '@/components/settings/server/homeDisplayName';
-import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
-import { MachineAddForm } from './MachineAddForm';
+import { MachineAddFormWithFlow } from './MachineAddForm';
 import type { MachineAddPathId } from './machineAddPaths';
-import { discardMachineAdd, useMachineAddDraftRow } from './useMachineAddFlow';
+import { useMachineAddFlow } from './useMachineAddFlow';
 import { useMachineAddFlowDraftSelector } from './machineAddFlowStore';
 import { useManagedMachineAccountSettings } from '@/components/settings/machines/managed/useManagedMachineAccountSettings';
 import { useManagedControllerScope } from '@/components/settings/machines/managed/useManagedControllerScope';
@@ -40,11 +39,10 @@ function readPath(value: string | string[] | undefined): MachineAddPathId | unde
 export const MachineAddDraftScreen = React.memo(function MachineAddDraftScreen() {
     const router = useRouter();
     const params = useLocalSearchParams<{ path?: string | string[] }>();
-    const draftRow = useMachineAddDraftRow();
+    const flow = useMachineAddFlow({ initialPath: readPath(params.path) });
+    const draftRow = flow.draftRow;
     // The machine joins the Home this device uses (the flow's default target).
-    const activeServer = useActiveServerSnapshot();
-    const draftServerId = useMachineAddFlowDraftSelector((draft) => draft.serverId);
-    const serverId = draftServerId ?? activeServer.serverId;
+    const serverId = flow.serverId;
     const homeName = resolveHomeDisplayName(getServerProfileById(serverId));
     // One read of the Account's opt-out serves the header's promise and the form's Create one.
     const accountScope = useServerCredentialAccountScopeBinding(serverId);
@@ -58,10 +56,9 @@ export const MachineAddDraftScreen = React.memo(function MachineAddDraftScreen()
         if (result !== true) fireAndForget(result, { tag });
     }, [router]);
     const leave = React.useCallback(() => navigate(MACHINES_COLLECTION_ROOT, 'MachineAddDraftScreen.leave', true), [navigate]);
-    const discard = React.useCallback(() => {
-        discardMachineAdd();
-        leave();
-    }, [leave]);
+    const discard = React.useCallback(async () => {
+        if (await flow.discard()) leave();
+    }, [flow.discard, leave]);
     const startSession = React.useCallback((machine: Readonly<{ machineId: string; serverId: string }>) => {
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime) return;
@@ -91,13 +88,15 @@ export const MachineAddDraftScreen = React.memo(function MachineAddDraftScreen()
                             size="small"
                             display="inverted"
                             title={t('addFlows.discard')}
+                            disabled={flow.approval.approvalPending}
                             onPress={discard}
                         />
                     </>
                 )}
             />
             <SettingAnchor setting={MACHINES_ADD_SETTINGS.settings.setupNewMachineAction}>
-                    <MachineAddForm
+                    <MachineAddFormWithFlow
+                        flow={flow}
                         layout="page"
                         testID="settings.machines.draft.form"
                         initialPath={readPath(params.path)}

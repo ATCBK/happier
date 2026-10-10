@@ -1,13 +1,26 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { storage } from '@/sync/domains/state/storageStore';
-import { getActiveServerId, setActiveServerId, upsertServerProfile, removeServerProfile } from '@/sync/domains/server/serverProfiles';
-import { useMachineAddFlow, useMachineAddDraftRow, discardMachineAdd } from './useMachineAddFlow';
-import { readMachineAddFlowDraft, updateMachineAddFlowDraft } from './machineAddFlowStore';
-import { createManualSystemTaskRunner } from '@/dev/testkit/harness/manualSystemTaskRunner';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+
+const harness = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(harness);
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { getActiveServerId, setActiveServerId, upsertServerProfile, removeServerProfile } = await import('@/sync/domains/server/serverProfiles');
+const { readMachineAddFlowDraft, updateMachineAddFlowDraft } = await import('./machineAddFlowStore');
+const { createManualSystemTaskRunner } = await import('@/dev/testkit/harness/manualSystemTaskRunner');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { createAccountSettingsScope } = await import('@/sync/domains/settings/scope/accountSettingsScope');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+// Substitute Metro's loader only; admission and task execution remain real.
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
+    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+    const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
+    return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
+});
 
 // Native navigation is an external boundary; this test never navigates.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({ splitStreamingRevealTextParts: () => [] }));
@@ -22,21 +35,37 @@ vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock().module;
 });
+const { useMachineAddFlow, useMachineAddDraftRow, discardMachineAdd } = await import('./useMachineAddFlow');
+const sshPolicy = { v: 1 as const, actions: {}, approvalWaivedSurfaces: { 'machines.add.ssh.start': ['ui' as const], 'machines.add.ssh.respond': ['ui' as const] } };
 
-afterEach(async () => { await act(async () => discardMachineAdd()); vi.useRealTimers(); standardCleanup(); });
+async function admitSsh(serverId: string, accountId: string) {
+    const scope = createAccountSettingsScope(serverId, accountId);
+    if (!scope) throw new Error('Invalid SSH fixture Account scope');
+    await storage.getState().activateSettingsScope(scope);
+    storage.getState().activateProfileScope(scope);
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: { actionsSettingsV1: sshPolicy } }, version: 1 } });
+    storage.setState({ settingsScope: { serverId, accountId }, profileScope: { serverId, accountId },
+        settings: { ...storage.getState().settings, actionsSettingsV1: sshPolicy }, machineListByServerId: { [serverId]: [] } });
+}
+
+beforeEach(async () => { await harness.reset(); });
+afterEach(async () => { await act(async () => discardMachineAdd()); publishAppliedActiveServerRuntimeAvailability(false); vi.useRealTimers(); standardCleanup(); });
 describe('machine add flow lifetime', () => {
     it('resumes its canonical SSH password prompt after remount and waits for the Home feed, not just task success', async () => {
         const previous = storage.getState();
         const previousServerId = getActiveServerId();
-        const home = await upsertServerProfile({ serverUrl: 'https://ssh-flow.example.test', name: 'SSH Home' });
+        const home = { id: await harness.addHome({ serverUrl: 'https://ssh-flow.example.test', name: 'SSH Home', accountId: 'fixture-account' }) };
         const manual = createManualSystemTaskRunner('native');
         vi.stubGlobal('isTauri', true); // Desktop identity is an environment boundary; paths remain real.
         try {
             await setActiveServerId(home.id);
-            storage.setState({ settingsScope: { serverId: home.id, accountId: 'fixture-account' }, machineListByServerId: { [home.id]: [] } });
+            await admitSsh(home.id, 'fixture-account');
             const first = await renderHook(() => useMachineAddFlow({ runner: manual.runner, initialPath: 'ssh' }));
             await act(async () => { first.getCurrent().ssh.setDraft({ ...first.getCurrent().ssh.draft, host: 'build-box' }); });
             await act(async () => { first.getCurrent().startSsh(); first.getCurrent().startSsh(); });
+            await vi.waitFor(() => expect(readMachineAddFlowDraft().sshTask?.taskId).toBeTruthy());
+            expect(first.getCurrent().run?.failure).toBeNull();
             const taskId = readMachineAddFlowDraft().sshTask?.taskId;
             expect(taskId).toBeTruthy();
             await first.unmount();
@@ -45,6 +74,7 @@ describe('machine add flow lifetime', () => {
             expect(resumed.getCurrent().run?.prompt).toMatchObject({ kind: 'ssh.password' });
             await act(async () => { resumed.getCurrent().ssh.setDraft({ ...resumed.getCurrent().ssh.draft, password: 'fixture-password' }); });
             await act(async () => resumed.getCurrent().continueSshPrompt());
+            await vi.waitFor(() => expect(manual.bridge.respond).toHaveBeenCalledWith(taskId, { password: 'fixture-password' }));
             expect(manual.bridge.respond).toHaveBeenCalledWith(taskId, { password: 'fixture-password' });
             await act(async () => manual.emitResult(taskId!, { protocolVersion: 1, taskId: taskId!, ok: true, data: { machineId: 'ssh-joined' } }));
             expect(resumed.getCurrent().arrived).toBeNull();
@@ -64,7 +94,7 @@ describe('machine add flow lifetime', () => {
     it('cancels an OS start that resolves after Discard instead of resurrecting its draft', async () => {
         const previous = storage.getState();
         const previousServerId = getActiveServerId();
-        const home = await upsertServerProfile({ serverUrl: 'https://pending-flow.example.test', name: 'Pending Home' });
+        const home = { id: await harness.addHome({ serverUrl: 'https://pending-flow.example.test', name: 'Pending Home', accountId: 'fixture-account' }) };
         const manual = createManualSystemTaskRunner('native');
         let finishStart!: (id: string) => void;
         const pendingStart = new Promise<string>((resolve) => { finishStart = resolve; });
@@ -73,10 +103,11 @@ describe('machine add flow lifetime', () => {
         vi.stubGlobal('isTauri', true);
         try {
             await setActiveServerId(home.id);
-            storage.setState({ settingsScope: { serverId: home.id, accountId: 'fixture-account' }, machineListByServerId: { [home.id]: [] } });
+            await admitSsh(home.id, 'fixture-account');
             const hook = await renderHook(() => useMachineAddFlow({ runner: manual.runner, initialPath: 'ssh' }));
             await act(async () => hook.getCurrent().ssh.setDraft({ ...hook.getCurrent().ssh.draft, host: 'pending-box' }));
             await act(async () => hook.getCurrent().startSsh());
+            await vi.waitFor(() => expect(readMachineAddFlowDraft().sshTask?.starting).toBe(true));
             expect(hook.getCurrent().run?.running).toBe(true);
             await act(async () => discardMachineAdd());
             await act(async () => finishStart('pending-ssh-task'));
@@ -90,6 +121,92 @@ describe('machine add flow lifetime', () => {
             await setActiveServerId(previousServerId);
             await removeServerProfile(home.id);
             vi.unstubAllGlobals();
+        }
+    });
+    it.each(['cancel', 'discard', 'addAnother'] as const)('applies SSH cancel policy to pending %s and cancels its eventual native task only after admission', async (operation) => {
+        const previous = storage.getState();
+        const serverId = await harness.addHome({ serverUrl: 'https://pending-cancel.example.test', name: 'Pending cancel', accountId: 'alice' });
+        await admitSsh(serverId, 'alice');
+        const manual = createManualSystemTaskRunner('native');
+        vi.stubGlobal('isTauri', true);
+        let finishStart!: (id: string) => void;
+        const pending = new Promise<string>(resolve => { finishStart = resolve; });
+        const originalStart = manual.bridge.start.getMockImplementation()!;
+        manual.bridge.start.mockImplementation(spec => spec.kind === 'remote.ssh.bootstrapMachine.v1' ? pending : originalStart(spec));
+        const policy = { ...sshPolicy, actions: { 'machines.add.ssh.cancel': { enabled: false } } };
+        harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: { actionsSettingsV1: policy } }, version: 1 } });
+        storage.getState().applySettingsForScope({ serverId, accountId: 'alice' }, { ...storage.getState().settings, actionsSettingsV1: policy }, 1);
+        try {
+            const hook = await renderHook(() => useMachineAddFlow({ runner: manual.runner, initialPath: 'ssh' }));
+            await act(async () => hook.getCurrent().ssh.setDraft({ ...hook.getCurrent().ssh.draft, host: 'pending-box' }));
+            await act(async () => hook.getCurrent().startSsh());
+            await vi.waitFor(() => expect(manual.bridge.start.mock.calls.some(([spec]) => spec.kind === 'remote.ssh.bootstrapMachine.v1')).toBe(true));
+            if (operation === 'addAnother') {
+                // Arrival can precede the native setup result; the visible Add another still retires that task.
+                await act(async () => storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'joined-while-starting', activeAt: Date.now() })] } }));
+                expect(hook.getCurrent().arrived?.machineId).toBe('joined-while-starting');
+            }
+            const promise = readMachineAddFlowDraft().sshTask?.startPromise;
+            await act(async () => { await hook.getCurrent()[operation](); });
+            await vi.waitFor(() => expect(readMachineAddFlowDraft().sshTask?.startError).toBe('action_disabled'));
+            expect(readMachineAddFlowDraft().sshTask?.startPromise).toBe(promise);
+            harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: { actionsSettingsV1: sshPolicy } }, version: 2 } });
+            await act(async () => { storage.getState().applySettingsForScope({ serverId, accountId: 'alice' }, { ...storage.getState().settings, actionsSettingsV1: sshPolicy }, 2); });
+            await act(async () => { await hook.getCurrent()[operation](); });
+            await vi.waitFor(() => expect(readMachineAddFlowDraft().sshTask).toBeNull());
+            await act(async () => finishStart('pending-cancel-task'));
+            await vi.waitFor(() => expect(manual.bridge.cancel).toHaveBeenCalledWith('pending-cancel-task'));
+            expect(hook.getCurrent().watch.status).toBe('idle');
+            expect(hook.getCurrent().run).toBeNull();
+            await hook.unmount();
+        } finally { finishStart('pending-cancel-task'); await act(async () => discardMachineAdd()); storage.setState(previous); vi.unstubAllGlobals(); }
+    });
+    it('enforces disabled SSH Action policy before the mounted Add flow starts a task', async () => {
+        const previous = storage.getState();
+        const serverId = await harness.addHome({ serverUrl: 'https://disabled-ssh.example.test', name: 'Disabled SSH', accountId: 'alice' });
+        vi.stubGlobal('isTauri', true);
+        const manual = createManualSystemTaskRunner('native');
+        const actionsSettingsV1 = { v: 1 as const, actions: { 'machines.add.ssh.start': { enabled: false } } };
+        harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: { actionsSettingsV1 } }, version: 1 } });
+        storage.setState({ settingsScope: { serverId, accountId: 'alice' }, profileScope: { serverId, accountId: 'alice' }, settings: { ...previous.settings, actionsSettingsV1 }, machineListByServerId: { [serverId]: [] } });
+        try {
+            const hook = await renderHook(() => useMachineAddFlow({ runner: manual.runner, initialPath: 'ssh' }));
+            await act(async () => hook.getCurrent().ssh.setDraft({ ...hook.getCurrent().ssh.draft, host: 'box' }));
+            await act(async () => hook.getCurrent().startSsh());
+            await vi.waitFor(() => expect(readMachineAddFlowDraft().sshTask?.startError).toBe('action_disabled'));
+            expect(manual.bridge.start.mock.calls.some(([spec]) => spec.kind === 'remote.ssh.bootstrapMachine.v1')).toBe(false);
+            await hook.unmount();
+        } finally { storage.setState(previous); vi.unstubAllGlobals(); }
+    });
+    it('waits for the credential-backed Action binding before presenting SSH start as ready', async () => {
+        const previous = storage.getState();
+        const serverUrl = 'https://ssh-binding.example.test';
+        const serverId = await harness.addHome({ serverUrl, name: 'SSH binding', accountId: 'alice' });
+        await admitSsh(serverId, 'alice');
+        vi.stubGlobal('isTauri', true);
+        const manual = createManualSystemTaskRunner('native');
+        const readCredentials = vi.mocked(TokenStorage.getCredentialsForServerUrl).getMockImplementation()!;
+        let releaseCredentials!: () => void;
+        const blockedCredentials = new Promise<void>(resolve => { releaseCredentials = resolve; });
+        // Secure storage is the genuine boundary; Account binding and admission remain real.
+        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(async (...args) => {
+            if (args[0] === serverUrl) await blockedCredentials;
+            return readCredentials(...args);
+        });
+        try {
+            const hook = await renderHook(() => useMachineAddFlow({ runner: manual.runner, initialPath: 'ssh' }));
+            await act(async () => hook.getCurrent().ssh.setDraft({ ...hook.getCurrent().ssh.draft, host: 'box' }));
+            expect(hook.getCurrent().ssh.ready).toBe(false);
+            await act(async () => releaseCredentials());
+            await vi.waitFor(() => expect(hook.getCurrent().ssh.ready).toBe(true));
+            await act(async () => hook.getCurrent().startSsh());
+            await vi.waitFor(() => expect(readMachineAddFlowDraft().sshTask?.taskId).toBeTruthy());
+            await hook.unmount();
+        } finally {
+            releaseCredentials();
+            vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(readCredentials);
+            await act(async () => discardMachineAdd());
+            storage.setState(previous); vi.unstubAllGlobals();
         }
     });
     it('projects the retained SSH run in the rail without mounting the flow or reacting to password edits', async () => {
