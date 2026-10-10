@@ -19,7 +19,10 @@ import { useWorkspaceFileQuery } from '@/sync/domains/workspaces/files/useWorksp
 import { workspaceCreateDirectory, workspaceWriteFile } from '@/sync/ops/workspaceFileSystem';
 import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
 import { tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
-import { storage, useLocalSetting, useServerScopedMachine, useWorkspaceRepositoryTreeExpandedPaths } from '@/sync/domains/state/storage';
+import { storage, useActiveServerAccountScope, useLocalSetting, useServerScopedMachine, useWorkspaceRepositoryTreeExpandedPaths } from '@/sync/domains/state/storage';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { usePaneHeaderSlotContent } from '@/components/appShell/panes/paneHeaderSlot';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
@@ -254,6 +257,13 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
     const collapseAll = React.useCallback(() => {
         setExpandedPaths([]);
     }, [setExpandedPaths]);
+    const router = useRouter();
+    const accountScope = useActiveServerAccountScope();
+    const actionApproval = useActionApprovalContinuation({
+        scopeKey: JSON.stringify([accountScope?.serverId, accountScope?.accountId,
+            workspaceScope.serverId, workspaceScope.machineId, workspaceScope.rootPath]),
+        serverId: workspaceScope.serverId, onExecuted: refresh,
+    });
 
     const allowCreateActions = React.useMemo(() => (
         machineRpcTargetAvailable && Boolean(workspaceScope.machineId.trim() && workspaceScope.rootPath.trim())
@@ -316,6 +326,10 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
 
             const res = await workspaceCreateDirectory(workspaceScope, directoryPath);
             if (!res.success) {
+                if (res.errorCode === 'approval_required' && res.approvalArtifactId) {
+                    actionApproval.requestApproval(res.approvalArtifactId);
+                    return;
+                }
                 Modal.alert(t('common.error'), res.error || t('files.createFolderFailed'));
                 return;
             }
@@ -329,7 +343,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
             setExpandedPaths(withDir);
             refresh();
         })();
-    }, [allowCreateActions, expandedPaths, refresh, setExpandedPaths, workspaceScope, revealPath]);
+    }, [actionApproval.requestApproval, allowCreateActions, expandedPaths, refresh, setExpandedPaths, workspaceScope, revealPath]);
 
     const transfers = useWorkspaceFileTransfers({
         workspaceScope,
@@ -343,6 +357,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
         expandedPaths,
         onExpandedPathsChange: setExpandedPaths,
         onRequestRefresh: refresh,
+        onActionApproval: actionApproval.requestApproval,
         onRequestDownload: handleRequestDownload,
     });
 
@@ -534,6 +549,10 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
 
     return (
         <View style={{ flex: 1, minHeight: 0 }}>
+            {actionApproval.approvalId ? <ActionApprovalPendingNotice message={t('approvals.status.open')}
+                testID="repository-tree-action-approval" onOpenApproval={() => router.push(
+                    `/inbox/approvals/${encodeURIComponent(actionApproval.approvalId!)}?serverId=${encodeURIComponent(workspaceScope.serverId)}`,
+                )} /> : null}
             {props.createMenuPlacement === 'paneHeader' ? <BrowserHeaderAction action={createMenu} /> : null}
             {showSearchBar || folderPage ? (
                 <RepositoryTreeToolbar

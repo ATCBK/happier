@@ -6,6 +6,10 @@ import { resolveKeepBothTargetPath } from '@/sync/domains/files/resolveKeepBothT
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { workspaceDeletePath, workspaceRenamePath, workspaceStatFile } from '@/sync/ops/workspaceFileSystem';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { createActionApprovalContinuation, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
+import type { FilesystemMutationOutput } from '@happier-dev/protocol/actions/filesystemActionFamily';
 
 import type { RepositoryTreeRowActionMenuItemId } from '@/components/workspaces/files/repositoryTree/RepositoryTreeRowActionsMenu';
 import { deletePathConfirm } from '@/components/workspaces/files/repositoryTree/deletePathConfirm';
@@ -63,6 +67,7 @@ export function useWorkspaceRepositoryTreeRowActions(params: Readonly<{
     expandedPaths: readonly string[];
     onExpandedPathsChange: (paths: string[]) => void;
     onRequestRefresh?: (() => void) | null;
+    onActionApproval?: (registration: ActionApprovalRegistration) => void;
     onRequestDownload?: ((params: Readonly<{ path: string; asZip: boolean }>) => Promise<{ ok: true } | { ok: false; error: string; canceled?: true }>) | null;
 }>): Readonly<{
     onSelectRowMenuItem: (node: RepositoryTreeNodeLike, itemId: RepositoryTreeRowActionMenuItemId) => Promise<void>;
@@ -72,6 +77,7 @@ export function useWorkspaceRepositoryTreeRowActions(params: Readonly<{
         onExpandedPathsChange,
         onRequestDownload,
         onRequestRefresh,
+        onActionApproval,
         workspaceScope,
         writeActionsEnabled,
     } = params;
@@ -79,6 +85,13 @@ export function useWorkspaceRepositoryTreeRowActions(params: Readonly<{
     React.useEffect(() => {
         expandedPathsRef.current = expandedPaths;
     }, [expandedPaths]);
+    const scopeRef = React.useRef(workspaceScope);
+    scopeRef.current = workspaceScope;
+    const mounted = React.useRef(true);
+    React.useEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; };
+    }, []);
 
     const isDestinationAlreadyExistsError = React.useCallback((error: string | undefined): boolean => {
         return typeof error === 'string' && /destination already exists/i.test(error);
@@ -96,21 +109,28 @@ export function useWorkspaceRepositoryTreeRowActions(params: Readonly<{
             return;
         }
 
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        const target = workspaceScope;
+        const current = () => mounted.current && (!lifetime || lifetime.isCurrent())
+            && scopeRef.current?.serverId === target?.serverId
+            && scopeRef.current?.machineId === target?.machineId
+            && scopeRef.current?.rootPath === target?.rootPath;
+
         if (itemId === 'repository-tree-menuitem-rename') {
             if (!writeActionsEnabled) return;
             let nextPath = await renamePathPrompt({ currentPath: node.path });
-            if (!nextPath) return;
+            if (!nextPath || !current()) return;
 
-            const target = workspaceScope;
             if (!target) {
                 Modal.alert(t('common.error'), t('files.repositoryTree.rename.failed'));
                 return;
             }
 
             let result = await workspaceRenamePath(target, { from: node.path, to: nextPath, overwrite: undefined });
+            if (!current()) return;
             if (!result.success && isDestinationAlreadyExistsError(result.error)) {
                 const strategy = await showRenameConflictResolutionDialog({ path: nextPath });
-                if (strategy === 'cancel') return;
+                if (strategy === 'cancel' || !current()) return;
 
                 if (strategy === 'replace') {
                     result = await workspaceRenamePath(target, { from: node.path, to: nextPath, overwrite: true });
@@ -123,24 +143,40 @@ export function useWorkspaceRepositoryTreeRowActions(params: Readonly<{
                             return !stat.success || stat.exists === true;
                         },
                     });
+                    if (!current()) return;
                     result = await workspaceRenamePath(target, { from: node.path, to: nextPath, overwrite: undefined });
                 }
             }
+            if (!current()) return;
 
+            const renamedPath = nextPath;
+            const complete = () => {
+                if (node.type === 'directory') {
+                    onExpandedPathsChange(remapExpandedPathsAfterRename({
+                        expandedPaths: expandedPathsRef.current, from: node.path, to: renamedPath,
+                    }));
+                }
+                onRequestRefresh?.();
+            };
             if (!result.success) {
+                if (result.errorCode === 'approval_required' && result.approvalArtifactId && onActionApproval) {
+                    onActionApproval(lifetime && areServerProfileIdentifiersEquivalent(target.serverId ?? lifetime.scope.serverId, lifetime.scope.serverId)
+                        ? createActionApprovalContinuation<FilesystemMutationOutput, 'daemon.filesystem.rename'>({
+                            artifactId: result.approvalArtifactId, actionId: 'daemon.filesystem.rename', scope: lifetime.scope,
+                            refreshAfterExecution: false,
+                            onSucceeded: value => {
+                                if (!current()) return;
+                                if (value.success) complete();
+                                else Modal.alert(t('common.error'), value.error);
+                            },
+                        }) : result.approvalArtifactId);
+                    return;
+                }
                 Modal.alert(t('common.error'), result.error || t('files.repositoryTree.rename.failed'));
                 return;
             }
 
-            if (node.type === 'directory') {
-                const nextExpanded = remapExpandedPathsAfterRename({
-                    expandedPaths: expandedPathsRef.current,
-                    from: node.path,
-                    to: nextPath,
-                });
-                onExpandedPathsChange(nextExpanded);
-            }
-            onRequestRefresh?.();
+            complete();
             return;
         }
 
@@ -148,24 +184,40 @@ export function useWorkspaceRepositoryTreeRowActions(params: Readonly<{
             if (!writeActionsEnabled) return;
 
             const confirm = await deletePathConfirm({ path: node.path, kind: node.type });
-            if (!confirm.confirmed) return;
+            if (!confirm.confirmed || !current()) return;
 
-            const target = workspaceScope;
             if (!target) {
                 Modal.alert(t('common.error'), t('files.repositoryTree.delete.failed'));
                 return;
             }
 
             const result = await workspaceDeletePath(target, { path: node.path, recursive: confirm.recursive });
+            if (!current()) return;
+            const complete = () => {
+                if (node.type === 'directory') {
+                    onExpandedPathsChange(removeExpandedPathsUnderDirectory(expandedPathsRef.current, node.path));
+                }
+                onRequestRefresh?.();
+            };
             if (!result.success) {
+                if (result.errorCode === 'approval_required' && result.approvalArtifactId && onActionApproval) {
+                    onActionApproval(lifetime && areServerProfileIdentifiersEquivalent(target.serverId ?? lifetime.scope.serverId, lifetime.scope.serverId)
+                        ? createActionApprovalContinuation<FilesystemMutationOutput, 'daemon.filesystem.delete'>({
+                            artifactId: result.approvalArtifactId, actionId: 'daemon.filesystem.delete', scope: lifetime.scope,
+                            refreshAfterExecution: false,
+                            onSucceeded: value => {
+                                if (!current()) return;
+                                if (value.success) complete();
+                                else Modal.alert(t('common.error'), value.error);
+                            },
+                        }) : result.approvalArtifactId);
+                    return;
+                }
                 Modal.alert(t('common.error'), result.error || t('files.repositoryTree.delete.failed'));
                 return;
             }
 
-            if (node.type === 'directory') {
-                onExpandedPathsChange(removeExpandedPathsUnderDirectory(expandedPathsRef.current, node.path));
-            }
-            onRequestRefresh?.();
+            complete();
             return;
         }
 
@@ -181,6 +233,7 @@ export function useWorkspaceRepositoryTreeRowActions(params: Readonly<{
         onExpandedPathsChange,
         onRequestDownload,
         onRequestRefresh,
+        onActionApproval,
         workspaceScope,
         writeActionsEnabled,
     ]);

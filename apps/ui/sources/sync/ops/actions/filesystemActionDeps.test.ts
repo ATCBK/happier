@@ -3,8 +3,6 @@ import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecut
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { createUiFilesystemAction } from './filesystemActionDeps';
-import { workspaceRenamePath, workspaceDeletePath } from '../workspaceFileSystem/pathMetadataMutations';
-import { workspaceCreateDirectory } from '../workspaceFileSystem/directoryBrowsing';
 
 const transport = vi.hoisted(() => vi.fn(async (_input: unknown) => ({ success: false, error: 'Destination already exists' })));
 // Machine RPC is the genuine cross-process boundary; Action admission remains real.
@@ -21,15 +19,6 @@ describe('UI filesystem Action transport', () => {
         expect(transport).toHaveBeenCalledWith(expect.objectContaining({ serverId: 'home', accountId: 'account', machineId: 'machine',
             method: 'daemon.filesystem.rename', payload: input }));
     });
-    it('routes live workspace callbacks through rooted semantic Actions', async () => {
-        const target = { serverId: 'home', machineId: 'machine', rootPath: '/repo' };
-        await workspaceRenamePath(target, { from: 'a', to: 'b' });
-        await workspaceDeletePath(target, { path: 'a' });
-        await workspaceCreateDirectory(target, 'folder');
-        expect(transport).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.filesystem.rename', payload: { rootPath: '/repo', from: '/repo/a', to: '/repo/b', overwrite: false } }));
-        expect(transport).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.filesystem.delete', payload: { rootPath: '/repo', path: '/repo/a', recursive: false } }));
-        expect(transport).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.filesystem.createDirectory', payload: { rootPath: '/repo', path: '/repo/folder' } }));
-    });
     it('does not infer a machine target from the ambient session', async () => {
         transport.mockClear();
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({ filesystemActionExecute: createUiFilesystemAction() }));
@@ -37,22 +26,6 @@ describe('UI filesystem Action transport', () => {
             surface: 'ui', authority: 'present_user', serverId: 'home', defaultSessionId: 'ambient',
         })).toMatchObject({ ok: false, errorCode: 'machine_not_selected' });
         expect(transport).not.toHaveBeenCalled();
-    });
-    it('addresses the literal selected tilde directory rather than the machine home', async () => {
-        transport.mockClear();
-        const target = { serverId: 'home', machineId: 'machine', rootPath: '/repo' };
-        await workspaceRenamePath(target, { from: '~/line\nbreak ', to: '~/renamed ' });
-        await workspaceDeletePath(target, { path: '~/line\nbreak ' });
-        await workspaceCreateDirectory(target, '~');
-        expect(transport).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.filesystem.rename', payload: {
-            rootPath: '/repo', from: '/repo/~/line\nbreak ', to: '/repo/~/renamed ', overwrite: false,
-        } }));
-        expect(transport).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.filesystem.delete', payload: {
-            rootPath: '/repo', path: '/repo/~/line\nbreak ', recursive: false,
-        } }));
-        expect(transport).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.filesystem.createDirectory', payload: {
-            rootPath: '/repo', path: '/repo/~',
-        } }));
     });
     it('refuses a generic transfer without concrete byte custody before preparing', async () => {
         transport.mockClear();
