@@ -4,7 +4,7 @@ import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
-import { addServerProfile, getServerProfile, useServerProfile } from '@/server/serverProfiles';
+import { addServerProfile, getServerProfile, isServerProfileHomeIdentity, useServerProfile } from '@/server/serverProfiles';
 import { resolveCurrentCliHomeTarget } from '@/server/homeTarget';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
@@ -22,6 +22,55 @@ const descriptor = {
 };
 
 describe('prepareDaemonHomeIrohTransport', () => {
+  it.each([true, false])('binds a fresh daemon through its authenticated tunnel (publication initially available: %s)', async initiallyAvailable => {
+    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL',
+      'HAPPIER_LOCAL_SERVER_URL', 'HAPPIER_PUBLIC_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
+    try {
+      await withTempDir('happier-daemon-fresh-tunnel-', async homeDir => {
+        envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: undefined,
+          HAPPIER_SERVER_URL: undefined, HAPPIER_LOCAL_SERVER_URL: undefined,
+          HAPPIER_PUBLIC_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined });
+        reloadConfiguration();
+        const serverUrl = 'http://qa.localhost:3020';
+        const localServerUrl = 'http://127.0.0.1:57982';
+        const profile = await addServerProfile({ name: 'fresh-daemon', serverUrl, localServerUrl, webappUrl: serverUrl });
+        const exactDescriptor = { ...descriptor, canonicalServerUrl: serverUrl,
+          endpoints: [{ kind: 'https' as const, url: serverUrl }] };
+        let publicationAvailable = initiallyAvailable;
+        // Only the HTTP boundary is substituted; transport, observation parsing,
+        // exact-authority admission and saved-profile persistence remain real.
+        vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
+          expect(String(url)).toBe(`${localServerUrl}/v1/features/authenticated`);
+          expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer fixture-terminal-token');
+          return Response.json({ features: {},
+            capabilities: { serverIdentity: { serverIdentityId: descriptor.homeServerIdentityId } },
+            ...(publicationAvailable ? { homeConnectionDescriptor: exactDescriptor } : {}) });
+        }));
+        const transport = await prepareDaemonHomeIrohTransport({ runtime: null, profile,
+          applicationCarrierEligibility: 'standard_only' });
+        try {
+          await expect(transport.verifyAuthenticated('fixture-terminal-token')).resolves.toEqual({ status: 'ready' });
+          if (!initiallyAvailable) {
+            expect(await isServerProfileHomeIdentity(profile.id, descriptor.homeServerIdentityId)).toBe(false);
+            expect((await getServerProfile(profile.id)).homeConnectionDescriptor).toBeUndefined();
+            publicationAvailable = true;
+            await expect(transport.verifyAuthenticated('fixture-terminal-token')).resolves.toEqual({ status: 'ready' });
+          }
+          expect((await getServerProfile(profile.id)).homeConnectionDescriptorAuthority).toBe('exact');
+          expect((await getServerProfile(profile.id)).homeConnectionDescriptor).toEqual(exactDescriptor);
+          expect(await isServerProfileHomeIdentity(profile.id, descriptor.homeServerIdentityId)).toBe(true);
+          expect(await isServerProfileHomeIdentity(profile.id, 'srv_different_home')).toBe(false);
+        } finally {
+          await transport.release();
+        }
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      envScope.restore();
+      reloadConfiguration();
+    }
+  });
+
   it('does not attach an env-only daemon Home descriptor to the focused profile or manufacture a saved profile', async () => {
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL',
       'HAPPIER_LOCAL_SERVER_URL', 'HAPPIER_PUBLIC_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
@@ -374,14 +423,15 @@ describe('prepareDaemonHomeIrohTransport', () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
-  it('allows unavailable Iroh to use only the descriptor-declared independently verified HTTPS origin', async () => {
+  it.each([undefined, 'http://127.0.0.1:3005'])('allows unavailable Iroh to use an independently verified HTTPS carrier with local route %s', async localServerUrl => {
     const httpsUrl = 'https://public-home.example.test';
+    const expectedOrigin = localServerUrl ?? httpsUrl;
     const descriptorWithHttpsFallback = {
       ...descriptor,
       endpoints: [...descriptor.endpoints, { kind: 'https' as const, url: httpsUrl }],
     };
     const probe = vi.fn(async ({ serverUrl }: { serverUrl: string }) => (
-      serverUrl === httpsUrl
+      serverUrl === expectedOrigin
         ? { status: 'ready' as const }
         : { status: 'auth_failed' as const, errorMessage: 'unexpected origin' }
     ));
@@ -391,7 +441,7 @@ describe('prepareDaemonHomeIrohTransport', () => {
       runtime: null,
       profile: {
         serverUrl: descriptor.canonicalServerUrl,
-        localServerUrl: 'http://127.0.0.1:3005',
+        localServerUrl,
         homeConnectionDescriptor: descriptorWithHttpsFallback,
       } as never,
       token: 'account-token',
@@ -400,9 +450,12 @@ describe('prepareDaemonHomeIrohTransport', () => {
     });
 
     expect(probe).toHaveBeenCalledTimes(1);
-    expect(probe).toHaveBeenCalledWith(expect.objectContaining({ serverUrl: httpsUrl }));
-    expect(publish).toHaveBeenCalledWith(httpsUrl, 'https');
+    expect(probe).toHaveBeenCalledWith(expect.objectContaining({
+      serverUrl: expectedOrigin, expectedServerIdentityId: descriptor.homeServerIdentityId,
+    }));
+    expect(publish).toHaveBeenCalledWith(expectedOrigin, 'https');
     expect(transport).toMatchObject({ carrier: 'standard', observedPath: 'unknown' });
+    await transport.release();
   });
 
   it('reports a transport outage as unreachable during reacquisition', async () => {
