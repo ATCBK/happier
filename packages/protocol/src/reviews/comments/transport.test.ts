@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { createActionExecutor } from '../../actions/actionExecutor.js';
+import { ActionsSettingsV1Schema } from '../../actions/actionSettings.js';
+import { isApprovalRequiredByActionsSettings } from '../../actions/actionApprovalPolicy.js';
+import type { ApprovalRequest } from '../../approvals/approvalRequestV1.js';
 import { executeReviewCommentTransportV1, buildReviewCommentCreateEquivalenceCommitmentV1, type ReviewCommentTransportContextV1 } from './transport.js';
 import {
   deriveReviewCommentStructuralMutationV1, ReviewCommentPrepareMutationRequestV1Schema,
@@ -127,7 +131,11 @@ describe('canonical Review Comment client transport', () => {
     await expect(execute([{ ...failures[0], commentId: 'unrelated' }])).rejects.toMatchObject({ code: 'review_comment_content_binding_mismatch' });
   });
 
-  it('seals complete revised records for every CRUD operation and keeps sensitive fields off the real HTTP boundary', async () => {
+  it.each(['agent', 'mcp', 'cli', 'voice'] as const)('admits durable comment CRUD on %s and keeps sensitive fields off the real HTTP boundary', async (surface) => {
+    const actor = surface === 'agent' || surface === 'mcp'
+      ? { kind: 'agent' as const, agentId: 'codex', sessionId: 'session-1' }
+      : { kind: 'user' as const, userId: context.accountId };
+    const creation = { ...create, ...(actor.kind === 'agent' ? { sessionId: actor.sessionId } : {}) };
     const stored = new Map<string, StoredReviewCommentV1>();
     const wire: unknown[] = [];
     let prepared: readonly ReviewCommentPreparedRecordV1[] = [];
@@ -135,37 +143,80 @@ describe('canonical Review Comment client transport', () => {
     let nonce = 0;
     let failures: unknown[] = [];
     let bulkActionId: string | undefined;
-    const run = (actionId: Exclude<ReviewCommentActionIdV1, 'reviews.comments.claimPublicationDispatch'>, input: Record<string, unknown>) => executeReviewCommentTransportV1({
-      actionId, input, context, actor, randomBytes: (length) => new Uint8Array(length).fill(++nonce),
-      request: async (request) => {
-        wire.push(request);
-        if (request.path.endsWith('/mutations/prepare')) {
-          const body = ReviewCommentPrepareMutationRequestV1Schema.parse(request.body);
-          const result = deriveReviewCommentStructuralMutationV1({ mutation: body.mutation, accountId: context.accountId,
-            actor, current: [...stored.values()].map((item) => item.structural), runtime: { now: () => 100 + sequence,
-              createId: (prefix) => `${prefix}-${++sequence}` } });
-          prepared = result.records.map((record) => {
-            const previousId = body.mutation.actionId === 'reviews.comments.reply' ? body.mutation.input.parentCommentId : record.structural.id;
-            const prior = stored.get(previousId);
-            return { ...record, ...(prior ? { previous: { structural: prior.structural,
-              source: { v: 1 as const, layout: 'canonical_v1' as const, envelope: prior.sensitiveEnvelope } } } : {}) };
-          });
-          failures = result.failed;
-          bulkActionId = result.bulkActionId;
-          return { v: 1, receipt: 'receipt-1', request: body, records: prepared, replayed: false, failed: failures, bulkActionId };
-        }
-        const body = ReviewCommentCommitMutationRequestV1Schema.parse(request.body);
-        const comments = body.records.map((item) => {
-          const structural = prepared.find((candidate) => candidate.structural.id === item.commentId)!.structural;
-          const record: StoredReviewCommentV1 = { v: 1, structural, sensitiveEnvelope: item.sensitiveEnvelope };
-          expect(openStoredReviewCommentV1({ stored: record, mode: 'e2ee', material: context.material! }).status).toBe('available');
-          stored.set(structural.id, record);
-          return record;
+    const approvalRequests: ApprovalRequest[] = [];
+    const executor = createActionExecutor({
+      isActionApprovalRequired: (actionId, actionContext) => isApprovalRequiredByActionsSettings(
+        actionId, actionContext.actionsSettings ?? ActionsSettingsV1Schema.parse({ v: 1 }), actionContext,
+      ),
+      approvalsCreate: async ({ request }) => {
+        approvalRequests.push(request);
+        return { artifactId: 'comment-approval' };
+      },
+      reviewCommentAction: async ({ actionId, input, reviewCommentPrincipal }) => {
+        if (actionId === 'reviews.comments.claimPublicationDispatch') throw new Error('Publication is not a comment CRUD operation');
+        return executeReviewCommentTransportV1({
+          actionId, input, context, actor: reviewCommentPrincipal?.actor ?? actor, randomBytes: (length) => new Uint8Array(length).fill(++nonce),
+          request: async (request) => {
+            wire.push(request);
+            if (request.method === 'get') return request.path === '/v1/reviews/comments'
+              ? { items: [...stored.values()], cursor: null }
+              : { comment: stored.get(decodeURIComponent(request.path.split('/').at(-1)!)) };
+            if (request.path.endsWith('/mutations/prepare')) {
+              const body = ReviewCommentPrepareMutationRequestV1Schema.parse(request.body);
+              const result = deriveReviewCommentStructuralMutationV1({ mutation: body.mutation, accountId: context.accountId,
+                actor, current: [...stored.values()].map((item) => item.structural), runtime: { now: () => 100 + sequence,
+                  createId: (prefix) => `${prefix}-${++sequence}` } });
+              prepared = result.records.map((record) => {
+                const previousId = body.mutation.actionId === 'reviews.comments.reply' ? body.mutation.input.parentCommentId : record.structural.id;
+                const prior = stored.get(previousId);
+                return { ...record, ...(prior ? { previous: { structural: prior.structural,
+                  source: { v: 1 as const, layout: 'canonical_v1' as const, envelope: prior.sensitiveEnvelope } } } : {}) };
+              });
+              failures = result.failed;
+              bulkActionId = result.bulkActionId;
+              return { v: 1, receipt: 'receipt-1', request: body, records: prepared, replayed: false, failed: failures, bulkActionId };
+            }
+            const body = ReviewCommentCommitMutationRequestV1Schema.parse(request.body);
+            const comments = body.records.map((item) => {
+              const structural = prepared.find((candidate) => candidate.structural.id === item.commentId)!.structural;
+              const record: StoredReviewCommentV1 = { v: 1, structural, sensitiveEnvelope: item.sensitiveEnvelope };
+              expect(openStoredReviewCommentV1({ stored: record, mode: 'e2ee', material: context.material! }).status).toBe('available');
+              stored.set(structural.id, record);
+              return record;
+            });
+            return { v: 1, comments, replayed: false, failed: failures, bulkActionId };
+          },
         });
-        return { v: 1, comments, replayed: false, failed: failures, bulkActionId };
       },
     });
-    let { comment } = ReviewCommentActionOutputSchemasV1['reviews.comments.create'].parse(await run('reviews.comments.create', create));
+    const actionContext = { surface, serverId: 'home', defaultSessionId: 'session-1',
+      actionRequestId: `comment-create-${surface}`, actionCaller: { kind: 'host' as const },
+      ...(actor.kind === 'agent' ? { reviewCommentPrincipal: { actor } } : {}),
+    };
+    expect(await executor.execute('reviews.comments.create', creation, actionContext)).toMatchObject({
+      ok: true, result: { kind: 'approval_request_created', artifactId: 'comment-approval' },
+    });
+    expect(approvalRequests).toMatchObject([{ actionId: 'reviews.comments.create', actionArgs: creation, status: 'open' }]);
+    expect(stored.size).toBe(0);
+    expect(await executor.execute('reviews.comments.create', creation, { ...actionContext,
+      actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'reviews.comments.create': { enabled: false } } }),
+    })).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+    expect(wire).toEqual([]);
+    const run = async (actionId: Exclude<ReviewCommentActionIdV1, 'reviews.comments.claimPublicationDispatch'>, input: Record<string, unknown>) => {
+      const result = await executor.execute(actionId, input, {
+        ...actionContext,
+        actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } }),
+      });
+      if (!result.ok) throw new Error(result.errorCode);
+      return result.result;
+    };
+    let { comment } = ReviewCommentActionOutputSchemasV1['reviews.comments.create'].parse(await run('reviews.comments.create', creation));
+    expect(ReviewCommentActionOutputSchemasV1['reviews.comments.get'].parse(await run('reviews.comments.get', {
+      commentId: comment.id,
+    })).comment).toEqual(comment);
+    expect(ReviewCommentActionOutputSchemasV1['reviews.comments.list'].parse(await run('reviews.comments.list', {
+      workspace,
+    })).items).toEqual([comment]);
     const input = () => ({ workspace, commentId: comment.id, expectedServerRevision: comment.serverRevision });
     comment = ReviewCommentActionOutputSchemasV1['reviews.comments.edit'].parse(await run('reviews.comments.edit', {
       ...input(), expectedBodyVersion: 1, nextBody: 'PRIVATE-edited', reason: 'PRIVATE-edit-reason', clientMutationId: 'edit-1',
