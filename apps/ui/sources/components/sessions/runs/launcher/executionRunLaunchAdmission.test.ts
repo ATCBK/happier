@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AIBackendProfileSchema, buildBackendTargetKeyV2, FeatureGatesSchema, FeaturesResponseSchema } from '@happier-dev/protocol';
 import { TeamCredentialProviderModelSelectionV1Schema, TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ExecutionRunStartResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 
 import { createDeferred, createMachineFixture, createPlainAccountEncryptionCurrentnessFixture, createSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { HomeCredentialMutationEvent } from '@/auth/storage/tokenStorage';
@@ -169,6 +170,66 @@ afterEach(() => {
 });
 
 describe('real execution Run launch admission', () => {
+    it.each(['deleted', 'loading'] as const)('refuses a qualified configured Run whose row is %s before any host effect', async (state) => {
+        const { input, bindingHook } = await launchFixture();
+        if (state === 'loading') beginAcpCatalogLoad(input.accountLifetime.scope);
+        await expect(admitExecutionRunLaunchTarget({ ...input, session: { ...input.session, active: true },
+            runBackendTargets: [{ kind: 'agent', identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'removed' }],
+            requirements: { secretReferenceOverlay: false, teamCredentialModel: false },
+        })).rejects.toMatchObject({ code: 'acp_catalog_unavailable' });
+        expect(boundary.rpc).not.toHaveBeenCalled();
+        expect(boundary.sessionRpc).not.toHaveBeenCalled();
+        await bindingHook.unmount();
+    });
+    it('starts a detached review through the real launch context without injecting a Session', async () => {
+        restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader();
+        const { input, home, machine } = await launchFixture();
+        setRuntimeFetch(async url => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
+            if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json(AcpCatalogRowReadResponseV1Schema.parse({
+                status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } },
+            }));
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        });
+        storage.setState({ settingsScope: input.accountLifetime.scope, settings: settingsDefaults, sessions: {},
+            machines: { [machine.id]: { ...machine, activeAt: Date.now() } },
+            machineListByServerId: { [home.id]: [{ ...machine, activeAt: Date.now() }] },
+        });
+        boundary.rpc.mockImplementation(async request => {
+            if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return supportedCapabilities;
+            if (request.method === 'execution.run.start') return ExecutionRunStartResponseSchema.parse({
+                runId: 'detached-review-run', callId: 'detached-call', sidechainId: 'detached-sidechain',
+            });
+            return { error: 'Method not found', errorCode: 'METHOD_NOT_FOUND' };
+        });
+        const hook = await renderHook(() => useExecutionRunLaunchContext(null, home.id, { machineId: machine.id, cwd: '/work/rejoined' }));
+        const { startReviewOfComparison, listReviewWalkthroughEngines } = await import('@/sync/ops/reviews/reviewWalkthrough');
+        const { resolveReviewWalkthroughPlan } = await import('@/sync/domains/reviews/reviewWalkthroughPlan');
+        const inventory = await listReviewWalkthroughEngines({ sessionId: null, machineId: machine.id, serverId: home.id });
+        expect(inventory, JSON.stringify({ inventory, methods: boundary.rpc.mock.calls.map(([request]) => request.method) }))
+            .toMatchObject({ ok: true, engines: expect.arrayContaining([expect.objectContaining({ engineId: 'claude', enabled: true })]) });
+        const outcome = await startReviewOfComparison({ sessionId: null, machineId: machine.id, serverId: home.id,
+            cwd: '/work/rejoined', comparison: { kind: 'workingTree' }, comparisonId: 'detached-evidence', instructions: 'Review.',
+            plan: resolveReviewWalkthroughPlan({ engines: inventory.ok ? inventory.engines : [],
+                selectedEngineIds: ['claude'], walkthrough: false, narratorEngineId: null }),
+            start: actionInput => hook.getCurrent().startAction('review.start', actionInput, 'detached-review'),
+        });
+        expect(outcome, JSON.stringify({ outcome, methods: boundary.rpc.mock.calls.map(([request]) => request.method) }))
+            .toMatchObject({ ok: true, reviewRunIds: ['detached-review-run'] });
+        expect(boundary.rpc.mock.calls.filter(([request]) => request.method === 'execution.run.start')).toEqual([
+            [expect.objectContaining({ machineId: machine.id, serverId: home.id, payload: expect.objectContaining({
+                cwd: '/work/rejoined', intent: 'review', intentInput: expect.objectContaining({ comparisonId: 'detached-evidence' }),
+            }) })],
+        ]);
+        expect(boundary.sessionRpc).not.toHaveBeenCalled();
+        expect(storage.getState().sessions).toEqual({});
+        await hook.unmount();
+    });
+
     it('projects the owner-applied draft selection instead of visible pending intent', async () => {
         const { input, session } = await launchFixture();
         const applied = { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'applied-model' };

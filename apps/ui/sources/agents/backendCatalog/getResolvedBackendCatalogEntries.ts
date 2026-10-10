@@ -1,5 +1,5 @@
 import { readBackendTargetRefV2, type BackendTargetRefV2, type BackendTargetRefV2Input, type PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 import type { AgentId } from '@/agents/catalog/catalog';
@@ -176,11 +176,12 @@ export function getResolvedBackendCatalogEntries(params: Readonly<{
         entriesByTargetKey.set(resolvedEntry.backendTargetKey, resolvedEntry);
     }
 
-    const configuredBackendIds = new Set(catalog.backends.map((backend) => backend.id));
+    const configuredBackendsById = new Map(catalog.backends.map((backend) => [backend.id, backend]));
+    const configuredBackendIds = new Set(configuredBackendsById.keys());
 
-    for (const backend of catalog.backends) {
-        const canonicalTarget: PersistedBackendTargetRefV2 = { kind: 'agent',
-            identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: backend.id };
+    for (const canonicalTarget of listAgentExecutionTargetsV1(CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, [...configuredBackendIds])) {
+        const backend = canonicalTarget.definitionId ? configuredBackendsById.get(canonicalTarget.definitionId) : null;
+        if (!backend) continue;
         const backendTargetKey = formatBackendTargetKeyV2(canonicalTarget);
         const agentId = CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.localId;
         const agentCatalogEntry = resolveConfiguredAcpAgentCatalogProjection(backend, {

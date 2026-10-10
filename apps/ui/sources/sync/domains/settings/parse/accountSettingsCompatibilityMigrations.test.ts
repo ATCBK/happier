@@ -10,6 +10,11 @@ import { settingsDefaults, settingsParse } from '@/sync/domains/settings/setting
 import { applyAccountSettingsCompatibilityMigrations } from './accountSettingsCompatibilityMigrations';
 
 describe('applyAccountSettingsCompatibilityMigrations', () => {
+    it('migrates legacy permission intent only to executable Agent targets', () => {
+        const migrated = settingsParse({ lastUsedPermissionMode: 'read-only' });
+        expect(migrated.sessionDefaultPermissionModeByTargetKey['agent:happier.agent.claude/claude']).toBe('read-only');
+        expect(Object.keys(migrated.sessionDefaultPermissionModeByTargetKey)).not.toContain('agent:happier.agent.custom-acp/custom-acp');
+    });
     it('avoids absent legacy boolean validation during sparse Account refreshes while retaining malformed-present validation', () => {
         const sparseSettings = accountSettingsParse({});
         // Instrument Zod's external error callback; the Settings owner and validators stay real.

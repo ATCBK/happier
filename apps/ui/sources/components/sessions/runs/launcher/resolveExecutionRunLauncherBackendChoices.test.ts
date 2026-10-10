@@ -38,6 +38,34 @@ const acpCatalogSnapshot: AcpCatalogSnapshotV1 = {
 };
 
 describe('resolveExecutionRunLauncherBackendChoices', () => {
+    it('uses canonical native snapshot facts for one review choice', () => {
+        const targetKey = 'agent:happier.agent.claude/claude';
+        const choices = resolveExecutionRunLauncherBackendChoices({ enabledAgentIds: ['claude'], intent: 'review', acpCatalogSnapshot,
+            executionRunsBackends: { [targetKey]: { available: true, intents: ['review'], title: 'Claude review' } } });
+        expect(choices).toEqual([expect.objectContaining({ backendId: 'claude', agentId: 'claude', title: 'Claude review', disabled: false })]);
+    });
+    it('resolves qualified configured review targets to the exact row and operational Agent', () => {
+        const targetKey = 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot';
+        const choices = resolveExecutionRunLauncherBackendChoices({ enabledAgentIds: [], intent: 'review', acpCatalogSnapshot,
+            executionRunsBackends: { [targetKey]: { available: true, intents: ['review'] } } });
+        expect(choices).toEqual([expect.objectContaining({ backendId: 'review-bot', agentId: 'custom-acp', targetKey,
+            backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'review-bot' } })]);
+    });
+    it('does not revive a qualified configured review target from an unavailable or deleted row', () => {
+        const targetKey = 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot';
+        for (const catalog of [{ status: 'unavailable' as const, reason: 'account-mode-mismatch' },
+            { status: 'ready' as const, revision: 5, record: { v: 1 as const, definitions: [] } }]) {
+            expect(resolveExecutionRunLauncherBackendChoices({ enabledAgentIds: [], intent: 'review', acpCatalogSnapshot: catalog,
+                executionRunsBackends: { [targetKey]: { available: true, intents: ['review'] } } })).toEqual([]);
+        }
+    });
+    it('keeps a qualified configured delegate target executable and definition-qualified in the Action key', () => {
+        const targetKey = 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot';
+        const choices = resolveExecutionRunLauncherBackendChoices({ enabledAgentIds: [], intent: 'delegate', acpCatalogSnapshot,
+            executionRunsBackends: { [targetKey]: { available: true, intents: ['delegate'] } } });
+        expect(choices).toEqual([expect.objectContaining({ backendId: 'review-bot', agentId: 'custom-acp',
+            targetKey, disabled: false })]);
+    });
     it('does not revive a configured review backend absent from the ready Account row', () => {
         const choices = resolveExecutionRunLauncherBackendChoices({
             enabledAgentIds: ['claude'], intent: 'review',
@@ -54,18 +82,20 @@ describe('resolveExecutionRunLauncherBackendChoices', () => {
             intent: 'delegate',
         });
         expect(choices).toContainEqual(expect.objectContaining({
-            backendTarget: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot' },
+            backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'review-bot' },
             title: 'Review Bot', disabled: false,
         }));
     });
 
-    it.each(['delegate', 'review'])('refuses %s choices when the required catalog is incomplete', (intent) => {
-        expect(() => resolveExecutionRunLauncherBackendChoices({
+    it.each(['delegate', 'review'])('keeps native %s choices independent of an incomplete configured catalog', (intent) => {
+        const choices = resolveExecutionRunLauncherBackendChoices({
             enabledAgentIds: ['claude'],
             executionRunsBackends: { claude: { available: true, intents: [intent] } },
             acpCatalogSnapshot: { status: 'partial', reason: 'incomplete-inventory', record: { v: 1, definitions: [] }, diagnostics: [] },
             intent,
-        })).toThrowError(expect.objectContaining({ code: 'acp_catalog_unavailable' }));
+        });
+        expect(choices).toContainEqual(expect.objectContaining({ backendId: 'claude', disabled: false }));
+        expect(choices.some((choice) => choice.backendTarget.kind === 'agent' && choice.backendTarget.definitionId)).toBe(false);
     });
     it('uses the review backend snapshot label for review-intent launcher choices instead of the raw engine id', () => {
         const choices = resolveExecutionRunLauncherBackendChoices({
@@ -140,9 +170,9 @@ describe('resolveExecutionRunLauncherBackendChoices', () => {
             backendTarget: {
                 kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured',
             },
-            targetKey,
+            targetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot',
             backendId: 'review-bot',
-            agentId: 'customAcp',
+            agentId: 'custom-acp',
             title: 'Review Bot',
             disabled: false,
         }));
@@ -160,8 +190,8 @@ describe('resolveExecutionRunLauncherBackendChoices', () => {
         });
 
         expect(choices).toContainEqual(expect.objectContaining({
-            backendTarget: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot' },
-            targetKey: 'acpBackend:review-bot',
+            backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'review-bot' },
+            targetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot',
             backendId: 'review-bot',
             title: 'Review Bot',
             disabled: false,
@@ -181,8 +211,8 @@ describe('resolveExecutionRunLauncherBackendChoices', () => {
 
         expect(choices.filter((choice) => choice.title === 'Review Bot')).toEqual([
             expect.objectContaining({
-                backendTarget: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot' },
-                targetKey: 'acpBackend:review-bot',
+                backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'review-bot' },
+                targetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot',
                 backendId: 'review-bot',
                 title: 'Review Bot',
                 disabled: false,
@@ -205,7 +235,7 @@ describe('resolveExecutionRunLauncherBackendChoices', () => {
                 kind: 'agent',
                 identity: { pluginId: 'happier.agent.claude', localId: 'claude' },
             },
-            targetKey: 'agent:claude',
+            targetKey: 'agent:happier.agent.claude/claude',
             backendId: 'claude',
             title: 't:agentInput.agent.claude',
             disabled: false,
@@ -250,7 +280,7 @@ describe('resolveExecutionRunLauncherBackendChoices', () => {
                 kind: 'agent',
                 identity: { pluginId: 'acme.plugin', localId: 'provider1' },
             },
-            targetKey: 'agent:acme.plugin.provider1',
+            targetKey: 'agent:acme.plugin/provider1',
             backendId: 'acme.plugin.backend1',
             title: 'Acme Plugin Backend',
             disabled: false,

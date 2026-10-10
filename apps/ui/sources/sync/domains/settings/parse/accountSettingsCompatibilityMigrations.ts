@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import {
     buildAgentUniverseBackendTargetKey,
-    listAgentUniverseIds,
+    listExecutableAgentUniverseIds,
 } from '@/agents/catalog/agentUniverse';
 import { getAgentCore } from '@/agents/registry/registryCore';
 import { CLAUDE_PERMISSION_MODES, CODEX_LIKE_PERMISSION_MODES, isPermissionMode, type PermissionMode } from '@/sync/domains/permissions/permissionTypes';
@@ -258,7 +258,7 @@ export function applyAccountSettingsCompatibilityMigrations<TSettings extends Re
             : {};
         const legacyByAgent = input.sessionDefaultPermissionModeByAgent;
         if (legacyByAgent && typeof legacyByAgent === 'object' && !Array.isArray(legacyByAgent)) {
-            for (const agentId of listAgentUniverseIds()) {
+            for (const agentId of listExecutableAgentUniverseIds()) {
                 const raw = (legacyByAgent as Record<string, unknown>)[agentId];
                 if (isPermissionMode(raw)) {
                     const group = getAgentCore(agentId)?.permissions.modeGroup;
@@ -272,7 +272,7 @@ export function applyAccountSettingsCompatibilityMigrations<TSettings extends Re
             const parsed = parsePermissionIntentAlias(input.lastUsedPermissionMode);
             if (parsed) {
                 const seededMode: PermissionMode = parsed === 'plan' ? 'read-only' : parsed;
-                for (const to of listAgentUniverseIds()) {
+                for (const to of listExecutableAgentUniverseIds()) {
                     const group = getAgentCore(to)?.permissions.modeGroup;
                     const allowed = group === 'codexLike' ? CODEX_LIKE_PERMISSION_MODES : CLAUDE_PERMISSION_MODES;
                     byTargetKey[buildAgentUniverseBackendTargetKey(to)] =
@@ -289,7 +289,7 @@ export function applyAccountSettingsCompatibilityMigrations<TSettings extends Re
             : {};
         const legacyByAgent = input.newSessionDefaultPersistenceModeByAgentV1;
         if (legacyByAgent && typeof legacyByAgent === 'object' && !Array.isArray(legacyByAgent)) {
-            for (const agentId of listAgentUniverseIds()) {
+            for (const agentId of listExecutableAgentUniverseIds()) {
                 const raw = (legacyByAgent as Record<string, unknown>)[agentId];
                 if (raw === 'direct' || raw === 'persisted') {
                     byTargetKey[buildAgentUniverseBackendTargetKey(agentId)] = raw;

@@ -300,7 +300,7 @@ describe('ACP captured Account row snapshots', () => {
             expect(account.readLiveSettings()).toBeNull();
             const settings = await account.readSettings();
             expect(await createVoiceAgentSettingsCatalogReader(account)(settings))
-                .toMatchObject({ entries: expect.arrayContaining([expect.objectContaining({ backendTargetKey: 'backend:row-review:configured:row-review' })]) });
+                .toMatchObject({ entries: expect.arrayContaining([expect.objectContaining({ backendTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:row-review' })]) });
         } finally { account.dispose(); }
     });
     it('transfers the exact complete predecessor before applying the user delta with the returned destination revision', async () => {
@@ -604,13 +604,21 @@ describe('ACP captured Account row snapshots', () => {
         expect(retained.definitions).toHaveLength(2);
     });
     it('admits Voice Settings configured choices from captured destination rows and refuses incomplete facts', async () => {
+        const secondDefinition = { ...definition, id: 'second-review', name: 'second-review', title: 'Second review' };
+        row = { status: 'present', revision: 3, content: { t: 'plain', v: { v: 1, definitions: [definition, secondDefinition] } } };
         const account = await captureLazyActionAccountContext(scope.serverId);
         try {
             const settings = getStorage().getState().settings;
             const reader = createVoiceAgentSettingsCatalogReader(account);
-            expect((await reader(settings))?.entries).toContainEqual(expect.objectContaining({
-                backendTargetKey: 'backend:row-review:configured:row-review', title: 'Row review',
-            }));
+            const entries = (await reader(settings))?.entries;
+            expect(entries).toEqual(expect.arrayContaining([definition, secondDefinition].map(entry => expect.objectContaining({
+                backendTargetKey: `agent:happier.agent.custom-acp/custom-acp:definition:${entry.id}`, title: entry.title,
+            }))));
+            expect(entries?.filter(entry => entry.identity?.pluginId === 'happier.agent.custom-acp')
+                .map(entry => entry.backendTargetKey)).toEqual([
+                    'agent:happier.agent.custom-acp/custom-acp:definition:row-review',
+                    'agent:happier.agent.custom-acp/custom-acp:definition:second-review',
+                ]);
             row = { status: 'present', revision: 4, content: { t: 'plain', v: { v: 1, definitions: [definition, { id: 'broken' }] } } };
             expect(await reader(settings)).toBeNull();
         } finally { account.dispose(); }

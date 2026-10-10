@@ -160,6 +160,20 @@ describe('review engine voice tool', () => {
     expect(await listReviewEnginesForVoiceTool({ sessionId: 's1' })).toMatchObject({ ok: false, errorCode: 'acp_catalog_unavailable' });
   });
 
+  it('offers both ready configured definitions without exposing the abstract contribution', async () => {
+    const definitions = ['first', 'second'].map(id => AcpBackendDefinitionV1Schema.parse({
+      id, name: id, title: id, command: 'review', createdAt: 1, updatedAt: 1,
+    }));
+    applyAcpCatalogSnapshot(state.settingsScope, { status: 'ready', revision: 4, record: { v: 1, definitions } }, true);
+    getMachineCapabilitiesSnapshot.mockReturnValue(null);
+    const { listReviewEnginesForVoiceTool } = await import('./reviewEnginesList');
+    const result = await listReviewEnginesForVoiceTool({ sessionId: 's1' }) as { items: readonly { engineId: string }[] };
+    expect(result.items.map(item => item.engineId)).toEqual(expect.arrayContaining(definitions.map(definition => resolveBackendTargetKeyV2({
+      kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: definition.id,
+    }))));
+    expect(result.items.map(item => item.engineId)).not.toContain('custom-acp');
+  });
+
   it('filters disabled review engines by default', async () => {
     const { listReviewEnginesForVoiceTool } = await import('./reviewEnginesList');
     const res: any = await listReviewEnginesForVoiceTool({ sessionId: 's1' });
@@ -211,7 +225,8 @@ describe('review engine voice tool', () => {
       items: readonly { engineId: string; label: string; enabled: boolean }[];
     };
 
-    expect(result.items).toContainEqual({ engineId: targetKey, label: 'Review Bot', enabled: true, capabilities: { structuredNarration: false } });
+    expect(result.items).toContainEqual({ engineId: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot', label: 'Review Bot', enabled: true, capabilities: { structuredNarration: false } });
+    expect(result.items.filter(item => item.label === 'Review Bot')).toHaveLength(1);
   });
 
   it('says which engines can narrate a walkthrough from the current Agent declaration, never from the engine id', async () => {

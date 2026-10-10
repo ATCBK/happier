@@ -1,5 +1,4 @@
-import { BackendTargetKeyV2Schema, buildBackendTargetKeyV2, convertBackendTargetRefV2ToV1, type PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { buildBackendTargetKey } from '@happier-dev/protocol/backends/targets/backendTargetRef';
+import { BackendTargetKeyV2Schema, buildBackendTargetKeyV2, readBackendTargetRefV2, type PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { readLegacyConfiguredAcpBackendId } from '@happier-dev/protocol/backends/targets/compat/customAcp';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
@@ -134,16 +133,19 @@ export function resolveExecutionRunLauncherBackendChoices(params: Readonly<{
             }),
         }).flatMap((option) => {
             const target = resolveReviewEngineTarget(option.id);
-            if (target.kind === 'backend' && target.configuredBackendId
-                && !catalogEntries.some((entry) => entry.kind === 'configuredBackend' && backendTargetKeysMatch(entry.backendTarget, target))) {
+            const catalogEntry = catalogEntries.find((entry) => backendTargetKeysMatch(entry.backendTarget, target));
+            const isConfigured = target.kind === 'agent'
+                ? Boolean(target.definitionId && readBackendTargetRefV2(target).configuredBackendId)
+                : Boolean(target.configuredBackendId);
+            if (isConfigured && catalogEntry?.kind !== 'configuredBackend') {
                 return [];
             }
-            const backendId = target.kind === 'backend' ? target.backendId : option.id;
-            const projectedAgentId = target.kind === 'backend' && target.sourceKind === 'configured'
+            const backendId = catalogEntry?.backendId ?? (target.kind === 'backend' ? target.backendId : option.id);
+            const projectedAgentId = catalogEntry?.agentId ?? (isConfigured
                 ? LEGACY_COMPAT_PRIMARY_AGENT_ID
                 : params.mergedBackendProjectionById?.[backendId]?.agentId?.trim()
                     || params.mergedProviderProjectionById?.[backendId]?.agentId?.trim()
-                    || backendId;
+                    || backendId);
             return [{
                 backendTarget: target,
                 targetKey: resolveBackendTargetKeyV2(target),
@@ -159,21 +161,14 @@ export function resolveExecutionRunLauncherBackendChoices(params: Readonly<{
         const backendId = entry.backendId;
         const catalogAgentId = entry.catalogAgentId;
         const isAvailable = entry.kind === 'configuredBackend'
-            ? availableBackendIds.has(backendId)
+            ? availableBackendIds.has(entry.backendTargetKey)
+                || availableBackendIds.has(backendId)
                 || (catalogAgentId ? availableBackendIds.has(catalogAgentId) : false)
                 || hasLegacyCompatExecutionRunAvailabilityCarrier(availableBackendIds, backendId)
-            : availableBackendIds.has(backendId);
-
-        // UI action inputs (and their protocol schemas) still use the legacy target key vocabulary
-        // (`agent:*`, `acpBackend:*`) for execution-run launcher surfaces. Keep V2 backend-target
-        // identity elsewhere (routes/settings/spawn/resume), but do not push V2 keys into action
-        // schemas that do not accept them.
-        const legacyTargetKey = entry.backendTarget.kind === 'agent'
-            ? buildBackendTargetKey({ kind: 'builtInAgent', agentId: entry.agentId })
-            : buildBackendTargetKey(convertBackendTargetRefV2ToV1(entry.backendTarget));
+            : availableBackendIds.has(entry.backendTargetKey) || availableBackendIds.has(backendId);
         return {
             backendTarget: entry.backendTarget,
-            targetKey: legacyTargetKey,
+            targetKey: entry.backendTargetKey,
             backendId,
             agentId: entry.agentId,
             title: entry.title,

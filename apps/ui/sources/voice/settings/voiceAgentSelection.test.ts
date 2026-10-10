@@ -5,7 +5,7 @@ import { readLocalConversationVoiceSettings, voiceSettingsDefaults, writeLocalCo
 import { applyVoiceAgentSelection, type VoiceAgentSelectionChoice } from './voiceAgentSelection';
 import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture } from '@/dev/testkit/harness/providerSettingsHarness';
 import { resolveVoiceAgentCatalogSelectionV1, voiceAgentCatalogSelectionValueV1 } from '@happier-dev/protocol/voice/settings/voiceAgentSelection';
-import { getResolvedAgentCatalogEntries } from '@/agents/backendCatalog/agentCatalogProjection';
+import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 const externalChoice = {
@@ -24,9 +24,9 @@ describe('atomic Voice Agent selection', () => {
         const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: ['first', 'second'].map(id => ({
             id, name: id, title: id, command: 'fixture-agent', createdAt: 0, updatedAt: 0,
         })) });
-        const entries = getResolvedAgentCatalogEntries({ enabledAgentIds: [], acpCatalogSnapshot: {
+        const entries = getResolvedBackendCatalogEntries({ enabledAgentIds: ['custom-acp'], acpCatalogSnapshot: {
             status: 'ready', record, revision: 1,
-        } }).filter(entry => entry.backendTargetKey?.includes(':definition:'));
+        } }).map(entry => entry.agentCatalogEntry);
         expect(entries).toHaveLength(2);
         const second = entries[1]!;
         expect(voiceAgentCatalogSelectionValueV1(entries[0]!)).not.toBe(voiceAgentCatalogSelectionValueV1(second));

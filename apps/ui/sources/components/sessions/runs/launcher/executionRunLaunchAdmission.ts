@@ -3,7 +3,7 @@ import type { Settings } from '@/sync/domains/settings/settings';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { ResolvedSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import type { ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
-import type { PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { readBackendTargetRefV2, type PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { getAcpCatalogSnapshot } from '@/sync/store/settings/acpCatalogSnapshot';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { backendTargetKeysMatch } from '@/agents/backendCatalog/backendTargetKeyV2';
@@ -20,7 +20,9 @@ function assertConfiguredAcpTargetsCurrent(
     scope: ServerAccountScopeLifetime['scope'],
     targets: readonly (PersistedBackendTargetRefV2 | null | undefined)[],
 ): void {
-    const configuredTargets = targets.filter((target) => target?.kind === 'backend' && target.configuredBackendId);
+    const configuredTargets = targets.filter((target) => target && (target.kind === 'agent'
+        ? target.definitionId && readBackendTargetRefV2(target).configuredBackendId
+        : target.configuredBackendId));
     if (configuredTargets.length === 0) return;
     const snapshot = getAcpCatalogSnapshot(scope);
     const refuse = () => { throw Object.assign(new Error(t('common.unavailable')), { code: 'acp_catalog_unavailable' }); };

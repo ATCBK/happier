@@ -39,6 +39,7 @@ function normalizeNonEmptyString(value: unknown): string | null {
 
 function resolveTaskRunnerBackendTarget(entry: ResolvedBackendCatalogEntry): BackendTargetRefV2 {
   if (entry.backendTarget.kind === 'backend') return entry.backendTarget;
+  if (entry.backendTarget.definitionId) return readBackendTargetRefV2(entry.backendTarget);
   return entry.compatibilityBackendTargets?.[0] ?? {
     kind: 'backend',
     backendId: entry.backendId,

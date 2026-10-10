@@ -7,11 +7,15 @@ import { CANONICAL_AGENT_IDS } from '@/agents/registry/registryCore';
 /** Canonical catalog order, minus Agents the catalog marks unselectable. */
 const SELECTABLE_AGENT_IDS_IN_DISPLAY_ORDER = [
     'claude', 'codex', 'opencode', 'antigravity', 'gemini', 'grok', 'auggie', 'qwen', 'kimi',
-    'kilo', 'kiro', 'devin', 'fx', 'droid', 'cursor', 'ohMyPi', 'pi', 'copilot',
+    'kilo', 'kiro', 'devin', 'fx', 'droid', 'codebuddy', 'cursor', 'ohMyPi', 'pi', 'copilot',
 ] as const;
 const AVAILABLE_SELECTABLE_AGENT_IDS = SELECTABLE_AGENT_IDS_IN_DISPLAY_ORDER.filter((id) => CANONICAL_AGENT_IDS.includes(id));
 
 describe('agents/enabled', () => {
+    it('never treats an abstract Custom ACP contribution as an enabled executable Agent', () => {
+        expect(isAgentEnabled({ agentId: 'custom-acp', backendEnabledByTargetKey: {} })).toBe(false);
+        expect(getEnabledAgentIds({ backendEnabledByTargetKey: {} })).not.toContain('custom-acp');
+    });
     it.runIf(CANONICAL_AGENT_IDS.includes('antigravity'))('keeps a live-negotiated agent enabled without static model facts', () => {
         expect(getEnabledAgentIds({ backendEnabledByTargetKey: {} })).toContain('antigravity');
     });

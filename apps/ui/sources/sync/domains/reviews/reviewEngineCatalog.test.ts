@@ -3,6 +3,39 @@ import { describe, expect, it } from 'vitest';
 import { buildAvailableReviewEngineOptions, resolveReviewEngineTarget } from './reviewEngineCatalog';
 
 describe('buildAvailableReviewEngineOptions', () => {
+  it('matches canonical native snapshot facts without duplicating the seeded Agent', () => {
+    const options = buildAvailableReviewEngineOptions({ enabledAgentIds: ['claude'], scope: 'paths', resolveAgentLabel: id => id,
+      executionRunsBackends: { 'agent:happier.agent.claude/claude': {
+        available: true, intents: ['review'], reviewScopes: ['paths'], title: 'Claude review',
+      } } });
+    expect(options).toEqual([{ id: 'claude', label: 'Claude review' }]);
+  });
+  it('collapses old and current configured snapshot aliases by definition identity', () => {
+    const key = 'agent:happier.agent.custom-acp/custom-acp:definition:review';
+    const options = buildAvailableReviewEngineOptions({ enabledAgentIds: [key], resolveAgentLabel: id => id,
+      executionRunsBackends: {
+        'backend:review:configured:review': { available: true, intents: ['review'], title: 'Review' },
+        'acpBackend:review': { available: true, intents: ['review'], title: 'Review' },
+        [key]: { available: true, intents: ['review'], title: 'Review' },
+      } });
+    expect(options).toEqual([{ id: key, label: 'Review' }]);
+  });
+  it('omits abstract declaration containers while retaining exact configured targets and discovered Agents', () => {
+    const target = 'agent:happier.agent.custom-acp/custom-acp:definition:review';
+    const options = buildAvailableReviewEngineOptions({
+      enabledAgentIds: ['claude', 'custom-acp', target],
+      resolveAgentLabel: id => id,
+      executionRunsBackends: {
+        'custom-acp': { available: true, intents: ['review'] },
+        customAcp: { available: true, intents: ['review'] },
+        'agent:happier.agent.custom-acp/custom-acp': { available: true, intents: ['review'] },
+        'happier.agent.custom-acp/custom-acp': { available: true, intents: ['review'] },
+        [target]: { available: true, intents: ['review'] },
+        'acme.review/reviewer': { available: true, intents: ['review'] },
+      },
+    });
+    expect(options.map(option => option.id)).toEqual(['claude', target, 'acme.review/reviewer']);
+  });
   it('preserves configured review target keys while routing catalog Agent ids as backends', () => {
     expect(resolveReviewEngineTarget('backend:review-bot:configured:review-bot')).toEqual({
       kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured',
@@ -84,7 +117,7 @@ describe('buildAvailableReviewEngineOptions', () => {
     expect(opts.map((option) => option.id)).toEqual(['claude']);
   });
 
-  it('falls back to the backend id when a discovered review backend has no canonical agent label', () => {
+  it('does not surface a historical abstract transport container as an executable review engine', () => {
     const opts = buildAvailableReviewEngineOptions({
       enabledAgentIds: ['claude'],
       // An Agent with no bundled core has no translated display name, so the
@@ -99,7 +132,6 @@ describe('buildAvailableReviewEngineOptions', () => {
 
     expect(opts).toEqual([
       { id: 'claude', label: 'agent:claude' },
-      { id: 'customAcp', label: 'customAcp' },
     ]);
   });
 

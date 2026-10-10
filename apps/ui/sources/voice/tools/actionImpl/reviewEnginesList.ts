@@ -1,4 +1,4 @@
-import { AGENT_IDS } from '@/agents/catalog/catalog';
+import { listExecutableAgentUniverseIds } from '@/agents/catalog/agentUniverse';
 import { readCurrentProjectedAgentCapabilities } from '@/agents/backendCatalog/currentAgentCapabilities';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
@@ -67,7 +67,7 @@ export async function listReviewEnginesForVoiceTool(params: Readonly<{ sessionId
     : null;
 
   const resolvedBackendEntries = getResolvedBackendCatalogEntries({
-    enabledAgentIds: Array.from(AGENT_IDS),
+    enabledAgentIds: listExecutableAgentUniverseIds(),
     acpCatalogSnapshot,
     mergedProviderProjectionById: daemonMergedProjectionInputs?.mergedProviderProjectionById ?? null,
     mergedBackendProjectionById: daemonMergedProjectionInputs?.mergedBackendProjectionById ?? null,
@@ -81,17 +81,17 @@ export async function listReviewEnginesForVoiceTool(params: Readonly<{ sessionId
   const enabledTargetKeyByEngineId = new Map<string, string>(
     resolvedBackendEntries
       .filter((entry) => typeof entry.backendId === 'string' && entry.backendId.trim().length > 0)
-      .map((entry) => [
-        String(entry.backendId),
-        entry.backendTargetKey,
-      ] as const),
+      .flatMap((entry) => [[entry.backendId, entry.backendTargetKey] as const,
+        [entry.backendTargetKey, entry.backendTargetKey] as const]),
   );
 
   const backendEnabledByTargetKey = params.backendEnabledByTargetKey === undefined ? state.settings?.backendEnabledByTargetKey ?? null : params.backendEnabledByTargetKey;
   const includeDisabled = params.includeDisabled === true;
-  const agentIds = includeDisabled
-    ? Array.from(AGENT_IDS)
-    : Array.from(AGENT_IDS).filter((id) => backendEnabledByTargetKey?.[resolveBackendTargetKeyV2({ kind: 'backend', backendId: id })] !== false);
+  const agentIds = resolvedBackendEntries
+    .filter(entry => includeDisabled || backendEnabledByTargetKey?.[entry.backendTargetKey] !== false)
+    .map(entry => entry.kind === 'configuredBackend'
+      ? entry.backendTargetKey
+      : entry.agentId);
   const items = buildAvailableReviewEngineOptions({
     enabledAgentIds: agentIds,
     executionRunsBackends,
@@ -99,8 +99,8 @@ export async function listReviewEnginesForVoiceTool(params: Readonly<{ sessionId
     resolveAgentLabel: (agentId) => labelByAgentId.get(agentId) ?? agentId,
   })
     .map((item) => {
-      const defaultTargetKey = resolveBackendTargetKeyV2(resolveReviewEngineTarget(item.id));
-      const effectiveTargetKey = enabledTargetKeyByEngineId.get(item.id) ?? defaultTargetKey;
+      const effectiveTargetKey = enabledTargetKeyByEngineId.get(item.id)
+        ?? resolveBackendTargetKeyV2(resolveReviewEngineTarget(item.id));
       const currentAgent = readCurrentProjectedAgentCapabilities({
         projection: daemonMergedProjectionInputs?.pluginProjectionV2,
         agentId: item.id,
