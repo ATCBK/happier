@@ -3,16 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { storage } from '@/sync/domains/state/storage';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { activatePendingQueueScope } from '../../engine/pending/pendingQueueV2.testHelpers';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 beforeEach(async () => {
     await loadSyncSingletonForTests();
     storage.setState(storage.getInitialState(), true);
     await activatePendingQueueScope({ serverId: 'server_1', accountId: 'account_a' });
+    vi.spyOn(Date, 'now').mockReturnValue(200);
 });
 
 afterEach(() => {
     storage.setState(storage.getInitialState(), true);
     vi.clearAllMocks();
+    vi.restoreAllMocks();
 });
 
 function createHarness(_createSessionsDomain: unknown, createReducer: typeof import('@happier-dev/session-core/reducer').createReducer) {
@@ -40,8 +43,9 @@ describe('sessions domain: no voice side effects', () => {
         const { get, domain } = createHarness(createSessionsDomain, createReducer);
 
         domain.applySessions([
-            {
+            createSessionFixture({
                 id: 's1',
+                serverId: 'server_1',
                 seq: 0,
                 createdAt: 1,
                 updatedAt: 1,
@@ -53,13 +57,14 @@ describe('sessions domain: no voice side effects', () => {
                 agentStateVersion: 0,
                 thinking: false,
                 thinkingAt: 0,
-                presence: 1,
-            } as any,
+                presence: 'online',
+            }),
         ]);
 
         domain.applySessions([
-            {
+            createSessionFixture({
                 id: 's1',
+                serverId: 'server_1',
                 seq: 0,
                 createdAt: 1,
                 updatedAt: 2,
@@ -79,8 +84,8 @@ describe('sessions domain: no voice side effects', () => {
                 agentStateVersion: 1,
                 thinking: false,
                 thinkingAt: 0,
-                presence: 2,
-            } as any,
+                presence: 'online',
+            }),
         ]);
 
         const nextState: any = get();
@@ -130,8 +135,9 @@ describe('sessions domain: no voice side effects', () => {
         } as any);
 
         const state: any = get();
-        state.sessions.s1 = {
+        state.sessions.s1 = createSessionFixture({
             id: 's1',
+            serverId: 'server_1',
             seq: 0,
             createdAt: 1,
             updatedAt: 1,
@@ -154,7 +160,7 @@ describe('sessions domain: no voice side effects', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 'online',
-        };
+        });
         state.sessionMessages.s1 = {
             messageIdsOldestFirst: ['m1'],
             messagesById: {
@@ -212,8 +218,9 @@ describe('sessions domain: no voice side effects', () => {
         state.ordinarySessionListMembershipByServerId.server_1 = ['s1'];
 
         domain.applySessions([
-            {
+            createSessionFixture({
                 id: 's1',
+                serverId: 'server_1',
                 seq: 0,
                 createdAt: 1,
                 updatedAt: 2,
@@ -236,7 +243,7 @@ describe('sessions domain: no voice side effects', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 'online',
-            } as any,
+            }),
         ]);
 
         const nextState: any = get();
