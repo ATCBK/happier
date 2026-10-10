@@ -9,6 +9,10 @@ import * as machineTransport from '@/session/transport/rpc/machineRpc';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createProjectDefinitionAction, registerProjectDefinitionHandlers } from '@/rpc/handlers/projectDefinitions';
 import type { RpcHandlerContext } from '@/api/rpc/types';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { reloadConfiguration } from '@/configuration';
+import { updateSettings } from '@/persistence';
+import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 
 import {
   type MachineLiveStreamFrameV1,
@@ -196,14 +200,17 @@ describe('createDaemonMachineBootstrapRuntime', () => {
       vi.restoreAllMocks();
     }
   });
-  it('reads the personal SOURCE manifest through the real exact-Home Action and refuses shared, unproved or retired credential custody', async () => {
+  it('reads the personal SOURCE manifest through portable Home admission and refuses lost binding or credential custody', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finite-source-inspection-'));
-    const serverId = 'source-home';
+    const home = await mkdtemp(join(tmpdir(), 'finite-source-home-'));
+    const scope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
+    const serverId = 'source-local-profile';
+    const homeId = 'srv_sourceHome';
     const serverHttpBaseUrl = 'https://source-home.invalid';
     const accountId = 'source-account';
     const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
     const credentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
-    const source = { id: 'source-ref', serverId, machineId: 'source-machine', rootPath: root, projectKey: 'project', createdAtMs: 1 };
+    const source = { id: 'source-ref', serverId: homeId, machineId: 'source-machine', rootPath: root, projectKey: 'project', createdAtMs: 1 };
     let current = true;
     let custodian: string | undefined = accountId;
     let retireDuringMachineRead = false;
@@ -211,6 +218,13 @@ describe('createDaemonMachineBootstrapRuntime', () => {
     let malformedReply = false;
     let issued = 0;
     try {
+      scope.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: serverId });
+      reloadConfiguration();
+      const profile = { id: serverId, name: 'Source', serverUrl: serverHttpBaseUrl, webappUrl: serverHttpBaseUrl,
+        createdAt: 1, updatedAt: 1, lastUsedAt: 1, homeConnectionDescriptorAuthority: 'exact' as const,
+        homeConnectionDescriptor: HomeConnectionDescriptorV1Schema.parse({ v: 1, homeServerIdentityId: homeId,
+          canonicalServerUrl: serverHttpBaseUrl, revision: 1, endpoints: [{ kind: 'https', url: serverHttpBaseUrl }] }) };
+      await updateSettings(settings => ({ ...settings, activeServerId: serverId, servers: { [serverId]: profile } }));
       await mkdir(join(root, '.happier'));
       await writeFile(join(root, '.happier/project.json'), JSON.stringify({ version: 1,
         scripts: { check: { source: { kind: 'command', command: 'must-not-run' }, execution: 'portable',
@@ -238,7 +252,7 @@ describe('createDaemonMachineBootstrapRuntime', () => {
       registerProjectDefinitionHandlers({ machineId: source.machineId,
         rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } },
         actionExecutor: createActionExecutor({ projectDefinitionAction: createProjectDefinitionAction({
-          serverId, machineId: source.machineId, workingDirectory: root,
+          serverId: homeId, machineId: source.machineId, workingDirectory: root,
           accessPolicy: { kind: 'restrictedRoots', roots: [root] },
         }) }),
       });
@@ -263,6 +277,12 @@ describe('createDaemonMachineBootstrapRuntime', () => {
         scripts: { check: { execution: 'portable', memoryDemand: { bytes: 123 } } },
       } } });
       expect(issued).toBe(1);
+      for (const scenario of ['ambiguous', 'retired'] as const) {
+        await updateSettings(settings => ({ ...settings, servers: scenario === 'ambiguous'
+          ? { [serverId]: profile, duplicate: { ...profile, id: 'duplicate' } } : {} }));
+        await expect(inspect({ source, signal })).rejects.toMatchObject({ code: 'target_mismatch' });
+      }
+      await updateSettings(settings => ({ ...settings, servers: { [serverId]: profile } }));
       for (const unproved of ['foreign-account', undefined]) {
         custodian = unproved;
         await expect(inspect({ source, signal })).rejects.toMatchObject({ code: 'project_requester_credentials_unavailable' });
@@ -285,7 +305,9 @@ describe('createDaemonMachineBootstrapRuntime', () => {
       await expect(inspect({ source, signal })).rejects.toMatchObject({ code: 'project_requester_credentials_unavailable' });
     } finally {
       vi.restoreAllMocks();
+      scope.restore(); reloadConfiguration();
       await rm(root, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   });
 

@@ -108,12 +108,14 @@ describe('Source Actions through the CLI Account front door', () => {
         expect(await actions.projectSourcesUpdate!(input, context)).toMatchObject({ ok: true, canManage: true });
         expect(artifactRequests).toEqual([`${serverUrl}/v1/artifacts/${artifactId}`]);
         write.mockClear(); artifactRequests.length = 0;
+        expect(await carrier.requesterAccountProjection!.readArtifact({ kind: 'doc', serverId: 'srv_wrongSource', artifactId })).toBeNull();
         expect(await actions.projectSourcesUpdate!({ ...input, patch: { attachment: { ...input.patch.attachment,
           attachment: { ...input.patch.attachment.attachment, ref: { ...input.patch.attachment.attachment.ref, serverId: 'srv_wrongSource' } } } } }, context))
           .toEqual({ ok: false, error: 'artifact_unavailable' });
         for (const scenario of ['ambiguous', 'retired'] as const) {
           await updateSettings(settings => ({ ...settings, servers: scenario === 'retired' ? {}
             : { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } } }));
+          expect(await carrier.requesterAccountProjection!.readArtifact({ kind: 'doc', serverId: homeId, artifactId })).toBeNull();
           expect(await actions.projectSourcesUpdate!(input, context)).toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
         }
         await updateSettings(settings => ({ ...settings, servers: { [profileId]: profile } }));
@@ -294,10 +296,15 @@ describe('Source Actions through the CLI Account front door', () => {
         // Real profile resolution, credentials and Artifact codecs run above HTTP/FS peers.
         async function home(id: string, actorToken: string) {
           const requests: string[] = [];
+          const probeAuthorization: Array<string | undefined> = [];
           let kind = 'widget-area-layout.v1';
           let status = 200;
           const peer = createServer((request, response) => {
-            requests.push(request.url ?? '/');
+            // The real loopback HTTP listener can receive anonymous origin
+            // probes. Keep protected Artifact requests separate from those
+            // non-disclosing 403s rather than counting incidental probes.
+            if (request.url === '/') probeAuthorization.push(request.headers.authorization);
+            else requests.push(request.url ?? '/');
             const allowed = request.headers.authorization === `Bearer ${actorToken}` && request.url === `/v1/artifacts/${artifactId}`;
             response.writeHead(allowed ? status : 403, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify(allowed && status === 200 ? {
@@ -313,7 +320,7 @@ describe('Source Actions through the CLI Account front door', () => {
           const url = `http://127.0.0.1:${address.port}`;
           await mkdir(join(taskHome, 'servers', id), { recursive: true });
           await writeFile(join(taskHome, 'servers', id, 'access.key'), JSON.stringify({ token: actorToken }));
-          return { id, url, requests, setKind: (value: string) => { kind = value; }, setStatus: (value: number) => { status = value; } };
+          return { id, url, requests, probeAuthorization, setKind: (value: string) => { kind = value; }, setStatus: (value: number) => { status = value; } };
         }
         const local = await home('source-home', token);
         const foreign = await home('foreign-home', foreignToken);
@@ -367,6 +374,7 @@ describe('Source Actions through the CLI Account front door', () => {
           externalActionExecutionAuthorization: authorization, externalActionTarget: target }))
           .toEqual({ ok: false, error: 'artifact_unavailable' });
         expect(foreign.requests).toHaveLength(3);
+        for (const authorization of [...local.probeAuthorization, ...foreign.probeAuthorization]) expect(authorization).toBeUndefined();
         expect(write).not.toHaveBeenCalled();
       } finally {
         vi.unstubAllEnvs();

@@ -7,21 +7,23 @@ import { readProjectRuntimeRequesterRefusal, type ProjectFiniteActionRuntime } f
 import { resolveProjectSetupAcceptedWorkspace } from './projectSetupAcceptedWorkspace';
 import { inspectProjectSetupReadiness } from './projectSetupPreparation';
 import { resolveProjectRequesterSecretEnvironment } from './projectSetupRequesterInputs';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 /** Passive review uses the same captured requester, current target, and native owner as execution. */
 export async function inspectProjectSetupReadinessFromRuntime(input: Readonly<{
     runtime: ProjectFiniteActionRuntime; ingress: RpcHandlerContext; workspace: ProjectDefinitionWorkspace; context: ActionExecutorContext;
 }>): Promise<ProjectSetupReadinessV1> {
-    const { runtime, ingress } = input;
+    const { runtime: authorityRuntime, ingress } = input;
+    const runtime = { ...authorityRuntime, serverId: input.workspace.serverId };
     const signal = input.context.signal ? AbortSignal.any([ingress.signal, input.context.signal]) : ingress.signal;
     let releaseRequester: (() => Promise<void>) | undefined;
     const unknown = (code: string): ProjectSetupReadinessV1 => ({ kind: 'unknown', code });
     const current = async () => !signal.aborted && (!runtime.isCurrent || await runtime.isCurrent())
         && Boolean(ingress.verifyMachineAdmissionCurrent && await ingress.verifyMachineAdmissionCurrent());
     try {
-        const refused = await readProjectRuntimeRequesterRefusal(runtime, ingress);
+        const refused = await readProjectRuntimeRequesterRefusal(authorityRuntime, ingress);
         if (refused) return unknown(refused.errorCode);
-        if (input.workspace.serverId !== runtime.serverId || input.workspace.machineId !== runtime.machineId
+        if (!await isServerProfileHomeIdentity(authorityRuntime.serverId, input.workspace.serverId) || input.workspace.machineId !== runtime.machineId
             || ingress.machineAdmission?.machineId !== runtime.machineId) return unknown('target_mismatch');
         if (!await current()) return unknown('project_requester_credentials_unavailable');
         releaseRequester = readRequesterAccountActionContext(runtime.accountAuthorization)?.retain();

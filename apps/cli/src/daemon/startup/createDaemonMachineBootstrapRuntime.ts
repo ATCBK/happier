@@ -59,6 +59,7 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readInstallationIdentityIfExistsSync } from '../identity/store';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 /** The installed host's passive source Action composition; it never reads a remote OS path. */
 export function createProjectFiniteSourceManifestInspector(params: Readonly<{
@@ -77,7 +78,7 @@ export function createProjectFiniteSourceManifestInspector(params: Readonly<{
       if (!await params.isCurrent()) throw Object.assign(new Error('project_requester_credentials_unavailable'), { code: 'project_requester_credentials_unavailable' });
       if (sourceSignal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
     };
-    if (source.serverId !== params.serverId) throw Object.assign(new Error('target_mismatch'), { code: 'target_mismatch' });
+    if (!await isServerProfileHomeIdentity(params.serverId, source.serverId)) throw Object.assign(new Error('target_mismatch'), { code: 'target_mismatch' });
     const assertSourceCustody = async () => {
       await assertSourceCurrent();
       let machine: Awaited<ReturnType<ApiClient['getMachine']>>;

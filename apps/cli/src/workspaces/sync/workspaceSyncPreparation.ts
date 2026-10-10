@@ -13,6 +13,7 @@ import { readWorkspaceSyncRootObjectIdentity } from './workspaceSyncRootIdentity
 import { readWorkspaceSyncChildMachineFacts } from './workspaceSyncTargetAuthority';
 import { managedDevcontainerChildProjectionsEqualV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 /** Only the incumbent new-operation prerequisite may produce this refusal, before Sync effects. */
 export class WorkspaceSyncInitialPreparationRefusal extends Error {
@@ -75,13 +76,16 @@ export function createWorkspaceSyncWorkerPreparation(input: Readonly<{
   prepareBetween(request: Readonly<{ sourceWorkspaceRefId: string; targetWorkspaceRefId: string }>, signal: AbortSignal): Promise<WorkspaceSyncPrepareBetweenResultV1>;
 }>) {
   const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
-  const readCurrent = (signal: AbortSignal, sourceWorkspaceRefId: string) =>
-    readWorkspaceSyncWorkerTargetSnapshot({ ...input, signal, sourceWorkspaceRefId });
+  const readCurrent = async (signal: AbortSignal, source: WorkspaceRefV1) => {
+    if (!await isServerProfileHomeIdentity(input.serverId, source.serverId)) fail('target_mismatch');
+    return await readWorkspaceSyncWorkerTargetSnapshot({ ...input, serverId: source.serverId,
+      signal, sourceWorkspaceRefId: source.id });
+  };
   return {
     resolveWorkerTarget: async ({ source, signal }: Readonly<{ source: WorkspaceRefV1; signal: AbortSignal }>): Promise<WorkspaceSyncWorkerTargetBasis> => {
       if (!await input.isCurrent()) fail('project_requester_credentials_unavailable');
-      const snapshot = await readCurrent(signal, source.id);
-      const basis = resolveWorkspaceSyncWorkerTarget({ serverId: input.serverId,
+      const snapshot = await readCurrent(signal, source);
+      const basis = resolveWorkspaceSyncWorkerTarget({ serverId: source.serverId,
         sourceWorkspaceRefId: source.id, targetMachineId: input.targetMachineId,
         workspaceRefs: snapshot.workspaceRefs, relationships: snapshot.relationships, childMachines: snapshot.childMachines });
       if (!basis.ok) return fail(basis.errorCode);
@@ -96,11 +100,11 @@ export function createWorkspaceSyncWorkerPreparation(input: Readonly<{
       if (!await input.isCurrent()) fail('project_requester_credentials_unavailable');
       if (choice.kind !== 'workers') return;
       if (!basis) return fail('workspace_sync_source_unavailable');
-      assertWorkspaceSyncWorkerTargetCurrent(basis, { ...await readCurrent(signal, basis.source.id), serverId: input.serverId });
+      assertWorkspaceSyncWorkerTargetCurrent(basis, { ...await readCurrent(signal, basis.source), serverId: basis.source.serverId });
       await readWorkspaceSyncRootObjectIdentity(basis.target.rootPath);
       const prepared = await input.prepareBetween({ sourceWorkspaceRefId: basis.source.id, targetWorkspaceRefId: basis.target.id }, signal);
       if (!prepared.ok) return fail(prepared.errorCode);
-      assertWorkspaceSyncWorkerTargetCurrent(basis, { ...await readCurrent(signal, basis.source.id), serverId: input.serverId });
+      assertWorkspaceSyncWorkerTargetCurrent(basis, { ...await readCurrent(signal, basis.source), serverId: basis.source.serverId });
       if (!await input.isCurrent()) fail('project_requester_credentials_unavailable');
       return prepared;
     },

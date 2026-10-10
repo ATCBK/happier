@@ -67,6 +67,10 @@ import { createProductionPluginInvocationServiceOwners } from '@/plugins/runtime
 import { resolveManifestHostAccessRequestsForQualifiedContribution } from '@/plugins/runtime/hostAccess/manifestRequests';
 import { pixiPlugin, pixiRuntime, pixiAdapter, importedPixiEnvironment } from '../../../../../../../packages/plugin-sdk/fixtures/external-targeted-packages/project-native-source';
 import * as processTreeBoundary from '@/agent/runtime/process/killProcessTree';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { reloadConfiguration } from '@/configuration';
+import { updateSettings } from '@/persistence';
+import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 
 class ObservedSetupPty implements PtyProcess {
     readonly pid = 3456;
@@ -84,7 +88,7 @@ describe('accepted Project Service declaration starter', () => {
     const cleanups: Array<() => Promise<void>> = [];
     afterEach(async () => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot(); await Promise.all(cleanups.splice(0).map(cleanup => cleanup())); });
 
-    async function fixture(setup = false, source?: unknown, finiteAccepting = true, workerExecution?: 'portable' | 'primary') {
+    async function fixture(setup = false, source?: unknown, finiteAccepting = true, workerExecution?: 'portable' | 'primary', profileId = 'home', homeId = profileId) {
         const root = await mkdtemp(join(tmpdir(), 'happier-project-service-'));
         await mkdir(join(root, '.happier'));
         const command = `${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 1000)"`;
@@ -92,7 +96,7 @@ describe('accepted Project Service declaration starter', () => {
             ...(workerExecution ? { execution: workerExecution } : {}) } },
             ...(setup ? { workspace: { setup: [{ kind: 'command', command: 'echo setup' }] } } : {}) });
         await writeFile(join(root, '.happier/project.json'), JSON.stringify(manifest));
-        const workspace = { id: 'accepted', serverId: 'home', machineId: 'machine', rootPath: root, createdAtMs: 1, projectKey: 'project' };
+        const workspace = { id: 'accepted', serverId: homeId, machineId: 'machine', rootPath: root, createdAtMs: 1, projectKey: 'project' };
         const targetRoot = workerExecution ? await mkdtemp(join(tmpdir(), 'happier-project-service-target-')) : root;
         const targetWorkspace = workerExecution ? { ...workspace, id: 'worker-ref', machineId: 'worker-machine', rootPath: targetRoot } : workspace;
         const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`, encryption: null,
@@ -123,10 +127,10 @@ describe('accepted Project Service declaration starter', () => {
         let trustedSetupDigest: string | null = null;
         const post = vi.spyOn(axios, 'post').mockImplementation(async url => {
             if (String(url).endsWith('/project-trust/read')) return { status: 200, data: trustedSetupDigest === null ? { status: 'absent' }
-                : { status: 'present', revision: 1, content: { t: 'plain', v: { project: { serverId: 'home', projectId: 'project' },
+                : { status: 'present', revision: 1, content: { t: 'plain', v: { project: { serverId: homeId, projectId: 'project' },
                     reviewedEffectDigest: trustedSetupDigest, approvedAtMs: 1 } } } };
             const refs = workerExecution ? [workspace, targetWorkspace] : [workspace];
-            const rows: ProjectAccountRowV1[] = refs.map(value => { const key = { kind: 'workspace-ref' as const, serverId: 'home', id: value.id };
+            const rows: ProjectAccountRowV1[] = refs.map(value => { const key = { kind: 'workspace-ref' as const, serverId: homeId, id: value.id };
                 return { key, revision: 1, content: { t: 'plain', v: { key, value } } }; });
             if (workerExecution) {
                 const key = { kind: 'relationship-graph' as const };
@@ -148,7 +152,7 @@ describe('accepted Project Service declaration starter', () => {
             config: { maxSessions: 10, idleTimeoutMs: 60_000, bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
                 bufferRetentionMs: 600_000, urlParseBufferLimit: 32_768, maxWriteChunkBytes: 16_384, defaultCols: 80, defaultRows: 24 }, env: {}, platform: 'linux' });
         const operationRuntime = createHostActionOperationRuntime({ machineId: targetWorkspace.machineId,
-            custodyBinding: { serverId: 'home', installationId: 'installation' }, resolveAccountId: async () => 'owner',
+            custodyBinding: { serverId: homeId, installationId: 'installation' }, resolveAccountId: async () => 'owner',
             ...(workerExecution ? { generateOperationId: () => 'setup-operation' } : {}) });
         const owner = createManagedServicesOwner({ processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
             // Plugin dependency installation is unreachable for literal Project commands.
@@ -160,16 +164,16 @@ describe('accepted Project Service declaration starter', () => {
             verifyMachineAdmissionCurrent: async () => true };
         let nativeTool: Readonly<{ executablePath: string; args?: readonly string[] }> | null = null;
         const admissionDrain = createDaemonAdmissionDrain();
-        const runtime: ProjectFiniteActionRuntime = { serverId: 'home', machineId: targetWorkspace.machineId, accountId: 'owner', credentials,
+        const runtime: ProjectFiniteActionRuntime = { serverId: profileId, machineId: targetWorkspace.machineId, accountId: 'owner', credentials,
             serverHttpBaseUrl: 'https://home.example', isCurrent: async () => true, operationRuntime, terminalSessions,
             workerAdmission: createProjectWorkerAdmission({ machineId: targetWorkspace.machineId, admissionDrain, readPolicy: async () => ({ status: 'ready', policy: { accepting: finiteAccepting, runAtMost: null }, source: 'stored', metadataVersion: 1 }) }),
             resolveWorkspaceExecutionConfig: async () => config, nativeIo: { resolveTool: async () => nativeTool },
             environmentIo: createProjectNativeEnvironmentIoForHost({ resolveTool: async () => null }),
             platform: 'linux', arch: 'x64', hostEnvironment: {}, successHomeDir: join(targetRoot, 'success'),
-            ...(workerExecution ? createWorkspaceSyncWorkerPreparation({ serverId: 'home', serverHttpBaseUrl: 'https://home.example',
+            ...(workerExecution ? createWorkspaceSyncWorkerPreparation({ serverId: profileId, serverHttpBaseUrl: 'https://home.example',
                 targetMachineId: targetWorkspace.machineId, credentials, isCurrent: async () => true,
                 // The controller's file-transfer/flush transport is the replaced boundary. Route/currentness and clean facts stay real.
-                prepareBetween: (request, signal) => prepareWorkspaceSyncBetween({ ...request, serverId: 'home', signal,
+                prepareBetween: (request, signal) => prepareWorkspaceSyncBetween({ ...request, serverId: homeId, signal,
                     readCurrent: async () => ({ workspaceRefs: [workspace, targetWorkspace], relationships: relationshipCurrent ? [relationship] : [] }),
                     flush: async () => {
                         copies++;
@@ -187,8 +191,8 @@ describe('accepted Project Service declaration starter', () => {
             registerProjectDefinitionHandlers({ machineId: workspace.machineId,
                 rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } },
                 actionExecutor: createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
-                    serverId: 'home', serverHttpBaseUrl: 'https://home.example', sessionId: 'cli-global', mode: 'plain', ctx: null,
-                    projectDefinitionAction: createProjectDefinitionAction({ serverId: 'home',
+                    serverId: profileId, serverHttpBaseUrl: 'https://home.example', sessionId: 'cli-global', mode: 'plain', ctx: null,
+                    projectDefinitionAction: createProjectDefinitionAction({ serverId: profileId,
                         machineId: workspace.machineId, workingDirectory: root, accessPolicy: { kind: 'restrictedRoots', roots: [root] } }) })) });
             vi.spyOn(machineTransport, 'callExactMachineRpc').mockImplementation(async request => {
                 expect(request.machineId).toBe(workspace.machineId);
@@ -197,7 +201,7 @@ describe('accepted Project Service declaration starter', () => {
                 return await handler(request.request, { signal: request.signal ?? ingress.signal });
             });
             const inspectSourceProjectManifest = createProjectFiniteSourceManifestInspector({ api: await ApiClient.create(credentials),
-                credentials, serverId: 'home', serverHttpBaseUrl: 'https://home.example', accountId: 'owner', ingress, isCurrent: async () => true });
+                credentials, serverId: profileId, serverHttpBaseUrl: 'https://home.example', accountId: 'owner', ingress, isCurrent: async () => true });
             Object.assign(runtime, { inspectSourceProjectManifest });
         }
         const projectionLifetime = new AbortController();
@@ -206,9 +210,9 @@ describe('accepted Project Service declaration starter', () => {
         const targets = await discoverLocalServiceRunTargets({ roots: [], acceptedWorkspaceRefs: [workspace] });
         const target = targets.find(target => 'declaration' in target && target.declaration.selection.kind === 'manifest');
         if (!target || !('declaration' in target)) throw new Error('Fixture manifest did not produce a Service declaration');
-        const request = { machineId: targetWorkspace.machineId, targetId: target.id, workspace: { serverId: 'home', machineId: 'machine', workspaceId: workspace.id, rootPath: root }, declaration: target.declaration,
+        const request = { machineId: targetWorkspace.machineId, targetId: target.id, workspace: { serverId: homeId, machineId: 'machine', workspaceId: workspace.id, rootPath: root }, declaration: target.declaration,
             ...(workerExecution ? { choice: { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: targetWorkspace.machineId } } } : {}) };
-        const context = { authority: 'account_automation' as const, serverId: 'home', actionRequestId: 'service-request' };
+        const context = { authority: 'account_automation' as const, serverId: homeId, actionRequestId: 'service-request' };
         const history = createLocalServiceLauncherHistoryStore();
         const feed = createLocalServiceLauncherFeed({ machineId: targetWorkspace.machineId, history,
             inventoryRegistry: createLocalServiceInventoryRegistry(), previewRegistry: createLocalServicePreviewRegistry(),
@@ -224,6 +228,33 @@ describe('accepted Project Service declaration starter', () => {
             trustSetupDigest(value: string) { trustedSetupDigest = value; },
             retireRegistryProjection() { projectionLifetime.abort(); } };
     }
+
+    it('reviews portable Home worker Services through the real source/preparation ports without widening binding or custody', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'service-portable-home-'));
+        cleanups.push(() => rm(home, { recursive: true, force: true }));
+        const scope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
+        const profileId = 'service-local-profile'; const homeId = 'srv_serviceHome';
+        try {
+            scope.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: profileId }); reloadConfiguration();
+            const url = 'https://home.example';
+            const profile = { id: profileId, name: 'Service', serverUrl: url, webappUrl: url, createdAt: 1, updatedAt: 1, lastUsedAt: 1,
+                homeConnectionDescriptorAuthority: 'exact' as const, homeConnectionDescriptor: HomeConnectionDescriptorV1Schema.parse({ v: 1,
+                    homeServerIdentityId: homeId, canonicalServerUrl: url, revision: 1, endpoints: [{ kind: 'https', url }] }) };
+            await updateSettings(settings => ({ ...settings, activeServerId: profileId, servers: { [profileId]: profile } }));
+            const h = await fixture(false, undefined, true, 'portable', profileId, homeId);
+            expect(await h.routes.startTarget!(h.request, h.ingress, h.context)).toMatchObject({ status: 'denied',
+                reasonCode: 'project_service_effect_review_required', reviewedEffectDigest: expect.any(String) });
+            expect(h.runtime.serverId).toBe(profileId);
+            for (const scenario of ['wrong', 'ambiguous', 'retired'] as const) {
+                await updateSettings(settings => ({ ...settings, servers: scenario === 'ambiguous'
+                    ? { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } } : scenario === 'retired' ? {} : { [profileId]: profile } }));
+                expect(await h.routes.startTarget!({ ...h.request, workspace: { ...h.request.workspace,
+                    serverId: scenario === 'wrong' ? 'wrong-home' : homeId } }, h.ingress, h.context))
+                    .toMatchObject({ status: 'denied', reasonCode: 'target_mismatch' });
+            }
+            expect(h.copies()).toBe(0); expect(h.owner.listProjectServices()).toEqual([]);
+        } finally { scope.restore(); reloadConfiguration(); }
+    });
 
     it('starts a reviewed Service for an admitted restricted requester without owner credentials', async () => {
         const h = await fixture();

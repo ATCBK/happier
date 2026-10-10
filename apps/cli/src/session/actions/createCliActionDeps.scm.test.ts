@@ -89,6 +89,14 @@ describe('Session-backed SCM owner workspace', () => {
         }),
       });
       const sessionResponse = V2SessionByIdResponseSchema.parse({ session: rawSession });
+      const saved = await scmDiffSummaryResultStore.create({ cwd: workspace, sessionId,
+        output: ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey: 'owner-comparison',
+          metadata: { source: { kind: 'workingTree' }, sourceKey: 'owner-comparison' },
+          comparison: { id: 'owner-comparison', source: { kind: 'workingTree' }, repository: { rootPath: workspace },
+            endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } },
+          requestedOutputs: ['summary'], outputs: { summary: { state: 'complete', value: { summaryMarkdown: 'Authenticated owner workspace' } } },
+          analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] },
+        }) });
       // HTTP is the boundary. Account mode, envelope opening, workspace admission,
       // Action dispatch and the saved-result filesystem reader all remain real.
       vi.spyOn(axios, 'get').mockImplementation(async (url) => {
@@ -106,10 +114,11 @@ describe('Session-backed SCM owner workspace', () => {
       }));
       const result = await executor.execute('scm.diffSummary.result.read', {
         // Session Actions must use their owner workspace even when a different cwd is supplied.
-        cwd: '/unrelated/input-worktree', resultId: '11111111-1111-4111-8111-111111111111',
+        cwd: '/unrelated/input-worktree', resultId: saved.resultId,
       }, { surface: 'cli', defaultSessionId: sessionId });
       expect(result).toMatchObject(scenario === 'plain' || scenario === 'e2ee' || scenario === 'e2eeSession' || scenario === 'layout0'
-        ? { ok: true, result: { success: false, errorCode: 'result_not_found' } }
+        ? { ok: true, result: { success: true,
+          result: { output: { outputs: { summary: { value: { summaryMarkdown: 'Authenticated owner workspace' } } } } } } }
         : { ok: false, errorCode: 'scm_action_worktree_unavailable' });
     });
   });

@@ -12,6 +12,7 @@ import type { createProjectWorkerAdmission } from './projectWorkerAdmission';
 import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { WorkspaceSyncStatusV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 /** Exact-target host adapter. Pool selection and current access authority remain with their callers. */
 export function createProjectWorkerAction(options: Readonly<{
@@ -32,7 +33,8 @@ export function createProjectWorkerAction(options: Readonly<{
       return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
     }
     const requester = context.externalActionCredential?.accountId ?? context.runtimeAccountId;
-    if ((requester && requester !== options.accountId) || (context.serverId && context.serverId !== options.serverId)) {
+    if ((requester && requester !== options.accountId)
+      || context.serverId && !await isServerProfileHomeIdentity(options.serverId, context.serverId)) {
       return { ok: false, errorCode: 'project_worker_access_denied', error: 'project_worker_access_denied' };
     }
     if (actionId === 'projects.worker.status') {
@@ -45,7 +47,7 @@ export function createProjectWorkerAction(options: Readonly<{
         ...(observedMemory ? { observedMemory } : {}),
         ...(lastCleanSyncAtMs !== undefined ? { lastCleanSyncAtMs } : {}),
       });
-      if (request.workspace.serverId !== options.serverId) return refused('forbidden');
+      if (!await isServerProfileHomeIdentity(options.serverId, request.workspace.serverId)) return refused('forbidden');
       if (request.destination.kind !== 'machine' || request.destination.machineId !== options.machineId) {
         return refused('forbidden');
       }
@@ -53,16 +55,16 @@ export function createProjectWorkerAction(options: Readonly<{
       if (!(service ? options.isServiceExecutionLive?.() : options.isFiniteExecutionLive())) return refused('unsupported');
       try {
         signal?.throwIfAborted();
-        const snapshot = await readWorkspaceSyncWorkerTargetSnapshot({ ...options, signal,
+        const snapshot = await readWorkspaceSyncWorkerTargetSnapshot({ ...options, serverId: request.workspace.serverId, signal,
           sourceWorkspaceRefId: request.workspace.refId, targetMachineId: options.machineId }).catch(() => null);
         // A missing Home observation is unknown, not proof that this copy is absent.
         if (!snapshot) return refused('unavailable');
-        const basis = resolveWorkspaceSyncWorkerTarget({ serverId: options.serverId,
+        const basis = resolveWorkspaceSyncWorkerTarget({ serverId: request.workspace.serverId,
           sourceWorkspaceRefId: request.workspace.refId, targetMachineId: options.machineId,
           workspaceRefs: snapshot.workspaceRefs, relationships: snapshot.relationships, childMachines: snapshot.childMachines });
         if (!basis.ok) {
           if (basis.errorCode === 'worker_copy_missing') {
-            const source = resolveWorkspaceRefById(snapshot.workspaceRefs, request.workspace.refId, options.serverId);
+            const source = resolveWorkspaceRefById(snapshot.workspaceRefs, request.workspace.refId, request.workspace.serverId);
             if (source) return { ...refused('worker_copy_missing'), workerCopy: {
               serverId: source.serverId, sourceWorkspaceRefId: source.id,
               sourceMachineId: source.machineId, targetMachineId: options.machineId,
@@ -94,7 +96,7 @@ export function createProjectWorkerAction(options: Readonly<{
         const observation = service ? await options.admission.observeServiceEligibility(request.memoryDemand)
           : await options.admission.observeFiniteEligibility(request.memoryDemand);
         if (!observation.eligible) return refused(observation.reason ?? 'unavailable', observation.load, observation.observedMemory);
-        return { eligible: true, candidate: { serverId: options.serverId, machineId: options.machineId },
+        return { eligible: true, candidate: { serverId: request.workspace.serverId, machineId: options.machineId },
           load: observation.load, explanation: observation.load.kind === 'unknown' ? 'load_unknown' : 'eligible',
           ...(lastCleanSyncAtMs !== undefined ? { lastCleanSyncAtMs } : {}) };
       } catch {
@@ -104,7 +106,7 @@ export function createProjectWorkerAction(options: Readonly<{
     const request = ProjectWorkerActionInputSchemasV1[actionId].parse(input);
     const failure = (errorCode: string, details?: unknown) => ({ ok: false as const, errorCode, error: errorCode,
       ...(details === undefined ? {} : { details }) });
-    if (request.workspace.serverId !== options.serverId || request.machineId !== options.machineId
+    if (!await isServerProfileHomeIdentity(options.serverId, request.workspace.serverId) || request.machineId !== options.machineId
       || request.expectedRelationship.controllerMachineId !== options.machineId) {
       return failure('worker_destination_mismatch');
     }
@@ -116,8 +118,8 @@ export function createProjectWorkerAction(options: Readonly<{
         return failure('workspace_unavailable');
       }
       const snapshot = await runWithServerHttpBaseUrl(options.serverHttpBaseUrl,
-        () => readProjectAccountRows({ credentials: options.credentials, serverId: options.serverId, signal }));
-      if (!resolveWorkspaceRefById(snapshot.workspaceRefs, request.workspace.refId, options.serverId)) {
+        () => readProjectAccountRows({ credentials: options.credentials, serverId: request.workspace.serverId, signal }));
+      if (!resolveWorkspaceRefById(snapshot.workspaceRefs, request.workspace.refId, request.workspace.serverId)) {
         return failure('workspace_unavailable');
       }
       await options.workspaceSync.relationshipOwner.stop(request.expectedRelationship.relationshipId, signal, {

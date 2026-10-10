@@ -12,6 +12,7 @@ import { validatePath, validateWorkspaceInspectionPath } from './pathSecurity';
 import type { FilesystemAccessPolicy } from './fileSystem/accessPolicy/filesystemAccessPolicy';
 import { registerActionSpecRpcHandlers, type ActionSpecRpcRegistrar } from './registerActionSpecRpcHandlers';
 import type { RpcActionExecutor } from './_actionDispatchAdapter';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 type NativeInspectionRuntimeLease = Readonly<{
   registry: Pick<ResolvedExecutablePluginRuntimeRegistry, 'contributes' | 'resolveProjectNativeAdapter'>;
@@ -81,7 +82,8 @@ export function createProjectDefinitionAction(params: Readonly<{
     const parsed = PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS[actionId].safeParse(input);
     if (!parsed.success) return failure('invalid_parameters');
     const workspace = parsed.data.workspace;
-    if (workspace.serverId !== params.serverId || (context.serverId && context.serverId !== params.serverId)) return failure('server_scope_mismatch');
+    if (!await isServerProfileHomeIdentity(params.serverId, workspace.serverId)
+      || context.serverId && !await isServerProfileHomeIdentity(params.serverId, context.serverId)) return failure('server_scope_mismatch');
     if (workspace.machineId !== params.machineId || (context.externalActionTarget && (context.externalActionTarget.kind !== 'machine'
       || context.externalActionTarget.machineId !== params.machineId))) return failure('target_not_local');
     const absolute = validateWorkspaceInspectionPath(expandHomeDirPath(workspace.rootPath));

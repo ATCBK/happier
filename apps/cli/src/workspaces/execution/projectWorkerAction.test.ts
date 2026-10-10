@@ -15,6 +15,11 @@ import { ProjectAccountRowMutationRequestV1Schema, ProjectAccountRowMutationResp
 import * as machineRpcTransport from '@/session/transport/rpc/machineRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
+import { updateSettings } from '@/persistence';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { withTempDir } from '@/testkit/fs/tempDir';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -32,6 +37,58 @@ function workerHomeGetData(url: string) {
 }
 
 describe('exact target worker status Action', () => {
+  it('admits portable Home worker Status at the installed host without widening requester or lost Home bindings', async () => {
+    await withTempDir('worker-portable-home-', async home => {
+      const scope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
+      const profileId = 'worker-local-profile';
+      const serverId = 'srv_portableWorker';
+      try {
+        scope.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: profileId });
+        reloadConfiguration();
+        const serverUrl = 'https://worker-home.test';
+        const profile = { id: profileId, name: 'Workers', serverUrl, webappUrl: serverUrl,
+          createdAt: 1, updatedAt: 1, lastUsedAt: 1, homeConnectionDescriptorAuthority: 'exact' as const,
+          homeConnectionDescriptor: HomeConnectionDescriptorV1Schema.parse({ v: 1, homeServerIdentityId: serverId,
+            canonicalServerUrl: serverUrl, revision: 1, endpoints: [{ kind: 'https', url: serverUrl }] }) };
+        await updateSettings(settings => ({ ...settings, activeServerId: profileId, servers: { [profileId]: profile } }));
+        const credentials = { token: 'portable-worker-owner', encryption: null };
+        const source = { id: 'portable-source', serverId, machineId: 'source', rootPath: '/source', createdAtMs: 1 };
+        const key = { kind: 'workspace-ref', serverId, id: source.id };
+        vi.spyOn(axios, 'get').mockImplementation(async url => ({ status: 200, data: workerHomeGetData(url) }));
+        const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete',
+          rows: [{ key, revision: 0, content: { t: 'plain', v: { key, value: source } } }] } });
+        const admission = createProjectWorkerAdmission({ machineId: 'target', admissionDrain: createDaemonAdmissionDrain(),
+          readPolicy: async () => ({ status: 'ready', policy: { accepting: true, runAtMost: null }, source: 'stored', metadataVersion: 1 }) });
+        const worker = createProjectWorkerAction({ machineId: 'target', serverId: profileId, serverHttpBaseUrl: serverUrl,
+          credentials, accountId: 'owner', admission, isFiniteExecutionLive: () => true });
+        const input = { workspace: { serverId, refId: source.id }, destination: { kind: 'machine' as const, machineId: 'target' }, purpose: 'finite' as const };
+        const context = { surface: 'rpc' as const, runtimeAccountId: 'owner', serverId };
+        const read = () => worker({ actionId: 'projects.worker.status', input, context });
+        expect(await read()).toMatchObject({ eligible: false, explanation: 'worker_copy_missing',
+          workerCopy: { serverId, sourceWorkspaceRefId: source.id, sourceMachineId: 'source', targetMachineId: 'target' } });
+        const localSource = { ...source, id: 'portable-local-source', machineId: 'target', rootPath: home };
+        const localKey = { ...key, id: localSource.id };
+        post.mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete',
+          rows: [{ key: localKey, revision: 0, content: { t: 'plain', v: { key: localKey, value: localSource } } }] } });
+        expect(await worker({ actionId: 'projects.worker.status', input: { ...input, workspace: { serverId, refId: localSource.id } }, context }))
+          .toMatchObject({ eligible: true, candidate: { serverId, machineId: 'target' } });
+        expect(await worker({ actionId: 'projects.worker.status', input, context: { ...context, runtimeAccountId: 'other' } }))
+          .toMatchObject({ ok: false, errorCode: 'project_worker_access_denied' });
+        const reads = post.mock.calls.length;
+        for (const scenario of ['wrong', 'ambiguous', 'retired'] as const) {
+          await updateSettings(settings => ({ ...settings, servers: scenario === 'wrong' ? { [profileId]: profile }
+            : scenario === 'ambiguous' ? { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } }
+              : { [profileId]: { ...profile, homeConnectionDescriptor: undefined } } }));
+          const rejectedHome = scenario === 'wrong' ? 'srv_otherWorker' : serverId;
+          expect(await worker({ actionId: 'projects.worker.status', input: { ...input, workspace: { ...input.workspace, serverId: rejectedHome } },
+            context: { ...context, serverId: rejectedHome } })).toMatchObject({ ok: false, errorCode: 'project_worker_access_denied' });
+        }
+        expect(post.mock.calls).toHaveLength(reads);
+        expect(admission.dependencies()).toEqual([]);
+        expect(configuration.activeServerId).toBe(profileId);
+      } finally { scope.restore(); reloadConfiguration(); }
+    });
+  });
   it('publishes copy-missing source and Machine facts through the existing passive status Action without acceptance', async () => {
     const credentials = { token: 'missing-copy-owner', encryption: null };
     const source = { id: 'source-ref', serverId: 'home', machineId: 'source', rootPath: '/source', createdAtMs: 1 };

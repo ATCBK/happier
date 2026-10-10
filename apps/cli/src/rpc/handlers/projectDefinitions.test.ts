@@ -11,19 +11,24 @@ import type { ProjectNativeCommandIo } from '@/workspaces/projectSetup/projectNa
 import { inspectProjectSetupReadiness, reviewProjectSetupEffect, type ProjectSetupPreparationInput } from '@/workspaces/projectSetup/projectSetupPreparation';
 import { createProjectSetupSuccessStore } from '@/workspaces/projectSetup/projectSetupSuccess';
 import { createProjectDefinitionAction, registerProjectDefinitionHandlers } from './projectDefinitions';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { reloadConfiguration } from '@/configuration';
+import { updateSettings } from '@/persistence';
+import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
-async function setup(nativeIo?: ProjectNativeCommandIo, reviewInput?: (root: string) => ProjectSetupPreparationInput) {
+async function setup(nativeIo?: ProjectNativeCommandIo, reviewInput?: (root: string) => ProjectSetupPreparationInput,
+  profileId = 'home-a', homeId = profileId) {
   const root = await mkdtemp(join(tmpdir(), 'happier-project-definition-rpc-'));
   roots.push(root);
-  const workspace = { serverId: 'home-a', machineId: 'machine-a', workspaceId: 'workspace-a', rootPath: root };
+  const workspace = { serverId: homeId, machineId: 'machine-a', workspaceId: 'workspace-a', rootPath: root };
   const handlers = new Map<string, (input: unknown, context?: RpcHandlerContext) => Promise<unknown>>();
   const executor = createActionExecutor({ ...createCliActionDeps({ token: 'fixture-token', mode: 'plain', ctx: null,
-    sessionId: 'project-definition-fixture', serverId: workspace.serverId, serverHttpBaseUrl: 'https://project-definition.example' }),
+    sessionId: 'project-definition-fixture', serverId: profileId, serverHttpBaseUrl: 'https://project-definition.example' }),
     projectDefinitionAction: createProjectDefinitionAction({
-    serverId: workspace.serverId, machineId: workspace.machineId, workingDirectory: root,
+    serverId: profileId, machineId: workspace.machineId, workingDirectory: root,
     accessPolicy: { kind: 'restrictedRoots', roots: [root] },
     ...(nativeIo ? { nativeIo } : {}),
     ...(reviewInput ? { inspectSetupReadiness: async () => inspectProjectSetupReadiness(reviewInput(root)) } : {}),
@@ -36,6 +41,31 @@ async function setup(nativeIo?: ProjectNativeCommandIo, reviewInput?: (root: str
 }
 
 describe('project definition Actions through registered Machine RPC', () => {
+  it('admits portable Home definition inspection and mutation without widening filesystem access or lost bindings', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'definition-portable-home-')); roots.push(home);
+    const scope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
+    const profileId = 'definition-local-profile'; const homeId = 'srv_definitionHome';
+    try {
+      scope.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: profileId }); reloadConfiguration();
+      const url = 'https://project-definition.example';
+      const profile = { id: profileId, name: 'Definition', serverUrl: url, webappUrl: url, createdAt: 1, updatedAt: 1, lastUsedAt: 1,
+        homeConnectionDescriptorAuthority: 'exact' as const, homeConnectionDescriptor: HomeConnectionDescriptorV1Schema.parse({ v: 1,
+          homeServerIdentityId: homeId, canonicalServerUrl: url, revision: 1, endpoints: [{ kind: 'https', url }] }) };
+      await updateSettings(settings => ({ ...settings, activeServerId: profileId, servers: { [profileId]: profile } }));
+      const h = await setup(undefined, undefined, profileId, homeId);
+      const inspect = h.handlers.get('daemon.projects.inspect.v1')!;
+      expect(await inspect({ workspace: h.workspace })).toMatchObject({ definition: { basis: { kind: 'absent' } } });
+      expect(await inspect({ workspace: { ...h.workspace, rootPath: home } })).toMatchObject({ ok: false, errorCode: 'access_denied' });
+      expect(await h.handlers.get('daemon.projects.manifest.update.v1')!({ workspace: h.workspace, expectedBasis: { kind: 'absent' },
+        bytes: '{"version":1}' })).toMatchObject({ status: 'saved' });
+      for (const scenario of ['wrong', 'ambiguous', 'retired'] as const) {
+        await updateSettings(settings => ({ ...settings, servers: scenario === 'ambiguous'
+          ? { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } } : scenario === 'retired' ? {} : { [profileId]: profile } }));
+        expect(await inspect({ workspace: { ...h.workspace, serverId: scenario === 'wrong' ? 'wrong-home' : homeId } }))
+          .toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
+      }
+    } finally { scope.restore(); reloadConfiguration(); }
+  });
   it('reports current readiness as unknown when captured requester review inputs are unavailable', async () => {
     const { workspace, handlers } = await setup();
     expect(await handlers.get('daemon.projects.inspect.v1')!({ workspace })).toMatchObject({

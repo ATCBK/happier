@@ -6,6 +6,7 @@ import { ExternalActionExecutionAuthorizationV1Schema,
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 import type { AdmittedRequesterSessionBootstrap } from './requesterSessionCredentials';
 import { bindRequesterSessionCredentialScope, decodeStoredCredentials, encodeStoredCredentials, type StoredCredentials } from '@/persistence';
 import { fetchAccountProfile } from '@/api/accountProfile';
@@ -127,7 +128,7 @@ async function projectAdmittedAccountCustody(input: RequesterAccountActionAuthor
         } catch { return null; }
       },
       readArtifact: async (ref, options) => {
-        if (ref.serverId !== stamp.serverId || options?.signal?.aborted || !await isCurrent()) return null;
+        if (!await isServerProfileHomeIdentity(stamp.serverId, ref.serverId) || options?.signal?.aborted || !await isCurrent()) return null;
         try {
           const artifact = await runWithServerHttpBaseUrl(bootstrap.serverHttpBaseUrl,
             () => artifacts.read(ref.artifactId, { ...options, includeSharedAudience: false }));

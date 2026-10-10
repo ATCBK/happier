@@ -28,6 +28,7 @@ function accountRows(rows: ProjectAccountRowV1[], options?: Readonly<{ rejectAft
   let wrote = false;
   const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
     if (wrote && options?.rejectAfterWrite) throw new Error('Home went offline after acknowledging the mutation');
+    if (String(url).endsWith('/v1/account/authoring-memory')) return { status: 200, data: { rows: [] } };
     if (!String(url).endsWith('/v1/account/encryption')) throw new Error(`Unexpected GET ${url}`);
     return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
   });
@@ -108,8 +109,12 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
         const usage = await actions.usageSourceAction!({ actionId: 'usage.sources.discover', input: { serverId: homeId, machineId: 'machine-a' } }, context)
           .catch(error => ({ errorCode: error.code }));
         expect.soft(usage).toEqual({ sources: [] });
-        expect(await executor.execute('projects.list', { serverId: homeId }, context))
-          .toMatchObject({ ok: true, result: { items: [expect.objectContaining({ serverId: homeId })] } });
+        const listed = await executor.execute('projects.list', { serverId: homeId }, context);
+        expect(listed, JSON.stringify(listed))
+          .toMatchObject({ ok: true, result: { items: [
+            { serverId: homeId, projectKey: { serverId: homeId, id: ref.id } },
+            { serverId: homeId, projectKey: { serverId: homeId, id: refB.id } },
+          ] } });
         expect(await executor.execute('projects.workspace.update', { serverId: homeId, workspaceId: ref.id, label: 'Portable' }, context))
           .toMatchObject({ ok: true, result: { workspaceRef: { ...portableRef, label: 'Portable' } } });
         expect(boundary.writes()[0]?.[1]).toMatchObject({ mutations: [{ key: { serverId: homeId } }] });
@@ -121,6 +126,13 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
             .toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
           expect(await executor.execute('projects.workspace.update', { serverId: rejectedHome, workspaceId: ref.id, label: 'Rejected' },
             { ...context, serverId: rejectedHome })).toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
+          expect(await actions.workspaceSyncRelationshipCreate!({ serverId: rejectedHome, operationId: 'rejected-sync',
+            input: { v: 1, sourceWorkspaceRefId: ref.id, targetMachineId: refB.machineId, targetPath: refB.rootPath,
+              mode: 'keep_both_in_sync', contentPolicy: relationship().contentPolicy, destinationIntent: 'use_existing' } }))
+            .toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
+          expect(await actions.usageSourceAction!({ actionId: 'usage.sources.discover',
+            input: { serverId: rejectedHome, machineId: 'machine-a' } }, { ...context, serverId: rejectedHome }))
+            .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
         }
         expect(boundary.writes()).toHaveLength(1);
       } finally { scope.restore(); reloadConfiguration(); }

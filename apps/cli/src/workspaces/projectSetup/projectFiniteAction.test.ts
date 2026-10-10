@@ -47,6 +47,9 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { reloadConfiguration } from '@/configuration';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import { readProjectAccountRows } from '@/workspaces/projectAccountRows';
+import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
+import { inspectProjectSetupReadinessFromRuntime } from './projectSetupReadiness';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 // The Home HTTP boundary publishes this fixture Account identity; it is not caller-supplied Action authority.
@@ -320,6 +323,8 @@ describe('authenticated finite Project Action owner', () => {
                         revision: 1, endpoints: [{ kind: 'https', url: serverUrl }] }) };
                 await updateSettings(settings => ({ ...settings, activeServerId: profileId, servers: { [profileId]: profile } }));
                 const h = await harness(undefined, null, 'machine', ownerToken, profileId, serverId);
+                expect.soft(await inspectProjectSetupReadinessFromRuntime({ runtime: h.runtime, ingress: h.context,
+                    workspace: h.address, context: { serverId } })).toMatchObject({ kind: 'notRequired' });
                 const selection = { kind: 'native', source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } } as const;
                 expect(await h.rpcInvoke('projects.script.run', { workspace: h.address, selection }))
                     .toMatchObject({ operation: { operationId: 'operation', state: 'accepted', domainRef: { sourceWorkspace: h.address } } });
@@ -329,8 +334,48 @@ describe('authenticated finite Project Action owner', () => {
                 expect(await h.rpcInvoke('projects.prepare', { workspace: h.address, phase: 'setup' },
                     { ...h.context, transportRequestId: 'portable-prepare' }))
                     .toMatchObject({ operation: { state: 'accepted' } });
+                await expect.poll(() => h.operationRuntime.store.get({ accountId: 'owner', machineId: 'machine' }, 'operation-2')?.state).toBe('succeeded');
                 expect(await h.rpcInvoke('projects.prepare', { workspace: { ...h.address, serverId: 'wrong-home' }, phase: 'setup' }))
                     .toMatchObject({ ok: false, errorCode: 'target_mismatch' });
+                const worker = await harness(portableNativeManifest, null, 'source-machine', ownerToken, profileId, serverId);
+                const target = await worker.addWorkerTarget();
+                const previousGet = worker.get.getMockImplementation()!;
+                worker.get.mockImplementation(async (...args) => String(args[0]).includes('/v1/machines/')
+                    ? { status: 200, data: { machine: { id: decodeURIComponent(String(args[0]).split('/').at(-1)!),
+                        metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0, storageMode: 'plain' } } }
+                    : previousGet(...args));
+                const preparation = createWorkspaceSyncWorkerPreparation({ serverId: profileId,
+                    serverHttpBaseUrl: worker.runtime.serverHttpBaseUrl, credentials: worker.runtime.credentials, targetMachineId: 'machine',
+                    isCurrent: worker.runtime.isCurrent!, prepareBetween: (request, signal) => prepareWorkspaceSyncBetween({ ...request,
+                        signal, serverId, readCurrent: async () => ({ workspaceRefs: worker.workspaceRefs, relationships: worker.relationships }),
+                        // Only the remote controller's file-transfer/clean-status reply is substituted.
+                        flush: async relationshipId => {
+                            await cp(worker.root, target.rootPath, { recursive: true });
+                            return { relationshipId, controllerMachineId: 'source-machine', state: 'watching', alphaPath: worker.root,
+                                betaPath: target.rootPath, mode: 'keep_synced', endpointStates: {
+                                    alpha: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 },
+                                    beta: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 } },
+                                conflictCount: 0, lastCycleObservedAtMs: 1, lastCleanSyncAtMs: 2 };
+                        } }) });
+                Object.assign(worker.runtime, preparation);
+                const source = worker.workspaceRefs[0]!;
+                const signal = worker.context.signal;
+                const basis = await preparation.resolveWorkerTarget({ source, signal });
+                expect(basis).toMatchObject({ source: { serverId }, target: { serverId, id: target.id } });
+                await preparation.prepareDequeue({ workspace: source, basis, signal,
+                    choice: { kind: 'workers', destination: { kind: 'machine', machineId: 'machine' } } });
+                expect(await worker.rpcInvoke('projects.script.run', { workspace: worker.address, selection: { kind: 'named', name: 'checked' },
+                    choice: { kind: 'workers', destination: { kind: 'machine', machineId: 'machine' } } }))
+                    .toMatchObject({ operation: { state: 'accepted' } });
+                await expect.poll(() => worker.spawned.length).toBe(1);
+                worker.spawned[0]!.pty.exit(0);
+                await expect.poll(() => worker.runtime.workerAdmission.dependencies()).toEqual([]);
+                await expect(preparation.resolveWorkerTarget({ source: { ...source, serverId: 'wrong-home' }, signal }))
+                    .rejects.toMatchObject({ code: 'target_mismatch' });
+                worker.relationships.splice(0);
+                await expect(preparation.prepareDequeue({ workspace: source, basis, signal,
+                    choice: { kind: 'workers', destination: { kind: 'machine', machineId: 'machine' } } }))
+                    .rejects.toMatchObject({ code: 'relationship_changed' });
                 for (const scenario of ['ambiguous', 'retired'] as const) {
                     await updateSettings(settings => ({ ...settings, servers: scenario === 'retired' ? {}
                         : { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } } }));
@@ -338,7 +383,13 @@ describe('authenticated finite Project Action owner', () => {
                         .toMatchObject({ ok: false, errorCode: 'target_mismatch' });
                     expect(await h.rpcInvoke('projects.script.run', { workspace: h.address, selection }))
                         .toMatchObject({ ok: false, errorCode: 'target_mismatch' });
+                    await expect(preparation.resolveWorkerTarget({ source, signal })).rejects.toMatchObject({ code: 'target_mismatch' });
+                    expect(await inspectProjectSetupReadinessFromRuntime({ runtime: h.runtime, ingress: h.context,
+                        workspace: h.address, context: { serverId } })).toMatchObject({ kind: 'unknown', code: 'target_mismatch' });
                 }
+                worker.retireCredentials();
+                await expect(preparation.resolveWorkerTarget({ source, signal }))
+                    .rejects.toMatchObject({ code: 'project_requester_credentials_unavailable' });
                 expect(h.spawned).toHaveLength(1);
             } finally { scope.restore(); reloadConfiguration(); }
         });
@@ -984,9 +1035,17 @@ describe('authenticated finite Project Action owner', () => {
                 active: true, revokedAt: null, replacedByMachineId: null, kind: 'persistent',
                 access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
             });
+            // Bootstrap discovery and private worker route discovery consume distinct
+            // Home shapes. The latter reads published rows for BOTH Sync endpoints.
+            const published = MachinePublishedRowV1Schema.parse({ ...installed,
+                metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
+                dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+            const sourcePublished = MachinePublishedRowV1Schema.parse({ ...published,
+                id: 'source-machine', installationId: 'source-installation' });
             h.get.mockImplementation(async url => {
                 if (String(url) === 'https://home.example/v1/machines') return { status: 200, data: [installed] };
-                if (String(url) === 'https://home.example/v1/machines/machine') return { status: 200, data: { machine: installed } };
+                if (String(url) === 'https://home.example/v1/machines/machine') return { status: 200, data: { machine: published } };
+                if (String(url) === 'https://home.example/v1/machines/source-machine') return { status: 200, data: { machine: sourcePublished } };
                 return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
             });
             const homePost = h.post.getMockImplementation();
