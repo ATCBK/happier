@@ -20,7 +20,8 @@ import {
     createBrowserLaunchpadDetailsTab,
     type BrowserSurfaceProductModels,
 } from '@/components/browser/surfaces';
-import { useBrowserSurfaceHostProps } from '@/components/browser/surfaces/useBrowserSurfaceHostProps';
+import { resolveBrowserSurfacePlatform, useBrowserSurfaceHostProps } from '@/components/browser/surfaces/useBrowserSurfaceHostProps';
+import { useOpenBrowserTargetInWorkspace } from '@/components/browser/surfaces/useOpenBrowserTargetInWorkspace';
 import {
     DetailsSurfaceHost,
     createDetailsSurfacePaneCallbacks,
@@ -51,9 +52,7 @@ import { resolveLocalServicePreviewPlatform } from '@/sync/domains/local/service
 import { useScopedPluginUiProjection } from '@/components/plugins/projection/useScopedPluginUiProjection';
 import { createWorkspaceDetailsSurfaceRenderers } from './details/surfaces/workspaceDetailsSurfaceRegistry';
 import { Icon } from '@/components/ui/icons/Icon';
-import { buildNewSessionLaunchRouteParams } from '@/components/sessions/new/navigation/newSessionRouteParams';
-import { seedAndOpenNewSession } from '@/components/sessions/new/newSessionSeedComposer';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useProjectNewSessionAction } from '@/components/projects/useProjectNewSessionAction';
 import { WorkspaceSyncRelationshipList } from '@/components/workspaces/sync/WorkspaceSyncRelationshipList';
 import { openWorkspaceSyncAddMachine } from '@/components/workspaces/sync/openWorkspaceSyncAddMachine';
 import { createWorkspaceSyncConflictDetailsTab } from '@/components/workspaces/sync/workspaceSyncConflictDetailsTab';
@@ -336,7 +335,13 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         pane.unpinDetailsTab,
     ]);
 
+    const openBrowserViewTarget = useOpenBrowserTargetInWorkspace({
+        scopeId: props.scopeId, scope: 'workspaceDetails', accountLifetime: scopedPluginProjection.accountLifetime,
+        openDetailsTab: pane.openDetailsTab, platform: resolveBrowserSurfacePlatform(props.platform), localServicePreviewState,
+        browserProfile: props.browserProductModels?.browserProfile?.profile,
+    });
     const detailsSurfaceRenderers = React.useMemo(() => createWorkspaceDetailsSurfaceRenderers({
+        onOpenTarget: openBrowserViewTarget,
         onRevealInFilesTree: revealInFilesTree,
         onOpenChanges: openChanges,
         scopeId: props.scopeId,
@@ -368,6 +373,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         productModels: props.browserProductModels ?? undefined,
     }), [
         revealInFilesTree,
+        openBrowserViewTarget,
         openChanges,
         browserLaunchpad,
         deviceType,
@@ -442,23 +448,13 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         props.workspaceRef.serverId,
     ]);
 
+    const newSession = useProjectNewSessionAction({ serverId: props.workspaceRef.serverId,
+        machineId: props.workspaceRef.machineId, rootPath: effectiveRootPath });
     const renderHeaderActions = React.useCallback(() => {
-        const openNewSessionWithReviewComments = () => {
-            const lifetime = captureActiveServerAccountScopeLifetime();
-            if (!lifetime) return;
-            seedAndOpenNewSession({
-                seed: { placement: { kind: 'exactTarget', serverId: props.workspaceRef.serverId,
-                    machineId: props.workspaceRef.machineId, directory: effectiveRootPath } },
-                scope: lifetime.scope,
-                isCurrent: lifetime.isCurrent,
-                navigateToNewSession: ({ draftId }) => router.push({
-                    pathname: '/new', params: buildNewSessionLaunchRouteParams({ draftId }),
-                }),
-            });
-        };
         return (
             <>
                 {props.renderHeaderActionsPrefix ? props.renderHeaderActionsPrefix({ iconButtonStyle, iconColor: theme.colors.text.secondary }) : null}
+                {newSession.approvalNotice}
                 <BrowserSurfaceOpenButton
                     onPress={openBrowserLaunchpadTab}
                     size={34}
@@ -466,7 +462,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
                 />
                 {hasWorkspaceReviewCommentDrafts ? (
                     <Pressable
-                        onPress={openNewSessionWithReviewComments}
+                        onPress={newSession.open}
                         testID="workspace-details-open-review-comments-session"
                         style={iconButtonStyle}
                         accessibilityRole="button"
@@ -537,6 +533,8 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         theme.colors.text.secondary,
         deviceType,
         effectiveRootPath,
+        newSession.open,
+        newSession.approvalNotice,
     ]);
 
     const resolveTabHref = React.useCallback((tab: DetailsTabState) => {
