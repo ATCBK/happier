@@ -4,6 +4,7 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { encodeBase64StoredJsonContentEnvelope } from '@/sync/encryption/base64StoredJsonContent';
 import type { ScmComparison } from '@happier-dev/protocol/scm';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 const rpc = vi.hoisted(() => vi.fn());
 const machineRpc = vi.hoisted(() => vi.fn());
@@ -12,8 +13,12 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', (
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { storage } = await import('@/sync/domains/state/storage');
 await import('@/sync/ops/actions/defaultActionExecutor');
 const { createScmDiffSummaryResultOperations } = await import('./results');
+const expectReceipt = (receipt: unknown) => expect(receipt, JSON.stringify({ receipt,
+  http: harness.requests.map(({ serverUrl, path }) => ({ serverUrl, path })),
+}));
 
 beforeEach(async () => { rpc.mockReset(); machineRpc.mockReset(); await harness.reset(); });
 afterEach(() => standardCleanup());
@@ -29,7 +34,7 @@ describe('commit proposal approval through the default Action executor', () => {
       return receipt;
     });
     const { machineScmCommitCreate } = await import('@/sync/ops/scm/machineScm');
-    expect(await machineScmCommitCreate('machine', { cwd: '/repo', message: 'Captured commit' }, {
+    expectReceipt(await machineScmCommitCreate('machine', { cwd: '/repo', message: 'Captured commit' }, {
       serverId, accountId: 'account',
     })).toMatchObject(receipt);
   });
@@ -49,13 +54,17 @@ describe('commit proposal approval through the default Action executor', () => {
     expect(response.success).toBe(false);
     expect(response).not.toHaveProperty('result');
   });
-  it('marks captured Files without a saved result through admitted Machine evidence and the captured Account', async () => {
+  it.each(['workingTree', 'turnCheckpoint'] as const)('marks captured Files without a saved result through admitted evidence and the captured Account (%s)', async (kind) => {
     const serverId = await harness.addHome({ name: 'Home A', serverUrl: 'https://home-a.example',
       accountId: 'account', serverIdentityId: 'srv_stable-home-a' });
     harness.answer(serverId, '/v1/account/encryption/currentness', { body: {
       mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
     } });
-    const comparison: ScmComparison = { id: 'c'.repeat(64), source: { kind: 'workingTree' }, repository: { rootPath: '/repo' },
+    const sessionId = kind === 'turnCheckpoint' ? 'captured-turn-session' : undefined;
+    if (sessionId) storage.setState({ sessions: { [sessionId]: createSessionFixture({ id: sessionId, serverId,
+      metadata: { path: '/repo', machineId: 'machine', host: 'fixture', homeDir: '/home/fixture' },
+    }) } });
+    const comparison: ScmComparison = { id: 'c'.repeat(64), source: { kind }, repository: { rootPath: '/repo' },
       endpoints: { before: 'before', after: 'after' }, inventory: { state: 'complete', reasons: [], files: [{ path: 'a.ts',
         changeKind: 'modified', binary: false, generated: false, lockfile: false, evidence: { state: 'available', unifiedDiff: 'patch' },
         occurrences: [{ id: 'exact', alias: 'c0', path: 'a.ts', position: 0, before: { startLine: 1, lineCount: 1 }, after: { startLine: 1, lineCount: 1 } }],
@@ -65,10 +74,14 @@ describe('commit proposal approval through the default Action executor', () => {
       value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: { v: 1, comparisonId: comparison.id, reviewedChangeRefs: [] } }) } });
     harness.answer(serverId, 'POST /v1/kv', { body: { success: true, results: [{ key, version: 2 }] } });
     machineRpc.mockImplementation(async ({ method }) => method === 'scm.diffSummary.capture'
-      ? { success: true, comparison, metadata: { source: comparison.source, sourceKey: comparison.id } }
+      ? { success: true, comparison, metadata: { source: comparison.source, sourceKey: comparison.id,
+          ...(sessionId ? { turnId: 'captured-turn', checkpointReceiptId: 'checkpoint.finalized', turnEvidenceMode: 'checkpoint' } : {}),
+        } }
       : { success: false, errorCode: 'result_unavailable', error: 'No saved narration exists' });
-    const operations = createScmDiffSummaryResultOperations({ machineId: 'machine', serverId, accountId: 'account', shouldContinue: () => true });
-    expect(await operations.setReviewed({ v: 2, cwd: '/repo', comparisonId: comparison.id, source: comparison.source, changeRefs: ['exact'] }, true))
+    const operations = createScmDiffSummaryResultOperations({ ...(sessionId ? { sessionId } : { machineId: 'machine' }),
+      serverId, accountId: 'account', shouldContinue: () => true });
+    expectReceipt(await operations.setReviewed({ v: 2, cwd: '/repo', comparisonId: comparison.id, source: comparison.source,
+      ...(sessionId ? { sessionId } : {}), changeRefs: ['exact'] }, true))
       .toMatchObject({ success: true, record: { comparisonId: comparison.id, reviewedChangeRefs: ['exact'] } });
     expect(machineRpc.mock.calls.every(([request]) => request.method === 'scm.diffSummary.capture')).toBe(true);
     expect(harness.requestsFor('/v1/kv').map(request => request.input)).toEqual([{ mutations: [{ key, version: 1,
@@ -84,7 +97,7 @@ describe('commit proposal approval through the default Action executor', () => {
     await harness.requireUiApproval(serverId, 'scm.commit.create');
     machineRpc.mockResolvedValue({ success: true, commitSha: 'a'.repeat(40) });
     const { machineScmCommitCreate } = await import('@/sync/ops/scm/machineScm');
-    expect(await machineScmCommitCreate('machine', { cwd: '/repo', message: 'Intentional commit' }, {
+    expectReceipt(await machineScmCommitCreate('machine', { cwd: '/repo', message: 'Intentional commit' }, {
       serverId, accountId: 'account',
     })).toMatchObject({ success: false, errorCode: 'FEATURE_UNSUPPORTED', actionErrorCode: 'approval_required', approvalArtifactId: expect.any(String) });
     expect(machineRpc).not.toHaveBeenCalled();
@@ -106,7 +119,7 @@ describe('commit proposal approval through the default Action executor', () => {
         groups: [{ id: 'one', message: 'First', rationale: '', changeRefs: ['exact'] }], leftOutChangeRefs: [] } })
       : ops.includeCommitPlanHookChanges({ ...control, groupId: 'one', beforeTreeOid: 'a'.repeat(40), afterTreeOid: 'b'.repeat(40) });
     const first = await request();
-    expect(first).toMatchObject({ success: false, errorCode: 'approval_required', approvalArtifactId: expect.any(String) });
+    expectReceipt(first).toMatchObject({ success: false, errorCode: 'approval_required', approvalArtifactId: expect.any(String) });
     expect(harness.artifacts(serverId).list()).toHaveLength(1);
     const second = await request();
     expect(second).toMatchObject({ success: false, errorCode: 'approval_required', approvalArtifactId: expect.any(String) });

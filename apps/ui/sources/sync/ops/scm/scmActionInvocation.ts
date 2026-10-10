@@ -1,4 +1,5 @@
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionPrepareResult } from '@happier-dev/protocol/actions/executor/types';
 import type { UiActionExecutorContext } from '@/sync/ops/actions/defaultActionExecutor';
@@ -35,15 +36,19 @@ export async function invokeUiScmAction<T>(params: Readonly<{
     const current = () => !params.context.signal?.aborted && params.shouldContinue?.() !== false;
     const retired = (): UiScmActionFailure => ({ success: false, errorCode: 'result_unavailable',
         error: 'The captured Account or SCM host retired.' });
+    const effectClass = getActionSpec(params.actionId).sideEffectClass;
+    const effectReceipt = effectClass === 'write' || effectClass === 'external' || effectClass === 'danger';
     if (!current()) return retired();
     try {
         const executor = params.executor ?? (await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor();
         const prepared = await executor.prepare(params.actionId, params.input, {
             ...params.context, surface: 'ui', actionRequestId: randomUUID(),
         });
-        if (!current()) return retired();
+        // A settled preparation may already acknowledge an approval Artifact.
+        // Only an unrun invocation can still be withdrawn before dispatch.
+        if (prepared.kind !== 'settled' && !current()) return retired();
         const response = prepared.kind === 'settled' ? prepared.result : await prepared.invocation.run();
-        if (!current()) return retired();
+        if (!effectReceipt && !current()) return retired();
         if (!response.ok) return { success: false, errorCode: response.errorCode ?? 'result_unavailable', error: response.error };
         const approval = ActionApprovalRequestCreatedResultSchema.safeParse(response.result);
         if (approval.success) return { success: false, errorCode: 'approval_required',

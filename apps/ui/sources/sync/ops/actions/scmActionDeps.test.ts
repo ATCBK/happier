@@ -9,9 +9,9 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 
-import { storage } from '@/sync/domains/state/storage';
-import { createUiScmAction } from './scmActionDeps';
-import { sessionScmCommitUndoLast } from '@/sync/ops/sessionScm';
+const { storage } = await import('@/sync/domains/state/storage');
+const { createUiScmAction } = await import('./scmActionDeps');
+const { sessionScmCommitUndoLast } = await import('@/sync/ops/sessionScm');
 
 const executeCanonicalAction = async () => ({ ok: false as const, errorCode: 'unsupported_action', error: 'unsupported_action' });
 const expectedHeadOid = 'a'.repeat(40);
@@ -76,7 +76,7 @@ describe('SCM Action target binding', () => {
 
     it('binds session undo and prepared-worktree source to the selected session repository', async () => {
         const serverId = await harness.addHome({ name: 'Selected Home', serverUrl: 'https://selected.example',
-            accountId: 'account-other', serverIdentityId: 'srv_selected' });
+            accountId: 'account-other', serverIdentityId: 'srv_selected', currentAccount: true });
         harness.answer(serverId, '/v1/account/encryption/currentness', { body: {
             mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
         } });
@@ -94,7 +94,8 @@ describe('SCM Action target binding', () => {
             ...preparedInput, cwd: '/repo/selected', sourcePath: '/repo/selected', outcomeVersion: 1,
         } }));
         // Action binding must not change the ordinary facade's relative-path contract.
-        expect(await sessionScmCommitUndoLast('selected', { cwd: 'nested', expectedHeadOid }, serverId))
+        const receipt = await sessionScmCommitUndoLast('selected', { cwd: 'nested', expectedHeadOid }, serverId);
+        expect(receipt, JSON.stringify({ receipt, http: harness.requests.map(({ serverUrl, path }) => ({ serverUrl, path })) }))
             .toMatchObject({ success: true, undoneCommitSha: expectedHeadOid });
         expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine-other',
             method: 'scm.commit.undoLast', payload: { cwd: '/repo/selected/nested', expectedHeadOid, outcomeVersion: 1 },

@@ -1,7 +1,7 @@
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ScmDiffSummaryResultClearInputSchema, ScmDiffSummaryResultClearResponseSchema, ScmDiffSummaryResultResponseSchema, type ScmDiffSummaryResultClearResponse } from '@happier-dev/protocol/scm/diffSummaryResult';
 import { isScmCommitPlanApplicationLocked } from '@happier-dev/protocol/scm/diffSummaryCommitPlan';
-import { ScmComparisonCaptureOutputSchema, ScmReviewedMarkInputSchema, buildScmReviewedMarksKey, createScmReviewedMarksRecordPort } from '@happier-dev/protocol/scm';
+import { ScmComparisonCaptureOutputSchema, ScmReviewedMarkInputSchema, buildScmReviewedMarksKey, createScmReviewedMarksRecordPort, buildScmComparisonSourceKey } from '@happier-dev/protocol/scm';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { runMachineScmRpcWithFallback } from '@/sync/ops/scm/machineScm';
@@ -42,8 +42,15 @@ export function createUiScmAction(account?: LazyActionAccountContext): NonNullab
                     }));
                     account.assertCurrent();
                     if (!captured.success || !captured.data.success || captured.data.comparison.id !== selection.comparisonId
-                        || captured.data.comparison.repository.rootPath !== selection.cwd
-                        || !scmReviewComparisonMatchesSource(selection.source, captured.data.comparison.source, captured.data.comparison)) return null;
+                        || captured.data.comparison.repository.rootPath !== selection.cwd) return null;
+                    const evidence = captured.data;
+                    const retainedSelectors = { cwd: selection.cwd, turnId: evidence.metadata.turnId,
+                        checkpointReceiptId: evidence.metadata.checkpointReceiptId, turnEvidenceMode: evidence.metadata.turnEvidenceMode };
+                    const sourceMatches = selection.source.kind === 'turnCheckpoint'
+                        ? buildScmComparisonSourceKey({ ...retainedSelectors, source: selection.source })
+                            === buildScmComparisonSourceKey({ ...retainedSelectors, source: evidence.comparison.source })
+                        : scmReviewComparisonMatchesSource(selection.source, evidence.comparison.source, evidence.comparison);
+                    if (!sourceMatches) return null;
                     return captured.data.comparison;
                 }
                 const saved = ScmDiffSummaryResultResponseSchema.safeParse(await read(RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ,
@@ -110,7 +117,7 @@ export function createUiScmAction(account?: LazyActionAccountContext): NonNullab
                         // locked revision/application check remains the deletion authority.
                         const cleared = ScmDiffSummaryResultClearResponseSchema.safeParse(await runMachineScmRpcWithFallback(target.machineId,
                             method, { results: [item] }, { serverId, accountId, signal: context.signal }));
-                        current();
+                        account.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
                         if (!cleared.success) throw new Error('The saved-result Clear response could not be validated.');
                         if (!cleared.data.success) failures.push({ ...cleared.data, resultId: item.resultId });
                         else {
@@ -127,7 +134,7 @@ export function createUiScmAction(account?: LazyActionAccountContext): NonNullab
             const result = await runMachineScmRpcWithFallback(target.machineId, method, request, {
                 serverId, accountId, signal: context.signal,
             });
-            account?.assertCurrent();
+            account?.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
             return result;
         }
         const sessionId = target?.kind === 'session' ? target.sessionId : context.defaultSessionId;
@@ -137,7 +144,7 @@ export function createUiScmAction(account?: LazyActionAccountContext): NonNullab
         const sessionRequest = actionId === 'scm.repository.clone' ? request : { ...request, cwd: undefined };
         const result = await runSessionScmRpc(sessionId, method, sessionRequest, serverId, context.signal, accountId,
             actionId === 'scm.pullRequest.prepareWorktree' ? (resolved) => ({ ...resolved, sourcePath: resolved.cwd }) : undefined);
-        account?.assertCurrent();
+        account?.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
         return result;
     };
 }
