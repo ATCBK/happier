@@ -4,11 +4,13 @@ import { StyleSheet } from 'react-native-unistyles';
 import { useNavigation, useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { type PromptDocRevisionV1 } from '@happier-dev/protocol/prompts/library/promptDocV2';
-import { readPromptDocInLibrary, createPromptDocInLibrary, updatePromptDocInLibrary, type PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { readPromptDocInLibrary, type PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { ArtifactOrganizationMutationFailureV1, readArtifactFolderCatalogV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
 import { resolveArtifactOrganizationHeaderV1, type ArtifactOrganizationHeaderV1 } from '@happier-dev/protocol/artifacts/artifactOrganizationV1';
 import { captureLazyActionAccountContext, type LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { createUiPromptLibraryArtifactStore } from '@/sync/ops/promptLibrary/promptLibraryArtifactStore';
+import { createPromptDoc, updatePromptDoc } from '@/sync/ops/promptLibrary/promptDocs';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
@@ -66,6 +68,7 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
   const targetServerId = props.serverId?.trim() || activeScope?.serverId;
   const targetActiveAccountId = targetServerId === activeScope?.serverId ? activeScope?.accountId : undefined;
   const [editingScope, setEditingScope] = React.useState<ServerAccountScope | null>(null);
+  const { execute } = useMountedActionExecution(editingScope);
   const accountRef = React.useRef<LazyActionAccountContext | null>(null);
   const documentRef = React.useRef<EditorDocument | null>(null);
   const revisionRef = React.useRef<PromptDocRevisionV1 | null>(null);
@@ -241,12 +244,12 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
     if ((isNew && !organizationAvailable) || title.trim().length === 0 || saving) return false;
 
     const account = accountRef.current;
+    const expectedRevision = revisionRef.current;
     let submittedMarkdown: string | null = null;
     try {
       setSaving(true);
       if (!account) throw new Error('action_account_scope_changed');
       account.assertCurrent();
-      const store = createUiPromptLibraryArtifactStore(account.workflowArtifacts, account);
       // Flush any debounced edit out of the active editor surface, then read the
       // freshest markdown from its handle (state may not have caught up yet).
       await editorRef.current?.flushPendingChange();
@@ -261,7 +264,9 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
         organization = { folderId: ensuredFolder.folderId, tags: normalizePromptTags(tagsText) };
       }
       if (!props.artifactId) {
-        const { artifactId } = await createPromptDocInLibrary({ store, request: { title: title.trim(), markdown: latestMarkdown, ...organization } });
+        const artifactId = await createPromptDoc({ title: title.trim(), markdown: latestMarkdown, ...organization,
+          serverId: account.serverId, expectedAccountId: account.accountId, executeAction: execute });
+        if (accountRef.current !== account) throw new Error('action_account_scope_changed');
         account.assertCurrent();
         setPristineTitle(title);
         setPristineMarkdown(latestMarkdown);
@@ -271,21 +276,21 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
         }
         setPendingHref(promptCollectionItemHref('doc', artifactId, { serverId: account.serverId }));
       } else {
-        const expectedRevision = revisionRef.current;
         if (!expectedRevision) throw new Error('prompt_doc_review_unavailable');
-        const accepted = await updatePromptDocInLibrary({ store, request: { artifactId: props.artifactId, expectedRevision,
-          title: title.trim(), markdown: latestMarkdown, ...organization } });
+        const acceptedRevision = await updatePromptDoc({ artifactId: props.artifactId, expectedRevision,
+          title: title.trim(), markdown: latestMarkdown, ...organization,
+          serverId: account.serverId, expectedAccountId: account.accountId, executeAction: execute });
+        if (accountRef.current !== account) throw new Error('action_account_scope_changed');
         account.assertCurrent();
-        if (!accepted.revision) throw new Error('prompt_doc_update_receipt_unavailable');
-        revisionRef.current = accepted.revision;
+        revisionRef.current = acceptedRevision;
         setConflict(null);
         if (documentRef.current) documentRef.current = { ...documentRef.current, title: title.trim(), markdown: latestMarkdown,
           ...(organizationAvailable ? { organization } : {}) };
-        setPristineTitle(title);
-        setPristineMarkdown(latestMarkdown);
+        applyExternalTitle(title, { preserveDirty: true });
+        applyExternalMarkdown(latestMarkdown, { preserveDirty: true });
         if (organizationAvailable) {
-          setPristineFolderName(folderName);
-          setPristineTagsText(tagsText);
+          applyExternalFolderName(folderName, { preserveDirty: true });
+          applyExternalTagsText(tagsText, { preserveDirty: true });
         }
       }
       return true;
@@ -317,7 +322,7 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
     } finally {
       setSaving(false);
     }
-  }, [applyExternalMarkdown, applyExternalTitle, folderName, markdown, organizationAvailable, promptFoldersV1, props.artifactId, saving, setPristineFolderName, setPristineMarkdown, setPristineTagsText, setPristineTitle, writeFolders, tagsText, title]);
+  }, [applyExternalFolderName, applyExternalMarkdown, applyExternalTagsText, applyExternalTitle, execute, folderName, markdown, organizationAvailable, promptFoldersV1, props.artifactId, saving, setPristineFolderName, setPristineMarkdown, setPristineTagsText, setPristineTitle, writeFolders, tagsText, title]);
 
   const reviewCurrentVersion = React.useCallback(async () => {
     const account = accountRef.current;
@@ -430,12 +435,12 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
               placeholder={t('promptLibrary.titlePlaceholder')}
               autoCapitalize="sentences"
               autoFocus={isNew}
-              editable={!isLoading}
+              editable={!isLoading && (!isNew || !saving)}
             />
           )}
         />
-        <PromptFolderFieldRow value={folderName} onChange={setFolderName} testID="promptDoc.folderName" editable={!isLoading && organizationAvailable} />
-        <PromptTagsFieldRow value={tagsText} onChange={setTagsText} testID="promptDoc.tags" editable={!isLoading && organizationAvailable} />
+        <PromptFolderFieldRow value={folderName} onChange={setFolderName} testID="promptDoc.folderName" editable={!isLoading && (!isNew || !saving) && organizationAvailable} />
+        <PromptTagsFieldRow value={tagsText} onChange={setTagsText} testID="promptDoc.tags" editable={!isLoading && (!isNew || !saving) && organizationAvailable} />
       </ItemGroup>
 
       <ItemGroup title={t('promptLibrary.surface.contentSection')} description={t('promptLibrary.surface.docContentDescription')}>
@@ -447,7 +452,7 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
               value={markdown}
               language="markdown"
               onChange={setMarkdown}
-              readOnly={isLoading}
+              readOnly={isLoading || (isNew && saving)}
               editorRef={editorRef}
               wrapLines={wrapLinesInDiffs !== false}
             />

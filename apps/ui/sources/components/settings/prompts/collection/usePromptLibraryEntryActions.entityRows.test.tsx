@@ -1,5 +1,5 @@
 import { act } from 'react-test-renderer';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createArtifactStoreBoundary, createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
@@ -19,6 +19,11 @@ import { withUiPromptLibraryArtifactReader } from '@/sync/ops/promptLibrary/prom
 import { resolvePromptStackSystemAppendBlocksV1 } from '@/sync/ops/promptLibrary/resolvePromptStackSystemAppendBlocksV1';
 
 installDisconnectedServerSocketBoundary();
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
+    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+    return { ...original, createFrontDoorActionExecute:
+    (await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary')).createFrontDoorActionExecuteForVitest(original) };
+});
 installPromptLibrarySettingsCommonModuleMocks({ storage: importOriginal => importOriginal(),
     modal: async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module });
 
