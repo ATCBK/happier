@@ -24,9 +24,12 @@ beforeAll(loadSyncSingletonForTests);
 afterEach(() => { resetRuntimeFetch(); invalidateAccountEncryptionModeCache(); vi.restoreAllMocks(); });
 
 describe('managed native UI Action frontdoor', () => {
-    it.each(['machines.provisioners.options', 'machines.environment.apply'] as const)(
-        'invokes %s through the captured UI Account ingress', async actionId => {
-        const target = await upsertServerProfile({ serverUrl: `https://native-${actionId.replaceAll('.', '-')}.test` });
+    it.each([
+        ['ui', 'machines.provisioners.options'], ['voice', 'machines.provisioners.options'],
+        ['ui', 'machines.environment.apply'], ['voice', 'machines.environment.apply'],
+    ] as const)(
+        'invokes %s %s through the captured present-user Account ingress', async (surface, actionId) => {
+        const target = await upsertServerProfile({ serverUrl: `https://native-${surface}-${actionId.replaceAll('.', '-')}.test` });
         await setServerProfileIdentityForUrl(target.serverUrl, 'srv_native_options');
         await resetPendingQueueState({ serverId: 'server-b', accountId: 'account-b' });
         const token = `e30.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'account-a', tokenEpoch: 3,
@@ -55,9 +58,32 @@ describe('managed native UI Action frontdoor', () => {
                 execution: { ok: true, result: output } });
         });
         expect(await createDefaultActionExecutor().execute(actionId, input, {
-            serverId: target.id, expectedAccountId: 'account-a', surface: 'ui',
+            serverId: target.id, expectedAccountId: 'account-a', surface,
         })).toEqual({ ok: true, result: output });
         expect(requests).toEqual([expect.objectContaining({ target: { kind: 'machine', machineId: 'controller' }, input })]);
+    });
+
+    it('refuses native Voice admission for a terminal credential despite caller-supplied present-user authority', async () => {
+        const target = await upsertServerProfile({ serverUrl: 'https://native-voice-terminal.test' });
+        await setServerProfileIdentityForUrl(target.serverUrl, 'srv_voice_terminal');
+        await resetPendingQueueState({ serverId: 'server-b', accountId: 'account-b' });
+        const token = `e30.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'account-a', tokenEpoch: 3,
+            provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })), 'base64url')}.signature`;
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
+        const effects: string[] = [];
+        setRuntimeFetch(async (rawUrl) => {
+            const path = new URL(String(rawUrl)).pathname;
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            effects.push(path);
+            return Response.json({ error: 'unsupported' }, { status: 404 });
+        });
+        expect(await createDefaultActionExecutor().execute('machines.provisioners.options', {
+            homeId: 'srv_voice_terminal', controller: { machineId: 'controller', installationId: 'installation' },
+            contribution: { pluginId: 'examples.machine-provisioner', localId: 'guest' }, selectors: {},
+        }, { serverId: target.id, expectedAccountId: 'account-a', surface: 'voice', authority: 'present_user' }))
+            .toEqual({ ok: false, errorCode: 'admission_unavailable', error: 'admission_unavailable' });
+        expect(effects).toEqual([]);
     });
 
     it.each(['own', 'foreign'] as const)('admits Move at the selected destination when the retained controller is unavailable (%s row)', async (ownership) => {
@@ -337,7 +363,7 @@ describe('managed native UI Action frontdoor', () => {
         expect(paths).not.toContain('/v1/artifacts');
     });
 
-    it.each(['agent', 'voice'] as const)('does not turn an automation-qualified %s origin into a present-user native relay', async (origin) => {
+    it.each(['agent', 'plugin', 'api'] as const)('does not turn an automation-qualified %s origin into a present-user native relay', async (origin) => {
         const target = await upsertServerProfile({ serverUrl: 'https://native-refusal.test' });
         expect(await setServerProfileIdentityForUrl(target.serverUrl, 'srv_native_origin')).toMatchObject({ serverIdentityId: 'srv_native_origin' });
         await resetPendingQueueState({ serverId: 'server-b', accountId: 'account-b' });

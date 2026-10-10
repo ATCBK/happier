@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { ManagedMachineActionInputSchemasV1, ManagedMachineActionOutputSchemasV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { socketRpcCodec } from '@happier-dev/sync-client';
@@ -153,19 +155,96 @@ describe('Machines advertised UI and eligible Voice execution', () => {
       // Pools do not advertise Voice; exercise their existing UI owner only.
       if (surface === 'ui') expect(await createDefaultActionExecutor().execute('machines.pools.resolve', input, context))
         .toEqual({ ok: true, result: pool });
-      // Managed inventory is Account-backed; Voice is not bound for this family.
+      // Account-backed managed reads use the same captured Home on Voice.
+      const managedInput = { homeId, managedId: managed.id };
       if (surface === 'ui') expect(await createDefaultActionExecutor().execute('machines.managed.get',
-        { homeId, managedId: managed.id }, context)).toEqual({ ok: true, result: managed });
+        managedInput, context)).toEqual({ ok: true, result: managed });
+      else {
+        const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
+        expect(JSON.parse(await handlers.machines_managed_get!(managedInput, { serverId: homeId })))
+          .toEqual({ ok: true, ...managed });
+      }
       expect(home.requests.filter(request => request.path.startsWith('/v1/machines/')).map(request => ({
         home: request.home, accountId: request.accountId, path: request.path, body: request.body,
       }))).toEqual([
         { home: 'compute', accountId: 'owner', path: '/v1/machines/presets/list', body: { homeId } },
         ...(surface === 'ui' ? [{ home: 'compute', accountId: 'owner', path: '/v1/machines/pools/resolve', body: input }] : []),
-        ...(surface === 'ui' ? [{ home: 'compute', accountId: 'owner', path: '/v1/machines/managed/actions/get',
-          body: { homeId, managedId: managed.id } }] : []),
+        { home: 'compute', accountId: 'owner', path: '/v1/machines/managed/actions/get', body: managedInput },
       ]);
     } finally {
       home.dispose();
     }
   });
+
+  it.each(['machines.provisioners.options', 'machines.managed.acquire', 'machines.managed.power.set'] as const)(
+    'invokes managed Voice %s through captured present-user native Account admission', async actionId => {
+      const homeId = `srv_voice_${actionId.replaceAll('.', '_')}`;
+      const controller = { machineId: 'controller', installationId: 'installation' };
+      const contribution = { pluginId: 'happier.machine.lima', localId: 'lima' };
+      const launch = { provider: contribution, schemaVersion: 1, name: 'Guest', choices: {} };
+      const managed = ManagedMachineActionOutputSchemasV1['machines.managed.get'].parse({
+        id: 'managed', homeId, custodianAccountId: 'owner', controller, launch,
+        resource: { contributionRef: contribution, schemaVersion: 1, value: {} },
+        desired: 'stop', desiredWhen: 'now', allocation: 'bound', creationState: 'active', intentRevision: 1,
+        retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
+      });
+      const input = ManagedMachineActionInputSchemasV1[actionId].parse(actionId === 'machines.provisioners.options'
+        ? { homeId, controller, contribution, selectors: {} }
+        : actionId === 'machines.managed.acquire' ? { selection: { kind: 'one-off', homeId, controller, launch,
+          retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false } }
+        : { homeId, managedId: managed.id, expectedRevision: 1, intent: 'stop', when: 'now' });
+      const output = actionId === 'machines.provisioners.options'
+        ? ManagedMachineActionOutputSchemasV1[actionId].parse({ choices: [{ id: 'small', title: 'Small', launch: {} }] })
+        : { kind: 'approval_request_created', actionId, artifactId: 'native-ask' };
+      const settings = { experiments: true, featureToggles: { voice: true } };
+      const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId: homeId } } });
+      let managedReadUnavailable = false;
+      const home = await serveActionHomes({ homes: [
+        { key: 'compute', serverUrl: `https://voice-native-${actionId.replaceAll('.', '-')}.test`, accountId: 'owner', settings, currentAccount: true },
+        { key: 'focused', serverUrl: `https://voice-focused-${actionId.replaceAll('.', '-')}.test`, accountId: 'other', settings, currentAccount: true },
+      ], route: request => {
+        if (request.home !== 'compute') return undefined;
+        if (request.path === '/v1/features') return Response.json(features);
+        if (request.path === '/v1/machines/managed/actions/get') return managedReadUnavailable
+          ? Response.json({ error: 'unsupported' }, { status: 404 }) : Response.json(managed);
+        if (request.path === '/v1/machines') return Response.json([{ ...createPlainMachineRowFixture({ id: controller.machineId,
+          accountId: 'owner' }), installationId: controller.installationId }]);
+        if (request.path !== `/v1/actions/${actionId}`) return undefined;
+        const envelope = request.body as { requestId: string };
+        return Response.json({ v: 1, actionId, requestId: envelope.requestId, execution: { ok: true, result: output } });
+      } });
+      const enabledSettings = storage.getState().settings;
+      try {
+        expect(await getServerFeaturesSnapshot({ serverId: home.homes.compute!.id })).toMatchObject({ status: 'ready', serverIdentityId: homeId });
+        const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
+        const toolName = actionId.replaceAll('.', '_');
+        expect(handlers[toolName]).toBeTypeOf('function');
+        const policyContext = { surface: 'voice' as const, authority: 'present_user' as const };
+        expect(isApprovalRequiredByActionsSettings(actionId, { v: 1, actions: {} }, policyContext))
+          .toBe(actionId !== 'machines.provisioners.options');
+        expect(JSON.parse(await handlers[toolName]!(input, { serverId: homeId }))).toEqual({ ok: true, ...output });
+        const nativeRequests = home.requests.filter(request => request.path.startsWith('/v1/actions/'));
+        expect(nativeRequests).toEqual([expect.objectContaining({ home: 'compute', accountId: 'owner',
+          path: `/v1/actions/${actionId}`, body: { v: 1, requestId: expect.any(String),
+            target: { kind: 'machine', machineId: controller.machineId }, input } })]);
+        // Tool parameters cannot substitute another Account or supply authority/approval custody.
+        if (actionId === 'machines.provisioners.options') {
+          expect(JSON.parse(await handlers[toolName]!({ ...input, accountId: 'other', authority: 'present_user', bypassApprovals: true },
+            { serverId: homeId }))).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+        }
+        // A retained tool obeys current Voice availability even after discovery.
+        if (actionId === 'machines.managed.acquire') {
+          storage.setState({ settings: settingsParse({ ...settings, featureToggles: { voice: false } }) });
+          expect(JSON.parse(await handlers[toolName]!(input, { serverId: homeId })))
+            .toMatchObject({ ok: false, errorCode: 'action_disabled' });
+        }
+        // A refused controller preflight settles at the existing typed Action boundary.
+        if (actionId === 'machines.managed.power.set') {
+          managedReadUnavailable = true;
+          expect(JSON.parse(await handlers[toolName]!(input, { serverId: homeId })))
+            .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+        }
+        expect(home.requests.filter(request => request.path.startsWith('/v1/actions/'))).toHaveLength(1);
+      } finally { storage.setState({ settings: enabledSettings }); home.dispose(); }
+    });
 });

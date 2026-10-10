@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { MachineAccessMutationResultV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { storage } from '@/sync/domains/state/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
@@ -14,8 +15,8 @@ describe('Voice Machine access Action effect', () => {
       { key: 'machine', serverUrl: 'https://voice-machine-access.test', accountId: 'alice', settings },
       { key: 'focused', serverUrl: 'https://voice-machine-focused.test', accountId: 'cara' },
     ], route: request => request.home === 'machine' && request.path === '/v1/machines/machine/access'
-      && request.method === 'PUT' ? Response.json({ kind: 'saved', grant: { machineId: 'machine',
-        principal: { kind: 'account', accountId: 'bob' }, level: 'view' }, readiness: 'ready' }) : undefined });
+      && request.method === 'PUT' ? Response.json(MachineAccessMutationResultV1Schema.parse({ kind: 'saved', grant: { machineId: 'machine',
+        principal: { kind: 'account', accountId: 'bob' }, level: 'view' }, readiness: 'ready', canPrepareKeys: false })) : undefined });
     const previousSettings = storage.getState().settings;
     storage.setState({ settings: settingsParse(settings) });
     try {

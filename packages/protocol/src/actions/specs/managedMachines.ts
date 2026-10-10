@@ -52,7 +52,7 @@ export const MANAGED_MACHINE_ACTION_SPECS = MANAGED_MACHINE_ACTION_IDS_V1.map((a
     executionPlacement: account ? 'account' : 'machine',
     placements: [],
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
-    bindings: { mcpToolName: actionId.replaceAll('.', '_'), rpcMethod: actionId },
+    bindings: { mcpToolName: actionId.replaceAll('.', '_'), voiceClientToolName: actionId.replaceAll('.', '_'), rpcMethod: actionId },
     cli: { acceptsServerId: true, commands: [{ path: actionId.split('.'), visibility: 'canonical' }] },
     inputHints: { title: titles[actionId], fields: [] },
     inputSchema: ManagedMachineActionInputSchemasV1[actionId],

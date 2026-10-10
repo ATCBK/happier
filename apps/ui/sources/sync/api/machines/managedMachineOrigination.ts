@@ -1,10 +1,10 @@
 import { ManagedAdmissionComputeInputV1Schema, ManagedMachineActionInputSchemasV1, ManagedMachineActionOutputSchemasV1, resolveManagedAcquireReviewV1,
-    type ManagedMachineActionIdV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+    type ManagedMachineActionIdV1, type ManagedMachineActionOutputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import type { ExternalActionEncryptionBindingV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
-import { createManagedMachineActionClient } from './managedMachineActions';
+import { createManagedMachineActionClient, ManagedMachineActionError } from './managedMachineActions';
 import { executeOriginalAccountActionTransport, executeOriginalAccountMachineAction, readOriginalAccountActionAuthentication,
     readOriginalAccountActionMachine } from '@/sync/api/externalActionAccountTransport';
 
@@ -21,11 +21,14 @@ export async function executeManagedMachineNativeAction(params: Readonly<{
     const { account, actionId, context } = params;
     account.assertCurrent();
     // The ordinary ingress has no producer for the outer UI approval Artifact's replay custody.
-    if (context.bypassApprovals || context.surface !== 'ui' || context.authority !== 'present_user') return failure('admission_unavailable');
+    if (context.bypassApprovals || (context.surface !== 'ui' && context.surface !== 'voice')
+        || context.authority !== 'present_user') return failure('admission_unavailable');
     if (!account.serverIdentityId || !context.actionRequestId) return failure('admission_unavailable');
     const authentication = readOriginalAccountActionAuthentication(account.credentials.token);
     if (!authentication) return failure('admission_unavailable');
-    const input = ManagedMachineActionInputSchemasV1[actionId].parse(params.input);
+    const parsedInput = ManagedMachineActionInputSchemasV1[actionId].safeParse(params.input);
+    if (!parsedInput.success) return failure('invalid_parameters');
+    const input = parsedInput.data;
     const review = actionId === 'machines.managed.acquire'
         ? resolveManagedAcquireReviewV1(ManagedMachineActionInputSchemasV1['machines.managed.acquire'].parse(input)) : null;
     const homeId = review?.homeId ?? ('homeId' in input ? input.homeId : undefined);
@@ -48,9 +51,15 @@ export async function executeManagedMachineNativeAction(params: Readonly<{
         : 'managedMachineId' in input ? input.managedMachineId : undefined;
     let foreignManagedCustody = false;
     if (managedId) {
-        const row = await createManagedMachineActionClient({ request: account.request }).execute('machines.managed.get', {
-            homeId, managedId,
-        }, { signal: params.signal });
+        let row: ManagedMachineActionOutputV1<'machines.managed.get'>;
+        try {
+            row = await createManagedMachineActionClient({ request: account.request }).execute('machines.managed.get', {
+                homeId, managedId,
+            }, { signal: params.signal });
+        } catch (error) {
+            if (error instanceof ManagedMachineActionError) return failure(error.code);
+            throw error;
+        }
         account.assertCurrent();
         if (row.id !== managedId || row.homeId !== homeId) return failure('managed_response_invalid');
         foreignManagedCustody = row.custodianAccountId !== account.accountId;
