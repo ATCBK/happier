@@ -23,6 +23,8 @@ UPDATE_AUTOMATION_VERB_MATRIX=1 ../../apps/stack/bin/hstack-exec --local -- \
 The daemon automation service is the controller authority for sidecar/streamed views; in-app
 engines use the UI automation control service. Human input takes control even when no action is
 running, and that hold lasts until explicit handback through the existing presence/input controls.
+Focusing a daemon view only activates its target: it does not interrupt agent input or change
+the controller. The command route still refuses non-human focus while observation is confidential.
 Handback cannot free a still-draining mutation. Agents must obtain a fresh successful snapshot after
 takeover or a document change before resuming mutations; stale navigation generations are refused.
 

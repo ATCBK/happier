@@ -96,7 +96,7 @@ export function createBrowserDaemonControlRoutes(input: Readonly<{
 
       if ((context?.authority === 'present_user' || context?.authority === 'account_automation') && (
         command.data.kind === 'navigate' || command.data.kind === 'goBack' || command.data.kind === 'goForward'
-        || command.data.kind === 'reload' || command.data.kind === 'stop' || command.data.kind === 'focusView'
+        || command.data.kind === 'reload' || command.data.kind === 'stop'
       )) {
         const automation = input.automation?.();
         if (automation) {
