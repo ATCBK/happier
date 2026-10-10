@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, Pressable, StyleProp, ViewStyle, TextStyle, Platform, StyleSheet as RNStyleSheet, type AccessibilityRole, type TextProps, type ViewProps, type LayoutChangeEvent } from 'react-native';
+import { View, Pressable, StyleProp, ViewStyle, TextStyle, Platform, Dimensions, StyleSheet as RNStyleSheet, type AccessibilityRole, type TextProps, type ViewProps, type LayoutChangeEvent } from 'react-native';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -49,8 +49,11 @@ import { ICON_LABEL_OPTICAL_NUDGE_STYLE } from '@/components/ui/icons/iconOptica
 import { useListPresentation } from './listPresentation';
 import { GROUPED_SURFACE_RADIUS_PX, PAGE_LIST_METRICS } from './pageListMetrics';
 import { useSectionLeadingColumn } from './sectionLeadingColumn';
+import { PageRowFieldWidthContext } from './pageRowFieldWidth';
+import { resolveViewportClass } from '@/utils/platform/viewportClass';
 import {
     HAPPIER_COLLECTION_LIST_METRICS,
+    HAPPIER_FIELD_BOX_METRICS,
     HAPPIER_META_COLUMN_STYLE,
     resolveHappierItemBehavior,
     HappierDivider,
@@ -211,6 +214,12 @@ export interface ItemProps {
      * field selects), using the row's own width in pages, grouped sections and popovers.
      */
     accessoryLayout?: 'inline' | 'stacked' | 'adaptive';
+    /**
+     * The adaptive accessory is a page select field. In a narrow pane column (not a phone) where the
+     * label's column and the field's narrowest trigger still fit, the field drops to its content width
+     * and stays trailing its label instead of moving beneath it; a phone still stacks it.
+     */
+    fieldAccessory?: boolean;
     showDivider?: boolean;
     dividerInset?: number;
     pressableStyle?: StyleProp<ViewStyle>;
@@ -590,6 +599,7 @@ export const Item = React.memo<ItemProps>((props) => {
         keepChevronWithRightElement = false,
         rightElementOutsidePressable = false,
         accessoryLayout = 'inline',
+        fieldAccessory = false,
         showDivider = true,
         dividerInset = isIOS ? 15 : 16,
         pressableStyle,
@@ -804,6 +814,7 @@ export const Item = React.memo<ItemProps>((props) => {
     const [isNarrowRow, setIsNarrowRow] = React.useState(false);
     const [rowWidthPx, setRowWidthPx] = React.useState<number | null>(null);
     const [accessoryWidthPx, setAccessoryWidthPx] = React.useState<number | null>(null);
+    const [fieldMaxWidthPx, setFieldMaxWidthPx] = React.useState<number | null>(null);
     // An independently activated page operation follows the phone rule even when a caller asks
     // for inline placement. Grouped controls retain their explicitly chosen composition.
     const pageOperation = isPageRow && rightElementOutsidePressable && accessoryLayout === 'inline';
@@ -816,7 +827,14 @@ export const Item = React.memo<ItemProps>((props) => {
         const next = isHappierPageRowNarrow(widthPx);
         setIsNarrowRow((current) => (current === next ? current : next));
         setRowWidthPx((current) => (current === widthPx ? current : widthPx));
-    }, []);
+        // A select field in a narrow pane column keeps the label's column and takes what is left, down to
+        // its narrowest trigger; a phone viewport keeps the phone rule (it moves beneath).
+        const fieldMaxPx = widthPx - 2 * PAGE_LIST_METRICS.rowPaddingHorizontalPx - PAGE_LIST_METRICS.rowLeadingGapPx
+            - PAGE_LIST_METRICS.sectionTextMinWidthPx;
+        const nextFieldMax = fieldAccessory && next && fieldMaxPx >= HAPPIER_FIELD_BOX_METRICS.triggerMinWidthPx
+            && resolveViewportClass(Dimensions.get('window')) !== 'compact' ? fieldMaxPx : null;
+        setFieldMaxWidthPx((current) => (current === nextFieldMax ? current : nextFieldMax));
+    }, [fieldAccessory]);
     // An adaptive control also moves beneath the label when its natural width does not fit its half of
     // a wide row (a segmented bar of long labels), instead of overflowing the sheet.
     const accessoryOverflows = rowWidthPx !== null && accessoryWidthPx !== null
@@ -830,7 +848,9 @@ export const Item = React.memo<ItemProps>((props) => {
     const operationSqueezesLabel = rowWidthPx !== null && accessoryWidthPx !== null
         && rowWidthPx - accessoryWidthPx - PAGE_LIST_METRICS.rowLeadingGapPx < PAGE_LIST_METRICS.sectionTextMinWidthPx;
     const stackAccessory = rightElement != null
-        && (accessoryLayout === 'stacked' || (adaptiveAccessory && (
+        // A field held beside its label at its content width is capped below half the row, so neither
+        // narrow-row rule applies to it.
+        && (accessoryLayout === 'stacked' || (adaptiveAccessory && fieldMaxWidthPx === null && (
             (pageOperation ? operationSqueezesLabel : isNarrowRow && !isMenuRow) || accessoryOverflows)));
     const stackAccessoryRef = React.useRef(stackAccessory);
     stackAccessoryRef.current = stackAccessory;
@@ -976,10 +996,12 @@ export const Item = React.memo<ItemProps>((props) => {
         if (!measuresRowWidth) return <View style={stackAccessory ? styles.accessoryMeasureStacked : styles.accessoryInline}>{named}</View>;
         return (
             <View onLayout={handleAccessoryLayout} style={stackAccessory ? styles.accessoryMeasureStacked : styles.accessoryMeasure}>
-                {named}
+                {fieldMaxWidthPx !== null && !stackAccessory ? (
+                    <PageRowFieldWidthContext.Provider value={fieldMaxWidthPx}>{named}</PageRowFieldWidthContext.Provider>
+                ) : named}
             </View>
         );
-    }, [accessoryAccessibleName, handleAccessoryLayout, isPageRow, measuresRowWidth, rightElement, stackAccessory]);
+    }, [accessoryAccessibleName, handleAccessoryLayout, isPageRow, measuresRowWidth, rightElement, fieldMaxWidthPx, stackAccessory]);
     const subtitleAccessoryNode = React.useMemo(() => normalizeNodeForView(subtitleAccessory ?? null), [subtitleAccessory]);
     const chevronAccessory = React.useMemo(() => {
         if (!showAccessory) return null;

@@ -133,4 +133,34 @@ describe('DropdownMenu page field', () => {
         const inline = await renderField({ selectedId: null, trigger: { itemProps: { accessoryLayout: 'inline' } } });
         expect(inline.screen.findAllByType(HappierFieldBoxTrigger)[0]!.props.span).not.toBe('row');
     });
+
+    it('keeps a select trailing its label at its content width in a narrow pane column, and stacks it on a phone', async () => {
+        const fieldBox = (screen: Awaited<ReturnType<typeof renderField>>['screen']) => screen.findAllByType('View' as never)
+            .map((node) => flattenTestStyle(node.props.style))
+            .find((style) => typeof style.borderWidth === 'number' && style.borderWidth > 0 && typeof style.borderRadius === 'number')!;
+        const layoutRow = async (screen: Awaited<ReturnType<typeof renderField>>['screen'], width: number) => {
+            const row = screen.findAll((node) => typeof node.type === 'string' && typeof node.props.onLayout === 'function')[0]!;
+            await act(async () => {
+                row.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width, height: 52 } } });
+            });
+            return flattenTestStyle(screen.findAll((node) => typeof node.type === 'string' && typeof node.props.onLayout === 'function')[0]!.props.style).flexDirection;
+        };
+
+        // A ~480px pane column beside a receipt (a desktop window): the label keeps its column and the
+        // select takes what is left at its content width, as in the lab ("At most [3 ▾]").
+        const pane = await renderField({ selectedId: 'round-robin' });
+        expect(await layoutRow(pane.screen, 481)).not.toBe('column');
+        expect(fieldBox(pane.screen).width).toBeUndefined();
+        // No wider than what the label's column leaves (row insets, gap, label column).
+        expect(pane.screen.findAllByType('View' as never).some((node) => flattenTestStyle(node.props.style).maxWidth === 481 - 2 * 16 - 12 - 200)).toBe(true);
+        // Below the label's column plus the narrowest trigger it moves beneath.
+        expect(await layoutRow(pane.screen, 370)).toBe('column');
+        standardCleanup();
+
+        // The same row width on a phone keeps the phone rule: the field moves beneath its label.
+        viewport.width = 430;
+        viewport.height = 932;
+        const phone = await renderField({ selectedId: 'round-robin' });
+        expect(await layoutRow(phone.screen, 398)).toBe('column');
+    });
 });

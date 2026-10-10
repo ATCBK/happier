@@ -1,4 +1,4 @@
-import { HappierFieldBoxTrigger, resolveHappierFieldBoxLabel, type HappierFieldBoxColors } from '@happier-dev/plugin-ui/presentation';
+import { HappierFieldBoxTrigger, resolveHappierFieldBoxLabel, type HappierFieldBoxColors, type HappierFieldBoxTriggerProps } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { View } from 'react-native';
 
@@ -9,8 +9,23 @@ import {
 } from '@/components/ui/lists/itemDensityMetrics';
 import { Text } from '@/components/ui/text/Text';
 import { Icon } from '@/components/ui/icons/Icon';
+import { PageRowFieldWidthContext } from '@/components/ui/lists/pageRowFieldWidth';
 import { t } from '@/text';
 
+
+/**
+ * A page select in its shared column beside the label. When its row is a narrow pane column, the row
+ * bounds it (`PageRowFieldWidthContext`): it takes its content width within that bound and stays
+ * trailing the label. The wrapper stays mounted across both, so the trigger keeps its state.
+ */
+function PageColumnFieldBoxTrigger(props: HappierFieldBoxTriggerProps) {
+    const rowMaxWidthPx = React.useContext(PageRowFieldWidthContext);
+    return (
+        <View style={rowMaxWidthPx === null ? null : { maxWidth: rowMaxWidthPx, alignItems: 'flex-start' }}>
+            <HappierFieldBoxTrigger {...props} span={rowMaxWidthPx === null ? 'column' : 'content'} />
+        </View>
+    );
+}
 
 export function renderDropdownItemTriggerRightElement(params: Readonly<{
     detail: string | null;
@@ -61,8 +76,9 @@ export function renderDropdownItemTriggerRightElement(params: Readonly<{
             placeholder: params.placeholder || t('common.choose'),
             colors: params.field,
         });
+        const FieldBoxTrigger = params.fieldSpan === 'column' ? PageColumnFieldBoxTrigger : HappierFieldBoxTrigger;
         return (
-            <HappierFieldBoxTrigger colors={params.field} leading={params.leading} trailing={chevron}
+            <FieldBoxTrigger colors={params.field} leading={params.leading} trailing={chevron}
                 {...(params.fieldSpan === undefined ? {} : { span: params.fieldSpan })}>
                 <Text
                     style={[label.style, params.secondary ? { flexGrow: 0, flexShrink: 1, flexBasis: 'auto' } : null, params.quietValue && !label.placeholder && params.quietValueColor ? { color: params.quietValueColor } : null]}
@@ -75,7 +91,7 @@ export function renderDropdownItemTriggerRightElement(params: Readonly<{
                         {params.secondary}
                     </Text>
                 ) : null}
-            </HappierFieldBoxTrigger>
+            </FieldBoxTrigger>
         );
     }
 
