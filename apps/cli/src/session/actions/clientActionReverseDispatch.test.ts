@@ -9,6 +9,53 @@ function executor(client: ClientActionMachineRpc | null) {
 }
 
 describe('client Action reverse delivery', () => {
+  it.each(['agent', 'mcp'] as const)('delivers the secret-free SSH lifecycle to the answering App for %s', async surface => {
+    const operations = [
+      { actionId: 'machines.add.ssh.start', input: { serverId: 'home', savedHostId: 'saved-box', expectedHostRevision: 4 }, result: { taskId: 'ssh-task' } },
+      { actionId: 'machines.add.ssh.status', input: { taskId: 'ssh-task' }, result: { taskId: 'ssh-task', status: 'running', currentStepId: null,
+        awaitingInput: true, prompt: { kind: 'ssh.password', message: 'Password needed', requiresPresentUser: false }, machineId: null, errorCode: null } },
+      { actionId: 'machines.add.ssh.respond', input: { taskId: 'ssh-task', answer: { kind: 'ssh.password' } }, result: { taskId: 'ssh-task' } },
+      { actionId: 'machines.add.ssh.cancel', input: { taskId: 'ssh-task' }, result: { taskId: 'ssh-task' } },
+    ] as const;
+    let delivered = 0;
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+      // The other process is the boundary; the UI owner lifecycle runs in its own suite.
+      callConnectedClientRpc: async (method, payload, options) => {
+        const expected = operations[delivered++];
+        expect(method).toBe(RPC_METHODS.UI_ACTION_EXECUTE);
+        expect(UiActionDispatchRequestV1Schema.parse(payload)).toMatchObject({ actionId: expected.actionId, input: expected.input,
+          context: { surface, authority: 'account_automation' } });
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result: expected.result } } };
+      },
+    };
+    const context = { surface, authority: 'account_automation', bypassApprovals: true } as const;
+    for (const operation of operations) {
+      expect(await executor(client).execute(operation.actionId, operation.input, context)).toEqual({ ok: true, result: operation.result });
+      expect(await executor(null).execute(operation.actionId, operation.input, context)).toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+    }
+    expect(delivered).toBe(4);
+    expect((await executor(client).execute('machines.add.ssh.start', operations[0].input, { ...context, surface: 'cli' })).ok).toBe(false);
+    expect(delivered).toBe(4);
+  });
+
+  it.each(['cli', 'agent', 'mcp'] as const)('delivers Machine metadata to the answering client for %s and refuses a disconnected client', async surface => {
+    const input = { serverId: 'home', machineId: 'machine', expectedVersion: 4,
+      patch: { displayName: 'New name', windowsRemoteSessionLaunchMode: 'windows_terminal' } };
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+      callConnectedClientRpc: async (_method, payload, options) => {
+        expect(UiActionDispatchRequestV1Schema.parse(payload)).toMatchObject({ actionId: 'machines.metadata.update', input });
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result: { version: 5 } } } };
+      },
+    };
+    const context = { surface, authority: 'account_automation', serverId: 'home' } as const;
+    expect(await executor(client).execute('machines.metadata.update', input, context)).toEqual({ ok: true, result: { version: 5 } });
+    expect(await executor(null).execute('machines.metadata.update', input, context)).toEqual({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+  });
+
   const reversal = { scope: { serverId: 'home', accountId: 'account' }, beforeVersion: 4, appliedVersion: 5,
     before: { value: 'dark' }, applied: { value: 'light' } };
   it.each([
