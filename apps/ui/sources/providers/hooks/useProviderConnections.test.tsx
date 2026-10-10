@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { createProviderErrorV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsCatalogV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -34,12 +36,16 @@ describe('useProviderConnections', () => {
     });
 
     it('refreshes visible peers after a same-route mutation and refreshes hidden projections only when revealed', async () => {
-        let connectionExists = true;
+        const initialCatalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+            connections: [ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_a', role: 'default', displayName: 'Acme',
+                displayNameMode: 'automatic', source: { kind: 'contribution', contributionKey: 'acme.plugin/acme' },
+                revision: 1, createdAt: 1, updatedAt: 1 })],
+        });
+        await account.restore({ waivedActions: ['providers.connections.delete'], catalog: initialCatalog });
         machineRpcWithServerScope.mockImplementation(async (request: { method: string; machineId: string; serverId: string }) => {
-            if (request.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTION_MUTATE) {
-                connectionExists = false;
-                return { status: 'success', action: 'delete', deletedConnectionId: 'pc_a' };
-            }
+            const content = account.readCatalogRow()?.content;
+            if (content?.t !== 'plain') throw new Error('Expected the persisted plain Provider catalog');
+            const connectionExists = request.serverId !== serverId || ProviderConnectionsCatalogV1Schema.parse(content.v).connections.length > 0;
             return createProviderConnectionsDescribeFixture({
                 connections: connectionExists ? [createProviderConnectionViewFixture({ connectionId: 'pc_a' })] : [],
             });
@@ -58,17 +64,24 @@ describe('useProviderConnections', () => {
         machineRpcWithServerScope.mockClear();
 
         await act(async () => {
-            await hook.getCurrent().mutation.run({ action: 'delete', machineId: 'machine-a', connectionId: 'pc_a' });
+            expect(await hook.getCurrent().mutation.run({ action: 'delete', machineId: 'machine-a', connectionId: 'pc_a' }))
+                .toMatchObject({ status: 'success', action: 'delete', deletedConnectionId: 'pc_a' });
         });
         expect(hook.getCurrent().detail.data?.connections).toHaveLength(0);
         expect(hook.getCurrent().list.data?.connections).toHaveLength(0);
         expect(hook.getCurrent().otherServer.data?.connections).toHaveLength(1);
         expect(hook.getCurrent().otherMachine.data?.connections).toHaveLength(1);
-        expect(machineRpcWithServerScope.mock.calls.map(([request]) => request)).toHaveLength(3);
+        expect(account.readCatalogRow()?.content).toMatchObject({ t: 'plain', v: { connections: [] } });
+        expect(machineRpcWithServerScope.mock.calls.map(([request]) => request)).toHaveLength(2);
         expect(machineRpcWithServerScope.mock.calls.every(([request]) => request.machineId === 'machine-a' && request.serverId === serverId)).toBe(true);
 
         await hook.rerender({ visible: false });
-        connectionExists = true;
+        // A second client restores the connection through the same row HTTP/CAS boundary.
+        const restored = await account.home.request(new URL(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, 'https://provider-settings-account.test'), {
+            method: 'POST', body: JSON.stringify({ expectedRevision: account.readCatalogRow()!.revision,
+                content: { t: 'plain', v: initialCatalog }, referencedSavedSecretIds: [], savedSecretRevisions: [] }),
+        });
+        expect(await restored.json()).toMatchObject({ status: 'updated' });
         machineRpcWithServerScope.mockClear();
         await act(async () => { await hook.getCurrent().detail.refresh(); });
         expect(machineRpcWithServerScope).toHaveBeenCalledOnce();

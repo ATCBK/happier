@@ -4,6 +4,7 @@ import type { DaemonProviderModelRowV1, DaemonProviderModelsResponseV1 } from '@
 
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
+import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import {
     captureActiveServerAccountScopeLifetime,
     type ActiveServerAccountScopeLifetime,
@@ -16,7 +17,7 @@ export function useProviderConnectionModels(input: Readonly<{
     serverId: string | null;
     connectionId: string;
 }>) {
-    const { describeProviderConnectionModels, ready } = useProviderActionClient(input.serverId);
+    const { describeProviderConnectionModels, ready, accountScope: { resolution, binding } } = useProviderActionClient(input.serverId);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     const [models, setModels] = React.useState<readonly DaemonProviderModelRowV1[]>([]);
     const [connectionRevision, setConnectionRevision] = React.useState<number | null>(null);
@@ -37,7 +38,8 @@ export function useProviderConnectionModels(input: Readonly<{
     stateAccountLifetimeRef.current = stateAccountLifetime;
     const stateScopeKeyRef = React.useRef(stateScopeKey);
     stateScopeKeyRef.current = stateScopeKey;
-    const scopeKey = JSON.stringify([input.enabled, input.machineId, input.serverId, input.connectionId]);
+    const scopeKey = JSON.stringify([input.enabled, input.machineId, input.serverId, input.connectionId,
+        resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : null]);
 
     React.useEffect(() => {
         const registration = accountLifetime?.onRetire(() => {
@@ -64,6 +66,7 @@ export function useProviderConnectionModels(input: Readonly<{
         const requestStillCurrent = (): boolean => (
             currentAccountLifetimeRef.current === accountLifetime
             && (accountLifetime?.isCurrent() ?? true)
+            && binding?.isCurrent() === true
         );
         if (!requestStillCurrent()) return null;
         if (!input.enabled || !input.connectionId) {
@@ -131,7 +134,7 @@ export function useProviderConnectionModels(input: Readonly<{
         } finally {
             if (generation.current === requestGeneration && requestStillCurrent()) setLoading(false);
         }
-    }, [accountLifetime, describeProviderConnectionModels, ready, input.connectionId, input.enabled, input.machineId, input.serverId, scopeKey]);
+    }, [accountLifetime, binding, describeProviderConnectionModels, ready, input.connectionId, input.enabled, input.machineId, input.serverId, scopeKey]);
 
     const refresh = React.useCallback(async (): Promise<void> => {
         await refreshWithResult();
@@ -165,7 +168,9 @@ export function useProviderConnectionModels(input: Readonly<{
         manualModelPolicy: stateMatchesScope ? manualModelPolicy : null,
         modelLoadAction: stateMatchesScope ? modelLoadAction : null,
         error: stateMatchesScope ? error : null,
-        loading: input.active !== false && scopeEnabled && (!ready || !stateMatchesScope || loading),
+        loading: input.active !== false && scopeEnabled
+            && (resolution.kind === 'resolving' || resolution.kind === 'bound')
+            && (!ready || !stateMatchesScope || loading),
         refresh,
         refreshWithResult,
     };

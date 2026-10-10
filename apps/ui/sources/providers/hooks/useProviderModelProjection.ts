@@ -4,6 +4,7 @@ import type { DaemonProviderModelProjectionResponseV1 } from '@happier-dev/proto
 
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
+import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
 import {
     captureActiveServerAccountScopeLifetime,
@@ -35,7 +36,7 @@ export function useProviderModelProjection(input: Readonly<{
     sourceConnectionId?: string;
     favoriteSelections?: readonly ProviderBoundModelRef[];
 }>) {
-    const { describeProviderModels, ready } = useProviderActionClient(input.serverId);
+    const { describeProviderModels, ready, accountScope: { resolution, binding } } = useProviderActionClient(input.serverId);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     const [state, setState] = React.useState<ProjectionState>({
         scopeKey: null,
@@ -53,13 +54,16 @@ export function useProviderModelProjection(input: Readonly<{
     const scopeKey = JSON.stringify([
         input.enabled, input.machineId, input.serverId, input.agentTargetKey, input.mode ?? 'picker', selectionKey,
         input.sourceConnectionId ?? null, input.favoriteSelections?.map(sessionModelSelectionKey) ?? [],
+        resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : null,
     ]);
     const scopeEnabled = Boolean(input.enabled && input.agentTargetKey);
     const stateMatchesScope = state.scopeKey === scopeKey
         && state.accountLifetime === accountLifetime;
     const data = stateMatchesScope ? state.data : null;
     const error = stateMatchesScope ? state.error : null;
-    const loading = input.active !== false && scopeEnabled && (!ready || !stateMatchesScope || state.loading);
+    const loading = input.active !== false && scopeEnabled
+        && (resolution.kind === 'resolving' || resolution.kind === 'bound')
+        && (!ready || !stateMatchesScope || state.loading);
     const status: ProviderModelProjectionStatus = !scopeEnabled
         ? 'disabled'
         : data
@@ -87,6 +91,7 @@ export function useProviderModelProjection(input: Readonly<{
         const requestStillCurrent = (): boolean => (
             currentAccountLifetimeRef.current === accountLifetime
             && (accountLifetime?.isCurrent() ?? true)
+            && binding?.isCurrent() === true
         );
         if (!requestStillCurrent()) return null;
         if (!input.enabled || !input.agentTargetKey) {
@@ -157,6 +162,7 @@ export function useProviderModelProjection(input: Readonly<{
         }
     }, [
         accountLifetime,
+        binding,
         describeProviderModels,
         ready,
         input.agentTargetKey,

@@ -5,6 +5,7 @@ import {
 import {
     DaemonProviderConnectionViewV1Schema,
     DaemonProviderConnectionMutationResponseV1Schema,
+    DaemonProviderBindingStatusResponseV1Schema,
     DaemonProviderConnectionsDescribeResponseV1Schema,
     DaemonProviderModelLoadResponseV1Schema,
     DaemonProviderModelProjectionResponseV1Schema,
@@ -14,6 +15,7 @@ import {
     DaemonProviderProbeResponseV1Schema,
     RPC_METHODS,
     type DaemonProviderConnectionMutationResponseV1,
+    type DaemonProviderBindingStatusResponseV1,
     type DaemonProviderConnectionsDescribeResponseV1,
     type DaemonProviderConnectionViewV1,
     type DaemonProviderModelLoadResponseV1,
@@ -25,6 +27,8 @@ import {
 } from '@happier-dev/protocol/rpc';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { vi } from 'vitest';
+import type { Socket } from 'socket.io-client';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 // IndexedDB is the genuine browser persistence leaf; record transactions and Sync stay real.
 import 'fake-indexeddb/auto';
 import { ActionsSettingsV1Schema, type ActionSettingsActionId } from '@happier-dev/protocol/actions/actionSettings';
@@ -34,18 +38,23 @@ import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } 
 
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { createMachineFixture } from '../fixtures/machineFixtures';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance, type AddHomeOptions } from './homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance, type AddHomeOptions, type HomeDomainAnswer } from './homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from './serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from './syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '../fixtures/featureFixtures';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
-    type ProviderConnectionsCatalogV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+    ProviderConnectionsRowMutationV1Schema, ProviderConnectionsRowMutationResponseV1Schema,
+    type ProviderConnectionsCatalogV1, type ProviderConnectionsContentV1,
+    type ProviderConnectionsRowMutationV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { parseToken } from '@/utils/auth/parseToken';
+import { listServerProfiles, resolveServerProfileScopeId } from '@/sync/domains/server/serverProfiles';
 
 type ProviderRpcResponse =
     | ReturnType<typeof DaemonContributionRegistryProjectionDescribeResponseSchema.parse>
     | DaemonProviderConnectionsDescribeResponseV1
     | DaemonProviderConnectionMutationResponseV1
+    | DaemonProviderBindingStatusResponseV1
     | DaemonProviderProbeResponseV1
     | DaemonProviderModelsResponseV1
     | DaemonProviderModelProjectionResponseV1
@@ -65,6 +74,10 @@ type ProviderRpcNext = () => Promise<ProviderRpcResponse>;
 type ProviderRpcInterceptor = (
     request: ProviderRpcRequest,
     next: ProviderRpcNext,
+) => unknown | Promise<unknown>;
+type ProviderRpcAcknowledgementTransformer = (
+    request: ProviderRpcRequest,
+    acknowledgement: Readonly<{ ok: true; result: unknown }>,
 ) => unknown | Promise<unknown>;
 
 type ProviderRpcResponseByMethod = Readonly<Record<string, ProviderRpcResponse>>;
@@ -212,6 +225,7 @@ export function createProviderModelProjectionFixture(input: Readonly<{
 
 function defaultResponses(): ProviderRpcResponseByMethod {
     return {
+        [RPC_METHODS.DAEMON_PROVIDERS_BINDING_STATUS]: DaemonProviderBindingStatusResponseV1Schema.parse({ status: 'current' }),
         [RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE]: createProviderConnectionsDescribeFixture(),
         [RPC_METHODS.DAEMON_PROVIDERS_PROBE]: DaemonProviderProbeResponseV1Schema.parse({
             status: 'success', models: [], requestFingerprint: 'probe-request:v1:test',
@@ -232,7 +246,10 @@ function defaultResponses(): ProviderRpcResponseByMethod {
 
 function parseResponse(method: string, response: unknown): ProviderRpcResponse {
     switch (method) {
+        case RPC_METHODS.DAEMON_PROVIDERS_BINDING_STATUS:
+            return DaemonProviderBindingStatusResponseV1Schema.parse(response);
         case RPC_METHODS.DAEMON_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE:
+        case RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE:
             return DaemonContributionRegistryProjectionDescribeResponseSchema.parse(response);
         case RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE:
             return DaemonProviderConnectionsDescribeResponseV1Schema.parse(response);
@@ -325,6 +342,7 @@ export function createProviderSettingsHarness(options: Readonly<{
         responses: { ...defaultResponses() } as Record<string, ProviderRpcResponse>,
         queues: new Map<string, ProviderRpcResponse[]>(),
         interceptors: new Map<string, ProviderRpcInterceptor>(),
+        acknowledgementTransformers: new Map<string, ProviderRpcAcknowledgementTransformer>(),
         requests: [] as ProviderRpcRequest[],
     };
 
@@ -341,10 +359,15 @@ export function createProviderSettingsHarness(options: Readonly<{
         intercept(method: string, interceptor: ProviderRpcInterceptor) {
             state.interceptors.set(method, interceptor);
         },
+        /** Corrupt a received wire ACK only after the valid typed handler and request capture. */
+        transformAcknowledgement(method: string, transformer: ProviderRpcAcknowledgementTransformer) {
+            state.acknowledgementTransformers.set(method, transformer);
+        },
         reset() {
             state.responses = { ...defaultResponses() };
             state.queues.clear();
             state.interceptors.clear();
+            state.acknowledgementTransformers.clear();
             state.requests.length = 0;
             state.machines = [...(options.machines ?? [{ ...machine, activeAt: Date.now() }])];
             state.settings = options.settings ?? { schemaVersion: 7 };
@@ -374,23 +397,48 @@ export function createProviderSettingsHarness(options: Readonly<{
 
 export function installProviderSettingsRpcBoundary(harness: ProviderSettingsHarness): void {
     installedProviderSettingsHarness.current = harness;
-    vi.doMock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-        machineRpcWithServerScope: (input: ProviderRpcRequest) => {
-            const current = installedProviderSettingsHarness.current;
-            if (!current) throw new Error('Provider settings test harness is not installed');
-            return current.machineRpc(input);
-        },
-    }));
+    installDisconnectedServerSocketBoundary(configureProviderSettingsSocket);
+}
+
+function configureProviderSettingsSocket(socket: Socket, serverUrl: string | undefined): void {
+    socket.connect = vi.fn<typeof socket.connect>(() => {
+        socket.connected = true;
+        for (const listener of socket.listeners('connect')) listener();
+        return socket;
+    });
+    socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event: string, payload: unknown) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+        if (!payload || typeof payload !== 'object' || !('method' in payload)
+            || typeof payload.method !== 'string' || !('params' in payload)) throw new Error('Malformed Provider Socket RPC');
+        const current = installedProviderSettingsHarness.current;
+        if (!current) throw new Error('Provider settings test harness is not installed');
+        const profile = listServerProfiles().find(candidate => candidate.serverUrl === serverUrl);
+        const auth = socket.auth;
+        if (!profile || !auth || typeof auth !== 'object' || typeof auth.token !== 'string') throw new Error('Provider Socket has no credentialed Home');
+        const separator = payload.method.indexOf(':');
+        if (separator < 1) throw new Error('Provider Socket has no Machine target');
+        const request = {
+            machineId: payload.method.slice(0, separator), serverId: resolveServerProfileScopeId(profile),
+            accountId: parseToken(auth.token), method: payload.method.slice(separator + 1), payload: payload.params,
+        };
+        const acknowledgement = { ok: true as const, result: await current.machineRpc(request) };
+        const transform = current.state.acknowledgementTransformers.get(request.method);
+        return transform ? await transform(request, acknowledgement) : acknowledgement;
+    });
 }
 
 /** Account admission, row publication and retirement stay real; only Home HTTP and Socket transport are substituted. */
 export function createProviderSettingsAccountHarness() {
     const home = createHomeGovernanceHarness();
     installHomeGovernanceBoundaries(home);
-    installDisconnectedServerSocketBoundary();
+    installDisconnectedServerSocketBoundary(configureProviderSettingsSocket);
     let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
     const serverUrl = 'https://provider-settings-account.test';
     let serverId = '';
+    let catalogRow: { revision: number | null; content: ProviderConnectionsContentV1 | null } | null = null;
+    let catalogMutationInterceptor: ((input: ProviderConnectionsRowMutationV1, next: () => HomeDomainAnswer)
+        => HomeDomainAnswer | Promise<HomeDomainAnswer>) | null = null;
+    const catalogMutations: ProviderConnectionsRowMutationV1[] = [];
     const defaultFeatures = () => createRootLayoutFeaturesResponse({ features: {
         providers: { enabled: true, localDiscovery: { enabled: true }, localModelManagement: { enabled: true } },
     } });
@@ -414,6 +462,9 @@ export function createProviderSettingsAccountHarness() {
             metadata: encodePlainMachineStoredContent(machine.metadata),
             daemonState: encodePlainMachineStoredContent(machine.daemonState),
         })) });
+        for (const machine of machines) home.answer(targetServerId, `/v1/machines/${encodeURIComponent(machine.id)}`, {
+            body: { machine: { id: machine.id, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } },
+        });
         await fetchAndApplyMachines({ credentials: { token: homeRecord.token }, expectedAccountMode: 'plain', encryption: null,
             // This fixture publishes a complete HTTP census, including an authoritative empty list.
             machineDataKeys: new Map(), sourceServerId: targetServerId, throwOnError: true, replace: true,
@@ -446,19 +497,30 @@ export function createProviderSettingsAccountHarness() {
     return {
         home,
         get serverId() { return serverId; },
+        catalogMutations,
+        readCatalogRow() { return catalogRow; },
+        interceptCatalogMutation(interceptor: NonNullable<typeof catalogMutationInterceptor>) {
+            catalogMutationInterceptor = interceptor;
+        },
         publishFeatures,
         publishMachines,
         selectMachine,
         async addHome(options: AddHomeOptions & Readonly<{ features?: ReturnType<typeof createRootLayoutFeaturesResponse> }>) {
             const targetServerId = await home.addHome(options);
             await publishFeatures(targetServerId, options.features ?? defaultFeatures());
+            for (const machine of installedProviderSettingsHarness.current?.state.machines ?? []) {
+                home.answer(targetServerId, `/v1/machines/${encodeURIComponent(machine.id)}`, {
+                    body: { machine: { id: machine.id, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } },
+                });
+            }
             return targetServerId;
         },
         async restore(options: Readonly<{
             accountId?: string;
             serverIdentityId?: string;
             settings?: Readonly<Record<string, unknown>>;
-            catalog?: ProviderConnectionsCatalogV1;
+            /** Null serves an absent row before the real catalog observer initializes it. */
+            catalog?: ProviderConnectionsCatalogV1 | null;
             waivedActions?: readonly ActionSettingsActionId[];
             machines?: readonly Machine[];
             features?: ReturnType<typeof createRootLayoutFeaturesResponse>;
@@ -508,38 +570,58 @@ export function createProviderSettingsAccountHarness() {
                 randomBytes: length => new Uint8Array(length).fill(17),
             }) }
                 : { t: 'plain', v: settings };
-            if (secret) home.answer(serverId, PROJECT_ACCOUNT_ROWS_ROUTE_V1, { body:
+            if (secret) home.answer(serverId, `POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { body:
                 ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: [] }),
             });
             const catalog = options.catalog ?? DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1;
             const catalogContent = secret ? (await import('@happier-dev/protocol/providers/connections/connectionRowsV1'))
                 .sealProviderConnectionsContentV1({ mode: 'e2ee', material: { type: 'legacy', secret }, catalog })
-                : { t: 'plain', v: catalog };
+                : { t: 'plain' as const, v: catalog };
+            const row: NonNullable<typeof catalogRow> = options.catalog === null
+                ? { revision: null, content: null } : { revision: 1, content: catalogContent };
+            catalogRow = row;
+            catalogMutations.length = 0;
             home.answer(serverId, '/v2/account/settings', { body: { version: 1, content: settingsContent } });
-            home.answer(serverId, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, { body: {
-                status: 'present', revision: 1, content: catalogContent,
+            home.answer(serverId, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, { select: () => ({ body: row.revision === null
+                ? { status: 'absent' } : {
+                    status: row.content === null ? 'deleted' : 'present', revision: row.revision,
+                    ...(row.content === null ? {} : { content: row.content }),
+                } }) });
+            home.answer(serverId, `POST ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, { select: async input => {
+                const mutation = ProviderConnectionsRowMutationV1Schema.parse(input);
+                catalogMutations.push(mutation);
+                const next = (): HomeDomainAnswer => {
+                    if (mutation.expectedRevision !== (row.revision ?? 'absent')) return { body:
+                        ProviderConnectionsRowMutationResponseV1Schema.parse({ status: 'conflict', revision: row.revision ?? -1 }) };
+                    if (mutation.content !== null && mutation.content.t !== (secret ? 'encrypted' : 'plain')) return { body:
+                        ProviderConnectionsRowMutationResponseV1Schema.parse({ status: 'account-mode-mismatch' }) };
+                    // Only the wire row is persisted here. Catalog operations, validation,
+                    // materialization and publication remain in the real Account owners.
+                    row.content = mutation.content;
+                    row.revision = (row.revision ?? 0) + 1;
+                    return { body: ProviderConnectionsRowMutationResponseV1Schema.parse({
+                        status: 'updated', revision: row.revision, cursor: row.revision,
+                    }) };
+                };
+                return await catalogMutationInterceptor?.(mutation, next) ?? next();
             } });
             home.answer(serverId, '/v2/account/settings/history', { body: { snapshots: [] } });
-            if (options.machines) await publishMachines(serverId, options.machines);
+            const machines = options.machines ?? installedProviderSettingsHarness.current?.state.machines;
+            if (machines) await publishMachines(serverId, machines);
             connection = await restoreServerAccountForTest({ serverUrl, accountId, request: home.request, credentials });
-            // The connection helper mounts one Home; credential lookups for a
-            // foreign Provider target must still answer for that exact Home.
-            const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-            vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async url => {
-                const token = home.findByServerUrl(url)?.token;
-                if (!token) return null;
-                return credentials && url === serverUrl ? credentials : { token };
-            });
+            // Account restoration scopes its bootstrap port to one Home. Subsequent
+            // peer Provider reads use every declared Home's same HTTP response owner.
+            installHomeGovernanceBoundaries(home);
             const { storage } = await import('@/sync/domains/state/storage');
             await waitForHomeGovernance(() => {
                 const scope = storage.getState().profileScope;
                 if (scope?.accountId !== accountId) throw new Error('Provider fixture Account is not mounted');
             });
-            if (options.machines) {
+            if (machines) {
                 await waitForHomeGovernance(() => {
                     if (!storage.getState().isDataReady) throw new Error('Provider fixture Sync bootstrap is not ready');
                 });
-                await publishMachines(serverId, options.machines);
+                await publishMachines(serverId, machines);
             }
             return { serverId, accountId };
         },
@@ -560,6 +642,9 @@ export function createProviderSettingsAccountHarness() {
             const { clearBrowserRecords } = await import('@/sync/domains/state/browserRecordStorage');
             await clearBrowserRecords();
             await home.reset();
+            catalogRow = null;
+            catalogMutationInterceptor = null;
+            catalogMutations.length = 0;
             serverId = '';
         },
     };

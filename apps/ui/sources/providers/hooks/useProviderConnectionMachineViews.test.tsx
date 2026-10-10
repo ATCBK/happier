@@ -16,11 +16,13 @@ import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarne
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import type { ProviderSettingsMachineRowV1 } from '@/providers/hooks/targetMachine';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const account = createProviderSettingsAccountHarness();
 let serverId = '';
 let otherServerId = '';
-const providerHarness = createProviderSettingsHarness();
+const providerHarness = createProviderSettingsHarness({ machines: ['machine-a', 'machine-b', 'machine-shared']
+    .map(id => createMachineFixture({ id })) });
 installProviderSettingsRpcBoundary(providerHarness);
 // Warm the real Sync module after the transport leaves are installed, not inside a test hook's budget.
 await loadSyncSingletonForTests();
@@ -132,6 +134,50 @@ describe('useProviderConnectionMachineViews', () => {
         expect(rendered.getCurrent().byTargetKey).toEqual({});
     });
 
+    it('withdraws peer Account A rows before rendering Account B while the active Home stays unchanged', async () => {
+        let releaseB!: (value: unknown) => void;
+        let calls = 0;
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, async () => {
+            calls += 1;
+            if (calls === 1) return createProviderConnectionsDescribeFixture({
+                connections: [createProviderConnectionViewFixture({ connectionId: 'pc_a', displayName: 'Peer Account A' })],
+            });
+            return await new Promise(resolve => { releaseB = resolve; });
+        });
+        const { useProviderConnectionMachineViews } = await import('./useProviderConnectionMachineViews');
+        const targets = [row('srv_peer', 'machine-a', otherServerId)];
+        const publishedNames: Array<string | null> = [];
+        const rendered = await renderHook(() => {
+            const views = useProviderConnectionMachineViews({ enabled: true, connectionId: 'pc_a', targets });
+            const peer = views.byTargetKey['srv_peer\u0000machine-a'];
+            publishedNames.push(peer && peer.status !== 'error' ? peer.connection?.displayName ?? null : null);
+            return views;
+        });
+        await waitForHomeGovernance(() => {
+            const peer = rendered.getCurrent().byTargetKey['srv_peer\u0000machine-a'];
+            expect(peer?.status === 'success' ? peer.connection?.displayName : null).toBe('Peer Account A');
+        });
+
+        const replacementRenderStart = publishedNames.length;
+        await act(async () => { await account.home.switchAccount(otherServerId, 'peer-account-b'); });
+        await waitForHomeGovernance(() => expect(calls).toBe(2));
+        try {
+            expect(publishedNames.slice(replacementRenderStart)).not.toContain('Peer Account A');
+            expect(rendered.getCurrent().byTargetKey['srv_peer\u0000machine-a']).toEqual({ status: 'loading', connection: null });
+        } finally {
+            await act(async () => {
+                releaseB(createProviderConnectionsDescribeFixture({ connections: [createProviderConnectionViewFixture({
+                    connectionId: 'pc_a', displayName: 'Peer Account B',
+                })] }));
+            });
+        }
+        await waitForHomeGovernance(() => {
+            const peer = rendered.getCurrent().byTargetKey['srv_peer\u0000machine-a'];
+            expect(peer?.status === 'success' ? peer.connection?.displayName : null).toBe('Peer Account B');
+        });
+        expect(account.home.findByServerUrl('https://provider-settings-account.test')?.accountId).toBe('account-a');
+    });
+
     it('requests peers only while focused with a visible machine section, preserving rows on blur', async () => {
         const { useProviderConnectionMachineViews } = await import('./useProviderConnectionMachineViews');
         const targets = [row('srv_a', 'machine-a', serverId), row('srv_b', 'machine-b', otherServerId)];
@@ -156,6 +202,46 @@ describe('useProviderConnectionMachineViews', () => {
         expect(requests()).toHaveLength(2);
         expect(rendered.getCurrent().byTargetKey).toBe(rows);
         expect(rendered.getCurrent().refresh).toBe(refresh);
+    });
+
+    it('does not publish a peer read acknowledged after that peer Account retires', async () => {
+        let releaseB!: (value: unknown) => void;
+        let retired = false;
+        let calls = 0;
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, async () => {
+            calls += 1;
+            if (calls === 1) {
+                await account.home.switchAccount(otherServerId, 'peer-account-b');
+                retired = true;
+                return createProviderConnectionsDescribeFixture({ connections: [createProviderConnectionViewFixture({
+                    connectionId: 'pc_a', displayName: 'Retired peer Account A',
+                })] });
+            }
+            return await new Promise(resolve => { releaseB = resolve; });
+        });
+        const { useProviderConnectionMachineViews } = await import('./useProviderConnectionMachineViews');
+        const targets = [row('srv_peer', 'machine-a', otherServerId)];
+        const publishedAfterRetirement: Array<string | null> = [];
+        const rendered = await renderHook(() => {
+            const views = useProviderConnectionMachineViews({ enabled: true, connectionId: 'pc_a', targets });
+            const peer = views.byTargetKey['srv_peer\u0000machine-a'];
+            if (retired) publishedAfterRetirement.push(peer && peer.status !== 'error' ? peer.connection?.displayName ?? null : null);
+            return views;
+        });
+        await waitForHomeGovernance(() => expect(calls).toBe(2));
+        try {
+            expect(publishedAfterRetirement).not.toContain('Retired peer Account A');
+        } finally {
+            await act(async () => {
+                releaseB(createProviderConnectionsDescribeFixture({ connections: [createProviderConnectionViewFixture({
+                    connectionId: 'pc_a', displayName: 'Current peer Account B',
+                })] }));
+            });
+        }
+        await waitForHomeGovernance(() => {
+            const peer = rendered.getCurrent().byTargetKey['srv_peer\u0000machine-a'];
+            expect(peer?.status === 'success' ? peer.connection?.displayName : null).toBe('Current peer Account B');
+        });
     });
 
     it('clears Account A rows, rejects its late read, and starts one Account B read when routing ids stay equal', async () => {

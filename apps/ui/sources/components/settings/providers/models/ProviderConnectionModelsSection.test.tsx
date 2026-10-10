@@ -2,11 +2,17 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderErrorV1 } from '@happier-dev/protocol';
+import { PROVIDER_MODEL_SETTINGS_ACTION_ID_BY_OPERATION_V1 } from '@happier-dev/protocol/providers/providerActionsV1';
 import {
     RPC_METHODS,
     type DaemonProviderModelRowV1,
-    type DaemonProviderModelSettingsMutationResponseV1,
 } from '@happier-dev/protocol/rpc';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema,
+    type ProviderConnectionsRowMutationV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
+import { CustomProviderTemplateV1Schema } from '@happier-dev/protocol/providers/connections/customTemplateV1';
+import { serializeModelVisibilityRefV1 } from '@happier-dev/protocol/providers/selection/v1';
+import type { HomeDomainAnswer } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import {
     createProviderConnectionViewFixture,
@@ -17,11 +23,11 @@ import {
     createDeferred,
     flushHookEffects,
     installMachineAdministrationTargetSelectionBoundary,
-    installProviderSettingsRpcBoundary,
     renderScreen,
     standardCleanup,
     withPopoverWebGlobals,
 } from '@/dev/testkit';
+import { createProviderSettingsAccountHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import type { ProviderModelLoadUiResult } from '@/providers/hooks/useProviderModelLoadAction';
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -37,8 +43,8 @@ const state = vi.hoisted(() => ({
 }));
 const refresh = vi.hoisted(() => vi.fn(async () => undefined));
 const providerDecisionListeners = vi.hoisted(() => new Set<() => void>());
-const mutate = vi.hoisted(() => vi.fn<(input: unknown) => Promise<DaemonProviderModelSettingsMutationResponseV1>>(
-    async (_input) => ({ status: 'success', action: 'manualRemove' }),
+const mutate = vi.hoisted(() => vi.fn<(input: ProviderConnectionsRowMutationV1) => Promise<HomeDomainAnswer | undefined>>(
+    async (_input) => undefined,
 ));
 const confirm = vi.hoisted(() => vi.fn(async () => true));
 const alert = vi.hoisted(() => vi.fn());
@@ -52,75 +58,41 @@ const probeProviderConnection = vi.hoisted(() => vi.fn<(_input: unknown) => Prom
 }>>>(async (_input) => ({ status: 'success', models: [], requestFingerprint: 'probe-request:v1:test' })));
 const routerPush = vi.hoisted(() => vi.fn());
 const routerBack = vi.hoisted(() => vi.fn());
+const router = { push: routerPush, back: routerBack };
 const navigationDispatch = vi.hoisted(() => vi.fn());
 const navigationPreventRemove = vi.hoisted(() => ({
     enabled: false,
     callback: null as null | ((event: { data: { action: unknown } }) => void),
 }));
-// Controllable incumbent Account lifetime; null matches the real module under
-// this harness (no registered profile scope) for existing tests.
-const accountLifetimeController = vi.hoisted(() => {
-    type ControllerLifetime = NonNullable<{
-        scope: { serverId: string; accountId: string };
-        isCurrent: () => boolean;
-        onRetire: (cancel: () => void) => Readonly<{ dispose(): void }>;
-    }>;
-    const controller: {
-        lifetime: ControllerLifetime | null;
-        install(accountId: string): Readonly<{ retire(): void }>;
-    } = {
-        lifetime: null,
-        install(accountId) {
-            let retired = false;
-            const retireCallbacks = new Set<() => void>();
-            controller.lifetime = {
-                scope: { serverId: 'server-a', accountId },
-                isCurrent: () => !retired,
-                onRetire: (cancel) => {
-                    if (retired) {
-                        cancel();
-                        return Object.freeze({ dispose() {} });
-                    }
-                    retireCallbacks.add(cancel);
-                    return Object.freeze({ dispose() { retireCallbacks.delete(cancel); } });
-                },
-            };
-            return Object.freeze({
-                retire() {
-                    if (retired) return;
-                    retired = true;
-                    for (const cancel of [...retireCallbacks]) cancel();
-                    retireCallbacks.clear();
-                },
-            });
-        },
-    };
-    return controller;
-});
-vi.mock('@/sync/domains/scope/activeServerAccountScope', () => ({
-    captureActiveServerAccountScopeLifetime: () => accountLifetimeController.lifetime,
-}));
 let modelsRequestCount = 0;
 const providerHarness = createProviderSettingsHarness();
 installProviderSettingsRpcBoundary(providerHarness);
+const account = createProviderSettingsAccountHarness();
+const initialCatalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+    connections: [ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_a', role: 'named', displayName: 'Acme',
+        displayNameMode: 'custom', revision: 7, createdAt: 1, updatedAt: 1,
+        source: { kind: 'custom', template: CustomProviderTemplateV1Schema.parse({ v: 1, name: 'Acme',
+            endpointTemplates: [{ id: 'chat', protocol: 'openai-chat', baseUrl: 'https://acme.example.test/v1',
+                capabilities: { streaming: 'unknown', toolRoundTrips: 'unknown', statefulResponses: 'unknown', reasoningControls: 'unknown' } }],
+            catalog: { source: 'manual', manualModelPolicy: 'allowed' },
+        }) },
+    })],
+    manualModelsByConnectionId: { pc_a: [{ id: 'manual-a', name: 'Manual A', addedAt: 1 }] },
+});
+function persistedCatalog() {
+    const content = account.readCatalogRow()?.content;
+    if (content?.t !== 'plain') throw new Error('Expected the persisted plain Provider catalog');
+    return ProviderConnectionsCatalogV1Schema.parse(content.v);
+}
 const administrationTarget = createMachineAdministrationTargetSelectionMock();
 installMachineAdministrationTargetSelectionBoundary(administrationTarget);
 
 installSettingsViewCommonModuleMocks({
     router: async () => ({
-        useRouter: () => ({ push: routerPush, back: routerBack }),
+        useRouter: () => router,
         useNavigation: () => ({ dispatch: navigationDispatch }),
     }),
-    storage: async () => ({
-        // The page header reads the viewer's content-width preference.
-        useLocalSetting: () => undefined,
-        useAllMachines: () => [{
-            id: 'machine-a', active: true, revokedAt: null,
-            metadata: { displayName: 'Mac' }, metadataVersion: 1, daemonState: null, daemonStateVersion: 1,
-            seq: 1, createdAt: 1, updatedAt: 1, activeAt: 1,
-        }],
-        useMachineListByServerId: () => ({ 'server-a': [{ id: 'machine-a', active: true, revokedAt: null }] }),
-    }),
+    storage: 'real',
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({ confirmResult: true, spies: { confirm, alert } }).module;
@@ -143,7 +115,6 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
             : { state: 'enabled', blockedBy: null, blockerCode: 'none' };
     },
 }));
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({ useActiveServerSnapshot: () => ({ serverId: 'server-a' }) }));
 vi.mock('@react-navigation/native', async () => {
     const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
     return createReactNavigationNativeMock({
@@ -235,16 +206,28 @@ function findProviderRecoveryAction(screen: Awaited<ReturnType<typeof renderScre
 }
 
 describe('ProviderConnectionModelsSection', () => {
-    afterEach(standardCleanup);
-    beforeEach(() => {
+    afterEach(async () => {
+        await standardCleanup();
+        await account.reset();
+    });
+    beforeEach(async () => {
         providerHarness.reset();
+        await account.restore({ serverIdentityId: 'srv_test', machines: providerHarness.state.machines, catalog: initialCatalog,
+            // This suite exercises direct model-management outcomes. The
+            // approval corridor has its own real-Artifact continuation suite.
+            waivedActions: [...Object.values(PROVIDER_MODEL_SETTINGS_ACTION_ID_BY_OPERATION_V1),
+                'providers.models.load', 'providers.models.cancel_load', 'providers.probe'],
+        });
         administrationTarget.controller.reset();
+        administrationTarget.controller.setMachines([
+            { machineId: 'machine-a', displayName: 'Mac', serverId: account.serverId },
+        ]);
         navigationDispatch.mockClear();
         navigationPreventRemove.enabled = false;
         navigationPreventRemove.callback = null;
-        accountLifetimeController.lifetime = null;
         mutate.mockReset();
-        mutate.mockImplementation(async () => ({ status: 'success', action: 'manualRemove' }));
+        mutate.mockImplementation(async () => undefined);
+        account.interceptCatalogMutation(async (input, next) => await mutate(input) ?? next());
         state.providerDecisionState = 'enabled';
         modelsRequestCount = 0;
         state.manualModelPolicy = 'allowed';
@@ -280,13 +263,10 @@ describe('ProviderConnectionModelsSection', () => {
                 modelLoadAction: 'available',
             });
         });
-        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_SETTINGS_MUTATE, async (request) => (
-            await mutate({ serverId: 'server-a', request: request.payload })
-        ));
         providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_PROBE, async (request) => (
             await probeProviderConnection({
                 ...(request.payload as { machineId: string; connectionId: string }),
-                serverId: 'server-a',
+                serverId: request.serverId,
             })
         ));
         providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_LOAD, async (request) => {
@@ -430,13 +410,9 @@ describe('ProviderConnectionModelsSection', () => {
         });
 
         expect(confirm).toHaveBeenCalledOnce();
-        expect(mutate).toHaveBeenCalledWith({
-            serverId: 'server-a',
-            request: {
-                action: 'manualRemove', machineId: 'machine-a', connectionId: 'pc_a',
-                modelId: 'manual-a', expectedConnectionRevision: 7,
-            },
-        });
+        expect(mutate).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: 1 }));
+        expect(persistedCatalog().manualModelsByConnectionId.pc_a).toBeUndefined();
+        expect(account.readCatalogRow()?.revision).toBe(2);
         expect(refresh).toHaveBeenCalledOnce();
     });
 
@@ -449,7 +425,6 @@ describe('ProviderConnectionModelsSection', () => {
     });
 
     it('adds every pasted manual model in one atomic mutation', async () => {
-        mutate.mockResolvedValueOnce({ status: 'success', action: 'manualAdd' });
         const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
 
         await act(async () => {
@@ -460,19 +435,14 @@ describe('ProviderConnectionModelsSection', () => {
         });
 
         expect(mutate).toHaveBeenCalledTimes(1);
-        expect(mutate).toHaveBeenCalledWith({
-            serverId: 'server-a',
-            request: {
-                action: 'manualAdd', machineId: 'machine-a', connectionId: 'pc_a',
-                expectedConnectionRevision: 7,
-                models: [{ id: 'model-a' }, { id: 'model-b' }, { id: 'model-c' }],
-            },
-        });
+        expect(mutate).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: 1 }));
+        expect(persistedCatalog().manualModelsByConnectionId.pc_a)
+            .toMatchObject([{ id: 'manual-a', name: 'Manual A' }, { id: 'model-a' }, { id: 'model-b' }, { id: 'model-c' }]);
+        expect(account.readCatalogRow()?.revision).toBe(2);
         expect(refresh).toHaveBeenCalledTimes(1);
     });
 
     it('persists valid pasted models once while retaining only rejected lines inline', async () => {
-        mutate.mockResolvedValueOnce({ status: 'success', action: 'manualAdd' });
         const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
 
         await act(async () => {
@@ -483,31 +453,31 @@ describe('ProviderConnectionModelsSection', () => {
         });
 
         expect(mutate).toHaveBeenCalledOnce();
-        expect(mutate).toHaveBeenCalledWith({
-            serverId: 'server-a',
-            request: {
-                action: 'manualAdd', machineId: 'machine-a', connectionId: 'pc_a',
-                expectedConnectionRevision: 7,
-                models: [{ id: 'valid-model' }],
-            },
-        });
+        expect(persistedCatalog().manualModelsByConnectionId.pc_a)
+            .toMatchObject([{ id: 'manual-a', name: 'Manual A' }, { id: 'valid-model' }]);
+        expect(account.readCatalogRow()?.revision).toBe(2);
         expect(screen.findByType('InlineAddExpander').props.isOpen).toBe(true);
         expect(screen.findByType('FieldTextInput').props.value).toBe('bad model');
         expect(screen.findByType('FieldTextInput').props.error).toBeTruthy();
         expect(refresh).toHaveBeenCalledOnce();
     });
 
-    it('renders typed operation recovery inline with the exact actionable retry', async () => {
-        mutate.mockResolvedValueOnce({
-            status: 'error',
-            error: createProviderErrorV1('provider_endpoint_unavailable', { connectionId: 'pc_a' }),
-        });
+    it('keeps the current catalog on a CAS conflict and offers connection review without replay', async () => {
+        mutate.mockResolvedValueOnce({ body: { status: 'conflict', revision: 99 } });
         const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
 
         await act(async () => { await screen.findByType(ProviderModelManager).props.onResetVisibility?.(); });
 
         expect(alert).not.toHaveBeenCalled();
-        expect(presentedTitles(screen)).toContain('settingsProviders.errors.actions.retry');
+        expect(persistedCatalog()).toEqual(initialCatalog);
+        expect(account.readCatalogRow()?.revision).toBe(1);
+        expect(sectionState(screen).errorRetry).toBeUndefined();
+        await act(async () => {
+            await findProviderRecoveryAction(screen, 'settingsProviders.errors.actions.reviewConnection')?.props.onPress?.();
+        });
+        expect(routerPush).toHaveBeenCalledOnce();
+        expect(mutate).toHaveBeenCalledOnce();
+        expect(persistedCatalog()).toEqual(initialCatalog);
     });
 
     it('shows initial transport failure and preserves stale rows when a later refresh fails', async () => {
@@ -588,15 +558,16 @@ describe('ProviderConnectionModelsSection', () => {
 
     it('settles overlapping visibility writes in the order the user issued them', async () => {
         // Two rapid toggles for the same model must not race: dispatching them
-        // concurrently lets the daemon apply them in the opposite order and
+        // concurrently lets the Account apply them in the opposite order and
         // leave the catalog showing the opposite of the user's last intent.
-        const firstWrite = createDeferred<DaemonProviderModelSettingsMutationResponseV1>();
+        const firstWrite = createDeferred<HomeDomainAnswer | undefined>();
         const dispatched: boolean[] = [];
         mutate.mockImplementation(async (input) => {
-            const request = (input as { request: { hidden?: boolean } }).request;
-            dispatched.push(request.hidden === true);
+            if (input.content?.t !== 'plain') throw new Error('Expected a plain Provider catalog mutation');
+            const catalog = ProviderConnectionsCatalogV1Schema.parse(input.content.v);
+            dispatched.push(Object.keys(catalog.modelVisibilityByRef).length > 0);
             if (dispatched.length === 1) return await firstWrite.promise;
-            return { status: 'success', action: 'setVisibility' };
+            return undefined;
         });
         const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
         const ref = { scope: 'allAgents' as const, providerConnectionId: 'pc_a', modelId: 'manual-a' };
@@ -610,15 +581,17 @@ describe('ProviderConnectionModelsSection', () => {
         expect(dispatched).toEqual([true]);
 
         await act(async () => {
-            firstWrite.resolve({ status: 'success', action: 'setVisibility' });
+            firstWrite.resolve(undefined);
             await both;
             await flushHookEffects();
         });
 
         expect(dispatched).toEqual([true, false]);
+        expect(persistedCatalog().modelVisibilityByRef).toEqual({});
+        expect(account.readCatalogRow()?.revision).toBe(3);
     });
 
-    it('refuses a queued visibility write once the selection moved to another machine', async () => {
+    it('persists Account visibility after machine deselection without a machine write', async () => {
         const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
         const setVisibility = screen.findByType(ProviderModelManager).props.onSetVisibility;
 
@@ -634,12 +607,15 @@ describe('ProviderConnectionModelsSection', () => {
             await flushHookEffects();
         });
 
-        expect(mutate).not.toHaveBeenCalled();
+        expect(persistedCatalog().modelVisibilityByRef).toEqual({
+            [serializeModelVisibilityRefV1({ scope: 'allAgents', providerConnectionId: 'pc_a', modelId: 'manual-a' })]: 'hidden',
+        });
+        expect(account.readCatalogRow()?.revision).toBe(2);
+        expect(providerHarness.state.requests.filter(request => request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_SETTINGS_MUTATE)).toEqual([]);
     });
 
     it('retires an Account A queued write even when Account B restores the same machine identity', async () => {
-        const accountA = accountLifetimeController.install('account-a');
-        const firstWrite = createDeferred<DaemonProviderModelSettingsMutationResponseV1>();
+        const firstWrite = createDeferred<HomeDomainAnswer | undefined>();
         mutate.mockImplementationOnce(async () => await firstWrite.promise);
         const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
         const setVisibility = screen.findByType(ProviderModelManager).props.onSetVisibility;
@@ -656,8 +632,7 @@ describe('ProviderConnectionModelsSection', () => {
         expect(mutate).toHaveBeenCalledOnce();
 
         await act(async () => {
-            accountA.retire();
-            accountLifetimeController.install('account-b');
+            await account.restore({ accountId: 'account-b', serverIdentityId: 'srv_test', machines: providerHarness.state.machines });
             await screen.update(
                 <ModelsSectionHost connectionId="pc_a" startAdding />,
             );
@@ -665,7 +640,7 @@ describe('ProviderConnectionModelsSection', () => {
         });
 
         await act(async () => {
-            firstWrite.resolve({ status: 'success', action: 'setVisibility' });
+            firstWrite.resolve(undefined);
             await both;
             await flushHookEffects();
         });
@@ -689,7 +664,6 @@ describe('ProviderConnectionModelsSection', () => {
     });
 
     it('retires the Account A manual-model buffer and its editor error when the Account lifetime retires', async () => {
-        const accountA = accountLifetimeController.install('account-a');
         const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
         expect(sectionState(screen).manualDraft.dirtyRef.current).toBe(false);
 
@@ -706,7 +680,9 @@ describe('ProviderConnectionModelsSection', () => {
         expect(screen.findByType('FieldTextInput').props.error).toBeTruthy();
         expect(sectionState(screen).manualDraft.dirtyRef.current).toBe(true);
 
-        await act(async () => { accountA.retire(); });
+        await act(async () => {
+            await (await import('@/sync/runtime/orchestration/connectionManager')).disconnectActiveServerConnection();
+        });
 
         // The retired Account leaves no buffer or validation state behind.
         // (The catalog hook also clears Account A's rows through the same
@@ -720,7 +696,6 @@ describe('ProviderConnectionModelsSection', () => {
     });
 
     it('keeps the typed manual-model buffer while the same Account lifetime stays current', async () => {
-        accountLifetimeController.install('account-a');
         const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
 
         await act(async () => {
@@ -874,7 +849,6 @@ describe('ProviderConnectionModelsSection', () => {
     });
 
     it('retries only catalog refresh after an acknowledged settings mutation', async () => {
-        mutate.mockResolvedValueOnce({ status: 'success', action: 'resetVisibility' });
         const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
         state.error = createProviderErrorV1('provider_endpoint_unavailable', {
             connectionId: 'pc_a', machineId: 'machine-a',
@@ -914,13 +888,9 @@ describe('ProviderConnectionModelsSection', () => {
 
         confirm.mockResolvedValueOnce(true);
         await act(async () => { await screen.findByType(ProviderModelManager).props.onShowOnly?.(exactRef); });
-        expect(mutate).toHaveBeenCalledWith({
-            serverId: 'server-a',
-            request: {
-                action: 'bulkVisibility', machineId: 'machine-a',
-                changes: [{ ref: exactRef, hidden: false }],
-            },
-        });
+        expect(mutate).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: 1 }));
+        expect(persistedCatalog().modelVisibilityByRef[serializeModelVisibilityRefV1(exactRef)]).toBeUndefined();
+        expect(account.readCatalogRow()?.revision).toBe(2);
     });
 
     it('delegates one exact Load action through the contained load hook', async () => {
@@ -937,7 +907,7 @@ describe('ProviderConnectionModelsSection', () => {
         expect(refreshButton).toBeDefined();
         await act(async () => { await refreshButton?.props.onPress?.(); });
         expect(probeProviderConnection).toHaveBeenCalledWith({
-            machineId: 'machine-a', serverId: 'server-a', connectionId: 'pc_a',
+            machineId: 'machine-a', serverId: 'srv_test', connectionId: 'pc_a',
         });
         expect(refresh).toHaveBeenCalledOnce();
         expect(screen.findByType(ProviderModelManager).props.groups[0].rows).toHaveLength(1);
@@ -958,8 +928,8 @@ describe('ProviderConnectionModelsSection', () => {
         });
         await act(async () => {
             administrationTarget.controller.setMachines([
-                { machineId: 'machine-a', displayName: 'Mac' },
-                { machineId: 'machine-b', displayName: 'Linux' },
+                { machineId: 'machine-a', displayName: 'Mac', serverId: account.serverId },
+                { machineId: 'machine-b', displayName: 'Linux', serverId: account.serverId },
             ]);
             administrationTarget.controller.select('machine-b', 'srv_test');
             await flushHookEffects();

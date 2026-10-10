@@ -124,6 +124,10 @@ export function setProviderModelPickerVisibility(input: Readonly<{
     return invoke('providers.models.source_visibility.set', { action: 'setConnectionVisibility', connectionId, shown },
         outputs['providers.models.source_visibility.set'], { serverId }, approval);
 }
+export const setProviderDefaultModelSelection = async (input: ProviderActionInputByIdV1['providers.defaults.set'] & Readonly<{ serverId: string | null }>, approval?: ProviderActionApprovalOptions) => {
+    const { serverId, ...request } = input;
+    return invoke('providers.defaults.set', request, outputs['providers.defaults.set'], { serverId }, approval);
+};
 export const describeProviderBindingStatus: ProviderActionMethod<'describeProviderBindingStatus'> = (input, approval) => invoke(
     'providers.binding.status', input.request, outputs['providers.binding.status'], input, approval,
 );

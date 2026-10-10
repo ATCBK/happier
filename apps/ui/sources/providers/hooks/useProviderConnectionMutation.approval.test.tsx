@@ -1,23 +1,25 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
-import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
-import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
+    ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema,
+} from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const scopedAccount = createProviderSettingsAccountHarness();
-const harness = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(harness);
+const harness = scopedAccount.home;
 const navigation = createExpoRouterMock();
 vi.doMock('expo-router', () => navigation.module);
-const machineRpc = vi.fn(async () => ({ status: 'success', action: 'delete', deletedConnectionId: 'pc_a' }));
-// Only Machine transport is replaced: Action admission, Artifact writes and Inbox execution stay real.
-vi.doMock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
+// Only Socket transport is substituted; scoped Machine routing, Artifact writes and Inbox execution stay real.
+const providerHarness = createProviderSettingsHarness({ machines: [] });
+installProviderSettingsRpcBoundary(providerHarness);
 await loadSyncSingletonForTests();
 const { useProviderConnectionMutation } = await import('./useProviderConnectionMutation');
 const { mutateProviderConnection } = await import('@/providers/actions/client');
@@ -26,13 +28,24 @@ const { useActionApprovalContinuation } = await import('@/components/approvals/u
 const { useServerCredentialAccountScopeResolution } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
 
 beforeEach(async () => {
-    standardCleanup(); await harness.reset(); installHomeGovernanceBoundaries(harness);
-    machineRpc.mockClear(); navigation.spies.push.mockClear();
+    standardCleanup(); await scopedAccount.reset();
+    providerHarness.reset(); navigation.spies.push.mockClear();
 });
-afterEach(standardCleanup);
+afterEach(async () => { standardCleanup(); await scopedAccount.reset(); });
+function catalogFixture() {
+    return ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+        connections: [{ v: 1, id: 'pc_a', source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' },
+            role: 'named', displayName: 'Approval source', displayNameMode: 'custom',
+            revision: 1, createdAt: 1, updatedAt: 1 }],
+    });
+}
+async function restoreAccount(waivedActions?: readonly ['providers.connections.delete']) {
+    return scopedAccount.restore({ catalog: catalogFixture(), waivedActions,
+        machines: [createMachineFixture({ id: 'machine-a', active: true, activeAt: Date.now() })] });
+}
 describe('Provider mutation deferred approval', () => {
     it('never reads the original result Artifact through a replacement Account on the same Home', async () => {
-        const serverId = await harness.addHome({ name: 'Provider captured Artifact', serverUrl: 'https://provider-captured-artifact.test', accountId: 'account-a' });
+        const { serverId } = await restoreAccount();
         await harness.requireUiApproval(serverId, 'providers.connections.delete');
         const onExecuted = () => {};
         const hook = await renderHook(() => ({
@@ -66,16 +79,33 @@ describe('Provider mutation deferred approval', () => {
             }));
             await flushHookEffects();
             expect(harness.requestsFor(path).filter(request => request.token !== originalToken)).toEqual([]);
-            expect(machineRpc).not.toHaveBeenCalled();
+            expect(providerHarness.state.requests).toEqual([]);
             expect(caller.signal.aborted).toBe(false);
         } finally {
             await act(async () => { caller.abort(); await execution; });
         }
     });
     it('follows each queued result-bearing approval on its captured Home when two Homes share one mounted registrar', async () => {
-        const { serverId: homeA } = await scopedAccount.restore({ accountId: 'account-a' });
+        const { serverId: homeA } = await restoreAccount();
         const home = scopedAccount.home;
         const homeB = await scopedAccount.addHome({ name: 'Provider multi B', serverUrl: 'https://provider-multi-b.test', accountId: 'account-b', active: false });
+        let peerCatalog = catalogFixture();
+        let peerRevision = 1;
+        let peerWrites = 0;
+        home.answer(homeB, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            select: () => ({ body: { status: 'present', revision: peerRevision, content: { t: 'plain', v: peerCatalog } } }),
+        });
+        home.answer(homeB, `POST ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            select: input => {
+                const mutation = ProviderConnectionsRowMutationV1Schema.parse(input);
+                expect(mutation.expectedRevision).toBe(peerRevision);
+                if (mutation.content?.t !== 'plain') throw new Error('Expected Plain peer Account row');
+                peerCatalog = mutation.content.v;
+                peerRevision += 1;
+                peerWrites += 1;
+                return { body: { status: 'updated', revision: peerRevision, cursor: peerRevision } };
+            },
+        });
         await home.requireUiApproval(homeB, 'providers.connections.delete');
         // The real Sync Home and both live Account scopes stay on A; B has its own
         // persisted policy and may not publish its Artifact into A's projection.
@@ -103,7 +133,7 @@ describe('Provider mutation deferred approval', () => {
             await waitForHomeGovernance(() => expect(hook.getCurrent().approvalId).toBe(artifactA));
             await request(homeB, 'account-b');
             const artifactB = home.artifacts(homeB).list()[0]!.id;
-            expect(machineRpc).not.toHaveBeenCalled();
+            expect(providerHarness.state.requests).toEqual([]);
             // The second result may settle durably before the first queue head.
             await expect(decideApprovalAsInbox(homeB, artifactB, 'approve')).resolves.toMatchObject({ ok: true });
             await expect(decideApprovalAsInbox(homeA, artifactA, 'approve')).resolves.toMatchObject({ ok: true });
@@ -113,7 +143,12 @@ describe('Provider mutation deferred approval', () => {
             expect([...new Set(home.requestsFor(`/v1/artifacts/${artifactB}`).map(request => request.serverId))]).toEqual([homeB]);
             await waitForHomeGovernance(() => expect(settlements.size).toBe(2));
             expect(settlements.get(homeB)).toMatchObject({ value: { status: 'success', action: 'delete' } });
-            expect(machineRpc).toHaveBeenCalledTimes(2);
+            expect(scopedAccount.readCatalogRow()).toMatchObject({ revision: 2, content: { t: 'plain', v: { connections: [] } } });
+            expect(peerCatalog.connections).toEqual([]);
+            expect(peerRevision).toBe(2);
+            expect(scopedAccount.catalogMutations).toHaveLength(1);
+            expect(peerWrites).toBe(1);
+            expect(providerHarness.state.requests).toEqual([]);
         } finally {
             await act(async () => { caller.abort(); await Promise.all(executions); });
             await hook.unmount();
@@ -121,22 +156,13 @@ describe('Provider mutation deferred approval', () => {
         }
     });
     it('preserves an acknowledged direct mutation after the captured Account retires', async () => {
-        const serverId = await harness.addHome({ name: 'Provider receipt', serverUrl: 'https://provider-receipt.test', accountId: 'account-a' });
-        await harness.requireUiApproval(serverId, 'providers.connections.delete');
-        const { storage } = await import('@/sync/domains/state/storage');
-        const settings = {
-            ...storage.getState().settings,
-            actionsSettingsV1: ActionsSettingsV1Schema.parse({
-                v: 1, actions: {}, approvalWaivedSurfaces: { 'providers.connections.delete': ['ui'] },
-            }),
-        };
-        storage.setState({ settings });
-        harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+        const { serverId } = await restoreAccount(['providers.connections.delete']);
         let releaseResponse: () => void = () => {};
         const responseGate = new Promise<void>(resolve => { releaseResponse = resolve; });
-        machineRpc.mockImplementationOnce(async () => {
+        scopedAccount.interceptCatalogMutation(async (_input, next) => {
+            const receipt = next();
             await responseGate;
-            return { status: 'success', action: 'delete', deletedConnectionId: 'pc_a' };
+            return receipt;
         });
         const capturedAccount = new AbortController();
         const settled = mutateProviderConnection({ serverId,
@@ -144,41 +170,47 @@ describe('Provider mutation deferred approval', () => {
         }, { scope: { serverId, accountId: 'account-a' }, signal: capturedAccount.signal,
             onApprovalPending: () => { throw new Error('The Account waived approval for this direct mutation'); },
         }).then(value => ({ value }), failure => ({ failure }));
-        await waitForHomeGovernance(() => expect(machineRpc).toHaveBeenCalledOnce());
+        await waitForHomeGovernance(() => expect(scopedAccount.catalogMutations).toHaveLength(1));
+        expect(scopedAccount.readCatalogRow()).toMatchObject({ revision: 2, content: { t: 'plain', v: { connections: [] } } });
         await harness.switchAccount(serverId, 'account-b');
         capturedAccount.abort();
         releaseResponse();
         await expect(settled).resolves.toMatchObject({ value: { status: 'success', action: 'delete', deletedConnectionId: 'pc_a' } });
         expect(harness.artifacts(serverId).list()).toHaveLength(0);
-        expect(machineRpc).toHaveBeenCalledOnce();
+        expect(scopedAccount.catalogMutations).toHaveLength(1);
+        expect(providerHarness.state.requests).toEqual([]);
     });
 
     it('opens the existing approval route and consumes its typed terminal result without replaying the mutation', async () => {
-        const serverId = await harness.addHome({ name: 'Provider approvals', serverUrl: 'https://provider-approval.test', accountId: 'account-a' });
+        const { serverId } = await restoreAccount();
         await harness.requireUiApproval(serverId, 'providers.connections.delete');
         const refresh = vi.fn(async () => {});
         const resolveTarget = () => ({ serverId, machineId: 'machine-a' });
-        const hook = await renderHook(() => useProviderConnectionMutation({ resolveTarget, refresh }));
+        const hook = await renderHook(() => ({ mutation: useProviderConnectionMutation({ resolveTarget, serverId, refresh }),
+            client: useProviderActionClient(serverId) }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().client.ready).toBe(true));
         let execution: ReturnType<ReturnType<typeof useProviderConnectionMutation>['run']> | undefined;
         await act(async () => {
-            execution = hook.getCurrent().run({ action: 'delete', machineId: 'machine-a', connectionId: 'pc_a' });
+            execution = hook.getCurrent().mutation.run({ action: 'delete', machineId: 'machine-a', connectionId: 'pc_a' });
         });
         await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
         const artifactId = harness.artifacts(serverId).list()[0]!.id;
-        expect(hook.getCurrent().error).toBeNull();
-        expect(hook.getCurrent().isPending('delete:pc_a')).toBe(true);
-        expect(machineRpc).not.toHaveBeenCalled();
+        expect(hook.getCurrent().mutation.error).toBeNull();
+        expect(hook.getCurrent().mutation.isPending('delete:pc_a')).toBe(true);
+        expect(providerHarness.state.requests).toEqual([]);
         expect(navigation.spies.push).toHaveBeenCalledWith(`/inbox/approvals/${encodeURIComponent(artifactId)}?serverId=${encodeURIComponent(serverId)}`);
         await expect(decideApprovalAsInbox(serverId, artifactId, 'approve')).resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
         await act(async () => { await expect(execution).resolves.toMatchObject({ status: 'success', action: 'delete' }); });
-        expect(hook.getCurrent().error).toBeNull();
-        expect(hook.getCurrent().isPending('delete:pc_a')).toBe(false);
-        expect(machineRpc).toHaveBeenCalledOnce();
+        expect(hook.getCurrent().mutation.error).toBeNull();
+        expect(hook.getCurrent().mutation.isPending('delete:pc_a')).toBe(false);
+        expect(scopedAccount.readCatalogRow()).toMatchObject({ revision: 2, content: { t: 'plain', v: { connections: [] } } });
+        expect(scopedAccount.catalogMutations).toHaveLength(1);
+        expect(providerHarness.state.requests).toEqual([]);
         expect(refresh).toHaveBeenCalledOnce();
     });
 
     it('ends pending local interest on Account retirement even when the explicit caller signal stays live', async () => {
-        const serverId = await harness.addHome({ name: 'Provider load approval', serverUrl: 'https://provider-load-approval.test', accountId: 'account-a' });
+        const { serverId } = await restoreAccount();
         await harness.requireUiApproval(serverId, 'providers.models.load');
         const hook = await renderHook(() => useProviderActionClient(serverId));
         await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
@@ -197,7 +229,7 @@ describe('Provider mutation deferred approval', () => {
             await flushHookEffects();
             expect(settlement).toMatchObject({ failure: { code: 'action_account_scope_changed' } });
             expect(caller.signal.aborted).toBe(false);
-            expect(machineRpc).not.toHaveBeenCalled();
+            expect(providerHarness.state.requests).toEqual([]);
         } finally {
             // Dispose the test's explicit interest even when the missing lifetime merge fails.
             await act(async () => { caller.abort(); await execution; });

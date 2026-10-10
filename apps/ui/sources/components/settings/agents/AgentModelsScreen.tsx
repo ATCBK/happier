@@ -5,8 +5,9 @@ import { serializeModelVisibilityRefV1, type ModelVisibilityRefV1 } from '@happi
 import { getAgentStaticModels } from '@happier-dev/agents';
 import { areProviderContributionKeysEqualV1 } from '@happier-dev/protocol/providers/contribution-identity';
 import type { ProviderModelPickerSourceKind } from '@happier-dev/protocol/providers/catalog/modelPickerVisibility';
+import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 
-import { getAgentCore, isBundledAgentId } from '@/agents/catalog/catalog';
+import { isBundledAgentId } from '@/agents/catalog/catalog';
 import { ProviderErrorItems } from '@/components/settings/providers/ProviderErrorItems';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -36,9 +37,12 @@ import {
     providerRetryRecoveryForError,
 } from '@/providers/connection/recovery';
 import { useProviderCatalogForServer } from '@/sync/store/useProviderCatalog';
-import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
-import { machineAdministrationTargetsEqual } from '@/sync/domains/machines/administration/targetSelection';
-import { useMachineAdministrationTargetSelection } from '@/sync/domains/machines/administration/useTargetSelection';
+import { refreshProviderCatalog } from '@/sync/engine/settings/providerCatalogEngine';
+import { useAgentAdministrationCatalog } from './collection/useAgentAdministrationCatalog';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { useSetting } from '@/sync/domains/state/storage';
+import { getFavoriteModelRef } from '@/sync/domains/models/favoriteModelSelections';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { isMachineAdministrationExecutionTargetCurrent } from '@/sync/domains/machines/administration/operationCurrentness';
 import { t } from '@/text';
 import { resolveAgentModelsSettingsAccess } from './resolveAgentModelsSettingsAccess';
@@ -74,21 +78,16 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
 }>) {
     const router = useRouter();
     const enabled = useFeatureEnabled('providers');
-    const administrationTargetSelection = useMachineAdministrationTargetSelection(
-        MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.agents,
-    );
-    const executionTarget = React.useMemo(() => {
-        const selectedTarget = administrationTargetSelection.selectedTarget;
-        const resolvedTarget = administrationTargetSelection.resolveExecutionTarget();
-        return selectedTarget !== null
-            && resolvedTarget !== null
-            && machineAdministrationTargetsEqual(selectedTarget, resolvedTarget.target)
-            ? resolvedTarget
-            : null;
-    }, [administrationTargetSelection]);
+    const administration = useAgentAdministrationCatalog({ loadProjection: false });
+    const administrationTargetSelection = administration.targetSelection;
+    const executionTarget = administration.executionTarget;
+    const accountScope = useAccountSettingsScope();
     const machineId = executionTarget?.machine.id ?? null;
-    const serverId = executionTarget?.serverId ?? null;
-    const { mutateProviderModelSettings } = useProviderActionClient(serverId);
+    // A selected machine retains its exact Home even offline; only an absent
+    // selection falls back to Account-only model management.
+    const serverId = administration.projectionScope?.serverId
+        ?? (administrationTargetSelection.selectedTarget === null ? accountScope?.serverId ?? null : null);
+    const { mutateProviderModelSettings, setProviderDefaultModelSelection } = useProviderActionClient(serverId);
     const providerCatalog = useProviderCatalogForServer(serverId);
     const resolveCurrentExecutionTarget = React.useCallback(() => {
         if (!executionTarget) return null;
@@ -111,8 +110,12 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
     );
     const providerSettings = settingsAccess.settings;
     const defaultSelection = useProviderSettingsForServer(serverId).defaultsByAgentTargetKey[props.agentTargetKey] ?? null;
-    const agentCore = props.runtimeAgentId && isBundledAgentId(props.runtimeAgentId) ? getAgentCore(props.runtimeAgentId) : null;
-    const agentTitle = agentCore ? t(agentCore.displayNameKey) : null;
+    const favorites = useSetting('currentFavoriteModelSelectionsV1');
+    const favoriteRefs = React.useMemo(() => accountScope && serverId
+        && areServerProfileIdentifiersEquivalent(accountScope.serverId, serverId)
+        ? favorites.map(getFavoriteModelRef).filter(ref => ref.agentTargetKey === props.agentTargetKey)
+        : [], [accountScope, favorites, props.agentTargetKey, serverId]);
+    const agentTitle = administration.agentEntries.find(entry => entry.backendTargetKey === props.agentTargetKey)?.title ?? null;
     const [operationError, setOperationError] = React.useState<Readonly<{
         error: ProviderErrorV1;
         retry?: () => Promise<void>;
@@ -165,6 +168,30 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
             ? <AgentSourceVisibility connectionId={connectionId} kind={kind} serverId={serverId} onStateChange={handleSourceVisibilityState} />
             : null;
     }, [handleSourceVisibilityState, providerSettings.connections, serverId]);
+    const reviewCurrentState = React.useCallback(async (): Promise<void> => {
+        if (!accountLifetime?.isCurrent() || !serverId
+            || !areServerProfileIdentifiersEquivalent(accountLifetime.scope.serverId, serverId)) return;
+        // Native visibility comes from the Account catalog; runtime rows come
+        // from the projection. Review both inputs without replaying the write.
+        await refreshProviderCatalog(accountLifetime.scope);
+        if (accountLifetime.isCurrent()) await projection.refresh();
+    }, [accountLifetime, projection.refresh, serverId]);
+    const setDefault = React.useCallback(async (ref: ProviderBoundModelRef): Promise<void> => {
+        if (!accountLifetime?.isCurrent() || !settingsAccess.writable || ref.agentTargetKey !== props.agentTargetKey) return;
+        try {
+            await setProviderDefaultModelSelection({
+                serverId, agentTargetKey: props.agentTargetKey,
+                selection: { v: 1, ref, updatedAt: Date.now() },
+            });
+            if (accountLifetime.isCurrent()) setOperationError(null);
+        } catch (caught) {
+            if (!accountLifetime.isCurrent()) return;
+            const error = providerErrorFromRpcFailure(caught);
+            showError(error, error.code === 'provider_rpc_mutation_outcome_unknown'
+                ? { reviewCurrentState }
+                : providerRetryRecoveryForError(error, () => setDefault(ref)));
+        }
+    }, [accountLifetime, props.agentTargetKey, reviewCurrentState, serverId, setProviderDefaultModelSelection, settingsAccess.writable, showError]);
     // One sheet per source, in picker order; hidden models stay in their source, switched off.
     const grouping = React.useMemo((): ProviderModelManagerSourceGrouping => ({
         nativeTitle: agentTitle ?? t('settingsAgents.detailPage.modelsNativeFallbackTitle'),
@@ -175,11 +202,10 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
         defaultRef: defaultSelection
             ? { providerConnectionId: defaultSelection.ref.providerConnectionId, modelId: defaultSelection.ref.modelId }
             : null,
+        favoriteRefs,
+        onSetDefault: ref => { void setDefault(ref); },
         renderSourceAccessory,
-    }), [agentTitle, defaultSelection, renderSourceAccessory]);
-    const reviewCurrentState = React.useCallback(async (): Promise<void> => {
-        await projection.refresh();
-    }, [projection.refresh]);
+    }), [agentTitle, defaultSelection, favoriteRefs, renderSourceAccessory, setDefault]);
     const refreshLoadedModel = React.useCallback(async (connectionId: string, modelId: string) => {
         if (!resolveCurrentExecutionTarget()) return false;
         const result = await projection.refreshWithResult();
