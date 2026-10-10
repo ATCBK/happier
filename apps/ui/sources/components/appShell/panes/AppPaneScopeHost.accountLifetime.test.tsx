@@ -8,6 +8,7 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import type { PluginSurfaceOpenHandler } from '@/components/plugins/surfaces/openPluginSurface';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { PluginUiSurfacePlacementProjection } from '@/sync/domains/plugins/ui/projection';
+import type { PaneSurfaceScope } from './types';
 
 // Only native geometry/font rendering and the external socket connection are
 // substituted. The pane reducer/provider, launch resolver/store and Account
@@ -19,6 +20,7 @@ vi.mock('react-native', async () => {
 });
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('expo-file-system', async () => (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);
 installDisconnectedServerSocketBoundary();
 // The real app entry loads syncEngine before any route can render a surface.
 // Keep that producer ordering while retaining the actual host and singleton.
@@ -36,7 +38,11 @@ const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/p
 const { createSessionPaneScopeId } = await import('@/components/sessions/panes/sessionPaneScopeId');
 
 describe('AppPaneScopeHost exact Home launch lifetime', () => {
-    it('keeps a Home B pane launcher across Home A retirement and refuses it when its real Home B credentials retire', async () => {
+    it.each([
+        { container: 'rightPane', adapter: 'direct' },
+        { container: 'detailsPane', adapter: 'direct' },
+        { container: 'detailsPane', adapter: 'driver' },
+    ] as const)('keeps a Home B $adapter $container launcher across Home A retirement and refuses it when its real Home B credentials retire', async ({ container, adapter }) => {
         const previousScope = storage.getState().profileScope;
         const previousProfile = storage.getState().profile;
         const previousSnapshot = getAppliedActiveServerSnapshot();
@@ -48,7 +54,7 @@ describe('AppPaneScopeHost exact Home launch lifetime', () => {
         const pluginId = 'acme.pane-lifetime';
         const destination = { pluginId, localId: 'notes' };
         const binding = normalizePluginUiDestinationBindingV1({ pluginId, destinationId: destination.localId,
-            rendererId: 'notes-renderer', container: 'rightPane', target: { kind: 'session' } });
+            rendererId: 'notes-renderer', container, target: { kind: 'session' } });
         if (!binding) throw new Error('The canonical destination schema refused the pane fixture');
         const placement = {
             id: 'surfacePlacement:acme.pane-lifetime:notes', pluginId, occurrenceId: 'notes-occurrence',
@@ -76,22 +82,29 @@ describe('AppPaneScopeHost exact Home launch lifetime', () => {
             published.right = context.state.scopes[scopeId]?.right;
             return null;
         }
+        function ScopedHost({ lifetime }: { lifetime: ServerAccountScopeLifetime | null }) {
+            const { registerDriver } = useAppPaneContext();
+            const surfaceScope = React.useMemo<PaneSurfaceScope>(() => ({ targetKind: 'session', sessionId, machineId: 'pane-machine-b', serverId: homeB.id,
+                    accountLifetime: lifetime, pluginUiProjection: projection, platform: 'web',
+                    projectionPhase: lifetime ? 'current' : 'unavailable', interactionEnabled: Boolean(lifetime) }), [lifetime]);
+            React.useEffect(() => adapter === 'driver' ? registerDriver({ scopeId, surfaceScope }) : undefined,
+                [registerDriver, surfaceScope]);
+            return <AppPaneScopeHost scopeId={scopeId} main={<PaneState />}
+                {...(adapter === 'direct' ? { surfaceScope } : {})} onPluginSurfaceOpenChange={publishOpen} />;
+        }
         function Harness() {
             const { binding: lifetime } = useServerCredentialAccountScopeBinding(homeB.id);
             published.lifetime = lifetime;
-            return <AppPaneProvider><AppPaneScopeHost scopeId={scopeId} main={<PaneState />}
-                surfaceScope={{ targetKind: 'session', sessionId, machineId: 'pane-machine-b', serverId: homeB.id,
-                    accountLifetime: lifetime, pluginUiProjection: projection, platform: 'web',
-                    projectionPhase: lifetime ? 'current' : 'unavailable', interactionEnabled: Boolean(lifetime) }}
-                onPluginSurfaceOpenChange={publishOpen} /></AppPaneProvider>;
+            return <AppPaneProvider><ScopedHost lifetime={lifetime} /></AppPaneProvider>;
         }
         const screen = await renderScreen(<Harness />);
         try {
             await vi.waitFor(() => expect(published.lifetime?.scope.accountId).toBe('pane-account-b'));
+            await vi.waitFor(() => expect(typeof published.open).toBe('function'));
             const escapedOpen = published.open;
             if (!escapedOpen) throw new Error('The actual pane owner did not publish its launcher');
             await act(async () => { expect(await escapedOpen({ destination })).toEqual({ ok: true }); });
-            expect(published.right?.selectedDestination).toEqual({ kind: 'plugin', destination });
+            if (container === 'rightPane') expect(published.right?.selectedDestination).toEqual({ kind: 'plugin', destination });
             const homeBLifetime = published.lifetime;
             await act(async () => {
                 storage.getState().activateProfileScope({ serverId: homeA.id, accountId: 'pane-account-a-next' });

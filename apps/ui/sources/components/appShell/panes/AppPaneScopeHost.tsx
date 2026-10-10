@@ -259,9 +259,9 @@ function PluginAppPaneSurface(props: Readonly<{
     );
 }
 
-const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps) => {
+const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Readonly<{ paneAdapter: ResolvedPaneAdapter | null }>) => {
     const enclosingNavigationBinding = usePluginSurfaceDestinationNavigationBinding();
-    const { dispatch, state, getDriver, driverRegistryVersion } = useAppPaneContext();
+    const { dispatch, state } = useAppPaneContext();
     const pane = useAppPaneScope(props.scopeId);
     const deviceType = useDeviceType();
     const appProjection = useAppShellPluginUiProjection().pluginUiProjection;
@@ -283,11 +283,7 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps) => {
     const rightOpen = Boolean(scopeState?.right.isOpen);
     const detailsOpen = Boolean(scopeState?.details.isOpen);
     const bottomOpen = Boolean(scopeState?.bottom?.isOpen);
-    const driver = React.useMemo(() => getDriver(props.scopeId), [driverRegistryVersion, getDriver, props.scopeId]);
-    const paneAdapter = React.useMemo(() => resolvePaneAdapter(driver, props), [
-        driver,
-        props,
-    ]);
+    const paneAdapter = props.paneAdapter;
     const showActionRail = useAppPaneActionRailVisible(props.scopeId, paneAdapter?.rightSidebarAdapter ?? null);
     const detailsPaneEnabled = paneAdapter?.detailsPaneEnabled !== false;
     const destinationDetails = props.destinationDetails;
@@ -657,10 +653,14 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps) => {
  * mounted Details workspace. The wrapper is lifecycle-only; `AppPaneScopeHost`
  * remains the sole selection/layout owner.
  */
-export const AppPaneScopeHost = React.memo((props: AppPaneScopeHostProps) => (
-    <PluginDetailsDestinationLaunchScope accountLifetime={props.pluginSurfaceScope !== undefined
-        ? props.pluginSurfaceScope?.accountLifetime ?? null
+export const AppPaneScopeHost = React.memo((props: AppPaneScopeHostProps) => {
+    const { getDriver, driverRegistryVersion } = useAppPaneContext();
+    const driver = React.useMemo(() => getDriver(props.scopeId), [driverRegistryVersion, getDriver, props.scopeId]);
+    const paneAdapter = React.useMemo(() => resolvePaneAdapter(driver, props), [driver, props]);
+    const surfaceScope = paneAdapter?.surfaceScope;
+    return <PluginDetailsDestinationLaunchScope accountLifetime={surfaceScope !== undefined
+        ? surfaceScope.accountLifetime ?? null
         : undefined}>
-        <AppPaneScopeHostContent {...props} />
-    </PluginDetailsDestinationLaunchScope>
-));
+        <AppPaneScopeHostContent {...props} paneAdapter={paneAdapter} />
+    </PluginDetailsDestinationLaunchScope>;
+});
