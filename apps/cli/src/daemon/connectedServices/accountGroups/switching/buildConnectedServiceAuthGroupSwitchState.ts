@@ -118,6 +118,7 @@ export function buildQualifiedConnectedAccountAuthGroupSwitchState(input: Readon
         serviceId: input.group.ref.service,
         groupId: input.group.ref.groupId,
         activeProfileId: input.group.activeConnectedAccountId,
+        activeSince: input.group.state.activeSince,
         incarnation: input.group.incarnation,
         generation: input.group.generation,
         runtimeStateRevision: input.group.runtimeStateRevision,
@@ -174,6 +175,7 @@ function buildConnectedServiceAuthGroupSwitchStateFromMemberRuntimeStates(input:
         serviceId: input.group.serviceId,
         groupId: input.group.groupId,
         activeProfileId: input.group.activeProfileId,
+        activeSince: input.group.state.activeSince,
         generation: input.group.generation,
         policy: normalizeConnectedServiceAuthGroupPolicy(input.group.policy),
         members: input.group.members.map((member) => ({

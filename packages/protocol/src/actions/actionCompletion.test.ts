@@ -116,6 +116,33 @@ describe('Action completion contract', () => {
       .toMatchObject({ ok: false });
   });
 
+  it('preserves explicit no-wake goal intent and cancellation through Action dispatch', async () => {
+    const mutations: unknown[] = [];
+    const controller = new AbortController();
+    const executor = createActionExecutor({
+      sessionGoalSet: async input => { mutations.push(input); return { ok: true }; },
+    } as ActionExecutorDeps);
+    expect(await executor.execute('session.goal.set', {
+      sessionId: 'goal-session', objective: 'Save for later', resumeInactiveWithInitialGoal: false,
+    }, { surface: 'cli', signal: controller.signal, actionRequestId: 'goal-request' })).toMatchObject({ ok: true });
+    expect(mutations).toEqual([{ sessionId: 'goal-session', objective: 'Save for later',
+      resumeInactiveWithInitialGoal: false, signal: controller.signal, actionRequestId: 'goal-request' }]);
+  });
+
+  it('refuses an Agent wake before dispatch when canonical start authority is unavailable', async () => {
+    let effects = 0;
+    const executor = createActionExecutor({
+      sessionGoalSet: async () => { effects++; return { ok: true }; },
+    } as ActionExecutorDeps);
+    expect(await executor.execute('session.goal.set', { sessionId: 'goal-session', objective: 'Finish',
+      resumeInactiveWithInitialGoal: true }, { surface: 'agent', defaultSessionId: 'goal-session', authority: 'account_automation', callerPermissionMode: 'default' }))
+      .toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+    expect(effects).toBe(0);
+    expect(await executor.execute('session.goal.set', { sessionId: 'goal-session', objective: 'Save for later',
+      resumeInactiveWithInitialGoal: false }, { surface: 'agent', defaultSessionId: 'goal-session', authority: 'account_automation', callerPermissionMode: 'default' }))
+      .toMatchObject({ ok: true });
+  });
+
   it('refuses contradictory detached and explicit session targets before starting a run', async () => {
     let starts = 0;
     const executor = createActionExecutor({

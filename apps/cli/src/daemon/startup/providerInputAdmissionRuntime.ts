@@ -23,10 +23,14 @@ export type ProviderInputAdmissionRequest = Readonly<{
 export async function callSessionProviderInputAdmission(params: Readonly<{
   credentials: StoredCredentials;
   sessionId: string;
+  externalAction?: Parameters<typeof callSessionRpc>[0]['externalAction'];
+  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionTransportContext>[0]['resolveAuthorizationHeaders'];
 }> & ProviderInputAdmissionRequest): Promise<Readonly<{ status: 'enforced' | 'cleared' | 'not_matched' }>> {
   const transport = await resolveSessionTransportContext({
     credentials: params.credentials,
     idOrPrefix: params.sessionId,
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
+    ...(params.externalAction?.context.signal ? { signal: params.externalAction.context.signal } : {}),
   });
   if (!transport.ok) {
     if (transport.code === 'encryption_material_unavailable') {
@@ -44,6 +48,8 @@ export async function callSessionProviderInputAdmission(params: Readonly<{
           mode: transport.mode,
           method: `${transport.sessionId}:${method}`,
           request,
+          ...(params.externalAction ? { externalAction: params.externalAction } : {}),
+          ...(params.externalAction?.context.signal ? { signal: params.externalAction.context.signal } : {}),
         })
       : await callSessionRpc({
           token: params.credentials.token,
@@ -52,6 +58,8 @@ export async function callSessionProviderInputAdmission(params: Readonly<{
           mode: transport.mode,
           method: `${transport.sessionId}:${method}`,
           request,
+          ...(params.externalAction ? { externalAction: params.externalAction } : {}),
+          ...(params.externalAction?.context.signal ? { signal: params.externalAction.context.signal } : {}),
         }),
   });
 }

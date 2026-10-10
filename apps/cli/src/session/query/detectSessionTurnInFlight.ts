@@ -148,6 +148,7 @@ export async function detectSessionTurnActivity(params: Readonly<{
     sessionProjection?: unknown;
     readyCompletesPendingUserTurns?: boolean;
     transcriptFetchTimeoutMs?: number;
+    resolveAuthorizationHeaders?: Parameters<typeof fetchEncryptedTranscriptPageLatest>[0]['resolveAuthorizationHeaders'];
     signal?: AbortSignal;
 }>): Promise<SessionTurnActivity> {
     const projectedActivity = detectSessionTurnActivityFromProjection(params.sessionProjection);
@@ -165,6 +166,7 @@ export async function detectSessionTurnActivity(params: Readonly<{
                     sessionId: params.sessionId,
                     afterSeq: Math.max(0, Math.trunc(params.afterSeqExclusive)),
                     limit: 20,
+                    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
                     ...(typeof params.transcriptFetchTimeoutMs === 'number'
                         ? { timeoutMs: params.transcriptFetchTimeoutMs }
                         : {}),
@@ -174,6 +176,7 @@ export async function detectSessionTurnActivity(params: Readonly<{
                     token: params.token,
                     sessionId: params.sessionId,
                     limit: 20,
+                    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
                     ...(typeof params.transcriptFetchTimeoutMs === 'number'
                         ? { timeoutMs: params.transcriptFetchTimeoutMs }
                         : {}),

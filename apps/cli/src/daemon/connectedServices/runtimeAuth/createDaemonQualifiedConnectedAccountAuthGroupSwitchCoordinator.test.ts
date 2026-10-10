@@ -135,7 +135,11 @@ function accountScopedUsageFailure() {
 
 describe('createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator', () => {
     it('reads selection from the live group and stored quota without preparing or switching', async () => {
-        const currentGroup = group({ activeConnectedAccountId: 'primary', generation: 7, runtimeStateRevision: 3 });
+        const activeSince = { accountId: 'primary', atMs: 100 };
+        const currentGroup = QualifiedConnectedAccountGroupV4Schema.parse({
+            ...group({ activeConnectedAccountId: 'primary', generation: 7, runtimeStateRevision: 3 }),
+            state: { activeSince, lastSwitchAt: activeSince.atMs },
+        });
         const accountUsageStore = createProviderAccountUsageStore();
         const recordKey = { providerId: 'example', accountSubjectId: 'backup', subjectKind: 'subscription' as const, quotaScope: 'account' as const };
         accountUsageStore.recordSnapshot({
@@ -158,6 +162,10 @@ describe('createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator', () =
             probeQuotaSnapshotsForGroup: forbiddenEffect,
         });
         const result = await coordinator.readSelection({ serviceId: service, groupId: 'fallbacks' });
+        expect(result).toMatchObject({
+            activeAccountRef: { service, accountId: 'primary' },
+            activeSince,
+        });
         expect(ConnectedServicePoolSelectionGetResponseV1Schema.parse({ group: currentGroup.ref, ...result })).toEqual({ group: currentGroup.ref, ...result });
         expect(result.observedAtMs).toBe(1_000);
         expect(result.selection.selected?.profileId).toBe('primary');
@@ -167,6 +175,38 @@ describe('createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator', () =
         expect(currentGroup.activeConnectedAccountId).toBe('primary');
         expect(currentGroup.generation).toBe(7);
     });
+
+    it.each(['missing-clock', 'mismatched-clock', 'manual-selection'] as const)(
+        'reads the persisted active account with truthful selection time for %s',
+        async scenario => {
+            const activeSince = { accountId: scenario === 'mismatched-clock' ? 'backup' : 'primary', atMs: 100 };
+            const base = group({ activeConnectedAccountId: 'primary', generation: 7, runtimeStateRevision: 3 });
+            const currentGroup = QualifiedConnectedAccountGroupV4Schema.parse({
+                ...base,
+                policy: { ...base.policy, ...(scenario === 'manual-selection' ? { strategy: 'manual' } : {}) },
+                // A legacy lastSwitchAt is not an identity-bound current selection time.
+                state: { lastSwitchAt: 50, ...(scenario === 'missing-clock' ? {} : { activeSince }) },
+            });
+            const forbiddenEffect = async () => { throw new Error('read must not mutate or refresh'); };
+            const coordinator = createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator({
+                token: 'read-token', quotaFreshnessMs: 60_000, nowMs: () => 1_000,
+                api: { readGroup: async () => currentGroup, listAccounts: async () => accounts(),
+                    setActiveAccount: forbiddenEffect, updateRuntimeState: forbiddenEffect },
+                applyGeneration: forbiddenEffect, prepareCandidateForSwitch: forbiddenEffect,
+                probeQuotaSnapshotsForGroup: forbiddenEffect,
+            });
+            const result = await coordinator.readSelection({ serviceId: service, groupId: 'fallbacks' });
+            expect(result).toMatchObject({
+                activeAccountRef: { service, accountId: 'primary' },
+                activeSince: scenario === 'manual-selection' ? activeSince : null,
+            });
+            expect(ConnectedServicePoolSelectionGetResponseV1Schema.parse({ group: currentGroup.ref, ...result })).toEqual({ group: currentGroup.ref, ...result });
+            if (scenario === 'manual-selection') {
+                expect(result.selection.selected).toBeNull();
+                expect(result.selection.reason).toBe('manual_strategy');
+            }
+        },
+    );
 
     it('refuses a selection read when captured requester authority retires during hydration', async () => {
         let current = true;

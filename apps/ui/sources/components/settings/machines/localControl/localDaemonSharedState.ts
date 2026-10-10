@@ -15,6 +15,7 @@ import { createThisComputerSetupPromptContinuation } from '@/components/systemTa
 import type { SystemTaskAuthRequestApproval } from '@/components/systemTasks/approveSystemTaskAuthRequestPrompt';
 import { resolveSystemTaskFailureMessage } from '@/components/systemTasks/resolveSystemTaskFailureMessage';
 import { readThisComputerSetupScope } from '@/components/systemTasks/thisComputerSetup/thisComputerSetupScope';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 /**
  * S-10 — the state every surface describing this computer shares, per system-task runner: the
@@ -191,14 +192,17 @@ export type CliUpdateStartContext = Readonly<{
     scope: ServerAccountScope;
     spec: SystemTaskSpec;
     machineId: string | null;
+    signal?: AbortSignal;
+    isCurrent?: () => boolean;
 }>;
 
 export async function startLocalCliUpdate<TStatus>(
     runner: SystemTaskRunner,
     parseStatus: (result: SystemTaskResult) => TStatus | null,
     context?: CliUpdateStartContext,
-): Promise<void> {
-    if (runner.mode === 'unavailable' || isLocalCliUpdateRunning(runner)) return;
+): Promise<SystemTaskResult | null> {
+    throwIfAborted(context?.signal);
+    if (runner.mode === 'unavailable' || isLocalCliUpdateRunning(runner) || context?.isCurrent?.() === false) return null;
     // Completion belongs to the initiating account, not whichever surface later observes it.
     const scope = context?.scope ?? getActiveServerAccountScope();
     const machineId = context ? context.machineId : readLocalDaemonSharedState<LocalDaemonStatusData>(runner).status?.machineId;
@@ -217,20 +221,24 @@ export async function startLocalCliUpdate<TStatus>(
                 ? t('settings.systemTaskBridgeUnavailable')
                 : (readSystemTaskStartErrorMessage(error) ?? t('settings.systemTaskStartFailed')),
         });
-        return;
+        if (context?.signal?.aborted) throw error;
+        return null;
     }
     setCli({ taskId, starting: false });
 
-    const result = await waitForSystemTaskResult(runner, taskId).catch(() => null);
+    const result = await waitForSystemTaskResult(runner, taskId, { signal: context?.signal }).catch(async (error: unknown) => {
+        if (context?.signal?.aborted) { await runner.cancel(taskId); throw error; }
+        return null;
+    });
     const failureCode = result && !result.ok && typeof result.error?.code === 'string' ? result.error.code : null;
     const inProgressElsewhere = failureCode === 'cli_update_in_progress';
     if (result && !result.ok && !inProgressElsewhere) {
         setCli({ errorMessage: describeCliUpdateFailure({ code: failureCode }) });
-        return;
+        return result;
     }
     if (!result) {
         setCli({ errorMessage: t('updates.row.failedGeneric') });
-        return;
+        return null;
     }
 
     if (result.ok && scope) {
@@ -238,16 +246,23 @@ export async function startLocalCliUpdate<TStatus>(
     }
     setCli({ rereading: true });
     try {
+        throwIfAborted(context?.signal);
+        if (context?.isCurrent?.() === false) return result;
         const statusTaskId = await runner.start({ ...spec, kind: 'daemon.service.status.v1' });
-        const statusResult = await waitForSystemTaskResult(runner, statusTaskId);
+        const statusResult = await waitForSystemTaskResult(runner, statusTaskId, { signal: context?.signal }).catch(async (error: unknown) => {
+            if (context?.signal?.aborted) await runner.cancel(statusTaskId);
+            throw error;
+        });
         const status = parseStatus(statusResult);
         const activeScope = getActiveServerAccountScope();
-        if (status && (!scope || (activeScope?.serverId === scope.serverId && activeScope.accountId === scope.accountId))) {
+        if (status && context?.isCurrent?.() !== false && (!scope || (activeScope?.serverId === scope.serverId && activeScope.accountId === scope.accountId))) {
             publishLocalDaemonStatus(runner, status);
         }
     } catch (error) {
+        if (context?.signal?.aborted) throw error;
         console.warn('Failed to re-read this computer after a CLI update:', error);
     } finally {
         setCli({ rereading: false });
     }
+    return result;
 }

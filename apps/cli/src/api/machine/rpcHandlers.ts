@@ -566,6 +566,10 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
       cancelConnectedServiceRuntimeAuthRecovery: params.deps?.cancelConnectedServiceRuntimeAuthRecovery,
       retryTemporaryThrottleNow: params.deps?.retryTemporaryThrottleNow,
       currentMachineId: params.deps?.currentMachineId,
+      ...(params.deps?.currentMachineId ? { machineActionDirectTargetTransport: {
+        machineId: params.deps.currentMachineId,
+        invoke: (method, request, options) => rpcHandlerManager.invokeLocal(method, request, options),
+      } } : {}),
       stageUsageLimitRecoveryMutation: params.deps?.stageUsageLimitRecoveryMutation,
       stageWorkStateMutation: params.deps?.stageWorkStateMutation,
     },

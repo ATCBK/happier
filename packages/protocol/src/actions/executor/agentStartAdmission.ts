@@ -47,6 +47,7 @@ export function isAgentStartActionV1(actionId: string): boolean {
 /** Acquisition admits Agent work only when it carries ordinary Session authoring. */
 export function isAgentStartActionInvocationV1(actionId: string, input: Readonly<Record<string, unknown>>): boolean {
     return isAgentStartActionV1(actionId)
+        || (actionId === 'session.goal.set' && typeof input.objective === 'string' && input.resumeInactiveWithInitialGoal !== false)
         || (actionId === 'machines.managed.acquire' && input.agentStart !== undefined);
 }
 /** Action policies that may admit new Agent work, unlike observation and own-Session controls. */
@@ -130,6 +131,10 @@ export function resolveActionAgentStartRequestsV1(params: Readonly<{
     knownFacts?: AgentStartFactsV1;
 }> {
     const { actionId, input: request, context, baseline } = params;
+    if (actionId === 'session.goal.set') {
+        return { ok: true, effectiveInput: request,
+            requests: [{ kind: 'session_target', targetSessionId: String(request.sessionId) }] };
+    }
     if (actionId === 'machines.managed.acquire' && request.agentStart !== undefined) {
         const continuation = ManagedAcquireAgentStartV1Schema.safeParse(request.agentStart);
         if (!continuation.success) return { ok: false, errorCode: 'invalid_parameters' };

@@ -1639,6 +1639,7 @@ export type UsageActionResultById = {
                         breakdown?: Record<string, number> | undefined;
                         effectiveUsd?: number | undefined;
                     };
+                    eventCount?: number | undefined;
                     backendMode?: string | null | undefined;
                     providerId?: string | null | undefined;
                     providerConnectionId?: string | null | undefined;
@@ -2119,6 +2120,17 @@ export type UsageActionResultById = {
                                 }[];
                             };
                         };
+                        activeAccountRef?: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        } | null | undefined;
+                        activeSince?: {
+                            accountId: string;
+                            atMs: number;
+                        } | null | undefined;
                     } | {
                         status: 'unavailable';
                         code: 'unsupported' | 'connected_account_daemon_owner_unavailable' | 'connected_account_daemon_runtime_unavailable' | 'connected_account_daemon_response_invalid';
@@ -2825,6 +2837,7 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         };
+                        eventCount?: number | undefined;
                         backendMode?: string | null | undefined;
                         providerId?: string | null | undefined;
                         providerConnectionId?: string | null | undefined;
@@ -2898,6 +2911,7 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         };
+                        eventCount?: number | undefined;
                         backendMode?: string | null | undefined;
                         providerId?: string | null | undefined;
                         providerConnectionId?: string | null | undefined;
@@ -3093,6 +3107,7 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         };
+                        eventCount?: number | undefined;
                         backendMode?: string | null | undefined;
                         providerId?: string | null | undefined;
                         providerConnectionId?: string | null | undefined;

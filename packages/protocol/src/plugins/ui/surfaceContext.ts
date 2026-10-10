@@ -130,6 +130,12 @@ const PluginUiHostApiSurfaceThemeTypographyV1Schema = lazyZodSchema(() => z.obje
 /** The complete semantic theme payload, not a style-system object. */
 export const PluginUiHostApiSurfaceThemeV1Schema = lazyZodSchema(() => z.object({
   version: z.literal(1),
+  /** Optional host presentation choices. Unknown ids use the shared renderer's defaults. */
+  spinner: z.object({
+    style: PluginUiHostApiSurfaceNonBlankStringV1Schema,
+    speed: PluginUiHostApiSurfaceNonBlankStringV1Schema,
+    pause: PluginUiHostApiSurfaceNonBlankStringV1Schema,
+  }).strict().optional(),
   // Presentation-only V1 addition. The map, gradient and coordinates drop unknown fields;
   // the surrounding identity/authority context remains closed.
   surfaceFinish: z.object({

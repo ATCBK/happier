@@ -28,12 +28,14 @@ import {
 import { SOCKET_RPC_EVENTS, WorkspaceSyncSourceExecutionV1Schema, type WorkspaceSyncSourceRoutingV1, type WorkspaceSyncSourceWriterTargetRoutingV1,
     type WorkspaceSyncSourceExecutionV1, type WorkspaceSyncTargetRoutingV1, type WorkspaceSyncSeedRoutingV1 } from "@happier-dev/protocol/socketRpc";
 import { OpenProjectInputV1Schema } from '@happier-dev/protocol/projects/openProjectV1';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { evaluateApiTokenGrantV1, isApiTokenGrantWithinV1, resolveCredentialActionAdmissionV1, ManagedMachineActionIdV1Schema,
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { evaluateApiTokenGrantV1, isApiTokenGrantWithinV1, isApiTokenGrantTargetMemberV1, resolveCredentialActionAdmissionV1, ManagedMachineActionIdV1Schema,
     managedMachineActionEndpointPathV1, ManagedControllerReportV1Schema, ManagedControllerIntentReportV1Schema,
     type ManagedControllerReportV1, type ManagedControllerIntentReportV1, type AuthTokenAuthenticationEvidenceV1,
     decodeBase64, QualifiedConnectedServiceUsageSourceV4Schema, ProviderAccountUsageRecordIdSchema,
-    parseQualifiedConnectedAccountV4StructuredQueryValue } from "@happier-dev/protocol";
+    parseQualifiedConnectedAccountV4StructuredQueryValue,
+    SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, SESSION_PENDING_EXECUTION_RUN_ENQUEUE_BY_MACHINE_EVENT_V2,
+    SessionPendingEnqueueByMachineRequestV1Schema, SessionPendingExecutionRunEnqueueByMachineRequestV2Schema } from "@happier-dev/protocol";
 import { resolveMachineRpcExternalActionEffectV1 } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
 import { MANAGED_ACTIVITY_READ_RPC_METHOD, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD,
     ManagedActivityReadRequestV1Schema, ManagedAdmissionDrainConfirmRequestV1Schema,
@@ -48,7 +50,7 @@ import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
 import { enforceLoginEligibility } from "./enforceLoginEligibility";
 import { narrowCredentialAuthority } from './effectiveCredentialAuthority';
-import { hasCurrentSessionActionRpcSourceBinding, hasCurrentSessionActionRpcSourceBindingInTx } from '@/app/api/socket/sessionScopedBinding';
+import { hasCurrentSessionActionRpcSourceBinding, hasCurrentSessionActionRpcSourceBindingInTx, hasCurrentSessionScopedMachineAccessInTx } from '@/app/api/socket/sessionScopedBinding';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { PROJECT_TRUST_ROUTE_V1, ProjectTrustMutationRequestV1Schema } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
 import { isRequesterProjectExecutionActionV1, PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
@@ -83,6 +85,7 @@ export function isOriginalAccountExecutionAction(actionId: string): boolean {
         || isSettingsDeclarationActionIdV1(actionId)
         || actionId === 'connectedServices.quota.get'
         || actionId === 'session.pending.resetStart.set' || actionId === 'session.pending.resetStart.cancel'
+        || actionId === 'session.continuation.inspect' || actionId === 'session.agent.transition'
         // The private approval owner reaches the exact daemon recorded by its
         // Account Artifact; native authority remains in that owner, not this reviewer.
         || spec.id === 'approval.request.decide';
@@ -634,6 +637,67 @@ function isQuotaReadHttpPurpose(proof: ExternalActionExecutionRequestProof): boo
     }
 }
 
+/** The installed coordinator owns decrypted selection; Home admits only its named, signed phases. */
+async function isSessionAgentTransitionHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
+    proof: ExternalActionExecutionRequestProof): Promise<boolean> {
+    if (verified.effectActionId !== verified.binding.actionId) return false;
+    const url = new URL(proof.path, 'http://home.invalid');
+    const method = proof.method.toUpperCase();
+    if (method === 'GET' && proof.body === undefined) {
+        if (['/v1/account/encryption/currentness', '/v1/account/encryption', '/v2/account/settings'].includes(url.pathname)) {
+            return url.search === '';
+        }
+        if (url.pathname === `/v1/machines/${encodeURIComponent(verified.binding.machineId)}`) return url.search === '';
+        if (verified.target.kind !== 'session') return false;
+        const read = /^\/v(?:1\/sessions\/([^/]+)(?:\/messages)?|2\/sessions\/([^/]+)(?:\/messages\/by-local-id\/[^/]+)?)$/u.exec(url.pathname);
+        if (!read) return false;
+        let sessionId: string;
+        try { sessionId = decodeURIComponent(read[1] ?? read[2]); } catch { return false; }
+        // Replay follows existing fork ancestry. Ordinary Account Session access
+        // remains handler-owned; a PAT must retain its captured scope for each
+        // actual requested ancestor, not borrow the child's resolved Machine.
+        if ('authentication' in verified.binding) return true;
+        const grant = verified.binding.grant;
+        if (isApiTokenGrantTargetMemberV1(grant, { kind: 'session', sessionId })) return true;
+        for (const machineId of grant.targets?.machines ?? []) {
+            if (await hasCurrentSessionScopedMachineAccessInTx({ tx: db, accountId: verified.binding.accountId, machineId, sessionId })) return true;
+        }
+        return false;
+    }
+    return verified.binding.actionId === 'session.agent.transition' && verified.target.kind === 'session'
+        && method === 'POST' && url.search === ''
+        && url.pathname === `/v2/sessions/${encodeURIComponent(verified.target.sessionId)}/agent-transition/cutover`;
+}
+
+/** No generic descendant grant: first-input custody, the transition fence, stop and same-Session resume only. */
+function isSessionAgentTransitionRpcPurpose(binding: ExternalActionExecutionAuthorizationBindingV1,
+    execution: ExternalActionMachineRpcExecutionV1,
+    request: Readonly<{ method: string; params?: unknown; event?: ExternalActionMachineRpcEventV1 }>): boolean {
+    if (binding.actionId !== 'session.agent.transition' || execution.target.kind !== 'session') return false;
+    const sessionId = execution.target.sessionId;
+    if (execution.effectActionId === 'session.message.send') {
+        const v1 = request.event === SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1 && request.method === request.event;
+        const v2 = request.event === SESSION_PENDING_EXECUTION_RUN_ENQUEUE_BY_MACHINE_EVENT_V2 && request.method === request.event;
+        const pending = v1 ? SessionPendingEnqueueByMachineRequestV1Schema.safeParse(request.params)
+            : v2 ? SessionPendingExecutionRunEnqueueByMachineRequestV2Schema.safeParse(request.params) : null;
+        return Boolean(pending?.success && pending.data.sessionId === sessionId
+            && pending.data.targetMachineId === binding.machineId && pending.data.requestedAction.kind === 'send_now');
+    }
+    if (execution.effectActionId !== binding.actionId || request.event !== undefined && request.event !== SOCKET_RPC_EVENTS.CALL) return false;
+    const fence = request.method === `${sessionId}:${SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION}`;
+    const stop = request.method === `${binding.machineId}:${RPC_METHODS.STOP_SESSION}`;
+    const resume = [RPC_METHODS.SPAWN_HAPPY_SESSION, RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE]
+        .some(method => request.method === `${binding.machineId}:${method}`);
+    if (!fence && !stop && !resume) return false;
+    // Home cannot open E2EE RPC params. The installed signature binds the exact
+    // Session/method/ciphertext; the incumbent receiver validates the opened request.
+    if (typeof request.params === 'string') return true;
+    if (!request.params || typeof request.params !== 'object' || Array.isArray(request.params)) return false;
+    const params = request.params as Readonly<Record<string, unknown>>;
+    if (fence) return params.serviceId === 'session.agentTransition' && (params.action === 'enforce' || params.action === 'clear');
+    return params.sessionId === sessionId && (stop || params.type === 'resume-session');
+}
+
 export async function verifyExternalActionDomainExecutionRequest(
     proof: ExternalActionExecutionRequestProof,
 ): Promise<VerifiedExternalActionExecutionRequest | null> {
@@ -696,6 +760,8 @@ export async function verifyExternalActionDomainExecutionRequest(
             || proof.method.toUpperCase() !== 'POST' || !child.success
             || !(child.data.handoffContinuation && readHandoffContinuationIssuanceAction(path) !== null
                 || child.data.handoffPreflight && path === bindExternalActionExecutionAuthorizationHttpPathV1('session.handoff'))) return null;
+    } else if (verified.binding.actionId === 'session.agent.transition' || verified.binding.actionId === 'session.continuation.inspect') {
+        if (!await isSessionAgentTransitionHttpPurpose(verified, proof)) return null;
     } else if (verified.binding.actionId === 'connectedServices.quota.get') {
         if (verified.effectActionId !== verified.binding.actionId || !isQuotaReadHttpPurpose(proof)) return null;
     } else if (verified.binding.actionId === 'session.pending.resetStart.set'
@@ -890,6 +956,7 @@ export async function verifyWorkspaceSyncProjectSourceAuthorization(
     if (!rootMachine?.installationPublicKey || rootMachine.installationId !== binding.installationId
         || classifyMachineAvailabilityState(rootMachine) !== 'available'
         || !verifyExternalActionMachineRpcRequestV1({ authorizationToken: authorization.token,
+            requesterAccountContext: packet.authorization.requesterAccountContext,
             effectActionId: packet.effectActionId, target: packet.target, installationId: packet.installationId,
             event: SOCKET_RPC_EVENTS.CALL, method: execution.method, requestId: execution.requestId,
             ...(execution.params === undefined ? {} : { params: execution.params }), workspaceSyncSourceRouting: routing,
@@ -994,6 +1061,7 @@ export async function verifyExternalActionMachineRpcExecution(
             || execution.installationId !== route.installationId) return null;
         const signer = await db.machine.findUnique({ where: { id: route.machineId }, select: { installationPublicKey: true } });
         if (!signer?.installationPublicKey || !verifyExternalActionMachineRpcRequestV1({ authorizationToken: execution.authorization.token,
+            requesterAccountContext: execution.authorization.requesterAccountContext,
             effectActionId: execution.effectActionId, target: execution.target, installationId: execution.installationId,
             event: request.event ?? SOCKET_RPC_EVENTS.CALL, method: request.method, requestId: request.requestId,
             ...(request.params === undefined ? {} : { params: request.params }), workspaceSyncSeedRouting: request.workspaceSyncSeedRouting,
@@ -1025,6 +1093,7 @@ export async function verifyExternalActionMachineRpcExecution(
         const writer = await db.machine.findUnique({ where: { id: signer.machineId }, select: { installationPublicKey: true } });
         if (!writer?.installationPublicKey || !verifyExternalActionMachineRpcRequestV1({
             authorizationToken: execution.authorization.token, effectActionId: execution.effectActionId, target: execution.target,
+            requesterAccountContext: execution.authorization.requesterAccountContext,
             installationId: execution.installationId, event: request.event ?? SOCKET_RPC_EVENTS.CALL,
             method: request.method, requestId: request.requestId, ...(request.params === undefined ? {} : { params: request.params }),
             workspaceSyncSourceWriterTargetRouting: routing, publicKey: writer.installationPublicKey,
@@ -1033,6 +1102,9 @@ export async function verifyExternalActionMachineRpcExecution(
         return admitted.verified;
     }
 
+    const isTransitionRoot = binding.actionId === 'session.agent.transition';
+    const transitionPurpose = isTransitionRoot && isSessionAgentTransitionRpcPurpose(binding, execution, request);
+    if (isTransitionRoot && !transitionPurpose) return null;
     const effect = parseExternalActionEffectAction(binding, execution.effectActionId);
     if (!effect.success || !hasMatchingExecutionEffectFamily(binding.actionId, execution.effectActionId)
         || (binding.handoffContinuation || binding.handoffPreflight) && binding.actionId !== execution.effectActionId) return null;
@@ -1058,8 +1130,8 @@ export async function verifyExternalActionMachineRpcExecution(
         const prefix = `${binding.machineId}:`;
         const method = managedGuestActivity && guestMethod ? guestMethod
             : request.method.startsWith(prefix) ? request.method.slice(prefix.length) : request.method;
-        if (binding.actionId !== execution.effectActionId
-            || resolveMachineRpcExternalActionEffectV1(method, binding) !== execution.effectActionId) return null;
+        if (!transitionPurpose && (binding.actionId !== execution.effectActionId
+            || resolveMachineRpcExternalActionEffectV1(method, binding) !== execution.effectActionId)) return null;
     }
     // Home proves the original Session or accepted handoff source. RPC effects
     // cannot substitute the destination signer for that original authority.
@@ -1088,6 +1160,7 @@ export async function verifyExternalActionMachineRpcExecution(
         || !await hasCurrentExecutionMachineAdmission(binding, machine)
         || !verifyExternalActionMachineRpcRequestV1({
             authorizationToken: execution.authorization.token,
+            requesterAccountContext: execution.authorization.requesterAccountContext,
             effectActionId: execution.effectActionId,
             target: execution.target,
             installationId: execution.installationId,
@@ -1101,7 +1174,7 @@ export async function verifyExternalActionMachineRpcExecution(
     ) return null;
     const principal = await verifyCurrentExternalActionPrincipal(binding);
     if (!principal || !await hasCurrentExternalActionSessionSource(binding, request.resolveCurrentSessionMachine)) return null;
-    const credentialAction = binding.handoffContinuation
+    const credentialAction = isTransitionRoot ? parseExternalActionEffectAction(binding, binding.actionId) : binding.handoffContinuation
         ? PublicActionIdSchema.safeParse(readExternalActionCredentialActionId(binding)) : effect;
     if (!credentialAction.success || !await readCurrentExternalActionPrincipal(binding, db)
         || !await hasCurrentExecutionMachineAdmission(binding)

@@ -101,7 +101,9 @@ export type SettingStorageBinding = Readonly<{
          * Writes through the device setting's owner, which may apply more than storage (the running
          * theme and status bar) or keep sibling fields of a nested record.
          */
-        commit: (local: LocalSettings, value: SettingValue, writeLocal: (delta: Partial<LocalSettings>) => void) => void | Promise<void>;
+        commit: (local: LocalSettings, value: SettingValue, writeLocal: (delta: Partial<LocalSettings>) => void,
+            context?: Readonly<{ signal?: AbortSignal; isCurrent(): boolean }>) =>
+            void | typeof SETTING_VALUE_UNAVAILABLE | Promise<void | typeof SETTING_VALUE_UNAVAILABLE>;
     }>
 );
 

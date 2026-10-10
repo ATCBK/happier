@@ -3,7 +3,8 @@ import { ExternalActionAccountAuthenticationV1Schema, ExternalActionHttpErrorSch
     ExternalActionExecutionAuthorizationRequestV1Schema, bindExternalActionExecutionAuthorizationHttpPathV1,
     type ExternalActionRequestEnvelopeV2 } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
-import { sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { sealExternalActionRequesterAccountContextV1, ExternalActionRequesterInvocationV1Schema,
+    type ExternalActionRequesterInvocationV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { openExternalActionResponseV2, sealExternalActionRequestV2, type ExternalActionEncryptionBindingV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { readAuthTokenProvenance } from '@happier-dev/protocol/auth/authToken';
@@ -63,20 +64,24 @@ export async function executeOriginalAccountActionTransport(params: Readonly<{
     requestFailureCode?: string;
     /** Fresh captured-Home identity only; inventory hints never select private custody. */
     machineCustody?: MachineCustody;
+    invocation?: ExternalActionRequesterInvocationV1;
 }>): Promise<ActionExecuteResult> {
     const { account, binding, material } = params;
     account.assertCurrent();
     const invalid = params.invalidResponseCode ?? 'invalid_action_output';
     const custody = params.machineCustody;
+    if (binding.actionId === 'session.agent.transition' && !params.invocation) return failure('admission_unavailable');
+    if (params.invocation && (account.credentialAuthorityKind !== 'account'
+        || !ExternalActionRequesterInvocationV1Schema.safeParse(params.invocation).success)) return failure('admission_unavailable');
     const finite = Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, binding.actionId);
     const foreignGuest = custody !== undefined && custody.custodian.accountId !== account.accountId;
-    if (finite && !custody) return failure('admission_unavailable');
+    if ((finite || params.invocation) && !custody) return failure('admission_unavailable');
     if (custody) {
         if ((custody.accountMode === 'e2ee') !== Boolean(material)) return failure('content_unavailable');
         if (account.credentialAuthorityKind !== 'account' || binding.target.kind !== 'machine' || !('authentication' in binding)
             || binding.serverIdentityId !== account.serverIdentityId || binding.accountId !== account.accountId) return failure('admission_unavailable');
     }
-    if (foreignGuest && custody) {
+    if ((foreignGuest || params.invocation) && custody) {
         if (!custody.installationPublicKey || binding.target.kind !== 'machine') return failure('content_unavailable');
     }
     const sealed = material
@@ -85,7 +90,7 @@ export async function executeOriginalAccountActionTransport(params: Readonly<{
         : ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: binding.requestId, target: binding.target, input: params.input });
     const envelope = params.handoffAdmission ? { ...sealed, handoffAdmission: params.handoffAdmission } : sealed;
     let request: unknown = envelope;
-    if (custody && (foreignGuest || finite)) {
+    if (custody && (foreignGuest || finite || params.invocation)) {
         if (binding.target.kind !== 'machine' || !('authentication' in binding)) return failure('admission_unavailable');
         const mint = await account.request(bindExternalActionExecutionAuthorizationHttpPathV1(binding.actionId), {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -128,17 +133,19 @@ export async function executeOriginalAccountActionTransport(params: Readonly<{
                 controllerPublicKey = currentController.installationPublicKey;
             } else controllerPublicKey = controller.installationPublicKey;
         }
-        if (foreignGuest || wake) {
+        if (foreignGuest || wake || params.invocation) {
             account.assertCurrent();
             params.signal?.throwIfAborted();
             const credentials = serializeRequesterAccountCredentials(custody.accountMode, account.credentials);
-            if (foreignGuest) {
+            if (foreignGuest || params.invocation) {
                 if (!custody.installationPublicKey) return failure('content_unavailable');
                 executionAuthorization = sealExternalActionRequesterAccountContextV1({ authorization: executionAuthorization,
-                    credentials, purpose: { kind: 'external_action' }, installationPublicKey: custody.installationPublicKey, randomBytes: getRandomBytes });
+                    credentials, purpose: { kind: 'external_action' }, installationPublicKey: custody.installationPublicKey, randomBytes: getRandomBytes,
+                    ...(params.invocation ? { invocation: params.invocation } : {}) });
             }
             if (wake && controllerPublicKey) executionAuthorization = sealExternalActionRequesterAccountContextV1({ authorization: executionAuthorization,
-                credentials, purpose: { kind: 'managed_finite_wake', target: wake.target }, installationPublicKey: controllerPublicKey, randomBytes: getRandomBytes });
+                credentials, purpose: { kind: 'managed_finite_wake', target: wake.target }, installationPublicKey: controllerPublicKey, randomBytes: getRandomBytes,
+                ...(params.invocation ? { invocation: params.invocation } : {}) });
         }
         request = ExternalActionExecutionAuthorizationRequestV1Schema.parse({ v: 1, machineId: binding.target.machineId,
             envelope, executionAuthorization });
@@ -172,9 +179,11 @@ type OriginalAccountMachineActionParams = Readonly<{
     actionId: ExternalActionEncryptionBindingV2['actionId'];
     requestId: string;
     machineId: string;
+    machineTarget?: Extract<ExternalActionEncryptionBindingV2['target'], { kind: 'machine' }>;
     input: unknown;
     handoffAdmission?: ExternalActionRequestEnvelopeV2['handoffAdmission'];
     signal?: AbortSignal;
+    invocation?: ExternalActionRequesterInvocationV1;
 }>;
 
 export function executeOriginalAccountMachineAction(params: OriginalAccountMachineActionParams & Readonly<{ foreignTargetOnly: true }>): Promise<ActionExecuteResult | null>;
@@ -183,6 +192,10 @@ export function executeOriginalAccountMachineAction(params: OriginalAccountMachi
 export async function executeOriginalAccountMachineAction(params: OriginalAccountMachineActionParams & Readonly<{ foreignTargetOnly?: boolean }>): Promise<ActionExecuteResult | null> {
     const { account } = params;
     account.assertCurrent();
+    if (params.machineTarget && params.machineTarget.machineId !== params.machineId) return failure('target_not_local');
+    if (params.actionId === 'session.agent.transition' && !params.invocation) return failure('admission_unavailable');
+    if (params.invocation && (account.credentialAuthorityKind !== 'account'
+        || !ExternalActionRequesterInvocationV1Schema.safeParse(params.invocation).success)) return failure('admission_unavailable');
     const row = await readOriginalAccountActionMachine(account, params.machineId, params.signal);
     if (!row || row.kind !== 'persistent' || row.revokedAt !== null || row.replacedByMachineId !== null
         || !row.access || row.access.accessState !== 'ready') return failure('admission_unavailable');
@@ -190,23 +203,24 @@ export async function executeOriginalAccountMachineAction(params: OriginalAccoun
     // Non-finite own targets retain their incumbent transport. Finite placement
     // is Home-owned even when its guest belongs to the requester.
     const finite = Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, params.actionId);
-    if (params.foreignTargetOnly && !foreignCustody && !finite) return null;
+    if (params.foreignTargetOnly && !foreignCustody && !finite && !params.invocation) return null;
     const authentication = readOriginalAccountActionAuthentication(account.credentials.token);
     if (!authentication || !account.serverIdentityId) return failure('admission_unavailable');
     const { accountMode, encryption } = await account.resolveAccountEncryption();
     if (!foreignCustody && row.access.resourceMode !== accountMode) return failure('admission_unavailable');
-    if ((foreignCustody || finite) && !row.installationId) return failure('content_unavailable');
-    if (foreignCustody && !row.installationPublicKey) return failure('content_unavailable');
+    if ((foreignCustody || finite || params.invocation) && !row.installationId) return failure('content_unavailable');
+    if ((foreignCustody || params.invocation) && !row.installationPublicKey) return failure('content_unavailable');
     if (accountMode === 'e2ee' && !encryption) return failure('content_unavailable');
     return await executeOriginalAccountActionTransport({ account, input: params.input,
+        ...(params.invocation ? { invocation: params.invocation } : {}),
         // Open owns checkout effects; an untrusted post-dispatch response cannot
         // authorize a fresh materialization. Read Actions keep their output errors.
         ...(params.actionId === 'projects.open' ? { invalidResponseCode: 'outcome_unknown' } : {}),
         ...(params.handoffAdmission ? { handoffAdmission: params.handoffAdmission } : {}),
         binding: { serverIdentityId: account.serverIdentityId, accountId: account.accountId, authentication,
-            actionId: params.actionId, requestId: params.requestId, target: { kind: 'machine', machineId: params.machineId } },
+            actionId: params.actionId, requestId: params.requestId, target: params.machineTarget ?? { kind: 'machine', machineId: params.machineId } },
         ...(accountMode === 'e2ee' && encryption ? { material: { type: 'dataKey', machineKey: encryption.getContentPrivateKey() } } : {}),
-        ...((foreignCustody || finite) && row.installationId ? { machineCustody: {
+        ...((foreignCustody || finite || params.invocation) && row.installationId ? { machineCustody: {
             accountMode, installationId: row.installationId, ...(row.installationPublicKey ? { installationPublicKey: row.installationPublicKey } : {}),
             custodian: row.access.custodian,
         } } : {}),

@@ -46,7 +46,7 @@ import type {
   RequesterSessionRuntimeContext,
   ResolveRequesterSessionRuntimeContext,
 } from '../sessionEncryption/requesterSessionCredentials';
-import { prepareRequesterAccountActionContext, type RequesterAccountActionContext } from '../sessionEncryption/requesterAccountActionProjection';
+import { prepareInstalledRequesterAccountActionContext, type RequesterAccountActionContext } from '../sessionEncryption/requesterAccountActionProjection';
 import { createProjectFiniteAction } from '@/workspaces/projectSetup/projectFiniteAction';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
@@ -14803,27 +14803,14 @@ export async function startDaemonSessionControlRuntime(
           currentServerHttpBaseUrl: params.serverBaseUrl,
           prepareRequesterAccountContext: async ({ authorization, purpose, signal }) => {
             const privatePurpose = purpose ?? { kind: 'external_action' as const };
-            const installation = readInstallationIdentityIfExistsSync();
-            const origin = await params.resolveCurrentMachineExecutionOriginContext?.(signal);
-            if (!installation || !origin || origin.machineId !== params.machineId) return null;
             let executeManagedFiniteWake: ((request: ManagedMachinePolicyRequest) => Promise<ActionExecuteResult>) | undefined;
-            const prepared = await prepareRequesterAccountActionContext({ authorization, purpose: privatePurpose,
-              machineId: params.machineId, installationId: installation.installationId, serverIdentityId: origin.serverIdentityId,
-              installationPrivateKey: decodeBase64(installation.privateKey, 'base64url'),
+            const prepared = await prepareInstalledRequesterAccountActionContext({ authorization, purpose: privatePurpose,
+              machineId: params.machineId,
               serverId: params.serverId, serverHttpBaseUrl: params.serverBaseUrl,
               ownCredentials: params.credentials,
-              isCurrent: async () => {
-                const next = readInstallationIdentityIfExistsSync();
-                const current = await params.resolveCurrentMachineExecutionOriginContext?.(signal);
-                if (next?.installationId !== installation.installationId || next.privateKey !== installation.privateKey
-                  || current?.machineId !== params.machineId || current.serverIdentityId !== origin.serverIdentityId) return false;
-                return await verifyExternalActionExecutionAuthorizationCurrent({ authorization,
-                  effectActionId: authorization.binding.actionId, target: authorization.binding.target,
-                  installationId: installation.installationId, privateKey: installation.privateKey,
-                  serverHttpBaseUrl: params.serverBaseUrl,
-                  ...(privatePurpose.kind === 'managed_finite_wake' ? { managedFiniteWakeTarget: privatePurpose.target } : {}),
-                  ...(signal ? { signal } : {}) });
-              }, createExecutor: admitted => {
+              resolveCurrentMachineExecutionOriginContext: signal => params.resolveCurrentMachineExecutionOriginContext?.(signal)
+                ?? Promise.resolve(null),
+              createExecutor: (admitted, installation) => {
                 if (privatePurpose.kind === 'managed_finite_wake') {
                   const target = privatePurpose.target;
                   const native = createDaemonManagedMachineActionAdapter({ credentials: admitted.credentials,

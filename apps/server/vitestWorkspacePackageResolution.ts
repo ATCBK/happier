@@ -8,6 +8,22 @@ const repoRoot = resolve(here, '..', '..');
 
 export const serverWorkspacePackageSourcesPlugin = createWorkspacePackageSourcesPlugin([
     {
+        packageName: '@happier-dev/channels-protocol',
+        packageSourceRoot: resolve(repoRoot, 'packages', 'channels-protocol', 'src'),
+    },
+    {
+        packageName: '@happier-dev/sdk',
+        packageSourceRoot: resolve(repoRoot, 'packages', 'sdk', 'src'),
+    },
+    {
+        packageName: '@happier-dev/plugin-sdk',
+        packageSourceRoot: resolve(repoRoot, 'packages', 'plugin-sdk', 'src'),
+    },
+    {
+        packageName: '@happier-dev/sync-client',
+        packageSourceRoot: resolve(repoRoot, 'packages', 'sync-client', 'src'),
+    },
+    {
         packageName: '@happier-dev/transfers',
         packageSourceRoot: resolve(repoRoot, 'packages', 'transfers', 'src'),
     },
@@ -26,6 +42,10 @@ export const serverWorkspacePackageSourcesPlugin = createWorkspacePackageSources
     {
         packageName: '@happier-dev/agents',
         packageSourceRoot: resolve(repoRoot, 'packages', 'agents', 'src'),
+    },
+    {
+        packageName: '@happier-dev/plugins-kiro',
+        packageSourceRoot: resolve(repoRoot, 'packages', 'plugins', 'kiro', 'src'),
     },
     {
         packageName: '@happier-dev/cli-common',

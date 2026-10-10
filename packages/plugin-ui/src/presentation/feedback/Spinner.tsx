@@ -27,7 +27,7 @@ import {
  *
  * The default mark is the Happier mark drawn in dots with light moving through it; the style, its
  * speed and its pause between loops are chosen by the host (Happier core reads its Settings →
- * Appearance choices; plugin surfaces draw the default wave at the default timing). The original rotating ring stays available as the `classicRing` style: on web a
+ * Appearance choices; plugin surfaces receive them through the projected theme). The original rotating ring stays available as the `classicRing` style: on web a
  * CSS-transform ring (stepped below the small-spinner threshold), on native the platform indicator
  * with a still ring overlay on Android, whose platform widget hides when stopped.
  *
@@ -414,6 +414,9 @@ export function HappierSpinner(props: HappierSpinnerProps) {
     defaultColor: theme?.colors[HAPPIER_TONE_COLOR_TOKEN.secondary],
     color,
     size,
+    indicatorStyle: theme?.spinner?.style,
+    indicatorSpeed: theme?.spinner?.speed,
+    indicatorPause: theme?.spinner?.pause,
     animating,
     animationEnabled: (animationEnabled ?? true) && presentationActive,
     hidesWhenStopped,

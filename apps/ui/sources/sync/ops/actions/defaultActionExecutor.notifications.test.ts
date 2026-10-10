@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -7,14 +7,15 @@ import {
     installHomeGovernanceBoundaries,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { StorageState } from '@/sync/store/types';
+import nacl from 'tweetnacl';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { ExternalActionExecutionAuthorizationRequestV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 
-const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
-
-// Machine RPC is the genuine daemon network boundary. Account capture,
-// settings, Action admission, relay selection and result validation stay real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: rpc.machine,
-}));
+let daemonResult: unknown;
+let beforeDaemonReply: (() => Promise<void>) | undefined;
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -30,20 +31,48 @@ async function addHome() {
         name: 'Notification Home',
         serverUrl: 'https://notifications-home.example',
         accountId: 'account-a',
+        serverIdentityId: 'srv_notifications', currentAccount: true,
     });
     const { storage } = await import('@/sync/domains/state/storage');
-    const machine = createMachineFixture({ id: 'notification-relay', activeAt: Date.now() });
+    const machine = createMachineFixture({ id: 'notification-relay', activeAt: Date.now(), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
     storage.setState({
         machines: { [machine.id]: machine },
         machineListByServerId: { [serverId]: [machine] },
     });
+    const installation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(5));
+    harness.answer(serverId, '/v1/machines', { body: [{ id: machine.id, kind: 'persistent', active: true,
+        installationId: 'notification-installation', installationPublicKey: encodeBase64(installation.publicKey), revokedAt: null,
+        replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
+        access: { custodian: { accountId: 'account-a', displayName: 'Account A' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }] });
+    for (const actionId of ['notifications.notify_me', 'action.options.resolve'] as const) {
+        harness.answer(serverId, `/v1/actions/${actionId}/execution-authorization`, { select: body => {
+            const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            return { body: { v: 1, token: 'notification-root', binding: { accountId: 'account-a',
+                authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId: 'srv_notifications', machineId: machine.id,
+                installationId: 'notification-installation', custodianAccountId: 'account-a', accountEncryptionMode: 'plain', actionId,
+                requestId: request.envelope.requestId, target: request.envelope.target,
+                requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope) } } };
+        } });
+        harness.answer(serverId, `/v1/actions/${actionId}`, { select: async body => {
+            const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            expect(openExternalActionRequesterAccountContextV1({ authorization: request.executionAuthorization, purpose: { kind: 'external_action' },
+                machineId: machine.id, installationId: 'notification-installation', serverIdentityId: 'srv_notifications',
+                installationPrivateKey: installation.secretKey, includeInvocation: true })).toMatchObject({ invocation: {
+                    caller: { kind: 'host' }, authority: actionId === 'notifications.notify_me' ? 'account_automation' : 'present_user',
+                    surface: actionId === 'notifications.notify_me' ? 'voice' : 'ui' } });
+            await beforeDaemonReply?.();
+            return { body: { v: 1, actionId, requestId: request.envelope.requestId,
+                execution: daemonResult && typeof daemonResult === 'object' && 'ok' in daemonResult ? daemonResult : { ok: true, result: daemonResult } } };
+        } });
+    }
     return serverId;
 }
 
 describe('default Action notification daemon transport', () => {
     beforeEach(async () => {
         await harness.reset();
-        rpc.machine.mockReset();
+        daemonResult = undefined;
+        beforeDaemonReply = undefined;
         const { storage } = await import('@/sync/domains/state/storage');
         const state = storage.getState();
         machineState = { machines: state.machines, machineListByServerId: state.machineListByServerId };
@@ -58,19 +87,14 @@ describe('default Action notification daemon transport', () => {
     it('sends Notify me through the captured Account daemon without inventing a resource target', async () => {
         const serverId = await addHome();
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
-        rpc.machine.mockResolvedValue({ attemptedChannels: 1, deliveredChannels: 1 });
+        daemonResult = { attemptedChannels: 1, deliveredChannels: 1 };
         const input = { title: 'Review', message: 'Review did not converge', channels: ['builtin:expo_push'] };
 
         await expect(createDefaultActionExecutor().execute('notifications.notify_me', input, {
             surface: 'voice', serverId,
         })).resolves.toEqual({ ok: true, result: { attemptedChannels: 1, deliveredChannels: 1 } });
-        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({
-            serverId,
-            accountId: 'account-a',
-            machineId: 'notification-relay',
-            method: 'notifications.notify_me',
-            payload: input,
-        }));
+        expect(harness.requestsFor('/v1/actions/notifications.notify_me').map(request =>
+            ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.input).envelope.input)).toEqual([input]);
     });
 
     it('resolves Send to options from that same Account host through the declared Action route', async () => {
@@ -80,18 +104,14 @@ describe('default Action notification daemon transport', () => {
         const result = {
             actionId: null, fieldPath: null, optionsSourceId: 'notifications.channels.available', options,
         };
-        rpc.machine.mockResolvedValue(result);
+        daemonResult = result;
 
         await expect(createDefaultActionExecutor().execute('action.options.resolve', {
             optionsSourceId: 'notifications.channels.available',
         }, { surface: 'ui', serverId })).resolves.toEqual({ ok: true, result });
-        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({
-            serverId,
-            accountId: 'account-a',
-            machineId: 'notification-relay',
-            method: 'action.options.resolve',
-            payload: { actionId: 'notifications.notify_me', fieldPath: 'channels' },
-        }));
+        expect(harness.requestsFor('/v1/actions/action.options.resolve').map(request =>
+            ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.input).envelope.input))
+            .toEqual([{ actionId: 'notifications.notify_me', fieldPath: 'channels' }]);
     });
 
     it('does not borrow the focused Home daemon for a notification Account on another Home', async () => {
@@ -104,19 +124,16 @@ describe('default Action notification daemon transport', () => {
             surface: 'voice', serverId,
         })).resolves.toMatchObject({ ok: false, errorCode: 'target_unavailable' });
         expect(otherServerId).not.toBe(serverId);
-        expect(rpc.machine).not.toHaveBeenCalled();
+        expect(harness.requestsFor('/v1/actions/notifications.notify_me')).toEqual([]);
     });
 
     it('withholds channel content when the captured Account changes while its daemon answers', async () => {
         const serverId = await addHome();
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
-        rpc.machine.mockImplementation(async () => {
+        beforeDaemonReply = async () => {
             await harness.switchAccount(serverId, 'account-b');
-            return {
-                optionsSourceId: 'notifications.channels.available',
-                options: [{ value: 'private/channel', label: 'Private channel' }],
-            };
-        });
+        };
+        daemonResult = { optionsSourceId: 'notifications.channels.available', options: [{ value: 'private/channel', label: 'Private channel' }] };
         await expect(createDefaultActionExecutor().execute('action.options.resolve', {
             optionsSourceId: 'notifications.channels.available',
         }, { surface: 'ui', serverId })).resolves.toMatchObject({
@@ -128,7 +145,7 @@ describe('default Action notification daemon transport', () => {
         const serverId = await addHome();
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
         const failure = { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
-        rpc.machine.mockResolvedValue(failure);
+        daemonResult = failure;
         await expect(createDefaultActionExecutor().execute('notifications.notify_me', { message: 'Hi' }, {
             surface: 'voice', serverId,
         })).resolves.toEqual(failure);

@@ -63,14 +63,11 @@ export async function withRemoteHostSshConfig<T>(account: LazyActionAccountConte
     account.assertCurrent();
     if (!areServerAccountScopesEqual(getActiveServerAccountScope(), account.accountLifetime.scope)) throw new RemoteHostOperationError('active_home_required');
     const host = await requireAdmittedHost(account, input, signal);
-    const [settings, snapshot] = await Promise.all([account.readSettings(), getServerFeaturesSnapshot({ serverId: account.serverId })]);
-    const enabled = (featureId: 'remoteHosts.management' | 'remoteHosts.secretMaterial') => resolveRuntimeFeatureDecisionFromSnapshot({
-        featureId, settings, snapshot, scope: { scopeKind: 'spawn', serverId: account.serverId },
-    })?.state === 'enabled';
-    if (!enabled('remoteHosts.management')) throw new RemoteHostOperationError('remote_host_management_unavailable');
+    const features = await readRemoteHostFeatureDecisions(account);
+    if (!features.managementEnabled) throw new RemoteHostOperationError('remote_host_management_unavailable');
     const assertCurrent = () => { signal?.throwIfAborted(); account.assertCurrent(); };
     const config = await resolveRemoteHostEffectiveSshConfig({ remoteHost: host,
-        localOverrides: getRemoteHostLocalOverrides(host.id), secretMaterialAllowed: enabled('remoteHosts.secretMaterial'),
+        localOverrides: getRemoteHostLocalOverrides(host.id), secretMaterialAllowed: features.secretMaterialEnabled,
         readSavedSecretValue: reference => readSavedSecretReferenceInContext(account, reference, signal) });
     assertCurrent();
     if (!config.ok) throw new RemoteHostOperationError(config.error.code);
@@ -79,6 +76,17 @@ export async function withRemoteHostSshConfig<T>(account: LazyActionAccountConte
     await requireAdmittedHost(account, input, signal);
     assertCurrent();
     return operation({ host, config, assertCurrent });
+}
+
+export async function readRemoteHostFeatureDecisions(account: LazyActionAccountContext): Promise<Readonly<{
+    managementEnabled: boolean; secretMaterialEnabled: boolean;
+}>> {
+    const [settings, snapshot] = await Promise.all([account.readSettings(), getServerFeaturesSnapshot({ serverId: account.serverId })]);
+    account.assertCurrent();
+    const enabled = (featureId: 'remoteHosts.management' | 'remoteHosts.secretMaterial') => resolveRuntimeFeatureDecisionFromSnapshot({
+        featureId, settings, snapshot, scope: { scopeKind: 'spawn', serverId: account.serverId },
+    })?.state === 'enabled';
+    return { managementEnabled: enabled('remoteHosts.management'), secretMaterialEnabled: enabled('remoteHosts.secretMaterial') };
 }
 
 /** The current relay dialog borrows credentials only until its admitted runner accepts the task. */

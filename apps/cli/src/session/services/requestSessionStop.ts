@@ -50,10 +50,12 @@ type StopSessionAttemptResult = StopSessionResult | Readonly<{
 async function readSessionInactive(params: Readonly<{
   token: string;
   sessionId: string;
+  resolveAuthorizationHeaders?: Parameters<typeof fetchSessionByIdCompat>[0]['resolveAuthorizationHeaders'];
 }>): Promise<boolean | null> {
   const session = await fetchSessionByIdCompat({
     token: params.token,
     sessionId: params.sessionId,
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
   }).catch(() => null);
   return session ? session.active === false : null;
 }
@@ -63,6 +65,7 @@ async function stopOutcomeFromAttemptResult(params: Readonly<{
   token: string;
   sessionId: string;
   targetKind?: 'caller_local' | 'owning_machine';
+  resolveAuthorizationHeaders?: Parameters<typeof fetchSessionByIdCompat>[0]['resolveAuthorizationHeaders'];
 }>): Promise<SessionStopOutcome> {
   const { result } = params;
   if (result.status === 'incomplete') {
@@ -83,7 +86,7 @@ async function stopOutcomeFromAttemptResult(params: Readonly<{
     // daemon does not track AND the server reports inactive is stopped — a cold
     // Session cannot otherwise satisfy any consumer that requires a confirmed
     // stop, because there is nothing left to signal.
-    const inactive = await readSessionInactive({ token: params.token, sessionId: params.sessionId });
+    const inactive = await readSessionInactive(params);
     if (inactive === true) {
       return SessionStopOutcomeSchema.parse({
         status: 'already_stopped',
@@ -108,6 +111,7 @@ async function stopSessionOnOwningMachine(params: Readonly<{
   credentials: StoredCredentials;
   sessionId: string;
   machineId: string;
+  externalAction?: Parameters<typeof callMachineRpc>[0]['externalAction'];
 }>): Promise<StopSessionAttemptResult> {
   try {
     const result = StopSessionResultSchema.safeParse(await callMachineRpc({
@@ -118,6 +122,8 @@ async function stopSessionOnOwningMachine(params: Readonly<{
       // The relay's finite forwarding deadline and disconnect still own acknowledgement expiry.
       timeoutMs: null,
       request: { sessionId: params.sessionId },
+      ...(params.externalAction ? { externalAction: params.externalAction } : {}),
+      ...(params.externalAction?.context.signal ? { signal: params.externalAction.context.signal } : {}),
       authorization: {
         kind: SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.SESSION_WRITE,
         sessionId: params.sessionId,
@@ -154,6 +160,7 @@ async function stopSessionOnOwningMachine(params: Readonly<{
 async function waitForSessionStopResult(params: Readonly<{
   token: string;
   sessionId: string;
+  resolveAuthorizationHeaders?: Parameters<typeof fetchSessionByIdCompat>[0]['resolveAuthorizationHeaders'];
 }>): Promise<boolean> {
   const deadlineMs = Date.now() + resolveSessionControlStopTimeoutMs();
   const events = openSessionEventSource(params);
@@ -268,6 +275,8 @@ export async function requestSessionStop(params: Readonly<{
   credentials: StoredCredentials;
   idOrPrefix: string;
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
+  externalAction?: Parameters<typeof callMachineRpc>[0]['externalAction'];
+  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionIdOrPrefix>[0]['resolveAuthorizationHeaders'];
 }>): Promise<
   | (Readonly<{ ok: true }> & SessionStopCommandResult)
   | Readonly<{ ok: false; code: 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'unsupported'; candidates?: string[] }>
@@ -275,6 +284,8 @@ export async function requestSessionStop(params: Readonly<{
   const resolved = await resolveSessionIdOrPrefix({
     credentials: params.credentials,
     idOrPrefix: params.idOrPrefix,
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
+    ...(params.externalAction?.context.signal ? { signal: params.externalAction.context.signal } : {}),
     ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
   });
   if (!resolved.ok) {
@@ -290,6 +301,7 @@ export async function requestSessionStop(params: Readonly<{
       token: params.credentials.token,
       sessionId: resolved.sessionId,
       ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
+      ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     });
     if (!rawSession) {
       return {
@@ -322,6 +334,7 @@ export async function requestSessionStop(params: Readonly<{
         credentials: params.credentials,
         sessionId: resolved.sessionId,
         machineId: owningMachine.machineId,
+        ...(params.externalAction ? { externalAction: params.externalAction } : {}),
       });
       if (physicalStopResult.status !== 'stopped') {
         return {
@@ -333,12 +346,14 @@ export async function requestSessionStop(params: Readonly<{
             token: params.credentials.token,
             sessionId: resolved.sessionId,
             targetKind: 'owning_machine',
+            ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
           }),
         };
       }
       const stopped = await waitForSessionStopResult({
         token: params.credentials.token,
         sessionId: resolved.sessionId,
+        ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
       });
       return stopped
         ? { ok: true, sessionId: resolved.sessionId, stopped: true }
@@ -353,6 +368,10 @@ export async function requestSessionStop(params: Readonly<{
           };
     }
 
+    if (params.externalAction) {
+      return { ok: true, sessionId: resolved.sessionId, stopped: false,
+        stopOutcome: { status: 'physical_stop_unconfirmed', reason: 'target_daemon_unavailable' } };
+    }
     const exactAttachmentIdBeforeDaemonStop = await readExactTerminalAttachmentId(resolved.sessionId);
     let physicalStopResult: StopSessionAttemptResult;
     try {

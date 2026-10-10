@@ -404,6 +404,7 @@ const SESSION_DURABLE_METHODS = [
   RPC_METHODS.DAEMON_SESSION_CONNECTED_SERVICE_AUTH_SWITCH,
   RPC_METHODS.DAEMON_SESSION_GOAL_GET,
   RPC_METHODS.DAEMON_SESSION_GOAL_SET,
+  RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2,
   RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR,
   RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE,
   RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL,
@@ -1009,6 +1010,12 @@ export function resolveMachineRpcRoutePolicy(method: string): MachineRpcRoutePol
 export function resolveMachineRpcExternalActionEffectV1(method: string,
   binding?: ExternalActionExecutionAuthorizationV1['binding'],
   selectedTarget?: Readonly<{ machineId: string; installationId: string }>): string | null {
+  if (binding?.actionId === 'session.agent.transition') {
+    // Only installed transition stop/activation packets use this composite root.
+    // The decrypted receiver still admits resume semantics, not fresh spawn.
+    return method === RPC_METHODS.STOP_SESSION || method === RPC_METHODS.SPAWN_HAPPY_SESSION
+      || method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE ? binding.actionId : null;
+  }
   if (binding?.handoffPreflight) {
     const admission = binding.handoffAdmission;
     if (!admission || binding.actionId !== 'session.handoff' || binding.handoffContinuation

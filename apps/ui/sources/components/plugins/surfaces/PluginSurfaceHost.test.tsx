@@ -11182,7 +11182,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         const screen = await renderScreen(render());
         await vi.waitFor(() => expect(reactNativeSurfaceProps).not.toHaveLength(0));
         const initial = readMountedSurface();
-        expect(initial.theme).toEqual(projectPluginUiTheme(lightTheme));
+        expect(initial.theme).toEqual(projectPluginUiTheme(lightTheme, initial.theme.spinner));
         expect(initial.locale).toBe('en');
         expect(initial.translations).toMatchObject({
             'panel.title': 'Native panel',

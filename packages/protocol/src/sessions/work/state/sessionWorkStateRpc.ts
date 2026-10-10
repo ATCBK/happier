@@ -473,6 +473,16 @@ export const DaemonSessionGoalSetRequestV1Schema = lazyZodSchema(() => z
   .refine(sessionGoalMutationHasField, { message: 'At least one goal mutation field is required' }));
 export type DaemonSessionGoalSetRequestV1 = z.infer<typeof DaemonSessionGoalSetRequestV1Schema>;
 
+/** Wake intent cannot be silently ignored by a V1 daemon. */
+export const DaemonSessionGoalSetRequestV2Schema = lazyZodSchema(() => z.object({
+  sessionId: z.string().trim().min(1),
+  objective: z.string().trim().min(1).max(4000),
+  status: SessionWorkStateStatusV1Schema.optional(),
+  tokenBudget: z.number().finite().positive().nullable().optional(),
+  resumeInactiveWithInitialGoal: z.literal(true),
+}).strict());
+export type DaemonSessionGoalSetRequestV2 = z.infer<typeof DaemonSessionGoalSetRequestV2Schema>;
+
 export const DaemonSessionGoalClearRequestV1Schema = lazyZodSchema(() => z
   .object({
     sessionId: z.string().trim().min(1),
@@ -568,4 +578,3 @@ export const PreflightSessionCatalogsV1Schema = lazyZodSchema(() => z.object({
   }),
 }));
 export type PreflightSessionCatalogsV1 = z.infer<typeof PreflightSessionCatalogsV1Schema>;
-

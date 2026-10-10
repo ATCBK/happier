@@ -15,17 +15,11 @@ import { resolveWebappUrlFromServerUrl } from '@/sync/domains/server/url/resolve
 import { useRemoteHostCatalogSnapshot } from '@/sync/store/settings/remoteHostCatalogSnapshot';
 import { getRemoteHostLocalOverridesStore } from '@/sync/domains/remoteHosts/remoteHostLocalOverrides';
 import type { RemoteHost } from '@/sync/domains/remoteHosts/remoteHostModel';
-import { withRemoteHostSshConfig } from '@/sync/ops/remoteHosts/remoteHostOperations';
-import { startAdmittedRemoteHostSystemTask } from '@/components/settings/remoteHosts/remoteHostTaskOperations';
 import type { SystemTaskSpec } from '@happier-dev/protocol/system/tasks/spec';
-import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { buildSshCredentialsDraftFromRemoteHostConfig, resolveRemoteHostBootstrapRelayUrls } from '@/components/settings/remoteHosts/remoteHostOutcomeActions';
 import { resolveHomeDisplayName } from '@/components/settings/server/homeDisplayName';
 import { confirmThisComputerAccountMove } from '@/components/settings/machines/localControl/thisComputerConnectionPresentation';
 import { useThisComputerSetupPreflight } from '@/components/onboarding/checklists/setupThisComputer/useThisComputerSetupPreflight';
-import { resolveRemoteSshBootstrapFormState, buildRemoteSshBootstrapFormStateFromSshConfig } from '@/components/onboarding/checklists/remoteSsh/resolveRemoteSshBootstrapFormState';
-import { persistRemoteHostAfterRemoteSshCompletion } from '@/components/onboarding/checklists/remoteSsh/persistRemoteHostAfterRemoteSshCompletion';
 import { buildRemoteSshChecklistItems } from '@/components/onboarding/checklists/remoteSsh/buildRemoteSshChecklistItems';
 import { mapRemoteSshTaskToChecklistExecution } from '@/components/onboarding/checklists/remoteSsh/mapRemoteSshTaskToChecklistExecution';
 import { useAwaitedMachineArrival, type AwaitedMachineArrivalBaseline } from '@/components/onboarding/detection/useAwaitedMachineArrival';
@@ -53,6 +47,7 @@ import { useMachineAddPaths } from './useMachineAddPaths';
 import { buildMachineAddCommand, detectClientCommandOs, MACHINE_ADD_COMMAND_OS, type MachineAddCommandOs } from './machineAddCommand';
 import { cancelMachineAddFlowTasks, discardMachineAddFlowDraft, readMachineAddFlowDraft, updateMachineAddFlowDraft, useMachineAddFlowDraft, useMachineAddFlowDraftSelector, type MachineAddTaskHandle } from './machineAddFlowStore';
 import { beginMachineAddWatch, startMachineAddTask, hasRunningMachineAddTask as hasRunningTask } from './machineAddTaskLifetime';
+import { getMachineAddSshSupportedAuthModes, runWithMachineAddSshForm, startMachineAddSshTask } from './machineAddSshTask';
 
 export type MachineAddDraftRow = Readonly<{ title: string; entityTitle: string | null; status: string | null; tone: 'waiting' | 'running' | 'failed' | 'arrived' }>;
 export type MachineAddStep = Readonly<{ id: string; label: string; state: 'done' | 'running' | 'pending' | 'failed'; elapsedMs: number | null }>;
@@ -152,7 +147,6 @@ export function useMachineAddFlow(options: Readonly<{ serverId?: string; initial
     const hostScope = useActiveServerAccountScope(serverId);
     const hostCatalog = useRemoteHostCatalogSnapshot(hostScope);
     const managementEnabled = useFeatureEnabled('remoteHosts.management');
-    const secretMaterialEnabled = useFeatureEnabled('remoteHosts.secretMaterial');
     const savedHosts = managementEnabled && isActiveHome ? hostCatalog?.data ?? EMPTY_REMOTE_HOSTS : EMPTY_REMOTE_HOSTS;
     const configured = useConfiguredSshHostSuggestions({ runner, enabled: runner.mode === 'tauri' && draft.path === 'ssh' });
     const configuredHosts = React.useMemo(() => filterConfiguredSshHostSuggestions({ suggestions: configured.suggestions, remoteHosts: savedHosts }), [configured.suggestions, savedHosts]);
@@ -162,6 +156,7 @@ export function useMachineAddFlow(options: Readonly<{ serverId?: string; initial
     const setDraft = React.useCallback((next: SshCredentialsDraft) => update((current) => ({ ...current, sshDraft: { ...next,
         privateKeyMaterial: next.authMode === 'keyfile' ? current.sshDraft.privateKeyMaterial : undefined,
         savedHostId: ['host', 'username', 'port', 'authMode', 'identityFilePath'].every((key) => next[key as keyof SshCredentialsDraft] === current.sshDraft[key as keyof SshCredentialsDraft]) ? current.sshDraft.savedHostId : null,
+        savedHostExpectedRevision: ['host', 'username', 'port', 'authMode', 'identityFilePath'].every((key) => next[key as keyof SshCredentialsDraft] === current.sshDraft[key as keyof SshCredentialsDraft]) ? current.sshDraft.savedHostExpectedRevision : undefined,
     } })), [update]);
     const suggestions = React.useMemo(() => [
         ...savedHosts.map((host) => ({ id: host.id, title: host.name, subtitle: host.ssh.target, apply: () => {
@@ -170,35 +165,18 @@ export function useMachineAddFlow(options: Readonly<{ serverId?: string; initial
                 ...buildSshCredentialsDraftFromRemoteHostConfig({ sshTarget: host.ssh.target, sshPort: host.ssh.port ?? null,
                     sshAuth: host.ssh.authMode, identityFilePath: overrides?.identityFilePath ?? '',
                     sshConfigFilePath: overrides?.sshConfigFilePath ?? '', identityPrivateKey: '', password: '' }), savedHostId: host.id,
+                savedHostExpectedRevision: hostCatalog && !hostCatalog.stale && hostCatalog.catalog.status === 'ready' && hostCatalog.catalog.cleanup !== 'pending'
+                    ? hostCatalog.catalog.revision : undefined,
             } });
         } })),
         ...configuredHosts.map((host) => ({ id: host.id, title: host.alias, subtitle: host.hostname, apply: () => update((current) => ({
             ...current, sshDraft: { ...applyConfiguredSshHostSuggestionToDraft(current.sshDraft, host), savedHostId: null },
         })) })),
-    ], [configuredHosts, savedHosts, serverId, update]);
+    ], [configuredHosts, hostCatalog, savedHosts, serverId, update]);
     const runWithSshForm = React.useCallback(async <T,>(run: (form: RemoteSshBootstrapFormState,
         startSpec?: (spec: SystemTaskSpec) => Promise<string>) => Promise<T>): Promise<T> => {
-        const sshDraft = readMachineAddFlowDraft().sshDraft;
-        if (sshDraft.savedHostId) {
-            if (!hostScope || !hostCatalog || hostCatalog.stale || hostCatalog.catalog.status !== 'ready' || hostCatalog.catalog.cleanup === 'pending'
-                || typeof hostCatalog.catalog.revision !== 'number') throw new Error('remote_host_catalog_unavailable');
-            const account = await captureLazyActionAccountContext(hostScope.serverId);
-            try {
-                if (account.accountId !== hostScope.accountId) throw new Error('action_account_scope_changed');
-                return await withRemoteHostSshConfig(account, { hostId: sshDraft.savedHostId, expectedRevision: hostCatalog.catalog.revision },
-                    async ({ config, assertCurrent }) => {
-                        const form = buildRemoteSshBootstrapFormStateFromSshConfig({ config: config.value, draft: sshDraft, installRelayRuntime: false });
-                        assertCurrent();
-                        return run(form, async spec => (await startAdmittedRemoteHostSystemTask({ runner, assertCurrent }, spec)).taskId);
-                    });
-            } finally { account.dispose(); }
-        }
-        const form = await resolveRemoteSshBootstrapFormState({ draft: sshDraft, usingSavedHost: false, selectedSavedHost: null,
-            privateKeyMaterialDraft: sshDraft.privateKeyMaterial ?? '', saveSecretMaterial: false, installRelayRuntime: false,
-            remoteHostsSecretMaterialEnabled: secretMaterialEnabled,
-        });
-        return run(form);
-    }, [hostCatalog, hostScope, runner, secretMaterialEnabled]);
+        return runWithMachineAddSshForm({ serverId, runner, draft: readMachineAddFlowDraft().sshDraft }, run);
+    }, [runner, serverId]);
     const chosen = paths.find((candidate) => candidate.id === draft.path) ?? null;
     const choosePath = React.useCallback((id: MachineAddPathId) => {
         if (!paths.some((candidate) => candidate.id === id) || hasRunningTask()) return;
@@ -227,45 +205,8 @@ export function useMachineAddFlow(options: Readonly<{ serverId?: string; initial
     }, [isActiveHome, chosen, localTask.start, preflight.activeLocalRelayUrl, preflight.thisComputerConnection, profile, runner, serverId]);
     const startSsh = React.useCallback(() => {
         if (chosen?.id !== 'ssh' || chosen.runs !== 'task' || !profile || !isActiveHome || !isSshCredentialsDraftReady(draft.sshDraft)) return;
-        const submitted = draft.sshDraft;
-        const expectedScope = storage.getState().settingsScope;
-        const hostLifetime = captureActiveServerAccountScopeLifetime();
-        const submittedHost = submitted.savedHostId ? savedHosts.find(host => host.id === submitted.savedHostId) : undefined;
-        const expectedHostRevision = hostCatalog && !hostCatalog.stale && hostCatalog.catalog.status === 'ready' && hostCatalog.catalog.cleanup !== 'pending'
-            ? hostCatalog.catalog.revision : null;
-        const observeCompletion = (taskId: string) => {
-            let unsubscribe: (() => void) | null = null;
-            const finish = () => {
-                const result = runner.getSnapshot(taskId)?.result;
-                if (!result) return;
-                unsubscribe?.();
-                unsubscribe = null;
-                if (!result.ok || !hostScope || !hostLifetime?.isCurrent() || expectedHostRevision === null
-                    || !areAccountSettingsScopesEqual(storage.getState().settingsScope, expectedScope)) return;
-                const data: unknown = result.data;
-                const machineId = data && typeof data === 'object' && !Array.isArray(data) && 'machineId' in data && typeof data.machineId === 'string' ? data.machineId : null;
-                // Persistence is the existing best-effort owner; a machine's arrival is independent.
-                void persistRemoteHostAfterRemoteSshCompletion({ managementEnabled, secretMaterialEnabled,
-                    scope: hostScope, expectedRevision: expectedHostRevision, host: submittedHost,
-                    assertCurrent: () => { if (!hostLifetime.isCurrent()) throw new Error('action_account_scope_changed'); },
-                    selectedSavedRemoteHostId: submitted.savedHostId ?? '__new__', newHostSentinelId: '__new__',
-                    runContext: { selectedSavedRemoteHostId: submitted.savedHostId ?? '__new__', saveHost: true, saveSecretMaterial: false },
-                    draft: submitted, privateKeyMaterialDraft: submitted.privateKeyMaterial ?? '', completion: { machineId, relayRuntimeUrl: null },
-                }).catch(() => {});
-            };
-            unsubscribe = runner.subscribe(taskId, finish);
-            finish();
-            return () => { unsubscribe?.(); unsubscribe = null; };
-        };
-        void startMachineAddTask('ssh', runner, async (isCurrent) => {
-            return runWithSshForm(async (form, startSpec) => {
-                if (!isCurrent() || !areAccountSettingsScopesEqual(storage.getState().settingsScope, expectedScope)) return null;
-                beginMachineAddWatch(serverId, 'ssh');
-                return sshTask.start(form, startSpec);
-            });
-        }, observeCompletion);
-    }, [isActiveHome, chosen, draft.sshDraft, hostCatalog, hostScope, managementEnabled, profile, runWithSshForm, runner,
-        savedHosts, secretMaterialEnabled, serverId, sshTask.start]);
+        void startMachineAddSshTask({ serverId, runner, draft: draft.sshDraft }, sshTask.start);
+    }, [isActiveHome, chosen, draft.sshDraft, profile, runner, serverId, sshTask.start]);
 
     const thisComputer: MachineAddThisComputer = !isActiveHome ? { kind: 'needsAuth' }
         : preflight.checking ? { kind: 'checking' }
@@ -320,7 +261,7 @@ export function useMachineAddFlow(options: Readonly<{ serverId?: string; initial
         choosePath, os: draft.os, detectedOs, setOs: (os: MachineAddCommandOs) => update((current) => ({ ...current, os })), commands,
         ssh: { draft: draft.sshDraft, setDraft, ready: isSshCredentialsDraftReady(draft.sshDraft),
             hostError: taskError && ['connection-failed', 'network-captive-portal'].includes(taskError.code) ? t('machineAdd.cannotReachHost') : null,
-            suggestions, supportedAuthModes: runner.mode === 'native' ? ['keyfile', 'password'] as const : ['agent', 'keyfile', 'password'] as const,
+            suggestions, supportedAuthModes: getMachineAddSshSupportedAuthModes(runner),
             privateKeyMaterial: draft.sshDraft.privateKeyMaterial ?? '', setPrivateKeyMaterial: (value: string) => update((current) => ({ ...current, sshDraft: { ...current.sshDraft, privateKeyMaterial: value, savedHostId: null } })),
         },
         thisComputer, run,

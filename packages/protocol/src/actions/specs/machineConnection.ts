@@ -4,6 +4,8 @@ import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 export { MachineTerminalOpenInputSchema, MachineTerminalListInputSchema } from './machineTerminal.js';
 
 const id = z.string().trim().min(1);
+export const HomeReconnectInputSchema = lazyZodSchema(() => z.object({ serverId: id }).strict());
+export const HomeReconnectOutputSchema = HomeReconnectInputSchema;
 export const HomeConnectInputSchema = lazyZodSchema(() => z.object({
   address: id,
   displayName: id.optional(),
@@ -29,10 +31,12 @@ export const MachinePairingCreateInputSchema = lazyZodSchema(() => z.object({ se
 export const MachinePairingCreateOutputSchema = lazyZodSchema(() => z.object({ pairId: id, link: id, expiresAtMs: z.number().int().nonnegative() }).strict());
 export const MACHINE_ADD_SSH_ACTION_IDS = ['machines.add.ssh.start', 'machines.add.ssh.status', 'machines.add.ssh.respond', 'machines.add.ssh.cancel'] as const;
 export type MachineAddSshActionId = typeof MACHINE_ADD_SSH_ACTION_IDS[number];
-export const MachineAddSshStartInputSchema = lazyZodSchema(() => z.object({ serverId: id, host: id, username: z.string().default(''),
+export const MachineAddSshStartInputSchema = lazyZodSchema(() => z.union([z.object({ serverId: id, host: id, username: z.string().default(''),
   port: z.number().int().min(1).max(65535).optional(), authMode: z.enum(['agent', 'keyfile', 'password']).default('agent'),
   identityFilePath: z.string().optional(),
-}).strict());
+}).strict(), z.object({ serverId: id, savedHost: z.object({ hostId: id,
+  expectedRevision: z.union([z.number().int().nonnegative(), z.literal('absent')]),
+}).strict() }).strict()]));
 export const MachineAddSshTaskInputSchema = lazyZodSchema(() => z.object({ taskId: id }).strict());
 export const MachineAddSshAnswerSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('ssh.trustHost'), trusted: z.boolean() }).strict(),
@@ -58,12 +62,12 @@ const clientSurfaces = { ui: true, voice: false, agent: true, mcp: true, cli: fa
 export const MACHINE_CONNECTION_ACTION_SPECS = [
   {
     id: 'machines.add.ssh.start', title: 'Add machine over SSH',
-    description: 'Start the existing client SSH setup task on the focused signed-in Home. Read status and answer non-secret prompts. Password and private-key entry stays with the present-user UI.',
+    description: 'Start client SSH setup on the focused signed-in Home using a new target or an exact saved host revision. Successful setup attempts to save the host through the existing catalog. Password and private-key entry stays with the present-user UI; trust and provisioning changes require explicit prompt answers.',
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'client', placements: [], surfaces: clientSurfaces,
     bindings: { mcpToolName: 'machines_add_ssh_start' }, inputSchema: MachineAddSshStartInputSchema, outputSchema: MachineAddSshTaskOutputSchema,
-    inputHints: { fields: [{ path: 'serverId', title: 'Home ID', widget: 'text', required: true }, { path: 'host', title: 'SSH host', widget: 'text', required: true },
+    inputHints: { fields: [{ path: 'serverId', title: 'Home ID', widget: 'text', required: true }, { path: 'host', title: 'SSH host', widget: 'text' },
       { path: 'username', title: 'SSH user', widget: 'text' }, { path: 'port', title: 'SSH port', widget: 'text' }, { path: 'authMode', title: 'Authentication', widget: 'text' },
-      { path: 'identityFilePath', title: 'Identity file', widget: 'text' }] },
+      { path: 'identityFilePath', title: 'Identity file', widget: 'text' }, { path: 'savedHost', title: 'Saved host and catalog revision', widget: 'json' }] },
   },
   {
     id: 'machines.add.ssh.status', title: 'Read SSH machine setup', description: 'Read the retained SSH setup task and its current prompt. Task success is not proof of Home feed arrival.',
@@ -82,6 +86,13 @@ export const MACHINE_CONNECTION_ACTION_SPECS = [
     safety: 'safe', sideEffectClass: 'write', executionPlacement: 'client', placements: [], surfaces: clientSurfaces,
     bindings: { mcpToolName: 'machines_add_ssh_cancel' }, inputSchema: MachineAddSshTaskInputSchema, outputSchema: MachineAddSshTaskOutputSchema,
     inputHints: { fields: [{ path: 'taskId', title: 'Task ID', widget: 'text', required: true }] },
+  },
+  {
+    id: 'homes.reconnect', title: 'Retry the focused Home connection',
+    description: 'Retry the current Home through its existing connection recovery owner. This does not switch device focus to another Home.',
+    safety: 'safe', sideEffectClass: 'write', executionPlacement: 'client', placements: [], surfaces: clientSurfaces,
+    bindings: { mcpToolName: 'homes_reconnect' }, inputSchema: HomeReconnectInputSchema, outputSchema: HomeReconnectOutputSchema,
+    inputHints: { fields: [{ path: 'serverId', title: 'Focused Home ID', widget: 'text', required: true }] },
   },
   {
     id: 'homes.connect', title: 'Connect a Home by address',

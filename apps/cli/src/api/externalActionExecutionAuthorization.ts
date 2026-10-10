@@ -274,6 +274,7 @@ export function createExternalActionMachineRpcExecution(input: Readonly<{
     installationId: input.installationId,
     machineSignature: signExternalActionMachineRpcRequestV1({
       authorizationToken: authorization.token,
+      requesterAccountContext: authorization.requesterAccountContext,
       effectActionId,
       target,
       installationId: input.installationId,

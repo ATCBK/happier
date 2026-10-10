@@ -50,6 +50,7 @@ export type { IntentStartActionInputById, IntentStartActionResultById } from './
 export type { InventoryActionInputById, InventoryActionResultById } from './dtos/inventoryActionDtos.generated.js';
 export type { LaunchProfilesActionInputById, LaunchProfilesActionResultById } from './dtos/launchProfilesActionDtos.generated.js';
 export type { ListReorderActionInputById, ListReorderActionResultById } from './dtos/listReorderActionDtos.generated.js';
+export type { LocalDaemonServicesActionInputById, LocalDaemonServicesActionResultById } from './dtos/localDaemonServicesActionDtos.generated.js';
 export type { LocalServicesActionsActionInputById, LocalServicesActionsActionResultById } from './dtos/localServicesActionsActionDtos.generated.js';
 export type { LocalServicesInventoryActionInputById, LocalServicesInventoryActionResultById } from './dtos/localServicesInventoryActionDtos.generated.js';
 export type { LocalServicesLauncherActionInputById, LocalServicesLauncherActionResultById } from './dtos/localServicesLauncherActionDtos.generated.js';
@@ -88,6 +89,7 @@ export type { ScmPullRequestActionInputById, ScmPullRequestActionResultById } fr
 export type { ScmRepositoryActionInputById, ScmRepositoryActionResultById } from './dtos/scmRepositoryActionDtos.generated.js';
 export type { ScopeActionInputById, ScopeActionResultById } from './dtos/scopeActionDtos.generated.js';
 export type { SessionAccessActionInputById, SessionAccessActionResultById } from './dtos/sessionAccessActionDtos.generated.js';
+export type { SessionAgentTransitionActionInputById, SessionAgentTransitionActionResultById } from './dtos/sessionAgentTransitionActionDtos.generated.js';
 export type { SessionAttentionActionInputById, SessionAttentionActionResultById } from './dtos/sessionAttentionActionDtos.generated.js';
 export type { SessionAuthoringActionInputById, SessionAuthoringActionResultById } from './dtos/sessionAuthoringActionDtos.generated.js';
 export type { SessionBoardActionInputById, SessionBoardActionResultById } from './dtos/sessionBoardActionDtos.generated.js';

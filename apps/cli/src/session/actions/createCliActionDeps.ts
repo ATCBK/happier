@@ -1,4 +1,7 @@
 import { homedir } from 'node:os';
+import { inspectSessionContinuation } from '@/session/agentTransition/sessionContinuationInspection';
+import { runSessionAgentTransition } from '@/session/agentTransition/sessionAgentTransitionCoordinator';
+import { rejectUndispatchedSessionAgentTransition } from '@happier-dev/protocol/sessions/agentTransitionEffectStage';
 import { projectAutomationEligibleEventsCatalogV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { projectCurrentSessionPresentationActionResult } from '@/session/presentation/currentSessionPresentationService';
 import { flattenWidgetLayoutWidgetsV1 } from '@happier-dev/protocol/widgets';
@@ -111,7 +114,8 @@ import { resolveWorkflowDefinitionRefV1 } from '@happier-dev/protocol/workflows/
 import { formatWorkflowDefinitionRefV1 } from '@happier-dev/protocol/workflows/workflowDefinitionRefV1';
 import { buildSessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
 import { SESSION_PERMISSION_MODES } from '@happier-dev/protocol/sessions/metadata/permission-modes';
-import { isPermissionModeGrantedV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
+import { isPermissionModeGrantedV1, resolveEffectiveApiTokenPermissionModeV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
+import { resolveEffectivePermissionMode } from '@happier-dev/protocol/actions/permissionPrivilege';
 import { ConnectedAccountAttemptResponseSchema, CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
 import { startMachineAgentSignIn, cancelMachineAgentSignIn, restartMachineAgentSignIn } from '@happier-dev/protocol/daemon/startAgentSignIn';
 import { buildMachineAgentsDetectRequest, buildMachineAgentInventoryDescriptors, projectMachineAgentsDetectResponse, MachineAgentInventoryUnavailableError } from '@happier-dev/protocol/capabilities/machineAgentInventory';
@@ -125,7 +129,7 @@ import type { SessionFollowSourceKeyPreparationResultV1, ResolvedRolesSnapshotV1
 import { AcpConfigOptionOverridesV1Schema, buildAcpConfigOptionOverridesV1 } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { AccountSettingMutationV1Schema } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import { BackendTargetRefV2Schema, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { derivePluginSessionInputLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { derivePluginSessionInputLocalIdV1, buildTrustedHostSessionInputAdmissionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { isMemoryDocumentSearchHitV1, negotiateMemorySearchV1 } from '@happier-dev/protocol/memory/memorySearch';
 import { MemoryStatusV1Schema } from '@happier-dev/protocol/memory/memoryStatus';
 import { MemorySettingsV1Schema } from '@happier-dev/protocol/memory/memorySettings';
@@ -1458,7 +1462,14 @@ export function createCliActionDeps(params: Readonly<{
     }
     if (direct?.machineId === input.machineId && !externalRequest && input.method !== RPC_METHODS.MACHINES_WORK_SUMMARY_GET) {
       const localActionContext: RpcLocalActionContext = {
+        ...(input.context?.surface ? { surface: input.context.surface } : {}),
         ...(input.authority ? { authority: input.authority } : {}),
+        ...(input.context?.callerPermissionMode !== undefined ? { callerPermissionMode: input.context.callerPermissionMode } : {}),
+        ...(input.context?.causalPermissionAuthority !== undefined ? { causalPermissionAuthority: input.context.causalPermissionAuthority } : {}),
+        ...(input.context?.agentStartContext ? { agentStartContext: input.context.agentStartContext } : {}),
+        ...(input.context?.agentStartWorkDepth !== undefined ? { agentStartWorkDepth: input.context.agentStartWorkDepth } : {}),
+        ...(input.context?.agentStartWorkspaceWrites !== undefined ? { agentStartWorkspaceWrites: input.context.agentStartWorkspaceWrites } : {}),
+        ...(input.context?.sessionAgentSpawnPolicyV1 !== undefined ? { sessionAgentSpawnPolicyV1: input.context.sessionAgentSpawnPolicyV1 } : {}),
         ...(input.context?.actionRequestId ? { actionRequestId: input.context.actionRequestId } : {}),
         ...(input.context?.executionRunWorkflowRunId ? { executionRunWorkflowRunId: input.context.executionRunWorkflowRunId } : {}),
         ...(input.context?.executionRunTargetMachineId ? { executionRunTargetMachineId: input.context.executionRunTargetMachineId } : {}),
@@ -2425,7 +2436,11 @@ export function createCliActionDeps(params: Readonly<{
     sessionId: string,
     operation: 'get' | 'set' | 'clear',
     request: Record<string, unknown>,
+    options?: Readonly<{ resumeInactiveWithInitialGoal?: boolean; context?: ActionExecutorContext; signal?: AbortSignal; actionRequestId?: string; serverId?: string | null }>,
   ): Promise<unknown> => {
+    const signal = options?.signal ?? options?.context?.signal;
+    const authority = options?.context ? options.context.authority ?? 'account_automation' : undefined;
+    signal?.throwIfAborted();
     if (!params.credentials) {
       return normalizeUsageLimitRecoveryOperationResult(
         { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' },
@@ -2458,6 +2473,12 @@ export function createCliActionDeps(params: Readonly<{
       currentMachineHost: currentMachineIdentity.host,
       currentMachineHomeDir: currentMachineIdentity.homeDir,
       operation,
+      ...(signal ? { signal } : {}),
+      ...(authority ? { executionAuthority: authority } : {}),
+      ...(options?.actionRequestId ?? options?.context?.actionRequestId
+        ? { actionRequestId: options?.actionRequestId ?? options?.context?.actionRequestId } : {}),
+      resumeInactiveWithInitialGoal: operation === 'set' && typeof request.objective === 'string'
+        && options?.resumeInactiveWithInitialGoal !== false,
       stageWorkStateMutation: params.stageWorkStateMutation,
       ...(operation === 'set' ? { request } : {}),
       callLiveSessionRpc: async () => await callSessionRpcForTransport(
@@ -2468,7 +2489,27 @@ export function createCliActionDeps(params: Readonly<{
             ? SESSION_RPC_METHODS.SESSION_GOAL_CLEAR
             : SESSION_RPC_METHODS.SESSION_GOAL_SET,
         request,
+        signal,
       ),
+      callMachineGoalRpc: async ({ machineId, operation: machineOperation, request: goalRequest, resumeInactiveWithInitialGoal }) => (
+        await callMachineAction({ machineId,
+          ...(options?.serverId ? { serverId: options.serverId } : {}),
+          method: machineOperation === 'get' ? RPC_METHODS.DAEMON_SESSION_GOAL_GET
+            : machineOperation === 'clear' ? RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR
+              : resumeInactiveWithInitialGoal ? RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2 : RPC_METHODS.DAEMON_SESSION_GOAL_SET,
+          request: { sessionId: transport.sessionId, ...goalRequest,
+            ...(resumeInactiveWithInitialGoal ? { resumeInactiveWithInitialGoal: true } : {}) },
+          ...(options?.context ? { context: options.context, authority,
+            authorization: options.context.rpcSessionAuthorization } : {}),
+          ...(signal ? { signal } : {}), effectActionId: `session.goal.${machineOperation}` })
+      ),
+      machineResumeTransport: async (method, resumeRequest, resumeOptions) => await callMachineAction({
+        machineId: currentMachineIdentity.machineId!, method, request: resumeRequest,
+        ...(options?.serverId ? { serverId: options.serverId } : {}),
+        ...(options?.context ? { context: options.context, authority,
+          authorization: options.context.rpcSessionAuthorization } : {}),
+        ...(resumeOptions?.signal ? { signal: resumeOptions.signal } : {}), effectActionId: 'session.goal.set',
+      }),
     });
   };
 
@@ -5967,6 +6008,65 @@ export function createCliActionDeps(params: Readonly<{
         ...(signal ? { signal } : {}),
       }));
     },
+    sessionContinuationInspect: async ({ input }) => {
+      if (!params.credentials) return { status: 'answered', inspection: { type: 'unavailable', reason: 'operation_unavailable' } };
+      return { status: 'answered', inspection: await inspectSessionContinuation({ credentials: params.credentials,
+        request: { v: 1, sourceSessionId: input.sessionId, selection: input.selection } }) };
+    },
+    sessionAgentTransition: async ({ request, context, sessionInputSource }) => {
+      if (!params.credentials || !context.actionCaller || !context.authority) return rejectUndispatchedSessionAgentTransition('forbidden');
+      const root = context.externalActionExecutionAuthorization;
+      if (root && (!params.externalActionMachineRequestPrivateKey || !params.externalActionMachineInstallationId)) {
+        return rejectUndispatchedSessionAgentTransition('forbidden');
+      }
+      const caller = context.actionCaller;
+      if (sessionInputSource && caller?.kind !== 'session') return rejectUndispatchedSessionAgentTransition('forbidden');
+      const inputAdmission = sessionInputSource && caller?.kind === 'session'
+        ? buildCausalSessionInputAdmissionV1({ ...sessionInputSource, callerDepth: readAgentStartCallerWorkDepthV1(caller) })
+        : caller?.kind === 'plugin'
+          ? buildPluginSessionInputAdmissionV1({ caller, surface: context.surface })
+          : caller?.kind === 'host' && (context.authority === 'present_user' || context.externalActionCredential)
+            ? buildTrustedHostSessionInputAdmissionV1(context.surface)
+            : undefined;
+      if (context.authority !== 'present_user' && !inputAdmission) return rejectUndispatchedSessionAgentTransition('forbidden');
+      let restrictedAdmission = inputAdmission;
+      if (inputAdmission && context.authority !== 'present_user' && caller?.kind !== 'session') {
+        let ceiling = (typeof context.callerPermissionMode === 'string'
+          ? parsePermissionIntentAlias(context.callerPermissionMode) : null) ?? 'default';
+        const constraints = [context.callerInputConstraints, context.externalActionCredential?.grant]
+          .filter(value => value !== undefined);
+        if (constraints.some(constraint => !isPermissionModeGrantedV1(constraint, ceiling))) {
+          const restricted = constraints.find(constraint => constraint.permissionModes !== null);
+          if (!restricted || restricted.permissionModes === null) return rejectUndispatchedSessionAgentTransition('forbidden');
+          const permissionModes = restricted.permissionModes.filter(mode => {
+            if (constraints.some(constraint => !isPermissionModeGrantedV1(constraint, mode))) return false;
+            const narrowed = resolveEffectivePermissionMode({ currentMode: ceiling, admittedPermissionCeiling: mode });
+            return narrowed.ok && narrowed.effectiveMode === parsePermissionIntentAlias(mode);
+          });
+          const granted = resolveEffectiveApiTokenPermissionModeV1({ permissionModes }, ceiling);
+          if (!granted) return rejectUndispatchedSessionAgentTransition('forbidden');
+          const narrowed = resolveEffectivePermissionMode({ currentMode: ceiling, admittedPermissionCeiling: granted });
+          if (!narrowed.ok) return rejectUndispatchedSessionAgentTransition('forbidden');
+          ceiling = narrowed.effectiveMode;
+        }
+        if (constraints.some(constraint => !isPermissionModeGrantedV1(constraint, ceiling))) {
+          return rejectUndispatchedSessionAgentTransition('forbidden');
+        }
+        restrictedAdmission = { ...inputAdmission, request: { ...inputAdmission.request, permission: {
+          ...inputAdmission.request.permission, requestedPermissionCeiling: ceiling,
+        } } };
+      }
+      return await runSessionAgentTransition({ credentials: params.credentials, request,
+        ...(restrictedAdmission ? { inputAdmission: restrictedAdmission } : {}),
+        ...(context.callerInputConstraints ? { callerInputConstraints: context.callerInputConstraints } : {}),
+        ...(context.externalActionCredential ? { credentialInputConstraints: context.externalActionCredential.grant } : {}),
+        ...(context.externalActionExecutionAuthorization ? { callerInputAuthorization: context.externalActionExecutionAuthorization } : {}),
+        ...(root ? { externalAction: { context: { ...context, externalActionTarget: { kind: 'session' as const, sessionId: request.sessionId } },
+          effectActionId: root.binding.actionId, installationId: params.externalActionMachineInstallationId!,
+          privateKey: params.externalActionMachineRequestPrivateKey! } } : {}),
+        ...(params.actionsSettingsProvider?.getAccountSettings ? { deps: { readAccountSettings: () => params.actionsSettingsProvider!.getAccountSettings!() ?? null } } : {}),
+        ...(params.machineAdmissionTransport ? { machineAdmissionTransport: params.machineAdmissionTransport } : {}) });
+    },
     sessionSendMessage: async ({
       callerInputConstraints,
       context,
@@ -6745,20 +6845,20 @@ export function createCliActionDeps(params: Readonly<{
       }));
     },
 
-    sessionGoalGet: async ({ sessionId }) => {
-      return await callRoutedSessionGoalControl(sessionId, 'get', {});
+    sessionGoalGet: async ({ sessionId, ...options }) => {
+      return await callRoutedSessionGoalControl(sessionId, 'get', {}, options);
     },
 
-    sessionGoalSet: async ({ sessionId, objective, status, tokenBudget }) => {
+    sessionGoalSet: async ({ sessionId, objective, status, tokenBudget, ...options }) => {
       return await callRoutedSessionGoalControl(sessionId, 'set', {
         ...(typeof objective === 'string' ? { objective } : {}),
         ...(typeof status === 'string' && status.trim().length > 0 ? { status: status.trim() } : {}),
         ...(typeof tokenBudget !== 'undefined' ? { tokenBudget: tokenBudget ?? null } : {}),
-      });
+      }, options);
     },
 
-    sessionGoalClear: async ({ sessionId }) => {
-      return await callRoutedSessionGoalControl(sessionId, 'clear', {});
+    sessionGoalClear: async ({ sessionId, ...options }) => {
+      return await callRoutedSessionGoalControl(sessionId, 'clear', {}, options);
     },
 
     sessionUsageLimitWaitResumeEnable: async ({ sessionId, issueFingerprint, remember, resumePromptMode }) => {

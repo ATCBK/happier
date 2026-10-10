@@ -21,6 +21,8 @@ import { fetchEncryptedTranscriptMessagesPage } from './fetchEncryptedTranscript
 import { decryptTranscriptReplaySlice } from './decryptTranscriptReplaySlice';
 import { fetchForkTranscriptSegments } from './fetchForkTranscriptSegments';
 
+export const DEFAULT_REPLAY_FORK_CHAIN_MAX_DEPTH = 10;
+
 type RawTranscriptRow = Readonly<{
   seq?: unknown;
   createdAt?: unknown;
@@ -160,6 +162,7 @@ function readMinSeq(rows: readonly { seq?: unknown }[]): number | null {
 
 export async function hydrateReplayDialogFromForkChain(params: Readonly<{
   credentials: StoredCredentials;
+  resolveAuthorizationHeaders?: Parameters<typeof fetchForkTranscriptSegments>[0]['resolveAuthorizationHeaders'];
   startingSessionId: string;
   /** Transcript page size. The server caps a single request at 500 rows. */
   limit: number;
@@ -256,7 +259,7 @@ export async function hydrateReplayDialogFromForkChain(params: Readonly<{
   const maxDepth =
     typeof params.maxDepth === 'number' && Number.isFinite(params.maxDepth)
       ? Math.max(1, Math.min(25, Math.floor(params.maxDepth)))
-      : 10;
+      : DEFAULT_REPLAY_FORK_CHAIN_MAX_DEPTH;
   const pageSize =
     typeof params.limit === 'number' && Number.isFinite(params.limit)
       ? Math.max(1, Math.min(500, Math.floor(params.limit)))
@@ -286,13 +289,21 @@ export async function hydrateReplayDialogFromForkChain(params: Readonly<{
       ? rows
       : rows.filter((row) => typeof row.seq === 'number' && row.seq > afterSeqExclusive);
 
+  const currentnessAuthorizationHeaders = params.resolveAuthorizationHeaders?.({
+    method: 'GET', path: '/v1/account/encryption/currentness',
+  });
+  if (params.resolveAuthorizationHeaders && !currentnessAuthorizationHeaders) {
+    throw new Error('External Action authorization unavailable');
+  }
   const accountEncryptionCurrentness = await fetchAccountEncryptionCurrentness({
     token: params.credentials.token,
+    ...(currentnessAuthorizationHeaders ? { authorizationHeaders: currentnessAuthorizationHeaders } : {}),
   });
   const { segments, chainTerminatedNaturally, acquisitionError } = await fetchForkTranscriptSegments({
     credentials: params.credentials, accountEncryptionMode: accountEncryptionCurrentness.mode,
     startingSessionId: String(params.startingSessionId ?? ''), upToSeqInclusive: params.upToSeqInclusive,
     afterSeqExclusive, maxDepth,
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
   });
   if (isAuthenticationError(acquisitionError)) throw acquisitionError;
 
@@ -436,6 +447,7 @@ export async function hydrateReplayDialogFromForkChain(params: Readonly<{
         beforeSeq: cursor,
         roles: REPLAY_DIALOG_MESSAGE_ROLES,
         deadlineAtMs,
+        ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
       }).catch((error) => {
         if (isAuthenticationError(error)) throw error;
         return null;
@@ -567,6 +579,7 @@ export async function hydrateReplayDialogFromForkChain(params: Readonly<{
       beforeSeq: Math.max(0, sourceCutoffSeqInclusive + 1),
       roles: ['user'],
       deadlineAtMs,
+      ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     }).catch((error) => {
       if (isAuthenticationError(error)) throw error;
       return null;

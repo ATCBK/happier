@@ -63,6 +63,22 @@ export type SettingsDeclarationsActionInputById = {
             kind: 'restore';
         } | undefined;
     };
+    readonly "settings.reset": {
+        anchor: string;
+        target?: {
+            kind: 'home';
+            serverId: string;
+        } | {
+            kind: 'team';
+            serverId: string;
+            teamId: string;
+        } | {
+            kind: 'team_identity_connection';
+            serverId: string;
+            teamId: string;
+            connectionId: string;
+        } | undefined;
+    };
     readonly "settings.invoke": {
         anchor: string;
         input?: {
@@ -174,6 +190,15 @@ export type SettingsDeclarationsActionResultById = {
             };
         } | undefined;
         reversalUnavailableReason?: 'no_change' | undefined;
+    };
+    readonly "settings.reset": {
+        anchor: string;
+        value: string | number | boolean | readonly JsonValue[] | {
+            readonly [key: string]: JsonValue;
+        } | null;
+    } | {
+        anchor: string;
+        unset: true;
     };
     readonly "settings.invoke": {
         anchor: string;

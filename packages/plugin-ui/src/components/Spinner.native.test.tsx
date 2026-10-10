@@ -70,6 +70,27 @@ function dotOpacities(): unknown[] {
 }
 
 describe('native HappierSpinner presentation', () => {
+  it('keeps the host-selected mark visible while inactive and reduced motion pauses its travelling light', async () => {
+    const initial = createSurfaceContext({ platform: 'ios', reducedMotion: true });
+    const context = { ...initial, theme: { ...initial.theme, spinner: { style: 'hWave', speed: 'fast', pause: 'long' } } };
+    const hostApi = createHostApiStub(context);
+    const renderSpinner = (presentationActive: boolean) => (
+      <PluginUiProviderInternal hostApi={hostApi} context={context} surfaceActivity={{ active: true }} presentationActive={presentationActive}>
+        <Spinner testID="preferred-spinner" />
+      </PluginUiProviderInternal>
+    );
+    await act(async () => { renderer = create(renderSpinner(false)); });
+    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(running()).toBe(0);
+
+    await act(async () => { renderer!.update(renderSpinner(true)); });
+    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(running()).toBe(1);
+
+    await act(async () => { renderer!.update(renderSpinner(false)); });
+    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(running()).toBe(0);
+  });
   it('pauses a declarative busy list row through the private environment projection without a Host API provider', async () => {
     const environment = projectHappierUiEnvironment(createSurfaceContext({ platform: 'ios' }));
     const renderRow = (presentationActive: boolean) => (
@@ -80,7 +101,7 @@ describe('native HappierSpinner presentation', () => {
     await act(async () => { renderer = create(renderRow(true)); });
     expect(running()).toBe(1);
     await act(async () => { renderer!.update(renderRow(false)); });
-    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(dotOpacities()).toEqual(Array(8).fill(0.85));
     expect(running()).toBe(0);
     await act(async () => { renderer!.update(renderRow(true)); });
     expect(running()).toBe(1);
@@ -121,7 +142,7 @@ describe('native HappierSpinner presentation', () => {
     await act(async () => { renderer = create(renderBusy(true)); });
     expect(running()).toBe(1);
     await act(async () => { renderer!.update(renderBusy(false)); });
-    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(dotOpacities()).toEqual(Array(8).fill(0.85));
     expect(running()).toBe(0);
     expect(surfaceActive).toBe(true);
     await act(async () => { renderer!.update(renderBusy(true)); });
@@ -140,7 +161,7 @@ describe('native HappierSpinner presentation', () => {
       </PluginUiProviderInternal>
     );
     await act(async () => { renderer = create(renderBusy(false)); });
-    expect(dotOpacities()).toEqual(Array(28).fill(0.85));
+    expect(dotOpacities()).toEqual(Array(32).fill(0.85));
     expect(running()).toBe(0);
     await act(async () => { renderer!.update(renderBusy(true)); });
     expect(running()).toBe(1);
@@ -165,7 +186,7 @@ describe('native HappierSpinner presentation', () => {
     await act(async () => { renderer = create(renderTabs('busy')); });
     expect(running()).toBe(1);
     await act(async () => { renderer!.update(renderTabs('other')); });
-    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(dotOpacities()).toEqual(Array(8).fill(0.85));
     expect(running()).toBe(0);
     await act(async () => { renderer!.update(renderTabs('busy')); });
     expect(running()).toBe(1);
@@ -182,7 +203,7 @@ describe('native HappierSpinner presentation', () => {
     });
 
     expect(renderer!.root.findAllByType('ActivityIndicator' as never)).toHaveLength(0);
-    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(dotOpacities()).toEqual(Array(8).fill(0.85));
   });
 
   it('holds public Spinner still, with no running clock, while its retained surface is inactive', async () => {
@@ -200,7 +221,7 @@ describe('native HappierSpinner presentation', () => {
     await act(async () => {
       renderer = create(renderSpinner(false));
     });
-    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(dotOpacities()).toEqual(Array(8).fill(0.85));
     expect(running()).toBe(0);
 
     await act(async () => {

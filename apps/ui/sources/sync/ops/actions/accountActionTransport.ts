@@ -1,15 +1,22 @@
-import { createTargetedActionRpcRequestV1, type ActionExecutorContext, type ActionId } from '@happier-dev/protocol/actions';
+import { type ActionExecutorContext, type ActionId } from '@happier-dev/protocol/actions';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { ExternalActionRequesterInvocationV1Schema, type ExternalActionRequesterInvocationV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime/permissionIntentV1';
+import { randomUUID } from '@/platform/randomUUID';
 
 export type AccountActionTransport = (input: Readonly<{
     serverId: string;
     accountId: string;
     machineId: string;
+    target: Extract<NonNullable<ActionExecutorContext['externalActionTarget']>, { kind: 'machine' }>;
     method: string;
     payload: unknown;
     signal?: AbortSignal;
     /** Connection setup stays bounded; the caller owns admission cancellation. */
     operationTimeoutMs?: null;
+    actionId: ActionId;
+    requestId: string;
+    invocation: ExternalActionRequesterInvocationV1;
 }>) => Promise<unknown>;
 
 export type UiAccountActionExecute = (args: Readonly<{
@@ -41,17 +48,32 @@ export function createUiAccountActionTransport(params: Readonly<{
             ? target.machineId.trim()
             : params.resolveFallbackMachineId();
         if (!machineId) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+        const workspaceWrites = args.context.workspaceWrites === 'deny' || args.context.agentStartWorkspaceWrites === 'deny'
+            ? 'deny' : args.context.workspaceWrites ?? args.context.agentStartWorkspaceWrites;
+        const provenance = !args.context.externalActionCredential
+            ? ExternalActionRequesterInvocationV1Schema.safeParse({ caller: args.context.actionCaller,
+                surface: args.context.surface, authority: args.context.authority,
+                ...(args.context.callerPermissionMode !== undefined ? { callerPermissionMode: typeof args.context.callerPermissionMode === 'string'
+                    ? parseAgentPermissionIntentV1Alias(args.context.callerPermissionMode) ?? args.context.callerPermissionMode : args.context.callerPermissionMode } : {}),
+                ...(args.context.callerInputConstraints !== undefined ? { callerInputConstraints: args.context.callerInputConstraints } : {}),
+                ...(workspaceWrites !== undefined ? { workspaceWrites } : {}),
+                ...(args.context.defaultSessionId !== undefined ? { defaultSessionId: args.context.defaultSessionId } : {}),
+            }) : null;
+        if (!provenance?.success) return { ok: false, errorCode: 'admission_unavailable', error: 'admission_unavailable' };
+        if (target && target.kind !== 'machine') return { ok: false, errorCode: 'target_not_local', error: 'target_not_local' };
+        if (args.actionId === 'session.agent.transition' && (target?.kind !== 'machine' || !target.machineId.trim())) {
+            return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+        }
         const method = getActionSpec(args.actionId).bindings?.rpcMethod;
-        if (!method) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${args.actionId}` };
         const signal = args.signal ?? args.context.signal;
         const result = await params.transport({
             serverId: params.account.serverId,
             accountId: params.account.accountId,
             machineId,
-            method,
-            payload: target
-                ? createTargetedActionRpcRequestV1(args.input, target, { defaultSessionId: args.context.defaultSessionId })
-                : args.input,
+            target: target?.kind === 'machine' ? { ...target, machineId } : { kind: 'machine', machineId },
+            method: method ?? '',
+            payload: args.input,
+            actionId: args.actionId, requestId: args.context.actionRequestId ?? randomUUID(), invocation: provenance.data,
             ...(signal ? { signal } : {}),
             // Admission may finish after connection/key hydration consumed the
             // ordinary RPC budget. Keep its authoritative result rather than

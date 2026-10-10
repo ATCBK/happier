@@ -1,9 +1,12 @@
 import type { PluginUiTargetedContributionsV1 } from '@happier-dev/protocol/plugins/ui';
-import { describe, expect, it } from 'vitest';
+import { act } from 'react';
+import { describe, expect, it, onTestFinished } from 'vitest';
 
 import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { storage } from '@/sync/domains/state/storage';
 
-import { createPluginSurfaceContext } from './pluginSurfaceContext';
+import { createPluginSurfaceContext, usePluginSurfaceEnvironment } from './pluginSurfaceContext';
 
 const targetedContributions: PluginUiTargetedContributionsV1 = {
     target: {
@@ -15,6 +18,36 @@ const targetedContributions: PluginUiTargetedContributionsV1 = {
 };
 
 describe('createPluginSurfaceContext', () => {
+    it('projects live local spinner preferences without subscribing to unrelated local settings', async () => {
+        const previous = storage.getState();
+        onTestFinished(() => { storage.setState(previous, true); });
+        storage.setState({ localSettings: { ...previous.localSettings,
+            loadingIndicatorStyle: 'hWave', loadingIndicatorSpeed: 'slow', loadingIndicatorPause: 'long',
+        } });
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders += 1;
+            return usePluginSurfaceEnvironment('web');
+        });
+        onTestFinished(() => hook.unmount());
+        const initial = hook.getCurrent();
+        expect(initial.theme.spinner).toEqual({ style: 'hWave', speed: 'slow', pause: 'long' });
+        const initialRenders = renders;
+        await act(async () => {
+            storage.setState({ localSettings: { ...storage.getState().localSettings,
+                uiItemDensity: previous.localSettings.uiItemDensity === 'compact' ? 'comfortable' : 'compact',
+            } });
+        });
+        expect(renders).toBe(initialRenders);
+        expect(hook.getCurrent()).toBe(initial);
+        await act(async () => {
+            storage.setState({ localSettings: { ...storage.getState().localSettings,
+                loadingIndicatorStyle: 'classicRing', loadingIndicatorSpeed: 'fast', loadingIndicatorPause: 'none',
+            } });
+        });
+        expect(hook.getCurrent().theme.spinner).toEqual({ style: 'classicRing', speed: 'fast', pause: 'none' });
+        expect(hook.getCurrent().reducedMotion).toBe(initial.reducedMotion);
+    });
     it('projects the shell column visibility only for an app page', () => {
         const fixture = createPluginSurfaceContextFixture();
         const environment = {

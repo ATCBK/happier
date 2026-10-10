@@ -1227,6 +1227,9 @@ function mountedHostActionContext(input: DispatchPluginSurfaceActionInput, calle
         ...(input.actionRequestId ? { actionRequestId: input.actionRequestId } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
         surface: 'plugin',
+        // Borrowing the host's context never makes a Plugin the present user.
+        // Keep its permission and input constraints while capping authority.
+        authority: 'account_automation',
         ...(caller || clientCaller
             ? {
                 actionCaller: {

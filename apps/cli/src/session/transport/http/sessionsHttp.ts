@@ -1,4 +1,6 @@
 import axios, { type AxiosResponse } from 'axios';
+import { createExternalActionAuthorizedRequestHeaders } from '@/api/externalActionExecutionAuthorization';
+import type { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { readSessionCreationInitialTriggerError } from '@/api/session/sessionCreationInitialTriggerError';
 import { pickSessionCreateOriginFields } from '@/session/shared/sessionCreateOrigin';
 import { z } from 'zod';
@@ -1085,25 +1087,37 @@ export async function applySessionAgentTransitionCutover(params: Readonly<{
    * transaction as the target current view (lane 10 child 01 principle 3).
    */
   teamCredentialBindings?: SessionTeamCredentialBindingIntentListV1;
+  externalAction?: Parameters<typeof callMachineRpc>[0]['externalAction'];
 }>): Promise<ApplySessionAgentTransitionCutoverHttpResult> {
   const serverUrl = resolveServerHttpBaseUrl();
   const encodedSessionId = encodeSessionIdPathSegment(params.sessionId);
+  const path = `/v2/sessions/${encodedSessionId}/agent-transition/cutover`;
+  const body = {
+    v: 1,
+    currentView: params.currentView,
+    divider: params.divider,
+    ...(params.teamCredentialBindings && params.teamCredentialBindings.length > 0
+      ? { teamCredentialBindings: params.teamCredentialBindings } : {}),
+  };
+  const externalAction = params.externalAction;
+  const authorization = externalAction?.context.externalActionExecutionAuthorization;
+  const target = externalAction?.context.externalActionTarget;
+  if (externalAction && (!authorization || !target)) {
+    return { ok: false, effect: 'none', error: 'forbidden' };
+  }
   let response: AxiosResponse<unknown>;
   try {
     response = await axios.post(
-      `${serverUrl}/v2/sessions/${encodedSessionId}/agent-transition/cutover`,
-      {
-        v: 1,
-        currentView: params.currentView,
-        divider: params.divider,
-        ...(params.teamCredentialBindings && params.teamCredentialBindings.length > 0
-          ? { teamCredentialBindings: params.teamCredentialBindings }
-          : {}),
-      },
+      `${serverUrl}${path}`,
+      body,
       {
         headers: {
           ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-          Authorization: `Bearer ${params.token}`,
+          ...(externalAction && authorization && target
+            ? createExternalActionAuthorizedRequestHeaders({
+                ...externalAction, authorization, target, method: 'POST', path, body,
+              })
+            : { Authorization: `Bearer ${params.token}` }),
           'Content-Type': 'application/json',
         },
         timeout: configuration.sessionControlHttpTimeoutMs,

@@ -262,6 +262,7 @@ export type SessionControlActionInputById = {
         objective?: string | undefined;
         status?: 'unknown' | 'active' | 'pending' | 'paused' | 'blocked' | 'complete' | 'cancelled' | undefined;
         tokenBudget?: number | null | undefined;
+        resumeInactiveWithInitialGoal?: boolean | undefined;
     };
     readonly "session.goal.clear": {
         [x: string]: unknown;
@@ -456,8 +457,13 @@ export type SessionControlActionResultById = {
     readonly "session.reports_to.set": {
         ok: true;
         sessionId: string;
-        leadSessionId: string | null;
-        attachedAt: number | null;
+        leadSessionId: string;
+        attachedAt: number;
+    } | {
+        ok: true;
+        sessionId: string;
+        leadSessionId: null;
+        attachedAt: null;
     } | {
         ok: false;
         error: 'reports_to_cycle';

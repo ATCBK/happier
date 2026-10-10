@@ -5,6 +5,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { Credentials, StoredCredentials } from '@/persistence';
 import type { RpcHandler, RpcHandlerRegistrar } from '../rpc/types';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 
 const routeMocks = vi.hoisted(() => ({
   routeSessionUsageLimitRecoveryWaitResumeEnable: vi.fn(),
@@ -119,6 +120,7 @@ describe('rpcHandlers.sessionGoals', () => {
         createCliActionDeps: (input) => {
           createCliActionDepsParams = input;
           return {
+            ...createCliActionDeps(input),
             sessionGoalSet,
             sessionGoalClear,
             sessionGoalGet,
@@ -153,9 +155,26 @@ describe('rpcHandlers.sessionGoals', () => {
     expect(sessionGoalSet).toHaveBeenCalledWith({
       sessionId: 'resolved-session',
       status: 'paused',
+      resumeInactiveWithInitialGoal: false,
     });
     expect(sessionGoalClear).toHaveBeenCalledWith({ sessionId: 'resolved-session' });
     expect(sessionGoalGet).toHaveBeenCalledWith({ sessionId: 'resolved-session' });
+  });
+
+  it('admits explicit wake intent only through the versioned daemon goal operation', async () => {
+    registerWithTransport();
+    const wake = handlers.get('daemon.sessionGoal.set.v2');
+    expect(wake).toBeDefined();
+    await expect(wake?.({ sessionId: 'session-prefix', objective: 'Finish the task',
+      resumeInactiveWithInitialGoal: true, tokenBudget: null })).resolves.toEqual({ ok: true });
+    expect(sessionGoalSet).toHaveBeenCalledWith({ sessionId: 'resolved-session', objective: 'Finish the task',
+      resumeInactiveWithInitialGoal: true, tokenBudget: null });
+    sessionGoalSet.mockClear();
+    await expect(wake?.({ sessionId: 'session-prefix', status: 'paused',
+      resumeInactiveWithInitialGoal: true })).resolves.toMatchObject({ errorCode: 'invalid_parameters' });
+    await expect(wake?.({ sessionId: 'session-prefix', objective: 'Finish', unknownAuthority: true }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(sessionGoalSet).not.toHaveBeenCalled();
   });
 
   it('routes plaintext session goal controls with token-only credentials', async () => {

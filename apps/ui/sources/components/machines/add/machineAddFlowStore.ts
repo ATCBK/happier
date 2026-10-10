@@ -19,7 +19,9 @@ export type MachineAddTaskHandle = Readonly<{
     observeCompletion?: (taskId: string) => (() => void);
     unsubscribeCompletion?: () => void;
 }>;
-export type MachineAddSshDraft = SshCredentialsDraft & Readonly<{ privateKeyMaterial?: string; savedHostId?: string | null }>;
+export type MachineAddSshDraft = SshCredentialsDraft & Readonly<{
+    privateKeyMaterial?: string; savedHostId?: string | null; savedHostExpectedRevision?: number | 'absent';
+}>;
 export type MachineAddFlowDraft = Readonly<{
     serverId: string | null;
     path: MachineAddPathId | null;

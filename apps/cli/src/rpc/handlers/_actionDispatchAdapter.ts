@@ -3,6 +3,7 @@ import type { createCliActionExecutor } from '@/session/actions/createCliActionE
 import type { RpcLocalActionContext, RpcHandlerContext } from '@/api/rpc/types';
 import type { SessionActionRpcOriginV1 } from '@happier-dev/protocol/socketRpc';
 import { WorkspaceSyncSourceContextV1Schema } from '@happier-dev/protocol/socketRpc';
+import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
 
 type CliActionExecutorParams = Parameters<typeof createCliActionExecutor>[0];
 
@@ -84,6 +85,9 @@ export function buildActionExecutorContextForRpc(
     );
     const requesterAuthorization = params.callerInputAuthorization?.requesterAccountProjection
         ? params.callerInputAuthorization : undefined;
+    const requesterInvocation = requesterAuthorization && !params.sessionActionOrigin
+        && !requesterAuthorization.binding.workflowActionOrigin
+        ? readRequesterAccountActionContext(requesterAuthorization)?.invocation : undefined;
     const originalHandoffAuthorization = (() => {
         const authorization = params.callerInputAuthorization;
         const binding = authorization?.binding;
@@ -198,6 +202,16 @@ export function buildActionExecutorContextForRpc(
                 credentialId: requesterAuthorization.binding.credentialId,
                 grant: requesterAuthorization.binding.grant,
             } } : {}),
+        } : {}),
+        ...(requesterInvocation ? {
+            surface: requesterInvocation.surface,
+            authority: requesterInvocation.authority === 'account_automation' ? 'account_automation' as const
+                : params.callerAuthority ?? 'account_automation',
+            actionCaller: requesterInvocation.caller,
+            ...(requesterInvocation.callerPermissionMode !== undefined
+                ? { callerPermissionMode: requesterInvocation.callerPermissionMode } : {}),
+            ...(requesterInvocation.workspaceWrites ? { workspaceWrites: requesterInvocation.workspaceWrites } : {}),
+            ...(requesterInvocation.defaultSessionId ? { defaultSessionId: requesterInvocation.defaultSessionId } : {}),
         } : {}),
         ...(params.sessionActionOrigin ? {
             // Invocation origin is transport authority, not the Session being mutated.

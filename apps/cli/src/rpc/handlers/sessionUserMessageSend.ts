@@ -118,10 +118,14 @@ export function registerSessionUserMessageSendHandler(
   };
 
   rpc.registerHandler(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND, async (raw: unknown, context) => {
-    const callerInputConstraints = context?.callerInputAuthorization
+    const grantConstraints = context?.callerInputAuthorization && 'grant' in context.callerInputAuthorization.binding
       ? { models: context.callerInputAuthorization.binding.grant.models,
           permissionModes: context.callerInputAuthorization.binding.grant.permissionModes }
-      : context?.callerInputConstraints;
+      : undefined;
+    // The private caller ceiling can narrow a grant, never replace or widen it.
+    const inputConstraints = [grantConstraints, context?.callerInputConstraints].filter(
+      (value): value is NonNullable<typeof value> => value !== undefined,
+    );
     const rawMeta = raw && typeof raw === 'object' && !Array.isArray(raw)
       ? (raw as { meta?: unknown }).meta
       : undefined;
@@ -182,7 +186,7 @@ export function registerSessionUserMessageSendHandler(
 
     const payloadFingerprint = deterministicStringify({
       ...request,
-      ...(callerInputConstraints ? { callerInputConstraints } : {}),
+      ...(inputConstraints.length ? { callerInputConstraints: inputConstraints } : {}),
     });
     const existing = exactOutcomesByLocalId.get(localId);
     if (existing) {
@@ -198,8 +202,7 @@ export function registerSessionUserMessageSendHandler(
 
     const deliver = async (): Promise<unknown> => {
       const readCallerInputFailure = (): string | null => {
-        const constraints = callerInputConstraints;
-        if (!constraints) return null;
+        if (!inputConstraints.length) return null;
         const effective = opts.sessionRuntimeControls?.readEffectiveInputConfiguration?.();
         const explicit = readSessionMessageModelSelectionV1(meta);
         const legacyModel = typeof meta.model === 'string' ? meta.model.trim() : '';
@@ -212,9 +215,11 @@ export function registerSessionUserMessageSendHandler(
                 ? { ...effective.modelSelection, modelId: legacyModel }
                 : 'automatic'
               : effective?.modelSelection ?? 'automatic';
-        if (!isModelRefGrantedV1(constraints, model)) return 'model_not_granted';
         const mode = normalizePermissionModeToIntent(meta.permissionMode) ?? effective?.permissionMode ?? 'default';
-        if (!isPermissionModeGrantedV1(constraints, mode)) return 'permission_mode_not_granted';
+        for (const constraints of inputConstraints) {
+          if (!isModelRefGrantedV1(constraints, model)) return 'model_not_granted';
+          if (!isPermissionModeGrantedV1(constraints, mode)) return 'permission_mode_not_granted';
+        }
         return null;
       };
       const rejected = (errorCode: string) => ({ ok: false, error: errorCode, errorCode });
@@ -238,13 +243,13 @@ export function registerSessionUserMessageSendHandler(
       // A runtime-local handler has no prepared attachment result and would be a bypass.
       // Restricted configuration overrides likewise belong to the host's queued transition
       // owner; native text handling cannot prove it applied a different model or mode.
-      const hasRestrictedConfigurationOverride = callerInputConstraints && (
-        (callerInputConstraints.models !== null && (
+      const hasRestrictedConfigurationOverride = inputConstraints.some(constraints => (
+        (constraints.models !== null && (
           readSessionMessageModelSelectionV1(meta).status !== 'absent'
           || (typeof meta.model === 'string' && meta.model.trim().length > 0)
         ))
-        || (callerInputConstraints.permissionModes !== null && normalizePermissionModeToIntent(meta.permissionMode) !== null)
-      );
+        || (constraints.permissionModes !== null && normalizePermissionModeToIntent(meta.permissionMode) !== null)
+      ));
       const runtimeResult = !selectedComposerAttachment
         && !hasRestrictedConfigurationOverride
         && typeof opts.sessionRuntimeControls?.handleUserMessage === 'function'

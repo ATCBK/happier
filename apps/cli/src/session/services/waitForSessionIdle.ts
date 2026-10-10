@@ -25,6 +25,7 @@ export async function waitForSessionIdle(params: Readonly<{
   timeoutMs: number;
   signal?: AbortSignal;
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
+  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionTransportContext>[0]['resolveAuthorizationHeaders'];
 }>): Promise<
   | Readonly<{ ok: true; sessionId: string; idle: true; observedAt: number }>
   | Readonly<{ ok: false; code: 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'unsupported' | 'encryption_material_unavailable' | 'timeout' | 'cancelled'; candidates?: string[] }>
@@ -41,6 +42,7 @@ export async function waitForSessionIdle(params: Readonly<{
       credentials: params.credentials,
       idOrPrefix: params.idOrPrefix,
       signal,
+      ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
       ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
     });
     if (!sessionTarget.ok) {
@@ -65,6 +67,7 @@ export async function waitForSessionIdle(params: Readonly<{
           encryptionKey: sessionTarget.ctx?.encryptionKey ?? null,
           encryptionVariant: sessionTarget.ctx?.encryptionVariant ?? null,
           transcriptFetchTimeoutMs: remainingTimeoutMs(),
+          ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
           signal,
         });
       } catch {
@@ -99,6 +102,7 @@ export async function waitForSessionIdle(params: Readonly<{
         ctx: sessionTarget.ctx,
         sessionEncryptionMode: sessionTarget.mode,
         timeoutMs: remainingTimeoutMs(),
+        ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
         signal,
         initialTurnActivity,
         initialTurnActivityRequiresTranscriptIdleEvidence,
@@ -111,6 +115,7 @@ export async function waitForSessionIdle(params: Readonly<{
               encryptionKey: sessionTarget.ctx?.encryptionKey ?? null,
               encryptionVariant: sessionTarget.ctx?.encryptionVariant ?? null,
               transcriptFetchTimeoutMs: remainingTimeoutMs(),
+              ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
               signal,
             })
             : detectSessionTurnActivity({
@@ -120,6 +125,7 @@ export async function waitForSessionIdle(params: Readonly<{
               encryptionKey: sessionTarget.ctx?.encryptionKey ?? null,
               encryptionVariant: sessionTarget.ctx?.encryptionVariant ?? null,
               transcriptFetchTimeoutMs: remainingTimeoutMs(),
+              ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
               signal,
             }),
         ...(initialProjectedPendingRequestCount !== null

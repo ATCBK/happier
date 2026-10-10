@@ -1,7 +1,10 @@
 import { DaemonSessionGoalClearRequestV1Schema, DaemonSessionGoalGetRequestV1Schema, DaemonSessionGoalSetRequestV1Schema, SessionUsageLimitCheckNowRequestV1Schema, SessionUsageLimitConsumeResetCreditRequestV1Schema, DaemonSessionSkillCatalogListRequestV1Schema, SessionUsageLimitWaitResumeCancelRequestV1Schema, SessionUsageLimitWaitResumeEnableRequestV1Schema, DaemonSessionVendorPluginCatalogListRequestV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
-import type { ActionExecutorDeps, SessionUsageLimitRecoveryV1 } from '@happier-dev/protocol';
+import type { SessionUsageLimitRecoveryV1 } from '@happier-dev/protocol';
 import { SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { DaemonSessionGoalSetRequestV2Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { buildActionExecutorContextForRpc } from '@/rpc/handlers/_actionDispatchAdapter';
 
 import {
   readStoredCredentials,
@@ -48,26 +51,12 @@ import {
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 
-import type { RpcHandlerRegistrar } from '../rpc/types';
+import type { RpcHandlerContext, RpcHandlerRegistrar } from '../rpc/types';
 
 type RegisterMachineSessionGoalRpcHandlersDeps = Readonly<{
   readStoredCredentials?: () => Promise<StoredCredentials | null>;
   resolveSessionTransportContext?: typeof resolveSessionTransportContext;
-  createCliActionDeps?: (
-    params: Parameters<typeof createCliActionDeps>[0],
-  ) => Pick<
-    ActionExecutorDeps,
-    | 'sessionGoalGet'
-    | 'sessionGoalSet'
-    | 'sessionGoalClear'
-    | 'sessionUsageLimitWaitResumeEnable'
-    | 'sessionUsageLimitWaitResumeCancel'
-    | 'sessionUsageLimitCheckNow'
-    | 'sessionUsageLimitSwitchAccountNow'
-    | 'sessionUsageLimitConsumeResetCredit'
-    | 'sessionVendorPluginCatalogList'
-    | 'sessionSkillCatalogList'
-  >;
+  createCliActionDeps?: typeof createCliActionDeps;
   isUsageLimitRecoveryEnabled?: () => Promise<boolean> | boolean;
   resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
   scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
@@ -76,6 +65,7 @@ type RegisterMachineSessionGoalRpcHandlersDeps = Readonly<{
   cancelConnectedServiceRuntimeAuthRecovery?: CancelConnectedServiceRuntimeAuthRecovery;
   retryTemporaryThrottleNow?: RetryTemporaryThrottleNow;
   currentMachineId?: string;
+  machineActionDirectTargetTransport?: Parameters<typeof createCliActionDeps>[0]['machineActionDirectTargetTransport'];
   stageUsageLimitRecoveryMutation?: (input: Readonly<{
     mutation: DaemonUsageLimitRecoveryFieldMutation;
     rawSession: RawSessionRecord;
@@ -117,16 +107,25 @@ function transportError(transport: Extract<ResolveSessionTransportContextResult,
 async function resolveActionDeps(params: Readonly<{
   sessionId: string;
   deps?: RegisterMachineSessionGoalRpcHandlersDeps;
+  context?: RpcHandlerContext;
 }>): Promise<
   | Readonly<{ ok: true; sessionId: string; actionDeps: ReturnType<NonNullable<RegisterMachineSessionGoalRpcHandlersDeps['createCliActionDeps']>> }>
   | Readonly<{ ok: false; result: unknown }>
 > {
-  const credentials = await (params.deps?.readStoredCredentials ?? readStoredCredentials)();
+  params.context?.signal.throwIfAborted();
+  const requester = params.context?.requesterSessionBootstrap;
+  const machineAdmission = params.context?.machineAdmission;
+  if (requester && !await requester.isCurrent()
+    || !requester && machineAdmission && machineAdmission.actorAccountId !== machineAdmission.custodianAccountId) {
+    return { ok: false, result: { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' } };
+  }
+  const credentials = requester?.credentials ?? await (params.deps?.readStoredCredentials ?? readStoredCredentials)();
   if (!credentials) return { ok: false, result: notAuthenticated() };
 
   const transport = await (params.deps?.resolveSessionTransportContext ?? resolveSessionTransportContext)({
     credentials,
     idOrPrefix: params.sessionId,
+    ...(params.context ? { signal: params.context.signal } : {}),
   });
   if (!transport.ok) return { ok: false, result: transportError(transport) };
   const stageDaemonWorkStateMutation = params.deps?.stageWorkStateMutation;
@@ -135,6 +134,7 @@ async function resolveActionDeps(params: Readonly<{
     credentials,
     sessionId: transport.sessionId,
     rawSession: transport.rawSession,
+    ...(params.deps?.machineActionDirectTargetTransport ? { machineActionDirectTargetTransport: params.deps.machineActionDirectTargetTransport } : {}),
     ...(stageDaemonWorkStateMutation
       ? { stageWorkStateMutation: (mutation: DaemonWorkStateFieldMutation) =>
           stageDaemonWorkStateMutation({ mutation, rawSession: transport.rawSession }) }
@@ -233,40 +233,55 @@ async function executeGoalControl(params: Readonly<{
   operation: GoalOperation;
   raw: unknown;
   deps?: RegisterMachineSessionGoalRpcHandlersDeps;
+  wakeEpoch?: boolean;
+  context?: RpcHandlerContext;
 }>): Promise<unknown> {
   if (params.operation === 'get') {
     const parsed = DaemonSessionGoalGetRequestV1Schema.safeParse(params.raw);
     if (!parsed.success) return invalidParameters();
-    const resolved = await resolveActionDeps({ sessionId: parsed.data.sessionId, deps: params.deps });
+    const resolved = await resolveActionDeps({ sessionId: parsed.data.sessionId, deps: params.deps, context: params.context });
     if (!resolved.ok) return resolved.result;
     return resolved.actionDeps.sessionGoalGet
-      ? await resolved.actionDeps.sessionGoalGet({ sessionId: resolved.sessionId })
+      ? await resolved.actionDeps.sessionGoalGet({ sessionId: resolved.sessionId,
+          ...(params.context ? { signal: params.context.signal, context: buildActionExecutorContextForRpc({ ...params.context, actionId: 'session.goal.get' }) } : {}) })
       : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
   }
 
   if (params.operation === 'clear') {
     const parsed = DaemonSessionGoalClearRequestV1Schema.safeParse(params.raw);
     if (!parsed.success) return invalidParameters();
-    const resolved = await resolveActionDeps({ sessionId: parsed.data.sessionId, deps: params.deps });
+    const resolved = await resolveActionDeps({ sessionId: parsed.data.sessionId, deps: params.deps, context: params.context });
     if (!resolved.ok) return resolved.result;
     return resolved.actionDeps.sessionGoalClear
-      ? await resolved.actionDeps.sessionGoalClear({ sessionId: resolved.sessionId })
+      ? await resolved.actionDeps.sessionGoalClear({ sessionId: resolved.sessionId,
+          ...(params.context ? { signal: params.context.signal, context: buildActionExecutorContextForRpc({ ...params.context, actionId: 'session.goal.clear' }) } : {}) })
       : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
   }
 
-  const parsed = DaemonSessionGoalSetRequestV1Schema.safeParse(params.raw);
+  const parsed = params.wakeEpoch
+    ? DaemonSessionGoalSetRequestV2Schema.safeParse(params.raw)
+    : DaemonSessionGoalSetRequestV1Schema.safeParse(params.raw);
   if (!parsed.success) return invalidParameters();
-  const resolved = await resolveActionDeps({ sessionId: parsed.data.sessionId, deps: params.deps });
+  const resolved = await resolveActionDeps({ sessionId: parsed.data.sessionId, deps: params.deps, context: params.context });
   if (!resolved.ok) return resolved.result;
   if (!resolved.actionDeps.sessionGoalSet) {
     return { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
   }
-  return await resolved.actionDeps.sessionGoalSet({
+  const request = {
     sessionId: resolved.sessionId,
     ...(typeof parsed.data.objective === 'string' ? { objective: parsed.data.objective } : {}),
     ...(typeof parsed.data.status === 'string' ? { status: parsed.data.status } : {}),
     ...(Object.prototype.hasOwnProperty.call(parsed.data, 'tokenBudget') ? { tokenBudget: parsed.data.tokenBudget } : {}),
-  });
+    resumeInactiveWithInitialGoal: params.wakeEpoch === true,
+  };
+  if (params.context) {
+    const context = buildActionExecutorContextForRpc({ ...params.context, actionId: 'session.goal.set',
+      defaultSessionId: resolved.sessionId,
+      ...(params.context.authorization ? { rpcSessionAuthorization: params.context.authorization } : {}) });
+    const result = await createActionExecutor(resolved.actionDeps).execute('session.goal.set', request, context);
+    return result.ok ? result.result : result;
+  }
+  return await resolved.actionDeps.sessionGoalSet(request);
 }
 
 async function executeCatalogControl(params: Readonly<{
@@ -459,14 +474,17 @@ export function registerMachineSessionGoalRpcHandlers(params: Readonly<{
   rpcHandlerManager: RpcHandlerRegistrar;
   deps?: RegisterMachineSessionGoalRpcHandlersDeps;
 }>): void {
-  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_GOAL_GET, async (raw: unknown) => (
-    await executeGoalControl({ operation: 'get', raw, deps: params.deps })
+  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_GOAL_GET, async (raw: unknown, context) => (
+    await executeGoalControl({ operation: 'get', raw, deps: params.deps, context })
   ));
-  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_GOAL_SET, async (raw: unknown) => (
-    await executeGoalControl({ operation: 'set', raw, deps: params.deps })
+  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_GOAL_SET, async (raw: unknown, context) => (
+    await executeGoalControl({ operation: 'set', raw, deps: params.deps, context })
   ));
-  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR, async (raw: unknown) => (
-    await executeGoalControl({ operation: 'clear', raw, deps: params.deps })
+  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2, async (raw: unknown, context) => (
+    await executeGoalControl({ operation: 'set', raw, deps: params.deps, wakeEpoch: true, context })
+  ));
+  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR, async (raw: unknown, context) => (
+    await executeGoalControl({ operation: 'clear', raw, deps: params.deps, context })
   ));
   params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_VENDOR_PLUGIN_CATALOG_LIST, async (raw: unknown) => (
     await executeCatalogControl({ operation: 'vendorPlugins', raw, deps: params.deps })

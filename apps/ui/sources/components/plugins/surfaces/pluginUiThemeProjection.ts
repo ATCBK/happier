@@ -176,10 +176,11 @@ export function readPluginUiHostTypography(): HappierUiTypography {
  * canonical typography/weight primitive, so there is no unresolved-token branch
  * and no fallback palette.
  */
-export function projectPluginUiTheme(theme: Theme): PluginUiThemeV1 {
+export function projectPluginUiTheme(theme: Theme, spinner?: PluginUiThemeV1['spinner']): PluginUiThemeV1 {
     const code = Typography.keyHint();
     return Object.freeze({
         version: 1,
+        ...(spinner ? { spinner } : {}),
         surfaceFinish: Object.fromEntries((['card', 'floating', 'composer', 'primaryButton', 'secondaryButton'] as const).map(role => {
             const gradient = resolveThemeSurfaceFinish(theme, role);
             return [role, gradient ? { ...gradient, colors: [...gradient.colors], ...(gradient.locations ? { locations: [...gradient.locations] } : {}) } : null];

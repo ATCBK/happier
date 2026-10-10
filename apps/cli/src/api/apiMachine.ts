@@ -2866,6 +2866,7 @@ export class ApiMachineClient {
             installationId: installation.installationId,
             machineSignature: signExternalActionMachineRpcRequestV1({
                 authorizationToken: authorization.token, effectActionId: 'session.message.send',
+                requesterAccountContext: authorization.requesterAccountContext,
                 target, installationId: installation.installationId, event, method: event,
                 requestId: authorization.binding.requestId, params: unsignedPayload,
                 privateKey: installation.privateKey,

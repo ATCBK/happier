@@ -12,6 +12,9 @@ import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecut
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { admitRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 
 let nextRpcAck: any = null;
 let nextSocket: FakeSocket | null = null;
@@ -599,6 +602,42 @@ describe('callSessionRpc (plaintext sessions)', () => {
     nextRpcAck = null;
     nextSocket = null;
     configureNextSocket = null;
+  });
+
+  it('seals the original private caller into the signed Session transition packet at the actual RPC boundary', async () => {
+    const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(17));
+    const target = { kind: 'session' as const, sessionId: 'sess_1' };
+    const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-root', binding: {
+      accountId: 'account', custodianAccountId: 'account', accountEncryptionMode: 'plain',
+      authentication: { kind: 'account', tokenEpoch: 1 }, serverIdentityId: 'home', machineId: 'machine', installationId: 'installation',
+      actionId: 'session.agent.transition', requestId: 'original', requestEnvelopeDigest: 'a'.repeat(43),
+      target: { kind: 'machine', machineId: 'machine' },
+    } });
+    const invocation = { caller: { kind: 'plugin' as const, pluginId: 'happier.agent.codex', contributionLocalId: 'automation' },
+      surface: 'plugin' as const, authority: 'account_automation' as const,
+      callerInputConstraints: { models: null, permissionModes: ['default' as const] } };
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (String(url).endsWith('/v1/account/profile')) return { status: 200, data: { id: 'account' } };
+      if (String(url).endsWith('/v2/account/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      return { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    });
+    const admitted = await admitRequesterAccountActionContext({ authorization, invocation,
+      credentials: { token: 'requester', encryption: null }, serverId: 'profile', serverIdentityId: 'home',
+      serverHttpBaseUrl: 'https://transition-home.test', isCurrent: async () => true });
+    expect(admitted).not.toBeNull();
+    const request = { action: 'enforce', serviceId: 'session.agentTransition', groupId: 'transition' };
+    nextRpcAck = { ok: true, result: { status: 'enforced' } };
+    try {
+      expect(await callSessionRpc({ token: 'requester', sessionId: 'sess_1', mode: 'plain', method: 'session.providerInput.admission',
+        request, externalAction: { context: { externalActionExecutionAuthorization: admitted!.authorization, externalActionTarget: target },
+          effectActionId: 'session.agent.transition', installationId: 'installation', privateKey: key.secretKey } }))
+        .toEqual({ status: 'enforced' });
+      const packet = nextSocket?.emitted.find(item => item.event === 'rpc-call')?.data;
+      expect(openExternalActionRequesterAccountContextV1({ authorization: packet.externalActionExecution.authorization,
+        purpose: { kind: 'machine_rpc', method: 'session.providerInput.admission', params: request },
+        machineId: 'machine', installationId: 'installation', serverIdentityId: 'home', installationPrivateKey: key.secretKey,
+        includeInvocation: true })?.invocation).toEqual(invocation);
+    } finally { await admitted?.dispose(); get.mockRestore(); }
   });
 
   it.each([

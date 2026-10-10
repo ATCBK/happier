@@ -131,6 +131,12 @@ export type MachineConnectionActionInputById = {
         port?: number | undefined;
         authMode?: 'agent' | 'keyfile' | 'password' | undefined;
         identityFilePath?: string | undefined;
+    } | {
+        serverId: string;
+        savedHost: {
+            hostId: string;
+            expectedRevision: number | 'absent';
+        };
     };
     readonly "machines.add.ssh.status": {
         taskId: string;
@@ -156,6 +162,9 @@ export type MachineConnectionActionInputById = {
     };
     readonly "machines.add.ssh.cancel": {
         taskId: string;
+    };
+    readonly "homes.reconnect": {
+        serverId: string;
     };
     readonly "homes.connect": {
         address: string;
@@ -309,6 +318,9 @@ export type MachineConnectionActionResultById = {
     };
     readonly "machines.add.ssh.cancel": {
         taskId: string;
+    };
+    readonly "homes.reconnect": {
+        serverId: string;
     };
     readonly "homes.connect": {
         kind: 'connected';

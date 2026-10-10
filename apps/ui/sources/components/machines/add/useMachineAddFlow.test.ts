@@ -35,10 +35,12 @@ describe('machine add flow lifetime', () => {
             await setActiveServerId(home.id);
             storage.setState({ settingsScope: { serverId: home.id, accountId: 'fixture-account' }, machineListByServerId: { [home.id]: [] } });
             const first = await renderHook(() => useMachineAddFlow({ runner: manual.runner, initialPath: 'ssh' }));
-            await act(async () => { first.getCurrent().ssh.setDraft({ ...first.getCurrent().ssh.draft, host: 'build-box' }); });
+            await act(async () => { first.getCurrent().ssh.setDraft({ ...first.getCurrent().ssh.draft, host: 'build-box', password: 'fixture-first-password' }); });
             await act(async () => { first.getCurrent().startSsh(); first.getCurrent().startSsh(); });
             const taskId = readMachineAddFlowDraft().sshTask?.taskId;
             expect(taskId).toBeTruthy();
+            await act(async () => manual.emitEvent(taskId!, { type: 'prompt', message: 'Password needed', data: { kind: 'ssh.password', target: 'build-box' } }));
+            expect(manual.bridge.respond).toHaveBeenCalledWith(taskId, { password: 'fixture-first-password' });
             await first.unmount();
             await act(async () => manual.emitEvent(taskId!, { type: 'prompt', message: 'Password needed', data: { kind: 'ssh.password', target: 'build-box' } }));
             const resumed = await renderHook(() => useMachineAddFlow({ runner: manual.runner }));

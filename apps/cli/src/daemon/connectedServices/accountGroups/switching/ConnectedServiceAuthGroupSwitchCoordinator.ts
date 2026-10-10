@@ -20,6 +20,7 @@ import {
 import type {
     ConnectedServiceCredentialRevisionV1,
     ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1,
+    ConnectedServiceAuthGroupStateV1,
 } from '@happier-dev/protocol';
 import { logger } from '@/ui/logger';
 import type { AutomaticQuotaResetContext, ConnectedServiceQuotaRecoveryCreditConsumeResult } from '../../quotas/ConnectedServiceQuotasCoordinator';
@@ -90,6 +91,7 @@ export type ConnectedServiceAuthGroupSwitchState<
     serviceId: TServiceIdentity;
     groupId: string;
     activeProfileId: string | null;
+    activeSince?: ConnectedServiceAuthGroupStateV1['activeSince'];
     incarnation?: string;
     generation: number;
     runtimeStateRevision?: number;
@@ -824,11 +826,17 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
     }>): Promise<Readonly<{
         observedAtMs: number;
         selection: ReturnType<typeof selectConnectedServiceAuthGroupCandidate>;
+        activeAccountRef: Readonly<{ service: TServiceIdentity; accountId: string }> | null;
+        activeSince: NonNullable<ConnectedServiceAuthGroupStateV1['activeSince']> | null;
     }>> {
         const loaded = await this.deps.loadState(input);
         const observedAtMs = this.deps.nowMs();
         return {
             observedAtMs,
+            activeAccountRef: loaded.activeProfileId ? { service: loaded.serviceId, accountId: loaded.activeProfileId } : null,
+            // Only the persisted identity-bound clock describes the current account.
+            // Observation time and legacy last-switch timestamps are not selection time.
+            activeSince: loaded.activeProfileId && loaded.activeSince?.accountId === loaded.activeProfileId ? loaded.activeSince : null,
             selection: selectConnectedServiceAuthGroupCandidate({
                 nowMs: observedAtMs,
                 quotaFreshnessMs: this.deps.quotaFreshnessMs,

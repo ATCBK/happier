@@ -1,4 +1,5 @@
 import { resolveInputOptions, normalizeResolvedOptions, tryNormalizeExecutionBackendOptionValue, readReviewNarratorOptions, buildAgentInventorySelectionArgs } from '../inputs/inputOptions.js';
+import { LOCAL_DAEMON_SERVICE_ACTION_IDS, LOCAL_DAEMON_SERVICE_INPUT_SCHEMAS, type LocalDaemonServiceActionId } from './specs/localDaemonService.js';
 import { AutomationEventTestInputV1Schema, testAutomationEventV1 } from '../automations/automationEventTestV1.js';
 import { getWorkflowStarterExamplesV1, materializeWorkflowStarterExample } from '../workflows/builtins/examples.js';
 import { WorkflowStartersResolveInputV1Schema } from '../workflows/builtins/starterActionsV1.js';
@@ -56,6 +57,8 @@ import { isProjectActionIdV1 } from './projectActionIdsV1.js';
 import { OpenProjectInputV1Schema, OpenProjectResultV1Schema } from '../projects/openProjectV1.js';
 import { isSessionCanvasActionId } from './sessionCanvasActionFamily.js';
 import { isSessionTerminalActionId } from './sessionTerminalActionFamily.js';
+import { SESSION_AGENT_TRANSITION_ACTION_INPUT_SCHEMAS } from './sessionAgentTransitionActionFamily.js';
+import { SessionAgentTransitionRequestV1Schema } from '../sessions/agentTransition.js';
 import { parseWorkflowDefinitionRefV1 } from '../workflows/workflowDefinitionRefV1.js';
 import { ComputerSelectedTargetResponseV1Schema, ComputerTargetSelectRequestV1Schema, ComputerTargetsListResponseV1Schema, computerTargetKeyV1, type ComputerApprovalDisplayV1 } from '../computer/v1.js';
 import { isSessionFollowActionIdV1 } from '../sessions/follow/actions.js';
@@ -68,7 +71,7 @@ import { SessionWorkerPublishInputV1Schema, SessionWorkerPublishOutputV1Schema }
 import { MachinesAgentsListInputSchema } from '../capabilities/machineAgentInventory.js';
 import { WorkflowEventsListInputV1Schema } from './specs/workflowEvents.js';
 import { WorkspaceFilesSearchActionInputSchema } from './actionSpecs.js';
-import { HomeConnectInputSchema, MachineAddCommandInputSchema, MachinePairingCreateInputSchema, MACHINE_ADD_SSH_ACTION_IDS, MACHINE_ADD_SSH_INPUT_SCHEMAS, type MachineAddSshActionId } from './specs/machineConnection.js';
+import { HomeConnectInputSchema, HomeReconnectInputSchema, MachineAddCommandInputSchema, MachinePairingCreateInputSchema, MACHINE_ADD_SSH_ACTION_IDS, MACHINE_ADD_SSH_INPUT_SCHEMAS, type MachineAddSshActionId } from './specs/machineConnection.js';
 import { isMachineTerminalActionId, MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS } from './specs/machineTerminal.js';
 import { MachineAccessActionIdSchema, machineAccessApprovalDisclosure } from './specs/machineAccess.js';
 import { MachineWorkSummaryGetInputV1Schema } from '../machines/machineWorkSummaryV1.js';
@@ -3375,8 +3378,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       }
     }
     const data = readRecord(admittedInput);
-    const sessionMessageSendAdmission: SessionMessageSendAdmission = actionId === 'session.message.send'
-      ? resolveSessionMessageSendAdmission(ctx, data.permissionModeOverride)
+    const sessionMessageSendAdmission: SessionMessageSendAdmission = actionId === 'session.message.send' || actionId === 'session.agent.transition'
+      ? resolveSessionMessageSendAdmission(ctx, actionId === 'session.agent.transition'
+        ? readRecord(readRecord(data.input).meta).permissionMode : data.permissionModeOverride)
       : { ok: true };
     if (!sessionMessageSendAdmission.ok) return sessionMessageSendAdmission.error;
     let requiredDirectoryApproval: SessionCreationDirectoryApprovalV1 | null = null;
@@ -5022,6 +5026,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return completeActionResult(result);
       }
 
+      if ((LOCAL_DAEMON_SERVICE_ACTION_IDS as readonly string[]).includes(actionId)) {
+        if (!deps.localDaemonServiceAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+        const id = actionId as LocalDaemonServiceActionId;
+        return completeActionResult(await deps.localDaemonServiceAction(id, LOCAL_DAEMON_SERVICE_INPUT_SCHEMAS[id].parse(parsed.data), ctx));
+      }
       if ((MACHINE_ADD_SSH_ACTION_IDS as readonly string[]).includes(actionId)) {
         if (!deps.machineAddSshTaskAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         const id = actionId as MachineAddSshActionId;
@@ -5030,6 +5039,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       if (actionId === 'homes.connect') {
         if (!deps.homeConnect) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         return completeActionResult(await deps.homeConnect(HomeConnectInputSchema.parse(parsed.data), ctx));
+      }
+      if (actionId === 'homes.reconnect') {
+        if (!deps.homeReconnect) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+        return completeActionResult(await deps.homeReconnect(HomeReconnectInputSchema.parse(parsed.data), ctx));
       }
       if (actionId === 'machines.add.command') {
         if (!deps.machineAddCommand) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
@@ -7538,6 +7551,24 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return completeActionResult(res);
         }
 
+        if (actionId === 'session.continuation.inspect') {
+          if (!deps.sessionContinuationInspect) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+          const input = SESSION_AGENT_TRANSITION_ACTION_INPUT_SCHEMAS[actionId].parse(parsed.data);
+          const serverId = resolveServerIdForSession(deps, ctx, input.sessionId);
+          return completeActionResult(await deps.sessionContinuationInspect({ input, context: ctx,
+            ...(serverId ? { serverId } : {}),
+          }));
+        }
+        if (actionId === 'session.agent.transition') {
+          if (!deps.sessionAgentTransition) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+          const input = SESSION_AGENT_TRANSITION_ACTION_INPUT_SCHEMAS[actionId].parse(parsed.data);
+          const request = SessionAgentTransitionRequestV1Schema.parse({ v: 1, ...input });
+          const serverId = resolveServerIdForSession(deps, ctx, request.sessionId);
+          return completeActionResult(await deps.sessionAgentTransition({ request, context: ctx,
+            ...(serverId ? { serverId } : {}),
+            ...(sessionMessageSendAdmission.sessionInputSource ? { sessionInputSource: sessionMessageSendAdmission.sessionInputSource } : {}),
+          }));
+        }
         if (actionId === 'session.message.send') {
           const sessionId = resolveSessionIdFromInput(parsed.data, ctx);
           if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
@@ -7917,7 +7948,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.goal.get' };
           }
           const serverId = resolveServerIdForSession(deps, ctx, sessionId);
-          const res = await deps.sessionGoalGet({ sessionId, ...(serverId ? { serverId } : {}) });
+          const res = await deps.sessionGoalGet({ sessionId, ...(serverId ? { serverId } : {}),
+            ...(ctx.authority || isAgentCaller(ctx) ? { context: ctx } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) });
           return completeActionResult(res);
         }
 
@@ -7937,6 +7969,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               ? { tokenBudget }
               : {}),
             ...(serverId ? { serverId } : {}),
+            ...(typeof data.resumeInactiveWithInitialGoal === 'boolean' ? { resumeInactiveWithInitialGoal: data.resumeInactiveWithInitialGoal } : {}),
+            ...(ctx.authority || isAgentCaller(ctx) ? { context: ctx } : {}),
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+            ...(ctx.actionRequestId ? { actionRequestId: ctx.actionRequestId } : {}),
           });
           return completeActionResult(res);
         }
@@ -7948,7 +7984,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.goal.clear' };
           }
           const serverId = resolveServerIdForSession(deps, ctx, sessionId);
-          const res = await deps.sessionGoalClear({ sessionId, ...(serverId ? { serverId } : {}) });
+          const res = await deps.sessionGoalClear({ sessionId, ...(serverId ? { serverId } : {}),
+            ...(ctx.authority || isAgentCaller(ctx) ? { context: ctx } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) });
           return completeActionResult(res);
         }
 

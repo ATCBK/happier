@@ -1,4 +1,5 @@
 import type { SessionFollowActionIdV1 } from '../../sessions/follow/actions.js';
+import type { LocalDaemonServiceActionId } from '../specs/localDaemonService.js';
 import type { MemoryWindowRequestV1 } from '../../memory/memoryWindow.js';
 import type { SessionModelMutationExpectedV1 } from '../../sessions/control/modelTransitionV1.js';
 import type { AcpCatalogSnapshotV1, AcpCatalogRowMutationV1 } from '../../acp/catalog/catalogRowsV1.js';
@@ -43,7 +44,7 @@ import type { SessionAuthoringOpenV1, SessionAuthoringOpenResultV1 } from '../..
 import type { MachineAddSshActionId } from '../specs/machineConnection.js';
 import type { MachineAccessActionId } from '../specs/machineAccess.js';
 import type { MachineTerminalActionId, MachineTerminalActionInput } from '../specs/machineTerminal.js';
-import type { HomeConnectInputSchema, HomeConnectOutputSchema, MachineAddCommandInputSchema, MachineAddCommandOutputSchema, MachinePairingCreateInputSchema, MachinePairingCreateOutputSchema, MachineTerminalOpenInputSchema, MachineTerminalListInputSchema } from '../specs/machineConnection.js';
+import type { HomeConnectInputSchema, HomeConnectOutputSchema, HomeReconnectInputSchema, HomeReconnectOutputSchema, MachineAddCommandInputSchema, MachineAddCommandOutputSchema, MachinePairingCreateInputSchema, MachinePairingCreateOutputSchema, MachineTerminalOpenInputSchema, MachineTerminalListInputSchema } from '../specs/machineConnection.js';
 import type {
   DaemonAgentInstallStartRequest, DaemonAgentInstallStartResponse,
   DaemonAgentInstallReadRequest, DaemonAgentInstallReadResponse,
@@ -98,6 +99,7 @@ import type { WorkspaceActionId } from '../workspaceActionFamily.js';
 import type { OpenProjectInputV1, OpenProjectResultV1 } from '../../projects/openProjectV1.js';
 import type { SessionCanvasActionId } from '../sessionCanvasActionFamily.js';
 import type { SessionTerminalActionId } from '../sessionTerminalActionFamily.js';
+import type { SessionAgentTransitionRequestV1, SessionAgentTransitionSelectionV1 } from '../../sessions/agentTransition.js';
 import type { ConnectedServiceConfigurationActionIdV1 } from '../../connect/configurationActionsV1.js';
 import type { SettingsDeclarationActionIdV1 } from '../settingsDeclarationActionFamily.js';
 import type { SettingsOwnerActionExecuteV1 } from '../settings/settingsOwnerActions.js';
@@ -753,6 +755,9 @@ export type ActionExecutorContext = Readonly<{
    * non-escalation; missing values fail closed to the default ordinal.
    */
   callerPermissionMode?: string | null;
+
+  /** Host-private constraints recovered from authenticated invocation custody, never authored Action input. */
+  callerInputConstraints?: CallerInputConstraintsV1;
 
   /**
    * Account-scoped policy for agent-surface child-session creation. Kept opaque
@@ -1458,8 +1463,10 @@ export type ActionExecutorDeps = Readonly<{
   promptInvocationResolve?: (args: Readonly<{ invocationId: string; argsText?: string; sessionId?: string | null; signal?: AbortSignal }>) => Promise<unknown>;
   machinesList: (args: Readonly<{ serverId?: string; limit?: number }>) => Promise<unknown>;
   homeConnect?: (input: z.infer<typeof HomeConnectInputSchema>, context: ActionExecutorContext) => Promise<z.infer<typeof HomeConnectOutputSchema> | ActionExecuteFailure>;
+  homeReconnect?: (input: z.infer<typeof HomeReconnectInputSchema>, context: ActionExecutorContext) => Promise<z.infer<typeof HomeReconnectOutputSchema> | ActionExecuteFailure>;
   machineAddCommand?: (input: z.infer<typeof MachineAddCommandInputSchema>, context: ActionExecutorContext) => Promise<z.infer<typeof MachineAddCommandOutputSchema> | ActionExecuteFailure>;
   machineAddSshTaskAction?: (actionId: MachineAddSshActionId, input: unknown, context: ActionExecutorContext) => Promise<unknown>;
+  localDaemonServiceAction?: (actionId: LocalDaemonServiceActionId, input: unknown, context: ActionExecutorContext) => Promise<unknown>;
   machinePairingCreate?: (input: z.infer<typeof MachinePairingCreateInputSchema>, context: ActionExecutorContext) => Promise<z.infer<typeof MachinePairingCreateOutputSchema> | ActionExecuteFailure>;
   machineTerminalAction?: (request: Readonly<{ actionId: MachineTerminalActionId; input: MachineTerminalActionInput; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   serversList: (args: Readonly<{ limit?: number }>) => Promise<unknown>;
@@ -1528,6 +1535,17 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<unknown>;
 
   // Session messaging (socket message event, server-scoped)
+  sessionContinuationInspect?: (args: Readonly<{
+    input: Readonly<{ sessionId: string; selection: SessionAgentTransitionSelectionV1 }>;
+    context: ActionExecutorContext;
+    serverId?: string | null;
+  }>) => Promise<unknown>;
+  sessionAgentTransition?: (args: Readonly<{
+    request: SessionAgentTransitionRequestV1;
+    context: ActionExecutorContext;
+    serverId?: string | null;
+    sessionInputSource?: NonNullable<Parameters<ActionExecutorDeps['sessionSendMessage']>[0]['sessionInputSource']>;
+  }>) => Promise<unknown>;
   sessionSendMessage: (args: Readonly<{
     context: ActionExecutorContext;
     callerInputConstraints?: CallerInputConstraintsV1;
@@ -1714,15 +1732,19 @@ export type ActionExecutorDeps = Readonly<{
     readAwareness: () => Promise<unknown>;
   }>) => Promise<WaitOwnerResultV1>;
   sessionWorkStateGet?: (args: Readonly<{ sessionId: string; serverId?: string | null }>) => Promise<unknown>;
-  sessionGoalGet?: (args: Readonly<{ sessionId: string; serverId?: string | null }>) => Promise<unknown>;
+  sessionGoalGet?: (args: Readonly<{ sessionId: string; serverId?: string | null; context?: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   sessionGoalSet?: (args: Readonly<{
     sessionId: string;
     objective?: string;
     status?: string;
     tokenBudget?: number | null;
     serverId?: string | null;
+    resumeInactiveWithInitialGoal?: boolean;
+    context?: ActionExecutorContext;
+    signal?: AbortSignal;
+    actionRequestId?: string;
   }>) => Promise<unknown>;
-  sessionGoalClear?: (args: Readonly<{ sessionId: string; serverId?: string | null }>) => Promise<unknown>;
+  sessionGoalClear?: (args: Readonly<{ sessionId: string; serverId?: string | null; context?: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   sessionUsageLimitWaitResumeEnable?: (args: Readonly<{
     sessionId: string;
     issueFingerprint?: string;

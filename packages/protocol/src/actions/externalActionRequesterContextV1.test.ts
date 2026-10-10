@@ -2,10 +2,69 @@ import { describe, expect, it } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import * as requester from '../sessions/creation/sessionRequesterBootstrapV1.js';
 import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema } from './externalActionApi.js';
-import { computeExternalActionRequestEnvelopeDigestV1 } from './externalActionExecutionAuthorization.js';
+import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionMachineRpcRequestV1,
+  verifyExternalActionMachineRpcRequestV1 } from './externalActionExecutionAuthorization.js';
 import { ManagedWakeTargetV1Schema } from '../machines/managed/managedIntentV1.js';
 
 describe('private requester Account context on an external Action', () => {
+  it.each(['plain', 'e2ee'] as const)('rejects replacement of the installed-signed %s private invocation with an independently sealed host invocation', mode => {
+    const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
+    const authorization = { v: 1 as const, token: 'original-plugin-root', binding: {
+      accountId: 'bob', custodianAccountId: 'bob', authentication: { kind: 'account' as const, tokenEpoch: 3 },
+      accountEncryptionMode: mode, serverIdentityId: 'home', machineId: 'machine', installationId: 'installation',
+      actionId: 'session.agent.transition', requestId: 'request', target: { kind: 'machine' as const, machineId: 'machine' },
+      requestEnvelopeDigest: 'a'.repeat(43),
+    } };
+    const credentials = { token: 'private-account', ...(mode === 'e2ee'
+      ? { secret: Buffer.from(new Uint8Array(32).fill(8)).toString('base64') } : {}) };
+    const purpose = { kind: 'machine_rpc' as const, method: 'stop-session', params: { sessionId: 'session' } };
+    const seal = (invocation: requester.ExternalActionRequesterInvocationV1) => requester.sealExternalActionRequesterAccountContextV1({
+      authorization, credentials, invocation, purpose, installationPublicKey: installation.publicKey, randomBytes: tweetnacl.randomBytes,
+    });
+    const original = seal({ caller: { kind: 'plugin', pluginId: 'acme.switch', contributionLocalId: 'switch' },
+      surface: 'plugin', authority: 'account_automation', callerInputConstraints: { models: null, permissionModes: ['read-only'] } });
+    const substituted = seal({ caller: { kind: 'host' }, surface: 'ui', authority: 'present_user' });
+    // The public recipient key can create a valid box. Only the installed
+    // producer's unchanged signature establishes which invocation it admitted.
+    expect(requester.openExternalActionRequesterAccountContextV1({ authorization: substituted, purpose,
+      machineId: 'machine', installationId: 'installation', serverIdentityId: 'home',
+      installationPrivateKey: installation.secretKey, includeInvocation: true })?.invocation?.authority).toBe('present_user');
+    const request = { authorizationToken: authorization.token, effectActionId: 'session.agent.transition',
+      target: { kind: 'session' as const, sessionId: 'session' }, installationId: 'installation',
+      method: 'machine:stop-session', requestId: 'child-request', params: purpose.params,
+      requesterAccountContext: original.requesterAccountContext };
+    const signature = signExternalActionMachineRpcRequestV1({ ...request, privateKey: installation.secretKey });
+    const verify = (requesterAccountContext: typeof original.requesterAccountContext) => verifyExternalActionMachineRpcRequestV1({
+      ...request, requesterAccountContext, signature, publicKey: installation.publicKey,
+    });
+    expect(verify(original.requesterAccountContext)).toBe(true);
+    expect(verify(substituted.requesterAccountContext)).toBe(false);
+    expect(verify(undefined)).toBe(false);
+  });
+  it.each(['plain', 'e2ee'] as const)('preserves private Plugin invocation facts inside the exact %s installed-key carrier', mode => {
+    const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(3));
+    const authorization = { v: 1 as const, token: 'home-proof', binding: {
+      accountId: 'bob', custodianAccountId: 'bob', authentication: { kind: 'account' as const, tokenEpoch: 3 },
+      accountEncryptionMode: mode, serverIdentityId: 'home', machineId: 'machine', installationId: 'installation',
+      actionId: 'session.agent.transition', requestId: 'request', target: { kind: 'machine' as const, machineId: 'machine' },
+      requestEnvelopeDigest: 'a'.repeat(43),
+    } };
+    const credentials = { token: 'private-account', ...(mode === 'e2ee' ? { secret: Buffer.from(new Uint8Array(32).fill(8)).toString('base64') } : {}) };
+    const invocation = { caller: { kind: 'plugin' as const, pluginId: 'acme.switch', contributionLocalId: 'switch' },
+      surface: 'plugin' as const, authority: 'account_automation' as const, callerPermissionMode: 'read-only' as const,
+      callerInputConstraints: { models: null, permissionModes: ['read-only'] } } satisfies requester.ExternalActionRequesterInvocationV1;
+    const sealed = requester.sealExternalActionRequesterAccountContextV1({ authorization, credentials,
+      invocation, purpose: { kind: 'external_action' }, installationPublicKey: installation.publicKey, randomBytes: tweetnacl.randomBytes });
+    const receive = { authorization: sealed, purpose: { kind: 'external_action' as const }, machineId: 'machine',
+      installationId: 'installation', serverIdentityId: 'home', installationPrivateKey: installation.secretKey, includeInvocation: true as const };
+    expect(requester.openExternalActionRequesterAccountContextV1(receive)).toEqual({ credentials, invocation });
+    expect(JSON.stringify(sealed)).not.toContain('acme.switch');
+    expect(requester.openExternalActionRequesterAccountContextV1({ ...receive,
+      authorization: { ...sealed, binding: { ...sealed.binding, requestId: 'other' } } })).toBeNull();
+    expect(() => requester.sealExternalActionRequesterAccountContextV1({ authorization, credentials,
+      invocation: { ...invocation, authority: 'present_user' }, purpose: { kind: 'external_action' },
+      installationPublicKey: installation.publicKey, randomBytes: tweetnacl.randomBytes })).toThrow();
+  });
   it.each(['plain', 'e2ee'] as const)('retains the guest box and opens %s custody only at the exact finite-wake controller', mode => {
     const seal = Reflect.get(requester, 'sealExternalActionRequesterAccountContextV1');
     const open = Reflect.get(requester, 'openExternalActionRequesterAccountContextV1');

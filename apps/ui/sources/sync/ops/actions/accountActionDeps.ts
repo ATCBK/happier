@@ -2,8 +2,8 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
 import { resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
-import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import type { ActionAccountContext } from './actionAccountContext';
+import type { ActionAccountContext, LazyActionAccountContext } from './actionAccountContext';
+import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import {
     createUiAccountActionTransport,
@@ -20,13 +20,18 @@ export function resolveUiAccountActionFallbackMachineId(account: Pick<ActionAcco
 
 /** Compose the existing machine relay with the invocation's captured Account. */
 export function createUiAccountAction(params: Readonly<{
-    account: Pick<ActionAccountContext, 'serverId' | 'accountId' | 'assertCurrent'>;
+    account: LazyActionAccountContext;
     transport?: AccountActionTransport;
 }>): UiAccountActionExecute {
     const execute = createUiAccountActionTransport({
         account: params.account,
         resolveFallbackMachineId: () => resolveUiAccountActionFallbackMachineId(params.account),
-        transport: params.transport ?? (async (input) => await machineRpcWithServerScope(input)),
+        transport: params.transport ?? (async input => {
+            const execution = await executeOriginalAccountMachineAction({ account: params.account, actionId: input.actionId,
+                machineId: input.machineId, machineTarget: input.target, requestId: input.requestId, input: input.payload, invocation: input.invocation,
+                ...(input.signal ? { signal: input.signal } : {}) });
+            return execution.ok ? execution.result : execution;
+        }),
     });
     return async (args) => await execute(
         args.context.serverId !== params.account.serverId

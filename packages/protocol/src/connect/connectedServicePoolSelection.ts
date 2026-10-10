@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
-import { QualifiedConnectedAccountIdSchema } from './qualifiedConnectedAccountPersistence.js';
+import { QualifiedConnectedAccountIdSchema, QualifiedConnectedAccountRefSchema } from './qualifiedConnectedAccountPersistence.js';
 import { QualifiedConnectedAccountGroupRefSchema } from './qualifiedConnectedAccountProjectionsV4.js';
-import { ConnectedServiceAuthGroupPolicyV1Schema } from './connectedServiceSchemas.js';
+import { ConnectedServiceAuthGroupPolicyV1Schema, ConnectedServiceAuthGroupStateV1Schema } from './connectedServiceSchemas.js';
 import { RPC_METHODS } from '../rpc/methods.js';
 
 export const CONNECTED_SERVICE_POOL_SELECTION_RPC_METHOD = RPC_METHODS.DAEMON_CONNECTED_SERVICE_POOL_SELECTION_GET;
@@ -66,6 +66,8 @@ export const ConnectedServicePoolSelectionGetResponseV1Schema = lazyZodSchema(()
     group: QualifiedConnectedAccountGroupRefSchema,
     observedAtMs: FiniteNumberSchema,
     selection: ConnectedServicePoolSelectionV1Schema,
+    activeAccountRef: asProtocolZod(QualifiedConnectedAccountRefSchema).nullable().optional(),
+    activeSince: ConnectedServiceAuthGroupStateV1Schema.removeDefault().shape.activeSince,
   }).strict(),
   z.object({ status: z.literal('unavailable'), code: z.enum([
     'connected_account_daemon_owner_unavailable', 'connected_account_daemon_runtime_unavailable',

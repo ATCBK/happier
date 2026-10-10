@@ -12,6 +12,7 @@ export type MachineRpcGovernanceMetadataV1 = Readonly<{
 }>;
 
 const ACTION_SPEC_RPC_METHOD_IDS = Object.freeze({
+  [RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2]: 'session.goal.set',
   [RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_INSPECT]: 'projects.worker.copy.inspect',
   [RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET]: 'search.settings.get',
   [RPC_METHODS.DAEMON_MEMORY_SETTINGS_SET]: 'search.settings.set',

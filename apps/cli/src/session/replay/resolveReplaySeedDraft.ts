@@ -122,6 +122,7 @@ export type ReplaySeedDraftResolution =
 
 export async function resolveReplaySeedDraft(params: Readonly<{
   credentials: StoredCredentials;
+  resolveAuthorizationHeaders?: Parameters<typeof hydrateReplayDialogFromForkChain>[0]['resolveAuthorizationHeaders'];
   cwd: string;
   source: ReplaySeedSource;
   strategy: HappierReplayStrategy;
@@ -186,6 +187,7 @@ export async function resolveReplaySeedDraft(params: Readonly<{
     params.source.kind !== 'voice_session.v1'
       ? await hydrateReplayDialogFromForkChain({
           credentials: params.credentials,
+          ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
           startingSessionId: sourceSessionId,
           limit: params.candidateLimit,
           maxDialogItems: params.recentMessagesCount,

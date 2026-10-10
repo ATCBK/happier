@@ -28,6 +28,15 @@ describe('machine and Home connection Action parity', () => {
       expect(getActionSpec(ActionIdSchema.parse(id)).executionPlacement).toBe('client');
     }
   });
+  it('admits an exact saved SSH host reference while refusing competing targets and secret material', () => {
+    const schema = getActionSpec('machines.add.ssh.start').inputSchema;
+    const saved = { serverId: 'home', savedHost: { hostId: 'host', expectedRevision: 4 } };
+    expect(schema.safeParse(saved).success).toBe(true);
+    expect(schema.safeParse({ ...saved, host: 'different-target' }).success).toBe(false);
+    expect(schema.safeParse({ ...saved, savedHost: { ...saved.savedHost, accountId: 'different-account' } }).success).toBe(false);
+    expect(schema.safeParse({ ...saved, password: 'secret' }).success).toBe(false);
+    expect(schema.safeParse({ ...saved, savedHost: { hostId: 'host' } }).success).toBe(false);
+  });
   it('returns the canonical Home connection outcome and rejects removed classifications', async () => {
     const id = ActionIdSchema.parse('homes.connect');
     // This port is the executing client's persisted Home and network boundary.

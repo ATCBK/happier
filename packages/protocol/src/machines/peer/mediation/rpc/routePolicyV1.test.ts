@@ -19,6 +19,27 @@ async function importRpcPolicy() {
 }
 
 describe('MachineRpcRoutePolicyV1', () => {
+  it('retains the transition root only for its named stop and activation effects', async () => {
+    const { resolveMachineRpcExternalActionEffectV1: resolve } = await import('./routePolicyV1');
+    const binding = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'transition-root', binding: {
+      accountId: 'requester', custodianAccountId: 'requester', authentication: { kind: 'account', tokenEpoch: 1 },
+      serverIdentityId: 'home', machineId: 'machine', installationId: 'installation', actionId: 'session.agent.transition',
+      requestId: 'original', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'machine', machineId: 'machine' },
+    } }).binding;
+    for (const method of [RPC_METHODS.STOP_SESSION, RPC_METHODS.SPAWN_HAPPY_SESSION, RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE]) {
+      expect(resolve(method, binding)).toBe('session.agent.transition');
+    }
+    expect(resolve(RPC_METHODS.SESSION_SPAWN_NEW, binding)).not.toBe('session.agent.transition');
+    expect(resolve(RPC_METHODS.STOP_SESSION)).not.toBe('session.agent.transition');
+  });
+  it('admits versioned inactive goal wake only as its canonical Session Action', async () => {
+    const { resolveMachineRpcRoutePolicy, resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
+    const method = RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2;
+    expect(resolveMachineRpcGovernance(method)).toEqual({ rpcClassification: 'action_spec_bound', actionSpecId: 'session.goal.set' });
+    expect(resolveMachineRpcRoutePolicy(method)).toMatchObject({ routeClass: 'server_required',
+      serverRequiredReason: 'durable_session_write', commandReceiptRequired: false });
+    expect(resolveMachineRpcExternalActionEffectV1(method)).toBe('session.goal.set');
+  });
   it('binds committed-copy review to the public read without granting shared Machine access or removal', async () => {
     const { resolveMachineRpcRoutePolicy, resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
     const method = RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_INSPECT;

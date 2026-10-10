@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import { buildTrustedHostSessionInputAdmissionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { buildCausalSessionInputAdmissionV1 } from '@/session/services/sessionInputAdmissionIdentity';
 
 const mocks = vi.hoisted(() => ({
   fetchAccountMachineReplacements: vi.fn(),
@@ -313,6 +315,53 @@ describe('runSessionAgentTransition — pre-stop failures leave the source untou
 });
 
 describe('runSessionAgentTransition — exact input admission by localId (QA-T-08)', () => {
+  it('rejects an authored permission above private admission authority before touching the source', async () => {
+    const harness = createTransitionDepsHarness();
+    const inputAdmission = buildCausalSessionInputAdmissionV1({
+      sourceSessionId: TEST_SESSION_ID, sourceTurnId: 'source-turn', callerDepth: 0, via: 'action',
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' },
+    });
+    const result = await runSessionAgentTransition({ credentials: TEST_CREDENTIALS, deps: harness.deps, inputAdmission,
+      request: buildTransitionRequest({ input: { text: 'continue', localId: TEST_LOCAL_ID, meta: { permissionMode: 'yolo' } } }) });
+    expect(result).toEqual({ type: 'rejected', code: 'forbidden', sourceEffect: 'none' });
+    expect(harness.calls).toEqual([]);
+  });
+  it('retains the admitted Agent ceiling when an inherited permissive Session switches without an authored permission', async () => {
+    const harness = createTransitionDepsHarness();
+    harness.setMetadata({ ...CLAUDE_SOURCE_METADATA, permissionMode: 'yolo' });
+    const inputAdmission = buildCausalSessionInputAdmissionV1({
+      sourceSessionId: TEST_SESSION_ID, sourceTurnId: 'source-turn', callerDepth: 0, via: 'action',
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' },
+    });
+    const invocation = {
+      credentials: TEST_CREDENTIALS, request: buildTransitionRequest(), deps: harness.deps, inputAdmission,
+    };
+    const result = await runSessionAgentTransition(invocation);
+    expect(result).toEqual({ type: 'accepted', localId: TEST_LOCAL_ID });
+    expect(harness.deps.sendSessionMessage).toHaveBeenCalledWith(expect.objectContaining({
+      inputAdmission: {
+        provenance: inputAdmission.provenance,
+        request: expect.objectContaining({ producer: 'sessionAction', permission: { requestedPermissionCeiling: 'read-only' } }),
+      },
+    }));
+  });
+
+  it('keeps ordinary UI continuation rich input and its trusted host admission intact', async () => {
+    const harness = createTransitionDepsHarness();
+    const input = {
+      text: 'Expanded skill and attachment prompt', localId: TEST_LOCAL_ID,
+      meta: { displayText: 'Review this attachment', permissionMode: 'default', reasoningEffort: 'high', customField: { preserved: true } },
+    };
+    const result = await runSessionAgentTransition({
+      credentials: TEST_CREDENTIALS, request: buildTransitionRequest({ input }), deps: harness.deps,
+    });
+    expect(result).toEqual({ type: 'accepted', localId: TEST_LOCAL_ID });
+    expect(harness.deps.sendSessionMessage).toHaveBeenCalledWith(expect.objectContaining({
+      message: input.text, localId: input.localId, messageMeta: input.meta,
+      inputAdmission: buildTrustedHostSessionInputAdmissionV1('ui'),
+    }));
+  });
+
   it('accepts only after canonical admission acknowledges that exact localId', async () => {
     const harness = createTransitionDepsHarness();
 

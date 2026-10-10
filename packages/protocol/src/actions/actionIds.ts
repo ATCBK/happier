@@ -1,6 +1,7 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 import { MACHINE_ADD_SSH_ACTION_IDS } from './specs/machineConnection.js';
+import { LOCAL_DAEMON_SERVICE_ACTION_IDS } from './specs/localDaemonService.js';
 import { USAGE_ACTION_IDS, USAGE_COACH_ACTION_IDS } from '../usage/usageActionIdsV1.js';
 import { MACHINE_ACCESS_ACTION_IDS, MACHINE_WORK_SUMMARY_ACTION_IDS } from './specs/machineAccess.js';
 import { MACHINE_TERMINAL_ACTION_IDS } from './specs/machineTerminal.js';
@@ -37,6 +38,7 @@ import { CONNECTED_SERVICE_CONFIGURATION_ACTION_IDS_V1 } from '../connect/config
 import { SETTINGS_DECLARATION_ACTION_IDS_V1 } from './settingsDeclarationActionFamily.js';
 import { APP_SHELL_ACTION_IDS } from './appShellActionFamily.js';
 import { SESSION_TERMINAL_ACTION_IDS } from './sessionTerminalActionFamily.js';
+import { SESSION_AGENT_TRANSITION_ACTION_IDS } from './sessionAgentTransitionActionFamily.js';
 import { NOTIFICATION_CONFIGURATION_ACTION_IDS } from './notificationConfigurationActionIds.js';
 import { APP_UPDATE_ACTION_IDS } from './appUpdateActionFamily.js';
 import { WIDGET_INSTANCE_ACTION_IDS_V1 } from '../widgets/actionIdsV1.js';
@@ -107,6 +109,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   operation_output: ACTION_OPERATION_ACTION_IDS_V1,
   capture_viewing: ['capture.view'],
   session_terminals: SESSION_TERMINAL_ACTION_IDS,
+  session_agent_transition: SESSION_AGENT_TRANSITION_ACTION_IDS,
   workspace_layout: [...WORKSPACE_ACTION_IDS, ...SESSION_CANVAS_ACTION_IDS],
   session_organization_move: ['session.organization.move', 'session.organization.pin.set'],
   composer_ingress: ['composer.transaction.apply', 'composer.attachments.pick', 'repository.upload.pick'],
@@ -152,7 +155,8 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'machines.agents.install.cancel',
   ],
   machine_agent_sign_in: ['machines.agents.signIn.start', 'machines.agents.signIn.status', 'machines.agents.signIn.cancel', 'machines.agents.signIn.restart'],
-  machine_connection: ['homes.connect', 'machines.add.command', 'machines.pairing.create', ...MACHINE_TERMINAL_ACTION_IDS, ...MACHINE_ADD_SSH_ACTION_IDS],
+  machine_connection: ['homes.connect', 'homes.reconnect', 'machines.add.command', 'machines.pairing.create', ...MACHINE_TERMINAL_ACTION_IDS, ...MACHINE_ADD_SSH_ACTION_IDS],
+  local_daemon_services: LOCAL_DAEMON_SERVICE_ACTION_IDS,
   machine_access: MACHINE_ACCESS_ACTION_IDS,
   machine_work_summary: MACHINE_WORK_SUMMARY_ACTION_IDS,
   session_access: [
@@ -783,6 +787,7 @@ export const ACTION_IDS = [
   ...ACTION_ID_FAMILIES_V1.widgets,
   ...ACTION_ID_FAMILIES_V1.computer,
   ...ACTION_ID_FAMILIES_V1.machine_connection,
+  ...ACTION_ID_FAMILIES_V1.local_daemon_services,
   ...ACTION_ID_FAMILIES_V1.machine_access,
   ...ACTION_ID_FAMILIES_V1.machine_work_summary,
   ...ACTION_ID_FAMILIES_V1.machine_agent_install,
@@ -803,6 +808,7 @@ export const ACTION_IDS = [
   ...ACTION_ID_FAMILIES_V1.discovery,
   ...ACTION_ID_FAMILIES_V1.session_access,
   ...ACTION_ID_FAMILIES_V1.session_lifecycle,
+  ...ACTION_ID_FAMILIES_V1.session_agent_transition,
   ...ACTION_ID_FAMILIES_V1.inventory,
   ...ACTION_ID_FAMILIES_V1.messaging,
   ...ACTION_ID_FAMILIES_V1.session_control,
@@ -851,6 +857,7 @@ export const ACTION_IDS = [
   ...ACTION_ID_FAMILIES_V1.account_sessions,
   ...ACTION_ID_FAMILIES_V1.account_security,
   ...ACTION_ID_FAMILIES_V1.account_api_tokens,
+  ...ACTION_ID_FAMILIES_V1.account_home_continuation,
   ...ACTION_ID_FAMILIES_V1.agent_acp_catalog,
   ...ACTION_ID_FAMILIES_V1.identity_github_apps,
   ...ACTION_ID_FAMILIES_V1.identity_providers,

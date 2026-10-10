@@ -23,6 +23,13 @@ function builtInProfile(index: number): ThemeProfileV1 {
 }
 
 describe('plugin UI semantic theme projection (§3.3, UI-D12)', () => {
+    it('projects the host-selected spinner style and timing without replacing its semantic theme', () => {
+        const theme = themeFor(null, 'dark');
+        const spinner = { style: 'hWave', speed: 'slow', pause: 'long' };
+        const projected = projectPluginUiTheme(theme, spinner);
+        expect(projected.spinner).toEqual(spinner);
+        expect(projected.colors).toEqual(projectPluginUiTheme(theme).colors);
+    });
     it('projects status text ink separately from marker colors for same-realm and hosted badges', () => {
         for (const mode of ['light', 'dark'] as const) {
             const theme = themeFor(null, mode);

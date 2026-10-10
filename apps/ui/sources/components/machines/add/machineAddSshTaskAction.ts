@@ -12,10 +12,11 @@ import { createDefaultSshCredentialsDraft } from '@/components/ssh/sshCredential
 import { resolveRemoteHostBootstrapRelayUrls } from '@/components/settings/remoteHosts/remoteHostOutcomeActions';
 import { getSystemTasksRunner } from '@/components/systemTasks/systemTasksRuntime';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
-import { resolveRemoteSshBootstrapPrompt, type RemoteSshBootstrapFormState } from '@/components/systemTasks/remoteSshBootstrap/useRemoteSshBootstrapTask';
+import { resolveRemoteSshBootstrapPrompt } from '@/components/systemTasks/remoteSshBootstrap/useRemoteSshBootstrapTask';
 import { startRemoteSshBootstrapTask, continueRemoteSshBootstrapTask } from '@/components/systemTasks/remoteSshBootstrap/remoteSshBootstrapTask';
 import { readMachineAddFlowDraft, updateMachineAddFlowDraft } from './machineAddFlowStore';
-import { beginMachineAddWatch, startMachineAddTask } from './machineAddTaskLifetime';
+import { hasRunningMachineAddTask, startMachineAddTask } from './machineAddTaskLifetime';
+import { getMachineAddSshSupportedAuthModes, runWithMachineAddSshForm, startMachineAddSshTask } from './machineAddSshTask';
 
 const ResolutionSchema = z.object({
     hostTrust: z.object({ kind: z.enum(['ssh.trustHost', 'ssh.replaceHostKey']), fingerprint: z.string(), existingFingerprint: z.string().nullable().optional() }).optional(),
@@ -45,24 +46,18 @@ export function createMachineAddSshTaskAction(runnerOverride?: SystemTaskRunner)
                 ...(descriptor ? { homeTarget: resolveHomeTargetFromDescriptor({ descriptor, authority: 'saved_profile',
                     profile: { id: profile.id, serverUrl: profile.serverUrl, webappUrl: resolveWebappUrlFromServerUrl(profile.serverUrl) } }) } : {}) };
         };
-        const form = (): RemoteSshBootstrapFormState => {
-            const draft = readMachineAddFlowDraft().sshDraft;
-            return { sshHost: draft.host, sshUsername: draft.username, sshPort: draft.port, sshAuth: draft.authMode,
-                sshPassword: draft.password, identityFilePath: draft.identityFilePath, identityPrivateKey: draft.privateKeyMaterial ?? '', installRelayRuntime: false };
-        };
         if (actionId === 'machines.add.ssh.start') {
             const request = MachineAddSshStartInputSchema.parse(input);
             if (!areServerProfileIdentifiersEquivalent(request.serverId, serverId)) return fail('server_scope_mismatch');
-            if ([retained.sshTask, retained.thisComputerTask].some((handle) => handle && (handle.starting || (handle.taskId && !handle.runner.getSnapshot(handle.taskId)?.result)))) return fail('machine_setup_in_progress');
+            if (hasRunningMachineAddTask()) return fail('machine_setup_in_progress');
+            if ('host' in request && !getMachineAddSshSupportedAuthModes(runner).some(mode => mode === request.authMode)) return fail('ssh_auth_mode_unavailable');
             updateMachineAddFlowDraft((draft) => ({ ...draft, serverId, path: 'ssh',
-                sshDraft: { ...createDefaultSshCredentialsDraft(request.authMode), host: request.host, username: request.username,
-                    port: request.port === undefined ? '' : String(request.port), identityFilePath: request.identityFilePath ?? '' } }));
-            const taskId = await startMachineAddTask('ssh', runner, async (isCurrent) => {
-                context.signal?.throwIfAborted();
-                if (!isCurrent() || !areAccountSettingsScopesEqual(storage.getState().settingsScope, scope)) return null;
-                beginMachineAddWatch(serverId, 'ssh');
-                return startRemoteSshBootstrapTask(target(), form());
-            });
+                sshDraft: 'savedHost' in request
+                    ? { ...createDefaultSshCredentialsDraft(), savedHostId: request.savedHost.hostId, savedHostExpectedRevision: request.savedHost.expectedRevision }
+                    : { ...createDefaultSshCredentialsDraft(request.authMode), host: request.host, username: request.username,
+                        port: request.port === undefined ? '' : String(request.port), identityFilePath: request.identityFilePath ?? '' } }));
+            const taskId = await startMachineAddSshTask({ serverId, runner, draft: readMachineAddFlowDraft().sshDraft, signal: context.signal },
+                (form, startSpec) => startRemoteSshBootstrapTask({ ...target(), startSpec }, form));
             return taskId ? { taskId } : fail('machine_setup_not_started');
         }
         const { taskId } = MachineAddSshTaskInputSchema.parse(actionId === 'machines.add.ssh.respond'
@@ -102,8 +97,10 @@ export function createMachineAddSshTaskAction(runnerOverride?: SystemTaskRunner)
         const resolution = ResolutionSchema.parse(params && typeof params === 'object' && !Array.isArray(params) && 'promptResolution' in params ? params.promptResolution ?? {} : {});
         const nextTaskId = await startMachineAddTask('ssh', handle.runner, async (isCurrent) => {
             if (!isCurrent() || !areAccountSettingsScopesEqual(storage.getState().settingsScope, scope)) return null;
-            return (await continueRemoteSshBootstrapTask({ options: { ...target(), runner: handle.runner }, form: form(),
-                taskId, snapshot, prompt, resolution, accept: accepted })).taskId;
+            return runWithMachineAddSshForm({ serverId, runner: handle.runner, draft: readMachineAddFlowDraft().sshDraft,
+                signal: context.signal, assertCurrent: () => { if (!isCurrent()) throw new Error('machine_setup_not_started'); } },
+                async (form, startSpec) => (await continueRemoteSshBootstrapTask({ options: { ...target(), runner: handle.runner, startSpec }, form,
+                    taskId, snapshot, prompt, resolution, accept: accepted })).taskId);
         }, handle.observeCompletion, handle);
         return nextTaskId ? { taskId: nextTaskId } : fail('machine_setup_not_started');
     };

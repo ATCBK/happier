@@ -41,12 +41,17 @@ import { decodePlainArtifactStoredContent } from '@happier-dev/protocol';
 import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { prepareRequesterAccountActionContext } from '../sessionEncryption/requesterAccountActionProjection';
-import { sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { sealExternalActionRequesterAccountContextV1, type ExternalActionRequesterInvocationV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { ProjectAccountRowV1Schema, ProjectAccountRowMutationRequestV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { encodeStoredCredentials } from '@/persistence';
 import { prepareAccountSettingsV2Content } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
+import { registerSessionAgentTransitionRpcHandlers } from '@/rpc/handlers/sessionAgentTransition';
+import { createEncryptedRpcTestClient } from '@/rpc/handlers/encryptedRpc.testkit';
+import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
 const principal = {
   accountId: 'account-1',
@@ -153,6 +158,140 @@ describe('executeExternalAction', () => {
         .toMatchObject({ kind: 'invalid_request', errorCode: 'invalid_encrypted_envelope' });
       expect(effects).toBe(1);
     } finally { get.mockRestore(); post.mockRestore(); }
+  });
+  it.each(['present-user', 'plugin', 'bounded-plugin', 'inherited-plugin', 'missing'] as const)('admits %s private origin through requester custody into the real transition coordinator', async kind => {
+    const accountId = 'transition-account';
+    const token = `fixture.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(23));
+    const target = { kind: 'machine' as const, machineId: 'controller' };
+    const actionId = 'session.agent.transition';
+    const sessionId = 'c123456789012345678901234';
+    const envelope = { v: 1 as const, requestId: `transition-${kind}`, target, input: { sessionId,
+      expectedCurrentAgentId: 'claude', selection: { v: 1, agentId: 'codex' },
+      input: { localId: 'first-input', text: 'Continue', meta: kind === 'inherited-plugin' ? {} : { permissionMode: kind === 'bounded-plugin' ? 'read-only' : 'yolo' } } } };
+    const invocation: ExternalActionRequesterInvocationV1 | undefined = kind === 'missing' ? undefined : kind.includes('plugin')
+      ? { caller: { kind: 'plugin', pluginId: 'acme.switch', contributionLocalId: 'switch' }, surface: 'plugin',
+        authority: 'account_automation', callerPermissionMode: 'read-only', callerInputConstraints: { models: null, permissionModes: ['read-only'] } }
+      : { caller: { kind: 'host' }, surface: 'ui', authority: 'present_user' };
+    const authorization = sealExternalActionRequesterAccountContextV1({ authorization: { v: 1, token: 'home-proof', binding: {
+      accountId, custodianAccountId: accountId, authentication: { kind: 'account', tokenEpoch: 7 },
+      accountEncryptionMode: 'plain', serverIdentityId: 'srv_home', machineId: target.machineId, installationId: 'installation',
+      actionId, requestId: envelope.requestId, target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+    } }, credentials: { token }, ...(invocation ? { invocation } : {}), purpose: { kind: 'external_action' },
+      installationPublicKey: installation.publicKey, randomBytes: tweetnacl.randomBytes });
+    let featureReads = 0;
+    resetServerFeaturesClientForTests();
+    const fetchBoundary = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      featureReads++;
+      return new Response(JSON.stringify({ features: { sessions: { enabled: true, agentSwitching: { enabled: false } } }, capabilities: {} }),
+        { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    // Only HTTP is substituted: private opening, requester admission, Action policy and coordinator are real.
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/profile') return { status: 200, data: { id: accountId } };
+      if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {
+        actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { [actionId]: ['ui', 'plugin'] } },
+      } }, version: 1 } };
+      if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (path === `/v2/sessions/${sessionId}`) return { status: 200, data: { session: {
+        id: sessionId, seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1, encryptionMode: 'plain',
+        metadata: JSON.stringify({ machineId: target.machineId, flavor: 'claude' }), metadataVersion: 1,
+        agentState: null, agentStateVersion: 0, dataEncryptionKey: null,
+      } } };
+      if (path === '/v1/features') { featureReads++; return { status: 200, data: { features: { sessions: { enabled: true,
+        agentSwitching: { enabled: false } } }, capabilities: {} } }; }
+      throw new Error(`Unexpected HTTP GET ${path}`);
+    });
+    const post = vi.spyOn(axios, 'post').mockImplementation(async url => {
+      if (new URL(String(url)).pathname === `/v1/actions/${actionId}/execution-authorization/verify`) return { status: 200, data: { ok: true } };
+      throw new Error(`Unexpected HTTP POST ${String(url)}`);
+    });
+    try {
+      const result = await executeExternalAction({ actionId, envelope, executionAuthorization: authorization,
+        principal: { accountId, authority: 'present_user', authentication: { kind: 'account', tokenEpoch: 7 } },
+        currentMachineId: target.machineId, currentServerId: 'profile', currentServerHttpBaseUrl: 'https://home.test',
+        currentInstallationId: 'installation', externalActionMachineRequestPrivateKey: installation.secretKey,
+        verifyExecutionAuthorization: async () => true, resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token, encryption: null } }),
+        executor: createActionExecutor(createUnavailableHostActionDeps()),
+        prepareRequesterAccountContext: request => prepareRequesterAccountActionContext({ authorization: request.authorization,
+          purpose: { kind: 'external_action' }, machineId: target.machineId, installationId: 'installation',
+          installationPrivateKey: installation.secretKey, serverId: 'profile', serverIdentityId: 'srv_home',
+          serverHttpBaseUrl: 'https://home.test', isCurrent: async () => true,
+          createExecutor: admitted => createCliActionExecutorFromCredentials({ credentials: admitted.credentials,
+            serverId: 'profile', serverApiUrl: admitted.serverHttpBaseUrl, serverIdentityId: 'srv_home', machineId: target.machineId,
+            externalActionMachineRequestPrivateKey: installation.secretKey, externalActionMachineInstallationId: 'installation',
+            actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1(admitted.accountSettingsContext.settings.actionsSettingsV1),
+              getAccountSettings: () => admitted.accountSettingsContext.settings },
+          }),
+        }),
+      });
+      if (kind === 'present-user' || kind === 'bounded-plugin' || kind === 'inherited-plugin') {
+        expect(result, JSON.stringify(result)).toMatchObject({ kind: 'response', response: { execution: { ok: true, result: { type: 'rejected', code: 'unsupported_operation' } } } });
+        expect(featureReads).toBeGreaterThan(0);
+      } else {
+        expect(result, JSON.stringify(result)).toMatchObject({ kind: 'response', response: { execution: kind === 'missing'
+          ? { ok: false, errorCode: 'forbidden' } : { ok: true, result: { type: 'rejected', code: 'forbidden', sourceEffect: 'none' } } } });
+        expect(featureReads).toBe(0);
+      }
+    } finally { get.mockRestore(); post.mockRestore(); fetchBoundary.mockRestore(); resetServerFeaturesClientForTests(); }
+  });
+  it.each(['default', 'yolo'] as const)('keeps authenticated API-token %s input inside its grant at the real transition coordinator', async permissionMode => {
+    let featureReads = 0;
+    resetServerFeaturesClientForTests();
+    const fetchBoundary = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      featureReads++;
+      return new Response(JSON.stringify({ features: { sessions: { enabled: true, agentSwitching: { enabled: false } } }, capabilities: {} }),
+        { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    try {
+      const settings = normalizeActionsSettingsV1({ v: 1, actions: {}, approvalWaivedSurfaces: { 'session.agent.transition': ['api'] } });
+      const executor = createCliActionExecutor({ token: 'api-credential', credentials: { token: 'api-credential', encryption: null }, sessionId: '',
+        actionsSettingsProvider: { getActionsSettings: () => settings } });
+      const result = await executor.execute('session.agent.transition', {
+        sessionId: 'session-1', expectedCurrentAgentId: 'claude', selection: { v: 1, agentId: 'codex' },
+        input: { localId: 'first-input', text: 'Continue', meta: { permissionMode } },
+      }, { actionCaller: { kind: 'host' }, surface: 'api', authority: 'account_automation',
+        actionsSettings: normalizeActionsSettingsV1({ v: 1, actions: {}, approvalWaivedSurfaces: { 'session.agent.transition': ['api'] } }),
+        externalActionCredential: { accountId: principal.accountId, principalId: principal.principalId, credentialId: principal.credentialId,
+          grant: { ...API_TOKEN_FULL_GRANT_V1, permissionModes: ['default'] } },
+      });
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { type: 'rejected',
+        code: permissionMode === 'default' ? 'unsupported_operation' : 'forbidden', sourceEffect: 'none' } });
+      expect(featureReads).toBe(permissionMode === 'default' ? 1 : 0);
+    } finally { fetchBoundary.mockRestore(); resetServerFeaturesClientForTests(); }
+  });
+  it('does not expose a parallel raw machine switching mutation', async () => {
+    const { call } = createEncryptedRpcTestClient({ scopePrefix: 'private-transition',
+      registerHandlers: manager => registerSessionAgentTransitionRpcHandlers(manager, {
+        readCredentials: async () => ({ token: 'host-account', encryption: null }),
+      }),
+    });
+    const result = await call(RPC_METHODS.SESSION_AGENT_TRANSITION, { v: 1, sessionId: 'session-1',
+      expectedCurrentAgentId: 'claude', selection: { v: 1, agentId: 'codex' },
+      input: { localId: 'first-input', text: 'Continue', meta: {} } });
+    expect(result).toMatchObject({ errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+  });
+  it('does not promote a raw resolved Session context without admitted private requester custody', async () => {
+    const accountId = 'unadmitted-session';
+    const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
+    const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(23));
+    const authorization = { v: 1 as const, token: 'unadmitted-root', binding: { accountId, custodianAccountId: accountId,
+      authentication: { kind: 'account' as const, tokenEpoch: 7 }, serverIdentityId: 'srv_home', machineId: 'controller', installationId: 'installation',
+      actionId: 'session.agent.transition', requestId: 'request', target: { kind: 'machine' as const, machineId: 'controller' } } };
+    const executor = createCliActionExecutor({ token: credentials.token, credentials, sessionId: '', serverId: 'profile',
+      serverIdentityId: 'srv_home', serverHttpBaseUrl: 'https://home.test', externalActionMachineRequestPrivateKey: key.secretKey,
+      externalActionMachineInstallationId: 'installation', actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({
+        v: 1, actions: {}, approvalWaivedSurfaces: { 'session.agent.transition': ['ui'] } }) } });
+    const result = await executor.execute('session.agent.transition', { sessionId: 'session-1', expectedCurrentAgentId: 'claude',
+      selection: { v: 1, agentId: 'codex' }, input: { localId: 'unadmitted-input', text: 'Continue', meta: {} } }, {
+      surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, runtimeAccountId: accountId, actionRequestId: 'request',
+      defaultSessionMachineId: 'controller', defaultSessionId: 'session-1', externalActionTarget: { kind: 'session', sessionId: 'session-1' },
+      externalActionExecutionAuthorization: authorization,
+    });
+    expect(result).toMatchObject({ ok: true, result: { type: 'rejected', code: 'forbidden', sourceEffect: 'none' } });
   });
   it('preserves UI Ask through the real private requester credential factory on a foreign installation', async () => {
     const accountId = 'bob-private-ask';
