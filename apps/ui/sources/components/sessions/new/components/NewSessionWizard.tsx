@@ -107,7 +107,7 @@ export interface NewSessionWizardProfilesProps {
     useProfiles: boolean;
     profiles: AIBackendProfile[];
     favoriteProfileIds: string[];
-    setFavoriteProfileIds: (ids: string[]) => void;
+    setFavoriteProfileIds: (ids: string[]) => void | Promise<void>;
     selectedProfileId: string | null;
     onPressDefaultEnvironment: () => void;
     onPressProfile: (profile: AIBackendProfile) => void;

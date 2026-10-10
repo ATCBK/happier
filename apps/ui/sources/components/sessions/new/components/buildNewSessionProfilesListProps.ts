@@ -6,7 +6,7 @@ import { getProfileEnvironmentVariables, type AIBackendProfile } from '@/sync/do
 type BuildNewSessionProfilesListPropsParams = Readonly<{
     profiles: AIBackendProfile[];
     favoriteProfileIds: string[];
-    setFavoriteProfileIds: (ids: string[]) => void;
+    setFavoriteProfileIds: React.ComponentProps<typeof ProfilesList>['onFavoriteProfileIdsChange'];
     selectedProfileId: string | null;
     selectedMachineId: string | null;
     onPressDefaultEnvironment: () => void;
