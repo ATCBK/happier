@@ -10,7 +10,7 @@ import { startSocket } from '@/app/api/socket';
 import type { Fastify as AppFastify } from '@/app/api/types';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { logger } from '@/utils/logging/log';
-import { db } from './prisma';
+import { db, withSqliteReadSnapshot, type TransactionClient } from './prisma';
 
 describe('shared QA schema errors at the Prisma and socket boundaries', () => {
     let harness: LightSqliteHarness;
@@ -29,6 +29,7 @@ describe('shared QA schema errors at the Prisma and socket boundaries', () => {
     ])('preserves $code while making query, transaction and handshake errors actionable', async ({ code, change, restore }) => {
         harness.resetEnv({ HAPPIER_STACK_SHARED_DB_SOURCE_STACK: 'dev-test', AUTH_REQUIRED_LOGIN_PROVIDERS: undefined });
         const account = await db.account.create({ data: { publicKey: `schema-${code}` } });
+        expect(await db.$metrics.prometheus()).toEqual(expect.any(String));
         const token = await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' });
         const app = Fastify({ logger: false }) as unknown as AppFastify;
         startSocket(app);
@@ -47,13 +48,37 @@ describe('shared QA schema errors at the Prisma and socket boundaries', () => {
         try {
             for (const execute of [
                 query,
-                () => db.$transaction(tx => tx.machine.findFirst({ select: { id: true, installationPublicKey: true } })),
                 () => db.$transaction([query()]),
             ]) {
                 const error = await execute().then(() => { throw new Error('Query unexpectedly succeeded'); }, error => error);
                 expect(error).toMatchObject({ code });
                 expect(String(error)).toMatch(/QA snapshot.*current shared dev schema.*reload a newer snapshot/i);
             }
+            for (const read of [
+                (query: (tx: TransactionClient) => Promise<unknown>) => db.$transaction(query),
+                (query: (tx: TransactionClient) => Promise<unknown>) => withSqliteReadSnapshot(query),
+            ]) {
+                let caughtInside: unknown;
+                const error = await read(async tx => {
+                    try {
+                        return await tx.machine.findFirst({ select: { id: true, installationPublicKey: true } });
+                    } catch (error) {
+                        caughtInside = error;
+                        expect(error).toMatchObject({ code });
+                        expect(String(error)).toMatch(/QA snapshot.*current shared dev schema.*reload a newer snapshot/i);
+                        throw error;
+                    }
+                }).then(() => { throw new Error('Query unexpectedly succeeded'); }, error => error);
+                expect(error).toBe(caughtInside);
+            }
+            await expect(withSqliteReadSnapshot(tx => tx.account.update({
+                where: { id: account.id }, data: { seq: { increment: 1 } },
+            }))).rejects.toThrow();
+            expect(await withSqliteReadSnapshot(tx => tx.account.findUnique({
+                where: { id: account.id }, select: { id: true, seq: true },
+            }))).toEqual({ id: account.id, seq: account.seq });
+            expect((await db.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } })).seq)
+                .toBe(account.seq + 1);
             harness.resetEnv({ HAPPIER_STACK_SHARED_DB_SOURCE_STACK: undefined });
             const ordinaryError = await query().then(() => null, error => error);
             expect(ordinaryError).toMatchObject({ code });

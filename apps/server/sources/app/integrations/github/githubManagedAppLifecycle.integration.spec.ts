@@ -212,6 +212,12 @@ describe("managed GitHub App registration lifecycle", () => {
                 },
             },
         });
+        await db.teamIdentityConnection.create({ data: {
+            teamId: null,
+            providerInstanceId: provider.id,
+            externalReference: { v: 1, kind: "github_app_identity", installationId: installation.id },
+            settings: { v: 1, kind: "github_app_identity", organizationLogin: "SharedHome" },
+        } });
         const directoryTeam = await db.team.create({ data: { name: "Shared Home GitHub directory consumer" } });
         await db.teamMembership.create({
             data: {
@@ -347,12 +353,31 @@ describe("managed GitHub App registration lifecycle", () => {
 
         // Home sign-in has no Team connection: enabling the provider is sufficient.
         await db.identityProviderInstance.update({ where: { id: provider.id }, data: { enabled: true } });
+        const consumerTeam = await db.team.create({ data: { name: "Shared sign-in Team" } });
+        const teamConnection = await db.teamIdentityConnection.create({ data: {
+            teamId: consumerTeam.id,
+            providerInstanceId: provider.id,
+            externalReference: { v: 1, kind: "github_app_identity", installationId: installation.id },
+            settings: { v: 1, kind: "github_app_identity", organizationLogin: "HomeSignIn" },
+        } });
+        await db.teamIdentityConnection.create({ data: {
+            teamId: null,
+            providerInstanceId: provider.id,
+            externalReference: { v: 1, kind: "github_app_identity", installationId: installation.id },
+            settings: { v: 1, kind: "github_app_identity", organizationLogin: "HomeSignIn" },
+            enabled: true,
+        } });
         await expect(listGitHubAppRegistrations({ actorAccountId, owner: { kind: "home" } }))
             .resolves.toMatchObject({ installations: [{
+                teamConsumers: [{
+                    team: { id: consumerTeam.id, name: consumerTeam.name },
+                    binding: { kind: "identity_connection", id: teamConnection.id, providerInstanceId: provider.id, enabled: false },
+                }],
                 requirements: { permissions: { members: "read" } },
                 prospectiveRequirements: { permissions: { members: "read" } },
             }] });
 
+        await db.teamIdentityConnection.deleteMany({ where: { providerInstanceId: provider.id } });
         await db.identityProviderInstance.delete({ where: { id: provider.id } });
         const team = await db.team.create({ data: { name: "Paused directory" } });
         const source = await db.teamDirectorySource.create({ data: {

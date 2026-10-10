@@ -2,7 +2,9 @@ import type {
     TeamIdentityConnectionUserActionIdV1,
     IdentityConnectionUserActionIdV1,
     IdentityConnectionV1,
+    TeamIdentityConnectionV1,
 } from "@happier-dev/protocol/teams";
+import type { HomeIdentityConnectionV1, HomeIdentityConnectionUserActionIdV1 } from "@happier-dev/protocol/home";
 
 import { resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";
 import { resolveOAuthRuntimeByIdInTx } from "@/app/auth/providers/identityProviderCatalog";
@@ -14,6 +16,18 @@ import type { TeamIdentityConnectionView as LifecycleConnectionView } from "./te
 import { identityConnectionOwner } from "./teamIdentityAdministrationAuthority";
 
 type TeamIdentityConnectionView = LifecycleConnectionView<string | null>;
+export type ScopedIdentityConnectionV1<TeamId extends string | null = string | null> =
+    TeamId extends null ? HomeIdentityConnectionV1 : TeamIdentityConnectionV1;
+
+/** Preserve the connection's scope when composing its outward result envelope. */
+export function projectIdentityConnectionResult<Details extends object>(
+    connection: ScopedIdentityConnectionV1,
+    details: Details,
+): (Details & { connection: HomeIdentityConnectionV1 }) | (Details & { connection: TeamIdentityConnectionV1 }) {
+    return connection.teamId === null
+        ? { ...details, connection }
+        : { ...details, connection };
+}
 
 export type TeamIdentityConnectionCurrentness = Readonly<{
     runtimeAvailable: boolean;
@@ -115,6 +129,15 @@ export async function resolveTeamIdentityConnectionCurrentnessInTx(
 }
 
 /** The projection every mutation result and list row returns: current state and allowed Actions from the one owner. */
+export function projectCurrentTeamIdentityConnectionV1InTx<TeamId extends string | null>(
+    tx: Tx,
+    input: Readonly<{
+        env: NodeJS.ProcessEnv;
+        teamId: TeamId;
+        connection: LifecycleConnectionView<TeamId>;
+        inputs?: TeamIdentityCurrentnessInputs;
+    }>,
+): Promise<ScopedIdentityConnectionV1<TeamId>>;
 export async function projectCurrentTeamIdentityConnectionV1InTx(
     tx: Tx,
     input: Readonly<{
@@ -123,7 +146,7 @@ export async function projectCurrentTeamIdentityConnectionV1InTx(
         connection: TeamIdentityConnectionView;
         inputs?: TeamIdentityCurrentnessInputs;
     }>,
-): Promise<IdentityConnectionV1> {
+): Promise<ScopedIdentityConnectionV1> {
     const current = await resolveTeamIdentityConnectionCurrentnessInTx(tx, input);
     return projectTeamIdentityConnectionV1(input.connection, current.currentness, current.runtimeFingerprint);
 }
@@ -132,12 +155,11 @@ export function projectTeamIdentityConnectionV1(
     connection: TeamIdentityConnectionView,
     current: TeamIdentityConnectionCurrentness,
     currentRuntimeFingerprint: string | null,
-): IdentityConnectionV1 {
+): ScopedIdentityConnectionV1 {
     const observation = connection.lastObservation;
-    return {
+    const shared: Omit<IdentityConnectionV1, "teamId" | "allowedActions"> = {
         v: 1,
         id: connection.id,
-        teamId: connection.teamId,
         provider: {
             id: connection.providerInstanceId,
             kind: connection.providerKind,
@@ -149,7 +171,6 @@ export function projectTeamIdentityConnectionV1(
         firstEnabledAt: connection.firstEnabledAt?.getTime() ?? null,
         revision: connection.revision,
         state: resolveTeamIdentityConnectionCurrentState(connection, current),
-        allowedActions: [...new Set(projectTeamIdentityConnectionAllowedActions(connection, current))],
         lastObservation: observation === null
             ? null
             : observation.kind === "workos_sso"
@@ -177,12 +198,14 @@ export function projectTeamIdentityConnectionV1(
         createdAt: connection.createdAt.getTime(),
         updatedAt: connection.updatedAt.getTime(),
     };
+    return { ...shared, ...projectTeamIdentityConnectionScope(connection, current) };
 }
 
-export function projectTeamIdentityConnectionAllowedActions(
+function projectTeamIdentityConnectionScope(
     connection: TeamIdentityConnectionView,
     current: TeamIdentityConnectionCurrentness,
-): readonly IdentityConnectionUserActionIdV1[] {
+): Readonly<{ teamId: string; allowedActions: TeamIdentityConnectionUserActionIdV1[] }>
+    | Readonly<{ teamId: null; allowedActions: HomeIdentityConnectionUserActionIdV1[] }> {
     const actions: TeamIdentityConnectionUserActionIdV1[] = ["teams.identity.connections.remove"];
     if (connection.providerKind === "oidc") {
         actions.unshift("teams.identity.connections.settings.update");
@@ -210,7 +233,7 @@ export function projectTeamIdentityConnectionAllowedActions(
             );
         }
     }
-    if (connection.teamId !== null) return actions;
+    if (connection.teamId !== null) return { teamId: connection.teamId, allowedActions: [...new Set(actions)] };
     const homeActions = {
         "teams.identity.connections.settings.update": "home.identity.connections.settings.update",
         "teams.identity.connections.enable": "home.identity.connections.enable",
@@ -221,5 +244,5 @@ export function projectTeamIdentityConnectionAllowedActions(
         "teams.identity.workos.reconcile": "home.identity.workos.reconcile",
         "teams.identity.workos.connection.set": "home.identity.workos.connection.set",
     } as const satisfies Record<TeamIdentityConnectionUserActionIdV1, IdentityConnectionUserActionIdV1>;
-    return actions.map((action) => homeActions[action]);
+    return { teamId: null, allowedActions: [...new Set(actions.map((action) => homeActions[action]))] };
 }

@@ -98,7 +98,8 @@ function readEnvelopeStreamId(envelope: MachineLiveStreamRelayEnvelopeV1): strin
         const receipt = MachineLiveStreamReceiptV1Schema.safeParse(message.receipt);
         return receipt.success ? receipt.data.streamId : null;
     }
-    return message.control.streamId;
+    if (message.kind === 'control' || message.kind === 'sideband_control') return message.control.streamId;
+    return null;
 }
 
 function isUserScopedSocket(socket: Socket): boolean {

@@ -91,9 +91,10 @@ export function isOriginalAccountExecutionAction(actionId: string): boolean {
 /** Paired terminal roots retain automation authority and never invent a Session source. */
 export function isOriginalTerminalExecutionAction(actionId: string,
     origin?: Pick<ExternalActionExecutionAuthorizationBindingV1, 'sessionActionOrigin' | 'sessionActionSource' | 'workflowActionOrigin'>): boolean {
+    const managedActionId = ManagedMachineActionIdV1Schema.safeParse(actionId);
     return Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, actionId)
-        || ManagedMachineActionIdV1Schema.safeParse(actionId).success
-            && resolveCredentialActionAdmissionV1({ spec: getActionSpec(actionId), authority: 'account_automation', grant: null }).ok
+        || managedActionId.success
+            && resolveCredentialActionAdmissionV1({ spec: getActionSpec(managedActionId.data), authority: 'account_automation', grant: null }).ok
         || (actionId === 'session.spawn_new' || isSettingsDeclarationActionIdV1(actionId))
             && !origin?.sessionActionOrigin && !origin?.sessionActionSource
             && !origin?.workflowActionOrigin

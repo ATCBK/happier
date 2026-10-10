@@ -146,7 +146,7 @@ export function resolvePreferredGeneratedClientEntrypoint(
 
 function withSharedQaSchemaDiagnostics(client: PrismaClientType) {
     if (!process.env.HAPPIER_STACK_SHARED_DB_SOURCE_STACK?.trim()) return client;
-    return client.$extends({
+    const extended = client.$extends({
         query: {
             async $allOperations({ args, query }) {
                 try {
@@ -159,6 +159,14 @@ function withSharedQaSchemaDiagnostics(client: PrismaClientType) {
                     throw error;
                 }
             },
+        },
+    });
+    // Query diagnostics do not change the generated client's public contract.
+    // Retain that contract while forwarding queries with the extended receiver.
+    return new Proxy(client, {
+        get(_target, property) {
+            const value = Reflect.get(extended, property, extended);
+            return typeof value === 'function' ? value.bind(extended) : value;
         },
     });
 }

@@ -1096,6 +1096,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 });
                 return;
             }
+            const validatedMethod = method;
 
             const rawTransferRouting = (data as { transferRouting?: unknown } | undefined)?.transferRouting;
             const reverseAutomationSeparator = method.indexOf(':');
@@ -1860,7 +1861,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 ...(externalActionExecution?.success ? [{
                     filterTargets: async (targets) => targets,
                     runOperation: async ({ operation }) => await verifyExternalActionMachineRpcExecution(externalActionExecution.data, {
-                        method, ...(callerRequestId === undefined ? {} : { requestId: callerRequestId }),
+                        method: validatedMethod, ...(callerRequestId === undefined ? {} : { requestId: callerRequestId }),
                         resolveCurrentSessionMachine: input => resolveCurrentSessionMachineFromServer({ io: params.io, presence: params.sessionPublisherPresence, ...input }),
                         ...(callParams === undefined ? {} : { params: callParams }),
                         ...(isProjectSource && workspaceSyncSourceRouting ? { workspaceSyncSourceRouting } : {}),

@@ -60,7 +60,7 @@ export async function resolveTeamAdmissionStartBinding(input: Readonly<{
                 team: { select: { admissionMode: true, archivedAt: true } },
             },
         });
-        if (!connection || !connection.enabled || connection.team.archivedAt !== null) return null;
+        if (!connection || !connection.enabled || !connection.team || connection.team.archivedAt !== null) return null;
         if (invitationToken) {
             const invitation = await inTx((tx) => resolveTeamInvitationFreshAccountAdmissionReferenceInTx(tx, {
                 token: invitationToken,

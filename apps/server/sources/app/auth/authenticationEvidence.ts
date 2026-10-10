@@ -102,10 +102,10 @@ export async function isAuthenticationEvidenceCurrentInTx(
             where: { id: providerEvidence.teamConnectionId },
             select: { id: true, teamId: true },
         });
-        if (!connection) return false;
+        if (!connection || connection.teamId === null) return false;
         const read = (await readTeamAuthenticationConnectionDescriptorsInTx(tx, {
             env: input.env,
-            references: [connection],
+            references: [{ ...connection, teamId: connection.teamId }],
         })).get(teamIdentityConnectionReferenceKey(connection));
         if (read?.status !== "ready"
             || read.connection.state !== "connected"
@@ -212,10 +212,10 @@ export async function resolveCurrentAuthenticationEvidenceForTeamQualificationIn
     const teamDescriptors = input.teamConnectionDescriptors
         ?? await readTeamAuthenticationConnectionDescriptorsInTx(tx, {
             env: input.env,
-            references: teamConnectionRows.map((connection) => ({
+            references: teamConnectionRows.flatMap((connection) => connection.teamId === null ? [] : [{
                 id: connection.id,
                 teamId: connection.teamId,
-            })),
+            }]),
         });
     const availableHomeMethods = resolvedEffectiveHome?.status === "ready" && accountFacts !== null
         ? new Set(resolveAvailableAccountAuthenticationMethodIdsForDecisions(
@@ -255,7 +255,7 @@ export async function resolveCurrentAuthenticationEvidenceForTeamQualificationIn
         const descriptor = item.teamConnectionId
             ? (() => {
                 const connection = teamConnectionById.get(item.teamConnectionId!);
-                if (!connection) return null;
+                if (!connection || connection.teamId === null) return null;
                 const read = teamDescriptors.get(teamIdentityConnectionReferenceKey(connection));
                 if (read?.status !== "ready"
                     || read.connection.state !== "connected"

@@ -4,6 +4,7 @@ import {
   MACHINE_LIVE_STREAM_SOCKET_EVENT,
   MACHINE_LIVE_STREAM_RELAY_AUTHORIZATION_AUDIENCE_V1,
   MachineLiveStreamWireFrameV1Schema as MachineLiveStreamFrameV1Schema,
+  MachineLiveStreamRelayEnvelopeV1Schema,
   PEER_MEDIATION_RECEIPTS,
   createMachineLiveStreamRelayAuthorizationSigningInputV1,
   type MachineLiveStreamWireFrameV1 as MachineLiveStreamFrameV1,
@@ -744,6 +745,30 @@ describe('machineLiveStreamRelayHandler', () => {
         }),
       }),
     }));
+  });
+
+  it.each([
+    { kind: 'start_response', startResponse: { v: 1, streamId: 'stream_1', accepted: false, disabledReason: 'unavailable' } },
+    { kind: 'metering', metering: { v: 1, streamId: 'stream_1', movingBitrateBps: 0, framesPerSecond: 0 } },
+  ])('refuses unsupported $kind socket ingress without relaying it', async (message) => {
+    const { machineLiveStreamRelayHandler } = await import('./machineLiveStreamRelayHandler');
+    const socketEmit = vi.fn();
+    const to = vi.fn(() => ({ emit: vi.fn() }));
+    const socket = createFakeSocket({ emit: socketEmit, id: 'source-socket' });
+    socket.data = { clientType: 'machine-scoped', verifiedMachineInstallationId: TEST_MACHINE_INSTALLATION_ID,
+      machineId: 'machine-source' };
+    machineLiveStreamRelayHandler('user-1', socket as unknown as LiveStreamRelaySocket, {
+      io: { to },
+      resolveAccountEncryptionMode: async (): Promise<'plain'> => 'plain',
+      serverRoutedLiveStreamEnabled: true, relayCaps, relayAuthorizationTrustRoots, nowMs: () => 1_000,
+    });
+    const envelope = MachineLiveStreamRelayEnvelopeV1Schema.parse({ v: 1,
+      sourceMachineId: 'machine-source', targetMachineId: 'machine-target', message });
+    await expect(getSocketHandler(socket, MACHINE_LIVE_STREAM_SOCKET_EVENT)(envelope)).resolves.toBeUndefined();
+    expect(socketEmit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, {
+      type: 'machine-live-stream', error: 'invalid_live_stream_payload',
+    });
+    expect(to).not.toHaveBeenCalled();
   });
 
   it('rejects server relay start without stream authorization', async () => {

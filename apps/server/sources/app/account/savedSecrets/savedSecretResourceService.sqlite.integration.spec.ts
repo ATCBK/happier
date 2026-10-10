@@ -1150,7 +1150,9 @@ describe("Saved Secret resource service (SQLite integration)", () => {
             installationId: 'promotion-other-install' } });
         const team = await db.team.create({ data: { name: 'Setup team' } });
         const environment = { toolchain: { adapterId: 'mise', config: '[tools]\nnode = "22"' }, setupScript: 'echo setup',
+            futureStoredMember: { nested: [null, { opaque: true }] },
             secretRefs: { v: 1, bindings: { TOKEN: { ref: personalSecretId }, UNRELATED: { ref: 'unrelated-personal' } } } };
+        const setup = { state: 'pending', futureStoredMember: { nested: [null, { opaque: true }] }, environment };
         const launch = { provider: { pluginId: 'fixture.setup', localId: 'vm' }, schemaVersion: 1, name: 'Guest', choices: {} };
         const preset = await db.managedMachinePreset.create({ data: { homeId: 'promotion-home', name: 'Team preset', teamId: team.id,
             launch, controllerMachineId: controller.id, controllerInstallationId: 'promotion-install', environment, revision: 4 } });
@@ -1161,7 +1163,7 @@ describe("Saved Secret resource service (SQLite integration)", () => {
             controllerMachineId: controller.id, controllerInstallationId: 'promotion-install', launch, presetId: preset.id, presetRevision: 4,
             admittedActionRequestId: 'promotion-setup', admittedInput: {}, allocation: 'may-exist',
             retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
-            environmentSetup: { state: 'pending', environment } } });
+            environmentSetup: setup } });
         const input = {
             accountId: owner.id,
             resourceId,
@@ -1192,7 +1194,11 @@ describe("Saved Secret resource service (SQLite integration)", () => {
             bindings: { ...environment.secretRefs.bindings, TOKEN: { ref: formatSharedSavedSecretRefV1(resourceId), revision: 1 } } } };
         expect(await db.managedMachinePreset.findUniqueOrThrow({ where: { id: preset.id } })).toMatchObject({ revision: 5, environment: rewritten });
         expect(await db.managedMachine.findUniqueOrThrow({ where: { id: managed.id } })).toMatchObject({
-            presetRevision: 4, environmentSetup: { state: 'pending', environment: rewritten } });
+            presetRevision: 4, environmentSetup: { ...setup, environment: rewritten } });
+        expect(await db.managedMachinePreset.findUniqueOrThrow({ where: { id: preset.id }, select: { environment: true } }))
+            .toEqual({ environment: rewritten });
+        expect(await db.managedMachine.findUniqueOrThrow({ where: { id: managed.id }, select: { environmentSetup: true } }))
+            .toEqual({ environmentSetup: { ...setup, environment: rewritten } });
         expect(await db.managedMachinePreset.findUniqueOrThrow({ where: { id: foreignPreset.id } })).toMatchObject({ revision: 0, environment });
         // Simulate a client retry after the first committed response was lost.
         await expect(inTx((tx) => promoteSavedSecretResourceInTx(tx, input))).resolves.toEqual({
