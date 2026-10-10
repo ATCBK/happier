@@ -8,7 +8,8 @@ import { synthesizeLocatorNameExpression } from '../../automation/locators';
  * BA-2 combined-snapshot evaluators + parsers. The injected expressions are bounded + try/guarded so
  * a hostile or huge DOM can never throw out of the evaluator or return an unbounded dump; the parsers
  * defensively coerce the raw CDP result into the bounded protocol shapes. Context capture and
- * automation semantic queries share this extraction owner.
+ * automation semantic snapshots share this bounded extraction owner. Full query Action results
+ * use the automation bridge's query expression instead of these context budgets.
  */
 
 export const SNAPSHOT_MAX_VISIBLE_TEXT_CHARS = 16_384;

@@ -349,7 +349,12 @@ describe('control adapter automation transport bridge', () => {
       expect(snapshot).toMatchObject({ status: 'succeeded', resultSummary: { truncated: true } });
       expect(snapshot.resultSummary?.elements).toHaveLength(SNAPSHOT_MAX_INTERACTIVE_ELEMENTS);
       expect(snapshot.resultSummary?.elements).toEqual(expect.arrayContaining([expect.objectContaining({ name: name.slice(0, SNAPSHOT_MAX_NAME_CHARS) })]));
-      expect(boundary.service.getTimeline(view).entries[0]?.resultSummary?.elements).not.toHaveLength(nodes.length);
+      const timeline = boundary.service.getTimeline(view).entries.find(entry => entry.automationRequestId === 'full-query');
+      expect(timeline).toMatchObject({ status: 'succeeded', resultSummary: { truncated: true } });
+      const timelineElements = timeline?.resultSummary?.elements;
+      expect(Array.isArray(timelineElements)).toBe(true);
+      if (Array.isArray(timelineElements)) expect(timelineElements.length).toBeLessThan(nodes.length);
+      expect(timelineElements).toEqual(expect.arrayContaining([expect.objectContaining({ name: name.slice(0, SNAPSHOT_MAX_NAME_CHARS) })]));
     } finally { boundary.dispose(); }
   });
   it.each([

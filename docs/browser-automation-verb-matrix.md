@@ -112,6 +112,14 @@ and a late callback cannot restore it. Semantic locator strings likewise have on
 parser shared by daemon automation and transcript labels; CSS/test ids are not rendered as
 human-readable target names. These remain development-source contracts.
 
+Full `queryElements` Action results preserve all matching CSS elements and complete accessible
+names; semantic locators retain their established first-match behavior with a complete name.
+The daemon bridge and installed collector do not apply context-snapshot budgets to these results.
+Context snapshots retain their bounded extraction/parsing owner, and timeline projections retain
+the Protocol redaction/clipping owner. Full results still pass through that owner's security
+redaction; query completeness does not weaken confidentiality admission or field-value exclusions.
+This is a development-source contract; the composed live query journey remains to be validated.
+
 ## Browser context and model images (development)
 
 The launch suggestion owner supplies detected-listener identity in
