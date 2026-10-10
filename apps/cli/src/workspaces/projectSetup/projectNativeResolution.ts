@@ -7,6 +7,8 @@ import { readProjectDefinitionFile, readProjectDefinitionFileBytes } from './nat
 import { getPathRemainderWithinBase } from '@/session/handoff/paths/sessionHandoffPathNormalization';
 import { inspectProjectDefinitionFacts } from './projectDefinitionInspection';
 import { parseNativePackage, resolveNativePackageManager, type NativePackageManagerSelection } from './nativePackageScripts';
+import { createFloxServiceActivationArgs } from './floxServiceActivation';
+import { MANAGED_SERVICE_NUMERIC_CONTRACT } from '@/plugins/runtime/invocation/services/managedServiceSpecNormalization';
 
 export type ProjectNativeRefusal = Readonly<{ kind: 'refused'; reason: 'missing' | 'outside_root' | 'invalid' | 'dynamic_unsupported' | 'unavailable' | 'unsupported' | 'cancelled'; code: string }>;
 export type ProjectNativeFileFact = Readonly<{ file: string; content: string }>;
@@ -125,7 +127,7 @@ async function selectNativeCommand(input: Readonly<{
         const absoluteFile = resolve(input.root, source.file.replaceAll('\\', '/'));
         // Primary invocation contracts: GNU make -f; just --justfile; Task --taskfile;
         // mise run + explicit MISE_OVERRIDE_CONFIG_FILENAMES; Docker compose --file up;
-        // Devbox run --config (directory); Flox build/services start --dir (environment root).
+        // Devbox run --config (directory); Flox build or owned service activation.
         switch (source.tool) {
             case 'make': args = ['-f', absoluteFile, source.target]; break;
             case 'just': args = ['--justfile', absoluteFile, source.target]; break;
@@ -179,10 +181,16 @@ async function resolveSelectedNativeCommand(intent: NativeCommandIntent, io: Pro
         if (!isAbsolute(executable.executablePath) || executable.executablePath.includes('\0')) return refuse('invalid', 'native_tool_invalid');
         if (packageManager?.version && executable.version === undefined) return refuse('unavailable', 'native_tool_version_unresolved');
         if (packageManager?.version && executable.version !== packageManager.version) return refuse('unavailable', 'native_tool_version_mismatch');
-        args = [...(executable.args ?? []), ...args];
+        const floxService = tool === 'flox' && args[0] === 'services' && args[1] === 'start';
+        if (floxService) {
+            args = createFloxServiceActivationArgs({ command: executable.executablePath, prefixArgs: executable.args ?? [],
+                root: cwd, target: args.at(-1)!, observationIntervalMs: MANAGED_SERVICE_NUMERIC_CONTRACT.healthIntervalMs.defaultValue });
+            environmentOverlay = { ...environmentOverlay, FLOX_SHELL: '/bin/bash' };
+        } else args = [...(executable.args ?? []), ...args];
         if (executable.environmentOverlay) environmentOverlay = { ...executable.environmentOverlay, ...environmentOverlay };
         return { kind: 'resolved', command: executable.executablePath, args, cwd, reviewInputs, toolchain: { tool, ...(executable.version ? { version: executable.version } : {}) },
-            reviewInvocation: { args: intent.args, ...(intent.environmentOverlay ? { environmentOverlay: intent.environmentOverlay } : {}) },
+            reviewInvocation: { args: floxService ? args.slice(executable.args?.length ?? 0) : intent.args,
+                ...((floxService ? environmentOverlay : intent.environmentOverlay) ? { environmentOverlay: floxService ? environmentOverlay : intent.environmentOverlay } : {}) },
             ...(packageManager ? { packageManager } : {}), ...(nativeCommandEnvironment ? { nativeCommandEnvironment } : {}), ...(environmentOverlay ? { environmentOverlay } : {}) };
     } catch { return signal?.aborted ? cancelled() : refuse('unavailable', 'native_tool_unavailable'); }
 }

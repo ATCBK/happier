@@ -926,8 +926,78 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         await h.owner.listProjectServices()[0]?.stop();
     });
 
+    it.skipIf(!process.env.FX19_FLOX_PATH)('qualifies installed owned Flox activation through declaration start, logs, native stop and owner restart', async ({ onTestFailed }) => {
+        let phase = 'fixture';
+        let observation: unknown;
+        onTestFailed(() => { console.error(`FX19 native fixture failed during ${phase}`, observation); });
+        const flox = process.env.FX19_FLOX_PATH!;
+        const h = await fixture(false, { kind: 'native', tool: 'flox', file: '.flox/env/manifest.toml', target: 'worker' });
+        const io = createProjectNativeEnvironmentIoForHost({ resolveTool: async () => ({ executablePath: flox, version: '1.18.1-gf264cf2' }) });
+        const env: Record<string, string> = {};
+        for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
+        Object.assign(h.runtime, { hostEnvironment: env, environmentIo: io });
+        h.setNativeTool({ executablePath: flox });
+        const native = (args: readonly string[]) => io.run({ command: flox, args, cwd: h.root, env });
+        phase = 'Flox init';
+        expect((await native(['init', '--bare', '--no-auto-setup', '--dir', h.root, '--name', 'fx19-service'])).exitCode).toBe(0);
+        await writeFile(join(h.root, '.flox/env/manifest.toml'), 'version = 1\n[services.worker]\ncommand = "echo fx19-service-output; while true; do sleep 1; done"\n[services.other]\ncommand = "echo fx19-unselected; while true; do sleep 1; done"\n');
+        const status = async () => {
+            const result = await native(['services', 'status', '--dir', h.root, '--json']);
+            expect(result.exitCode).toBe(0);
+            const services = JSON.parse(result.stdout) as Array<{ name: string; status: string; pid: number | null }>;
+            observation = services;
+            return services;
+        };
+        try {
+            phase = 'effect review';
+            const review = await h.routes.startTarget!(h.request, h.ingress, h.context);
+            expect(review).toMatchObject({ status: 'denied', reasonCode: 'project_service_effect_review_required' });
+            if (!review.reviewedEffectDigest) throw new Error('Expected Flox Service review');
+            const request = { ...h.request, expectedEffectDigest: review.reviewedEffectDigest };
+            phase = 'admitted Start';
+            expect(await h.routes.startTarget!(request, h.ingress, h.context)).toMatchObject({ status: 'succeeded' });
+            const handle = h.owner.listProjectServices()[0]!;
+            expect(handle.snapshot()).toMatchObject({ state: 'running', mode: 'spawn', baseUrl: null });
+            phase = 'native Running observation';
+            await expect.poll(async () => (await status()).find(service => service.name === 'worker')?.status, { timeout: 30_000 }).toBe('Running');
+            expect((await status()).find(service => service.name === 'other')?.status).toBe('Disabled');
+            phase = 'native logs';
+            expect((await native(['services', 'logs', '--dir', h.root, 'worker'])).stdout).toContain('fx19-service-output');
+            expect(h.setupProcesses).toEqual([]);
+            phase = 'native Stop';
+            expect((await native(['services', 'stop', '--dir', h.root, 'worker'])).exitCode).toBe(0);
+            await expect.poll(() => handle.snapshot().state, { timeout: 30_000 }).toBe('stopped');
+            expect(await handle.stop()).toEqual({ status: 'stopped' });
+            phase = 'fresh Start after Stop';
+            expect(await h.routes.startTarget!(request, h.ingress, { ...h.context, actionRequestId: 'flox-second-start' })).toMatchObject({ status: 'succeeded' });
+            phase = 'second native Running observation';
+            await expect.poll(async () => (await status()).find(service => service.name === 'worker')?.status, { timeout: 30_000 }).toBe('Running');
+            // Graceful daemon restart retires owned trees, unlike detached Compose adoption.
+            phase = 'daemon owner retirement';
+            await h.owner.retireProjectServices();
+            await expect.poll(async () => (await status()).every(service => service.pid === null), { timeout: 30_000 }).toBe(true);
+            const recoveredOwner = createManagedServicesOwner({ processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+                dependencies: Object.freeze({}) as never, resolveScope: scope => scope });
+            cleanups.push(() => recoveredOwner.dispose());
+            const recoveredStarter = createProjectServiceDeclarationStarter({ resolveRuntime: async () => h.runtime,
+                acquirePluginRuntime: async () => ({ registry: { projectManagedServices: recoveredOwner }, release: async () => {} }) });
+            phase = 'fresh owner recovery';
+            const recoveredContext = { ...h.context, actionRequestId: 'flox-recovered-start' };
+            const resolved = await recoveredStarter.resolveStartTarget(request, h.ingress, recoveredContext);
+            if (!resolved.ok) throw new Error(resolved.reasonCode);
+            expect(await recoveredStarter.startManagedDeclaration(resolved.declaration, request, h.ingress, recoveredContext)).toMatchObject({ status: 'succeeded' });
+            const recoveredHandle = recoveredOwner.listProjectServices()[0]!;
+            expect(recoveredHandle.instanceId).not.toBe(handle.instanceId);
+            expect(await recoveredHandle.stop()).toEqual({ status: 'stopped' });
+            await expect.poll(async () => (await status()).every(service => service.pid === null), { timeout: 30_000 }).toBe(true);
+        } finally {
+            await native(['services', 'stop', '--dir', h.root]);
+            await h.owner.retireProjectServices();
+            await expect.poll(async () => (await status()).every(service => service.pid === null), { timeout: 30_000 }).toBe(true);
+        }
+    }, 120_000);
+
     it.each([
-        [{ kind: 'native', tool: 'flox', file: '.flox/env/manifest.toml', target: 'web' }, 'native_service_lifecycle_unsupported'],
         [{ kind: 'pluginNative', adapter: { pluginId: 'acme.native', localId: 'service' }, file: 'service.json', target: 'web' }, 'native_service_instance_unavailable'],
     ])('refuses a detached source lacking an actual native instance/lifecycle witness', async (source, reasonCode) => {
         const h = await fixture(false, source);

@@ -246,10 +246,6 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                 if (acquired.kind !== 'ready') throw new ServiceStartRefusal(acquired.code);
                 production = acquired.production;
                 preparation.retainNativeInvocation!(production);
-            } else if (source.tool === 'flox') {
-                // Qualified Flox 1.18.1 services die with their last activation.
-                // A shell holder would not satisfy starter-independent native custody.
-                throw new ServiceStartRefusal('native_service_lifecycle_unsupported');
             }
             const resolved = await resolveProjectNativeCommand({ root: association.workspace.rootPath, source, usage: 'service', io: runtime.nativeIo, signal,
                 serviceScope: digest({ serverId: runtime.serverId, accountId: admission.actorAccountId }),
@@ -261,6 +257,11 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                 if (source.tool === 'compose') {
                     builtinNative = createNativeComposeLifecycle({ args: resolved.reviewInvocation.args, io: runtime.environmentIo });
                     processMode = { kind: 'native', builtinLifecycle: builtinNative.lifecycle };
+                } else if (source.tool === 'flox') {
+                    // The activation, including its native selected-service wait,
+                    // is the owned process lifetime, not a detached native resource.
+                    processMode = { kind: 'managedSpawn', endpointNone: true,
+                        endpointDetection: { kind: 'detectAfterLaunch', minimumConfidence: 'high' } };
                 }
             }
             else if (source.kind === 'pluginNative' && resolved.kind === 'pluginResolved' && production && nativeLifecycleLease) {

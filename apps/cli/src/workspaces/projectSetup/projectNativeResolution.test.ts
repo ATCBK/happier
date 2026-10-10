@@ -82,7 +82,7 @@ describe('project native resolution', () => {
                 ['compose', 'compose.yml', 'web', 'service', ['compose', '--project-name', expect.stringMatching(/^happier-[a-f0-9]+$/u), '--file', join(root, 'compose.yml'), 'up', '--detach', 'web']],
                 ['devbox', 'devbox.json', 'build', 'script', ['run', '--config', root, 'build']],
                 ['flox', '.flox/env/manifest.toml', 'build', 'script', ['build', '--dir', root, 'build']],
-                ['flox', '.flox/env/manifest.toml', 'web', 'service', ['services', 'start', '--dir', root, 'web']],
+                ['flox', '.flox/env/manifest.toml', 'web', 'service', ['activate', '--dir', root, '--no-start-services', '-c', expect.stringContaining("service='web'")]],
             ] as const) {
                 expect(await resolveProjectNativeCommand({ root, source: { kind: 'native', tool, file, target }, usage, io })).toMatchObject({ kind: 'resolved', args });
             }
