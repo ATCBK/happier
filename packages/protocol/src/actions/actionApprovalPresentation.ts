@@ -131,7 +131,9 @@ export function formatApprovalFieldValues(values: readonly unknown[], options: R
   const displayValues = options.preserveStructuredValues ? values : values.flatMap((value) => (Array.isArray(value) ? value : [value]));
   const formatted = displayValues
     .map((value) => {
-      if (typeof value === 'string') return value.trim();
+      // An explicitly blank string is still supplied content (for example an
+      // empty prompt document), unlike an absent operand.
+      if (typeof value === 'string') return value.trim() || JSON.stringify(value);
       if (typeof value === 'number' || typeof value === 'boolean') return String(value);
       if (value && typeof value === 'object') {
         try {
