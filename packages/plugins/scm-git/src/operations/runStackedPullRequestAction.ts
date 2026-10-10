@@ -4,7 +4,6 @@ import type {
   ScmCommitCreateRequest,
   ScmCommitCreateResponse,
   ScmCommitPublication,
-  ScmOperationOutcome,
   ScmOperationErrorCode,
   ScmPullRequestOpenOrReuseRequest,
   ScmPullRequestOpenOrReuseResponse,
@@ -91,13 +90,14 @@ function phasesForAction(action: ScmPullRequestRunStackedRequest['action']): rea
     }
 }
 
-function buildErrorResponse(input: Readonly<{
-    error: string;
-    errorCode?: ScmOperationErrorCode;
+type StackedActionFailure = Readonly<Pick<Extract<ScmPullRequestRunStackedResponse, { success: false }>,
+    'error' | 'errorCode' | 'retryNotBeforeMs' | 'remediation' | 'outcome'> & {
     events: readonly ScmPullRequestRunStackedProgressEvent[];
+}>;
+
+function buildErrorResponse(input: StackedActionFailure & Readonly<{
     commitSha?: string;
     commitPublication?: ScmCommitPublication;
-    outcome?: ScmOperationOutcome;
 }>): ScmPullRequestRunStackedResponse {
     return {
         success: false,
@@ -107,6 +107,8 @@ function buildErrorResponse(input: Readonly<{
         ...(input.commitSha ? { commitSha: input.commitSha } : {}),
         ...(input.commitPublication ? { commitPublication: input.commitPublication } : {}),
         ...(input.outcome ? { outcome: input.outcome } : {}),
+        ...(input.retryNotBeforeMs !== undefined ? { retryNotBeforeMs: input.retryNotBeforeMs } : {}),
+        ...(input.remediation ? { remediation: input.remediation } : {}),
     };
 }
 
@@ -139,7 +141,7 @@ export function createGitRunStackedPullRequestAction(
 
             let commitSha: string | null = null;
             let commitPublication: ScmCommitPublication | undefined;
-            const errorResponse = (failure: Readonly<{ error: string; errorCode?: ScmOperationErrorCode; events: readonly ScmPullRequestRunStackedProgressEvent[]; outcome?: ScmOperationOutcome }>) => buildErrorResponse({
+            const errorResponse = (failure: StackedActionFailure) => buildErrorResponse({
                 ...failure,
                 ...(commitSha ? { commitSha } : {}),
                 ...(commitPublication ? { commitPublication } : {}),
@@ -357,6 +359,10 @@ export function createGitRunStackedPullRequestAction(
                     return errorResponse({
                         error: opened.error ?? 'Pull request open-or-reuse failed',
                         errorCode: opened.errorCode,
+                        retryNotBeforeMs: opened.retryNotBeforeMs,
+                        remediation: opened.remediation,
+                        // A phase-local PR outcome must not erase the action's landed commit.
+                        ...(commitSha ? {} : { outcome: opened.outcome }),
                         events,
                     });
                 }

@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRealGitScmBackendRuntimeServices, runWithGitScmCommandRunner } from '../testkit/scmRuntime.test-support.js';
+import { createRealGitScmBackendRuntimeServices, runWithGitScmCommandRunner, runWithRealGitScmRuntime } from '../testkit/scmRuntime.test-support.js';
 
 import type {
   ScmBranchCreateResponse,
@@ -17,6 +17,10 @@ import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/plugin-sdk/scm';
 
 import type { ScmBackendContext } from '../types.js';
 import { createGitRunStackedPullRequestAction } from './runStackedPullRequestAction.js';
+import { createGithubRestAdapter } from '../../../scm-github/src/pullRequests/restAdapter.js';
+import { githubHostingProviderAdapter, GITHUB_SCM_HOSTING_PROVIDER_LOCAL_ID } from '../../../scm-github/src/adapter.js';
+import { GITHUB_PLUGIN_ID } from '../../../scm-github/src/observations/githubProviderContracts.js';
+import { createScmHostingProviderRegistry } from '../../../../../apps/cli/src/scm/hostingProviders/registry';
 
 const context: ScmBackendContext = {
     cwd: '/repo',
@@ -62,6 +66,69 @@ function createSnapshot(input?: Partial<ScmWorkingSnapshot['branch']>): ScmWorki
 }
 
 describe('run stacked pull request action', () => {
+    it.each([false, true])('retains canonical retry metadata from the real PR owner in a stacked action after commit=$0', async (commitFirst) => {
+        const adapter = createGithubRestAdapter({
+            resolveToken: async () => ({ kind: 'available', token: 'fixture-token' }),
+            fetcher: async (_url, init) => {
+                const throttled = init?.method === 'POST';
+                return {
+                    ok: !throttled, status: throttled ? 403 : 200, statusText: throttled ? 'Forbidden' : 'OK',
+                    headers: new Headers(throttled ? { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1900000000' } : {}),
+                    json: async () => throttled ? { message: 'API rate limit exceeded.' } : [],
+                    text: async () => '',
+                };
+            },
+        });
+        const registry = createScmHostingProviderRegistry({
+            providers: [{ id: GITHUB_SCM_HOSTING_PROVIDER_LOCAL_ID, pluginId: GITHUB_PLUGIN_ID,
+                kind: 'github', displayName: 'GitHub', capabilities: [] }],
+            runtimeRegistrations: [{ pluginId: GITHUB_PLUGIN_ID, occurrenceId: 'fixture', registration: {
+                id: GITHUB_SCM_HOSTING_PROVIDER_LOCAL_ID,
+                adapter: { routing: githubHostingProviderAdapter, pullRequests: adapter },
+            } }],
+        });
+        const workspace = mkdtempSync(join(tmpdir(), 'happier-stacked-throttle-'));
+        const git = (args: string[]) => execFileSync('git', args, { cwd: workspace, encoding: 'utf8' }).trim();
+        try {
+            git(['init', '-b', 'main']);
+            git(['-c', 'user.name=Happier Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'base']);
+            git(['checkout', '-b', 'feature/stacked-throttle']);
+            git(['remote', 'add', 'origin', 'https://github.com/happier-dev/happier.git']);
+            git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+            git(['update-ref', 'refs/remotes/origin/feature/stacked-throttle', 'HEAD']);
+            git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+            git(['branch', '--set-upstream-to=origin/feature/stacked-throttle']);
+            if (commitFirst) {
+                git(['config', 'user.name', 'Happier Test']);
+                git(['config', 'user.email', 'test@example.com']);
+                writeFileSync(join(workspace, 'selected.txt'), 'selected\n');
+            }
+            const originalHead = git(['rev-parse', 'HEAD']);
+            const runtime = createRealGitScmBackendRuntimeServices();
+            const response = await runWithRealGitScmRuntime(() => runWithGitScmCommandRunner(async (input) => {
+                // The Git network/process boundary is substituted; commit and PR logic stay real.
+                if (input.args[0] === 'push') return { success: true, stdout: '', stderr: '', exitCode: 0 };
+                return await runtime.runCommand(input);
+            }, () => createGitRunStackedPullRequestAction().runStacked({
+                context: { ...context, cwd: workspace, detection: { ...context.detection, rootPath: workspace } },
+                request: { action: commitFirst ? 'commitPushAndOpenOrReuse' : 'openOrReuse', base: 'main', body: '',
+                    ...(commitFirst ? { commitMessage: 'selected', filePaths: ['selected.txt'] } : {}) },
+            })), { hostingProviderRuntimeServices: { resolveScmHostingProviderRegistry: async () => registry } });
+            const finalHead = git(['rev-parse', 'HEAD']);
+            expect(response).toMatchObject({
+                success: false, errorCode: 'REMOTE_RATE_LIMITED', retryNotBeforeMs: 1900000000000,
+                outcome: commitFirst
+                    ? { kind: 'effect_applied_with_warning', errorCode: 'REMOTE_RATE_LIMITED', effect: { kind: 'commit', commitSha: finalHead } }
+                    : { kind: 'failed', errorCode: 'REMOTE_RATE_LIMITED' },
+                events: expect.arrayContaining([expect.objectContaining({ kind: 'action_failed', phase: 'pr' })]),
+            });
+            if (commitFirst) {
+                expect(finalHead).not.toBe(originalHead);
+                expect(response).toMatchObject({ commitSha: finalHead, commitPublication: { state: 'published' } });
+                expect(git(['show', 'HEAD:selected.txt'])).toBe('selected');
+            } else expect(finalHead).toBe(originalHead);
+        } finally { rmSync(workspace, { recursive: true, force: true }); }
+    });
     it('preserves a landed commit after post-publication process failure and stops before push', async () => {
         const cwd = mkdtempSync(join(tmpdir(), 'happier-stacked-publication-'));
         const git = (args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
