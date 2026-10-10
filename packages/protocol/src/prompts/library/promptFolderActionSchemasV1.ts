@@ -15,6 +15,19 @@ export const ARTIFACT_FOLDER_ACTION_INPUT_SCHEMAS_V1 = {
   'artifact.folder.set': lazyZodSchema(() => z.object({ artifactId: id, folderId: id.nullable().optional(), tags: z.array(id).optional(),
     expectedRevision: revision }).strict().refine(value => value.folderId !== undefined || value.tags !== undefined, { message: 'Organization change required' })),
 } as const;
+export type ArtifactFolderCreateActionInputV1 = z.infer<typeof ARTIFACT_FOLDER_ACTION_INPUT_SCHEMAS_V1['artifact.folders.create']>;
+
+/** A Save reviews the exact folder effect together with its content assignment. */
+export const PromptLibrarySaveOrganizationFieldsV1 = {
+  folderId: lazyZodSchema(() => z.string().nullable().optional()),
+  tags: lazyZodSchema(() => z.array(z.string()).optional()),
+  createFolder: ARTIFACT_FOLDER_ACTION_INPUT_SCHEMAS_V1['artifact.folders.create'].optional(),
+} as const;
+export function isPromptLibrarySaveFolderAssignmentV1(input: Readonly<{
+  folderId?: string | null; createFolder?: ArtifactFolderCreateActionInputV1;
+}>): boolean {
+  return input.createFolder === undefined || input.folderId === input.createFolder.id;
+}
 const unavailable = lazyZodSchema(() => z.object({ status: z.literal('unavailable'), reason: z.string().min(1) }).strict());
 export const ArtifactFolderRowV1Schema = lazyZodSchema(() => PromptFolderEntryV1Schema.extend({ parentId: id.nullable() }).strict());
 export const ArtifactFolderListResultV1Schema = lazyZodSchema(() => z.union([

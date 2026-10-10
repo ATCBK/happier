@@ -3,11 +3,12 @@ import { z } from 'zod';
 import { HAPPIER_GUIDE_MARKDOWN, HAPPIER_GUIDE_TITLE } from './happierGuideInstructionsV1.js';
 import { ArtifactOrganizationHeaderV1Schema } from '../../artifacts/artifactOrganizationV1.js';
 import { ArtifactRevisionV1Schema, type ArtifactRevisionV1 } from '../../artifacts/artifactRevisionV1.js';
+import { PromptLibrarySaveOrganizationFieldsV1, isPromptLibrarySaveFolderAssignmentV1 } from './promptFolderActionSchemasV1.js';
 
 /** Public operands cannot assert provenance; only this known static starter derives built_in. */
 export const PromptDocCreateActionInputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ title: z.string().min(1), markdown: z.string(), folderId: z.string().nullable().optional(),
-    tags: z.array(z.string()).optional(), favorite: z.boolean().optional() }).strict(),
+  z.object({ title: z.string().min(1), markdown: z.string(), ...PromptLibrarySaveOrganizationFieldsV1,
+    favorite: z.boolean().optional() }).strict().refine(isPromptLibrarySaveFolderAssignmentV1, { message: 'Folder assignment must match the reviewed folder creation' }),
   z.object({ starter: z.literal('happier_guide') }).strict(),
 ]));
 export type PromptDocCreateActionInputV1 = z.infer<typeof PromptDocCreateActionInputV1Schema>;
