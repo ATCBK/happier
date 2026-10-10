@@ -65,6 +65,8 @@ export {
   QualifiedConnectedAccountProfileV4Schema,
   QualifiedConnectedAccountProviderIdentityV4Schema,
   QualifiedConnectedAccountServiceRefSchema,
+  sameQualifiedConnectedAccountGroupRef,
+  type QualifiedConnectedAccountGroupRef,
 } from './qualifiedConnectedAccountProjectionsV4.js';
 
 export {
@@ -461,19 +463,6 @@ export const QualifiedProviderAccountUsageWriteSuccessV4Schema = lazyZodSchema((
  * bound here would make a stored record unreadable through its own routes.
  */
 export type QualifiedConnectedAccountServiceRef = PluginContributionIdentityV1;
-export type QualifiedConnectedAccountGroupRef = z.infer<
-  typeof QualifiedConnectedAccountGroupRefSchema
->;
-
-/** Canonical equality for the complete qualified group identity. */
-export function sameQualifiedConnectedAccountGroupRef(
-  left: QualifiedConnectedAccountGroupRef,
-  right: QualifiedConnectedAccountGroupRef,
-): boolean {
-  return left.service.pluginId === right.service.pluginId
-    && left.service.localId === right.service.localId
-    && left.groupId === right.groupId;
-}
 export type QualifiedConnectedAccountConfigurationTargetV4 = z.infer<
   typeof QualifiedConnectedAccountConfigurationTargetV4Schema
 >;
