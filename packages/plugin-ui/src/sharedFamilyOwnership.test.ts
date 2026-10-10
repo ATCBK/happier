@@ -59,6 +59,7 @@ const APPROVED_CATALOG_VOCABULARY = [
   'Grid', 'Tree', 'Skeleton', 'DiffViewer', 'KeyHint',
   // Plan 70s2: the one widget frame with controlled viewer-local disclosure.
   'WidgetFrame',
+  'EmptySlot',
   'FloatingFrame',
   // r0.42 (Triage plan): the numbered story-rail step, one presentation owner.
   'Step',
@@ -1413,6 +1414,21 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     declarative: { kind: 'not-applicable', reason: 'Declarative widgets render inside the host frame; there is no free frame node.' },
   },
   {
+    publicName: 'EmptySlot',
+    propTypeName: 'EmptySlotProps',
+    family: 'Empty slot',
+    disposition: 'required',
+    proofTier: 'simple',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/state/EmptySlot.tsx',
+    sharedSymbol: 'HappierEmptySlot',
+    pluginOwner: { module: 'components/State.tsx', symbol: 'EmptySlot' },
+    coreConsumers: ['components/ui/empty/EmptySlot.tsx'],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'An empty layout slot belongs to its mounted widget area; V2 has no free slot node.' },
+  },
+  {
     publicName: 'FloatingFrame',
     propTypeName: 'FloatingFrameProps',
     family: 'Floating frame',
@@ -2374,6 +2390,7 @@ describe('graduated shared presentation families (§8.2)', () => {
       'SelectionTiles',
       'Tree',
       'WidgetFrame',
+      'EmptySlot',
       'FloatingFrame',
       'PageHeader',
       'ListDetailLayout',
