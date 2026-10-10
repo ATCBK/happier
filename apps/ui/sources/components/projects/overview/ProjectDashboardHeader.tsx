@@ -69,7 +69,6 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
     layoutId: string | null;
     attachedDashboard?: ProjectAttachedDashboardSelection;
     sharedDashboard?: ProjectAttachedDashboardRead;
-    onSelectDashboard: (layoutId: string | null) => void;
   }>,
 ) {
   const serverId = props.workspaceRef.serverId;
@@ -77,7 +76,7 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
     () => readProjectWidgetAreaContextV1({ serverId, projectRef: props.workspaceRef }).projectIdentity?.projectKey ?? null,
     [props.workspaceRef, serverId],
   );
-  // The destination controller preserves the admitted checkout and selected pane resource.
+  // The mounted area owns selection; this bar sends its canonical Action only.
   const phone = useDeviceType() === 'phone';
     const scope = useActiveServerAccountScope(serverId);
     const dashboards = useProjectDashboards({

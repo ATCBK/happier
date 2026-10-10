@@ -9,8 +9,9 @@ import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/act
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { installSessionDetailsPanelNonRnModuleMocks } from '@/components/sessions/panes/sessionDetailsPanelNonRnModuleMocks';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { ProjectDashboardHeader } from './ProjectDashboardHeader';
+import { ProjectDashboardHeader, projectDashboardRouteId } from './ProjectDashboardHeader';
 import { WidgetAreaLayoutBar } from '@/components/widgets/area/WidgetAreaLayoutBar';
+import { useProjectWidgetAreaBinding } from '@/components/widgets/area/useProjectWidgetAreaBinding';
 
 installSessionDetailsPanelNonRnModuleMocks();
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -42,8 +43,17 @@ beforeAll(async () => { disposeActionLoader = await installRealActionExecutorMod
 afterAll(() => disposeActionLoader?.());
 beforeEach(() => { artifacts.clear(); unknownDelete = false; holdInventory = null; holdDelete = null; holdRead = null; deletes.length = 0; selected.length = 0; });
 
-function header(layoutId: string | null, overrides: Partial<React.ComponentProps<typeof ProjectDashboardHeader>> = {}) {
-    return <runtime.Wrapper><ProjectDashboardHeader
+type MountedDashboardHeaderProps = React.ComponentProps<typeof ProjectDashboardHeader> & Readonly<{ onSelectDashboard: (id: string | null) => void }>;
+function MountedDashboardHeader(props: MountedDashboardHeaderProps) {
+    const checkout = React.useMemo(() => ({ ...props.workspaceRef, rootPath: props.activeRootPath }), [props.workspaceRef, props.activeRootPath]);
+    useProjectWidgetAreaBinding({ serverId: props.workspaceRef.serverId, projectName: props.projectName,
+        projectRef: props.workspaceRef, activeCheckout: checkout, layoutId: props.layoutId ?? undefined,
+        onSelectLayout: props.onSelectDashboard });
+    return <ProjectDashboardHeader {...props} />;
+}
+
+function header(layoutId: string | null, overrides: Partial<MountedDashboardHeaderProps> = {}) {
+    return <runtime.Wrapper><MountedDashboardHeader
         workspaceRef={{ id: 'w1', serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo', createdAtMs: 1, projectKey: 'project-key' }}
         activeRootPath="/repo" projectName="happier" layoutId={layoutId} onSelectDashboard={id => selected.push(id)} {...overrides}
     /></runtime.Wrapper>;
@@ -57,7 +67,7 @@ async function renderReleaseSelected() {
     }, { surface: 'ui', serverId: runtime.serverId, expectedAccountId: 'account-a' });
     if (!result.ok) throw new Error(`Dashboard fixture refused: ${JSON.stringify(result)}`);
     const dashboard = WidgetInstanceActionOutputSchemasV1['widgets.area.layout.create'].parse(result.result);
-    const screen = await renderScreen(<runtime.Wrapper><ProjectDashboardHeader
+    const screen = await renderScreen(<runtime.Wrapper><MountedDashboardHeader
         workspaceRef={{ id: 'w1', serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo', createdAtMs: 1, projectKey: 'project-key' }}
         activeRootPath="/repo" projectName="happier" layoutId="release" onSelectDashboard={id => selected.push(id)}
     /></runtime.Wrapper>);
@@ -68,6 +78,19 @@ async function renderReleaseSelected() {
 }
 
 describe('ProjectDashboardHeader', () => {
+    it('maps the admitted default dashboard to the null Overview route and keeps named dashboard selection exact', async () => {
+        const surface = { serverId: runtime.serverId, accountId: 'account-a', owner: { kind: 'project' as const, projectId: 'project-key' } };
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'ui' as const, serverId: runtime.serverId, expectedAccountId: 'account-a' };
+        expect(await executor.execute('widgets.area.layout.create', { surface, layoutId: 'release', name: 'Release' }, context)).toMatchObject({ ok: true });
+        const result = await executor.execute('widgets.area.layout.list', { surface }, context);
+        if (!result.ok) throw new Error(`Dashboard inventory refused: ${JSON.stringify(result)}`);
+        const inventory = WidgetInstanceActionOutputSchemasV1['widgets.area.layout.list'].parse(result.result).layouts;
+        expect(inventory.filter(row => row.isDefault)).toHaveLength(1);
+        expect(projectDashboardRouteId(inventory.find(row => row.isDefault)!)).toBeNull();
+        expect(projectDashboardRouteId(inventory.find(row => !row.isDefault)!)).toBe('release');
+    });
     it('keeps an unavailable attached selection distinct from personal Overview and permits only an explicit private selection', async () => {
         const before = artifacts.list();
         const screen = await renderScreen(header(null, { attachedDashboard: { sourceId: 'team-source', artifactId: 'attached-shared-dashboard' } }));
@@ -98,7 +121,7 @@ describe('ProjectDashboardHeader', () => {
         holdInventory = () => waiting;
         let submit!: (name: string) => void;
         const prompt = vi.spyOn(Modal, 'prompt').mockImplementationOnce(() => new Promise<string>(resolve => { submit = resolve; }));
-        const screen = await renderScreen(<runtime.Wrapper><ProjectDashboardHeader
+        const screen = await renderScreen(<runtime.Wrapper><MountedDashboardHeader
             workspaceRef={{ id: 'w1', serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo', createdAtMs: 1, projectKey: 'project-key' }}
             activeRootPath="/repo" projectName="happier" layoutId={layoutId} onSelectDashboard={id => selected.push(id)}
         /></runtime.Wrapper>);
@@ -108,11 +131,13 @@ describe('ProjectDashboardHeader', () => {
             await act(async () => { holdInventory = null; releaseInventory(); });
             await vi.waitFor(() => expect(screen.findAllByType(WidgetAreaLayoutBar)[0]!.props.selectedId).not.toBe(''));
             await act(async () => submit('Early copy'));
+            await vi.waitFor(() => {
+                const created = artifacts.list().find(row => row.id && artifacts.readPlainBody(row.id)?.includes('Early copy'));
+                expect(created).toBeTruthy();
+                const layout = WidgetAreaLayoutV1Schema.parse(JSON.parse(artifacts.readPlainBody(created!.id)!));
+                expect(layout.items).toEqual([]);
+            });
             await vi.waitFor(() => expect(selected).toHaveLength(1));
-            const copied = artifacts.list().find(row => row.id && artifacts.readPlainBody(row.id)?.includes('Early copy'));
-            expect(copied).toBeTruthy();
-            const layout = WidgetAreaLayoutV1Schema.parse(JSON.parse(artifacts.readPlainBody(copied!.id)!));
-            expect(layout.items).toEqual([]);
         } finally { prompt.mockRestore(); releaseInventory(); }
     });
     it('leaves an explicitly missing dashboard unavailable without lending it Overview actions', async () => {
@@ -232,7 +257,7 @@ describe('ProjectDashboardHeader', () => {
         expect((await executor.execute('widgets.area.layout.create', { surface, layoutId: 'release', name: 'Release' }, context)).ok).toBe(true);
         const render = async () => renderScreen(<runtime.Wrapper><ProjectDashboardHeader
             workspaceRef={{ id: 'w1', serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo', createdAtMs: 1, projectKey: 'project-key' }}
-            activeRootPath="/repo" projectName="happier" layoutId={null} onSelectDashboard={() => {}}
+            activeRootPath="/repo" projectName="happier" layoutId={null}
         /></runtime.Wrapper>);
         const edited = async (screen: Awaited<ReturnType<typeof render>>) => {
             let options: readonly { name: string; isDefault: boolean; edited?: boolean }[] = [];

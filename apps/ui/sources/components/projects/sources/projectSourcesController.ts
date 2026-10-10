@@ -493,7 +493,7 @@ export function createProjectSourcesController(scope: ServerAccountScope, execut
         async updateSource(patch: ProjectSourcesUpdateInputV1['patch'], target?: Pick<ProjectSourceV1, 'id' | 'revision'>) {
             // Catalog gestures carry their own captured target. Editor selection
             // is presentation state, never authority to retarget an attachment.
-    const current = target ?? state.current;
+            const current = target ?? state.current;
             if (disposed || !current || state.mutation !== 'idle' || uncertainSources.has(current.id)
                 || conflicts.has(current.id) || (!target && (!state.canManage || state.conflict))) return null;
             publish({ mutation: 'saving', issue: null });

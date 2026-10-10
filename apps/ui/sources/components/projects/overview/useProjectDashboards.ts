@@ -2,6 +2,7 @@ import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import {
   buildWidgetSurfaceArtifactIdV1,
+  readWidgetSurfaceArtifactHeaderV1,
   WidgetInstanceActionOutputSchemasV1,
   type WidgetAreaLayoutSummaryV1,
   type WidgetSurfaceRefV1,
@@ -12,6 +13,8 @@ import type { ActionExecuteResult, ActionId } from '@happier-dev/protocol';
 import { randomUUID } from '@/platform/randomUUID';
 import { storage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { widgetAreaLayoutBaseSurface } from '@/components/widgets/area/widgetAreaLayoutSelection';
 
 export type ProjectDashboardsState = Readonly<{
   status: 'loading' | 'ready' | 'offline';
@@ -87,11 +90,14 @@ export function useWidgetAreaLayouts(
     return () => { mounted.current = false; generation.current++; };
   }, []);
   const isCurrent = React.useCallback(() => mounted.current && currentObservation.current === observation, [observation]);
-  const publicationIds = React.useMemo(() => [...new Set([
-    ...(surface ? [surface.artifactId ?? buildWidgetSurfaceArtifactIdV1(surface)] : []),
-    ...state.dashboards.map(dashboard => dashboard.artifactId),
-  ])], [surface, state.dashboards]);
-  const publications = storage(useShallow(store => publicationIds.map(id => store.artifacts[id])));
+  const baseSurface = React.useMemo(() => surface ? widgetAreaLayoutBaseSurface(surface) : null, [surface]);
+  const publications = storage(useShallow(store => baseSurface ? Object.values(store.artifacts).flatMap(artifact => {
+    if (!artifact.isDecrypted || artifact.ownerAccountId !== baseSurface.accountId || artifact.access !== 'owner') return [];
+    const header = readWidgetSurfaceArtifactHeaderV1({ artifactId: artifact.id, header: artifact.rawHeader });
+    if (!header || !sameStrictJsonValue(widgetAreaLayoutBaseSurface(header.surface), baseSurface)) return [];
+    // Header reads may republish the same document; only changed revision/access facts renew it.
+    return [JSON.stringify([artifact.id, artifact.headerVersion, artifact.bodyVersion ?? null])];
+  }).sort() : []));
 
   const run = React.useCallback(
     async (actionId: Extract<ActionId, `widgets.area.layout.${string}`>, args: unknown) => {
@@ -135,7 +141,7 @@ export function useWidgetAreaLayouts(
   React.useEffect(() => {
     setInventory(previous => previous.observation === observation
       ? previous : { observation, state: LOADING_INVENTORY });
-    // The same exact Artifact publications that renew the area's preset read renew its inventory.
+    // Same-area publications include newly created layouts, not only already-known inventory IDs.
     // Unrelated Artifact and store updates keep this subscription's projection unchanged.
     void load();
     return () => { generation.current++; };

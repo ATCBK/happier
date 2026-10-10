@@ -44,8 +44,7 @@ export function ProjectOverviewWidgets(props: Readonly<{
     // The bar is the Overview's own dashboard header unless a host supplies another (a Team Source view).
     const bar = props.bar ?? <ProjectDashboardHeader workspaceRef={props.workspaceRef}
         activeRootPath={props.activeRootPath} activeWorktreeId={props.activeWorktreeId} projectName={projectName} layoutId={props.layoutId ?? null}
-        attachedDashboard={props.attachedDashboard} sharedDashboard={binding.sharedDashboard}
-        onSelectDashboard={props.onSelectDashboard} />;
+        attachedDashboard={props.attachedDashboard} sharedDashboard={binding.sharedDashboard} />;
     if (!binding.port) return <ProjectOverviewLayout bar={bar} identity={null}
         blocking={binding.unavailableReasonCode === 'widget_area_loading'
             ? <SurfaceStateCard kind="loading" title={t('common.loading')} testID="project-overview.loading" />

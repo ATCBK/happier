@@ -277,7 +277,7 @@ it('keeps an attached shared Project dashboard owner distinct from its viewer un
         const artifactId = buildWidgetSurfaceArtifactIdV1(storedSurface);
         attachedArtifactId = artifactId;
         const instance = { v: 1 as const, id: 'shared-summary', definition: { kind: 'builtin' as const, id: 'project_about' },
-            displayName: 'Owner dashboard About', bindings: { target: { kind: 'context' as const, slot: 'checkout' } } };
+            displayName: 'Owner dashboard About', bindings: { checkout: { kind: 'context' as const, slot: 'checkout' } } };
         area = createLayoutArtifactHttpBoundary('owner', { artifactId, kind: 'widget-area-layout.v1',
             defaultLayout: { v: 1, surface: storedSurface, items: [{ kind: 'widget', instance, area: 'main' }] }, parseLayout: value => WidgetAreaLayoutV1Schema.parse(value),
             buildHeader: buildWidgetSurfaceArtifactHeaderV1 });
@@ -292,13 +292,34 @@ it('keeps an attached shared Project dashboard owner distinct from its viewer un
         expect(await hook.getCurrent().port!.execute({ actionId: 'widgets.item.list' })).toMatchObject({ ok: true,
             result: { surface: { ...storedSurface, artifactId }, canEdit: false, isShared: true } });
         const { ProjectOverviewWidgets } = await import('@/components/projects/detail/ProjectOverviewWidgets');
+        const { ProjectBuiltinWidgetBody } = await import('@/components/projects/widgets/ProjectBuiltinWidgetBody');
+        const { ConfiguredWidgetRefusal, UnavailableInstalledWidget } = await import('@/components/widgets/InstalledWidgetSurface');
         const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
         const wrap = (content: React.ReactNode) => <AppShellPluginUiProjectionValueProvider value={{ pluginUiProjection: null, pluginBrowserProjection: null,
             phase: 'current', interactionEnabled: true, machineId: null, serverId: null, platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime(),
             clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} }}>{content}</AppShellPluginUiProjectionValueProvider>;
+        const contentNode = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1000, height: 800 }) };
         const screen = await renderScreen(wrap(<ProjectOverviewWidgets workspaceRef={checkout} activeRootPath={checkout.rootPath}
-            attachedDashboard={{ sourceId: 'team-source', artifactId }} onSelectDashboard={() => {}} />));
-        await vi.waitFor(() => expect(screen.findByTestId('project-overview-main.widget.shared-summary')).not.toBeNull());
+            attachedDashboard={{ sourceId: 'team-source', artifactId }} onSelectDashboard={() => {}} />), { createNodeMock: element => {
+                // DOM geometry is the boundary; the real near-viewport policy must admit this visible body.
+                if (element.type === 'ScrollView') return { getInnerViewNode: () => contentNode };
+                const id = element.props.testID;
+                if (id === 'project-overview-main.widget.shared-summary' || id === 'project-overview-aside.widget.shared-summary') {
+                    return { getBoundingClientRect: () => ({ left: 0, top: 100, width: 600, height: 220 }) };
+                }
+                return null;
+            } });
+        await vi.waitFor(() => expect(screen.findByTestId('project-overview-main.widget.shared-summary'), screen.getTextContent()).not.toBeNull());
+        await vi.waitFor(() => {
+            const bodyId = 'project-overview-main.widget.shared-summary.body';
+            const native = screen.findAllByType(ProjectBuiltinWidgetBody).find(node => node.props.testID === bodyId);
+            const refusal = screen.findAllByType(ConfiguredWidgetRefusal).find(node => node.props.testID === bodyId);
+            const unavailable = screen.findAllByType(UnavailableInstalledWidget).find(node => node.props.testID === bodyId);
+            expect({ builtin: native?.props.id ?? null,
+                deferred: screen.findHostByTestId('project-overview-main.widget.shared-summary.deferred') !== null,
+                refusal: refusal?.props.resolution ?? unavailable?.props.unresolved ?? null,
+            }).toEqual({ builtin: 'project_about', deferred: false, refusal: null });
+        });
         await vi.waitFor(() => expect(screen.findByTestId('project-overview-main.widget.shared-summary.body.repository')).not.toBeNull());
         expect(screen.findByTestId('project-overview-main.widget.code')).toBeNull();
         expect(area.writes).toEqual([]);

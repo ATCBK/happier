@@ -2,7 +2,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
-import { createWidgetAreaLayoutArtifactPortV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { createWidgetAreaActionPortV1, createWidgetAreaLayoutArtifactPortV1, createWidgetSurfaceArtifactPortV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { createWorkBoardArtifactBoundary } from '../../../../../../packages/protocol/src/boards/workBoardArtifactV1.testkit';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -37,8 +37,10 @@ it('refreshes mounted inventory for new and removed same-area publications throu
         },
     };
     const owner = (target: WidgetSurfaceRefV1) => createWidgetAreaLayoutArtifactPortV1(publishingTransport, { surface: target, isCurrent: () => true });
+    const area = createWidgetAreaActionPortV1(target => createWidgetSurfaceArtifactPortV1(publishingTransport, { surface: target, isCurrent: () => true }));
     const unused = async (): Promise<never> => { throw new Error('unexpected_layout_operation'); };
     const executor = createActionExecutor(createActionExecutorBoundaryFixture({ widgetAccountScope: () => scope,
+        widgetSurfaceActions: { corePage: area },
         widgetAreaLayouts: {
             list: args => owner(args.surface).list(), create: args => owner(args.surface).create(args),
             delete: args => owner(args.surface).delete(args), rename: unused, reorder: unused, reset: unused, undo: unused,
@@ -79,8 +81,10 @@ it.each(['project', 'home', 'account', 'retired'] as const)('withdraws private i
         return boundary.transport.list(...args);
     } };
     const owner = (target: WidgetSurfaceRefV1) => createWidgetAreaLayoutArtifactPortV1(transport, { surface: target, isCurrent: () => true });
+    const area = createWidgetAreaActionPortV1(target => createWidgetSurfaceArtifactPortV1(transport, { surface: target, isCurrent: () => true }));
     const unused = async (): Promise<never> => { throw new Error('unexpected_layout_operation'); };
     const executor = createActionExecutor(createActionExecutorBoundaryFixture({ widgetAccountScope: () => scope,
+        widgetSurfaceActions: { project: area },
         widgetAreaLayouts: { list: args => owner(args.surface).list(), create: args => owner(args.surface).create(args),
             delete: unused, rename: unused, reorder: unused, reset: unused, undo: unused },
     }));
