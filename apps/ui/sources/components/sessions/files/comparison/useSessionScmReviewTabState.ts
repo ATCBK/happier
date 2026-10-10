@@ -47,17 +47,6 @@ function scrollPositionsEqual(previous: unknown, next: unknown): boolean {
     return Number.isFinite(previous) && Number.isFinite(next) && Math.abs(previous - next) < SCROLL_PERSIST_EPSILON_PX;
 }
 
-function valuesEqual(key: string, previous: unknown, next: unknown): boolean {
-    if (key === 'scrollTop') return scrollPositionsEqual(previous, next);
-    if (Object.is(previous, next)) return true;
-    if (Array.isArray(previous) || Array.isArray(next)) {
-        const before = Array.isArray(previous) ? previous : [];
-        const after = Array.isArray(next) ? next : [];
-        return before.length === after.length && before.every((value, index) => Object.is(value, after[index]));
-    }
-    return false;
-}
-
 /** Both live and captured Files preserve the existing review tab's scroll and collapse state. */
 export function useScmReviewTabState(hostKey: string, pane: ReturnType<typeof useAppPaneScope>, tabKey = SESSION_DETAILS_SCM_REVIEW_TAB_KEY) {
     const raw = pane.scopeState?.details?.tabState?.[tabKey];
@@ -70,21 +59,15 @@ export function useScmReviewTabState(hostKey: string, pane: ReturnType<typeof us
             scrollTop: typeof scrollTop === 'number' && Number.isFinite(scrollTop) ? scrollTop : null,
             collapsedPaths: Array.isArray(collapsedPaths) ? collapsedPaths.filter((path): path is string => typeof path === 'string') : null };
     }
-    const stateRef = React.useRef<Record<string, unknown>>({});
-    React.useEffect(() => { stateRef.current = persistedReviewTabState ?? {}; }, [persistedReviewTabState]);
-    const setDetailsTabState = pane.setDetailsTabState;
+    const patchDetailsTabState = pane.patchDetailsTabState;
     const setPersistedReviewTabState = React.useCallback((patch: Record<string, unknown>) => {
-        const previous = stateRef.current;
-        if (!Object.entries(patch).some(([key, value]) => !valuesEqual(key, previous[key], value))) return;
-        const next = { ...previous, ...patch };
-        stateRef.current = next;
         if (initialStateRef.current) initialStateRef.current = {
             ...initialStateRef.current,
-            ...(typeof next.scrollTop === 'number' ? { scrollTop: next.scrollTop } : {}),
-            ...(Array.isArray(next.collapsedPaths) ? { collapsedPaths: next.collapsedPaths.filter((path): path is string => typeof path === 'string') } : {}),
+            ...(typeof patch.scrollTop === 'number' ? { scrollTop: patch.scrollTop } : {}),
+            ...(Array.isArray(patch.collapsedPaths) ? { collapsedPaths: patch.collapsedPaths.filter((path): path is string => typeof path === 'string') } : {}),
         };
-        setDetailsTabState(tabKey, next);
-    }, [setDetailsTabState, tabKey]);
+        patchDetailsTabState(tabKey, patch);
+    }, [patchDetailsTabState, tabKey]);
     const onCollapsedPathsChange = React.useCallback((paths: string[]) => setPersistedReviewTabState({ collapsedPaths: paths }), [setPersistedReviewTabState]);
     const pendingScrollTopRef = React.useRef<number | null>(null);
     const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -96,7 +79,7 @@ export function useScmReviewTabState(hostKey: string, pane: ReturnType<typeof us
     }, [setPersistedReviewTabState]);
     const onScrollTopChange = React.useCallback((top: number) => {
         if (!Number.isFinite(top) || scrollPositionsEqual(pendingScrollTopRef.current, top)) return;
-        if (pendingScrollTopRef.current === null && scrollPositionsEqual(stateRef.current.scrollTop, top)) return;
+        if (pendingScrollTopRef.current === null && scrollPositionsEqual(initialStateRef.current?.scrollTop, top)) return;
         // View switches remount Files immediately; persistence remains debounced.
         if (initialStateRef.current) initialStateRef.current = { ...initialStateRef.current, scrollTop: top };
         pendingScrollTopRef.current = top;

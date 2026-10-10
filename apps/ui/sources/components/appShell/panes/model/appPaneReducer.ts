@@ -113,6 +113,7 @@ export type AppPaneAction =
         restoreSourceOnRehydrate?: boolean;
     }>
     | { type: 'setDetailsTabState'; scopeId: string; tabKey: string; nextState: unknown }
+    | { type: 'patchDetailsTabState'; scopeId: string; tabKey: string; patch: Readonly<Record<string, unknown>> }
     | { type: 'pinDetailsTab'; scopeId: string; tabKey: string }
     | { type: 'unpinDetailsTab'; scopeId: string; tabKey: string }
     | { type: 'closeDetails'; scopeId: string }
@@ -559,6 +560,12 @@ export function appPaneReduce(state: AppPaneState, action: AppPaneAction): AppPa
             return updateScopeDetails(state, action.scopeId, (details) => (
                 applySetDetailsTabState(details, action.tabKey, action.nextState)
             ));
+        case 'patchDetailsTabState':
+            return updateScopeDetails(state, action.scopeId, (details) => {
+                const current = getOwnPaneTabStateEntry(details.tabState, action.tabKey);
+                const record = current && typeof current === 'object' && !Array.isArray(current) ? current : {};
+                return applySetDetailsTabState(details, action.tabKey, { ...record, ...action.patch });
+            });
         case 'pinDetailsTab':
             return updateScopeDetails(state, action.scopeId, (details) => (
                 applyPinDetailsTab(details, action.tabKey)

@@ -71,6 +71,7 @@ export type AppPaneScopeApi = {
         restoreSourceOnRehydrate?: boolean;
     }>) => void;
     setDetailsTabState: (tabKey: string, nextState: unknown) => void;
+    patchDetailsTabState: (tabKey: string, patch: Readonly<Record<string, unknown>>) => void;
     pinDetailsTab: (tabKey: string) => void;
     unpinDetailsTab: (tabKey: string) => void;
     closeDetails: () => void;
@@ -194,6 +195,9 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     const setDetailsTabState = React.useCallback((tabKey: string, nextState: unknown) => {
         dispatch({ type: 'setDetailsTabState', scopeId, tabKey, nextState });
     }, [dispatch, scopeId]);
+    const patchDetailsTabState = React.useCallback((tabKey: string, patch: Readonly<Record<string, unknown>>) => {
+        dispatch({ type: 'patchDetailsTabState', scopeId, tabKey, patch });
+    }, [dispatch, scopeId]);
 
     const replaceDetailsTab = React.useCallback((tabKey: string, tab: DetailsTab, options?: Readonly<{
         intent?: 'default' | 'pinned' | 'preview';
@@ -306,6 +310,7 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
         openDetailsTab,
         replaceDetailsTab,
         setDetailsTabState,
+        patchDetailsTabState,
         pinDetailsTab,
         unpinDetailsTab,
         closeDetails,
@@ -339,6 +344,7 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
         openDetailsTab,
         replaceDetailsTab,
         setDetailsTabState,
+        patchDetailsTabState,
         pinDetailsTab,
         unpinDetailsTab,
         closeDetails,

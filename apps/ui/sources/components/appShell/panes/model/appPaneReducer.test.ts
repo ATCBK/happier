@@ -796,15 +796,12 @@ describe('appPaneReduce', () => {
         let state = appPaneReduce(createAppPaneState({ maxScopesInMemory: 3 }), { type: 'activateScope', scopeId });
         state = appPaneReduce(state, { type: 'setDetailsTabState', scopeId, tabKey, nextState: { scrollTop: 42 } });
         // Both mounted review writers issue patches in one event, before either receives a render.
-        // @ts-expect-error Test-first: the canonical reducer does not admit atomic tab patches yet.
         state = appPaneReduce(state, { type: 'patchDetailsTabState', scopeId, tabKey, patch: { reviewRunIds: ['run-1'] } });
-        // @ts-expect-error Test-first: the canonical reducer does not admit atomic tab patches yet.
         state = appPaneReduce(state, { type: 'patchDetailsTabState', scopeId, tabKey, patch: { workspaceReviewTarget: { view: 'walkthrough' } } });
         expect(state.scopes[scopeId].details.tabState[tabKey]).toEqual({ scrollTop: 42, reviewRunIds: ['run-1'], workspaceReviewTarget: { view: 'walkthrough' } });
         expect(state.scopes[scopeId].details.isOpen).toBe(false);
         expect(Object.keys(state.scopes[scopeId].details.tabsByKey)).toEqual([]);
         const previous = state;
-        // @ts-expect-error Test-first: the canonical reducer does not admit atomic tab patches yet.
         state = appPaneReduce(state, { type: 'patchDetailsTabState', scopeId, tabKey, patch: { reviewRunIds: ['run-1'] } });
         expect(state).toBe(previous);
     });
