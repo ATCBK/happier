@@ -17,19 +17,24 @@ export function useManagedProvisioners(serverId: string, onApprovalPending?: (re
     }>>({ binding: null, requestKey: '', provisioners: [], error: null, loading: false });
     const controllers = React.useMemo(() => controller ? 'machineId' in controller ? [controller] : controller : [], [controller]);
     const requestKey = JSON.stringify([homeId, controllers]);
+    // Presence projections may recreate equivalent controller objects. Only the semantic
+    // request key changes demand; the ref supplies that render's typed inputs to the effect.
+    const controllersRef = React.useRef(controllers);
+    controllersRef.current = controllers;
     const [refreshRevision, refresh] = React.useReducer(value => value + 1, 0);
     const approvalRef = React.useRef(onApprovalPending);
     approvalRef.current = onApprovalPending;
     const client = React.useMemo(() => binding && homeId ? createManagedProvisionerClient(binding.scope, homeId) : null, [binding, homeId]);
     React.useEffect(() => {
-        if (!binding || !client || !homeId || controllers.length === 0) return;
+        const selectedControllers = controllersRef.current;
+        if (!binding || !client || !homeId || selectedControllers.length === 0) return;
         const abort = new AbortController();
         const retirement = binding.onRetire(() => {
             abort.abort();
             setState(current => current.binding === binding ? { binding: null, requestKey: '', provisioners: [], error: null, loading: false } : current);
         });
         setState(current => ({ binding, requestKey, provisioners: current.binding === binding && current.requestKey === requestKey ? current.provisioners : [], error: null, loading: true }));
-        void Promise.all(controllers.map(selected => client.read('machines.provisioners.list', { homeId, controller: selected },
+        void Promise.all(selectedControllers.map(selected => client.read('machines.provisioners.list', { homeId, controller: selected },
             { signal: abort.signal, onApprovalPending: registration => approvalRef.current?.(registration) }))).then(results => {
             if (abort.signal.aborted || !binding.isCurrent()) return;
             // Each controller answers for its own installs: one that cannot answer does not hide the others'.
@@ -45,7 +50,7 @@ export function useManagedProvisioners(serverId: string, onApprovalPending?: (re
                 ? { ...current, loading: false, error: 'unavailable' } : current);
         });
         return () => { abort.abort(); retirement.dispose(); };
-    }, [binding, client, homeId, controllers, requestKey, refreshRevision]);
+    }, [binding, client, homeId, requestKey, refreshRevision]);
     const visible = binding?.isCurrent() && state.binding === binding && state.requestKey === requestKey ? state : {
         provisioners: [], error: resolution.kind === 'resolving' || resolution.kind === 'bound' ? null : resolution.kind,
         loading: resolution.kind === 'resolving' || resolution.kind === 'bound' && controllers.length > 0,

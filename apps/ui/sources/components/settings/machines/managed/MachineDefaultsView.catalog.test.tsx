@@ -126,10 +126,32 @@ describe('Machine Defaults installed provisioner names', () => {
             { machineId: 'cloud-controller', installationId: 'cloud-installation' },
         ];
         const { useManagedProvisioners } = await import('./useManagedProvisioners');
-        const catalog = await renderHook(() => useManagedProvisioners(focusedHome, undefined, controllers));
+        const transport = await import('@/utils/system/runtimeFetch');
+        const fetch = vi.spyOn(transport, 'runtimeFetch');
+        onTestFinished(() => fetch.mockRestore());
+        const catalog = await renderHook((selected: readonly ManagedControllerV1[]) => useManagedProvisioners(focusedHome, undefined, selected),
+            { initialProps: controllers });
         await vi.waitFor(() => expect(catalog.getCurrent().loading).toBe(false));
         expect(catalog.getCurrent().error).toBeNull();
         expect(catalog.getCurrent().provisioners.map(row => row.descriptor.title)).toEqual(['Local guest', 'Cloud service']);
+        const modeReads = () => fetch.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/account/encryption').length;
+        const initialModeReads = modeReads();
+        expect(initialModeReads).toBeGreaterThan(0);
+        const initialCatalogReads = home.requests.filter(request => request.path === '/v1/actions/machines.provisioners.list').length;
+        // Machine presence updates rebuild these objects without changing any catalog demand.
+        await catalog.rerender(controllers.map(controller => ({ ...controller })));
+        await vi.waitFor(() => expect(catalog.getCurrent().loading).toBe(false));
+        expect(modeReads()).toBe(initialModeReads);
+        expect(home.requests.filter(request => request.path === '/v1/actions/machines.provisioners.list')).toHaveLength(initialCatalogReads);
+        // Explicit refresh still reads the real controller catalog rather than retaining stale data.
+        await act(async () => catalog.getCurrent().refresh());
+        await vi.waitFor(() => expect(catalog.getCurrent().loading).toBe(false));
+        expect(home.requests.filter(request => request.path === '/v1/actions/machines.provisioners.list')).toHaveLength(initialCatalogReads * 2);
+        // Real controller membership changes still refresh the projection.
+        await catalog.rerender(controllers.slice(0, 1));
+        await vi.waitFor(() => expect(catalog.getCurrent().loading).toBe(false));
+        expect(home.requests.filter(request => request.path === '/v1/actions/machines.provisioners.list')).toHaveLength(initialCatalogReads * 2 + 1);
+        expect(catalog.getCurrent().provisioners.map(row => row.descriptor.title)).toEqual(['Local guest']);
         await catalog.unmount();
         const { MachineDefaultsView } = await import('./MachineDefaultsView');
         const screen = await renderScreen(<MachineDefaultsView />);
