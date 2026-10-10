@@ -18,6 +18,7 @@ import { createScmDiffSummarySavedResultOperations } from '@/sync/ops/scmDiffSum
 import { subscribeExecutionRunActivity } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { t } from '@/text';
 import { scmComparisonKey } from './filesComparison';
+import { useScmDiffSummaryModelChoices } from '@/components/settings/sourceControl/useScmDiffSummaryModelChoices';
 
 /**
  * A comparison view's binding to its admitted host's saved diff-summary result: the one store's projection for the
@@ -54,9 +55,9 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     }, [hostKey]);
     const storedModel = useSetting(SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride);
     const [model, setModel] = React.useState(typeof storedModel === 'string' ? storedModel : '');
-    const [modelAvailability, setModelAvailability] = React.useState({ value: '', available: false });
-    const onModelAvailability = React.useCallback((available: boolean) => setModelAvailability({ value: model, available }), [model]);
-    const modelAvailable = modelAvailability.value === model && modelAvailability.available;
+    const modelChoices = useScmDiffSummaryModelChoices({ value: model, machineId: machine?.machineId,
+        serverId, observeSelection: Boolean(scope && machineReachable && comparison) });
+    const modelAvailable = modelChoices.selectionAvailable;
     React.useEffect(() => { setModel(typeof storedModel === 'string' ? storedModel : ''); }, [binding, storedModel]);
     const selected = React.useMemo(() => resolveScmDiffSummaryModelSelection({ storedValue: model }), [model]);
     const [starting, setStarting] = React.useState(false);
@@ -193,6 +194,6 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         host, serverId, comparison,
         binding, isCurrent, scope, machine, machineReachable, canControl, canSend, launch, viewModel, capturedComparison, cwd, operations,
         error, setError,
-        model, setModel, onModelAvailability, modelAvailable, selected, starting, onStart,
+        model, setModel, modelChoices, modelAvailable, selected, starting, onStart,
     } as const;
 }

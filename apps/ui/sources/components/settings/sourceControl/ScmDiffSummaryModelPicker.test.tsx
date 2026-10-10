@@ -1,17 +1,36 @@
 import * as React from 'react';
+import '@/dev/testkit/harness/syncSingletonLoader';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { ScmDiffSummaryModelPicker } from './ScmDiffSummaryModelPicker';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decodeScmDiffSummaryModelOverride } from '@/settings/scmDiffSummary/settings';
-import { getStorage } from '@/sync/domains/state/storage';
-import { resetDynamicModelProbeCacheForTests } from '@/sync/domains/models/dynamicModelProbeCache';
-import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { AgentModelsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
-const rpc = vi.hoisted(() => ({ invoke: vi.fn() }));
-// The daemon RPC is the system boundary; catalog, discovery/cache, hook and picker stay real.
-vi.mock('@/sync/ops/capabilities', () => ({ machineCapabilitiesInvoke: rpc.invoke }));
+const rpc = vi.hoisted(() => ({ requests: [] as Array<Readonly<{ method: string; machineId: string; serverId?: string | null; payload: unknown }>> }));
+// Home HTTP, device credentials and Machine RPC are the boundaries; Action admission,
+// Account catalog, discovery/cache and picker projection remain real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    const invoke = async (request: typeof rpc.requests[number]): Promise<unknown> => {
+        rpc.requests.push(request);
+        if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)
+            return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1,
+                projection: { v: 2, generation: 1, familiesById: {} } });
+        if (request.method === RPC_METHODS.CAPABILITIES_INVOKE) return { ok: true, result: AgentModelsProbeObservationSchema.parse({
+            availableModels: [
+                { id: 'real-model', name: 'Real model', capabilities: { structuredOutput: 'supported' } },
+                { id: 'rejected-model', name: 'Rejected model', capabilities: { structuredOutput: 'unsupported' } },
+                { id: 'unknown-model', name: 'Unknown model', capabilities: { structuredOutput: 'unknown' } },
+            ], supportsFreeform: false, source: 'dynamic',
+        }) };
+        throw new Error(`Unexpected Machine RPC: ${request.method}`);
+    };
+    // The arbitrary generic wire return is narrowed by real response schemas above this boundary.
+    return createServerScopedMachineRpcBoundaryMock(invoke as typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc').machineRpcWithServerScope);
+});
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeNativeMock({ platformOS: 'ios' });
@@ -34,49 +53,78 @@ vi.mock('expo-router', async () => {
     return createExpoRouterMock().module;
 });
 
+const { createHomeGovernanceHarness, installHomeGovernanceBoundaries } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+const disposeActionLoader = await installRealActionExecutorModuleLoader();
+afterAll(disposeActionLoader);
+const { renderSettingsView } = await import('@/dev/testkit/harness/settingsViewHarness');
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { ScmDiffSummaryModelPicker } = await import('./ScmDiffSummaryModelPicker');
+const { getStorage } = await import('@/sync/domains/state/storage');
+const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+const { resetDynamicModelProbeCacheForTests } = await import('@/sync/domains/models/dynamicModelProbeCache');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { resetAcpCatalogEngineForTests } = await import('@/sync/engine/settings/acpCatalogEngine');
+const { resetAcpCatalogSnapshotsForTests } = await import('@/sync/store/settings/acpCatalogSnapshot');
+const { getAcpCatalogSnapshot } = await import('@/sync/store/settings/acpCatalogSnapshot');
+const { readCachedDaemonMergedProjectionCacheEntry } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { standardCleanup } = await import('@/dev/testkit/cleanup/standardCleanup');
+
 describe('Summary model discovery', () => {
     const initialStorage = getStorage().getState();
-    beforeEach(() => { rpc.invoke.mockReset(); resetDynamicModelProbeCacheForTests(); });
-    afterEach(() => { standardCleanup(); getStorage().setState(initialStorage, true); });
+    beforeEach(async () => { await homes.reset(); rpc.requests = []; resetDynamicModelProbeCacheForTests(); clearDaemonMergedProjectionCacheForTests(); resetAcpCatalogEngineForTests(); resetAcpCatalogSnapshotsForTests(); });
+    afterEach(async () => { standardCleanup(); getStorage().setState(initialStorage, true); await homes.reset(); });
     it.each([
-        { name: 'Codex', id: 'backend-discovery:agent:happier.agent.codex/codex', target: { kind: 'backend', backendId: 'codex' }, configured: false, unknownStatic: false },
-        { name: 'configured ACP', id: 'backend-discovery:backend:review-bot:configured:review-bot', target: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot' }, configured: true, unknownStatic: false },
-        { name: 'configured carrier with only unknown static models', id: 'backend-discovery:backend:claude:configured:claude', target: { kind: 'backend', backendId: 'claude', configuredBackendId: 'claude' }, configured: true, unknownStatic: true },
-    ])('discovers $name without saving a fabricated model choice', async ({ id, target, configured, unknownStatic }) => {
-        if (configured) getStorage().setState({ settings: { ...initialStorage.settings, acpCatalogSettingsV1: {
-            v: 2, backends: [{ id: target.backendId, name: target.backendId, title: 'Review Bot', command: 'review-cli', args: ['acp'], env: {},
-                capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown', supportsConfigOptions: 'unknown', promptImageSupport: 'unknown' },
-                createdAt: 1, updatedAt: 1 }],
-        } } });
-        rpc.invoke.mockResolvedValue({ supported: true, response: { ok: true, result: {
-            availableModels: [
-                { id: 'real-model', name: 'Real model', capabilities: { structuredOutput: 'supported' } },
-                { id: 'rejected-model', name: 'Rejected model', capabilities: { structuredOutput: 'unsupported' } },
-            ], supportsFreeform: false, source: 'dynamic',
-        } } });
+        { name: 'Codex', target: { kind: 'backend' as const, backendId: 'codex' }, configured: false },
+        { name: 'configured ACP', target: { kind: 'backend' as const, backendId: 'review-bot', configuredBackendId: 'review-bot' }, configured: true },
+    ])('discovers $name without saving a fabricated model choice', async ({ target, configured }) => {
+        const homeId = await homes.addHome({ name: 'Summary discovery', serverUrl: 'https://summary-discovery.example.test',
+            accountId: 'summary-discovery-account', accountEncryptionMode: 'plain', currentAccount: true });
+        const scope = { serverId: homeId, accountId: 'summary-discovery-account' };
+        const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: configured ? [{ id: target.backendId,
+            name: target.backendId, title: 'Review Bot', command: 'review-cli', args: ['acp'], env: {}, createdAt: 1, updatedAt: 1 }] : [] });
+        homes.answer(homeId, ACP_CATALOG_ROWS_ROUTE_V1, { body: AcpCatalogRowReadResponseV1Schema.parse({
+            status: 'present', revision: 1, content: { t: 'plain', v: record },
+        }) });
+        homes.answer(homeId, '/v1/account/encryption/currentness', { body: {
+            mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        } });
+        const machine = createMachineFixture({ id: 'summary-discovery-machine', activeAt: Date.now() });
+        getStorage().setState({ settingsScope: scope, profileScope: scope,
+            machines: { [machine.id]: machine }, machineListByServerId: { [homeId]: [machine] } });
         const change = vi.fn();
         const selection = vi.fn();
         const screen = await renderSettingsView(<ScmDiffSummaryModelPicker value="" onChange={change}
-            onSelection={selection} machineId="summary-discovery-machine" serverId="summary-discovery-home" />);
+            onSelection={selection} machineId={machine.id} serverId={homeId} />);
         const menu = () => screen.findAll(node => node.type === DropdownMenu)[0];
-        if (unknownStatic) {
-            const staticRows = menu().props.items.filter((item: { category: string; id: string }) => item.category === 'Review Bot' && item.id !== id);
-            expect(staticRows.length).toBeGreaterThan(0);
-            expect(staticRows.every((item: { disabled: boolean }) => item.disabled)).toBe(true);
-        }
+        const diagnostic = () => JSON.stringify({ paths: homes.requests.map(request => request.path), rpc: rpc.requests,
+            catalog: getAcpCatalogSnapshot(scope), projection: readCachedDaemonMergedProjectionCacheEntry({ machineId: machine.id, serverId: homeId }),
+            items: menu().props.items });
+        const id = `backend-discovery:${buildBackendTargetKeyV2(target)}`;
+        await vi.waitFor(() => expect(menu().props.items.find((item: { id: string }) => item.id === id),
+            diagnostic()).toBeDefined());
         const discovery = menu().props.items.find((item: { id: string }) => item.id === id);
-        expect(discovery).toBeDefined();
         await act(async () => { menu().props.onSelect(discovery.id); });
         expect(change).not.toHaveBeenCalled();
         expect(selection).not.toHaveBeenCalled();
-        expect(rpc.invoke).toHaveBeenCalledWith('summary-discovery-machine', expect.objectContaining({
-            method: 'probeModels', params: expect.objectContaining({ backendTarget: expect.objectContaining(target) }),
-        }), expect.objectContaining({ serverId: 'summary-discovery-home' }));
+        await vi.waitFor(() => expect(menu().props.items.find((item: { title: string }) => item.title === 'Real model'),
+            diagnostic()).toBeDefined());
+        expect(rpc.requests.find(request => request.method === RPC_METHODS.CAPABILITIES_INVOKE)).toMatchObject({
+            machineId: machine.id, serverId: homeId, payload: {
+                method: 'probeModels', params: { backendTarget: expect.objectContaining(target) },
+            },
+        });
         const offered = menu().props.items.find((item: { title: string }) => item.title === 'Real model');
         const rejected = menu().props.items.find((item: { title: string }) => item.title === 'Rejected model');
+        const unknown = menu().props.items.find((item: { title: string }) => item.title === 'Unknown model');
         expect(offered?.disabled).toBe(false);
         expect(rejected?.disabled).toBe(true);
-        await act(async () => { menu().props.onSelect(rejected.id); });
+        expect(unknown?.disabled).toBe(true);
+        await act(async () => { menu().props.onSelect(rejected.id); menu().props.onSelect(unknown.id); });
         expect(change).not.toHaveBeenCalled();
         await act(async () => { menu().props.onSelect(offered.id); });
         expect(decodeScmDiffSummaryModelOverride(change.mock.calls[0]?.[0])).toMatchObject({ modelId: 'real-model' });

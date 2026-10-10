@@ -58,7 +58,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     // The comparison's saved result, restore/reread and START: the one binding Walkthrough and Commits share.
     const bound = props.bound;
     const { scope, machine, machineReachable, canControl, canSend, launch, viewModel, capturedComparison, cwd, operations,
-        error, setError, model, setModel, onModelAvailability, modelAvailable, selected, starting } = bound;
+        error, setError, model, setModel, modelChoices, modelAvailable, selected, starting } = bound;
     const displayHomeId = scope?.serverId ?? props.serverId;
     // Subscribe to attribution, not heartbeat objects. Exact Home lookup and
     // machine naming stay at their existing owners while the machine is offline.
@@ -209,7 +209,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     return (
         <View style={{ flex: 1, minHeight: 0 }}>
             {props.renderBar(<>{reviewActions}{conversationAction}</>)}
-            {choosingModel ? <ScmDiffSummaryModelPicker value={model} onChange={setModel} onAvailabilityChange={onModelAvailability} machineId={machine?.machineId} serverId={props.serverId} /> : null}
+            {choosingModel ? <ScmDiffSummaryModelPicker value={model} onChange={setModel} modelChoices={modelChoices} machineId={machine?.machineId} serverId={props.serverId} /> : null}
             <WalkthroughView
                 reading={reading ?? EMPTY_WALKTHROUGH_READING}
                 scopeLabel={props.scopeLabel}
@@ -231,7 +231,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                     if (!selected.success || !modelAvailable) setChoosingModel(true);
                     else void onStart();
                 } } : {}) } : null}
-                start={{ modelPicker: <ScmDiffSummaryModelPicker value={model} onChange={setModel} onAvailabilityChange={onModelAvailability} machineId={machine?.machineId} serverId={props.serverId} testID="walkthrough-model-choice" />,
+                start={{ modelPicker: <ScmDiffSummaryModelPicker value={model} onChange={setModel} modelChoices={modelChoices} machineId={machine?.machineId} serverId={props.serverId} testID="walkthrough-model-choice" />,
                     onStart, busy: starting, disabled: !selected.success || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns,
                     reason: error ?? (!selected.success || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns ? t('walkthroughStart.unavailable') : null) }}
                 onRetry={onStart}

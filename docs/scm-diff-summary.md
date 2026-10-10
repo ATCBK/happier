@@ -96,6 +96,11 @@ model. Opening a Walkthrough destination does not start generation; Start does.
   [`ScmCommitsView.tsx`](../apps/ui/sources/components/sessions/files/commits/ScmCommitsView.tsx)
   is the shared presentation; Session adapters retain their authorized composer
   affordance without becoming a separate commit-plan controller.
+  The comparison binding observes its selected model through
+  [`useScmDiffSummaryModelChoices.ts`](../apps/ui/sources/components/settings/sourceControl/useScmDiffSummaryModelChoices.ts),
+  the same offered-model projection consumed by its picker and Source Control
+  settings. A restored proposal does not depend on mounting an empty-state
+  picker to establish model availability.
 - [`WorkspaceCommitsView.tsx`](../apps/ui/sources/components/projects/scm/WorkspaceCommitsView.tsx)
   is the Project consumer of the same controller and presentation, rendered by
   [`WorkspaceScmReviewDetailsView.tsx`](../apps/ui/sources/components/projects/panes/details/views/WorkspaceScmReviewDetailsView.tsx).

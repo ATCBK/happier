@@ -48,7 +48,7 @@ export const ScmCommitsView = React.memo(function ScmCommitsView(props: ScmCommi
                 <ScmDiffSummaryModelPicker
                     value={bound.model}
                     onChange={bound.setModel}
-                    onAvailabilityChange={bound.onModelAvailability}
+                    modelChoices={bound.modelChoices}
                     machineId={bound.machine?.machineId}
                     serverId={bound.serverId}
                     testID="commit-proposal-model-choice"
