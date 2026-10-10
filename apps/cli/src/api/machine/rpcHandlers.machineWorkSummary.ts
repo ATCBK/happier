@@ -7,6 +7,7 @@ import type { ManagedActivityInventory } from '@/daemon/lifecycle/managedActivit
 import type { RequesterWorkAttributionV1 } from '@/daemon/lifecycle/requesterWorkAttribution';
 import { projectMachineWorkSummary } from '@/daemon/machines/machineWorkSummary';
 import type { RpcHandlerContext, RpcHandlerRegistrar } from '../rpc/types';
+import { doesMachineRpcTargetMatchAdmission } from './machineRpcAuthorization';
 
 export type MachineWorkSummaryRpcOwner = Readonly<{
     target: Omit<RequesterWorkAttributionV1, 'accountId'>;
@@ -25,8 +26,7 @@ export function registerMachineWorkSummaryRpcHandlers(params: MachineWorkSummary
     const current = async (context: RpcHandlerContext | undefined): Promise<boolean> => {
         const admission = context?.machineAdmission;
         if (!context || !admission || context.signal.aborted || !context.verifyMachineAdmissionCurrent
-            || admission.machineId !== params.target.machineId || admission.installationId !== params.target.installationId
-            || admission.custodianAccountId !== params.custodianAccountId
+            || !doesMachineRpcTargetMatchAdmission(undefined, admission, { ...params.target, custodianAccountId: params.custodianAccountId })
             || (admission.actorAccountId !== admission.custodianAccountId && admission.role !== 'manage')) return false;
         try { return await context.verifyMachineAdmissionCurrent() && !context.signal.aborted; }
         catch { return false; }
@@ -36,7 +36,8 @@ export function registerMachineWorkSummaryRpcHandlers(params: MachineWorkSummary
         // `serverId` is the caller's own profile id for this Home (it selected the connection on the caller's
         // device) and need not equal this daemon's; the Home is the one this request arrived through, and the
         // server-admitted machine admission below is what names this machine and its custodian.
-        if (!input.success || input.data.machineId !== params.target.machineId
+        if (!input.success || !doesMachineRpcTargetMatchAdmission(input.data, context?.machineAdmission,
+            { ...params.target, custodianAccountId: params.custodianAccountId })
             || !await current(context) || !context) return refused();
         try {
             const access = MachineAccessGrantsListResponseV1Schema.safeParse(await params.readAccess(context.signal));

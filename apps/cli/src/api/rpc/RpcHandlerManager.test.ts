@@ -610,6 +610,44 @@ it('refuses Machine access-loss custody without a reserved server-origin stamp',
   expect(cleanup).not.toHaveBeenCalled();
 });
 
+it('admits caller-local Home labels but refuses a payload for another Machine before handler execution', async () => {
+  const machineAdmission = { actorAccountId: 'alice', custodianAccountId: 'alice', machineId: 'machine-a',
+    installationId: 'installation-a', role: 'manage' as const, encryptionMode: 'plain' as const };
+  const key = tweetnacl.sign.keyPair();
+  let current = true;
+  // Only Home's authenticated HTTP verification is substituted; admission and signing stay real.
+  const network = vi.spyOn(axios, 'post').mockImplementation(async (url, raw) => {
+    expect(String(url)).toBe('https://daemon-home.invalid/v1/machines/machine-a/admission/verify');
+    const body = raw as { proof: Parameters<typeof verifyMachineInstallationProof>[0]['proof'] };
+    expect(verifyMachineInstallationProof({ publicKey: key.publicKey, proof: body.proof, payload: {
+      version: 1, machineId: 'machine-a', installationId: 'installation-a', accountId: 'alice',
+      rpcAdmission: { context: machineAdmission, method: `machine-a:${RPC_METHODS.MACHINES_WORK_SUMMARY_GET}` },
+    } })).toBe(true);
+    return current ? { status: 200, data: { v: 1, ok: true } } : { status: 403, data: { error: 'access_denied' } };
+  });
+  const rpc = new RpcHandlerManager({ scopePrefix: 'machine-a', encryptionMode: 'plain', logger: () => {},
+    authorizeRequest: request => authorizeMachineRpcRequest(request, {
+      machineId: 'machine-a', resolveCustodianAccountId: async () => 'alice', resolveInstallationId: () => 'installation-a',
+      verifyMachineAdmission: input => verifyMachineRpcAdmissionCurrent({ ...input, privateKey: key.secretKey,
+        daemonToken: 'daemon-token', serverHttpBaseUrl: 'https://daemon-home.invalid' }),
+    }) });
+  const handled: unknown[] = [];
+  rpc.registerHandler(RPC_METHODS.MACHINES_WORK_SUMMARY_GET, (params: unknown) => {
+    handled.push(params);
+    return { kind: 'current', requesters: [] };
+  });
+  const params = { serverId: 'browser-profile-for-home', machineId: 'machine-a' };
+  const request = { method: `machine-a:${RPC_METHODS.MACHINES_WORK_SUMMARY_GET}`, params, machineAdmission };
+  try {
+    expect(await rpc.handleRequest(request)).toEqual({ kind: 'current', requesters: [] });
+    expect(await rpc.handleRequest({ ...request, params: { ...params, machineId: 'other-machine' } }))
+      .toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
+    current = false;
+    expect(await rpc.handleRequest(request)).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
+    expect(handled).toEqual([params]);
+  } finally { network.mockRestore(); }
+});
+
 it('rechecks the exact stamped Machine authority after asynchronous handler preparation', async () => {
   const machineAdmission = { actorAccountId: 'bob', custodianAccountId: 'alice', machineId: 'machine-a',
     installationId: 'installation-a', role: 'use' as const, encryptionMode: 'plain' as const };
@@ -626,6 +664,32 @@ it('rechecks the exact stamped Machine authority after asynchronous handler prep
   });
   expect(await rpc.handleRequest({ method: 'machine-a:prepare-effect', params: {}, machineAdmission }))
     .toEqual({ effectAllowed: false });
+});
+
+it('retains a live Machine authority verifier for accepted work after transport cancellation', async () => {
+  const machineAdmission = { actorAccountId: 'bob', custodianAccountId: 'alice', machineId: 'machine-a',
+    installationId: 'installation-a', role: 'use' as const, encryptionMode: 'plain' as const };
+  let current = true;
+  let handlerContext: RpcHandlerContext | undefined;
+  const rpc = new RpcHandlerManager({ scopePrefix: 'machine-a', encryptionMode: 'plain', logger: () => {},
+    authorizeRequest: request => authorizeMachineRpcRequest(request, { machineId: 'machine-a',
+      resolveCustodianAccountId: async () => 'alice', resolveInstallationId: () => 'installation-a',
+      verifyMachineAdmission: async () => current }) });
+  rpc.registerHandler('accepted-work', async (_params: unknown, context?: RpcHandlerContext) => {
+    handlerContext = context;
+    await new Promise<void>(resolve => context?.signal.addEventListener('abort', () => resolve(), { once: true }));
+    return { accepted: true };
+  });
+  const boundary = createSocketEventBoundary();
+  rpc.onSocketConnect(boundary.socket);
+  const response = rpc.handleRequest({ method: 'machine-a:accepted-work', params: {}, machineAdmission, requestId: 'accepted-request' });
+  await vi.waitFor(() => expect(handlerContext).toBeDefined());
+  boundary.trigger('rpc-cancel', { requestId: 'accepted-request' });
+  expect(await response).toEqual({ accepted: true });
+  expect(await handlerContext?.verifyMachineAdmissionCurrent?.()).toBe(false);
+  expect(await handlerContext?.verifyMachineAuthorityCurrent?.()).toBe(true);
+  current = false;
+  expect(await handlerContext?.verifyMachineAuthorityCurrent?.()).toBe(false);
 });
 
 it.each(['plain', 'e2ee'] as const)('does not disclose confidential continuation errors in %s responses or logs', async (mode) => {

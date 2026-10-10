@@ -136,6 +136,25 @@ export type MachineRpcAdmissionBoundary = Readonly<{
   }>) => Promise<boolean>;
 }>;
 
+/**
+ * Home is the authenticated connection, not a caller-local server profile label.
+ * Bind Machine inputs to that connection's admitted installation and custodian.
+ * Session/indirect inputs may omit machineId; explicit Machine targets must match.
+ * Callers still reverify current admission at their effect/disclosure boundary.
+ */
+export function doesMachineRpcTargetMatchAdmission(
+  request: unknown,
+  admission: SocketRpcMachineAdmissionContextV1 | undefined,
+  target: Readonly<{ machineId: string; installationId: string; custodianAccountId: string | null }> | null,
+): boolean {
+  return !!target && !!admission
+    && admission.machineId === target.machineId
+    && admission.installationId === target.installationId
+    && admission.custodianAccountId === target.custodianAccountId
+    && (!request || typeof request !== 'object' || !('machineId' in request)
+      || request.machineId === admission.machineId);
+}
+
 /** This read proves current access; the signed context is not a reusable admission ticket. */
 export type MachineRpcAdmissionCurrentInput = Readonly<{
   context: SocketRpcMachineAdmissionContextV1;
@@ -431,12 +450,16 @@ export async function authorizeMachineRpcRequest(request: Readonly<{
     if (isAccessLoss && context.actorAccountId !== context.custodianAccountId) return forbidden();
     try {
       const installationId = machine.resolveInstallationId();
+      const custodianAccountId = !writerTargetRouting && !seedRouting
+        ? await machine.resolveCustodianAccountId(request.signal) : null;
       if (request.signal?.aborted
         || !installationId
-        || !sourceRouting && !targetRouting && !writerTargetRouting && !seedRouting && context.machineId !== machine.machineId
+        || !sourceRouting && !targetRouting && !writerTargetRouting && !seedRouting
+          && !doesMachineRpcTargetMatchAdmission(request.params, context, {
+            machineId: machine.machineId, installationId, custodianAccountId,
+          })
         || !request.method.startsWith(`${machine.machineId}:`)
-        || !sourceRouting && !targetRouting && !writerTargetRouting && !seedRouting && context.installationId !== installationId
-        || !writerTargetRouting && !seedRouting && context.custodianAccountId !== await machine.resolveCustodianAccountId(request.signal)
+        || !writerTargetRouting && !seedRouting && context.custodianAccountId !== custodianAccountId
         || !await machine.verifyMachineAdmission({ context, method: request.method,
           ...(sourceRouting ? { workspaceSyncSourceRouting: sourceRouting } : {}),
           ...((seedRouting || isProjectSource || writerTargetRouting && request.callerInputAuthorization?.binding.actionId === 'projects.open')

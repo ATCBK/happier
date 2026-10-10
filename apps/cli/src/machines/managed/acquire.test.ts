@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createManagedMachineAcquisitionDriver, createManagedMachineControllerClient } from './acquire';
+import { readManagedMachine } from './readManagedMachine';
 import { createManagedNativeInvocation } from './reconcile';
 import { executeContributedAction } from '@/plugins/runtime/invocation/actions/executeContributedAction';
 import { createManagedProviderOperationAuthority } from '@/daemon/connectedServices/purposeBindings/managedProviderOperationAuthority';
@@ -182,6 +183,35 @@ function originAuthorization(homeId: string, requestId = 'original-request') {
 function materializeNativeBootstrapCredential(services: PluginServices, kind: 'bytes' | 'file') {
     return services.machineProvisioners.materializeBootstrapCredential({ kind });
 }
+it('reads a managed Machine using portable Home authority rather than the HTTP projection local profile label', async () => {
+    const homeId = 'srv_managed_read';
+    const wire = originAuthorization(homeId);
+    const keys = tweetnacl.sign.keyPair();
+    const retained = ManagedMachineV1Schema.parse({ ...machine, homeId });
+    let current = true;
+    const reads: unknown[] = [];
+    // Home HTTP is the boundary; projection, signing and currentness stay real.
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
+        if (String(url).endsWith('/verify')) return { status: 200, data: { ok: true } };
+        expect(options?.headers?.[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER]).toBeTruthy();
+        expect(options?.headers?.Authorization).toBeUndefined();
+        reads.push(body);
+        return { status: 200, data: retained };
+    });
+    const authorization = await projectExternalActionRequesterHttpAuthorization({ authorization: wire,
+        serverId: 'daemon-local-profile', serverIdentityId: homeId, serverHttpBaseUrl: 'https://home.example',
+        target: wire.binding.target, installationId: controller.installationId, privateKey: keys.secretKey,
+        isCurrent: async () => current,
+    });
+    if (!authorization) throw new Error('Requester HTTP projection was not established');
+    const request = { serverHttpBaseUrl: 'https://home.example', homeId, managedId: retained.id, authorization };
+    expect(await readManagedMachine(request)).toEqual(retained);
+    await expect(readManagedMachine({ ...request, homeId: 'another-home' }))
+        .rejects.toMatchObject({ code: 'workspace_sync_child_unavailable' });
+    current = false;
+    await expect(readManagedMachine(request)).rejects.toMatchObject({ code: 'workspace_sync_child_unavailable' });
+    expect(reads).toEqual([{ homeId, managedId: retained.id }]);
+});
 afterEach(async () => {
     vi.restoreAllMocks();
     vi.mocked(filesystem.rm).mockImplementation((await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).rm);

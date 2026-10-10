@@ -2,6 +2,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { readVoicePrivacySettings } from '@/sync/domains/settings/readVoicePrivacySettings';
 import { normalizeNonEmptyString, resolveVoiceMachineLabel } from './shared';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
 
 export async function listMachinesForVoiceTool(params: Readonly<{ serverId?: string; limit?: number }>): Promise<unknown> {
   const state = storage.getState();
@@ -10,7 +11,11 @@ export async function listMachinesForVoiceTool(params: Readonly<{ serverId?: str
   }
   const activeServerId = getActiveServerSnapshot().serverId;
   const serverId = params.serverId ?? activeServerId;
-  const machines = state.machineListByServerId[serverId] ?? (serverId === activeServerId ? Object.values(state.machines) : []);
+  const machines = resolveServerScopedMachines({
+    serverId, activeServerId, activeMachines: Object.values(state.machines),
+    machineListByServerId: state.machineListByServerId,
+    machineListStatusByServerId: state.machineListStatusByServerId,
+  }) ?? [];
   const limit = typeof params.limit === 'number' && Number.isFinite(params.limit) ? Math.max(1, Math.min(200, Math.floor(params.limit))) : 50;
 
   const items = machines

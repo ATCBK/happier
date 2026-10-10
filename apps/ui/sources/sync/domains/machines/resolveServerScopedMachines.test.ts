@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { adoptHomeProfile, setActiveServerId, type ServerProfile } from '@/sync/domains/server/serverProfiles';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { storage } from '@/sync/domains/state/storage';
+import { listMachinesForVoiceTool } from '@/voice/tools/actionImpl/machinesList';
+import { readMachineDaemonCliVersionForServerScope } from './readMachineDaemonCliVersionForServerScope';
 import {
     resolveExactServerScopedMachine,
     resolvePortableMachineAdministrationTarget,
@@ -27,6 +31,49 @@ describe('resolveServerScopedMachines', () => {
         await setActiveServerId(profile.id);
     });
     afterEach(() => standardCleanup());
+
+    it('lists Voice inventory through equivalent Home keys without disclosing settled stale or foreign rows', async () => {
+        const original = storage.getState();
+        const machine = createMachineFixture({ id: 'machine-voice' });
+        const sharingSettings = { ...original.settings, voice: { ...original.settings.voice,
+            privacy: { ...original.settings.voice.privacy, shareDeviceInventory: true },
+        } };
+        try {
+            storage.setState({ settings: sharingSettings, machines: { [machine.id]: machine },
+                machineListByServerId: {}, machineListStatusByServerId: {},
+            });
+            expect(await listMachinesForVoiceTool({ serverId: profile.id })).toMatchObject({
+                items: [{ serverId: profile.id, machineId: machine.id }],
+            });
+            expect(await listMachinesForVoiceTool({ serverId: 'foreign-home' })).toEqual({ items: [] });
+            storage.setState({ machineListByServerId: { [identity]: [], [profile.id]: [machine] },
+                machineListStatusByServerId: { [identity]: 'idle' },
+            });
+            expect(await listMachinesForVoiceTool({ serverId: profile.id })).toEqual({ items: [] });
+            storage.setState({ settings: { ...sharingSettings, voice: { ...sharingSettings.voice,
+                privacy: { ...sharingSettings.voice.privacy, shareDeviceInventory: false },
+            } } });
+            expect(await listMachinesForVoiceTool({ serverId: identity })).toMatchObject({ ok: false, errorCode: 'privacy_disabled' });
+        } finally {
+            storage.setState({ settings: original.settings, machines: original.machines,
+                machineListByServerId: original.machineListByServerId,
+                machineListStatusByServerId: original.machineListStatusByServerId,
+            });
+        }
+    });
+
+    it('reads daemon versions through the same equivalent Home inventory and settled absence rule', () => {
+        const active = createMachineFixture({ id: 'machine-version', daemonState: { cliVersion: '0.3.1' } });
+        const foreign = createMachineFixture({ id: active.id, daemonState: { cliVersion: '0.2.9' } });
+        const state = { machines: { [active.id]: active }, machineListByServerId: { 'foreign-home': [foreign] } };
+        expect(readMachineDaemonCliVersionForServerScope({ state, machineId: active.id,
+            serverId: identity, activeServerId: profile.id })).toBe('0.3.1');
+        expect(readMachineDaemonCliVersionForServerScope({ state, machineId: active.id,
+            serverId: 'foreign-home', activeServerId: profile.id })).toBe('0.2.9');
+        expect(readMachineDaemonCliVersionForServerScope({ machineId: active.id, serverId: profile.id, activeServerId: profile.id,
+            state: { ...state, machineListByServerId: { [identity]: [] }, machineListStatusByServerId: { [identity]: 'idle' } },
+        })).toBeNull();
+    });
 
     it('prefers live active-server machines over a stale scoped cache when the requested server id is an active-server alias', () => {
         const freshMachine = createMachine('machine-live', 200);
