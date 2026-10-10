@@ -101,7 +101,9 @@ export function buildAccountWidgetAddSections(input: AccountWidgetAddInput): rea
     const addGroup = input.addGroup;
     const groups = addGroup ? (input.fragments ?? []).map(fragment => ({ ...buildWidgetGroupFragmentEntry({
         fragment, candidates: input.candidates, scope: input.scope, context, submitLabel: input.labels.submit,
-        add: (saved, draft) => runWidgetSetupCommand(() => addGroup(saved, draft), t('widgetAdd.addFailed')),
+        add: (saved, draft) => runWidgetSetupCommand(() => addGroup({ ...saved, group: {
+            ...saved.group, context: draft.bindings, ...(draft.width ? { width: draft.width } : {}),
+        } }, draft), t('widgetAdd.addFailed')),
         renderGroupPreview: input.renderGroupPreview ?? (() => null),
     }), ...(input.fragmentActions ? { actions: input.fragmentActions(fragment) } : {}) })) : [];
     const yours = [...widgets.yours.map(entry), ...groups];
@@ -141,11 +143,9 @@ export function useAccountWidgetAddSections(input: Readonly<{
     const groupCapable = scope !== null && supportsWidgetGroupsV1(scope.owner.kind);
     const { fragments, actionsFor: fragmentActions } = useYourWidgetLayoutFragments(groupCapable ? { serverId: scope.serverId, accountId: scope.accountId } : null);
     const area = input.area;
-    const addGroup = React.useCallback(async (fragment: WidgetLayoutFragmentSummaryV1, draft: WidgetSetupDraft) => {
+    const addGroup = React.useCallback(async (fragment: WidgetLayoutFragmentSummaryV1) => {
         if (!scope) throw new Error('widget_area_unavailable');
-        const group = { ...fragment.group, ...(draft.width ? { width: draft.width } : {}),
-            ...(Object.keys(draft.bindings).length ? { context: draft.bindings } : {}) };
-        const outcome = await runAddWidgetLayoutFragmentCommandV1(group, scope, area ? { area } : {});
+        const outcome = await runAddWidgetLayoutFragmentCommandV1(fragment.group, scope, area ? { area } : {});
         if (outcome.kind === 'refused') throw new Error(outcome.errorCode);
         return outcome.kind === 'approvalPending' ? { ok: true as const, approvalPending: true as const } : { ok: true as const };
     }, [area, scope]);

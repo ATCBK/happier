@@ -118,9 +118,26 @@ describe('WidgetAddSurface', () => {
         await act(async () => screen.findByTestId('add.search')!.props.onKeyPress({ nativeEvent: { key: 'ArrowDown' }, preventDefault: () => {} }));
         await flushHookEffects({ cycles: 2 });
         expect(accessibilityBoundary.announce).toHaveBeenLastCalledWith('Signups this week, New people per day');
+        await act(async () => screen.findByTestId('add.search')!.props.onKeyPress({ nativeEvent: { key: 'Enter' }, preventDefault: () => {} }));
+        await flushHookEffects({ cycles: 3 });
+        expect(accessibilityBoundary.announce).toHaveBeenLastCalledWith('widgetAdd.justAdded(widget=Signups this week)');
         await act(async () => screen.findByTestId('add.search')!.props.onKeyPress({ nativeEvent: { key: 'ArrowDown' }, preventDefault: () => {} }));
         await flushHookEffects({ cycles: 2 });
         expect(accessibilityBoundary.announce).toHaveBeenLastCalledWith('Summary, Sessions');
+        expect(rec.submits.map(submit => submit.id)).toEqual([SIGNUPS.key]);
+    });
+
+    it('delivers Android search-arrow selection through the mounted polite live region', async () => {
+        accessibilityBoundary.os = 'android';
+        const rec = recorder();
+        const screen = await renderPanel({ sections: [{ id: 'all', title: 'All', entries: [widgetEntry(SIGNUPS, rec)] }] });
+        const status = () => screen.findByTestId('add.selectionStatus')!;
+        expect(status().props.accessibilityLiveRegion).toBe('polite');
+        expect(status().props.children.props.children).toBe('');
+        await act(async () => screen.findByTestId('add.search')!.props.onKeyPress({ nativeEvent: { key: 'ArrowDown' }, preventDefault: () => {} }));
+        await flushHookEffects({ cycles: 2 });
+        expect(status().props.children.props.children).toBe('Signups this week, New people per day');
+        expect(accessibilityBoundary.announce).not.toHaveBeenCalled();
         expect(rec.submits).toEqual([]);
     });
 

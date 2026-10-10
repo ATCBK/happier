@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { AccessibilityInfo, Platform, ScrollView, View } from 'react-native';
+import { Platform, ScrollView, View } from 'react-native';
 import Animated, { FadeIn, ZoomIn } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
@@ -11,6 +11,7 @@ import {
 } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
@@ -89,6 +90,14 @@ export type WidgetAddPanelProps = Readonly<{
  * list down): added — its count ticks and a check lands; waiting for someone's approval; or refused.
  */
 type AddFeedback = Readonly<{ entryId: string; kind: 'added' | 'pending' | 'failed'; message: string }>;
+
+function widgetAddEntryAccessibilityLabel(entry: WidgetAddEntry): string {
+    return [entry.title, entry.subtitle ?? null, entry.added ? t('widgetAdd.added') : entry.count ?? null].filter(Boolean).join(', ');
+}
+
+function widgetAddOptionId(listboxId: string, entryId: string): string {
+    return `${listboxId}.option.${encodeURIComponent(entryId)}`;
+}
 
 function feedbackFor(entry: Readonly<{ id: string; title: string }>, result: WidgetSetupSubmitResult): AddFeedback {
     if (!result.ok) return { entryId: entry.id, kind: 'failed', message: result.message };
@@ -177,9 +186,8 @@ export function WidgetAddPanel(props: WidgetAddPanelProps): React.ReactElement {
     const [pushed, setPushed] = React.useState(props.initialEntryId !== undefined);
     const [direction, setDirection] = React.useState<'none' | 'forward' | 'backward'>('none');
     const [feedback, setFeedback] = React.useState<AddFeedback | null>(null);
-    React.useEffect(() => {
-        if (feedback) AccessibilityInfo.announceForAccessibility?.(feedback.message);
-    }, [feedback]);
+    const panelId = React.useId();
+    const listboxId = `widget-add-${panelId}.listbox`;
 
     const sections = React.useMemo(() => filterWidgetAddSections(props.sections, query), [props.sections, query]);
     const ask = props.ask && matchesWidgetAddAsk(props.ask, query) ? props.ask : null;
@@ -194,6 +202,8 @@ export function WidgetAddPanel(props: WidgetAddPanelProps): React.ReactElement {
     // The selection survives a search that hides its row: the pane keeps showing what was chosen.
     const selected = React.useMemo(() => (selectedId === ASK_ID ? askEntry
         : props.sections.flatMap((section) => section.entries).find((entry) => entry.id === selectedId) ?? null), [askEntry, props.sections, selectedId]);
+    // A hidden selection still owns the preview, but cannot be a search's active descendant.
+    const activeId = selectedId !== null && visibleIds.includes(selectedId) ? selectedId : null;
 
     const split = props.composition === 'split';
     const select = React.useCallback((id: string) => {
@@ -262,6 +272,8 @@ export function WidgetAddPanel(props: WidgetAddPanelProps): React.ReactElement {
             sections={sections}
             askEntry={ask ? askEntry : null}
             selectedId={selectedId}
+            listboxId={listboxId}
+            activeId={activeId}
             feedback={feedback}
             onSelect={select}
         />
@@ -291,6 +303,16 @@ export function WidgetAddPanel(props: WidgetAddPanelProps): React.ReactElement {
             style={[styles.root, split ? styles.rootSplit : null]}
             {...(Platform.OS === 'web' ? { onKeyDown } : {})}
         >
+            <PoliteAccessibilityStatus
+                statusTestID={`${props.testID}.status`}
+                transitionKey={feedback ? `outcome:${feedback.entryId}:${feedback.kind}` : 'idle'}
+                announcement={feedback?.message ?? ''}
+            />
+            {Platform.OS !== 'web' ? <PoliteAccessibilityStatus
+                statusTestID={`${props.testID}.selectionStatus`}
+                transitionKey={`selection:${activeId ?? ''}`}
+                announcement={activeId !== null && selected ? widgetAddEntryAccessibilityLabel(selected) : ''}
+            /> : null}
             {split ? (
                 <>
                     <View style={styles.listColumn}>{list}</View>
@@ -312,6 +334,8 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
     onSearchKey: (event: Readonly<{ nativeEvent: { key: string }; preventDefault?: () => void }>) => void;
     askEntry: WidgetAddEntry | null;
     selectedId: string | null;
+    listboxId: string;
+    activeId: string | null;
     feedback: AddFeedback | null;
     onSelect: (id: string) => void;
 }>): React.ReactElement {
@@ -320,6 +344,7 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
     const nothing = props.sections.length === 0 && !props.askEntry;
     const row = (entry: WidgetAddEntry) => (
         <WidgetAddRow key={entry.id} entry={entry} selected={props.selectedId === entry.id}
+            nativeID={widgetAddOptionId(props.listboxId, entry.id)}
             feedback={props.feedback?.entryId === entry.id ? props.feedback : null}
             onSelect={props.onSelect} testID={`${props.testID}.entry.${entry.id}`} />
     );
@@ -343,9 +368,18 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
                 testID={`${props.testID}.search`}
                 style={styles.search}
                 onKeyPress={props.onSearchKey}
+                {...(Platform.OS === 'web' ? {
+                    role: 'combobox' as const,
+                    'aria-autocomplete': 'list' as const,
+                    'aria-controls': props.listboxId,
+                    'aria-expanded': true,
+                    'aria-activedescendant': props.activeId === null ? undefined : widgetAddOptionId(props.listboxId, props.activeId),
+                } : {})}
                 {...(Platform.OS === 'web' && !props.phone ? { autoFocus: true } : {})}
             />
-            <ScrollView style={props.phone ? null : styles.fill} contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="always">
+            <ScrollView nativeID={props.listboxId} accessibilityLabel={props.searchPlaceholder}
+                {...(Platform.OS === 'web' ? { role: 'listbox' as const } : {})}
+                style={props.phone ? null : styles.fill} contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="always">
                 {props.sections.map((section) => (
                     <View key={section.id} style={styles.section} accessibilityLabel={section.title}>
                         <View style={styles.sectionHeader}>
@@ -372,6 +406,7 @@ const WidgetAddRow = React.memo(function WidgetAddRow(props: Readonly<{
     feedback: AddFeedback | null;
     onSelect: (id: string) => void;
     testID: string;
+    nativeID: string;
 }>): React.ReactElement {
     const styles = stylesheet;
     const { theme } = useUnistyles();
@@ -379,9 +414,10 @@ const WidgetAddRow = React.memo(function WidgetAddRow(props: Readonly<{
     const row = (
         <HappierPressable
             testID={props.testID}
+            nativeID={props.nativeID}
             accessibilityRole="option"
             selected={props.selected}
-            accessibilityLabel={[entry.title, entry.subtitle ?? null, entry.added ? t('widgetAdd.added') : entry.count ?? null].filter(Boolean).join(', ')}
+            accessibilityLabel={widgetAddEntryAccessibilityLabel(entry)}
             onPress={() => props.onSelect(entry.id)}
             style={(state) => [
                 styles.row,

@@ -22,13 +22,20 @@ it('delivers search-owned active options to the DOM while arrows preserve focus 
         { id: 'beta', title: 'Beta', icon: 'chat-circle' as const, onPick: () => {} },
     ] }];
     try {
-        await act(async () => root.render(<WidgetAddPanel title="Add widgets" searchPlaceholder="Search widgets" sections={sections}
-            addLabel="Add" composition="split" onRequestClose={() => {}} testID="add" />));
+        await act(async () => root.render(<>
+            <WidgetAddPanel title="Add widgets" searchPlaceholder="Search widgets" sections={sections}
+                addLabel="Add" composition="split" onRequestClose={() => {}} testID="add" />
+            <WidgetAddPanel title="Add widgets elsewhere" searchPlaceholder="Search widgets" sections={sections}
+                addLabel="Add" composition="split" onRequestClose={() => {}} testID="other" />
+        </>));
         const search = container.querySelector<HTMLInputElement>('input[data-testid="add.search"]')!;
         const list = container.querySelector('[role="listbox"]');
         expect(list).not.toBeNull();
         expect(search.getAttribute('role')).toBe('combobox');
         expect(search.getAttribute('aria-controls')).toBe(list!.id);
+        const otherSearch = container.querySelector<HTMLInputElement>('input[data-testid="other.search"]')!;
+        expect(otherSearch.getAttribute('aria-controls')).not.toBe(list!.id);
+        expect(document.getElementById(otherSearch.getAttribute('aria-controls')!)?.getAttribute('role')).toBe('listbox');
         search.focus();
         const arrow = async (key: string) => act(async () => search.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })));
         await arrow('ArrowDown');
