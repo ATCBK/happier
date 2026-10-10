@@ -5,22 +5,35 @@ import {
   happierPageTextMetrics,
 } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
-/** The link's own line: its visible height. The hit area grows around it, never the layout. */
+/** The link's own line: its visible height. The press target grows around it, never the layout. */
 const LINE_HEIGHT_PX = happierPageTextMetrics('rowDescription').lineHeight;
-/** A precise pointer needs only a little slack around the words. */
-const PRECISE_POINTER_HIT_SLOP_PX = 6;
 
-function resolveHitSlopPx(): number {
+/**
+ * The press frame on a touch pointer (the same strategy as `IconButton`'s `overhang` frame). **Not
+ * `hitSlop`**: react-native-web's `Pressable` never reads it, so a slop target does not exist on touch
+ * web. The frame is real box model, grown only above and below the line and given back with negative
+ * margins, so the words keep the sentence's line and baseline. It never grows sideways, where it would
+ * reach over the words beside it. A precise pointer keeps the words' own box.
+ */
+function resolveTouchFrame(): Readonly<{
+  paddingTop: number;
+  paddingBottom: number;
+  marginTop: number;
+  marginBottom: number;
+}> | null {
   const floor = resolveTouchTargetFloorPx();
-  return floor === null
-    ? PRECISE_POINTER_HIT_SLOP_PX
-    : Math.ceil((floor - LINE_HEIGHT_PX) / 2);
+  if (floor === null) return null;
+  const grow = Math.max(0, (floor - LINE_HEIGHT_PX) / 2);
+  return grow === 0
+    ? null
+    : { paddingTop: grow, paddingBottom: grow, marginTop: -grow, marginBottom: -grow };
 }
 
 /**
@@ -29,7 +42,8 @@ function resolveHitSlopPx(): number {
  *
  * It is a button, not navigation: semibold ink (secondary, or primary for `strong`) that underlines on hover, the
  * shared press dip, and the keyboard focus ring. The text keeps its line height, so it sits on the
- * baseline of the sentence it ends; the press target reaches the platform minimum through hit slop.
+ * baseline of the sentence it ends; on a touch pointer the press frame reaches the platform minimum
+ * above and below the line without taking layout. The focus ring and press dip stay on the words.
  */
 export const TextLinkButton = React.memo(function TextLinkButton(
   props: Readonly<{
@@ -46,6 +60,7 @@ export const TextLinkButton = React.memo(function TextLinkButton(
 ) {
   const { theme } = useUnistyles();
   const strong = props.tone === 'strong';
+  const touchFrame = resolveTouchFrame();
   return (
     <HappierPressable
       testID={props.testID}
@@ -53,39 +68,48 @@ export const TextLinkButton = React.memo(function TextLinkButton(
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       expanded={props.expanded}
       disabled={props.disabled}
-      hitSlop={resolveHitSlopPx()}
       onPress={props.onPress}
       style={(state) => ({
         alignSelf: 'flex-start',
-        borderRadius: 4,
+        ...touchFrame,
         opacity: state.disabled
           ? 0.4
           : state.pressed
             ? HAPPIER_PRESS_FEEDBACK_V1.opacity
             : 1,
-        ...happierFocusRingStyle({
-          visible: state.focused,
-          color: theme.colors.border.focus,
-        }),
       })}
     >
       {(state) => (
-        <Text
-          numberOfLines={1}
+        // The ring outlines the words, never the larger touch frame around them.
+        <View
           style={[
-            stylesheet.label,
-            strong ? stylesheet.strong : null,
-            state.hovered ? stylesheet.hovered : null,
+            stylesheet.ink,
+            happierFocusRingStyle({
+              visible: state.focused,
+              color: theme.colors.border.focus,
+            }),
           ]}
         >
-          {props.label}
-        </Text>
+          <Text
+            numberOfLines={1}
+            style={[
+              stylesheet.label,
+              strong ? stylesheet.strong : null,
+              state.hovered ? stylesheet.hovered : null,
+            ]}
+          >
+            {props.label}
+          </Text>
+        </View>
       )}
     </HappierPressable>
   );
 });
 
 const stylesheet = StyleSheet.create((theme) => ({
+  ink: {
+    borderRadius: 4,
+  },
   label: {
     ...Typography.default('semiBold'),
     ...happierPageTextMetrics('rowDescription'),

@@ -344,6 +344,9 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
         showCategoryTitles
         matchTriggerWidth
         connectToTrigger
+        // A phone gets the shared bottom sheet, named by the section (lab `b-work Vp`).
+        popoverPhonePresentation="sheet"
+        popoverAccessibilityLabel={t('sessionVoice.title')}
         rowKind="item"
         itemRowProps={{ rightElementOutsidePressable: true }}
         footer={

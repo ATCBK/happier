@@ -2,6 +2,7 @@ import { showPutUnderSessionModal } from '@/components/sessions/work/PutUnderSes
 import { roleActions } from '@/sync/ops/roles/roleActions';
 import { sessionDisplayActions, undoSessionBotChange } from '@/sync/ops/sessions/sessionDisplayActions';
 import { readSessionBotV1, type SessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
+import { announceBotMarkerAccepted } from '@/components/sessions/bots/botMarkerFeedback';
 import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import * as React from 'react';
@@ -324,7 +325,11 @@ export async function executeSessionAction(params: Readonly<{
             const result = await sessionDisplayActions.setBot(params.target.sessionId, accepted,
                 { serverId: params.target.serverId });
             if (!result.ok) throw new HappyError(result.error, false);
-            if (targetAddress) publishSessionBotChangeNotice({ target: params.target, address: targetAddress, accepted, previous });
+            if (targetAddress) {
+                publishSessionBotChangeNotice({ target: params.target, address: targetAddress, accepted, previous });
+                // Accepted only: the header mark acknowledges it and the rail's Bots entry nudges (lab `b-promote`).
+                announceBotMarkerAccepted({ serverId: targetAddress.serverId, sessionId: targetAddress.sessionId, bot: accepted !== null });
+            }
             return;
         }
         case SESSION_ACTION_TOOL_CALLS_TOGGLE_ID:

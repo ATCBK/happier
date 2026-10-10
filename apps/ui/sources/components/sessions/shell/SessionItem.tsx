@@ -821,6 +821,8 @@ const SessionItemContent = React.memo(
         });
         const swipeableRef = React.useRef<Swipeable | null>(null);
         const contextMenuAnchorRef = React.useRef<View>(null);
+        // The row's picture: an accepted Pin to rail travels from here (lab `b-rail` signature move).
+        const identityRef = React.useRef<View>(null);
         const followEditor = useAccountSessionFollowEditorHost({
             serverId: serverId ?? null,
             sessionId: resolvedSession.id,
@@ -1249,6 +1251,7 @@ const SessionItemContent = React.memo(
             leadingMenuItems,
             onSelectLeadingMenuItem: handleSelectLeadingMenuItem,
             surface: actionMenuSurface,
+            flightOriginRef: identityRef,
             onOpen: handleOpenFromMenu,
             onMoveToFolder,
             selectionModeAvailable: Boolean(resolvedSelectionKey),
@@ -1657,16 +1660,18 @@ const SessionItemContent = React.memo(
                                 ]}
                             />
                         ) : (
-                            <SessionListIdentity
-                                session={resolvedSession}
-                                display={resolvedSessionListIdentityDisplay}
-                                serverId={serverId ?? null}
-                                color={sessionTitleColor}
-                                avatarSize={avatarSize}
-                                agentLogoSize={agentLogoSize}
-                                connected={sessionStatus.isConnected}
-                                testID={`session-list-agent-logo-${resolvedSession.id}`}
-                            />
+                            <View ref={identityRef} collapsable={false}>
+                                <SessionListIdentity
+                                    session={resolvedSession}
+                                    display={resolvedSessionListIdentityDisplay}
+                                    serverId={serverId ?? null}
+                                    color={sessionTitleColor}
+                                    avatarSize={avatarSize}
+                                    agentLogoSize={agentLogoSize}
+                                    connected={sessionStatus.isConnected}
+                                    testID={`session-list-agent-logo-${resolvedSession.id}`}
+                                />
+                            </View>
                         )}
                         {!isMinimal && shouldRenderSessionListAvatar && pendingBadge ? (
                             <View

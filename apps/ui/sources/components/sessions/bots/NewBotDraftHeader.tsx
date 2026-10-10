@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import Animated, { FadeIn } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { useComposerTextValue } from '@/components/sessions/agentInput/composerTextStore';
@@ -59,8 +59,9 @@ export const NewBotDraftHeader = React.memo(function NewBotDraftHeader(
         title={name.trim() || t('bots.name.placeholder')}
         alwaysShowTitle
         titleEditor={titleEditor}
-        // The purpose line becomes the naming hint and back with a soft arrival (lab `b-new` Motion);
-        // the first render and reduced motion place the sentence at once.
+        // The purpose line and the naming hint crossfade (lab `b-new` Motion, `durationMs.base`): the
+        // leaving line fades where it stood while the new one arrives. The first render and reduced
+        // motion place the sentence at once.
         description={
           <Animated.View
             key={naming ? 'hint' : 'purpose'}
@@ -68,6 +69,11 @@ export const NewBotDraftHeader = React.memo(function NewBotDraftHeader(
               reducedMotion || !swapped.current
                 ? undefined
                 : FadeIn.duration(motionTokens.durationMs.base)
+            }
+            exiting={
+              reducedMotion
+                ? undefined
+                : FadeOut.duration(motionTokens.durationMs.base)
             }
           >
             {renderPageHeaderText({

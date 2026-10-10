@@ -1,5 +1,6 @@
 import { archiveSessionReports, confirmSessionArchive } from '@/components/sessions/actions/confirmSessionArchive';
 import * as React from 'react';
+import type { View } from 'react-native';
 
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
@@ -29,6 +30,7 @@ import {
     resolveManualReadStateFromSessionActionId,
 } from '@/components/sessions/actions/sessionActionIds';
 import { createSessionActionDropdownItem } from '@/components/sessions/actions/sessionActionPresentation';
+import { forgetRailPinOrigin, measureWindowRect, noteRailPinOrigin } from '@/components/sessions/bots/railPinFlight';
 import type { SessionActionExecutionOperations, SessionActionId, SessionActionTarget } from '@/components/sessions/actions/sessionActionTypes';
 import type { SessionReminderPresentation } from '@/sync/domains/session/organization/attentionStanding';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
@@ -128,6 +130,8 @@ export function useSessionRowActionMenu(params: Readonly<{
     onSelectLeadingMenuItem?: (itemId: string) => boolean | Promise<boolean>;
     /** The Bots roster's compact menu instead of the list's; its Open row runs `onOpen`. */
     surface?: 'rowMenu' | 'botsRoster';
+    /** The row's picture: an accepted Pin to rail travels from here to its rail slot (lab `b-rail`). */
+    flightOriginRef?: React.RefObject<View | null>;
     onOpen?: () => void;
     onMoveToFolder?: () => void;
     selectionModeAvailable?: boolean;
@@ -378,6 +382,16 @@ export function useSessionRowActionMenu(params: Readonly<{
         }
 
         const actionId = resolveActionIdFromMenuItemId(itemId);
+        if (actionId === SESSION_ACTION_RAIL_PIN_ID) {
+            // Where the picture is now; the rail slot reads it only if the pin is accepted.
+            const pinned = { serverId: target.serverId, sessionId: target.sessionId };
+            noteRailPinOrigin(pinned, await measureWindowRect(params.flightOriginRef?.current));
+            await executeSessionAction({ actionId, target }).catch((error: unknown) => {
+                forgetRailPinOrigin(pinned);
+                showActionError(error);
+            });
+            return;
+        }
         switch (actionId) {
             case SESSION_ACTION_RENAME_ID:
                 await handleRenameSession();
@@ -418,6 +432,7 @@ export function useSessionRowActionMenu(params: Readonly<{
         params.onOpenFollowEditor,
         params.onMoveToFolder,
         params.onSelectLeadingMenuItem,
+        params.flightOriginRef,
         reminderPresets,
         applyReminderPresetIntent,
     ]);

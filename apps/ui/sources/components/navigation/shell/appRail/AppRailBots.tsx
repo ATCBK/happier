@@ -1,10 +1,14 @@
-import { readSessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import { usePathname } from 'expo-router';
 import * as React from 'react';
 import { View } from 'react-native';
 import Animated, {
+  Easing,
   FadeIn,
   FadeOut,
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withTiming,
   ZoomIn,
   ZoomOut,
 } from 'react-native-reanimated';
@@ -12,6 +16,15 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useShallow } from 'zustand/react/shallow';
 
 import { readBotActivity } from '@/components/sessions/bots/botActivity';
+import { BotMarkerFeedback } from '@/components/sessions/bots/botMarkerFeedback';
+import { useBotsHomeServerIds, useBotsSummary } from '@/components/sessions/bots/botsSummary';
+import {
+  forgetRailPinOrigin,
+  measureWindowRect,
+  peekRailPinOrigin,
+  resolveRailPinFlightStart,
+  type WindowRect,
+} from '@/components/sessions/bots/railPinFlight';
 import { BotsPopoverContent } from '@/components/sessions/bots/BotsPopoverContent';
 import { useOptionalBotsRosterRuntime } from '@/components/sessions/bots/BotsRosterRuntime';
 import { WorkspaceDestinationRow } from '@/components/appShell/workspace/WorkspaceDestinationRow';
@@ -22,13 +35,12 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Icon } from '@/components/ui/icons/Icon';
 import { motionTokens } from '@/components/ui/motion';
+import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
-import { useSessionListSelectionState } from '@/hooks/session/useSessionListSelectionState';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
-import { resolveSessionListOrganizationServerIds } from '@/sync/domains/session/organization/sessionListOrganizationServerIds';
 import {
   storage,
   useSessionOrganizationProjections,
@@ -58,25 +70,12 @@ const ROSTER_WIDTH_PX = 376;
 const PIN_AVATAR_SIZE_PX = 24;
 const PIN_RING_SIZE_PX = 32;
 
-/** The Homes whose rail membership the rail reads: the same Homes the Sessions list presents. */
-function useRailBotServerIds(): readonly string[] {
-  const selection = useSessionListSelectionState();
-  return React.useMemo(
-    () =>
-      resolveSessionListOrganizationServerIds({
-        allowedServerIds: selection.allowedServerIds,
-        activeServerId: selection.activeServerId,
-      }),
-    [selection.activeServerId, selection.allowedServerIds],
-  );
-}
-
 /**
  * The rail's lean Bot facts: explicit rail membership (organization projection) joined with the
  * already-loaded rows of exactly those Sessions. Never pages, never reads transcripts.
  */
 export function useAppRailBotHomes(): readonly AppRailBotHome[] {
-  const serverIds = useRailBotServerIds();
+  const serverIds = useBotsHomeServerIds();
   const projections = useSessionOrganizationProjections(serverIds);
   const pinned = React.useMemo(
     () =>
@@ -118,55 +117,6 @@ export function useAppRailBotHomes(): readonly AppRailBotHome[] {
   );
 }
 
-type SessionListRowsByServerId = Readonly<
-  Record<
-    string,
-    Readonly<Record<string, SessionListRenderableSession>> | undefined
-  >
->;
-
-/**
- * Counts the loaded Bots that need the person. The rail is always mounted and the store notifies on
- * every change anywhere, so the count is recomputed only when one of these Homes' row maps was
- * replaced; every other notification returns the previous number without walking a row.
- */
-export function createBotsNeedingYouCounter(
-  serverIds: readonly string[],
-): (rowsByServerId: SessionListRowsByServerId) => number {
-  let countedRows: ReadonlyArray<SessionListRowsByServerId[string]> | null =
-    null;
-  let count = 0;
-  return (rowsByServerId) => {
-    const rows = serverIds.map((serverId) => rowsByServerId[serverId]);
-    if (
-      countedRows !== null &&
-      rows.every((homeRows, index) => homeRows === countedRows![index])
-    )
-      return count;
-    const now = Date.now();
-    count = 0;
-    for (const homeRows of rows) {
-      if (!homeRows) continue;
-      for (const row of Object.values(homeRows)) {
-        if (readSessionBotV1(row.metadata?.bot)?.kind !== 'bot') continue;
-        if (readBotActivity(row, now) === 'needsYou') count += 1;
-      }
-    }
-    countedRows = rows;
-    return count;
-  };
-}
-
-/** How many loaded Bots need the person: the Bots entry's only badge (no offline or working count). */
-function useBotsNeedingYouCount(): number {
-  const serverIds = useRailBotServerIds();
-  const count = React.useMemo(
-    () => createBotsNeedingYouCounter(serverIds),
-    [serverIds],
-  );
-  return storage((state) => count(state.sessionListRowsByServerId));
-}
-
 const renderRoster = (content: SidebarFooterPopoverContentProps) => (
   <BotsPopoverContent {...content} />
 );
@@ -183,13 +133,15 @@ export const AppRailBots = React.memo(function AppRailBots(
 ) {
   const { theme } = useUnistyles();
   const runtime = useOptionalBotsRosterRuntime();
-  const needsYou = useBotsNeedingYouCount();
+  const needsYou = useBotsSummary().needsYou;
   const label =
     needsYou > 0
       ? `${props.entry.title}, ${t('bots.roster.needsYou', { count: needsYou })}`
       : props.entry.title;
   return (
     <>
+      {/* An accepted promotion nudges the one place Bots live, once (plan 60: "where-did-it-go nudge"). */}
+      <BotMarkerFeedback kind="nudge">
       <SidebarFooterPopoverButton
         testID={`app-rail:${props.entry.id}`}
         iconName={props.entry.icon}
@@ -213,6 +165,7 @@ export const AppRailBots = React.memo(function AppRailBots(
           />
         )}
       />
+      </BotMarkerFeedback>
       {needsYou > 0 && !props.renderTrigger ? (
         <AppRailBadge
           testID={`app-rail:${props.entry.id}-badge`}
@@ -222,6 +175,69 @@ export const AppRailBots = React.memo(function AppRailBots(
     </>
   );
 });
+
+/** How far the travelling picture lifts while it leaves the row and settles as it lands. */
+const PIN_FLIGHT_LIFT = 0.06;
+
+/**
+ * The accepted pin's signature move (lab `b-rail`, plan 60 "pin shared-element flight"): when the
+ * person pinned from a row that recorded where its picture was, the new slot starts there, at that
+ * size, and travels to the rail on the success-moment track — lift (`gatherMs`), travel (`travelMs`),
+ * land (`landMs`). Transform and opacity only. No recorded origin (a pin from elsewhere) or reduced
+ * motion leaves the slot to its ordinary arrival.
+ */
+function useRailPinLanding(
+  session: Readonly<{ serverId: string; sessionId: string }> | null,
+  reducedMotion: boolean,
+) {
+  const [origin] = React.useState<WindowRect | null>(() =>
+    session && !reducedMotion ? peekRailPinOrigin(session) : null,
+  );
+  const clock = useSharedValue(origin ? 0 : 3);
+  const from = useSharedValue({ translateX: 0, translateY: 0, scale: 1 });
+  const avatarRef = React.useRef<View>(null);
+  const startedRef = React.useRef(false);
+  const onAvatarLayout = React.useCallback(() => {
+    if (!origin || !session || startedRef.current) return;
+    startedRef.current = true;
+    forgetRailPinOrigin(session);
+    fireAndForget(
+      measureWindowRect(avatarRef.current).then((slot) => {
+        const start = resolveRailPinFlightStart(origin, slot);
+        if (!start) {
+          clock.value = 3;
+          return;
+        }
+        from.value = start;
+        const track = motionTokens.successMoment;
+        const ease = reanimatedMotionTokens.easing.standard;
+        clock.value = withSequence(
+          withTiming(1, { duration: track.gatherMs, easing: ease }),
+          withTiming(2, { duration: track.travelMs, easing: ease }),
+          withTiming(3, { duration: track.landMs, easing: Easing.out(Easing.quad) }),
+        );
+      }),
+      { tag: 'AppRail.Bot.pinLanding' },
+    );
+  }, [clock, from, origin, session]);
+  const style = useAnimatedStyle(() => {
+    const t = clock.value;
+    const gather = Math.min(1, t);
+    const travel = Math.min(1, Math.max(0, t - 1));
+    const land = Math.min(1, Math.max(0, t - 2));
+    const lifted = 1 + PIN_FLIGHT_LIFT * (gather - land);
+    const size = from.value.scale + (1 - from.value.scale) * travel;
+    return {
+      opacity: gather,
+      transform: [
+        { translateX: from.value.translateX * (1 - travel) },
+        { translateY: from.value.translateY * (1 - travel) },
+        { scale: size * lifted },
+      ],
+    };
+  });
+  return { flying: origin !== null, style, avatarRef, onAvatarLayout };
+}
 
 /**
  * One Bot the person pinned to the rail (lab `b-rail A`, 60s3): its seeded avatar, a thin ring while
@@ -258,7 +274,11 @@ export const AppRailBotPin = React.memo(function AppRailBotPin(
       : activity === 'working'
         ? t('bots.roster.rowWorking', { name })
         : name;
-  const entering = !props.animateEntry
+  const landing = useRailPinLanding(
+    props.animateEntry ? { serverId: bot.serverId, sessionId: bot.sessionId } : null,
+    reducedMotion,
+  );
+  const entering = !props.animateEntry || landing.flying
     ? undefined
     : reducedMotion
       ? FadeIn.duration(motionTokens.successMoment.reducedCrossFadeMs)
@@ -270,7 +290,7 @@ export const AppRailBotPin = React.memo(function AppRailBotPin(
     ? FadeOut.duration(motionTokens.successMoment.reducedCrossFadeMs)
     : ZoomOut.duration(motionTokens.overlay.popover.exitMs);
   return (
-    <Animated.View entering={entering} exiting={exiting} ref={reorder.ref}>
+    <Animated.View entering={entering} exiting={exiting} ref={reorder.ref} style={landing.style}>
       <WorkspaceDestinationRow style={props.slotStyle} href={href} existingMenu dragSource={false}>
         {actions => <>
         <DropdownMenu
@@ -297,16 +317,27 @@ export const AppRailBotPin = React.memo(function AppRailBotPin(
           tooltipPlacement="right"
           selected={active}
           onLongPress={openMenu}
-          onContextMenu={event => { event.preventDefault(); event.stopPropagation(); openMenu(); }}
-          onKeyDown={async event => {
-            if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
-              event.preventDefault(); event.stopPropagation(); openMenu(); return;
+          onContextMenu={event => {
+            if (event && typeof event === 'object') {
+              const gesture = event as { preventDefault?: () => void; stopPropagation?: () => void };
+              gesture.preventDefault?.(); gesture.stopPropagation?.();
             }
-            if (!event.altKey || !reorder.available) return;
-            const target = event.key === 'ArrowUp' ? props.previousBotSessionId : event.key === 'ArrowDown' ? props.nextBotSessionId : undefined;
-            if (!target) return;
-            event.preventDefault(); event.stopPropagation();
-            await reorder.move(target, event.key === 'ArrowUp' ? 'top' : 'bottom');
+            openMenu();
+          }}
+          onKeyDown={(key, event) => {
+            // The shared pressable owns key normalization and stopping a handled event.
+            const gesture = event && typeof event === 'object'
+              ? event as { altKey?: boolean; shiftKey?: boolean; nativeEvent?: { altKey?: boolean; shiftKey?: boolean } }
+              : {};
+            const modifiers = gesture.nativeEvent ?? gesture;
+            if (key === 'ContextMenu' || (modifiers.shiftKey && key === 'F10')) {
+              openMenu(); return true;
+            }
+            if (!modifiers.altKey || !reorder.available) return false;
+            const target = key === 'ArrowUp' ? props.previousBotSessionId : key === 'ArrowDown' ? props.nextBotSessionId : undefined;
+            if (!target) return false;
+            fireAndForget(reorder.move(target, key === 'ArrowUp' ? 'top' : 'bottom'), { tag: 'AppRail.Bot.keyboardMove' });
+            return true;
           }}
           icon={
             <View style={styles.pin}>
@@ -319,11 +350,13 @@ export const AppRailBotPin = React.memo(function AppRailBotPin(
                   />
                 </View>
               ) : null}
-              <Avatar
-                id={bot.avatarId}
-                size={PIN_AVATAR_SIZE_PX}
-                monochrome={bot.session.active !== true}
-              />
+              <View ref={landing.avatarRef} collapsable={false} onLayout={landing.onAvatarLayout}>
+                <Avatar
+                  id={bot.avatarId}
+                  size={PIN_AVATAR_SIZE_PX}
+                  monochrome={bot.session.active !== true}
+                />
+              </View>
             </View>
           }
           onPress={() => {
