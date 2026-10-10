@@ -41,13 +41,30 @@ describe('describeHappierDropOutcome', () => {
   });
 
   it('refuses with the owner reason, stays quiet for already-here and silent over nothing', () => {
-    const refused = (code: string, preview?: { verb: string; target: string }) => ({ status: 'refused' as const, reason: { code, message: 'Because' }, ...(preview ? { preview } : {}) });
-    expect(describeHappierDropOutcome({ phase: 'carrying', admission: refused('read', { verb: 'Can’t put under Fix', target: 'Fix' }) }, vocabulary))
+    const refused = (code: string, preview?: { verb: string; target: string; glyph?: 'refused' }) => ({ status: 'refused' as const, reason: { code, message: 'Because' }, ...(preview ? { preview } : {}) });
+    expect(describeHappierDropOutcome({ phase: 'carrying', admission: refused('read', { verb: 'Can’t put under Fix', target: 'Fix', glyph: 'refused' }) }, vocabulary))
       .toEqual({ tone: 'refused', title: 'Can’t put under Fix', detail: 'Because' });
     expect(describeHappierDropOutcome({ phase: 'carrying', admission: refused('read') }, vocabulary)?.title).toBe('Can’t move it here');
     expect(describeHappierDropOutcome({ phase: 'carrying', admission: refused('already_here') }, vocabulary))
       .toMatchObject({ tone: 'quiet', glyph: 'here' });
     expect(describeHappierDropOutcome({ phase: 'carrying', admission: refused('no-target') }, vocabulary)).toBeNull();
+  });
+
+  it('lets localized refusal vocabulary describe an action preview without changing allowed or unchanged wording', () => {
+    const preview = { verb: 'Move to Project', target: 'Project', glyph: 'move' as const };
+    const words = { ...vocabulary, refusedPreviewTitle: (value: { target: string }) => `Can’t move to ${value.target}` };
+    const refusal = (code: string) => ({ status: 'refused' as const, reason: { code, message: 'Because' }, preview });
+    // Hosted vocabularies without a specific formatter still describe a denial, never the action.
+    expect(describeHappierDropOutcome({ phase: 'carrying', admission: refusal('read') }, vocabulary))
+      .toEqual({ tone: 'refused', title: vocabulary.refusedTitle, detail: 'Because' });
+    for (const phase of ['carrying', 'settled'] as const) {
+      expect(describeHappierDropOutcome({ phase, admission: refusal('read') }, words))
+        .toEqual({ tone: 'refused', title: 'Can’t move to Project', detail: 'Because' });
+    }
+    expect(describeHappierDropOutcome({ phase: 'carrying', admission: refusal('already_here') }, words))
+      .toEqual({ tone: 'quiet', glyph: 'here', title: preview.verb, detail: 'Because' });
+    expect(describeHappierDropOutcome({ phase: 'carrying', admission: { status: 'allowed', effect: { ...plugin.effect, preview } } }, words)?.title)
+      .toBe(preview.verb);
   });
 
   it('words a late refusal and an unknown result the way the source line keeps them, never as a rollback', () => {

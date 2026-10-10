@@ -73,7 +73,7 @@ export function resolveWidgetLayoutEntityDrop(input: Readonly<{
     if (position.groupId && (!group || group.kind !== 'group')) return refused('widget_group_not_found');
     // A group's own refusals name the group that cannot take it (lab wgdnd 5, 6).
     const cannotEnter = (code: string) => {
-        if (group?.kind === 'group') preview = { ...preview, verb: t('widgetFrame.cantPutInGroup', { group: groupName(group) }) };
+        if (group?.kind === 'group') preview = { ...preview, glyph: 'refused', verb: t('widgetFrame.cantPutInGroup', { group: groupName(group) }) };
         return refused(code);
     };
     if (sourcePlacement?.kind === 'group' || input.item.kind === 'widget-layout-group') {

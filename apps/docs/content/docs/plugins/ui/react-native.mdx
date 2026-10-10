@@ -339,6 +339,13 @@ Action id or input to choose a mark. The released preview also supplies pending
 and settled feedback; refused feedback uses the refusal mark. A mark is
 presentation, not permission or a request to execute an Action.
 
+For an early refusal, Happier describes the action as a denial: "Move to Project"
+becomes "Can’t move to Project". If your resolver supplies its own complete
+translated denial, such as "Can’t put it in Website", declare
+`glyph: 'refused'` in that preview to retain its title. Hosts without specific
+refusal vocabulary use a localized generic denial. The reason still explains
+why the target cannot take the item and what to do next.
+
 To make your reference attachable to a composer, set the source declaration's
 `composerAttachment` to one of your own declared attachment local ids. Register
 `toComposerAttachment(reference)` alongside `describe`; return a

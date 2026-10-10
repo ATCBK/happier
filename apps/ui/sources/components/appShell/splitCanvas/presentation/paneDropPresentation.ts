@@ -181,7 +181,7 @@ export function presentPaneDropAdmission(admission: PaneDropAdmission | EntityDr
         }
         const verb = t('entityDragDrop.pane.cantOpenHere');
         return { status: 'refused', reason: { code, message: refusalMessage(code, scene) },
-            preview: { verb, target: scene.paneTitle ?? verb } };
+            preview: { glyph: 'refused', verb, target: scene.paneTitle ?? verb } };
     }
     const kind = PANE_EFFECT_KINDS[admission.effect.actionId];
     if (!kind) {

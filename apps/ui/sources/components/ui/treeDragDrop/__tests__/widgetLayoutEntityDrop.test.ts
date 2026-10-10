@@ -10,6 +10,7 @@ import { resolveWidgetAreaEntityDrop } from '@/components/widgets/area/widgetAre
 import { resolveSessionSurfaceIndicatorEdge } from '@/components/sessions/board/sessionSurfaceIndicatorEdge';
 import { createEntityDragDropRuntime } from '../entityDragDropRuntime';
 import { resolveWidgetLayoutEntityDrop } from '../widgetLayoutEntityDrop';
+import { describeEntityDropOutcome } from '../ui/entityDropOutcome';
 import { resolveWidgetCardPointerDestination, resolveWidgetGroupPointerDestination, widgetGroupDropTarget, widgetGroupTakesEffect, widgetLayoutCardDropTarget, widgetLayoutSiblingIds } from '@/components/widgets/group/widgetGroupDropTarget';
 import { t } from '@/text';
 import { resolveHappierDropChooserSections } from '@happier-dev/plugin-ui/presentation';
@@ -326,8 +327,11 @@ describe('shared layout DnD admission', () => {
             consequence: t('widgetFrame.wholeGroupDetail', { count: 2 }) } } });
         // Refused by the group: the title names the group it cannot enter.
         const wide: EntityDragItemV1 = { kind: 'home-section', scope, sectionId: 'wide' };
-        expect(resolve(wide, { groupId: 'group', anchorId: null, placement: 'after' })).toMatchObject({ status: 'refused',
+        const refusal = resolve(wide, { groupId: 'group', anchorId: null, placement: 'after' });
+        expect(refusal).toMatchObject({ status: 'refused',
             reason: { code: 'widget_group_width_no_fit' }, preview: { verb: t('widgetFrame.cantPutInGroup', { group: 'happier' }) } });
+        expect(describeEntityDropOutcome({ phase: 'carrying', admission: refusal }))
+            .toMatchObject({ tone: 'refused', title: t('widgetFrame.cantPutInGroup', { group: 'happier' }) });
     });
     it('outlines a group only for a carry that would enter it, wherever inside it the pointer is (lab wgdnd 1 vs 3)', () => {
         const other: WidgetLayoutGroupV1 = { ...group, id: 'other', children: [widget('other-child')] };

@@ -37,6 +37,8 @@ export type HappierDropOutcomeVocabulary = Readonly<{
   pendingDetail: string;
   /** A refusal that names no verb of its own ("Can't move it here"). */
   refusedTitle: string;
+  /** Localized denial of an action preview; omission uses the generic refusal title. */
+  refusedPreviewTitle?: (preview: DropPreview) => string;
   /** A dispatched effect the owner later refused ("Couldn't put Review under Fix"). */
   lateRefusalTitle: (effect: HappierDropEffect, itemTitle: string | null) => string;
   /** A dispatched effect whose result is unknown ("Not sure Put under Fix went through"). */
@@ -105,10 +107,15 @@ export function describeHappierDropOutcome(
   if (admission.status === 'refused') {
     const code = admission.reason.code;
     if (vocabulary.silentCodes?.has(code)) return null;
-    const title = admission.preview?.verb ?? vocabulary.refusedTitle;
-    return vocabulary.unchangedCodes?.has(code)
-      ? { tone: 'quiet', glyph: 'here', title, detail: admission.reason.message }
-      : { tone: 'refused', title, detail: admission.reason.message };
+    if (vocabulary.unchangedCodes?.has(code)) {
+      return { tone: 'quiet', glyph: 'here', title: admission.preview?.verb ?? vocabulary.refusedTitle, detail: admission.reason.message };
+    }
+    const title = admission.preview?.glyph === 'refused'
+      ? admission.preview.verb
+      : admission.preview
+        ? vocabulary.refusedPreviewTitle?.(admission.preview) ?? vocabulary.refusedTitle
+        : vocabulary.refusedTitle;
+    return { tone: 'refused', title, detail: admission.reason.message };
   }
   const { effect } = admission;
   if (verdict.phase === 'pending') {

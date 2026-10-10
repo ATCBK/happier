@@ -1842,6 +1842,39 @@ describe('i18n integrity', () => {
         expect(untranslated).toEqual([]);
     });
 
+    it('keeps drop-refusal titles localized with their target in every supported locale', () => {
+        const locales = [
+            { code: 'ru', root: ru }, { code: 'pl', root: pl }, { code: 'es', root: es },
+            { code: 'fr', root: fr }, { code: 'it', root: itLocale }, { code: 'pt', root: pt },
+            { code: 'ca', root: ca }, { code: 'de', root: de }, { code: 'zh-Hans', root: zhHans },
+            { code: 'zh-Hant', root: zhHant }, { code: 'ja', root: ja },
+        ];
+        const expected = flattenTranslationLeaves(en.entityDragDrop)
+            .map((leaf) => `${leaf.key}:${leaf.kind}`).sort();
+        const shapeMismatches = locales.flatMap(({ code, root }) => {
+            const actual = flattenTranslationLeaves(root.entityDragDrop)
+                .map((leaf) => `${leaf.key}:${leaf.kind}`).sort();
+            return JSON.stringify(actual) === JSON.stringify(expected) ? [] : [code];
+        });
+        const targetTitles = [
+            'cantMoveTo', 'cantMoveAbove', 'cantMoveBelow', 'cantCopyTo', 'cantAddTo',
+            'cantAttachTo', 'cantUploadTo', 'cantOpen', 'cantGoTo', 'cantPutUnder',
+        ] as const;
+        const target = 'DROP_TARGET_MARKER';
+        const untranslatedOrMissingTargets = locales.flatMap(({ code, root }) => targetTitles.flatMap((key) => {
+            const title = root.entityDragDrop.preview[key]({ target });
+            return title.includes(target) && title !== en.entityDragDrop.preview[key]({ target })
+                ? [] : [`${code}: ${key}`];
+        }));
+        const untranslatedSplitTitles = locales
+            .filter(({ root }) => root.entityDragDrop.preview.cantSplitHere === en.entityDragDrop.preview.cantSplitHere)
+            .map(({ code }) => code);
+
+        expect(shapeMismatches).toEqual([]);
+        expect(untranslatedOrMissingTargets).toEqual([]);
+        expect(untranslatedSplitTitles).toEqual([]);
+    });
+
     it('keeps permission-review semantics localized in every supported locale', () => {
         const locales = [
             { code: 'ru', root: ru },

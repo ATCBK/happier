@@ -36,6 +36,26 @@ function vocabulary(): HappierDropOutcomeVocabulary {
             : effect.preview.verb,
         pendingDetail: t('entityDragDrop.preview.pendingDetail'),
         refusedTitle: t('entityDragDrop.preview.cantMoveHere'),
+        refusedPreviewTitle: preview => {
+            const target = preview.target;
+            switch (preview.glyph) {
+                case 'nest': return t('entityDragDrop.preview.cantPutUnder', { target });
+                case 'above': return t('entityDragDrop.preview.cantMoveAbove', { target });
+                case 'below': return t('entityDragDrop.preview.cantMoveBelow', { target });
+                case 'move':
+                case 'folder':
+                case 'topLevel': return t('entityDragDrop.preview.cantMoveTo', { target });
+                case 'copy': return t('entityDragDrop.preview.cantCopyTo', { target });
+                case 'attach': return t('entityDragDrop.preview.cantAttachTo', { target });
+                case 'upload': return t('entityDragDrop.preview.cantUploadTo', { target });
+                case 'open':
+                case 'tab': return t('entityDragDrop.preview.cantOpen', { target });
+                case 'goTo': return t('entityDragDrop.preview.cantGoTo', { target });
+                case 'split':
+                case 'splitVertical': return t('entityDragDrop.preview.cantSplitHere');
+                default: return t('entityDragDrop.preview.cantAddTo', { target });
+            }
+        },
         lateRefusalTitle: (effect, item) => isRelation(effect)
             ? item
                 ? t('entityDragDrop.settled.refusedPutUnder', { item, target: effect.preview.target })

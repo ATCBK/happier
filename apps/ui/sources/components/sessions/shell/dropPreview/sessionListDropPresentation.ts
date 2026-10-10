@@ -56,7 +56,7 @@ export function describeSessionListDropPreview(target: SessionListDropTargetPrev
 
 /** The refusal headline when the place is a Session that will not take reports. */
 export function describeSessionListRefusedPutUnder(leadName: string): EntityDropPreviewV1 {
-    return { verb: t('entityDragDrop.preview.cantPutUnder', { target: leadName }), target: leadName };
+    return { glyph: 'refused', verb: t('entityDragDrop.preview.cantPutUnder', { target: leadName }), target: leadName };
 }
 
 /** The list's code for a pointer over no row or zone; it carries no refusal to say. */
