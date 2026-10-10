@@ -128,7 +128,11 @@ export function useOpenProject(): OpenProject {
 
         async function openHref(href: string, find?: unknown): Promise<boolean> {
             const execute = captureMountedWorkspaceAction();
-            if (!execute) { router.push(href as never); return true; }
+            if (!execute) {
+                if (find) return false;
+                router.push(href as never);
+                return true;
+            }
             const result = await execute({ actionId: 'workspace.tabs.open', input: { href, ...(find ? { find } : {}) } });
             return result.ok;
         }

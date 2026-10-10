@@ -271,6 +271,9 @@ describe('useOpenProject', () => {
             }) },
         }) })]);
         release();
+        routerPush.mockClear();
+        expect(await hook.getCurrent()('wr_1', options)).toBe(false);
+        expect(routerPush).not.toHaveBeenCalled();
         await act(async () => {
             const otherHome = await homes.addHome({ name: 'Other Home', serverUrl: 'https://projects-open-other.test', accountId: 'account-a' });
             homes.answer(otherHome, '/v1/account/project-rows/list', { body: { status: 'listed', coverage: 'complete', rows: [] } });
