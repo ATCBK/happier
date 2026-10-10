@@ -7,6 +7,8 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { act } from 'react-test-renderer';
 import { buildMachineAddHref } from '@/components/settings/machines/collection/machineCollectionModel';
+import { resolveCliInvokerNameForCurrentApp } from '@/sync/runtime/resolvePublicReleaseRing';
+import { readNewSessionDraftProjectionFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -55,15 +57,14 @@ vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
     useActiveServerSnapshot: () => ({ serverId: 'server-1' }),
 }));
 
-vi.mock('@/sync/runtime/resolvePublicReleaseRing', () => ({
-    resolveCliInvokerNameForCurrentApp: () => 'hdev',
-}));
-
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createPartialStorageModuleMock(importOriginal, {
-        useAllMachines: () => machinesMock,
-    });
+// Device persistence is the boundary; Machine selection and the draft repository stay real.
+vi.mock('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage', () => {
+    const values = new Map<string, string>();
+    return { getSessionDraftPersistenceStorage: () => ({
+        getString: (key: string) => values.get(key),
+        set: (key: string, value: string) => { values.set(key, value); },
+        delete: (key: string) => { values.delete(key); },
+    }) };
 });
 
 vi.mock('@expo/vector-icons', async () => {
@@ -114,17 +115,43 @@ function flattenTextValue(value: unknown): string {
     return String(value);
 }
 
+async function renderSessions(element: React.ReactElement) {
+    const { storage } = await import('@/sync/domains/state/storage');
+    storage.setState({ profileScope: { serverId: 'server-1', accountId: 'account-1' },
+        machines: Object.fromEntries(machinesMock.map(machine => [machine.id, machine])),
+        machineListByServerId: { 'server-1': machinesMock } });
+    const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    publishAppliedActiveServerSnapshot({ serverId: 'server-1', serverUrl: 'https://home.test', generation: 0 });
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    expect(captureActiveServerAccountScopeLifetime()?.isCurrent()).toBe(true);
+    return renderScreen(element);
+}
+
+function selectedDraft() {
+    const route = routerPushSpy.mock.lastCall?.[0] as { params: { draftId: string } };
+    return readNewSessionDraftProjectionFromRepository({
+        scope: { serverId: 'server-1', accountId: 'account-1' }, draftId: route.params.draftId,
+    })?.draft;
+}
+
 describe('SessionsListEmptyState', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         standardCleanup();
         routerPushSpy.mockReset();
         machinesMock = [];
+        const { configureSessionDraftRepository, resetSessionDraftRepositoryForTests } =
+            await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        const { createSessionDraftCipher } = await import('@/sync/encryption/sessionDraftEncryption');
+        resetSessionDraftRepositoryForTests();
+        configureSessionDraftRepository({ scope: { serverId: 'server-1', accountId: 'account-1' }, syncEnabled: false,
+            cipher: createSessionDraftCipher({ accountMode: 'plain', accountCryptoMaterial: null,
+                getSessionContext: () => { throw new Error('A new-session draft has no Session'); }, randomBytes: size => new Uint8Array(size) }) });
     });
 
     it('opens machine setup through the Home tab that owns the pressed empty state', async () => {
         const { SessionsListEmptyState } = await import('./SessionsListEmptyState');
         const pushes = [vi.fn(), vi.fn()];
-        const screen = await renderScreen(<>
+        const screen = await renderSessions(<>
             {pushes.map((push, index) => <DestinationInstanceHost key={index}
                 tabId={`home-${index}`} ref={{ kind: 'sessions', params: {} }} pathname="/"
                 focused={index === 0} visible navigation={{ push, replace: () => {}, back: () => {} }}>
@@ -149,7 +176,7 @@ describe('SessionsListEmptyState', () => {
         ];
 
         const { SessionsListEmptyState } = await import('./SessionsListEmptyState');
-        const screen = await renderScreen(<SessionsListEmptyState kind="create_session" targetLabel="leeroy-mbp" />);
+        const screen = await renderSessions(<SessionsListEmptyState kind="create_session" targetLabel="leeroy-mbp" />);
 
         expect(
             screen.findAllByType('Text' as never)
@@ -162,7 +189,7 @@ describe('SessionsListEmptyState', () => {
         expect(() => screen.findByProps({ testID: 'sessions-empty-state-machine:m-offline' })).toThrow();
         expect(
             screen.findAllByType('Text' as never)
-                .some((node) => flattenTextValue(node.props.children).includes('hdev')),
+                .some((node) => flattenTextValue(node.props.children).includes(resolveCliInvokerNameForCurrentApp())),
         ).toBe(true);
     });
 
@@ -172,7 +199,7 @@ describe('SessionsListEmptyState', () => {
         ];
 
         const { SessionsListEmptyState } = await import('./SessionsListEmptyState');
-        const screen = await renderScreen(<SessionsListEmptyState kind="create_session" targetLabel="leeroy-mbp" />);
+        const screen = await renderSessions(<SessionsListEmptyState kind="create_session" targetLabel="leeroy-mbp" />);
 
         await screen.pressByTestIdAsync('sessions-empty-state-machine:m-online');
 
@@ -180,15 +207,30 @@ describe('SessionsListEmptyState', () => {
             pathname: '/new',
             params: {
                 draftId: expect.any(String),
-                machineId: 'm-online',
-                spawnServerId: 'server-1',
             },
         });
+        expect(selectedDraft()).toMatchObject({ selectedMachineId: 'm-online', targetServerId: 'server-1' });
+    });
+
+    it('offers every online same-name Machine with a distinguishable label', async () => {
+        machinesMock = [createMachine({ id: 'd4ac-machine', host: 'same-host' }),
+            createMachine({ id: 'f874-machine', host: 'same-host' })];
+        const { SessionsListEmptyState } = await import('./SessionsListEmptyState');
+        const { Item } = await import('@/components/ui/lists/Item');
+        const screen = await renderSessions(<SessionsListEmptyState kind="create_session" targetLabel="same-host" />);
+        expect(screen.findAllByType(Item).filter(node => node.props.testID?.startsWith('sessions-empty-state-machine:'))
+            .map(node => ({ id: node.props.testID, title: node.props.title })))
+            .toEqual([
+                { id: 'sessions-empty-state-machine:d4ac-machine', title: 'sessionsList.emptyState.startSessionOnMachine:same-host · d4ac' },
+                { id: 'sessions-empty-state-machine:f874-machine', title: 'sessionsList.emptyState.startSessionOnMachine:same-host · f874' },
+            ]);
+        await screen.pressByTestIdAsync('sessions-empty-state-machine:f874-machine');
+        expect(selectedDraft()).toMatchObject({ selectedMachineId: 'f874-machine', targetServerId: 'server-1' });
     });
 
     it('renders the connect action below the tile for never-connected accounts and routes it to the machine draft', async () => {
         const { SessionsListEmptyState } = await import('./SessionsListEmptyState');
-        const screen = await renderScreen(<SessionsListEmptyState kind="connect_machine" targetLabel="leeroy-mbp" />);
+        const screen = await renderSessions(<SessionsListEmptyState kind="connect_machine" targetLabel="leeroy-mbp" />);
 
         expect(screen.findByProps({ testID: 'session-getting-started-kind-connect_machine' })).toBeTruthy();
         expect(
@@ -211,7 +253,7 @@ describe('SessionsListEmptyState', () => {
         ];
 
         const { SessionsListEmptyState } = await import('./SessionsListEmptyState');
-        const screen = await renderScreen(<SessionsListEmptyState kind="start_daemon" targetLabel="leeroy-mbp" />);
+        const screen = await renderSessions(<SessionsListEmptyState kind="start_daemon" targetLabel="leeroy-mbp" />);
 
         expect(screen.findByProps({ testID: 'session-getting-started-kind-start_daemon' })).toBeTruthy();
         expect(
@@ -226,7 +268,7 @@ describe('SessionsListEmptyState', () => {
 
     it('renders select-session as the browse-style summary without setup actions', async () => {
         const { SessionsListEmptyState } = await import('./SessionsListEmptyState');
-        const screen = await renderScreen(<SessionsListEmptyState kind="select_session" targetLabel="leeroy-mbp" />);
+        const screen = await renderSessions(<SessionsListEmptyState kind="select_session" targetLabel="leeroy-mbp" />);
 
         expect(screen.findByProps({ testID: 'session-getting-started-kind-select_session' })).toBeTruthy();
         expect(screen.findByTestId('sessions-empty-state-summary')).not.toBeNull();

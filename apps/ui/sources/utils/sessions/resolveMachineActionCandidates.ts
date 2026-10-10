@@ -22,30 +22,28 @@ export function resolveMachineActionCandidates(
 ): Machine[] {
     const onlineOnly = options.onlineOnly ?? true;
     const nowMs = options.nowMs ?? Date.now();
-    const bestByLabel = new Map<string, Machine>();
+    const bestById = new Map<string, Machine>();
 
     for (const machine of allMachines) {
         if (onlineOnly && !isMachineOnline(machine, nowMs)) continue;
 
-        // A dedupe key, not a display name: machines without a name stay distinct by id.
-        const label = (readMachineName(machine) ?? machine.id).trim();
-        if (!label) continue;
-
-        const existing = bestByLabel.get(label);
+        // Display names are not identity: distinct registrations remain separately selectable.
+        const existing = bestById.get(machine.id);
         if (!existing) {
-            bestByLabel.set(label, machine);
+            bestById.set(machine.id, machine);
             continue;
         }
         if (compareMachinesForPicker(machine, existing) > 0) {
-            bestByLabel.set(label, machine);
+            bestById.set(machine.id, machine);
         }
     }
 
-    return [...bestByLabel.entries()]
-        .sort(([aLabel, a], [bLabel, b]) => {
+    return [...bestById.values()]
+        .sort((a, b) => {
+            const aLabel = readMachineName(a) ?? a.id;
+            const bLabel = readMachineName(b) ?? b.id;
             const labelCmp = aLabel.localeCompare(bLabel);
             if (labelCmp !== 0) return labelCmp;
-            return compareMachinesForPicker(b, a);
-        })
-        .map(([, machine]) => machine);
+            return a.id.localeCompare(b.id);
+        });
 }

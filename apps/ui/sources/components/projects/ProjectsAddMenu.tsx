@@ -5,7 +5,7 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 
 import type { ProjectsListModel } from './useProjectsListModel';
 import { describeProjectSourceRow } from './sources/projectSourceAddress';
@@ -40,11 +40,14 @@ export const ProjectsAddMenu = React.memo(function ProjectsAddMenu(props: Readon
         ...(sources?.yours ?? []),
         ...(sources?.teams ?? []).flatMap((team) => team.sources),
     ].map((source) => [source.id, source] as const)), [sources]);
-    const machineItems = React.useMemo((): DropdownMenuItem[] => machines.map((machine) => ({
-        id: `machine:${machine.id}`,
-        testID: `${props.testID}:machine:${machine.id}`,
-        title: getMachineDisplayName(machine) ?? machine.metadata?.host ?? machine.id,
-    })), [machines, props.testID]);
+    const machineItems = React.useMemo((): DropdownMenuItem[] => {
+        const names = resolveMachineDisplayNames(machines);
+        return machines.map((machine) => ({
+            id: `machine:${machine.id}`,
+            testID: `${props.testID}:machine:${machine.id}`,
+            title: names.get(machine.id)!,
+        }));
+    }, [machines, props.testID]);
     const full = Boolean(onClone || sources);
     const items = React.useMemo((): ReadonlyArray<DropdownMenuItem> => {
         if (!full) return machineItems;

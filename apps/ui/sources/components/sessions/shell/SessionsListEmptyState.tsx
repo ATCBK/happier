@@ -10,7 +10,7 @@ import { SessionGettingStartedSummary } from '@/components/sessions/guidance/Ses
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useAllMachines } from '@/sync/domains/state/storage';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { buildMachineAddHref } from '@/components/settings/machines/collection/machineCollectionModel';
 import { resolveMachineActionCandidates } from '@/utils/sessions/resolveMachineActionCandidates';
 
@@ -37,6 +37,7 @@ export function SessionsListEmptyState(props: SessionsListEmptyStateProps) {
     const activeServer = useActiveServerSnapshot();
     const allMachines = useAllMachines();
     const machines = resolveMachineActionCandidates(allMachines);
+    const machineNames = resolveMachineDisplayNames(allMachines);
 
     const handleStartSession = React.useCallback((machineId: string) => {
         const serverId = String(activeServer.serverId ?? '').trim();
@@ -84,7 +85,7 @@ export function SessionsListEmptyState(props: SessionsListEmptyStateProps) {
             {props.kind === 'create_session' && machines.length > 0 ? (
                 <ItemGroup title={t('sessionsList.emptyState.actionsTitle')}>
                     {machines.map((machine) => {
-                        const machineLabel = getMachineDisplayName(machine) ?? machine.id;
+                        const machineLabel = machineNames.get(machine.id)!;
                         return (
                             <Item
                                 key={machine.id}

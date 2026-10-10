@@ -212,11 +212,12 @@ describe('ProjectsListView', () => {
         expect(screen.findByTestId('projects-list-organization-show-anchor')).not.toBeNull();
     });
 
-    it('offers one add entrance with deduplicated machine choices, not a second add-first group', async () => {
+    it('offers distinct online same-name Machine choices in the single add entrance', async () => {
         const nowMs = Date.now();
         machinesMock = [
             createMachine({ id: 'm1', host: 'leeroy-mbp', active: true, activeAt: nowMs }),
-            createMachine({ id: 'm2', host: 'leeroy-mbp', active: false, activeAt: 1 }),
+            createMachine({ id: 'm2', host: 'leeroy-mbp', active: true, activeAt: nowMs - 1 }),
+            createMachine({ id: 'm3', host: 'leeroy-mbp', active: false, activeAt: 1 }),
         ];
 
         const { ProjectsListView } = await import('./ProjectsListView');
@@ -224,7 +225,9 @@ describe('ProjectsListView', () => {
 
         const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
         const menu = screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'projects-list:add:menu');
-        expect(menu?.props.items.filter((item: { id: string }) => item.id.startsWith('machine:')).map((item: { id: string }) => item.id)).toEqual(['machine:m1']);
+        expect(menu?.props.items.find((item: { id: string }) => item.id === 'folder')?.submenu.items
+            .map((item: { id: string; title: string }) => ({ id: item.id, title: item.title })))
+            .toEqual([{ id: 'machine:m1', title: 'leeroy-mbp · m1' }, { id: 'machine:m2', title: 'leeroy-mbp · m2' }]);
         expect(screen.findByTestId('projects-list:add-row')).toBeTruthy();
         expect(screen.findByTestId('projects-add-first-machine:m1')).toBeNull();
         expect(screen.findByTestId('projects-add-first-machine:m2')).toBeNull();

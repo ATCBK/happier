@@ -43,6 +43,7 @@ import {
   isMachineOnline,
 } from '@/utils/sessions/machineUtils';
 import { resolveMachineActionCandidates } from '@/utils/sessions/resolveMachineActionCandidates';
+import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import { formatOSPlatform } from '@/utils/sessions/sessionUtils';
 import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
@@ -154,6 +155,7 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
     () => resolveMachineActionCandidates(machines, { onlineOnly: false }),
     [machines],
   );
+  const machineNames = React.useMemo(() => resolveMachineDisplayNames(candidates), [candidates]);
   const [query, setQuery] = React.useState('');
   const requestedDraftId = readParam(params.draftId);
   const draftId = props.draftId;
@@ -209,7 +211,7 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
 
   function opened(result: Extract<OpenProjectResultV1, { kind: 'opened' }>) {
       const machineName =
-        getMachineDisplayName(
+        machineNames.get(result.workspace.machineId) ?? getMachineDisplayName(
           machines.find((candidate) => candidate.id === result.workspace.machineId) ?? null,
         ) ?? result.workspace.machineId;
       const projectName = result.directory.split(/[\\/]/u).filter(Boolean).pop() ?? result.directory;
@@ -306,7 +308,7 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
     });
   };
 
-  const machineName = machine ? (getMachineDisplayName(machine) ?? machine.id) : null;
+  const machineName = machine ? (machineNames.get(machine.id) ?? getMachineDisplayName(machine)) : null;
   const checkoutsHere = options.find((option) => option.use === 'existing')?.candidates.length ?? 0;
   const whereStatus: ProjectOpenWhereStatus = !machine || !machineName
     ? { kind: 'none' }
@@ -405,11 +407,11 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
           <ProjectOpenWhereRow
             items={candidates.map((candidate) => ({
               id: candidate.id,
-              title: getMachineDisplayName(candidate) ?? candidate.id,
+              title: machineNames.get(candidate.id)!,
               subtitle: isMachineOnline(candidate, presenceNowMs)
                 ? undefined
                 : t('projects.open.offline', {
-                    machine: getMachineDisplayName(candidate) ?? candidate.id,
+                    machine: machineNames.get(candidate.id)!,
                   }),
               icon: (
                 <Icon
@@ -446,7 +448,7 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
             testIdPrefix="projects.open"
           /> : null}
           <ProjectOpenOutcome open={open} gitRef={ref}
-            machineName={(id) => getMachineDisplayName(machines.find((candidate) => candidate.id === id) ?? null) ?? id}
+            machineName={(id) => machineNames.get(id) ?? getMachineDisplayName(machines.find((candidate) => candidate.id === id) ?? null) ?? id}
             onChooseCandidate={candidate => {
             const checkout = workspaceAddressFromRefV1(candidate);
             if (!open.draft) return;

@@ -61,6 +61,35 @@ async function seedOpenDraft(draftId: string) {
 }
 
 describe('Project Open rendered choices', () => {
+    it('keeps same-name Machines distinguishable and retains the selected id when reopened after presence changes', async () => {
+        const draftId = '00000000-0000-4000-8000-000000000081';
+        const seeded = await seedOpenDraft(draftId);
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { Item } = await import('@/components/ui/lists/Item');
+        const first = { ...seeded.machine, id: 'd4ac-machine' };
+        const second = { ...seeded.machine, id: 'f874-machine', activeAt: first.activeAt - 1 };
+        storage.setState({ machines: { [first.id]: first, [second.id]: second }, machineListByServerId: { home: [first, second] } });
+        const screen = await renderScreen(<ProjectOpenScreen />);
+        const where = () => screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'projects.open.where');
+        await vi.waitFor(() => expect(where()).toBeDefined());
+        expect(where()!.props.items.map((item: { id: string; title: string }) => ({ id: item.id, title: item.title })))
+            .toEqual([{ id: first.id, title: 'tester.local · d4ac' }, { id: second.id, title: 'tester.local · f874' }]);
+        await act(async () => { where()!.props.onSelect(first.id); });
+        expect(seeded.read().selection.value?.machineId).toBe(first.id);
+        await act(async () => { screen.unmount(); });
+        const changedSecond = { ...second, activeAt: first.activeAt + 1, updatedAt: first.updatedAt + 1 };
+        storage.setState({ machines: { [first.id]: first, [second.id]: changedSecond }, machineListByServerId: { home: [changedSecond, first] } });
+        const reopened = await renderScreen(<ProjectOpenScreen />);
+        const reopenedWhere = () => reopened.findAllByType(DropdownMenu).find(node => node.props.testID === 'projects.open.where');
+        await vi.waitFor(() => expect(reopenedWhere()).toBeDefined());
+        expect(reopenedWhere()!.props.selectedId).toBe(first.id);
+        expect(reopenedWhere()!.props.items.filter((item: { checked: boolean }) => item.checked).map((item: { id: string }) => item.id))
+            .toEqual([first.id]);
+        expect(reopened.findAllByType(Item).find(node => node.props.testID === 'projects.open.where.row')!.props.title)
+            .toBe('tester.local · d4ac');
+        expect(seeded.read().selection.value?.machineId).toBe(first.id);
+    });
+
     it('edits Source subdirectory and Sync policy without replacing a retained link or saved Source defaults', async () => {
         const draftId = '00000000-0000-4000-8000-000000000081';
         const seeded = await seedOpenDraft(draftId);
