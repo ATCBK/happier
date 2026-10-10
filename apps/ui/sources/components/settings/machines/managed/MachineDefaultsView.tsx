@@ -185,6 +185,8 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
         <SettingRow
           testID="settings.machineDefaults.creationEnabled"
           setting={MACHINES_DEFAULTS_SETTINGS.settings.creationEnabled}
+          // A phone keeps the switch to its title (lab m-defaults Ap); `false` renders no declared description.
+          subtitle={compact ? false : undefined}
           rightElement={
             <Switch
               testID="settings.machineDefaults.creationEnabled.switch"
@@ -200,13 +202,15 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
 });
 
 const CategoryPushRow = React.memo(function CategoryPushRow(
-  props: Readonly<{ model: CategoryModel; providers: string | undefined }>,
+  // `showDivider` comes from the group (its last row draws none).
+  props: Readonly<{ model: CategoryModel; providers: string | undefined; showDivider?: boolean }>,
 ) {
   const router = useRouter();
   return (
     <SettingRow
       testID={`settings.machineDefaults.${props.model.category}`}
       setting={props.model.setting}
+      showDivider={props.showDivider}
       subtitle={[props.providers?.trim(), describeRetentionPolicy(props.model.policy)].filter(Boolean).join(' · ')}
       onPress={() => {
         const result = runGuardedNavigation(() =>
