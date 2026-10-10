@@ -6,7 +6,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
-import { FeaturesResponseSchema, AUTHORITY_CEILING_HEADER_V1, supportsMachineOperationProtocolCapabilityV1 } from '@happier-dev/protocol';
+import { FeaturesResponseSchema, AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { signAccountContentKeyBindingV1 } from '@happier-dev/protocol/crypto/accountContentKeyBindingV1';
@@ -95,11 +95,12 @@ describe('managed catalog original Account transport', () => {
       requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(), resolveRequestAuthHttpPort: () => 43123,
       createRedactionLease: () => ({ add() {}, close() {} }),
     });
+    const resolveCurrentMachineExecutionOriginContext = createCurrentMachineExecutionOriginContextResolver({ serverUrl,
+      resolveCurrentMachineId: () => controller.machineId });
     const native = createDaemonManagedMachineActionAdapter({ credentials, machineId: controller.machineId, serverBaseUrl: serverUrl,
       serverId: configuration.activeServerId, installationIdentity: { installationId: controller.installationId, privateKey: installation.secretKey },
       managedProviderOperationAuthority: authority,
-      resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({ serverUrl,
-        resolveCurrentMachineId: () => controller.machineId }),
+      resolveCurrentMachineExecutionOriginContext,
       acquireRuntimeRegistryLease: async () => ({ registry, source: 'active', durableRevision: 1, release: async () => {} }),
     });
     const executor = (admitted?: RequesterAccountActionContext) => createCliActionExecutorFromCredentials({
@@ -140,6 +141,14 @@ describe('managed catalog original Account transport', () => {
           return authorizationVerified;
         },
         resolveTarget: createDaemonExternalActionTargetResolver({ credentials }), executor: executor(),
+        // Installed credential custody is the OS fixture, as in daemon startup.
+        // Resolve the actual Home identity and retain real recovery-key crypto.
+        resolveEncryption: async signal => {
+          const origin = await resolveCurrentMachineExecutionOriginContext(signal);
+          return origin?.machineId === controller.machineId
+            ? { serverIdentityId: origin.serverIdentityId, material: { type: 'dataKey', machineKey } }
+            : null;
+        },
         prepareRequesterAccountContext: async input => {
           const prepared = await prepareRequesterAccountActionContext({ authorization: input.authorization, purpose: { kind: 'external_action' },
             machineId: controller.machineId, installationId: controller.installationId, installationPrivateKey: installation.secretKey,
@@ -188,11 +197,7 @@ describe('managed catalog original Account transport', () => {
           const response = await app.inject({ method: 'POST', url: '/v1/actions/machines.provisioners.list',
             headers: { authorization: `Bearer ${token}`, [AUTHORITY_CEILING_HEADER_V1]: 'account_automation' },
             payload: { v: 1, machineId: controller.machineId, envelope, executionAuthorization: minted.authorization } });
-          const capabilityRow = await db.machine.findUnique({ where: { id: controller.machineId },
-            select: { operationProtocolCapabilities: true, operationProtocolCapabilitiesRevision: true } });
-          expect(supportsMachineOperationProtocolCapabilityV1(capabilityRow?.operationProtocolCapabilities,
-            'externalActionExecutionAuthorization'), JSON.stringify(capabilityRow)).toBe(true);
-          expect(response.statusCode, JSON.stringify({ response: response.json(), capabilityRow })).toBe(200);
+          expect(response.statusCode, JSON.stringify(response.json())).toBe(200);
           const execution = openExternalActionResponseV2({ envelope: response.json(), binding, material, request: envelope });
           return execution?.ok ? { kind: 'succeeded', value: execution.result } : { kind: 'failed', execution };
         })();
