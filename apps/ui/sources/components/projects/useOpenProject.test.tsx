@@ -154,11 +154,10 @@ describe('useOpenProject', () => {
         await screen.pressByTestIdAsync('projects.open.submit');
         await vi.waitFor(() => expect(screen.findByTestId('projects.open.acceptedUnfocused')).not.toBeNull());
         expect(routerPush).not.toHaveBeenCalled();
-        const recovery = screen.findByTestId('projects.open.acceptedUnfocused');
-        expect(recovery).not.toBeNull();
+        expect(screen.findByTestId('projects.open.acceptedUnfocused.action')).not.toBeNull();
         homes.answer(serverIdA, 'POST /v1/account/project-rows/list', { select: () => ({ body: { status: 'listed', coverage: 'complete', rows } }) });
         homes.requests.length = 0;
-        await act(async () => { await recovery!.props.action.onPress(); });
+        await screen.pressByTestIdAsync('projects.open.acceptedUnfocused.action');
         await vi.waitFor(() => expect(routerPush).toHaveBeenCalledOnce());
         const href = new URL(routerPush.mock.calls[0]![0], 'https://happier.invalid');
         expect(href.searchParams.get('serverId')).toBe(serverIdA);

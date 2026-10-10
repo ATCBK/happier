@@ -29,6 +29,7 @@ import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { encodeTerminalStreamBytes } from '@happier-dev/protocol/terminal/stream';
+import type { SessionDraftRecordV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 
 // Component probes retain the real controller/Actions; only native rendering is substituted.
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -84,7 +85,7 @@ function answerOwnMachineActions(homeId: string, accountId: string, serverIdenti
     }));
     homes.answer(homeId, '/v1/machines', { body: machines });
     for (const machine of machines) homes.answer(homeId, `GET /v1/machines/${machine.id}`, { body: { machine } });
-    for (const actionId of ['projects.open', 'projects.prepare', 'projects.script.run', 'projects.compute.exec'] as const) {
+    for (const actionId of ['projects.prepare', 'projects.script.run', 'projects.compute.exec'] as const) {
         homes.answer(homeId, `/v1/actions/${actionId}/execution-authorization`, { select: body => {
             const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
             const machine = machines.find(candidate => candidate.id === request.machineId);
@@ -178,16 +179,49 @@ describe('Project finite delivery through the default UI Action host', () => {
             import('@/sync/encryption/sessionDraftEncryption'),
             import('./actionAccountContext'),
         ]);
+        homes.answer(requesterHomeId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'projects.open': ['ui'] } },
+        } } } });
+        // Own non-finite Open uses its incumbent RPC. Foreign custody is the
+        // reachable Account HTTP path whose lost acknowledgement must not replay.
+        const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(3));
+        const machine = { ...ExternalActionMachineBootstrapV1Schema.parse({
+            id: 'source', kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
+            installationId: 'source-installation',
+            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
+            access: { custodian: { accountId: 'custodian', displayName: 'Custodian' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+        }), installationPublicKey: encodeBase64(installation.publicKey) };
+        homes.answer(requesterHomeId, '/v1/machines', { body: [machine] });
+        homes.answer(requesterHomeId, 'GET /v1/machines/source', { body: { machine } });
+        homes.answer(requesterHomeId, '/v1/actions/projects.open/execution-authorization', { select: body => {
+            const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            return { body: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'original-open-root', binding: {
+                accountId: 'requester', authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId: 'srv_finite_requester',
+                machineId: machine.id, installationId: machine.installationId, custodianAccountId: machine.access!.custodian.accountId,
+                accountEncryptionMode: 'plain', actionId: 'projects.open', requestId: request.envelope.requestId,
+                target: request.envelope.target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
+            } }) };
+        } });
         const account = await captureLazyActionAccountContext(serverId);
         const scope = { serverId, accountId: 'requester' };
         const storage = new Map<string, string>();
+        let draftRow: SessionDraftRecordV2 | null = null;
+        let mutationSequence = 100;
         const repository = createSessionDraftRepository({
-            scope, syncEnabled: false,
+            scope, syncEnabled: true,
+            randomUUID: () => `00000000-0000-4000-8000-${String(mutationSequence++).padStart(12, '0')}`,
             storage: { getString: key => storage.get(key), set: (key, value) => storage.set(key, value), delete: key => storage.delete(key) },
             cipher: createSessionDraftCipher({ accountMode: 'plain', accountCryptoMaterial: null,
                 getSessionContext: () => { throw new Error('Open cannot create a Session'); }, randomBytes: size => new Uint8Array(size) }),
-            transport: { read: async () => ({ status: 'absent' }), list: async () => ({ items: [] }),
-                mutate: async () => { throw new Error('Local draft cannot issue a remote draft mutation'); } },
+            // Authenticated retained draft storage/CAS is the persistence boundary;
+            // the real repository must settle admission before any Open POST.
+            transport: { read: async () => draftRow ? { status: draftRow.content ? 'present' : 'deleted', record: draftRow } : { status: 'absent' },
+                list: async () => ({ items: draftRow ? [draftRow] : [] }), mutate: async request => {
+                    if (request.expectedRevision !== (draftRow?.revision ?? 'absent')) return { status: 'conflict', current: draftRow ?? { status: 'absent' } };
+                    draftRow = { address: request.address, revision: (draftRow?.revision ?? -1) + 1,
+                        content: request.content, createdAt: 1, updatedAt: 2 };
+                    return { status: 'updated', record: draftRow };
+                } },
         });
         const input = { serverId, machineId: 'source', source: { kind: 'folder' as const, path: '/repo' }, materialization: { kind: 'attach' as const } };
         let effects = 0;
@@ -209,11 +243,15 @@ describe('Project finite delivery through the default UI Action host', () => {
             onOpened: result => { navigation.push(result); } });
         try {
             await controller.submit();
+            const snapshot = controller.getSnapshot();
+            const settlementCode = snapshot.result && 'errorCode' in snapshot.result ? snapshot.result.errorCode
+                : snapshot.result && 'kind' in snapshot.result ? snapshot.result.kind : 'no_result';
+            expect(homes.requestsFor('/v1/actions/projects.open'), settlementCode).toHaveLength(1);
             if (settlement === 'pre_open_refusal') {
-                expect(controller.getSnapshot().uncertainInput).toBeNull();
-                expect(controller.getSnapshot().result).toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+                expect(snapshot.uncertainInput, settlementCode).toBeNull();
+                expect(snapshot.result, settlementCode).toMatchObject({ ok: false, errorCode: 'target_unavailable' });
             } else {
-                expect(controller.getSnapshot()).toMatchObject({ uncertainInput: input, result: { kind: 'outcomeUnknown' },
+                expect(snapshot, settlementCode).toMatchObject({ uncertainInput: input, result: { kind: 'outcomeUnknown' },
                     canCheck: settlement === 'outcome_unknown' });
                 if (settlement === 'outcome_unknown') expect(controller.getSnapshot().result).toEqual({ kind: 'outcomeUnknown', operationId: 'original-open' });
             }

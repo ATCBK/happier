@@ -46,6 +46,9 @@ async function seedOpenDraft(draftId: string) {
             getSessionContext: () => { throw new Error('Open has no Session'); }, randomBytes: size => new Uint8Array(size) }) });
     const machine = createMachineFixture({ id: 'machine', activeAt: Date.now() });
     storage.setState({ profileScope: scope, machines: { [machine.id]: machine }, machineListByServerId: { home: [machine] } });
+    storage.getState().activateProjectAccountRowsScope(scope);
+    storage.getState().applyProjectAccountRowsForScope(scope, { scope, status: 'ready', coverage: 'complete',
+        workspaceRefs: [], relationships: [], organizations: [], revisionsByPhysicalKey: {} });
     writeProjectOpenDraft({ scope, draftId, patch: { selection: { serverId: 'home', source: { kind: 'source', id: 'source', revision: 1,
         defaultRef: 'main',
         selector: { provider: { id: 'forge', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
@@ -151,21 +154,11 @@ describe('Project Open rendered choices', () => {
     it('selects a Machine and renders the named Use group without materializing a checkout', async () => {
         // The platform, router and applied Home are boundaries; the store, draft,
         // controller, chooser and shared radio-group presentation stay real.
-        const { storage } = await import('@/sync/domains/state/storage');
-        const { configureSessionDraftRepository, resetSessionDraftRepositoryForTests, writeProjectOpenDraft,
+        const { writeProjectOpenDraft,
             getSessionDraftSnapshot } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
-        resetSessionDraftRepositoryForTests();
         const scope = { serverId: 'home', accountId: 'account' };
-        const { createSessionDraftCipher } = await import('@/sync/encryption/sessionDraftEncryption');
-        configureSessionDraftRepository({ scope, syncEnabled: false,
-            cipher: createSessionDraftCipher({ accountMode: 'plain', accountCryptoMaterial: null,
-                getSessionContext: () => { throw new Error('Open has no Session'); }, randomBytes: size => new Uint8Array(size) }) });
-        const machine = createMachineFixture({ id: 'machine', activeAt: Date.now() });
-        storage.setState({ profileScope: scope, machines: { [machine.id]: machine }, machineListByServerId: { home: [machine] } });
         const draftId = '00000000-0000-4000-8000-000000000081';
-        writeProjectOpenDraft({ scope, draftId, patch: { selection: { serverId: 'home', source: { kind: 'source', id: 'source', revision: 1,
-            selector: { provider: { id: 'forge', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
-                repository: { nameWithOwner: 'octocat/Hello-World', cloneUrl: 'https://github.com/octocat/Hello-World' }, protocol: 'https' } } } } });
+        const { machine } = await seedOpenDraft(draftId);
         const screen = await renderScreen(<ProjectOpenScreen />);
         const picker = () => screen.findAllByType(DropdownMenu).find(node =>
             node.props.items.some((item: { id: string }) => item.id === machine.id));
