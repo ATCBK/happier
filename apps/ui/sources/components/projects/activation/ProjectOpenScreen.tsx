@@ -438,8 +438,11 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
           />
           {effectiveUse === 'copy' && choiceBase.materialization?.kind === 'sync' ? <WorkspaceActivationSyncFields
             action={choiceBase.materialization.workspaceAction}
-            onChange={workspaceAction => edit({ materialization: { kind: 'sync',
-              targetPath: effectiveDestination, workspaceAction } })}
+            onChange={workspaceAction => {
+              // The Sync fields never offer `none`; attachment is a different Open choice.
+              if (workspaceAction.kind === 'none') return;
+              edit({ materialization: { kind: 'sync', targetPath: effectiveDestination, workspaceAction } });
+            }}
             testIdPrefix="projects.open"
           /> : null}
           <ProjectOpenOutcome open={open} gitRef={ref}

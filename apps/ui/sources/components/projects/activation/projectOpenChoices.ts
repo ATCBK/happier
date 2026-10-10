@@ -147,10 +147,13 @@ export function buildProjectOpenDraft(state: ProjectOpenChoiceState): OpenProjec
       break;
     }
     case 'copy': {
+      const workspaceAction = state.materialization?.kind === 'sync' ? state.materialization.workspaceAction
+        : buildSessionHandoffWorkspaceAction({ workspaceSyncMode: 'copy_once', contentSelection: 'git_worktree',
+          includeIgnoredMode: 'exclude', ignoredIncludeGlobs: [] });
+      // Copy is an explicit Sync operation, never the handoff helper's no-copy arm.
+      if (!workspaceAction || workspaceAction.kind === 'none') throw new Error('project_open_copy_action_unavailable');
       const candidate = { kind: 'sync' as const, targetPath: state.destination.trim(),
-        workspaceAction: state.materialization?.kind === 'sync' ? state.materialization.workspaceAction
-          : buildSessionHandoffWorkspaceAction({ workspaceSyncMode: 'copy_once', contentSelection: 'git_worktree',
-            includeIgnoredMode: 'exclude', ignoredIncludeGlobs: [] })! };
+        workspaceAction };
       const parsed = OpenProjectDraftSelectionV1Schema.shape.materialization.safeParse(candidate);
       materialization = parsed.success ? candidate : { ...candidate, targetPath: '' };
       break;

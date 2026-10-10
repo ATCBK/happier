@@ -651,7 +651,7 @@ export function getSessionWorkContext(session: SessionStatusSource, serverId?: s
     const state = storage.getState();
     const ownerMetadata = readDisplayOwnerMetadata(session);
     const target = readPrivateDisplayMachineTarget(session, ownerMetadata, serverId);
-    const home = serverId?.trim() || session.serverId || getActiveServerId();
+    const home = serverId?.trim() || getActiveServerId();
     const machineId = target?.machineId ?? ownerMetadata?.machineId;
     const machine = machineId ? state.machineListByServerId[home]?.find(item => item.id === machineId)
         ?? (home === getActiveServerId() ? state.machines[machineId] : undefined) : undefined;
