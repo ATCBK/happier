@@ -90,9 +90,9 @@ describe('buildNewSessionScreenVariantModel', () => {
         const screen = await renderScreen(React.createElement(React.Fragment, null, badge?.renderPopover?.({
             open: true, anchorRef: React.createRef(), onRequestClose: () => {},
         })));
-        const checklist = screen.findAll(node => node.props?.testIDPrefix === 'managed-machine-progress-step')[0];
-        expect(checklist?.props.steps.map((step: { stepId: string; status: string }) => [step.stepId, step.status])).toEqual([
-            ['create', 'done'], ['install', 'done'], ['join', 'done'], ['setup', 'pending'],
+        const checklist = screen.findAll(node => node.props?.testID === 'managed-machine-progress-steps' && Array.isArray(node.props.steps))[0];
+        expect(checklist?.props.steps.map((step: { key: string; state: string }) => [step.key, step.state])).toEqual([
+            ['create', 'done'], ['install', 'done'], ['join', 'done'], ['setup', 'upcoming'],
         ]);
         await screen.unmount();
     });
@@ -109,8 +109,8 @@ describe('buildNewSessionScreenVariantModel', () => {
         const screen = await renderScreen(React.createElement(React.Fragment, null, badge?.renderPopover?.({
             open: true, anchorRef: React.createRef(), onRequestClose: () => {},
         })));
-        const checklist = screen.findAll(node => node.props?.testIDPrefix === 'managed-machine-progress-step')[0];
-        expect(checklist?.props.steps).toEqual([{ stepId: 'native.boot', title: 'Waiting for guest SSH', status: 'active' }]);
+        const checklist = screen.findAll(node => node.props?.testID === 'managed-machine-progress-steps' && Array.isArray(node.props.steps))[0];
+        expect(checklist?.props.steps).toEqual([expect.objectContaining({ key: 'native.boot', title: 'Waiting for guest SSH', state: 'running' })]);
         expect(screen.getTextContent()).not.toContain('No bill');
         const archive = screen.findAll(node => node.props?.testIDPrefix === 'managed-machine-progress-archive')[0];
         await act(async () => archive?.props.onSelectTab('stop'));

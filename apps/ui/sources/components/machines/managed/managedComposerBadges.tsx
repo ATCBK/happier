@@ -5,15 +5,17 @@ import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
 import { AgentInputContentPopover } from '@/components/sessions/agentInput/components/AgentInputContentPopover';
-import {
-  ProgressChecklist,
-  type ProgressChecklistStep,
-} from '@/components/systemTasks/ProgressChecklist';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
+import {
+  SetupSteps,
+  setupStepTestID,
+  type SetupStep,
+  type SetupStepState,
+} from '@/components/ui/setupBlocks/SetupSteps';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -37,7 +39,7 @@ export type ManagedProgressModel = Readonly<{
   stages: readonly Readonly<{
     id: string;
     label: string;
-    status: 'done' | 'active' | 'pending' | 'failed';
+    state: Extract<SetupStepState, 'done' | 'running' | 'upcoming' | 'failed'>;
   }>[];
   failed: boolean;
   /** A native-create/admission failure must not be labelled as an install failure. */
@@ -112,11 +114,12 @@ export const ManagedProgressPopoverContent = React.memo(
   ) {
     const { model } = props;
     const steps = React.useMemo(
-      (): ProgressChecklistStep[] =>
+      (): SetupStep[] =>
         model.stages.map((stage) => ({
-          stepId: stage.id,
+          key: stage.id,
           title: stage.label,
-          status: stage.status,
+          state: stage.state,
+          testID: setupStepTestID('managed-machine-progress-step', stage.id, stage.state),
         })),
       [model.stages],
     );
@@ -149,11 +152,10 @@ export const ManagedProgressPopoverContent = React.memo(
           ) : null}
         </View>
         <Text style={styles.quiet}>{model.recipe}</Text>
-        <ProgressChecklist
+        <SetupSteps
+          testID="managed-machine-progress-steps"
+          variant="compact"
           steps={steps}
-          testIDPrefix="managed-machine-progress-step"
-          showStepMessages={false}
-          density="compact"
         />
         <Text style={styles.body} accessibilityLiveRegion="polite">
           {model.message}

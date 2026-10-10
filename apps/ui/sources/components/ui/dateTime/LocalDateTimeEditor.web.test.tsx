@@ -20,8 +20,11 @@ describe('LocalDateTimeEditor on web', () => {
                 labels={{ date: 'Date', time: 'Time', pastInstant: 'Past' }} testIDPrefix="editor" />;
         }
         const screen = await renderScreen(<Harness />);
-        expect(screen.findByTestId('editor-date-picker-button')?.props.accessibilityRole).toBe('button');
-        expect(screen.findByTestId('editor-time-picker-button')?.props.accessibilityRole).toBe('button');
+        // Each picker is a named button (the shared field's own pressable, by role).
+        const buttonRole = (testID: string) => screen.findAll((node) => node.props.testID === testID)
+            .map((node) => node.props.accessibilityRole ?? node.props.role).find(Boolean);
+        expect(buttonRole('editor-date-picker-button')).toBe('button');
+        expect(buttonRole('editor-time-picker-button')).toBe('button');
         await act(async () => screen.changeTextByTestId('editor-date-input', '2026-09-11'));
         await act(async () => screen.changeTextByTestId('editor-time-input', '14:25'));
         expect(screen.findByTestId('editor-date-input')?.props.value).toBe('2026-09-11');

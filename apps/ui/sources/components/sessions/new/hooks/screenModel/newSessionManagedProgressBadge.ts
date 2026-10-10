@@ -27,17 +27,17 @@ export function buildNewSessionManagedProgressBadge(
     const { setup, operation, observedStatus, failed, label, tone } = describeManagedCreationProgress(machineName, progress);
     // A setup row exists only on a joined machine, so Create, Install and Join are observed facts by then.
     const joinedStages: ManagedProgressModel['stages'] = [
-        { id: 'create', label: t('managedMachines.creation.create'), status: 'done' },
-        { id: 'install', label: t('managedMachines.creation.install'), status: 'done' },
-        { id: 'join', label: t('managedMachines.creation.join', { home: managedCreationHomeName(selection.selection.homeId) }), status: 'done' },
+        { id: 'create', label: t('managedMachines.creation.create'), state: 'done' },
+        { id: 'install', label: t('managedMachines.creation.install'), state: 'done' },
+        { id: 'join', label: t('managedMachines.creation.join', { home: managedCreationHomeName(selection.selection.homeId) }), state: 'done' },
     ];
     const stages: ManagedProgressModel['stages'] = setup ? [...joinedStages, { id: 'setup', label: t('managedMachines.creation.setup'),
-        status: setup.state === 'failed' ? 'failed' : setup.state === 'succeeded' || setup.state === 'skipped' ? 'done'
-            : setup.state === 'running' && (!observedStatus || observedStatus.tone === 'active') ? 'active' : 'pending' }]
+        state: setup.state === 'failed' ? 'failed' : setup.state === 'succeeded' || setup.state === 'skipped' ? 'done'
+            : setup.state === 'running' && (!observedStatus || observedStatus.tone === 'active') ? 'running' : 'upcoming' }]
         : operation?.progress?.kind === 'phase'
         ? [{ id: operation.progress.phase, label: operation.progress.label,
-            status: operation.state === 'failed' ? 'failed' : operation.state === 'succeeded' ? 'done'
-                : observedStatus?.tone === 'active' ? 'active' : 'pending' }]
+            state: operation.state === 'failed' ? 'failed' : operation.state === 'succeeded' ? 'done'
+                : observedStatus?.tone === 'active' ? 'running' : 'upcoming' }]
         : [];
     return buildManagedProgressStatusBadge({
         machineName, mark: React.createElement(Icon, { name: 'desktop', size: 16 }),

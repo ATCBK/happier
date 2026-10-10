@@ -8,9 +8,10 @@ import { useUnistyles } from 'react-native-unistyles';
 
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
-import { ProgressChecklist } from '@/components/systemTasks/ProgressChecklist';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { SetupSteps, setupStepTestID, type SetupStep } from '@/components/ui/setupBlocks/SetupSteps';
 import { StatusDot } from '@/components/ui/status/StatusDot';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
@@ -47,6 +48,12 @@ export const PluginTranscriptActivityCard = React.memo(
             () => resolvePluginTranscriptActivityPresentation(props.activity),
             [props.activity],
         );
+        const checklistSteps = React.useMemo(() => presentation.checklistSteps.map((step): SetupStep => ({
+            key: step.stepId,
+            state: step.state,
+            title: step.title,
+            testID: setupStepTestID('plugin-transcript-activity-checklist-step', step.stepId, step.state),
+        })), [presentation.checklistSteps]);
         if (props.activity.aggregateHiddenCount !== undefined) {
             return (
                 <View testID="plugin-transcript-activity-overflow">
@@ -98,11 +105,11 @@ export const PluginTranscriptActivityCard = React.memo(
                         showChevron={false}
                         accessibilityLabel={presentation.accessibilityLabel}
                     />
-                    <ProgressChecklist
-                        steps={presentation.checklistSteps}
-                        testIDPrefix="plugin-transcript-activity-checklist-step"
-                        showStepMessages={false}
-                    />
+                    {checklistSteps.length > 0 ? (
+                        <SectionContentRow testID="plugin-transcript-activity-checklist">
+                            <SetupSteps variant="checklist" steps={checklistSteps} />
+                        </SectionContentRow>
+                    ) : null}
                     {props.activity.actions.map((action) => (
                         <Item
                             key={`${action.pluginId}:${action.localId}`}

@@ -1,15 +1,16 @@
 import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
+import {
+    resolveHappierFutureLocalDateTime,
+    toHappierLocalDateTimeDraft,
+    type HappierLocalDateTimeDraft,
+} from '@happier-dev/plugin-ui/presentation';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
-import {
-    LocalDateTimeEditor,
-    resolveFutureLocalDateTime,
-} from '@/components/ui/dateTime/LocalDateTimeEditor';
-import { toLocalDateTimeDraft, type LocalDateTimeDraft } from '@/components/ui/dateTime/localDateTimeValue';
+import { LocalDateTimeEditor } from '@/components/ui/dateTime/LocalDateTimeEditor';
 import type { CustomModalInjectedProps } from '@/modal/types';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import {
@@ -44,7 +45,7 @@ export function SessionReminderDateTimeModal(props: Readonly<{
         daysAhead: 1,
         minuteOfDay: 9 * 60,
     }, props.nowMs)), [props.nowMs]);
-    const [draft, setDraft] = React.useState<LocalDateTimeDraft>(() => toLocalDateTimeDraft(initial));
+    const [draft, setDraft] = React.useState<HappierLocalDateTimeDraft>(() => toHappierLocalDateTimeDraft(initial));
     const [savePreset, setSavePreset] = React.useState(false);
     const [saving, setSaving] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
@@ -54,7 +55,7 @@ export function SessionReminderDateTimeModal(props: Readonly<{
     // of being scheduled as an already-due reminder.
     const [observedNowMs, setObservedNowMs] = React.useState(props.nowMs);
     const nowMs = Math.max(props.nowMs, observedNowMs);
-    const validTimestamp = resolveFutureLocalDateTime(draft, nowMs);
+    const validTimestamp = resolveHappierFutureLocalDateTime(draft, nowMs);
     const rule = validTimestamp === null ? null : inferSessionReminderPresetRule(validTimestamp, nowMs);
 
     const finish = React.useCallback((value: SessionReminderDateTimeResult | null) => {
@@ -72,7 +73,7 @@ export function SessionReminderDateTimeModal(props: Readonly<{
                 onPress={() => {
                     if (saving) return;
                     const submittedAtMs = Date.now();
-                    const submitted = savedReminder?.remindAt ?? resolveFutureLocalDateTime(draft, submittedAtMs);
+                    const submitted = savedReminder?.remindAt ?? resolveHappierFutureLocalDateTime(draft, submittedAtMs);
                     if (submitted === null) {
                         setObservedNowMs(submittedAtMs);
                         setError(null);

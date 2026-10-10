@@ -410,7 +410,7 @@ export function buildTranscriptRowShellSignature(params: Readonly<{
         // F-P5 (2026-08-10): `progress` ALSO selects the card. `useTranscriptRowHost` renders
         // `ExternalSessionOperationSharedCard` while it is null and `ExternalImportProgressCard`
         // once owner hydration adopts it — a group title plus one status row becoming a status row
-        // with a subtitle, an N-step `ProgressChecklist`, an optional import row, an optional
+        // with a subtitle, an N-step `SetupSteps` list, an optional import row, an optional
         // published row and one row per action. That swap was invisible here, because
         // `appendExternalSessionOperationTranscriptItem` adopts `progress` only when
         // `matchesExternalSessionOperationPresentation` holds, whose identity is

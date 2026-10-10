@@ -4,7 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import type { MachineAgent, MachineAgentSignInSession } from '@/agents/machineAgents/machineAgentTypes';
-import { ProgressChecklist, type ProgressChecklistStep } from '@/components/systemTasks/ProgressChecklist';
+import { SetupSteps, setupStepTestID, type SetupStep } from '@/components/ui/setupBlocks/SetupSteps';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -58,26 +58,32 @@ function choiceKey(choice: AgentSignInChoice): string {
 }
 
 /** The install as a plan before anything runs: the agent, each part it still needs, a check, then sign-in. */
-function buildInstallPlan(agent: MachineAgent): ProgressChecklistStep[] {
+function buildInstallPlan(agent: MachineAgent, testIDPrefix: string): SetupStep[] {
+    const planned = (key: string, title: string): SetupStep => ({ key, title, state: 'upcoming', testID: setupStepTestID(testIDPrefix, key) });
     return [
-        { stepId: 'agent', title: t('machineAgents.installAgent', { agent: agent.title }), status: 'pending' },
+        planned('agent', t('machineAgents.installAgent', { agent: agent.title })),
         ...agent.dependencies
             .filter((dependency) => !dependency.installed)
-            .map((dependency): ProgressChecklistStep => ({ stepId: dependency.key, title: dependency.title, status: 'pending' })),
-        { stepId: 'check', title: t('machineAgents.stepCheck'), status: 'pending' },
-        { stepId: 'signIn', title: t('machineAgents.stepSignIn'), status: 'pending' },
+            .map((dependency) => planned(dependency.key, dependency.title)),
+        planned('check', t('machineAgents.stepCheck')),
+        planned('signIn', t('machineAgents.stepSignIn')),
     ];
 }
 
-function buildJobSteps(agent: MachineAgent): ProgressChecklistStep[] {
-    return (agent.job?.steps ?? []).map((step) => ({
-        stepId: step.stepId,
-        title: step.label,
-        status: step.state === 'running' ? 'active' : step.state === 'done' ? 'done' : step.state === 'failed' ? 'failed' : 'pending',
-        message: step.state === 'running' && step.bytesDone !== null && step.bytesTotal
+function buildJobSteps(agent: MachineAgent, testIDPrefix: string): SetupStep[] {
+    return (agent.job?.steps ?? []).map((step) => {
+        const state = step.state === 'running' || step.state === 'done' || step.state === 'failed' ? step.state : 'upcoming';
+        const detail = step.state === 'running' && step.bytesDone !== null && step.bytesTotal
             ? t('machineAgents.progress', { done: formatByteSize(step.bytesDone), total: formatByteSize(step.bytesTotal) })
-            : null,
-    }));
+            : null;
+        return {
+            key: step.stepId,
+            title: step.label,
+            state,
+            ...(detail ? { detail } : {}),
+            testID: setupStepTestID(testIDPrefix, step.stepId, state),
+        };
+    });
 }
 
 /**
@@ -114,7 +120,7 @@ function PhaseBody(props: AgentSetupFormViewProps & Readonly<{ phase: AgentSetup
                 <>
                     <Lead text={`${lead}${also} ${t('machineAgents.installThenSignIn')}`} />
                     <View style={styles.plan}>
-                        <ProgressChecklist steps={buildInstallPlan(agent)} testIDPrefix={`${testID}.plan`} showStepMessages={false} />
+                        <SetupSteps variant="checklist" steps={buildInstallPlan(agent, `${testID}.plan`)} />
                     </View>
                     <Actions>
                         <RoundButton testID={`${testID}.install`} size="small" title={t('machineAgents.installAgent', { agent: agent.title })} onPress={handlers.onInstall} />
@@ -145,7 +151,7 @@ function PhaseBody(props: AgentSetupFormViewProps & Readonly<{ phase: AgentSetup
             return (
                 <>
                     <View style={styles.plan}>
-                        <ProgressChecklist steps={buildJobSteps(agent)} testIDPrefix={`${testID}.job`} />
+                        <SetupSteps variant="checklist" steps={buildJobSteps(agent, `${testID}.job`)} />
                     </View>
                     {agent.job?.logLine ? <Text style={styles.log} numberOfLines={1}>{agent.job.logLine}</Text> : null}
                     <Actions>
@@ -163,7 +169,7 @@ function PhaseBody(props: AgentSetupFormViewProps & Readonly<{ phase: AgentSetup
                 <>
                     {agent.job && agent.job.steps.length > 0 ? (
                         <View style={styles.plan}>
-                            <ProgressChecklist steps={buildJobSteps(agent)} testIDPrefix={`${testID}.job`} />
+                            <SetupSteps variant="checklist" steps={buildJobSteps(agent, `${testID}.job`)} />
                         </View>
                     ) : null}
                     <AttentionBanner
@@ -337,6 +343,7 @@ const styles = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         overflow: 'hidden',
+        paddingHorizontal: 12,
     },
     log: {
         ...Typography.mono(),

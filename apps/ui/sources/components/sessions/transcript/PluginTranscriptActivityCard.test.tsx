@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import type { ReactTestInstance } from 'react-test-renderer';
 
 import type { ChatListItem } from '@/components/sessions/chatListItems';
 import {
@@ -87,6 +88,16 @@ function paintedTitleLine(node: RenderedItem) {
     };
 }
 
+/** A shared setup-step row's painted title line: its text host's own clamp, read from the render. */
+function paintedStepLine(node: ReactTestInstance | null, label: string) {
+    if (!node) throw new Error('Expected the card to paint this step.');
+    const title = node.findAll((child) => child.children.length === 1 && child.children[0] === label
+        && typeof child.type === 'string')[0];
+    if (!title) throw new Error(`Expected the step to paint its title "${label}".`);
+    const maxLines = title.props.numberOfLines;
+    return { text: label, maxLines: typeof maxLines === 'number' ? maxLines : null };
+}
+
 /** The same, for the one `Item` subtitle this card paints. */
 function paintedSubtitleLine(node: RenderedItem): Readonly<{ text: unknown; maxLines: number | null }> | null {
     if (!node) throw new Error('Expected the card to paint this Item.');
@@ -156,7 +167,7 @@ describe('PluginTranscriptActivityCard', () => {
             pointerEvents: 'none',
         });
         expect(screen.findByTestId('plugin-transcript-activity-checklist-step-done-lint')).toBeTruthy();
-        expect(screen.findByTestId('plugin-transcript-activity-checklist-step-active-build')).toBeTruthy();
+        expect(screen.findByTestId('plugin-transcript-activity-checklist-step-running-build')).toBeTruthy();
         expect(screen.findByTestId('plugin-transcript-activity-a11y-status')?.props).toMatchObject({
             accessibilityLiveRegion: 'polite',
             role: 'status',
@@ -265,8 +276,8 @@ describe('PluginTranscriptActivityCard', () => {
         expect(paint.statusDetail).toEqual(paintedSubtitleLine(status));
         expect(paint.hasProgress).toBe(true);
         expect(paint.checklistStepLabels).toEqual([
-            paintedTitleLine(screen.findByTestId('plugin-transcript-activity-checklist-step-done-lint')),
-            paintedTitleLine(screen.findByTestId('plugin-transcript-activity-checklist-step-active-build')),
+            paintedStepLine(screen.findByTestId('plugin-transcript-activity-checklist-step-done-lint'), 'Lint'),
+            paintedStepLine(screen.findByTestId('plugin-transcript-activity-checklist-step-running-build'), 'Build'),
         ]);
         expect(paint.checklistStepLabels.map((line) => line.text)).toEqual(['Lint', 'Build']);
         expect(paint.actionLabels).toEqual([

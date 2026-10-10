@@ -4,12 +4,12 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-na
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { MachineCliGlyphs } from '@/components/sessions/new/components/MachineCliGlyphs';
-import { ProgressChecklist, type ProgressChecklistStep } from '@/components/systemTasks/ProgressChecklist';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SurfaceCard } from '@/components/ui/cards/SurfaceCard';
 import { Icon } from '@/components/ui/icons/Icon';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { StatusDot } from '@/components/ui/status/StatusDot';
+import { SetupSteps, setupStepTestID, type SetupStep } from '@/components/ui/setupBlocks/SetupSteps';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { hapticsSuccess } from '@/components/ui/theme/haptics';
@@ -98,16 +98,20 @@ export const MachineAddStepList = React.memo(function MachineAddStepList(props: 
     testID: string;
     steps: readonly MachineAddStep[];
 }>) {
-    const steps = React.useMemo((): ProgressChecklistStep[] => props.steps.map((step) => ({
-        stepId: step.id,
-        title: step.label,
-        status: step.state === 'running' ? 'active' : step.state,
-        detail: step.elapsedMs !== null && step.state !== 'pending' ? formatElapsed(step.elapsedMs) : null,
-    })), [props.steps]);
+    const steps = React.useMemo(() => props.steps.map((step): SetupStep => {
+        const state = step.state === 'pending' ? 'upcoming' : step.state;
+        return {
+            key: step.id,
+            title: step.label,
+            state,
+            ...(step.elapsedMs !== null && step.state !== 'pending' ? { meta: formatElapsed(step.elapsedMs) } : {}),
+            testID: setupStepTestID(props.testID, step.id, state),
+        };
+    }), [props.steps, props.testID]);
     const styles = stylesheet;
     return (
         <View style={styles.steps}>
-            <ProgressChecklist steps={steps} testIDPrefix={props.testID} showStepMessages={false} />
+            <SetupSteps variant="checklist" steps={steps} />
         </View>
     );
 });
@@ -260,6 +264,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
         overflow: 'hidden',
+        paddingHorizontal: 12,
     },
     arrived: {
         gap: 12,

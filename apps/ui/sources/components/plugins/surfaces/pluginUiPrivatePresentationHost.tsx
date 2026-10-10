@@ -76,6 +76,7 @@ import type { usePaneHeaderSlotBinding } from '@/components/appShell/panes/paneH
 import { readPluginUiHostTypography } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { useSetting } from '@/sync/domains/state/storage';
 import { createScrollViewNearViewportTracker } from '@/components/widgets/nearViewport';
+import { resolveAppLocalDateTimePicker } from '@/components/ui/dateTime/LocalDateTimeEditor';
 import type { PluginUiScrollActivityTracker } from '@happier-dev/plugin-ui/advanced';
 import {
     useInstalledPluginBrandPresentation,
@@ -355,6 +356,7 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
         return <PluginDictationButton {...input} />;
     },
     storedImageHost: SESSION_STORED_IMAGE_HOST,
+    localDateTimePicker: resolveAppLocalDateTimePicker(),
     renderMaterialSurface: renderThemeMaterialSurface,
     renderMarkdown(input: Readonly<{ value: string; selectable: boolean; testID?: string }>) {
         return <MarkdownView markdown={input.value} selectable={input.selectable} testID={input.testID} />;

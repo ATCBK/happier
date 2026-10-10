@@ -1,44 +1,325 @@
 import type { ReactNode } from 'react';
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import type { HappierUiTheme } from '../../environment/types.js';
-import { HappierStep } from './Step.js';
+import { HappierSpinner, iconMatchedSpinnerSize } from '../feedback/Spinner.js';
+import type { HappierFontWeight } from '../portableTypes.js';
+import type { HappierTone } from '../semantics.js';
 import { HappierText } from '../text/Text.js';
 import { useHappierTypeRoleStyle } from '../text/typeRole.js';
+import {
+  HAPPIER_STEP_PROGRESS_GLYPH_TONE,
+  HappierStep,
+  HappierStepCancelledMark,
+  type HappierStepProgress,
+} from './Step.js';
+
+/**
+ * Where one step of an ordered setup or progress list stands. Setup flows use `done`, `current` and
+ * `upcoming`; progress the system reports adds `running`, `waiting` (it needs the reader), `failed`
+ * and `cancelled`.
+ */
+export type HappierSetupStepState = HappierStepProgress;
+
+/**
+ * How the steps paint. `numbered`: a rail of numbered steps for a setup the reader walks through.
+ * `checklist`: one row per step with its state glyph, for progress the system reports (installing,
+ * importing, creating). `compact`: one quiet line per step with ink marks, for a popover or a card's
+ * corner beside other content.
+ */
+export type HappierSetupStepsVariant = 'numbered' | 'checklist' | 'compact';
+
+/** The states whose mark is a glyph from the adapter's icon owner. */
+export type HappierSetupStepGlyphState =
+  keyof typeof HAPPIER_STEP_PROGRESS_GLYPH_TONE;
 
 export type HappierSetupStep = Readonly<{
   key: string;
-  state?: 'done' | 'current' | 'upcoming';
+  state?: HappierSetupStepState;
   title: ReactNode;
+  /** What the step asks for or reports, beneath its title. The compact line leaves it out. */
   detail?: string;
+  /** A short settled fact at the row's end (how long the step took). */
+  meta?: string;
+  /** What the step asks the reader to do (numbered setup steps only). */
   body?: ReactNode;
   testID?: string;
 }>;
 
-export type HappierSetupStepsProps = Readonly<{
-  steps: readonly HappierSetupStep[];
-  plain?: boolean;
-  testID?: string;
-  theme: HappierUiTheme;
-  stateGlyph?: ReactNode;
-  /** Adapters bind their text host, not another step layout or marker. */
-  renderTitle?: (step: HappierSetupStep, plain: boolean) => ReactNode;
-  renderDetail?: (detail: string) => ReactNode;
+/** How a step's title is painted; the shared owner decides it so adapters bind only their text host. */
+export type HappierSetupStepTitlePresentation = Readonly<{
+  plain: boolean;
+  variant: HappierSetupStepsVariant;
+  color: string;
+  weight: 'regular' | 'medium' | 'semiBold';
 }>;
 
-/** The ordered setup composition; numbering and settled/current markers belong to HappierStep. */
+export type HappierSetupStepsProps = Readonly<{
+  steps: readonly HappierSetupStep[];
+  /** A numbered list of instructions: sentences, no step titles. */
+  plain?: boolean;
+  variant?: HappierSetupStepsVariant;
+  testID?: string;
+  theme: HappierUiTheme;
+  /** Draws a settled state's glyph (done: check, failed: close, waiting: waiting) in the given tone and size. */
+  renderStateGlyph?: (
+    glyph: Readonly<{
+      state: HappierSetupStepGlyphState;
+      tone: HappierTone;
+      size: number;
+    }>,
+  ) => ReactNode;
+  /** Adapters bind their text host, not another step layout or marker. */
+  renderTitle?: (
+    step: HappierSetupStep,
+    title: HappierSetupStepTitlePresentation,
+  ) => ReactNode;
+  renderDetail?: (detail: string) => ReactNode;
+  renderMeta?: (meta: string) => ReactNode;
+}>;
+
+/** Per paint: each settled state's glyph tone, the glyph size, and the ring an unsettled step draws. */
+const GLYPH_PAINT = {
+  numbered: { tone: HAPPIER_STEP_PROGRESS_GLYPH_TONE, size: 12, ring: 0 },
+  checklist: { tone: HAPPIER_STEP_PROGRESS_GLYPH_TONE, size: 16, ring: 12 },
+  // The marks stay ink, so the step being worked on reads by weight; only a failure takes colour.
+  compact: {
+    tone: { done: 'muted', failed: 'danger', waiting: 'neutral' },
+    size: 14,
+    ring: 10,
+  },
+} as const satisfies Record<
+  HappierSetupStepsVariant,
+  Readonly<{
+    tone: Readonly<Record<HappierSetupStepGlyphState, HappierTone>>;
+    size: number;
+    ring: number;
+  }>
+>;
+
+const FONT_WEIGHT = {
+  regular: '400',
+  medium: '500',
+  semiBold: '600',
+} as const satisfies Record<
+  HappierSetupStepTitlePresentation['weight'],
+  HappierFontWeight
+>;
+
+function isGlyphState(
+  state: HappierSetupStepState,
+): state is HappierSetupStepGlyphState {
+  return state in HAPPIER_STEP_PROGRESS_GLYPH_TONE;
+}
+
+function resolveTitlePresentation(
+  state: HappierSetupStepState,
+  plain: boolean,
+  variant: HappierSetupStepsVariant,
+  theme: HappierUiTheme,
+): HappierSetupStepTitlePresentation {
+  const { colors } = theme;
+  const title = (
+    color: string,
+    weight: HappierSetupStepTitlePresentation['weight'],
+  ) => ({ plain, variant, color, weight });
+  const working =
+    state === 'running' || state === 'current' || state === 'waiting';
+  if (variant === 'numbered') {
+    if (plain) return title(colors.text, 'regular');
+    if (state === 'done') return title(colors.secondaryText, 'medium');
+    if (state === 'cancelled') return title(colors.mutedText, 'medium');
+    return title(colors.text, 'semiBold');
+  }
+  if (working) return title(colors.text, 'medium');
+  if (state === 'upcoming' || state === 'cancelled')
+    return title(colors.mutedText, 'regular');
+  if (variant === 'compact')
+    return title(
+      state === 'failed' ? colors.danger : colors.secondaryText,
+      'regular',
+    );
+  // A checklist's settled rows keep their words in ink; the glyph says how they settled.
+  return title(colors.text, 'regular');
+}
+
+/**
+ * The ordered setup and progress composition; numbering and settled/current/working markers belong to
+ * HappierStep. Settled glyphs come from the adapter's icon owner in the tone this owner chooses.
+ */
 export function HappierSetupSteps(props: HappierSetupStepsProps) {
-  const detailStyle = useHappierTypeRoleStyle('body', props.theme);
-  return <View testID={props.testID} style={{ gap: props.plain ? 9 : 14 }} accessibilityRole="list">
-    {props.steps.map((step, index) => <HappierStep key={step.key} testID={step.testID}
-      marker={{ kind: 'number', value: index + 1 }} numberState={step.state ?? 'upcoming'}
-      theme={props.theme} title={step.title} stateGlyph={props.stateGlyph}
-      titleContent={props.renderTitle?.(step, props.plain === true) ?? (props.plain
-        ? <HappierText style={[detailStyle, { color: props.theme.colors.text }]}>{step.title}</HappierText>
-        : undefined)}>
-      {step.detail ? props.renderDetail?.(step.detail) ?? <HappierText style={[detailStyle,
-        { marginTop: 2, color: props.theme.colors.secondaryText }]}>{step.detail}</HappierText> : null}
-      {step.body ? <View style={{ marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>{step.body}</View> : null}
-    </HappierStep>)}
-  </View>;
+  const theme = props.theme;
+  const plain = props.plain === true;
+  const variant = props.variant ?? 'numbered';
+  const paint = GLYPH_PAINT[variant];
+  const bodyStyle = useHappierTypeRoleStyle('body', theme);
+  const captionStyle = useHappierTypeRoleStyle('caption', theme);
+
+  const renderTitle = (
+    step: HappierSetupStep,
+    state: HappierSetupStepState,
+  ) => {
+    const title = resolveTitlePresentation(state, plain, variant, theme);
+    const adapted = props.renderTitle?.(step, title);
+    if (adapted !== undefined) return adapted;
+    // A heading stays the default for an author's ordinary setup step; settled and progress titles are quieter text.
+    if (variant === 'numbered' && !plain && title.weight === 'semiBold')
+      return undefined;
+    return (
+      <HappierText
+        style={[
+          bodyStyle,
+          { color: title.color, fontWeight: FONT_WEIGHT[title.weight] },
+        ]}
+      >
+        {step.title}
+      </HappierText>
+    );
+  };
+  const renderDetail = (detail: string) =>
+    props.renderDetail?.(detail) ?? (
+      <HappierText
+        style={[bodyStyle, { marginTop: 2, color: theme.colors.secondaryText }]}
+      >
+        {detail}
+      </HappierText>
+    );
+  const renderMeta = (meta: string) =>
+    props.renderMeta?.(meta) ?? (
+      <HappierText
+        tabularNumbers
+        style={[captionStyle, { color: theme.colors.mutedText }]}
+      >
+        {meta}
+      </HappierText>
+    );
+  const renderGlyph = (state: HappierSetupStepGlyphState) =>
+    props.renderStateGlyph?.({
+      state,
+      tone: paint.tone[state],
+      size: paint.size,
+    });
+  const renderMark = (state: HappierSetupStepState) => {
+    if (isGlyphState(state)) return renderGlyph(state);
+    if (state === 'running')
+      return (
+        <HappierSpinner
+          size={iconMatchedSpinnerSize(paint.size)}
+          color={theme.colors.text}
+        />
+      );
+    if (state === 'cancelled')
+      return <HappierStepCancelledMark color={theme.colors.mutedText} />;
+    return (
+      <View
+        style={{
+          width: paint.ring,
+          height: paint.ring,
+          borderRadius: paint.ring / 2,
+          borderWidth: 1.5,
+          borderColor:
+            state === 'current' ? theme.colors.text : theme.colors.mutedText,
+        }}
+      />
+    );
+  };
+
+  if (variant !== 'numbered') {
+    const checklist = variant === 'checklist';
+    return (
+      <View
+        testID={props.testID}
+        style={checklist ? null : { gap: 6 }}
+        accessibilityRole="list"
+      >
+        {props.steps.map((step, index) => {
+          const state = step.state ?? 'upcoming';
+          return (
+            <View
+              key={step.key}
+              testID={step.testID}
+              {...(state === 'running' ? { 'aria-busy': true } : {})}
+              style={
+                checklist
+                  ? [
+                      {
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 10,
+                        minHeight: 38,
+                        paddingVertical: 8,
+                      },
+                      index > 0
+                        ? {
+                            borderTopWidth: StyleSheet.hairlineWidth,
+                            borderTopColor: theme.colors.divider,
+                          }
+                        : null,
+                    ]
+                  : { flexDirection: 'row', alignItems: 'center', gap: 8 }
+              }
+            >
+              <View
+                aria-hidden
+                style={{
+                  width: Math.max(paint.size, 16),
+                  height: Math.max(paint.size, 16),
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                {renderMark(state)}
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                {renderTitle(step, state)}
+                {checklist && step.detail ? renderDetail(step.detail) : null}
+              </View>
+              {step.meta ? renderMeta(step.meta) : null}
+            </View>
+          );
+        })}
+      </View>
+    );
+  }
+
+  return (
+    <View
+      testID={props.testID}
+      style={{ gap: plain ? 9 : 14 }}
+      accessibilityRole="list"
+    >
+      {props.steps.map((step, index) => {
+        const state = step.state ?? 'upcoming';
+        return (
+          <HappierStep
+            key={step.key}
+            testID={step.testID}
+            marker={{ kind: 'number', value: index + 1 }}
+            numberState={state}
+            theme={theme}
+            title={step.title}
+            stateGlyph={isGlyphState(state) ? renderGlyph(state) : undefined}
+            trailing={step.meta ? renderMeta(step.meta) : undefined}
+            titleContent={renderTitle(step, state)}
+          >
+            {step.detail ? renderDetail(step.detail) : null}
+            {step.body ? (
+              <View
+                style={{
+                  marginTop: 10,
+                  flexDirection: 'row',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                {step.body}
+              </View>
+            ) : null}
+          </HappierStep>
+        );
+      })}
+    </View>
+  );
 }

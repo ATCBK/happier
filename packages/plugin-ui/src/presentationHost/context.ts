@@ -193,6 +193,8 @@ export type PluginUiPresentationHost = Readonly<{
   resolveMaterialColor?(input: Readonly<{ color: string; role?: HappierMaterialRole; nested: boolean; translucentColor?: string }>): string;
   /** Incumbent platform image decoder; Session-media acquisition remains in the mounted host API. */
   storedImageHost?: HappierStoredImageHost;
+  /** The host's own date and time picker for `LocalDateTimeField`; absent, the field is typed alone. */
+  localDateTimePicker?: import('../presentation/form/LocalDateTimeField.js').HappierLocalDateTimePickerHost;
   /** Qualified row destinations use the incumbent workspace owner; absent hosts keep ordinary activation. */
   renderDestinationRow?(input: NavigationListDestination & Readonly<{
     children: ReactNode;

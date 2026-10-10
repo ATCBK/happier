@@ -83,6 +83,8 @@ const APPROVED_CATALOG_VOCABULARY = [
   'WidgetSurface',
   // Public setup and Voice author adapters documented by docs/plugin-platform.md.
   'SetupSteps', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
+  // Lane 12 Machines: the typed-or-picked local date and time (a provisioner's lease or expiry input).
+  'LocalDateTimeField',
 ] as const;
 
 type DeclarativeDisposition = Readonly<{
@@ -1657,6 +1659,21 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     devMountSymbols: [],
     declarative: { kind: 'not-applicable', reason: 'V2 has no setup-steps node.' },
   },
+  {
+    publicName: 'LocalDateTimeField',
+    propTypeName: 'LocalDateTimeFieldProps',
+    family: 'Local date-time field',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/form/LocalDateTimeField.tsx',
+    sharedSymbol: 'HappierLocalDateTimeField',
+    pluginOwner: { module: 'components/Form.tsx', symbol: 'LocalDateTimeField' },
+    coreConsumers: ['components/ui/dateTime/LocalDateTimeEditor.tsx'],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no local date-time node.' },
+  },
   // These five public adapters request the existing physical host. They do not duplicate its
   // presentation or lifecycle and are source-present, not loaded-platform graduated.
   ...[
@@ -2368,7 +2385,7 @@ describe('graduated shared presentation families (§8.2)', () => {
       'NavigationList.Row',
       'DragSource', 'DropTarget',
       'DetailsPane', 'PaneHeaderContent', 'Avatar', 'AgentCursor', 'PresenceCapsule', 'StatusCapsule',
-      'SetupSteps', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
+      'SetupSteps', 'LocalDateTimeField', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
     ]);
   });
 

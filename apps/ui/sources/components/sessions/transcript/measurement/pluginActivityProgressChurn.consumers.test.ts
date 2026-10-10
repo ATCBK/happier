@@ -234,11 +234,12 @@ describe('plugin activity progress churn — the five size-key consumers', () =>
 
     /**
      * F-1 (2026-08-11) — V-2 dropped the length term at ANY clamp, which turned a safe over-key into
-     * a real UNDER-key here. `checklistStepLabels` and `actionLabels` are clamp TWO (`Item` paints a
-     * title with `numberOfLines: subtitle ? 1 : 2`, and these carry no subtitle), and a clamp-2 box
-     * is NOT height-invariant in its text: one line while the label fits, two once it does not. Every
-     * churn case V-2 measured lives in `statusDetail`, which is clamp ONE — so restricting the drop to
-     * a clamp of one keeps all of it fixed while this direction stays keyed.
+     * a real UNDER-key here. `actionLabels` are clamp TWO (`Item` paints a title with
+     * `numberOfLines: subtitle ? 1 : 2`, and these carry no subtitle) and `checklistStepLabels` are
+     * unclamped `SetupSteps` titles; neither box is height-invariant in its text: one line while the
+     * label fits, more once it does not. Every churn case V-2 measured lives in `statusDetail`, which
+     * is clamp ONE — so restricting the drop to a clamp of one keeps all of it fixed while this
+     * direction stays keyed.
      *
      * Nothing else in this file crosses the LENGTH boundary inside a clamp of two.
      */
@@ -279,6 +280,15 @@ describe('plugin activity progress churn — the five size-key consumers', () =>
      * directions).
      */
     it('does NOT invalidate when a clamped label gains a hard break the clamp already swallows', () => {
+        const action = (label: string) => [{ pluginId: 'acme.preview', localId: 'open', label }];
+        const twoLines = signatureFor(activity({ actions: action('aa\nbb') }));
+        const threeBreaksSameLength = signatureFor(activity({ actions: action('a\nb\nc') }));
+
+        expect(buildTranscriptItemHeightSignatureKey(threeBreaksSameLength))
+            .toBe(buildTranscriptItemHeightSignatureKey(twoLines));
+    });
+
+    it('invalidates when an unclamped step title gains a hard break, since the step paints every line', () => {
         const twoLines = signatureFor(activity({
             checklist: [{ id: 'build', label: 'aa\nbb', state: 'active' }],
         }));
@@ -287,7 +297,7 @@ describe('plugin activity progress churn — the five size-key consumers', () =>
         }));
 
         expect(buildTranscriptItemHeightSignatureKey(threeBreaksSameLength))
-            .toBe(buildTranscriptItemHeightSignatureKey(twoLines));
+            .not.toBe(buildTranscriptItemHeightSignatureKey(twoLines));
     });
 
     it('still invalidates when the fixed-width progress rail appears or disappears', () => {

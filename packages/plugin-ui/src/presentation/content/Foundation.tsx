@@ -451,6 +451,29 @@ export function resolveHappierProgressPercentage(
   return Math.round(fraction * 100);
 }
 
+/**
+ * One check or step beneath a banner's description, with the literal commands it names kept apart
+ * (`{ code }`) so they are drawn as code and never wrap inside themselves.
+ */
+export type HappierBannerPoint = readonly (string | Readonly<{ code: string }>)[];
+
+/** Splits a translated line around the literal commands it names (they are never translated). */
+export function splitHappierBannerPoint(text: string, commands: readonly string[]): HappierBannerPoint {
+  const segments: (string | Readonly<{ code: string }>)[] = [];
+  let rest = text;
+  while (rest) {
+    const next = commands
+      .map((command) => ({ command, at: command ? rest.indexOf(command) : -1 }))
+      .filter((match) => match.at >= 0)
+      .sort((left, right) => left.at - right.at || right.command.length - left.command.length)[0];
+    if (!next) { segments.push(rest); break; }
+    if (next.at > 0) segments.push(rest.slice(0, next.at));
+    segments.push({ code: next.command });
+    rest = rest.slice(next.at + next.command.length);
+  }
+  return segments;
+}
+
 /** A banner that needs the reader — a failure, a caution or "needs you" — is announced and wears the warning mark. */
 export function isHappierBannerUrgent(tone: HappierTone): boolean {
   return tone === 'danger' || tone === 'warning' || tone === 'attention';
@@ -481,6 +504,13 @@ export function HappierBanner(
     /** Core binds its text host; both adapters retain this owner's layout. */
     titleContent?: ReactNode;
     descriptionContent?: ReactNode;
+    /**
+     * Checks or steps the reader can take, beneath the description: one hanging line each, so a long
+     * point wraps under its own text rather than under the bullet. Points put the action below.
+     */
+    points?: readonly HappierBannerPoint[];
+    /** Core binds its text host for a point's line; the hanging layout stays this owner's. */
+    renderPoint?: (point: HappierBannerPoint, index: number) => ReactNode;
     announce?: 'alert' | 'status' | 'none';
     accessibilityLiveRegion?: 'polite' | 'assertive';
   }>,
@@ -492,7 +522,11 @@ export function HappierBanner(
   const [narrow, setNarrow] = useState(false);
   const fullWidthAction =
     narrow && props.compactActionPlacement === 'full-width';
-  const actionBelow = narrow || props.actionPlacement === 'below';
+  const actionBelow = narrow || props.actionPlacement === 'below' || (props.points?.length ?? 0) > 0;
+  const descriptionStyle = {
+    ...resolveHappierPageTextStyle('rowDescription', typography),
+    color: props.theme.colors.secondaryText,
+  };
   const role =
     props.announce === 'none'
       ? undefined
@@ -592,6 +626,27 @@ export function HappierBanner(
               {props.description}
             </HappierText>
           ) : null)}
+        {props.points?.length ? (
+          <View style={{ marginTop: 2 }}>
+            {props.points.map((point, index) => (
+              <View key={index} testID={props.testID ? `${props.testID}.point.${index}` : undefined}
+                style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                <HappierText aria-hidden style={{ ...descriptionStyle, width: 14 }}>{'\u2022'}</HappierText>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  {props.renderPoint?.(point, index) ?? (
+                    <HappierText style={descriptionStyle}>
+                      {point.map((segment, segmentIndex) => typeof segment === 'string' ? segment : (
+                        // A command never breaks inside itself; the line wraps around it.
+                        <HappierText key={segmentIndex} style={{ fontFamily: props.theme.typography.code.fontFamily,
+                          color: props.theme.colors.text }}>{segment.code.replace(/ /g, '\u00a0')}</HappierText>
+                      ))}
+                    </HappierText>
+                  )}
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : null}
         {props.details}
         {props.action && actionBelow && !fullWidthAction ? (
           <View style={{ alignItems: 'flex-start', marginTop: 10 }}>

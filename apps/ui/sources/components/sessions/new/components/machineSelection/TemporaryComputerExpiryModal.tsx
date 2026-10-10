@@ -1,15 +1,13 @@
 import * as React from 'react';
 import { ScrollView, View } from 'react-native';
+import {
+    resolveHappierFutureLocalDateTime,
+    toHappierLocalDateTimeDraft,
+    type HappierLocalDateTimeDraft,
+} from '@happier-dev/plugin-ui/presentation';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import {
-    LocalDateTimeEditor,
-    resolveFutureLocalDateTime,
-} from '@/components/ui/dateTime/LocalDateTimeEditor';
-import {
-    toLocalDateTimeDraft,
-    type LocalDateTimeDraft,
-} from '@/components/ui/dateTime/localDateTimeValue';
+import { LocalDateTimeEditor } from '@/components/ui/dateTime/LocalDateTimeEditor';
 import { Modal } from '@/modal';
 import type { CustomModalInjectedProps } from '@/modal/types';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
@@ -32,12 +30,12 @@ export function TemporaryComputerExpiryModal(props: Readonly<{
     currentExpiresAt?: number;
     onResolve: (expiresAt: number | null) => void;
 }> & CustomModalInjectedProps) {
-    const [draft, setDraft] = React.useState<LocalDateTimeDraft>(() => toLocalDateTimeDraft(new Date(
+    const [draft, setDraft] = React.useState<HappierLocalDateTimeDraft>(() => toHappierLocalDateTimeDraft(new Date(
         props.currentExpiresAt !== undefined && props.currentExpiresAt > props.nowMs
             ? props.currentExpiresAt
             : props.nowMs + INITIAL_EXPIRY_OFFSET_MS,
     )));
-    const expiresAt = resolveFutureLocalDateTime(draft, props.nowMs);
+    const expiresAt = resolveHappierFutureLocalDateTime(draft, props.nowMs);
 
     const finish = React.useCallback((value: number | null) => {
         props.onResolve(value);

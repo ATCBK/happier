@@ -10,6 +10,7 @@ import {
   HappierLink,
   HappierMetadata,
   HappierProgress,
+  type HappierBannerPoint,
 } from '../presentation/content/Foundation.js';
 import { HAPPIER_TONE_COLOR_TOKEN, type HappierTone } from '../presentation/semantics.js';
 import { softenHappierWorkColor } from '../presentation/work/workStatus.js';
@@ -222,6 +223,11 @@ export type BannerProps = Readonly<{
   titleKey?: string;
   description?: string;
   descriptionKey?: string;
+  /**
+   * Checks or steps beneath the description (a provisioner's "run this to fix it"); keep literal
+   * commands apart with `splitHappierBannerPoint` so they are drawn as code.
+   */
+  points?: readonly HappierBannerPoint[];
   action?: ReactNode;
   testID?: string;
 }>;

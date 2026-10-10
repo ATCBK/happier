@@ -75,6 +75,13 @@ vi.mock('@tauri-apps/api/path', () => ({
     join: async (...parts: string[]) => parts.join('/'),
 }));
 
+function textUnder(node: { children: ReadonlyArray<unknown> } | null): string {
+    if (!node) return '';
+    return node.children.map((child) => typeof child === 'string'
+        ? child
+        : textUnder(child as { children: ReadonlyArray<unknown> })).join('');
+}
+
 function createSnapshot(overrides: Partial<SystemTaskRunState> = {}): SystemTaskRunState {
     return {
         taskId: 'task_1',
@@ -128,16 +135,16 @@ describe('SystemTaskProgressCard checklist rendering', () => {
         if (!prepareRow) {
             throw new Error('Missing prepare checklist row');
         }
-        expect(prepareRow.props.title).toBe('settings.systemTaskStepPrepare');
-        expect(prepareRow.props.subtitle).toBe('Preparing task');
+        expect(textUnder(prepareRow)).toContain('settings.systemTaskStepPrepare');
+        expect(textUnder(prepareRow)).toContain('Preparing task');
 
-        const installRow = screen.findByTestId('system-task-progress-checklist-step-active-install-runtime');
+        const installRow = screen.findByTestId('system-task-progress-checklist-step-running-install-runtime');
         expect(installRow).not.toBeNull();
         if (!installRow) {
             throw new Error('Missing install checklist row');
         }
-        expect(installRow.props.title).toBe('settings.systemTaskStepInstallRuntime');
-        expect(installRow.props.subtitle).toBe('Installing runtime');
+        expect(textUnder(installRow)).toContain('settings.systemTaskStepInstallRuntime');
+        expect(textUnder(installRow)).toContain('Installing runtime');
     });
 
     it('supports a checklist-only variant without the verbose status rows', async () => {
@@ -174,7 +181,7 @@ describe('SystemTaskProgressCard checklist rendering', () => {
         expect(screen.findByTestId('system-task-step-label')).toBeNull();
         expect(screen.findByTestId('system-task-message')).toBeNull();
 
-        const checklistRow = screen.findByTestId('system-task-progress-checklist-step-active-install-runtime');
+        const checklistRow = screen.findByTestId('system-task-progress-checklist-step-running-install-runtime');
         expect(checklistRow).not.toBeNull();
     });
 
@@ -204,12 +211,12 @@ describe('SystemTaskProgressCard checklist rendering', () => {
             }),
         );
 
-        const row = screen.findByTestId('system-task-progress-checklist-step-active-unknown-step-id');
+        const row = screen.findByTestId('system-task-progress-checklist-step-running-unknown-step-id');
         expect(row).not.toBeNull();
         if (!row) {
             throw new Error('Missing unknown step checklist row');
         }
-        expect(row.props.title).toBe('unknown.step.id');
+        expect(textUnder(row)).toContain('unknown.step.id');
     });
 
     it('shows Open logs only on desktop and invokes the tauri command with an absolute path', async () => {

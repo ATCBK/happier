@@ -1,16 +1,35 @@
 import type { ReactElement, ReactNode } from 'react';
 
-import { HappierSetupSteps, type HappierSetupStep } from '../presentation/content/SetupSteps.js';
+import {
+  HappierSetupSteps,
+  type HappierSetupStep,
+  type HappierSetupStepGlyphState,
+  type HappierSetupStepsVariant,
+} from '../presentation/content/SetupSteps.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
-import { Icon, type IconName } from './Icon.js';
+import { PluginUiIconGlyph, type IconName } from './Icon.js';
 import { usePluginTheme } from './PluginUiProvider.js';
 
 export type SetupStep = HappierSetupStep;
-export type SetupStepsProps = Readonly<{ steps: readonly SetupStep[]; plain?: boolean; testID?: string }>;
+export type SetupStepsProps = Readonly<{
+  steps: readonly SetupStep[];
+  plain?: boolean;
+  /** `numbered` (default) setup rail, `checklist` rows for reported progress, or `compact` quiet lines. */
+  variant?: HappierSetupStepsVariant;
+  testID?: string;
+}>;
 
+const SETUP_STEP_GLYPH = {
+  done: 'check',
+  failed: 'close',
+  waiting: 'waiting',
+} as const satisfies Record<HappierSetupStepGlyphState, IconName>;
+
+/** Ordered setup or progress steps: a provisioner's acquisition stages, a sign-in's numbered instructions. */
 export function SetupSteps(props: SetupStepsProps): ReactElement {
   const theme = usePluginTheme();
-  return <HappierSetupSteps {...props} theme={theme} stateGlyph={<Icon name="check" size="small" tone="success" />} />;
+  return <HappierSetupSteps {...props} theme={theme}
+    renderStateGlyph={(glyph) => <PluginUiIconGlyph name={SETUP_STEP_GLYPH[glyph.state]} size={glyph.size} tone={glyph.tone} />} />;
 }
 
 export type SetupBlockAction = Readonly<{ label: string; testID: string; onPress(): void }>;

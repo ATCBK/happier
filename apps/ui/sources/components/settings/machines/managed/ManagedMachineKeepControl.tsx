@@ -5,6 +5,9 @@ import {
   HappierPressable,
   HappierRadioChoiceList,
   happierPageTextMetrics,
+  resolveHappierFutureLocalDateTime,
+  toHappierLocalDateTimeDraft,
+  type HappierLocalDateTimeDraft,
 } from '@happier-dev/plugin-ui/presentation';
 import type { MachineRetentionPolicyV1 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
 import type { RetentionV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
@@ -12,14 +15,7 @@ import { isMachineRetainedWakeEligibleV1 } from '@happier-dev/protocol/machines/
 
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import {
-  LocalDateTimeEditor,
-  resolveFutureLocalDateTime,
-} from '@/components/ui/dateTime/LocalDateTimeEditor';
-import {
-  toLocalDateTimeDraft,
-  type LocalDateTimeDraft,
-} from '@/components/ui/dateTime/localDateTimeValue';
+import { LocalDateTimeEditor } from '@/components/ui/dateTime/LocalDateTimeEditor';
 import { Switch } from '@/components/ui/forms/Switch';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -318,7 +314,7 @@ function KeepChoices(props: InnerProps) {
         current.kind === 'deadline' && effects.includes(current.effect)
           ? current.effect
           : effects[0]!,
-      time: toLocalDateTimeDraft(
+      time: toHappierLocalDateTimeDraft(
         new Date(
           current.kind === 'deadline' && current.at > nowMs
             ? current.at
@@ -431,7 +427,7 @@ type DeadlineDraft = Readonly<{
   /** The instant the editor opened; a reading must be after it. */
   nowMs: number;
   effect: RetentionEffect;
-  time: LocalDateTimeDraft;
+  time: HappierLocalDateTimeDraft;
 }>;
 
 /**
@@ -450,7 +446,7 @@ function DeadlineEditor(
   }>,
 ) {
   const { draft } = props;
-  const at = resolveFutureLocalDateTime(draft.time, draft.nowMs);
+  const at = resolveHappierFutureLocalDateTime(draft.time, draft.nowMs);
   const retention: RetentionV1 | null =
     at === null
       ? null

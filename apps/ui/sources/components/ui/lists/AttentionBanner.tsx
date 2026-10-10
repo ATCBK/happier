@@ -1,4 +1,4 @@
-import { HappierBanner, HappierPressable, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { HappierBanner, HappierPressable, happierPageTextMetrics, type HappierBannerPoint } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -12,29 +12,6 @@ import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThem
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-
-/**
- * One check or step under the banner's title: plain text with any literal command set apart as `code`
- * (drawn in the mono type role). Build it with {@link attentionBannerPoint}.
- */
-export type AttentionBannerPoint = readonly (string | Readonly<{ code: string }>)[];
-
-/** Splits a translated line around the literal commands it names (they are never translated). */
-export function attentionBannerPoint(text: string, commands: readonly string[]): AttentionBannerPoint {
-    const segments: (string | Readonly<{ code: string }>)[] = [];
-    let rest = text;
-    while (rest) {
-        const next = commands
-            .map((command) => ({ command, at: command ? rest.indexOf(command) : -1 }))
-            .filter((match) => match.at >= 0)
-            .sort((left, right) => left.at - right.at || right.command.length - left.command.length)[0];
-        if (!next) { segments.push(rest); break; }
-        if (next.at > 0) segments.push(rest.slice(0, next.at));
-        segments.push({ code: next.command });
-        rest = rest.slice(next.at + next.command.length);
-    }
-    return segments;
-}
 
 export type AttentionBannerAction = Readonly<{
     label: string;
@@ -63,7 +40,7 @@ export const AttentionBanner = React.memo(function AttentionBanner(props: Readon
      * Checks or steps the reader can take, beneath the description: one hanging line each, so a long
      * point wraps under its own text rather than under the bullet.
      */
-    points?: readonly AttentionBannerPoint[];
+    points?: readonly HappierBannerPoint[];
     tone?: 'warning' | 'neutral' | 'danger';
     /** A containing pane can own its gutter; page sections retain the shared section insets. */
     placement?: 'page-section' | 'inline';
@@ -121,29 +98,21 @@ export const AttentionBanner = React.memo(function AttentionBanner(props: Readon
                 accessibilityLiveRegion={props.accessibilityLiveRegion}
                 icon={props.icon ?? <Icon name={iconName} size={ICON_SIZE.md} color={palette.foreground} />}
                 titleContent={<Text style={styles.title}>{props.title}</Text>}
-                descriptionContent={props.description || props.points?.length ? <>
-                    {props.description ? <Text style={styles.description}>{props.description}</Text> : null}
-                    {props.points?.length ? (
-                        <View style={styles.points}>
-                            {props.points.map((point, index) => (
-                                <View key={index} testID={`${props.testID}.point.${index}`} style={styles.point}>
-                                    <Text style={[styles.description, styles.pointBullet]} aria-hidden>{'\u2022'}</Text>
-                                    <Text style={[styles.description, styles.pointText]}>
-                                        {point.map((segment, segmentIndex) => typeof segment === 'string' ? segment : (
-                                            <Text key={segmentIndex} testID={`${props.testID}.point.${index}.code.${point.slice(0, segmentIndex).filter((part) => typeof part !== 'string').length}`}
-                                                // A command never breaks inside itself; the line wraps around it.
-                                                style={styles.code}>{segment.code.replace(/ /g, '\u00a0')}</Text>
-                                        ))}
-                                    </Text>
-                                </View>
-                            ))}
-                        </View>
-                    ) : null}
-                </> : undefined}
+                descriptionContent={props.description ? <Text style={styles.description}>{props.description}</Text> : undefined}
+                points={props.points}
+                renderPoint={(point, index) => (
+                    <Text style={[styles.description, styles.pointText]}>
+                        {point.map((segment, segmentIndex) => typeof segment === 'string' ? segment : (
+                            <Text key={segmentIndex} testID={`${props.testID}.point.${index}.code.${point.slice(0, segmentIndex).filter((part) => typeof part !== 'string').length}`}
+                                // A command never breaks inside itself; the line wraps around it.
+                                style={styles.code}>{segment.code.replace(/ /g, '\u00a0')}</Text>
+                        ))}
+                    </Text>
+                )}
                 action={actions}
                 compactActionPlacement={props.compactActionPlacement}
                 // Two or more ways forward, or a list of steps, never share a line with the words.
-                actionPlacement={props.secondaryAction || (props.moreActions?.length ?? 0) > 0 || (props.points?.length ?? 0) > 0 ? 'below' : undefined}
+                actionPlacement={props.secondaryAction || (props.moreActions?.length ?? 0) > 0 ? 'below' : undefined}
                 onLayout={(event) => { const width = event.nativeEvent.layout.width; if (width > 0) setCompact(width < PAGE_LIST_METRICS.rowStackBelowWidthPx); }}
                 details={<>
                     {hasDetails ? (
@@ -214,17 +183,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         flexWrap: 'wrap',
         gap: 6,
-    },
-    points: {
-        marginTop: 2,
-    },
-    point: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-    },
-    pointBullet: {
-        width: 14,
-        marginTop: 0,
     },
     pointText: {
         flex: 1,

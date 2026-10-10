@@ -196,7 +196,7 @@ describe('pending row signatures are presentation-scoped', () => {
  * `useTranscriptRowHost` selects the card from `item.progress`: null renders
  * `ExternalSessionOperationSharedCard` (group title + one status `Item` + an optional dismiss
  * `Item`), non-null renders `ExternalImportProgressCard` (group title + a status `Item` WITH a
- * subtitle + an N-step `ProgressChecklist` + an optional import row + an optional published row +
+ * subtitle + an N-step `SetupSteps` list + an optional import row + an optional published row +
  * one `Item` per action). `appendExternalSessionOperationTranscriptItem` adopts `progress` only when
  * `matchesExternalSessionOperationPresentation` holds, and that identity is
  * `(v, operationId, revision, kind, status, phase)` — so at the owner-hydration transition

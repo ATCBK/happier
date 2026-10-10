@@ -13,7 +13,6 @@ import { renderScreen } from '@/dev/testkit';
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const confirmMock = vi.hoisted(() => vi.fn(async () => true));
-const checklistMock = vi.hoisted(() => vi.fn((props: Record<string, unknown>) => React.createElement('ProgressChecklist', props)));
 const shimmerMock = vi.hoisted(() => vi.fn((props: Record<string, unknown> & { children?: React.ReactNode }) => (
     React.createElement('ShimmerView', props, props.children)
 )));
@@ -86,10 +85,6 @@ vi.mock('@/components/ui/lists/Item', () => ({
 
 vi.mock('@/components/ui/lists/ItemGroup', () => ({
     ItemGroup: (props: Record<string, unknown> & { children?: React.ReactNode }) => React.createElement('ItemGroup', props, props.children),
-}));
-
-vi.mock('@/components/systemTasks/ProgressChecklist', () => ({
-    ProgressChecklist: checklistMock,
 }));
 
 vi.mock('@/components/ui/feedback/ShimmerView', () => ({
@@ -361,7 +356,6 @@ describe('ExternalImportProgressCard', () => {
     });
 
     it('reuses the shared checklist and emits Resume only from durable awaiting progress', async () => {
-        checklistMock.mockClear();
         const onResume = vi.fn();
         const onCancel = vi.fn();
 
@@ -377,10 +371,11 @@ describe('ExternalImportProgressCard', () => {
             onCancel,
         }));
 
-        expect(checklistMock).toHaveBeenCalledOnce();
-        expect(checklistMock.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
-            testIDPrefix: 'external-session-operation-step',
-        }));
+        // The operation's phases paint as the shared ordered steps; the paused phase waits for the reader.
+        const stepIds = screen.findAll((node) => typeof node.props.testID === 'string'
+            && node.props.testID.startsWith('external-session-operation-step-')
+            && typeof node.type === 'string').map((node) => node.props.testID as string);
+        expect(stepIds.some((id) => id.startsWith('external-session-operation-step-waiting-'))).toBe(true);
         expect(onResume).not.toHaveBeenCalled();
         expect(onCancel).not.toHaveBeenCalled();
 

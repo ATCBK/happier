@@ -3,6 +3,8 @@ import { Linking, View } from 'react-native';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { SetupSteps, setupStepTestID, type SetupStep, type SetupStepState } from '@/components/ui/setupBlocks/SetupSteps';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { isDesktopHost, invokeDesktopHost } from '@/utils/platform/desktopHost';
@@ -12,11 +14,6 @@ import { presentActiveCliAcquisition, presentCliAcquisitionEvent } from './cliAc
 import { resolveSystemTaskFailureMessage } from './resolveSystemTaskFailureMessage';
 import { resolveSystemTaskStepLabel } from './resolveSystemTaskStepLabel';
 import { readLatestSystemTaskPrompt } from './prompts/readLatestSystemTaskPrompt';
-import {
-    ProgressChecklist,
-    type ProgressChecklistStep,
-    type ProgressChecklistStepStatus,
-} from './ProgressChecklist';
 
 function translateStatus(snapshot: SystemTaskRunState): string {
     if (snapshot.awaitingInput) {
@@ -43,7 +40,7 @@ function renderValue(value: string | null): string {
 type ChecklistStep = Readonly<{
     stepId: string;
     message: string | null;
-    status: ProgressChecklistStepStatus;
+    state: SetupStepState;
 }>;
 
 function buildChecklistSteps(snapshot: SystemTaskRunState): readonly ChecklistStep[] {
@@ -88,22 +85,22 @@ function buildChecklistSteps(snapshot: SystemTaskRunState): readonly ChecklistSt
     return orderedStepIds.map((stepId, index) => {
         const message = byStepId.get(stepId)?.message ?? null;
         if (snapshot.status === 'succeeded') {
-            return { stepId, message, status: 'done' };
+            return { stepId, message, state: 'done' };
         }
         if (snapshot.status === 'failed') {
-            if (index < currentIndex) return { stepId, message, status: 'done' };
-            if (index === currentIndex) return { stepId, message, status: 'failed' };
-            return { stepId, message, status: 'pending' };
+            if (index < currentIndex) return { stepId, message, state: 'done' };
+            if (index === currentIndex) return { stepId, message, state: 'failed' };
+            return { stepId, message, state: 'upcoming' };
         }
         if (snapshot.status === 'canceled') {
-            if (index < currentIndex) return { stepId, message, status: 'done' };
-            if (index === currentIndex) return { stepId, message, status: 'canceled' };
-            return { stepId, message, status: 'pending' };
+            if (index < currentIndex) return { stepId, message, state: 'done' };
+            if (index === currentIndex) return { stepId, message, state: 'cancelled' };
+            return { stepId, message, state: 'upcoming' };
         }
 
-        if (index < currentIndex) return { stepId, message, status: 'done' };
-        if (index === currentIndex) return { stepId, message, status: snapshot.awaitingInput ? 'waiting' : 'active' };
-        return { stepId, message, status: 'pending' };
+        if (index < currentIndex) return { stepId, message, state: 'done' };
+        if (index === currentIndex) return { stepId, message, state: snapshot.awaitingInput ? 'waiting' : 'running' };
+        return { stepId, message, state: 'upcoming' };
     });
 }
 
@@ -182,12 +179,18 @@ export const SystemTaskProgressCard = React.memo(function SystemTaskProgressCard
         ? resolveSystemTaskFailureMessage(props.snapshot.result.error) ?? props.snapshot.latestMessage
         : acquisition?.status ?? props.snapshot.latestMessage;
     const checklistSteps = React.useMemo(() => buildChecklistSteps(props.snapshot), [props.snapshot]);
-    const presentedChecklistSteps = React.useMemo<readonly ProgressChecklistStep[]>(() => (
-        checklistSteps.map((step) => ({
-            ...step,
-            title: renderValue(resolveSystemTaskStepLabel(step.stepId)),
-        }))
-    ), [checklistSteps]);
+    const presentedChecklistSteps = React.useMemo<readonly SetupStep[]>(() => (
+        checklistSteps.map((step) => {
+            const message = showStepMessages ? step.message?.trim() : undefined;
+            return {
+                key: step.stepId,
+                state: step.state,
+                title: renderValue(resolveSystemTaskStepLabel(step.stepId)),
+                ...(message ? { detail: message } : {}),
+                testID: setupStepTestID('system-task-progress-checklist-step', step.stepId, step.state),
+            };
+        })
+    ), [checklistSteps, showStepMessages]);
     const promptAction = React.useMemo(() => resolvePromptAction(props.snapshot), [props.snapshot]);
     const canOpenLogs = showOpenLogs && isDesktopHost();
     const handleOpenLogs = React.useCallback(async () => {
@@ -249,11 +252,11 @@ export const SystemTaskProgressCard = React.memo(function SystemTaskProgressCard
                         mode="info"
                     />
                 ) : null}
-                <ProgressChecklist
-                    steps={presentedChecklistSteps}
-                    testIDPrefix="system-task-progress-checklist-step"
-                    showStepMessages={showStepMessages}
-                />
+                {presentedChecklistSteps.length > 0 ? (
+                    <SectionContentRow testID="system-task-progress-checklist">
+                        <SetupSteps variant="checklist" steps={presentedChecklistSteps} />
+                    </SectionContentRow>
+                ) : null}
                 {canOpenLogs ? (
                     <Item
                         testID="system-task-progress-open-logs"

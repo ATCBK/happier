@@ -83,7 +83,7 @@ describe('AttentionBanner', () => {
   });
 
   it('lists its checks as points, each a hanging line, with literal commands set apart as code', async () => {
-    const { attentionBannerPoint } = await import('./AttentionBanner');
+    const { splitHappierBannerPoint: attentionBannerPoint } = await import('@happier-dev/plugin-ui/presentation');
     const commands = ['happier daemon status', 'happier self update'];
     expect(
       attentionBannerPoint('Run happier daemon status to diagnose', commands),

@@ -49,6 +49,7 @@ export {
   resolveFloatingFrameCorner,
   resolveFloatingFrameCornerRect,
   resolveFloatingFrameHeight,
+  resolveFloatingFramePlacementStyle,
   resolveFloatingFrameSettleTransition,
   type FloatingFrameChromeOptions,
   type FloatingFrameCorner,
@@ -112,9 +113,28 @@ export {
 export {
   HappierSetupSteps,
   type HappierSetupStep,
+  type HappierSetupStepGlyphState,
+  type HappierSetupStepState,
   type HappierSetupStepsProps,
+  type HappierSetupStepsVariant,
+  type HappierSetupStepTitlePresentation,
 } from './content/SetupSteps.js';
 export { HappierFieldStepper } from './form/FieldStepper.js';
+export {
+  HappierLocalDateTimeField,
+  type HappierLocalDateTimeFieldProps,
+  type HappierLocalDateTimePickerHost,
+  type HappierLocalDateTimePickerMode,
+  type HappierLocalDateTimePickerRequest,
+} from './form/LocalDateTimeField.js';
+export {
+  formatHappierLocalDateInput,
+  formatHappierLocalTimeInput,
+  parseHappierLocalDateTime,
+  resolveHappierFutureLocalDateTime,
+  toHappierLocalDateTimeDraft,
+  type HappierLocalDateTimeDraft,
+} from './form/localDateTimeValue.js';
 export type { HappierFieldStepperBounds } from './form/fieldValueDraft.js';
 export {
   happierMaterialBackgroundColor,
@@ -441,7 +461,7 @@ export { HappierDataChart, type HappierDataChartProps } from './data/Chart.js';
 export { CapacityBar, type CapacityBarProps } from './data/CapacityBar.js';
 export { RankedRows, type RankedRowsProps } from './data/RankedRows.js';
 export { CompositionStrip, type CompositionStripProps, type CompositionSegment } from './data/CompositionStrip.js';
-export { StackedSeriesChart, type StackedSeriesChartProps } from './data/StackedSeriesChart.js';
+export { StackedSeriesChart, type StackedSeriesChartProps, type StackedSeriesBand } from './data/StackedSeriesChart.js';
 export { BurnUpChart, type BurnUpChartProps } from './data/BurnUpChart.js';
 export { Heatmap, resolveFirstFullyVisibleColumn, type HeatmapProps, type HappierGridAxis, type HappierGridCell, type HappierGridFrame } from './data/Heatmap.js';
 export { DotGrid, type DotGridProps } from './data/DotGrid.js';
@@ -768,6 +788,8 @@ export {
   HappierProgress,
   isHappierBannerUrgent,
   resolveHappierProgressPercentage,
+  splitHappierBannerPoint,
+  type HappierBannerPoint,
   type HappierMetadataEntry,
 } from './content/Foundation.js';
 export { HappierStep, HappierStepMarkerView } from './content/Step.js';

@@ -5,9 +5,7 @@ import type {
     ExternalSessionOperationStatusV1,
 } from '@happier-dev/protocol';
 
-import type {
-    ProgressChecklistStepStatus,
-} from '@/components/systemTasks/ProgressChecklist';
+import type { SetupStepState } from '@/components/ui/setupBlocks/SetupSteps';
 
 export type ExternalSessionOperationObservationContext = 'live' | 'hydrated';
 /**
@@ -93,7 +91,7 @@ export type ExternalSessionOperationProgressPresentation = Readonly<{
         phase: ExternalSessionOperationPhaseV1;
         stepId: ExternalSessionOperationPhaseV1;
         titleKey: ExternalSessionOperationTranslationKey;
-        status: ProgressChecklistStepStatus;
+        state: SetupStepState;
     }>[];
     actions: readonly Readonly<{
         kind: ExternalSessionOperationActionKind;
@@ -205,18 +203,18 @@ function isRetryableExternalLinkedAdmissionAcknowledgementReconciliation(
         && progress.error.retryable === true;
 }
 
-function resolveStepStatus(
+function resolveStepState(
     effectiveStatus: ExternalSessionOperationStatusV1,
     index: number,
     currentIndex: number,
-): ProgressChecklistStepStatus {
+): SetupStepState {
     if (effectiveStatus === 'completed') return 'done';
     if (index < currentIndex) return 'done';
-    if (index > currentIndex) return 'pending';
+    if (index > currentIndex) return 'upcoming';
 
     switch (effectiveStatus) {
         case 'running':
-            return 'active';
+            return 'running';
         case 'awaiting_user_resume':
         case 'cancel_requested':
         case 'reconciliation_required':
@@ -225,7 +223,7 @@ function resolveStepStatus(
             return 'failed';
         case 'cancelled':
         case 'discarded':
-            return 'canceled';
+            return 'cancelled';
     }
 }
 
@@ -459,7 +457,7 @@ export function presentExternalSessionOperationProgress(
         phase,
         stepId: phase,
         titleKey: PHASE_LABEL_KEYS[phase],
-        status: resolveStepStatus(effectiveStatus, index, currentIndex),
+        state: resolveStepState(effectiveStatus, index, currentIndex),
     }));
     const estimate = progress.checkpoint.totalItemEstimate ?? null;
     const importProgress = progress.timeline.includes('importing')

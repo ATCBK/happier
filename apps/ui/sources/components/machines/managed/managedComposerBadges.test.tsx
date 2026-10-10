@@ -18,9 +18,9 @@ vi.mock('@/components/ui/popover', async (importOriginal) =>
 afterEach(() => standardCleanup());
 
 const stages = [
-  { id: 'create', label: 'Create VM', status: 'done' as const },
-  { id: 'install', label: 'Install Happier', status: 'active' as const },
-  { id: 'join', label: 'Join Personal Home', status: 'pending' as const },
+  { id: 'create', label: 'Create VM', state: 'done' as const },
+  { id: 'install', label: 'Install Happier', state: 'running' as const },
+  { id: 'join', label: 'Join Personal Home', state: 'upcoming' as const },
 ];
 
 describe('managed composer badges', () => {
@@ -98,7 +98,7 @@ describe('managed composer badges', () => {
       recipe: 'Mac desktop',
       stages: stages.map((stage) =>
         stage.id === 'install'
-          ? { ...stage, status: 'failed' as const }
+          ? { ...stage, state: 'failed' as const }
           : stage,
       ),
       failed: true,
@@ -161,8 +161,8 @@ describe('managed composer badges', () => {
       mark: null,
       recipe: 'Mac desktop',
       stages: [
-        ...stages.map((stage) => ({ ...stage, status: 'done' as const })),
-        { id: 'setup', label: 'Set up', status: 'failed' as const },
+        ...stages.map((stage) => ({ ...stage, state: 'done' as const })),
+        { id: 'setup', label: 'Set up', state: 'failed' as const },
       ],
       failed: true,
       label: 'Set up · Failed',

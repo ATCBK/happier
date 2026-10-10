@@ -1,54 +1,124 @@
 import * as React from 'react';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierSetupSteps, happierPageTextMetrics, type HappierSetupStep } from '@happier-dev/plugin-ui/presentation';
+import {
+  HAPPIER_TONE_COLOR_TOKEN,
+  HappierSetupSteps,
+  happierPageTextMetrics,
+  type HappierSetupStep,
+  type HappierSetupStepGlyphState,
+  type HappierSetupStepState,
+  type HappierSetupStepsVariant,
+  type HappierSetupStepTitlePresentation,
+} from '@happier-dev/plugin-ui/presentation';
 
-import { Icon } from '@/components/ui/icons/Icon';
+import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 export type SetupStep = HappierSetupStep;
+export type SetupStepState = HappierSetupStepState;
+
+const STATE_GLYPH = {
+  done: 'check',
+  failed: 'x',
+  waiting: 'question',
+} as const satisfies Record<HappierSetupStepGlyphState, IconName>;
+
+/** A stable, readable test id segment for a step key a producer reports (system task step ids, stage ids). */
+export function encodeSetupStepKeyForTestId(key: string): string {
+  return (
+    String(key ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'unknown'
+  );
+}
+
+/** `<prefix>-<state>-<key>`: a progress step's test id names where it stands. */
+export function setupStepTestID(
+  prefix: string,
+  key: string,
+  state: SetupStepState = 'upcoming',
+): string {
+  return `${prefix}-${state}-${encodeSetupStepKeyForTestId(key)}`;
+}
 
 /**
  * The one numbered-step anatomy of a set-up block (Home's "Add your phone", Connected services'
- * sign-in flows): a marker per step, the step in words, its detail, and what it asks for beneath.
- * `plain` is a list of instructions (sentences, no step titles), as the pairing panel reads.
+ * sign-in flows) and of ordered progress (a system task, an import, a machine being created): a marker
+ * per step, the step in words, its detail, and what it asks for beneath. `plain` is a list of
+ * instructions (sentences, no step titles), as the pairing panel reads. `checklist` paints reported
+ * progress as one glyph row per step; `compact` is one quiet line per step, for a popover or a card's corner.
  */
-export function SetupSteps(props: Readonly<{
+export function SetupSteps(
+  props: Readonly<{
     steps: readonly SetupStep[];
     plain?: boolean;
+    variant?: HappierSetupStepsVariant;
     testID?: string;
-}>) {
-    const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
-    return <HappierSetupSteps {...props} theme={presentationTheme}
-        stateGlyph={<Icon name="check" size={12} color={theme.colors.state.success.foreground} />}
-        renderTitle={(step, plain) => typeof step.title === 'string' ? (
-            <Text style={plain ? styles.plainTitle : [styles.title, step.state === 'done' ? styles.titleDone : null]}>{step.title}</Text>
-        ) : step.title}
-        renderDetail={(detail) => <Text style={styles.detail}>{detail}</Text>} />;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const presentationTheme = React.useMemo(
+    () => projectPluginUiTheme(theme),
+    [theme],
+  );
+  return (
+    <HappierSetupSteps
+      {...props}
+      theme={presentationTheme}
+      renderStateGlyph={(glyph) => (
+        <Icon
+          name={STATE_GLYPH[glyph.state]}
+          size={glyph.size}
+          color={presentationTheme.colors[HAPPIER_TONE_COLOR_TOKEN[glyph.tone]]}
+        />
+      )}
+      renderTitle={(step, title) =>
+        typeof step.title === 'string' ? (
+          <Text style={[titleStyle(title), { color: title.color }]}>
+            {step.title}
+          </Text>
+        ) : (
+          step.title
+        )
+      }
+      renderDetail={(detail) => <Text style={styles.detail}>{detail}</Text>}
+      renderMeta={(meta) => <Text style={styles.meta}>{meta}</Text>}
+    />
+  );
+}
+
+function titleStyle(title: HappierSetupStepTitlePresentation) {
+  const weight =
+    title.weight === 'regular'
+      ? Typography.default()
+      : Typography.default(title.weight);
+  if (title.variant !== 'numbered' || title.plain)
+    return [styles.lineTitle, weight];
+  return [styles.title, weight];
 }
 
 const styles = StyleSheet.create((theme) => ({
-    title: {
-        ...Typography.default('semiBold'),
-        ...happierPageTextMetrics('rowTitle'),
-        paddingTop: 1,
-        color: theme.colors.text.primary,
-    },
-    titleDone: {
-        ...Typography.default('medium'),
-        color: theme.colors.text.secondary,
-    },
-    plainTitle: {
-        ...Typography.default(),
-        ...happierPageTextMetrics('rowDescription'),
-        color: theme.colors.text.primary,
-    },
-    detail: {
-        ...Typography.default(),
-        ...happierPageTextMetrics('rowDescription'),
-        marginTop: 2,
-        color: theme.colors.text.secondary,
-    },
+  title: {
+    ...happierPageTextMetrics('rowTitle'),
+    paddingTop: 1,
+  },
+  lineTitle: {
+    ...happierPageTextMetrics('rowDescription'),
+  },
+  detail: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowDescription'),
+    marginTop: 2,
+    color: theme.colors.text.secondary,
+  },
+  meta: {
+    ...Typography.default(),
+    ...Typography.tabular(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.tertiary,
+  },
 }));

@@ -1,6 +1,7 @@
 import type { HappierTone } from '@happier-dev/plugin-ui/presentation';
 
 import type { ChatListItem } from '@/components/sessions/chatListItems';
+import type { SetupStepState } from '@/components/ui/setupBlocks/SetupSteps';
 import {
     resolveItemSubtitleMaxLines,
     resolveItemTitleMaxLines,
@@ -15,7 +16,7 @@ export type PluginTranscriptActivityItem = Extract<
 export type PluginTranscriptActivityChecklistStep = Readonly<{
     stepId: string;
     title: string;
-    status: 'pending' | 'active' | 'done' | 'failed';
+    state: Extract<SetupStepState, 'upcoming' | 'running' | 'done' | 'failed'>;
 }>;
 
 type PluginTranscriptActivityPhasePresentation = Readonly<{
@@ -39,18 +40,18 @@ function resolvePhasePresentation(
     }
 }
 
-function resolveChecklistStatus(
+function resolveChecklistState(
     state: PluginTranscriptActivityItem['checklist'][number]['state'],
-): PluginTranscriptActivityChecklistStep['status'] {
+): PluginTranscriptActivityChecklistStep['state'] {
     switch (state) {
         case 'complete':
             return 'done';
         case 'active':
-            return 'active';
+            return 'running';
         case 'failed':
             return 'failed';
         case 'pending':
-            return 'pending';
+            return 'upcoming';
     }
 }
 
@@ -99,9 +100,9 @@ export function resolvePluginTranscriptActivityPresentation(
     const checklistSteps = activity.checklist.map((step) => ({
         stepId: step.id,
         title: step.label,
-        status: resolveChecklistStatus(step.state),
+        state: resolveChecklistState(step.state),
     }));
-    const hasChecklistFailure = checklistSteps.some((step) => step.status === 'failed');
+    const hasChecklistFailure = checklistSteps.some((step) => step.state === 'failed');
     const accessibilityLabel = [
         activity.title,
         statusTitle,
@@ -219,11 +220,10 @@ export function resolvePluginTranscriptActivityHeightBearingPaint(
             ? null
             : resolveItemSubtitleLine(presentation.statusDetail),
         hasProgress: presentation.progress !== null,
-        // `ProgressChecklist` is given `showStepMessages={false}`, so each step is an `Item` with a
-        // title and no subtitle.
+        // Each step paints as a shared `SetupSteps` row: its title, unclamped, and no detail.
         checklistStepLabels: presentation.checklistSteps.map((step) => ({
             text: step.title,
-            maxLines: resolveItemTitleMaxLines(false),
+            maxLines: null,
         })),
         // Session Action admission has already shaped the final transcript
         // item. The card and this descriptor deliberately consume that same

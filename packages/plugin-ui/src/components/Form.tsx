@@ -45,6 +45,9 @@ import {
   usePluginUiFocusTargetBindingInternal,
 } from './Focus.js';
 import { usePluginTheme, usePluginTranslation } from './PluginUiProvider.js';
+import { HappierLocalDateTimeField } from '../presentation/form/LocalDateTimeField.js';
+import type { HappierLocalDateTimeDraft } from '../presentation/form/localDateTimeValue.js';
+import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { resolveAuthorText } from './resolveAuthorText.js';
 import { Row, Stack } from './Layout.js';
 import { Text } from './Text.js';
@@ -458,6 +461,30 @@ function SelectSegmented(props: SelectProps): ReactElement {
       {...(props.testID === undefined ? {} : { testID: props.testID })}
     />
   );
+}
+
+/**
+ * A local wall-clock reading: `YYYY-MM-DD` and `HH:mm` where the reader is. Read the instant it names
+ * with `resolveHappierFutureLocalDateTime` from `@happier-dev/plugin-ui/presentation`.
+ */
+export type LocalDateTimeValue = HappierLocalDateTimeDraft;
+
+export type LocalDateTimeFieldProps = Readonly<{
+  /** The instant the reading must be after; also the picker's earliest day. */
+  nowMs: number;
+  value: LocalDateTimeValue;
+  onChange: (value: LocalDateTimeValue) => void;
+  labels: Readonly<{ date: string; time: string; pastInstant: string }>;
+  testIDPrefix: string;
+}>;
+
+/**
+ * One local date and time, typed or picked (a lease's end, an expiry, a reminder). Each field opens the
+ * host's own date or time picker where it has one; otherwise the reader types the reading.
+ */
+export function LocalDateTimeField(props: LocalDateTimeFieldProps): ReactElement {
+  const picker = useOptionalPluginUiPresentationHost()?.localDateTimePicker;
+  return <HappierLocalDateTimeField {...props} theme={usePluginTheme()} {...(picker ? { picker } : {})} />;
 }
 
 export type ValidationMessageProps = Readonly<{ message: string; testID?: string }>;
