@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Buffer } from 'node:buffer';
-import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
-import type { ActionExecutorDeps } from '@happier-dev/protocol';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { clientActionUnavailable } from '@happier-dev/protocol/actions/clientDispatchV1';
 import { SignedRootActionExecuteRequestSchema } from '@/daemon/externalActions/signedRootActionControl';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';

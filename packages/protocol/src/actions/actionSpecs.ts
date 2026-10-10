@@ -12846,7 +12846,7 @@ function normalizeActionPublicExposure(spec: PreNormalizedActionSpec): Normalize
   const isPluginSurfaceExcluded = isPluginSurfaceExcludedActionId(spec.id);
   const executionPlacement = resolveActionExecutionPlacement(spec);
   const requiredAuthority = resolveActionRequiredAuthority(spec);
-  const canExposeCli = executionPlacement !== 'client';
+  const canExposeCli = executionPlacement !== 'client' || spec.cli !== undefined;
   // The human transcript preference explicitly forbids Agent/MCP mutation;
   // general approval requestability must not resurrect those declared surfaces.
   // Trusted plugin and human admission still use the ordinary authority owner.
@@ -12861,9 +12861,8 @@ function normalizeActionPublicExposure(spec: PreNormalizedActionSpec): Normalize
     cli: canExposeCli ? spec.cli : undefined,
     surfaces: {
       ...spec.surfaces,
-      // Standalone CLI has no answering-client transport. Client placement
-      // remains discoverable to Agent/MCP reverse dispatch, never as a CLI
-      // command merely because a declaration supplied CLI metadata.
+      // Explicit client commands use the mounted answering-owner transport;
+      // undeclared client-owned Actions remain unavailable as CLI commands.
       cli: canExposeCli && spec.surfaces.cli,
       mcp: spec.surfaces.mcp || presentUserRequestable
         || spec.id === 'account.apiTokens.list' || spec.id === 'account.security.get',

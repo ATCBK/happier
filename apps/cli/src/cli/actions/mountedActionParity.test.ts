@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createActionExecutor, getActionSpec, listActionSpecsForSurface, type ActionExecutorDeps, type ActionId } from '@happier-dev/protocol';
 import { clientActionUnavailable } from '@happier-dev/protocol/actions/clientDispatchV1';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 import { compileActionCliFields, listCompiledActionCliCommands } from './compiledCommands';
 import { composeActionCliInput, parseActionCliCommandInput, parseActionCliInput } from './parseCommandInput';
@@ -73,8 +74,7 @@ describe('mounted Action CLI parity', () => {
       clientActionExecute: async (args) => ({ ok: true as const, result: await respond(args) }),
       currentSessionPresentationApply: respond,
     } satisfies Partial<ActionExecutorDeps>;
-    // Unused host services are absent in this bounded transport fixture.
-    const executor = createActionExecutor(mountedPorts as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...mountedPorts });
     await expect(executor.execute(id, normalizedInput, context)).resolves.toEqual({ ok: true, result });
     expect(delivered).toEqual([normalizedInput]);
   });
@@ -83,10 +83,13 @@ describe('mounted Action CLI parity', () => {
     const normalizedInput = cliInput(id, input);
     // The mounted-client transport has no responder; no headless writer exists.
     const executor = createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
       clientActionExecute: async ({ actionId }) => clientActionUnavailable(actionId),
-    } as ActionExecutorDeps);
+    });
     const expected = id === 'session.presentation.apply'
       ? { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${id}` }
+      : id === 'workflow.authoring.conversation.bind'
+        ? { ok: true, result: { status: 'unavailable' } }
       : { ok: false, errorCode: 'unavailable', error: 'noClient' };
     await expect(executor.execute(id, normalizedInput, context)).resolves.toEqual(expected);
   });
@@ -107,7 +110,7 @@ describe('named area layout selection CLI dispatch', () => {
       delivered.push(args.input);
       return { ok: true as const, result };
     } } satisfies Partial<ActionExecutorDeps>;
-    const executor = createActionExecutor(ports as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...ports });
     const input = cliInput('widgets.area.layout.select', { surface });
     await expect(executor.execute('widgets.area.layout.select', input, context)).resolves.toEqual({ ok: true, result });
     expect(delivered).toEqual([input]);
@@ -117,7 +120,7 @@ describe('named area layout selection CLI dispatch', () => {
     const ports = { ...scopePorts,
       clientActionExecute: async ({ actionId }) => clientActionUnavailable(actionId),
     } satisfies Partial<ActionExecutorDeps>;
-    const executor = createActionExecutor(ports as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...ports });
     await expect(executor.execute('widgets.area.layout.select', cliInput('widgets.area.layout.select', { surface }), context))
       .resolves.toEqual({ ok: false, errorCode: 'unavailable', error: 'noClient' });
   });

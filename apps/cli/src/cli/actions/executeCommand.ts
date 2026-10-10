@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 
 import type { ActionExecuteResult } from '@happier-dev/protocol';
+import { resolveActionExecutionPlacementForInput } from '@happier-dev/protocol/actions/actionSpecs';
 
 import { printJsonEnvelope, writeJsonStdout } from '@/cli/output/jsonEnvelope';
 import { mapUnknownErrorToControlError } from '@/cli/control/controlErrorMapping';
@@ -374,11 +375,12 @@ export async function runCompiledActionCliCommand(params: Readonly<{
         : deps.readCredentialsFn,
       resolveServerFeaturesSnapshot,
       ...(machineId !== null ? { machineId } : {}),
-      // Discovery reads the daemon's committed contributed Action registry as
-      // well as bundled specs. Preserve the former actions host's signed-client
-      // transport while the shared compiler owns its argv/help/completion.
+      // Discovery reads the daemon's contributed registry, and client-placed
+      // commands reach the answering mounted owner through that same ingress.
+      // The CLI compiler owns argv/help/completion, not client-side state.
       ...(command.actionId === 'action.spec.search'
         || command.actionId === 'action.spec.get'
+        || resolveActionExecutionPlacementForInput(command.spec, input) === 'client'
         ? { externalActionClient: true as const }
         : {}),
     };
