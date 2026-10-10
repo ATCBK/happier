@@ -2872,7 +2872,7 @@ const effectiveTranslations = { "pt": {
         "shortcutHint": ({ modifier }: { modifier: string }) => `${modifier}-clique · ${modifier}⇧L alterna claro e escuro`
     } } as const;
 
-const glassAppearanceTranslations = { pt: { iosReduceTransparencyPath: "Ajustes › Acessibilidade › Tela e Tamanho do Texto › Reduzir Transparência", title: 'Vidro', material: 'Material', solid: 'Sólido', auto: 'Automático', everywhere: 'Em todo lugar', custom: 'Personalizado', blur: 'Desfoque', off: 'Desativado', opacity: 'Opacidade', customize: 'Personalizar', chrome: 'Moldura da janela', sidebar: 'Barra lateral', content: 'Conteúdo', floating: 'Superfícies flutuantes', appearance: 'Aparência', moreSettings: 'Mais ajustes de aparência…', customizeLink: 'Personalizar…', toolbarTitle: 'Botão Aparência', toolbarDescription: 'Mostra Aparência na barra. Um clique com modificador alterna claro e escuro.', reduceTransparency: 'Sólido porque Reduzir transparência está ativado', osSettings: 'Abrir ajustes de acessibilidade', themeCommand: 'Alternar claro e escuro', autoDescription: "Adapta-se ao dispositivo: vidro em camadas nas janelas compatíveis e nas superfícies flutuantes do telefone.", osSettingsUnavailable: "Não foi possível abrir os ajustes de acessibilidade. Abra-os nos ajustes do dispositivo.", ...effectiveTranslations["pt"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "pt">;
+const glassAppearanceTranslations = { pt: { ...Shared_glassAppearanceTranslations.atmosphereTranslations['pt'], iosReduceTransparencyPath: "Ajustes › Acessibilidade › Tela e Tamanho do Texto › Reduzir Transparência", title: 'Vidro', material: 'Material', solid: 'Sólido', auto: 'Automático', everywhere: 'Em todo lugar', custom: 'Personalizado', blur: 'Desfoque', off: 'Desativado', opacity: 'Opacidade', customize: 'Personalizar', chrome: 'Moldura da janela', sidebar: 'Barra lateral', content: 'Conteúdo', floating: 'Superfícies flutuantes', appearance: 'Aparência', moreSettings: 'Mais ajustes de aparência…', customizeLink: 'Personalizar…', toolbarTitle: 'Botão Aparência', toolbarDescription: 'Mostra Aparência na barra. Um clique com modificador alterna claro e escuro.', reduceTransparency: 'Sólido porque Reduzir transparência está ativado', osSettings: 'Abrir ajustes de acessibilidade', themeCommand: 'Alternar claro e escuro', autoDescription: "Adapta-se ao dispositivo: vidro em camadas nas janelas compatíveis e nas superfícies flutuantes do telefone.", osSettingsUnavailable: "Não foi possível abrir os ajustes de acessibilidade. Abra-os nos ajustes do dispositivo.", ...effectiveTranslations["pt"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "pt">;
 
 return { effectiveTranslations, glassAppearanceTranslations };
 })();
@@ -4091,6 +4091,10 @@ const pt: typeof en = {
         },
     },
     reach: {
+        publicLinks: "Ligações públicas",
+        allowPublicSubpath: "Permitir ligações públicas neste nome de anfitrião",
+        allowPublicSubpathDescription: "Usa o endereço HTTPS deste Home para ligações públicas de sessões e Artifacts quando não há um domínio separado disponível. O HTML permanece num ambiente restrito. Os serviços locais continuam a precisar de um domínio separado.",
+        publicLinksHelp: "Desativado por predefinição. Os domínios isolados permitem pré-visualizar PDF; as ligações neste nome de anfitrião permitem transferi-los.",
         title: 'Acesso',
         diagramTitle: ({ home }: { home: string }) => `Como um novo dispositivo chega a ${home}`,
         yourDevices: 'Seus dispositivos',
@@ -5073,7 +5077,7 @@ const oidcEditorWords: Pick<Readonly<Record<IdentityAdministrationLanguage, Oidc
         allowRulesHint: 'Introduz um valor por linha. Deixa em branco para não restringir.', brandingHint: 'Deixa em branco para usar o aspeto de início de sessão predefinido.', invalidScopes: 'Inclui openid nos âmbitos pedidos.', refreshFailed: 'Não foi possível atualizar esta ligação', refreshFailedHint: 'As tuas alterações foram mantidas. Tenta novamente para verificar alterações no Home.',
     } };
 
-const identityAdministrationTranslations = { pt: build({ ...en, homeWorkosChooseDetail: "Escolha a conexão WorkOS usada para entrar neste Home.", homeWorkosAdd: "Login da empresa via WorkOS", homeWorkosCompanyName: "Nome da empresa", homeWorkosPurpose: "As pessoas da sua empresa podem entrar neste Home com sua conta de trabalho.", homeWorkosEnableDetail: "As pessoas poderão entrar neste Home com sua conta da empresa.", homeWorkosOffboarding: "O SSO sozinho não remove as pessoas que deixam sua empresa.", homeWorkosPlatformRequired: "Configure primeiro o WorkOS nas plataformas de login.",  title: 'Fornecedores de identidade', subtitle: 'Ligações de início de sessão do Home disponíveis para Teams.', homeConnections: 'Ligações do Home', add: 'Adicionar ligação', empty: 'Sem ligações do Home', active: 'Ativo', disabled: 'Desativado', configuration: 'Configuração', issuer: 'URL do emissor', clientSecret: 'Segredo do cliente', secretSet: 'Definido', secretNotSet: 'Não definido', secretRetain: 'Deixe vazio para manter o segredo atual.', advanced: 'Mostrar definições avançadas', hideAdvanced: 'Ocultar definições avançadas', actions: 'Ações', test: 'Testar início de sessão', testing: 'A abrir teste…', edit: 'Editar ligação', save: 'Guardar ligação', saving: 'A guardar…', enable: 'Ativar ligação', disable: 'Desativar ligação', remove: 'Remover ligação', createTitle: 'Adicionar fornecedor de identidade', editTitle: 'Editar fornecedor de identidade', displayName: 'Nome', required: 'Preencha os campos obrigatórios.', invalidIssuer: 'Introduza um URL HTTPS válido.', secretRequired: 'Introduza um segredo do cliente.', error: 'A alteração não foi aplicada.', accounts: 'Accounts afetados', connections: 'Ligações de Team', errorForbidden: 'Já não tem permissão para isto. Nada foi alterado.', errorConflict: 'Outra pessoa alterou isto primeiro. As suas edições foram mantidas: recarregue e tente novamente.', errorMissing: 'Isto já não existe. Pode ter sido removido.', errorInUse: 'Algo ainda depende disto. Remova-o primeiro.', errorProviderUnavailable: 'O serviço de identidade não respondeu. Nada foi alterado.', errorRateLimited: 'O fornecedor pediu para aguardar antes de tentar de novo.', errorInvalid: 'O Home rejeitou estes valores. Verifique a configuração e tente novamente.', errorImmutable: 'Este valor fica fixo quando o registo está em uso. Crie um novo.', errorAuthenticationRequired: 'Inicie sessão novamente nesta Team e tente de novo. Nada foi alterado.', errorPolicyUnavailable: 'A política de autenticação da Team não pode ser avaliada agora. Nada foi alterado.', errorPolicyInUse: 'A política de autenticação da Team ainda depende desta ligação.', errorNotAllowed: 'Este Home não permite que as Teams configurem isto. Nada foi alterado.', errorNeedsAttention: 'A sincronização do diretório requer atenção. Execute uma sincronização completa.', errorSyncPaused: 'Esta fonte está em pausa. «Retomar sincronização» inicia uma nova sincronização completa.', alternateLogins: 'Accounts que precisam de outro método de início de sessão', recoveryAuthenticationPolicy: 'Abrir autenticação da Team', recoveryAlternateLogin: 'Dê primeiro outro método de início de sessão a essas Accounts', recoveryDirectory: 'Abrir diretório', recoveryGroupMappings: 'Abrir mapeamentos de Grupos', recoveryTeamAuthentication: 'Iniciar sessão novamente', callbackUrl: 'URL de callback', callbackUrlHint: 'Registe este URL no seu fornecedor de identidade.' , workosSetupSso: 'Abrir o portal de administração do WorkOS', workosSetupDirectory: 'Configurar o WorkOS Directory Sync', workosCheckSetup: 'Verificar a configuração do WorkOS', workosChooseConnection: 'Escolher a ligação', workosPortalConfirmBody: 'Vai concluir a configuração no WorkOS e depois voltar aqui para escolher a ligação.', workosDirectoryPortalConfirmBody: 'Vai concluir a configuração no WorkOS e depois voltar aqui para escolher o diretório.', workosSetupSection: 'Configuração', workosSetupFooter: 'Pode sair e voltar: a configuração continua a partir do passo alcançado.', workosStepPortalDetail: 'Ligue lá o seu fornecedor de identidade. Quando voltar, a configuração continua aqui.', workosStepPortalDone: 'Portal de administração', workosStepPortalDoneDetail: 'A sua organização está ligada.', workosOpenPortal: 'Abrir portal', workosOpenPortalAgain: 'Abrir novamente', workosStepChooseDetail: 'Escolha que ligação WorkOS os membros usam para iniciar sessão.', workosStepChooseDone: 'Ligação', workosFindConnections: 'Procurar ligações', workosUseConnection: ({ name }: { name: string }) => `Usar ${name}`, workosCandidateDraft: 'Um rascunho no WorkOS. Conclua-o lá primeiro.', workosStepTestDetail: 'Inicie sessão uma vez. Nada é guardado na conta de ninguém.', workosTestPassed: 'O seu início de sessão de teste funcionou.', workosTestAgain: 'Testar novamente', workosStepEnable: 'Ativá-la', workosStepEnableDetail: 'Depois os membros podem iniciar sessão com ela. Para a exigir, escolha-a em Como os membros iniciam sessão.', workosTurnOn: 'Ativar', workosConnectionSection: 'Ligação', workosConnectionRow: 'Ligação WorkOS', workosConnectionNotChosen: 'Ainda não escolhida', workosChange: 'Alterar', errorWorkosPlatformUnavailable: 'O WorkOS ainda não está configurado neste Home.', errorSetupRequired: 'Isto tem de ser configurado antes de poder ser usado.', removeTitle: ({ name }: { name: string }) => `Remover ${name}?`, removeBody: ({ name }: { name: string }) => `${name} deixa de ser oferecido para iniciar sessão. As contas que o usavam são mantidas.`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `Ainda usado por ${connections} ligação(ões) de equipa e ${accounts} conta(s). Remova-as primeiro.`, disableTitle: ({ name }: { name: string }) => `Desativar ${name}?`, disableBody: ({ name }: { name: string }) => `Ninguém pode iniciar sessão com ${name} até ser reativado. Nada é eliminado.`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `Remover a instalação em ${name}?`, githubRemoveInstallationBody: ({ name }: { name: string }) => `Este Home deixa de usar a App em ${name}. Nada muda no GitHub; desinstale-a lá se já não precisar dela.`, removeBlockedTitle: ({ name }: { name: string }) => `${name} ainda não pode ser removido`, removeImpactPeople: ({ count }: { count: number }) => count === 1 ? '1 pessoa inicia sessão nesta equipa com ela.' : `${count} pessoas iniciam sessão nesta equipa com ela.`, removeImpactNobody: 'Ainda ninguém inicia sessão nesta equipa com ela.', removeImpactKept: 'As contas e as adesões à equipa são mantidas.', removeBlockedAlternateLogins: ({ count }: { count: number }) => count === 1 ? '1 pessoa não tem outra forma de iniciar sessão.' : `${count} pessoas não têm outra forma de iniciar sessão.`, removeBlockedDirectories: ({ count }: { count: number }) => count === 1 ? 'Uma fonte de diretório ainda a usa.' : `${count} fontes de diretório ainda a usam.`, removeBlockedGroups: ({ count }: { count: number }) => count === 1 ? 'Um mapeamento de grupo ainda a usa.' : `${count} mapeamentos de grupo ainda a usam.`, removeBlockedMemberships: ({ count }: { count: number }) => count === 1 ? '1 adesão ainda é gerida por ela.' : `${count} adesões ainda são geridas por ela.` }, githubAccessWords.pt, oidcEditorWords.pt) };
+const identityAdministrationTranslations = { pt: build({ ...en, homeWorkosChooseDetail: "Escolha a conexão WorkOS usada para entrar neste Home.", workosRequiredForTeamWork: "Necessário para trabalhar na equipe", workosTeamPolicyHint: "Altere os métodos de entrada aceitos em Como os membros entram.", workosLifecycleFootnote: "Desativar impede a entrada por essa conexão até você ativá-la novamente. Remover exclui a conexão deste Home; a organização do WorkOS permanece.", homeWorkosAdd: "Login da empresa via WorkOS", homeWorkosCompanyName: "Nome da empresa", homeWorkosPurpose: "As pessoas da sua empresa podem entrar neste Home com sua conta de trabalho.", homeWorkosEnableDetail: "As pessoas poderão entrar neste Home com sua conta da empresa.", homeWorkosOffboarding: "O SSO sozinho não remove as pessoas que deixam sua empresa.", homeWorkosPlatformRequired: "Configure primeiro o WorkOS nas plataformas de login.",  title: 'Fornecedores de identidade', subtitle: 'Ligações de início de sessão do Home disponíveis para Teams.', homeConnections: 'Ligações do Home', add: 'Adicionar ligação', empty: 'Sem ligações do Home', active: 'Ativo', disabled: 'Desativado', configuration: 'Configuração', issuer: 'URL do emissor', clientSecret: 'Segredo do cliente', secretSet: 'Definido', secretNotSet: 'Não definido', secretRetain: 'Deixe vazio para manter o segredo atual.', advanced: 'Mostrar definições avançadas', hideAdvanced: 'Ocultar definições avançadas', actions: 'Ações', test: 'Testar início de sessão', testing: 'A abrir teste…', edit: 'Editar ligação', save: 'Guardar ligação', saving: 'A guardar…', enable: 'Ativar ligação', disable: 'Desativar ligação', remove: 'Remover ligação', createTitle: 'Adicionar fornecedor de identidade', editTitle: 'Editar fornecedor de identidade', displayName: 'Nome', required: 'Preencha os campos obrigatórios.', invalidIssuer: 'Introduza um URL HTTPS válido.', secretRequired: 'Introduza um segredo do cliente.', error: 'A alteração não foi aplicada.', accounts: 'Accounts afetados', connections: 'Ligações de Team', errorForbidden: 'Já não tem permissão para isto. Nada foi alterado.', errorConflict: 'Outra pessoa alterou isto primeiro. As suas edições foram mantidas: recarregue e tente novamente.', errorMissing: 'Isto já não existe. Pode ter sido removido.', errorInUse: 'Algo ainda depende disto. Remova-o primeiro.', errorProviderUnavailable: 'O serviço de identidade não respondeu. Nada foi alterado.', errorRateLimited: 'O fornecedor pediu para aguardar antes de tentar de novo.', errorInvalid: 'O Home rejeitou estes valores. Verifique a configuração e tente novamente.', errorImmutable: 'Este valor fica fixo quando o registo está em uso. Crie um novo.', errorAuthenticationRequired: 'Inicie sessão novamente nesta Team e tente de novo. Nada foi alterado.', errorPolicyUnavailable: 'A política de autenticação da Team não pode ser avaliada agora. Nada foi alterado.', errorPolicyInUse: 'A política de autenticação da Team ainda depende desta ligação.', errorNotAllowed: 'Este Home não permite que as Teams configurem isto. Nada foi alterado.', errorNeedsAttention: 'A sincronização do diretório requer atenção. Execute uma sincronização completa.', errorSyncPaused: 'Esta fonte está em pausa. «Retomar sincronização» inicia uma nova sincronização completa.', alternateLogins: 'Accounts que precisam de outro método de início de sessão', recoveryAuthenticationPolicy: 'Abrir autenticação da Team', recoveryAlternateLogin: 'Dê primeiro outro método de início de sessão a essas Accounts', recoveryDirectory: 'Abrir diretório', recoveryGroupMappings: 'Abrir mapeamentos de Grupos', recoveryTeamAuthentication: 'Iniciar sessão novamente', callbackUrl: 'URL de callback', callbackUrlHint: 'Registe este URL no seu fornecedor de identidade.' , workosSetupSso: 'Abrir o portal de administração do WorkOS', workosSetupDirectory: 'Configurar o WorkOS Directory Sync', workosCheckSetup: 'Verificar a configuração do WorkOS', workosChooseConnection: 'Escolher a ligação', workosPortalConfirmBody: 'Vai concluir a configuração no WorkOS e depois voltar aqui para escolher a ligação.', workosDirectoryPortalConfirmBody: 'Vai concluir a configuração no WorkOS e depois voltar aqui para escolher o diretório.', workosSetupSection: 'Configuração', workosSetupFooter: 'Pode sair e voltar: a configuração continua a partir do passo alcançado.', workosStepPortalDetail: 'Ligue lá o seu fornecedor de identidade. Quando voltar, a configuração continua aqui.', workosStepPortalDone: 'Portal de administração', workosStepPortalDoneDetail: 'A sua organização está ligada.', workosOpenPortal: 'Abrir portal', workosOpenPortalAgain: 'Abrir novamente', workosStepChooseDetail: 'Escolha que ligação WorkOS os membros usam para iniciar sessão.', workosStepChooseDone: 'Ligação', workosFindConnections: 'Procurar ligações', workosUseConnection: ({ name }: { name: string }) => `Usar ${name}`, workosCandidateDraft: 'Um rascunho no WorkOS. Conclua-o lá primeiro.', workosStepTestDetail: 'Inicie sessão uma vez. Nada é guardado na conta de ninguém.', workosTestPassed: 'O seu início de sessão de teste funcionou.', workosTestAgain: 'Testar novamente', workosStepEnable: 'Ativá-la', workosStepEnableDetail: 'Depois os membros podem iniciar sessão com ela. Para a exigir, escolha-a em Como os membros iniciam sessão.', workosTurnOn: 'Ativar', workosConnectionSection: 'Ligação', workosConnectionRow: 'Ligação WorkOS', workosConnectionNotChosen: 'Ainda não escolhida', workosChange: 'Alterar', errorWorkosPlatformUnavailable: 'O WorkOS ainda não está configurado neste Home.', errorSetupRequired: 'Isto tem de ser configurado antes de poder ser usado.', removeTitle: ({ name }: { name: string }) => `Remover ${name}?`, removeBody: ({ name }: { name: string }) => `${name} deixa de ser oferecido para iniciar sessão. As contas que o usavam são mantidas.`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `Ainda usado por ${connections} ligação(ões) de equipa e ${accounts} conta(s). Remova-as primeiro.`, disableTitle: ({ name }: { name: string }) => `Desativar ${name}?`, disableBody: ({ name }: { name: string }) => `Ninguém pode iniciar sessão com ${name} até ser reativado. Nada é eliminado.`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `Remover a instalação em ${name}?`, githubRemoveInstallationBody: ({ name }: { name: string }) => `Este Home deixa de usar a App em ${name}. Nada muda no GitHub; desinstale-a lá se já não precisar dela.`, removeBlockedTitle: ({ name }: { name: string }) => `${name} ainda não pode ser removido`, removeImpactPeople: ({ count }: { count: number }) => count === 1 ? '1 pessoa inicia sessão nesta equipa com ela.' : `${count} pessoas iniciam sessão nesta equipa com ela.`, removeImpactNobody: 'Ainda ninguém inicia sessão nesta equipa com ela.', removeImpactKept: 'As contas e as adesões à equipa são mantidas.', removeBlockedAlternateLogins: ({ count }: { count: number }) => count === 1 ? '1 pessoa não tem outra forma de iniciar sessão.' : `${count} pessoas não têm outra forma de iniciar sessão.`, removeBlockedDirectories: ({ count }: { count: number }) => count === 1 ? 'Uma fonte de diretório ainda a usa.' : `${count} fontes de diretório ainda a usam.`, removeBlockedGroups: ({ count }: { count: number }) => count === 1 ? 'Um mapeamento de grupo ainda a usa.' : `${count} mapeamentos de grupo ainda a usam.`, removeBlockedMemberships: ({ count }: { count: number }) => count === 1 ? '1 adesão ainda é gerida por ela.' : `${count} adesões ainda são geridas por ela.` }, githubAccessWords.pt, oidcEditorWords.pt) };
 
 return { githubAccessWords, oidcEditorWords, identityAdministrationTranslations };
 })();
@@ -5295,6 +5299,44 @@ const machineDetailPageTranslations = { pt: translated({
             stopDaemonDescription: 'As sessões em curso continuam. Não é possível iniciar novas até o reiniciar nesta máquina.',
             stopDaemonAction: 'Parar',
             detailsTitle: 'Detalhes da máquina',
+            tabs: {
+                overview: "Visão geral",
+            },
+            thisMachineTitle: "Esta máquina",
+            connectionFollowsAccount: "Segue a sua conta",
+            subPages: {
+                sharing: "Partilha",
+                agents: "Agentes",
+                terminal: "Terminal",
+                connection: "Ligação",
+                tools: "Ferramentas",
+                doctor: "Diagnóstico",
+                details: "Detalhes",
+            },
+            summaries: {
+                terminalDirect: "Sem anfitrião de terminal",
+                agentReady: ({ agent }) => `${agent} está pronto`,
+                agentsReadyPair: ({ first, second }) => `${first} e ${second} estão prontos`,
+                agentsReadyCount: ({ count }) => `${count} agentes estão prontos`,
+                doctorChecked: ({ time }) => `Verificado ${time}`,
+            },
+            work: {
+                none: "Sem trabalho",
+                working: ({ count }) => `${count} a trabalhar`,
+            },
+            platformFact: ({ platform, arch }) => `${platform} · ${arch}`,
+        },
+        allMachines: {
+            rowTitle: "Todas as máquinas",
+            viewList: "Lista",
+            viewGrid: "Grelha",
+            viewLabel: "Mostrar máquinas como",
+            columnMachine: "Máquina",
+            columnWork: "Trabalho",
+            columnStatus: "Estado",
+            allMachinesGroup: "Todas as máquinas",
+            machinesCount: ({ count }) => count === 1 ? `1 máquina` : `${count} máquinas`,
+            sessionsWorking: ({ count }) => count === 1 ? `1 sessão a trabalhar` : `${count} sessões a trabalhar`,
         },
     }) };
 
@@ -6290,6 +6332,11 @@ const pluginSettingsPresentationTranslations = { pt: {
             emptyBody: 'Os plugins adicionam painéis, comandos e ferramentas para os seus agentes. Comece pelos feitos pelo Happier.',
             browsePlugins: 'Explorar plugins',
             browseEmpty: 'Suas fontes ainda não oferecem nenhum plugin.',
+            noSavedDetails: 'Não há detalhes de plugins salvos para esta máquina.',
+            projectionFailedTitle: 'Não foi possível carregar o registro de plugins desta máquina',
+            projectionFailedBody: 'Não foi possível carregar os detalhes dos plugins. Tente novamente para gerenciá-los.',
+            machineOfflineTitle: 'Esta máquina está offline',
+            machineOfflineBody: 'As alterações exigem que esta máquina esteja online. Escolha outra máquina no cabeçalho.',
             forDevelopers: 'Para desenvolvedores',
             readFailedTitle: 'Não foi possível ler os plugins desta máquina',
             readFailedBody: 'Nada foi alterado. Tente de novo para consultar a máquina outra vez.',
@@ -6433,6 +6480,9 @@ const en = Shared_providerCollectionTranslations.en;
 const pt: ProviderCollectionCopy = {
     settingsProvidersCollection: {
         gateway: {
+            statusRunning: 'Em execução',
+            statusIdle: 'Inativo',
+            statusNotChecked: 'Não verificado',
             railGroup: 'Gateways',
             managedFromConnectedServices: 'Gerenciado em Serviços conectados',
             description: 'Permite que qualquer agente use suas assinaturas.',
@@ -6520,6 +6570,9 @@ const pt: ProviderCollectionCopy = {
         addTitle: ({ provider }: { provider: string }) => `Adicionar ${provider}`,
         addDescription: ({ provider }: { provider: string }) => `Adicione uma chave e os modelos de ${provider} aparecem em todo agente que pode executá-los.`,
         addKeyDescription: 'Guardada como segredo salvo na sua conta.',
+        addAccountScopeHint: 'Guardado na sua conta de imediato, sem precisar de um computador. Depois pode testá-lo em qualquer um dos seus computadores.',
+        editConnection: 'Editar ligação',
+        editDescription: 'As alterações aplicam-se às sessões iniciadas depois. A chave e os modelos ficam na respetiva página.',
         connectedTitle: ({ provider }: { provider: string }) => `${provider} está conectado`,
         connectedHiddenCountDescription: ({ provider, count }: { provider: string; count: number }) => `${count} modelos prontos. Ficam ocultos no seletor por padrão, porque ${provider} lista muitos modelos que você talvez já tenha. Escolha um quando quiser em “Passa por” ou mostre todos.`,
         connectedHiddenDescription: ({ provider }: { provider: string }) => `Os modelos ficam ocultos no seletor por padrão, porque ${provider} lista muitos modelos que você talvez já tenha. Escolha um quando quiser em “Passa por” ou mostre todos.`,
@@ -7574,7 +7627,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         linkLoadFailed: 'Não foi possível verificar o link público.',
         linkNetworkOff: 'Compartilhar visuais sem acesso à rede',
         linkNetworkConsequence: 'Visuais com acesso à rede podem enviar seu conteúdo a outros sites e revelar o endereço IP de quem os vê. Código e recursos remotos podem mudar. Desativar mantém o conteúdo incluído interativo sem solicitações externas.',
-        linkUnavailable: 'Os links públicos não estão disponíveis neste Home. Peça ao administrador para configurar o alojamento de links públicos.',
+        linkUnavailable: "As ligações públicas não estão disponíveis neste Home. Pede ao proprietário que configure um domínio de partilha isolado ou permita ligações neste nome de anfitrião. Também é necessário configurar a limitação de pedidos das ligações públicas.",
+        configurePublicLinks: "Configurar ligações públicas",
         justYouTitle: 'Trabalhem juntos nesta sessão',
         justYouBody: ({ home }) => `Compartilhe com pessoas em ${home}. Elas podem acompanhar, conversar aqui e assumir enquanto você está fora.`,
         share: 'Compartilhar',
@@ -8584,6 +8638,8 @@ const pt: typeof en = {
     daemonTitle: 'Serviço em segundo plano',
     daemonDescription: 'Executa as suas sessões neste computador e mantém-no ligado ao seu Home.',
     unreadableTitle: ({ home }: { home: string }) => `Não foi possível ler as máquinas de ${home}`,
+    indexViewTitle: 'Vista de Todas as máquinas',
+    indexViewDescription: 'Mostra Todas as máquinas como lista ou com um cartão por máquina. Guardado neste dispositivo.',
 };
 
 const settingsMachinesTranslations = { pt };
@@ -9197,6 +9253,11 @@ const sidebarFooterTranslations = { pt: {
         usageNextInOrder: ({ account }) => `Quando ${account} se esgotar, o próximo turno passa para a próxima conta na ordem`,
         usageNextMostLeft: ({ account }) => `Quando ${account} se esgotar, o próximo turno passa para a conta com mais margem`,
         usageNextStays: ({ pool, account }) => `${pool} fica em ${account} até você trocar`,
+        machinesEmptyTitle: 'Execute sessões nos seus próprios computadores',
+        machinesEmptyBody: 'Adicione este computador, um servidor ou uma máquina na nuvem. O Happier mostra o que cada um está a fazer e avisa quando um precisa de si.',
+        machinesAddThisComputer: 'Adicionar este computador',
+        machinesAddAnotherMachine: 'Adicionar outra máquina',
+        machinesHomeSignedOut: ({ home }) => `Terminou a sessão em ${home}, por isso as suas máquinas não são listadas.`,
     } } as const satisfies Pick<Record<string, SidebarFooterTranslation>, "pt">;
 
 return { sidebarFooterTranslations };
@@ -11301,6 +11362,7 @@ const widgetAddTranslations = { pt: {
         previewLiveData: 'Ao vivo, com seus dados',
         addsAtSize: ({ size }) => `Adiciona no tamanho ${size}. Você pode mudar depois.`,
         backToWidgets: 'Widgets',
+        prompts: { project: 'Qual projeto?', projects: 'Quais projetos?', session: 'Qual sessão?', workspace: 'Qual espaço de trabalho?' },
         nativeDescriptions: {
             session_summary: 'Atividade e próximos passos da sessão escolhida.',
             agent_plan: 'Acompanhe o plano do agente para a sessão escolhida.',
@@ -11911,6 +11973,7 @@ const workflowExamplesTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'c
         sessionNotifyDescription: "Uma notificação sempre que o agente desta sessão precisar da sua resposta.",
         sessionDailySummaryDescription: "Um resumo aqui todos os dias às 09:00.",
         sessionTestDescription: "Executa um comando de teste editável após cada turno concluído, com falha ou cancelado.",
+        newTag: "Novo",
         notifyWhenAgentWaits: { title: "Avise-me quando um agente esperar", description: "Escolha uma sessão e receba uma notificação sempre que o agente precisar da sua intervenção." },
         dailySummaryInSession: { title: "Resumo diário nesta sessão", description: "Escolha uma sessão para receber um resumo todos os dias às 09:00." },
         memoryUpkeepInSession: { title: 'Manutenção da memória', description: 'Revise a memória desta sessão todos os dias às 09:00 e mantenha os fatos úteis atualizados.' },

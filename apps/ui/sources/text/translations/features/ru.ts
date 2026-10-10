@@ -2892,7 +2892,7 @@ const effectiveTranslations = { "ru": {
         "shortcutHint": ({ modifier }: { modifier: string }) => `${modifier}-щелчок · ${modifier}⇧L переключает светлую и тёмную темы`
     } } as const;
 
-const glassAppearanceTranslations = { ru: { iosReduceTransparencyPath: "Настройки › Универсальный доступ › Дисплей и размер текста › Понижение прозрачности", title: 'Стекло', material: 'Материал', solid: 'Непрозрачный', auto: 'Авто', everywhere: 'Везде', custom: 'Свой', blur: 'Размытие', off: 'Выкл.', opacity: 'Непрозрачность', customize: 'Настроить', chrome: 'Рамка окна', sidebar: 'Боковая панель', content: 'Содержимое', floating: 'Плавающие поверхности', appearance: 'Оформление', moreSettings: 'Другие настройки оформления…', customizeLink: 'Настроить…', toolbarTitle: 'Кнопка оформления', toolbarDescription: 'Показывает Оформление на панели. Щелчок с модификатором переключает светлую и тёмную темы.', reduceTransparency: 'Непрозрачный: включено уменьшение прозрачности', osSettings: 'Открыть настройки универсального доступа', themeCommand: 'Переключить светлую и тёмную темы', autoDescription: "Подстраивается под устройство: слои стекла в совместимых окнах и плавающие поверхности на телефоне.", osSettingsUnavailable: "Не удалось открыть настройки универсального доступа. Откройте их в настройках устройства.", ...effectiveTranslations["ru"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "ru">;
+const glassAppearanceTranslations = { ru: { ...Shared_glassAppearanceTranslations.atmosphereTranslations['ru'], iosReduceTransparencyPath: "Настройки › Универсальный доступ › Дисплей и размер текста › Понижение прозрачности", title: 'Стекло', material: 'Материал', solid: 'Непрозрачный', auto: 'Авто', everywhere: 'Везде', custom: 'Свой', blur: 'Размытие', off: 'Выкл.', opacity: 'Непрозрачность', customize: 'Настроить', chrome: 'Рамка окна', sidebar: 'Боковая панель', content: 'Содержимое', floating: 'Плавающие поверхности', appearance: 'Оформление', moreSettings: 'Другие настройки оформления…', customizeLink: 'Настроить…', toolbarTitle: 'Кнопка оформления', toolbarDescription: 'Показывает Оформление на панели. Щелчок с модификатором переключает светлую и тёмную темы.', reduceTransparency: 'Непрозрачный: включено уменьшение прозрачности', osSettings: 'Открыть настройки универсального доступа', themeCommand: 'Переключить светлую и тёмную темы', autoDescription: "Подстраивается под устройство: слои стекла в совместимых окнах и плавающие поверхности на телефоне.", osSettingsUnavailable: "Не удалось открыть настройки универсального доступа. Откройте их в настройках устройства.", ...effectiveTranslations["ru"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "ru">;
 
 return { effectiveTranslations, glassAppearanceTranslations };
 })();
@@ -4111,6 +4111,10 @@ const ru: typeof en = {
         },
     },
     reach: {
+        publicLinks: "Публичные ссылки",
+        allowPublicSubpath: "Разрешить публичные ссылки на этом имени хоста",
+        allowPublicSubpathDescription: "Используйте HTTPS-адрес этого Home для публичных ссылок на сессии и Artifacts, если отдельный домен недоступен. HTML остаётся в ограниченной среде. Локальным сервисам по-прежнему нужен отдельный домен.",
+        publicLinksHelp: "По умолчанию выключено. На изолированных доменах доступен просмотр PDF; ссылки на этом имени хоста предлагают скачивание PDF.",
         title: 'Доступ',
         diagramTitle: ({ home }: { home: string }) => `Как новое устройство попадает в ${home}`,
         yourDevices: 'Ваши устройства',
@@ -5095,7 +5099,7 @@ const oidcEditorWords: Pick<Readonly<Record<IdentityAdministrationLanguage, Oidc
         allowRulesHint: 'Введите по одному значению в строке. Пустое поле означает отсутствие ограничений.', brandingHint: 'Оставьте пустым для стандартного оформления входа.', invalidScopes: 'Включите openid в запрашиваемые области.', refreshFailed: 'Не удалось обновить это подключение', refreshFailedHint: 'Ваши изменения сохранены. Повторите попытку, чтобы проверить изменения в Home.',
     } };
 
-const identityAdministrationTranslations = { ru: build({ ...en, homeWorkosChooseDetail: "Выберите подключение WorkOS для входа в этот Home.", homeWorkosAdd: "Вход компании через WorkOS", homeWorkosCompanyName: "Название компании", homeWorkosPurpose: "Сотрудники вашей компании могут войти в этот Home с рабочей учётной записью.", homeWorkosEnableDetail: "Люди смогут входить в этот Home с учётной записью компании.", homeWorkosOffboarding: "Сам по себе SSO не удаляет людей, покинувших компанию.", homeWorkosPlatformRequired: "Сначала настройте WorkOS в платформах входа.",  title: 'Поставщики идентификации', subtitle: 'Подключения Home для входа в Teams.', homeConnections: 'Подключения Home', add: 'Добавить подключение', empty: 'Нет подключений Home', active: 'Активно', disabled: 'Отключено', configuration: 'Конфигурация', issuer: 'URL издателя', clientSecret: 'Секрет клиента', secretSet: 'Задан', secretNotSet: 'Не задан', secretRetain: 'Оставьте пустым, чтобы сохранить текущий секрет.', advanced: 'Показать дополнительные настройки', hideAdvanced: 'Скрыть дополнительные настройки', actions: 'Действия', test: 'Проверить вход', testing: 'Открывается проверка…', edit: 'Изменить подключение', save: 'Сохранить подключение', saving: 'Сохранение…', enable: 'Включить подключение', disable: 'Отключить подключение', remove: 'Удалить подключение', createTitle: 'Добавить поставщика идентификации', editTitle: 'Изменить поставщика идентификации', displayName: 'Название', required: 'Заполните обязательные поля.', invalidIssuer: 'Введите корректный URL HTTPS.', secretRequired: 'Введите секрет клиента.', error: 'Изменение не применено.', accounts: 'Затронутые Accounts', connections: 'Подключения Team', errorForbidden: 'У вас больше нет прав на это действие. Ничего не изменено.', errorConflict: 'Кто-то изменил это раньше. Ваши правки сохранены — обновите и повторите.', errorMissing: 'Этого больше нет. Возможно, объект удалили.', errorInUse: 'От этого что-то ещё зависит. Сначала удалите зависимости.', errorProviderUnavailable: 'Служба идентификации не ответила. Ничего не изменено.', errorRateLimited: 'Поставщик просит подождать перед повторной попыткой.', errorInvalid: 'Home отклонил эти значения. Проверьте конфигурацию и повторите.', errorImmutable: 'Это значение фиксируется после начала использования. Создайте новую запись.', errorAuthenticationRequired: 'Войдите в этот Team снова и повторите попытку. Ничего не изменено.', errorPolicyUnavailable: 'Политику аутентификации Team сейчас невозможно оценить. Ничего не изменено.', errorPolicyInUse: 'Политика аутентификации Team всё ещё зависит от этого подключения.', errorNotAllowed: 'Этот Home не разрешает Team настраивать это. Ничего не изменено.', errorNeedsAttention: 'Синхронизация каталога требует внимания. Запустите полную синхронизацию.', errorSyncPaused: 'Этот источник приостановлен. «Возобновить синхронизацию» запускает новую полную синхронизацию.', alternateLogins: 'Accounts, которым нужен другой способ входа', recoveryAuthenticationPolicy: 'Открыть аутентификацию Team', recoveryAlternateLogin: 'Сначала дайте этим Accounts другой способ входа', recoveryDirectory: 'Открыть каталог', recoveryGroupMappings: 'Открыть сопоставления Групп', recoveryTeamAuthentication: 'Войти снова', callbackUrl: 'URL обратного вызова', callbackUrlHint: 'Зарегистрируйте этот URL у поставщика идентификации.' , workosSetupSso: 'Открыть портал администратора WorkOS', workosSetupDirectory: 'Настроить WorkOS Directory Sync', workosCheckSetup: 'Проверить настройку WorkOS', workosChooseConnection: 'Выбрать подключение', workosPortalConfirmBody: 'Вы завершите настройку в WorkOS, а затем вернётесь сюда, чтобы выбрать подключение.', workosDirectoryPortalConfirmBody: 'Вы завершите настройку в WorkOS, а затем вернётесь сюда, чтобы выбрать каталог.', workosSetupSection: 'Настройка', workosSetupFooter: 'Можно уйти и вернуться: настройка продолжится с достигнутого шага.', workosStepPortalDetail: 'Подключите там своего поставщика удостоверений. Когда вернётесь, настройка продолжится здесь.', workosStepPortalDone: 'Портал администратора', workosStepPortalDoneDetail: 'Ваша организация связана.', workosOpenPortal: 'Открыть портал', workosOpenPortalAgain: 'Открыть снова', workosStepChooseDetail: 'Выберите, через какое подключение WorkOS входят участники.', workosStepChooseDone: 'Подключение', workosFindConnections: 'Найти подключения', workosUseConnection: ({ name }: { name: string }) => `Использовать ${name}`, workosCandidateDraft: 'Черновик в WorkOS. Сначала завершите его там.', workosStepTestDetail: 'Войдите один раз сами. Ни в чьей учётной записи ничего не сохраняется.', workosTestPassed: 'Ваш тестовый вход сработал.', workosTestAgain: 'Проверить снова', workosStepEnable: 'Включить', workosStepEnableDetail: 'После этого участники смогут входить через него. Чтобы сделать его обязательным, выберите его в разделе «Как входят участники».', workosTurnOn: 'Включить', workosConnectionSection: 'Подключение', workosConnectionRow: 'Подключение WorkOS', workosConnectionNotChosen: 'Ещё не выбрано', workosChange: 'Изменить', errorWorkosPlatformUnavailable: 'WorkOS ещё не настроен в этом Home.', errorSetupRequired: 'Это нужно настроить, прежде чем использовать.', removeTitle: ({ name }: { name: string }) => `Удалить ${name}?`, removeBody: ({ name }: { name: string }) => `${name} больше не предлагается для входа. Учётные записи, которые его использовали, сохраняются.`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `Всё ещё используется: подключения команды — ${connections}, учётные записи — ${accounts}. Сначала удалите их.`, disableTitle: ({ name }: { name: string }) => `Выключить ${name}?`, disableBody: ({ name }: { name: string }) => `Никто не сможет войти через ${name}, пока его снова не включат. Ничего не удаляется.`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `Удалить установку в ${name}?`, githubRemoveInstallationBody: ({ name }: { name: string }) => `Этот Home перестаёт использовать приложение в ${name}. В GitHub ничего не меняется; удалите его там, если оно больше не нужно.`, removeBlockedTitle: ({ name }: { name: string }) => `${name} пока нельзя удалить`, removeImpactPeople: ({ count }: { count: number }) => `Входят в эту команду через него: ${count}.`, removeImpactNobody: 'Через него пока никто не входит в эту команду.', removeImpactKept: 'Их учётные записи и членство в команде сохраняются.', removeBlockedAlternateLogins: ({ count }: { count: number }) => `Людей без другого способа входа: ${count}.`, removeBlockedDirectories: ({ count }: { count: number }) => `Его всё ещё используют источники каталога: ${count}.`, removeBlockedGroups: ({ count }: { count: number }) => `Его всё ещё используют сопоставления групп: ${count}.`, removeBlockedMemberships: ({ count }: { count: number }) => `Членств, которыми он всё ещё управляет: ${count}.` }, githubAccessWords.ru, oidcEditorWords.ru) };
+const identityAdministrationTranslations = { ru: build({ ...en, homeWorkosChooseDetail: "Выберите подключение WorkOS для входа в этот Home.", workosRequiredForTeamWork: "Обязательно для работы в команде", workosTeamPolicyHint: "Измените разрешённые способы входа в разделе Как участники входят.", workosLifecycleFootnote: "Отключение запрещает вход через это подключение до его повторного включения. Удаление убирает подключение из этого Home; организация WorkOS сохраняется.", homeWorkosAdd: "Вход компании через WorkOS", homeWorkosCompanyName: "Название компании", homeWorkosPurpose: "Сотрудники вашей компании могут войти в этот Home с рабочей учётной записью.", homeWorkosEnableDetail: "Люди смогут входить в этот Home с учётной записью компании.", homeWorkosOffboarding: "Сам по себе SSO не удаляет людей, покинувших компанию.", homeWorkosPlatformRequired: "Сначала настройте WorkOS в платформах входа.",  title: 'Поставщики идентификации', subtitle: 'Подключения Home для входа в Teams.', homeConnections: 'Подключения Home', add: 'Добавить подключение', empty: 'Нет подключений Home', active: 'Активно', disabled: 'Отключено', configuration: 'Конфигурация', issuer: 'URL издателя', clientSecret: 'Секрет клиента', secretSet: 'Задан', secretNotSet: 'Не задан', secretRetain: 'Оставьте пустым, чтобы сохранить текущий секрет.', advanced: 'Показать дополнительные настройки', hideAdvanced: 'Скрыть дополнительные настройки', actions: 'Действия', test: 'Проверить вход', testing: 'Открывается проверка…', edit: 'Изменить подключение', save: 'Сохранить подключение', saving: 'Сохранение…', enable: 'Включить подключение', disable: 'Отключить подключение', remove: 'Удалить подключение', createTitle: 'Добавить поставщика идентификации', editTitle: 'Изменить поставщика идентификации', displayName: 'Название', required: 'Заполните обязательные поля.', invalidIssuer: 'Введите корректный URL HTTPS.', secretRequired: 'Введите секрет клиента.', error: 'Изменение не применено.', accounts: 'Затронутые Accounts', connections: 'Подключения Team', errorForbidden: 'У вас больше нет прав на это действие. Ничего не изменено.', errorConflict: 'Кто-то изменил это раньше. Ваши правки сохранены — обновите и повторите.', errorMissing: 'Этого больше нет. Возможно, объект удалили.', errorInUse: 'От этого что-то ещё зависит. Сначала удалите зависимости.', errorProviderUnavailable: 'Служба идентификации не ответила. Ничего не изменено.', errorRateLimited: 'Поставщик просит подождать перед повторной попыткой.', errorInvalid: 'Home отклонил эти значения. Проверьте конфигурацию и повторите.', errorImmutable: 'Это значение фиксируется после начала использования. Создайте новую запись.', errorAuthenticationRequired: 'Войдите в этот Team снова и повторите попытку. Ничего не изменено.', errorPolicyUnavailable: 'Политику аутентификации Team сейчас невозможно оценить. Ничего не изменено.', errorPolicyInUse: 'Политика аутентификации Team всё ещё зависит от этого подключения.', errorNotAllowed: 'Этот Home не разрешает Team настраивать это. Ничего не изменено.', errorNeedsAttention: 'Синхронизация каталога требует внимания. Запустите полную синхронизацию.', errorSyncPaused: 'Этот источник приостановлен. «Возобновить синхронизацию» запускает новую полную синхронизацию.', alternateLogins: 'Accounts, которым нужен другой способ входа', recoveryAuthenticationPolicy: 'Открыть аутентификацию Team', recoveryAlternateLogin: 'Сначала дайте этим Accounts другой способ входа', recoveryDirectory: 'Открыть каталог', recoveryGroupMappings: 'Открыть сопоставления Групп', recoveryTeamAuthentication: 'Войти снова', callbackUrl: 'URL обратного вызова', callbackUrlHint: 'Зарегистрируйте этот URL у поставщика идентификации.' , workosSetupSso: 'Открыть портал администратора WorkOS', workosSetupDirectory: 'Настроить WorkOS Directory Sync', workosCheckSetup: 'Проверить настройку WorkOS', workosChooseConnection: 'Выбрать подключение', workosPortalConfirmBody: 'Вы завершите настройку в WorkOS, а затем вернётесь сюда, чтобы выбрать подключение.', workosDirectoryPortalConfirmBody: 'Вы завершите настройку в WorkOS, а затем вернётесь сюда, чтобы выбрать каталог.', workosSetupSection: 'Настройка', workosSetupFooter: 'Можно уйти и вернуться: настройка продолжится с достигнутого шага.', workosStepPortalDetail: 'Подключите там своего поставщика удостоверений. Когда вернётесь, настройка продолжится здесь.', workosStepPortalDone: 'Портал администратора', workosStepPortalDoneDetail: 'Ваша организация связана.', workosOpenPortal: 'Открыть портал', workosOpenPortalAgain: 'Открыть снова', workosStepChooseDetail: 'Выберите, через какое подключение WorkOS входят участники.', workosStepChooseDone: 'Подключение', workosFindConnections: 'Найти подключения', workosUseConnection: ({ name }: { name: string }) => `Использовать ${name}`, workosCandidateDraft: 'Черновик в WorkOS. Сначала завершите его там.', workosStepTestDetail: 'Войдите один раз сами. Ни в чьей учётной записи ничего не сохраняется.', workosTestPassed: 'Ваш тестовый вход сработал.', workosTestAgain: 'Проверить снова', workosStepEnable: 'Включить', workosStepEnableDetail: 'После этого участники смогут входить через него. Чтобы сделать его обязательным, выберите его в разделе «Как входят участники».', workosTurnOn: 'Включить', workosConnectionSection: 'Подключение', workosConnectionRow: 'Подключение WorkOS', workosConnectionNotChosen: 'Ещё не выбрано', workosChange: 'Изменить', errorWorkosPlatformUnavailable: 'WorkOS ещё не настроен в этом Home.', errorSetupRequired: 'Это нужно настроить, прежде чем использовать.', removeTitle: ({ name }: { name: string }) => `Удалить ${name}?`, removeBody: ({ name }: { name: string }) => `${name} больше не предлагается для входа. Учётные записи, которые его использовали, сохраняются.`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `Всё ещё используется: подключения команды — ${connections}, учётные записи — ${accounts}. Сначала удалите их.`, disableTitle: ({ name }: { name: string }) => `Выключить ${name}?`, disableBody: ({ name }: { name: string }) => `Никто не сможет войти через ${name}, пока его снова не включат. Ничего не удаляется.`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `Удалить установку в ${name}?`, githubRemoveInstallationBody: ({ name }: { name: string }) => `Этот Home перестаёт использовать приложение в ${name}. В GitHub ничего не меняется; удалите его там, если оно больше не нужно.`, removeBlockedTitle: ({ name }: { name: string }) => `${name} пока нельзя удалить`, removeImpactPeople: ({ count }: { count: number }) => `Входят в эту команду через него: ${count}.`, removeImpactNobody: 'Через него пока никто не входит в эту команду.', removeImpactKept: 'Их учётные записи и членство в команде сохраняются.', removeBlockedAlternateLogins: ({ count }: { count: number }) => `Людей без другого способа входа: ${count}.`, removeBlockedDirectories: ({ count }: { count: number }) => `Его всё ещё используют источники каталога: ${count}.`, removeBlockedGroups: ({ count }: { count: number }) => `Его всё ещё используют сопоставления групп: ${count}.`, removeBlockedMemberships: ({ count }: { count: number }) => `Членств, которыми он всё ещё управляет: ${count}.` }, githubAccessWords.ru, oidcEditorWords.ru) };
 
 return { githubAccessWords, oidcEditorWords, identityAdministrationTranslations };
 })();
@@ -5317,6 +5321,44 @@ const machineDetailPageTranslations = { ru: translated({
             stopDaemonDescription: 'Текущие сессии продолжат работу. Новые не запустятся, пока вы не перезапустите её на этой машине.',
             stopDaemonAction: 'Остановить',
             detailsTitle: 'Сведения о машине',
+            tabs: {
+                overview: "Обзор",
+            },
+            thisMachineTitle: "Эта машина",
+            connectionFollowsAccount: "Как в аккаунте",
+            subPages: {
+                sharing: "Доступ",
+                agents: "Агенты",
+                terminal: "Терминал",
+                connection: "Подключение",
+                tools: "Инструменты",
+                doctor: "Диагностика",
+                details: "Сведения",
+            },
+            summaries: {
+                terminalDirect: "Без хоста терминала",
+                agentReady: ({ agent }) => `${agent} готов`,
+                agentsReadyPair: ({ first, second }) => `${first} и ${second} готовы`,
+                agentsReadyCount: ({ count }) => `Готово агентов: ${count}`,
+                doctorChecked: ({ time }) => `Проверено ${time}`,
+            },
+            work: {
+                none: "Нет работы",
+                working: ({ count }) => `${count} в работе`,
+            },
+            platformFact: ({ platform, arch }) => `${platform} · ${arch}`,
+        },
+        allMachines: {
+            rowTitle: "Все машины",
+            viewList: "Список",
+            viewGrid: "Сетка",
+            viewLabel: "Показывать машины",
+            columnMachine: "Машина",
+            columnWork: "Работа",
+            columnStatus: "Состояние",
+            allMachinesGroup: "Все машины",
+            machinesCount: ({ count }) => count === 1 ? `1 машина` : `Машин: ${count}`,
+            sessionsWorking: ({ count }) => count === 1 ? `1 сессия в работе` : `Сессий в работе: ${count}`,
         },
     }) };
 
@@ -6312,6 +6354,11 @@ const pluginSettingsPresentationTranslations = { ru: {
             emptyBody: 'Плагины добавляют панели, команды и инструменты для ваших агентов. Начните с плагинов от Happier.',
             browsePlugins: 'Обзор плагинов',
             browseEmpty: 'В ваших источниках пока нет плагинов.',
+            noSavedDetails: 'Для этого компьютера нет сохранённых сведений о плагинах.',
+            projectionFailedTitle: 'Не удалось загрузить реестр плагинов этого компьютера',
+            projectionFailedBody: 'Сведения о плагинах не удалось загрузить. Повторите попытку, чтобы управлять плагинами.',
+            machineOfflineTitle: 'Этот компьютер не в сети',
+            machineOfflineBody: 'Для изменений компьютер должен быть в сети. Выберите другой компьютер в заголовке.',
             forDevelopers: 'Для разработчиков',
             readFailedTitle: 'Не удалось прочитать плагины этого компьютера',
             readFailedBody: 'Ничего не изменилось. Повторите, чтобы снова запросить компьютер.',
@@ -6455,6 +6502,9 @@ const en = Shared_providerCollectionTranslations.en;
 const ru: ProviderCollectionCopy = {
     settingsProvidersCollection: {
         gateway: {
+            statusRunning: 'Работает',
+            statusIdle: 'Бездействует',
+            statusNotChecked: 'Не проверено',
             railGroup: 'Шлюзы',
             managedFromConnectedServices: 'Управляется в разделе «Подключённые сервисы»',
             description: 'Позволяет любому агенту использовать ваши подписки.',
@@ -6542,6 +6592,9 @@ const ru: ProviderCollectionCopy = {
         addTitle: ({ provider }: { provider: string }) => `Добавить ${provider}`,
         addDescription: ({ provider }: { provider: string }) => `Добавьте ключ — и модели ${provider} появятся в каждом агенте, который может их запускать.`,
         addKeyDescription: 'Хранится как сохранённый секрет в вашем аккаунте.',
+        addAccountScopeHint: 'Сразу сохраняется в вашем аккаунте — компьютер не нужен. Проверить можно потом с любого вашего компьютера.',
+        editConnection: 'Изменить подключение',
+        editDescription: 'Изменения применяются к сессиям, запущенным после этого. Ключ и модели остаются на его странице.',
         connectedTitle: ({ provider }: { provider: string }) => `${provider} подключён`,
         connectedHiddenCountDescription: ({ provider, count }: { provider: string; count: number }) => `Готово моделей: ${count}. По умолчанию они скрыты в выборе, потому что ${provider} предлагает много моделей, которые у вас уже могут быть. Выберите любую в «Работает через» или покажите все.`,
         connectedHiddenDescription: ({ provider }: { provider: string }) => `Его модели по умолчанию скрыты в выборе, потому что ${provider} предлагает много моделей, которые у вас уже могут быть. Выберите любую в «Работает через» или покажите все.`,
@@ -7594,7 +7647,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         linkLoadFailed: 'Не удалось проверить публичную ссылку.',
         linkNetworkOff: 'Поделиться визуализациями без доступа к сети',
         linkNetworkConsequence: 'Визуализации с доступом к сети могут отправлять своё содержимое другим сайтам и раскрывать IP-адрес зрителя. Удалённый код и ресурсы могут меняться. Отключение сети сохраняет интерактивность включённого содержимого без внешних запросов.',
-        linkUnavailable: 'Публичные ссылки недоступны в этом Home. Попросите администратора настроить их размещение.',
+        linkUnavailable: "Публичные ссылки недоступны в этом Home. Попросите владельца настроить изолированный домен или разрешить ссылки на этом имени хоста. Также нужно настроить ограничение частоты запросов для публичных ссылок.",
+        configurePublicLinks: "Настроить публичные ссылки",
         justYouTitle: 'Работайте над сессией вместе',
         justYouBody: ({ home }) => `Поделитесь ею с людьми в ${home}. Они смогут следить за ней, обсуждать её здесь и продолжить, пока вас нет.`,
         share: 'Поделиться',
@@ -8610,6 +8664,8 @@ const ru: typeof en = {
     daemonTitle: 'Фоновая служба',
     daemonDescription: 'Выполняет ваши сессии на этом компьютере и поддерживает его связь с Home.',
     unreadableTitle: ({ home }: { home: string }) => `Не удалось прочитать машины в ${home}`,
+    indexViewTitle: 'Вид «Все машины»',
+    indexViewDescription: 'Показывает «Все машины» списком или карточкой для каждой машины. Сохраняется на этом устройстве.',
 };
 
 const settingsMachinesTranslations = { ru };
@@ -9223,6 +9279,11 @@ const sidebarFooterTranslations = { ru: {
         usageNextInOrder: ({ account }) => `Когда ${account} закончится, следующий ход перейдёт к следующему аккаунту по порядку`,
         usageNextMostLeft: ({ account }) => `Когда ${account} закончится, следующий ход перейдёт к аккаунту с наибольшим остатком`,
         usageNextStays: ({ pool, account }) => `${pool} остаётся на ${account}, пока вы не переключите`,
+        machinesEmptyTitle: 'Запускайте сессии на своих компьютерах',
+        machinesEmptyBody: 'Добавьте этот компьютер, сервер или облачную машину. Happier показывает, чем занята каждая, и сообщает, когда какая-то из них нуждается в вас.',
+        machinesAddThisComputer: 'Добавить этот компьютер',
+        machinesAddAnotherMachine: 'Добавить другую машину',
+        machinesHomeSignedOut: ({ home }) => `Вы вышли из ${home}, поэтому его машины не показаны.`,
     } } as const satisfies Pick<Record<string, SidebarFooterTranslation>, "ru">;
 
 return { sidebarFooterTranslations };
@@ -11311,6 +11372,7 @@ const widgetAddTranslations = { ru: {
         panes: 'Панели',
         panesHint: 'добавляется как ссылка, открывающаяся в «Подробностях»',
         builtIn: 'Встроенное',
+        prompts: { project: 'Какой проект?', projects: 'Какие проекты?', session: 'Какой сеанс?', workspace: 'Какое рабочее пространство?' },
         nativeDescriptions: {
             session_summary: 'Активность и следующие шаги выбранной сессии.',
             agent_plan: 'Следите за планом агента для выбранной сессии.',
@@ -11937,6 +11999,7 @@ const workflowExamplesTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'c
         sessionNotifyDescription: "Уведомление каждый раз, когда агенту этой сессии нужен ваш ответ.",
         sessionDailySummaryDescription: "Сводка здесь каждый день в 09:00.",
         sessionTestDescription: "Запускает редактируемую тестовую команду после каждого завершённого, неудачного или отменённого хода.",
+        newTag: "Новое",
         notifyWhenAgentWaits: { title: "Уведомить меня, когда агент ждёт", description: "Выберите сессию и получайте уведомление каждый раз, когда её агенту нужно ваше участие." },
         dailySummaryInSession: { title: "Ежедневная сводка в этой сессии", description: "Выберите сессию для сводки каждый день в 09:00." },
         memoryUpkeepInSession: { title: 'Обновление памяти', description: 'Проверяйте память этой сессии каждый день в 09:00 и поддерживайте полезные факты в актуальном состоянии.' },

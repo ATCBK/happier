@@ -2870,7 +2870,7 @@ const effectiveTranslations = { "ja": {
         "shortcutHint": ({ modifier }: { modifier: string }) => `${modifier}-クリック・${modifier}⇧Lでライトとダークを切り替え`
     } } as const;
 
-const glassAppearanceTranslations = { ja: { iosReduceTransparencyPath: "設定 › アクセシビリティ › 画面表示とテキストサイズ › 透明度を下げる", title: 'ガラス', material: '素材', solid: '不透明', auto: '自動', everywhere: '全体', custom: 'カスタム', blur: 'ぼかし', off: 'オフ', opacity: '不透明度', customize: 'カスタマイズ', chrome: 'ウィンドウ枠', sidebar: 'サイドバー', content: 'コンテンツ', floating: 'フローティング画面', appearance: '外観', moreSettings: '外観の詳細設定…', customizeLink: 'カスタマイズ…', toolbarTitle: '外観ボタン', toolbarDescription: 'ツールバーに外観を表示します。修飾キーを押しながらクリックするとライトとダークを切り替えます。', reduceTransparency: '「透明度を下げる」が有効なため不透明です', osSettings: 'アクセシビリティ設定を開く', themeCommand: 'ライトとダークを切り替える', autoDescription: "このデバイスに合わせます。対応デスクトップでは各面に層状のガラス、スマートフォンではフローティング画面にガラスを使います。", osSettingsUnavailable: "アクセシビリティ設定を開けませんでした。デバイスの設定から開いてください。", ...effectiveTranslations["ja"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "ja">;
+const glassAppearanceTranslations = { ja: { ...Shared_glassAppearanceTranslations.atmosphereTranslations['ja'], iosReduceTransparencyPath: "設定 › アクセシビリティ › 画面表示とテキストサイズ › 透明度を下げる", title: 'ガラス', material: '素材', solid: '不透明', auto: '自動', everywhere: '全体', custom: 'カスタム', blur: 'ぼかし', off: 'オフ', opacity: '不透明度', customize: 'カスタマイズ', chrome: 'ウィンドウ枠', sidebar: 'サイドバー', content: 'コンテンツ', floating: 'フローティング画面', appearance: '外観', moreSettings: '外観の詳細設定…', customizeLink: 'カスタマイズ…', toolbarTitle: '外観ボタン', toolbarDescription: 'ツールバーに外観を表示します。修飾キーを押しながらクリックするとライトとダークを切り替えます。', reduceTransparency: '「透明度を下げる」が有効なため不透明です', osSettings: 'アクセシビリティ設定を開く', themeCommand: 'ライトとダークを切り替える', autoDescription: "このデバイスに合わせます。対応デスクトップでは各面に層状のガラス、スマートフォンではフローティング画面にガラスを使います。", osSettingsUnavailable: "アクセシビリティ設定を開けませんでした。デバイスの設定から開いてください。", ...effectiveTranslations["ja"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "ja">;
 
 return { effectiveTranslations, glassAppearanceTranslations };
 })();
@@ -4089,6 +4089,10 @@ const ja: typeof en = {
         },
     },
     reach: {
+        publicLinks: "公開リンク",
+        allowPublicSubpath: "このホスト名で公開リンクを許可",
+        allowPublicSubpathDescription: "別の共有ドメインがない場合、このHomeのHTTPSアドレスをセッションやArtifactの公開リンクに使います。HTMLは制限されたサンドボックス内に保たれます。ローカルサービスには別のドメインが必要です。",
+        publicLinksHelp: "初期設定はオフです。独立した共有ドメインではPDFをプレビューでき、このホスト名のリンクではPDFをダウンロードできます。",
         title: '到達経路',
         diagramTitle: ({ home }: { home: string }) => `新しいデバイスが ${home} に届く経路`,
         yourDevices: 'あなたのデバイス',
@@ -5069,7 +5073,7 @@ const oidcEditorWords: Pick<Readonly<Record<IdentityAdministrationLanguage, Oidc
         allowRulesHint: '1 行に 1 つの値を入力します。空欄の場合は制限しません。', brandingHint: '既定のサインイン表示を使う場合は空欄にします。', invalidScopes: '要求するスコープに openid を含めてください。', refreshFailed: 'この接続を更新できませんでした', refreshFailedHint: '編集内容は保持されています。Home の変更を確認するには再試行してください。',
     } };
 
-const identityAdministrationTranslations = { ja: build({ ...en, homeWorkosChooseDetail: "この Home へのサインインに使う WorkOS 接続を選んでください。", homeWorkosAdd: "WorkOSによる会社のサインイン", homeWorkosCompanyName: "会社名", homeWorkosPurpose: "会社のメンバーは仕事用アカウントでこのHomeにサインインできます。", homeWorkosEnableDetail: "会社のアカウントでこのHomeにサインインできるようになります。", homeWorkosOffboarding: "SSOだけでは退職した人は削除されません。", homeWorkosPlatformRequired: "まずサインインプラットフォームでWorkOSを設定してください。",  title: 'ID プロバイダー', subtitle: 'Team で利用できる Home 所有のサインイン接続です。', homeConnections: 'Home のサインイン接続', add: '接続を追加', empty: 'Home の接続はありません', active: '有効', disabled: '無効', configuration: '設定', issuer: '発行者 URL', clientSecret: 'クライアントシークレット', secretSet: '設定済み', secretNotSet: '未設定', secretRetain: '現在のシークレットを保持するには空欄にします。', advanced: '詳細設定を表示', hideAdvanced: '詳細設定を隠す', actions: '操作', test: 'サインインをテスト', testing: 'テストを開いています…', edit: '接続を編集', save: '接続を保存', saving: '保存中…', enable: '接続を有効化', disable: '接続を無効化', remove: '接続を削除', createTitle: 'ID プロバイダーを追加', editTitle: 'ID プロバイダーを編集', displayName: '名前', required: '必須項目を入力してください。', invalidIssuer: '有効な HTTPS URL を入力してください。', secretRequired: 'クライアントシークレットを入力してください。', error: '変更できませんでした。', accounts: '影響する Account', connections: 'Team 接続', errorForbidden: 'この操作の権限がなくなりました。何も変更されていません。', errorConflict: '先に別のユーザーが変更しました。入力内容は保持されています。再読み込みしてからもう一度お試しください。', errorMissing: 'これはすでに存在しません。削除された可能性があります。', errorInUse: 'まだ依存しているものがあります。先にそれを削除してください。', errorProviderUnavailable: 'ID サービスが応答しませんでした。何も変更されていません。', errorRateLimited: 'プロバイダーから、再試行前に待つよう求められました。', errorInvalid: 'Home がこれらの値を拒否しました。設定を確認してもう一度お試しください。', errorImmutable: 'この値は使用開始後は変更できません。新しく作成してください。', errorAuthenticationRequired: 'この Team にもう一度サインインしてから再試行してください。変更はありません。', errorPolicyUnavailable: 'Team の認証ポリシーを現在評価できません。変更はありません。', errorPolicyInUse: 'Team の認証ポリシーはまだこの接続に依存しています。', errorNotAllowed: 'この Home では Team がこれを設定することを許可していません。変更はありません。', errorNeedsAttention: 'ディレクトリ同期に確認が必要です。完全同期を実行してください。', errorSyncPaused: 'このソースは一時停止中です。「同期を再開」で新しい完全同期を開始します。', alternateLogins: '別のサインイン方法が必要な Account', recoveryAuthenticationPolicy: 'Team の認証を開く', recoveryAlternateLogin: '先にこれらの Account に別のサインイン方法を用意してください', recoveryDirectory: 'ディレクトリを開く', recoveryGroupMappings: 'グループの対応付けを開く', recoveryTeamAuthentication: 'もう一度サインイン', callbackUrl: 'コールバック URL', callbackUrlHint: 'この URL を ID プロバイダーに登録してください。' , workosSetupSso: 'WorkOS 管理ポータルを開く', workosSetupDirectory: 'WorkOS Directory Sync を設定', workosCheckSetup: 'WorkOS の設定を確認', workosChooseConnection: '接続を選択', workosPortalConfirmBody: 'WorkOS で設定を完了してから、ここに戻って接続を選択します。', workosDirectoryPortalConfirmBody: 'WorkOS で設定を完了してから、ここに戻ってディレクトリを選択します。', workosSetupSection: '設定', workosSetupFooter: '途中で離れても大丈夫です。設定は到達したステップから再開されます。', workosStepPortalDetail: 'そこで ID プロバイダーを接続します。戻ると、ここで設定が続きます。', workosStepPortalDone: '管理ポータル', workosStepPortalDoneDetail: '組織がリンクされています。', workosOpenPortal: 'ポータルを開く', workosOpenPortalAgain: 'もう一度開く', workosStepChooseDetail: 'メンバーのサインインに使う WorkOS 接続を選択します。', workosStepChooseDone: '接続', workosFindConnections: '接続を探す', workosUseConnection: ({ name }: { name: string }) => `${name} を使用`, workosCandidateDraft: 'WorkOS の下書きです。先にそちらで完了してください。', workosStepTestDetail: 'ご自身で一度サインインします。誰のアカウントにも何も保存されません。', workosTestPassed: 'テストサインインは成功しました。', workosTestAgain: 'もう一度テスト', workosStepEnable: 'オンにする', workosStepEnableDetail: 'オンにするとメンバーがサインインに使えます。必須にするには「メンバーのサインイン方法」で選択します。', workosTurnOn: 'オンにする', workosConnectionSection: '接続', workosConnectionRow: 'WorkOS 接続', workosConnectionNotChosen: '未選択', workosChange: '変更', errorWorkosPlatformUnavailable: 'この Home ではまだ WorkOS が設定されていません。', errorSetupRequired: '使う前に設定が必要です。', removeTitle: ({ name }: { name: string }) => `${name} を削除しますか？`, removeBody: ({ name }: { name: string }) => `${name} はサインイン方法として提供されなくなります。使用していたアカウントは保持されます。`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `まだ Team 接続 ${connections} 件とアカウント ${accounts} 件で使用されています。先にそれらを削除してください。`, disableTitle: ({ name }: { name: string }) => `${name} をオフにしますか？`, disableBody: ({ name }: { name: string }) => `再びオンにするまで ${name} でサインインできません。何も削除されません。`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `${name} のインストールを削除しますか？`, githubRemoveInstallationBody: ({ name }: { name: string }) => `この Home は ${name} の App を使わなくなります。GitHub 側は変わりません。不要なら GitHub でアンインストールしてください。`, removeBlockedTitle: ({ name }: { name: string }) => `${name} はまだ削除できません`, removeImpactPeople: ({ count }: { count: number }) => `${count} 人がこれでこの Team にサインインしています。`, removeImpactNobody: 'まだ誰もこれでこの Team にサインインしていません。', removeImpactKept: 'アカウントと Team のメンバーシップは保持されます。', removeBlockedAlternateLogins: ({ count }: { count: number }) => `${count} 人には他のサインイン方法がありません。`, removeBlockedDirectories: ({ count }: { count: number }) => `${count} 件のディレクトリソースがまだ使用しています。`, removeBlockedGroups: ({ count }: { count: number }) => `${count} 件のグループ対応付けがまだ使用しています。`, removeBlockedMemberships: ({ count }: { count: number }) => `${count} 件のメンバーシップがまだこれで管理されています。` }, githubAccessWords.ja, oidcEditorWords.ja) };
+const identityAdministrationTranslations = { ja: build({ ...en, homeWorkosChooseDetail: "この Home へのサインインに使う WorkOS 接続を選んでください。", workosRequiredForTeamWork: "チームでの作業に必要", workosTeamPolicyHint: "許可するサインイン方法は「メンバーのサインイン方法」で変更できます。", workosLifecycleFootnote: "オフにすると、再びオンにするまでこの接続でサインインできません。削除するとこのHomeから接続が削除されますが、WorkOSの組織は残ります。", homeWorkosAdd: "WorkOSによる会社のサインイン", homeWorkosCompanyName: "会社名", homeWorkosPurpose: "会社のメンバーは仕事用アカウントでこのHomeにサインインできます。", homeWorkosEnableDetail: "会社のアカウントでこのHomeにサインインできるようになります。", homeWorkosOffboarding: "SSOだけでは退職した人は削除されません。", homeWorkosPlatformRequired: "まずサインインプラットフォームでWorkOSを設定してください。",  title: 'ID プロバイダー', subtitle: 'Team で利用できる Home 所有のサインイン接続です。', homeConnections: 'Home のサインイン接続', add: '接続を追加', empty: 'Home の接続はありません', active: '有効', disabled: '無効', configuration: '設定', issuer: '発行者 URL', clientSecret: 'クライアントシークレット', secretSet: '設定済み', secretNotSet: '未設定', secretRetain: '現在のシークレットを保持するには空欄にします。', advanced: '詳細設定を表示', hideAdvanced: '詳細設定を隠す', actions: '操作', test: 'サインインをテスト', testing: 'テストを開いています…', edit: '接続を編集', save: '接続を保存', saving: '保存中…', enable: '接続を有効化', disable: '接続を無効化', remove: '接続を削除', createTitle: 'ID プロバイダーを追加', editTitle: 'ID プロバイダーを編集', displayName: '名前', required: '必須項目を入力してください。', invalidIssuer: '有効な HTTPS URL を入力してください。', secretRequired: 'クライアントシークレットを入力してください。', error: '変更できませんでした。', accounts: '影響する Account', connections: 'Team 接続', errorForbidden: 'この操作の権限がなくなりました。何も変更されていません。', errorConflict: '先に別のユーザーが変更しました。入力内容は保持されています。再読み込みしてからもう一度お試しください。', errorMissing: 'これはすでに存在しません。削除された可能性があります。', errorInUse: 'まだ依存しているものがあります。先にそれを削除してください。', errorProviderUnavailable: 'ID サービスが応答しませんでした。何も変更されていません。', errorRateLimited: 'プロバイダーから、再試行前に待つよう求められました。', errorInvalid: 'Home がこれらの値を拒否しました。設定を確認してもう一度お試しください。', errorImmutable: 'この値は使用開始後は変更できません。新しく作成してください。', errorAuthenticationRequired: 'この Team にもう一度サインインしてから再試行してください。変更はありません。', errorPolicyUnavailable: 'Team の認証ポリシーを現在評価できません。変更はありません。', errorPolicyInUse: 'Team の認証ポリシーはまだこの接続に依存しています。', errorNotAllowed: 'この Home では Team がこれを設定することを許可していません。変更はありません。', errorNeedsAttention: 'ディレクトリ同期に確認が必要です。完全同期を実行してください。', errorSyncPaused: 'このソースは一時停止中です。「同期を再開」で新しい完全同期を開始します。', alternateLogins: '別のサインイン方法が必要な Account', recoveryAuthenticationPolicy: 'Team の認証を開く', recoveryAlternateLogin: '先にこれらの Account に別のサインイン方法を用意してください', recoveryDirectory: 'ディレクトリを開く', recoveryGroupMappings: 'グループの対応付けを開く', recoveryTeamAuthentication: 'もう一度サインイン', callbackUrl: 'コールバック URL', callbackUrlHint: 'この URL を ID プロバイダーに登録してください。' , workosSetupSso: 'WorkOS 管理ポータルを開く', workosSetupDirectory: 'WorkOS Directory Sync を設定', workosCheckSetup: 'WorkOS の設定を確認', workosChooseConnection: '接続を選択', workosPortalConfirmBody: 'WorkOS で設定を完了してから、ここに戻って接続を選択します。', workosDirectoryPortalConfirmBody: 'WorkOS で設定を完了してから、ここに戻ってディレクトリを選択します。', workosSetupSection: '設定', workosSetupFooter: '途中で離れても大丈夫です。設定は到達したステップから再開されます。', workosStepPortalDetail: 'そこで ID プロバイダーを接続します。戻ると、ここで設定が続きます。', workosStepPortalDone: '管理ポータル', workosStepPortalDoneDetail: '組織がリンクされています。', workosOpenPortal: 'ポータルを開く', workosOpenPortalAgain: 'もう一度開く', workosStepChooseDetail: 'メンバーのサインインに使う WorkOS 接続を選択します。', workosStepChooseDone: '接続', workosFindConnections: '接続を探す', workosUseConnection: ({ name }: { name: string }) => `${name} を使用`, workosCandidateDraft: 'WorkOS の下書きです。先にそちらで完了してください。', workosStepTestDetail: 'ご自身で一度サインインします。誰のアカウントにも何も保存されません。', workosTestPassed: 'テストサインインは成功しました。', workosTestAgain: 'もう一度テスト', workosStepEnable: 'オンにする', workosStepEnableDetail: 'オンにするとメンバーがサインインに使えます。必須にするには「メンバーのサインイン方法」で選択します。', workosTurnOn: 'オンにする', workosConnectionSection: '接続', workosConnectionRow: 'WorkOS 接続', workosConnectionNotChosen: '未選択', workosChange: '変更', errorWorkosPlatformUnavailable: 'この Home ではまだ WorkOS が設定されていません。', errorSetupRequired: '使う前に設定が必要です。', removeTitle: ({ name }: { name: string }) => `${name} を削除しますか？`, removeBody: ({ name }: { name: string }) => `${name} はサインイン方法として提供されなくなります。使用していたアカウントは保持されます。`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `まだ Team 接続 ${connections} 件とアカウント ${accounts} 件で使用されています。先にそれらを削除してください。`, disableTitle: ({ name }: { name: string }) => `${name} をオフにしますか？`, disableBody: ({ name }: { name: string }) => `再びオンにするまで ${name} でサインインできません。何も削除されません。`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `${name} のインストールを削除しますか？`, githubRemoveInstallationBody: ({ name }: { name: string }) => `この Home は ${name} の App を使わなくなります。GitHub 側は変わりません。不要なら GitHub でアンインストールしてください。`, removeBlockedTitle: ({ name }: { name: string }) => `${name} はまだ削除できません`, removeImpactPeople: ({ count }: { count: number }) => `${count} 人がこれでこの Team にサインインしています。`, removeImpactNobody: 'まだ誰もこれでこの Team にサインインしていません。', removeImpactKept: 'アカウントと Team のメンバーシップは保持されます。', removeBlockedAlternateLogins: ({ count }: { count: number }) => `${count} 人には他のサインイン方法がありません。`, removeBlockedDirectories: ({ count }: { count: number }) => `${count} 件のディレクトリソースがまだ使用しています。`, removeBlockedGroups: ({ count }: { count: number }) => `${count} 件のグループ対応付けがまだ使用しています。`, removeBlockedMemberships: ({ count }: { count: number }) => `${count} 件のメンバーシップがまだこれで管理されています。` }, githubAccessWords.ja, oidcEditorWords.ja) };
 
 return { githubAccessWords, oidcEditorWords, identityAdministrationTranslations };
 })();
@@ -5291,6 +5295,44 @@ const machineDetailPageTranslations = { ja: translated({
             stopDaemonDescription: '実行中のセッションは続きます。このマシンで再起動するまで新しいセッションは開始できません。',
             stopDaemonAction: '停止',
             detailsTitle: 'マシンの詳細',
+            tabs: {
+                overview: "概要",
+            },
+            thisMachineTitle: "このマシン",
+            connectionFollowsAccount: "アカウントの設定に従う",
+            subPages: {
+                sharing: "共有",
+                agents: "エージェント",
+                terminal: "ターミナル",
+                connection: "接続",
+                tools: "ツール",
+                doctor: "診断",
+                details: "詳細",
+            },
+            summaries: {
+                terminalDirect: "ターミナルホストなし",
+                agentReady: ({ agent }) => `${agent} は使用可能です`,
+                agentsReadyPair: ({ first, second }) => `${first} と ${second} は使用可能です`,
+                agentsReadyCount: ({ count }) => `${count} 個のエージェントが使用可能です`,
+                doctorChecked: ({ time }) => `${time} に確認`,
+            },
+            work: {
+                none: "作業なし",
+                working: ({ count }) => `${count} 件作業中`,
+            },
+            platformFact: ({ platform, arch }) => `${platform} · ${arch}`,
+        },
+        allMachines: {
+            rowTitle: "すべてのマシン",
+            viewList: "リスト",
+            viewGrid: "グリッド",
+            viewLabel: "マシンの表示方法",
+            columnMachine: "マシン",
+            columnWork: "作業",
+            columnStatus: "状態",
+            allMachinesGroup: "すべてのマシン",
+            machinesCount: ({ count }) => count === 1 ? `${count} 台のマシン` : `${count} 台のマシン`,
+            sessionsWorking: ({ count }) => count === 1 ? `${count} 件のセッションが作業中` : `${count} 件のセッションが作業中`,
         },
     }) };
 
@@ -6284,6 +6326,11 @@ const pluginSettingsPresentationTranslations = { ja: {
             emptyBody: 'プラグインはエージェント向けのパネル、コマンド、ツールを追加します。まずは Happier 製のものから始めましょう。',
             browsePlugins: 'プラグインを見る',
             browseEmpty: 'ソースにはまだ利用できるプラグインがありません。',
+            noSavedDetails: 'このマシンには保存済みのプラグイン詳細がありません。',
+            projectionFailedTitle: 'このマシンのプラグインレジストリを読み込めませんでした',
+            projectionFailedBody: 'プラグインの詳細を読み込めませんでした。管理するには再試行してください。',
+            machineOfflineTitle: 'このマシンはオフラインです',
+            machineOfflineBody: '変更するには、このマシンをオンラインにする必要があります。ヘッダーで別のマシンを選択してください。',
             forDevelopers: '開発者向け',
             readFailedTitle: 'このマシンのプラグインを読み込めませんでした',
             readFailedBody: '何も変更されていません。再試行するとマシンにもう一度問い合わせます。',
@@ -6427,6 +6474,9 @@ const en = Shared_providerCollectionTranslations.en;
 const ja: ProviderCollectionCopy = {
     settingsProvidersCollection: {
         gateway: {
+            statusRunning: '実行中',
+            statusIdle: '待機中',
+            statusNotChecked: '未確認',
             railGroup: 'ゲートウェイ',
             managedFromConnectedServices: '接続済みサービスで管理',
             description: 'どのエージェントからでもサブスクリプションを使えるようにします。',
@@ -6514,6 +6564,9 @@ const ja: ProviderCollectionCopy = {
         addTitle: ({ provider }: { provider: string }) => `${provider} を追加`,
         addDescription: ({ provider }: { provider: string }) => `キーを追加すると、${provider} のモデルが実行できるすべてのエージェントに表示されます。`,
         addKeyDescription: 'アカウントに保存済みのシークレットとして保管されます。',
+        addAccountScopeHint: 'すぐにアカウントに保存されます。コンピューターは不要です。あとでどのコンピューターからでもテストできます。',
+        editConnection: '接続を編集',
+        editDescription: '変更はこのあと開始するセッションに適用されます。キーとモデルはそのページで管理します。',
         connectedTitle: ({ provider }: { provider: string }) => `${provider} に接続しました`,
         connectedHiddenCountDescription: ({ provider, count }: { provider: string; count: number }) => `${count} 個のモデルを使えます。${provider} にはすでにお持ちのモデルも多く含まれるため、既定ではモデル選択に表示されません。「経由先」からいつでも選べます。すべて表示することもできます。`,
         connectedHiddenDescription: ({ provider }: { provider: string }) => `${provider} にはすでにお持ちのモデルも多く含まれるため、既定ではモデル選択に表示されません。「経由先」からいつでも選べます。すべて表示することもできます。`,
@@ -7564,7 +7617,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         linkLoadFailed: '公開リンクを確認できませんでした。',
         linkNetworkOff: 'ビジュアルのネットワークアクセスを無効にして共有',
         linkNetworkConsequence: 'ネットワークに接続できるビジュアルは、内容を外部サイトに送信し、閲覧者の IP アドレスを公開する場合があります。外部のコードや素材は変更される可能性があります。無効にしても、同梱されたコンテンツは外部通信なしで操作できます。',
-        linkUnavailable: 'このHomeでは公開リンクを利用できません。管理者に公開リンクのホスティング設定を依頼してください。',
+        linkUnavailable: "このHomeでは公開リンクを利用できません。Homeの所有者に、独立した共有ドメインの設定か、このホスト名でのリンクの許可を依頼してください。公開リンクのリクエスト制限も設定する必要があります。",
+        configurePublicLinks: "公開リンクを設定",
         justYouTitle: 'このセッションで一緒に作業しましょう',
         justYouBody: ({ home }) => `${home}のメンバーと共有しましょう。見守ったり、ここで話し合ったり、あなたが不在の間に引き継いだりできます。`,
         share: '共有',
@@ -8573,6 +8627,8 @@ const ja: typeof en = {
     daemonTitle: 'バックグラウンドサービス',
     daemonDescription: 'このコンピューターでセッションを実行し、Home との接続を保ちます。',
     unreadableTitle: ({ home }: { home: string }) => `${home} のマシンを読み込めませんでした`,
+    indexViewTitle: 'すべてのマシンの表示',
+    indexViewDescription: 'すべてのマシンをリスト、またはマシンごとのカードで表示します。このデバイスに保存されます。',
 };
 
 const settingsMachinesTranslations = { ja };
@@ -9186,6 +9242,11 @@ const sidebarFooterTranslations = { ja: {
         usageNextInOrder: ({ account }) => `${account} を使い切ると、次のターンは順番で次のアカウントに移ります`,
         usageNextMostLeft: ({ account }) => `${account} を使い切ると、次のターンは残りが最も多いアカウントに移ります`,
         usageNextStays: ({ pool, account }) => `${pool} は切り替えるまで ${account} のままです`,
+        machinesEmptyTitle: '自分のコンピューターでセッションを実行',
+        machinesEmptyBody: 'このコンピューター、サーバー、クラウドマシンを追加しましょう。Happier はそれぞれが何をしているかを表示し、対応が必要なときに知らせます。',
+        machinesAddThisComputer: 'このコンピューターを追加',
+        machinesAddAnotherMachine: '別のマシンを追加',
+        machinesHomeSignedOut: ({ home }) => `${home} からサインアウトしているため、そのマシンは表示されません。`,
     } } as const satisfies Pick<Record<string, SidebarFooterTranslation>, "ja">;
 
 return { sidebarFooterTranslations };
@@ -11273,6 +11334,7 @@ const widgetAddTranslations = { ja: {
         panes: 'ペイン',
         panesHint: '詳細で開くリンクとして追加',
         builtIn: '組み込み',
+        prompts: { project: 'どのプロジェクトですか？', projects: 'どのプロジェクトですか？', session: 'どのセッションですか？', workspace: 'どのワークスペースですか？' },
         nativeDescriptions: {
             session_summary: '選んだセッションの活動と次のステップを確認します。',
             agent_plan: '選んだセッションのエージェントの計画を確認します。',
@@ -11899,6 +11961,7 @@ const workflowExamplesTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'c
         sessionNotifyDescription: "このセッションのエージェントがあなたの入力を必要とするたびに通知します。",
         sessionDailySummaryDescription: "毎日09:00にここで要約します。",
         sessionTestDescription: "ターンが完了・失敗・キャンセルされるたびに、編集可能なテストコマンドを実行します。",
+        newTag: "新着",
         notifyWhenAgentWaits: { title: "エージェントが待機したら通知する", description: "セッションを選ぶと、エージェントがあなたの入力を必要とするたびに通知されます。" },
         dailySummaryInSession: { title: "このセッションで毎日の要約", description: "毎日09:00に要約を受け取るセッションを選びます。" },
         memoryUpkeepInSession: { title: 'メモリの整理', description: '毎日09:00にこのセッションのメモリを確認し、役立つ情報を最新に保ちます。' },

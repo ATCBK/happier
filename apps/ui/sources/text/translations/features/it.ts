@@ -2872,7 +2872,7 @@ const effectiveTranslations = { "it": {
         "shortcutHint": ({ modifier }: { modifier: string }) => `${modifier}-clic · ${modifier}⇧L alterna chiaro e scuro`
     } } as const;
 
-const glassAppearanceTranslations = { it: { iosReduceTransparencyPath: "Impostazioni › Accessibilità › Schermo e dimensioni del testo › Riduci trasparenza", title: 'Vetro', material: 'Materiale', solid: 'Opaco', auto: 'Automatico', everywhere: 'Ovunque', custom: 'Personalizzato', blur: 'Sfocatura', off: 'Disattivata', opacity: 'Opacità', customize: 'Personalizza', chrome: 'Cornice della finestra', sidebar: 'Barra laterale', content: 'Contenuto', floating: 'Superfici mobili', appearance: 'Aspetto', moreSettings: 'Altre impostazioni dell’aspetto…', customizeLink: 'Personalizza…', toolbarTitle: 'Pulsante Aspetto', toolbarDescription: 'Mostra Aspetto nella barra. Un clic con modificatore alterna chiaro e scuro.', reduceTransparency: 'Opaco perché Riduci trasparenza è attivo', osSettings: 'Apri le impostazioni di accessibilità', themeCommand: 'Alterna chiaro e scuro', autoDescription: "Si adatta al dispositivo: vetro a strati nelle finestre compatibili e sulle superfici mobili del telefono.", osSettingsUnavailable: "Non è stato possibile aprire le impostazioni di accessibilità. Aprile nelle impostazioni del dispositivo.", ...effectiveTranslations["it"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "it">;
+const glassAppearanceTranslations = { it: { ...Shared_glassAppearanceTranslations.atmosphereTranslations['it'], iosReduceTransparencyPath: "Impostazioni › Accessibilità › Schermo e dimensioni del testo › Riduci trasparenza", title: 'Vetro', material: 'Materiale', solid: 'Opaco', auto: 'Automatico', everywhere: 'Ovunque', custom: 'Personalizzato', blur: 'Sfocatura', off: 'Disattivata', opacity: 'Opacità', customize: 'Personalizza', chrome: 'Cornice della finestra', sidebar: 'Barra laterale', content: 'Contenuto', floating: 'Superfici mobili', appearance: 'Aspetto', moreSettings: 'Altre impostazioni dell’aspetto…', customizeLink: 'Personalizza…', toolbarTitle: 'Pulsante Aspetto', toolbarDescription: 'Mostra Aspetto nella barra. Un clic con modificatore alterna chiaro e scuro.', reduceTransparency: 'Opaco perché Riduci trasparenza è attivo', osSettings: 'Apri le impostazioni di accessibilità', themeCommand: 'Alterna chiaro e scuro', autoDescription: "Si adatta al dispositivo: vetro a strati nelle finestre compatibili e sulle superfici mobili del telefono.", osSettingsUnavailable: "Non è stato possibile aprire le impostazioni di accessibilità. Aprile nelle impostazioni del dispositivo.", ...effectiveTranslations["it"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "it">;
 
 return { effectiveTranslations, glassAppearanceTranslations };
 })();
@@ -4091,6 +4091,10 @@ const it: typeof en = {
         },
     },
     reach: {
+        publicLinks: "Link pubblici",
+        allowPublicSubpath: "Consenti link pubblici su questo nome host",
+        allowPublicSubpathDescription: "Usa l’indirizzo HTTPS di questa Home per i link pubblici di sessioni e Artifacts quando non è disponibile un dominio separato. L’HTML rimane in un ambiente ristretto. I servizi locali richiedono ancora un dominio separato.",
+        publicLinksHelp: "Disattivato per impostazione predefinita. I domini isolati offrono l’anteprima PDF; i link su questo nome host offrono il download.",
         title: 'Raggiungibilità',
         diagramTitle: ({ home }: { home: string }) => `Come un nuovo dispositivo raggiunge ${home}`,
         yourDevices: 'I tuoi dispositivi',
@@ -5073,7 +5077,7 @@ const oidcEditorWords: Pick<Readonly<Record<IdentityAdministrationLanguage, Oidc
         allowRulesHint: 'Inserisci un valore per riga. Lascia vuoto per non applicare restrizioni.', brandingHint: 'Lascia vuoto per usare l’aspetto di accesso predefinito.', invalidScopes: 'Includi openid negli ambiti richiesti.', refreshFailed: 'Impossibile aggiornare questa connessione', refreshFailedHint: 'Le tue modifiche sono conservate. Riprova per controllare le modifiche sul Home.',
     } };
 
-const identityAdministrationTranslations = { it: build({ ...en, homeWorkosChooseDetail: "Scegli la connessione WorkOS con cui le persone accedono a questo Home.", homeWorkosAdd: "Accesso aziendale tramite WorkOS", homeWorkosCompanyName: "Nome dell’azienda", homeWorkosPurpose: "Le persone della tua azienda possono accedere a questo Home con il loro account di lavoro.", homeWorkosEnableDetail: "Le persone potranno accedere a questo Home con il loro account aziendale.", homeWorkosOffboarding: "Il solo SSO non rimuove le persone che lasciano la tua azienda.", homeWorkosPlatformRequired: "Configura prima WorkOS nelle piattaforme di accesso.",  title: 'Provider di identità', subtitle: 'Connessioni di accesso del Home disponibili ai Team.', homeConnections: 'Connessioni del Home', add: 'Aggiungi connessione', empty: 'Nessuna connessione del Home', active: 'Attivo', disabled: 'Disattivato', configuration: 'Configurazione', issuer: 'URL emittente', clientSecret: 'Segreto client', secretSet: 'Impostato', secretNotSet: 'Non impostato', secretRetain: 'Lascia vuoto per mantenere il segreto corrente.', advanced: 'Mostra impostazioni avanzate', hideAdvanced: 'Nascondi impostazioni avanzate', actions: 'Azioni', test: 'Prova accesso', testing: 'Apertura della prova…', edit: 'Modifica connessione', save: 'Salva connessione', saving: 'Salvataggio…', enable: 'Attiva connessione', disable: 'Disattiva connessione', remove: 'Rimuovi connessione', createTitle: 'Aggiungi provider di identità', editTitle: 'Modifica provider di identità', displayName: 'Nome', required: 'Completa i campi obbligatori.', invalidIssuer: 'Inserisci un URL HTTPS valido.', secretRequired: 'Inserisci un segreto client.', error: 'La modifica non è riuscita.', accounts: 'Account interessati', connections: 'Connessioni Team', errorForbidden: 'Non hai più l’autorizzazione. Non è stato modificato nulla.', errorConflict: 'Qualcun altro l’ha modificato prima. Le tue modifiche sono conservate: ricarica e riprova.', errorMissing: 'Non esiste più. Potrebbe essere stato rimosso.', errorInUse: 'Qualcosa dipende ancora da questo. Rimuovilo prima.', errorProviderUnavailable: 'Il servizio di identità non ha risposto. Non è stato modificato nulla.', errorRateLimited: 'Il provider ha chiesto di attendere prima di riprovare.', errorInvalid: 'Il Home ha rifiutato questi valori. Controlla la configurazione e riprova.', errorImmutable: 'Questo valore è fisso quando il record è in uso. Creane uno nuovo.', errorAuthenticationRequired: 'Accedi di nuovo a questo Team, poi riprova. Nulla è stato modificato.', errorPolicyUnavailable: 'Il criterio di autenticazione del Team non può essere valutato al momento. Nulla è stato modificato.', errorPolicyInUse: 'Il criterio di autenticazione del Team dipende ancora da questa connessione.', errorNotAllowed: 'Questo Home non consente ai Team di configurare questo. Nulla è stato modificato.', errorNeedsAttention: 'La sincronizzazione della directory richiede attenzione. Esegui una sincronizzazione completa.', errorSyncPaused: 'Questa sorgente è in pausa. «Riprendi sincronizzazione» avvia una nuova sincronizzazione completa.', alternateLogins: 'Account che necessitano di un altro metodo di accesso', recoveryAuthenticationPolicy: 'Apri autenticazione del Team', recoveryAlternateLogin: 'Assegna prima un altro metodo di accesso a questi Account', recoveryDirectory: 'Apri directory', recoveryGroupMappings: 'Apri mappature dei Gruppi', recoveryTeamAuthentication: 'Accedi di nuovo', callbackUrl: 'URL di callback', callbackUrlHint: 'Registra questo URL presso il tuo provider di identità.' , workosSetupSso: 'Apri il portale di amministrazione WorkOS', workosSetupDirectory: 'Configura WorkOS Directory Sync', workosCheckSetup: 'Controlla la configurazione WorkOS', workosChooseConnection: 'Scegli la connessione', workosPortalConfirmBody: 'Completerai la configurazione in WorkOS, poi tornerai qui per scegliere la connessione.', workosDirectoryPortalConfirmBody: 'Completerai la configurazione in WorkOS, poi tornerai qui per scegliere la directory.', workosSetupSection: 'Configurazione', workosSetupFooter: 'Puoi uscire e tornare: la configurazione riprende dal passaggio raggiunto.', workosStepPortalDetail: 'Collega lì il tuo provider di identità. Al ritorno, la configurazione continua qui.', workosStepPortalDone: 'Portale di amministrazione', workosStepPortalDoneDetail: 'La tua organizzazione è collegata.', workosOpenPortal: 'Apri portale', workosOpenPortalAgain: 'Riapri', workosStepChooseDetail: 'Scegli quale connessione WorkOS usano i membri per accedere.', workosStepChooseDone: 'Connessione', workosFindConnections: 'Cerca connessioni', workosUseConnection: ({ name }: { name: string }) => `Usa ${name}`, workosCandidateDraft: 'Una bozza in WorkOS. Completala prima lì.', workosStepTestDetail: 'Accedi una volta tu stesso. Non viene salvato nulla nell’account di nessuno.', workosTestPassed: 'Il tuo accesso di prova ha funzionato.', workosTestAgain: 'Prova di nuovo', workosStepEnable: 'Attivala', workosStepEnableDetail: 'Poi i membri potranno accedere con essa. Per renderla obbligatoria, sceglila in Come accedono i membri.', workosTurnOn: 'Attiva', workosConnectionSection: 'Connessione', workosConnectionRow: 'Connessione WorkOS', workosConnectionNotChosen: 'Non ancora scelta', workosChange: 'Cambia', errorWorkosPlatformUnavailable: 'WorkOS non è ancora configurato su questo Home.', errorSetupRequired: 'Va configurato prima di poterlo usare.', removeTitle: ({ name }: { name: string }) => `Rimuovere ${name}?`, removeBody: ({ name }: { name: string }) => `${name} non viene più offerto per l’accesso. Gli account che lo usavano vengono conservati.`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `Ancora usato da ${connections} connessioni del team e ${accounts} account. Rimuovile prima.`, disableTitle: ({ name }: { name: string }) => `Disattivare ${name}?`, disableBody: ({ name }: { name: string }) => `Nessuno può accedere con ${name} finché non viene riattivato. Non viene eliminato nulla.`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `Rimuovere l’installazione su ${name}?`, githubRemoveInstallationBody: ({ name }: { name: string }) => `Questo Home smette di usare l’App su ${name}. Su GitHub non cambia nulla; disinstallala lì se non ti serve più.`, removeBlockedTitle: ({ name }: { name: string }) => `${name} non può ancora essere rimosso`, removeImpactPeople: ({ count }: { count: number }) => count === 1 ? '1 persona accede a questo team con essa.' : `${count} persone accedono a questo team con essa.`, removeImpactNobody: 'Nessuno accede ancora a questo team con essa.', removeImpactKept: 'I loro account e le iscrizioni al team vengono conservati.', removeBlockedAlternateLogins: ({ count }: { count: number }) => count === 1 ? '1 persona non ha altri modi per accedere.' : `${count} persone non hanno altri modi per accedere.`, removeBlockedDirectories: ({ count }: { count: number }) => count === 1 ? 'Una fonte di directory la usa ancora.' : `${count} fonti di directory la usano ancora.`, removeBlockedGroups: ({ count }: { count: number }) => count === 1 ? 'Una mappatura di gruppo la usa ancora.' : `${count} mappature di gruppo la usano ancora.`, removeBlockedMemberships: ({ count }: { count: number }) => count === 1 ? '1 iscrizione è ancora gestita da essa.' : `${count} iscrizioni sono ancora gestite da essa.` }, githubAccessWords.it, oidcEditorWords.it) };
+const identityAdministrationTranslations = { it: build({ ...en, homeWorkosChooseDetail: "Scegli la connessione WorkOS con cui le persone accedono a questo Home.", workosRequiredForTeamWork: "Richiesto per lavorare nel team", workosTeamPolicyHint: "Modifica i metodi di accesso accettati in Come accedono i membri.", workosLifecycleFootnote: "Disattivarla impedisce l’accesso finché non la riattivi. Rimuoverla elimina la connessione da questo Home; l’organizzazione WorkOS rimane.", homeWorkosAdd: "Accesso aziendale tramite WorkOS", homeWorkosCompanyName: "Nome dell’azienda", homeWorkosPurpose: "Le persone della tua azienda possono accedere a questo Home con il loro account di lavoro.", homeWorkosEnableDetail: "Le persone potranno accedere a questo Home con il loro account aziendale.", homeWorkosOffboarding: "Il solo SSO non rimuove le persone che lasciano la tua azienda.", homeWorkosPlatformRequired: "Configura prima WorkOS nelle piattaforme di accesso.",  title: 'Provider di identità', subtitle: 'Connessioni di accesso del Home disponibili ai Team.', homeConnections: 'Connessioni del Home', add: 'Aggiungi connessione', empty: 'Nessuna connessione del Home', active: 'Attivo', disabled: 'Disattivato', configuration: 'Configurazione', issuer: 'URL emittente', clientSecret: 'Segreto client', secretSet: 'Impostato', secretNotSet: 'Non impostato', secretRetain: 'Lascia vuoto per mantenere il segreto corrente.', advanced: 'Mostra impostazioni avanzate', hideAdvanced: 'Nascondi impostazioni avanzate', actions: 'Azioni', test: 'Prova accesso', testing: 'Apertura della prova…', edit: 'Modifica connessione', save: 'Salva connessione', saving: 'Salvataggio…', enable: 'Attiva connessione', disable: 'Disattiva connessione', remove: 'Rimuovi connessione', createTitle: 'Aggiungi provider di identità', editTitle: 'Modifica provider di identità', displayName: 'Nome', required: 'Completa i campi obbligatori.', invalidIssuer: 'Inserisci un URL HTTPS valido.', secretRequired: 'Inserisci un segreto client.', error: 'La modifica non è riuscita.', accounts: 'Account interessati', connections: 'Connessioni Team', errorForbidden: 'Non hai più l’autorizzazione. Non è stato modificato nulla.', errorConflict: 'Qualcun altro l’ha modificato prima. Le tue modifiche sono conservate: ricarica e riprova.', errorMissing: 'Non esiste più. Potrebbe essere stato rimosso.', errorInUse: 'Qualcosa dipende ancora da questo. Rimuovilo prima.', errorProviderUnavailable: 'Il servizio di identità non ha risposto. Non è stato modificato nulla.', errorRateLimited: 'Il provider ha chiesto di attendere prima di riprovare.', errorInvalid: 'Il Home ha rifiutato questi valori. Controlla la configurazione e riprova.', errorImmutable: 'Questo valore è fisso quando il record è in uso. Creane uno nuovo.', errorAuthenticationRequired: 'Accedi di nuovo a questo Team, poi riprova. Nulla è stato modificato.', errorPolicyUnavailable: 'Il criterio di autenticazione del Team non può essere valutato al momento. Nulla è stato modificato.', errorPolicyInUse: 'Il criterio di autenticazione del Team dipende ancora da questa connessione.', errorNotAllowed: 'Questo Home non consente ai Team di configurare questo. Nulla è stato modificato.', errorNeedsAttention: 'La sincronizzazione della directory richiede attenzione. Esegui una sincronizzazione completa.', errorSyncPaused: 'Questa sorgente è in pausa. «Riprendi sincronizzazione» avvia una nuova sincronizzazione completa.', alternateLogins: 'Account che necessitano di un altro metodo di accesso', recoveryAuthenticationPolicy: 'Apri autenticazione del Team', recoveryAlternateLogin: 'Assegna prima un altro metodo di accesso a questi Account', recoveryDirectory: 'Apri directory', recoveryGroupMappings: 'Apri mappature dei Gruppi', recoveryTeamAuthentication: 'Accedi di nuovo', callbackUrl: 'URL di callback', callbackUrlHint: 'Registra questo URL presso il tuo provider di identità.' , workosSetupSso: 'Apri il portale di amministrazione WorkOS', workosSetupDirectory: 'Configura WorkOS Directory Sync', workosCheckSetup: 'Controlla la configurazione WorkOS', workosChooseConnection: 'Scegli la connessione', workosPortalConfirmBody: 'Completerai la configurazione in WorkOS, poi tornerai qui per scegliere la connessione.', workosDirectoryPortalConfirmBody: 'Completerai la configurazione in WorkOS, poi tornerai qui per scegliere la directory.', workosSetupSection: 'Configurazione', workosSetupFooter: 'Puoi uscire e tornare: la configurazione riprende dal passaggio raggiunto.', workosStepPortalDetail: 'Collega lì il tuo provider di identità. Al ritorno, la configurazione continua qui.', workosStepPortalDone: 'Portale di amministrazione', workosStepPortalDoneDetail: 'La tua organizzazione è collegata.', workosOpenPortal: 'Apri portale', workosOpenPortalAgain: 'Riapri', workosStepChooseDetail: 'Scegli quale connessione WorkOS usano i membri per accedere.', workosStepChooseDone: 'Connessione', workosFindConnections: 'Cerca connessioni', workosUseConnection: ({ name }: { name: string }) => `Usa ${name}`, workosCandidateDraft: 'Una bozza in WorkOS. Completala prima lì.', workosStepTestDetail: 'Accedi una volta tu stesso. Non viene salvato nulla nell’account di nessuno.', workosTestPassed: 'Il tuo accesso di prova ha funzionato.', workosTestAgain: 'Prova di nuovo', workosStepEnable: 'Attivala', workosStepEnableDetail: 'Poi i membri potranno accedere con essa. Per renderla obbligatoria, sceglila in Come accedono i membri.', workosTurnOn: 'Attiva', workosConnectionSection: 'Connessione', workosConnectionRow: 'Connessione WorkOS', workosConnectionNotChosen: 'Non ancora scelta', workosChange: 'Cambia', errorWorkosPlatformUnavailable: 'WorkOS non è ancora configurato su questo Home.', errorSetupRequired: 'Va configurato prima di poterlo usare.', removeTitle: ({ name }: { name: string }) => `Rimuovere ${name}?`, removeBody: ({ name }: { name: string }) => `${name} non viene più offerto per l’accesso. Gli account che lo usavano vengono conservati.`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `Ancora usato da ${connections} connessioni del team e ${accounts} account. Rimuovile prima.`, disableTitle: ({ name }: { name: string }) => `Disattivare ${name}?`, disableBody: ({ name }: { name: string }) => `Nessuno può accedere con ${name} finché non viene riattivato. Non viene eliminato nulla.`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `Rimuovere l’installazione su ${name}?`, githubRemoveInstallationBody: ({ name }: { name: string }) => `Questo Home smette di usare l’App su ${name}. Su GitHub non cambia nulla; disinstallala lì se non ti serve più.`, removeBlockedTitle: ({ name }: { name: string }) => `${name} non può ancora essere rimosso`, removeImpactPeople: ({ count }: { count: number }) => count === 1 ? '1 persona accede a questo team con essa.' : `${count} persone accedono a questo team con essa.`, removeImpactNobody: 'Nessuno accede ancora a questo team con essa.', removeImpactKept: 'I loro account e le iscrizioni al team vengono conservati.', removeBlockedAlternateLogins: ({ count }: { count: number }) => count === 1 ? '1 persona non ha altri modi per accedere.' : `${count} persone non hanno altri modi per accedere.`, removeBlockedDirectories: ({ count }: { count: number }) => count === 1 ? 'Una fonte di directory la usa ancora.' : `${count} fonti di directory la usano ancora.`, removeBlockedGroups: ({ count }: { count: number }) => count === 1 ? 'Una mappatura di gruppo la usa ancora.' : `${count} mappature di gruppo la usano ancora.`, removeBlockedMemberships: ({ count }: { count: number }) => count === 1 ? '1 iscrizione è ancora gestita da essa.' : `${count} iscrizioni sono ancora gestite da essa.` }, githubAccessWords.it, oidcEditorWords.it) };
 
 return { githubAccessWords, oidcEditorWords, identityAdministrationTranslations };
 })();
@@ -5295,6 +5299,44 @@ const machineDetailPageTranslations = { it: translated({
             stopDaemonDescription: 'Le sessioni in corso continuano. Non se ne possono avviare di nuove finché non lo riavvii su questa macchina.',
             stopDaemonAction: 'Arresta',
             detailsTitle: 'Dettagli della macchina',
+            tabs: {
+                overview: "Panoramica",
+            },
+            thisMachineTitle: "Questa macchina",
+            connectionFollowsAccount: "Segue il tuo account",
+            subPages: {
+                sharing: "Condivisione",
+                agents: "Agenti",
+                terminal: "Terminale",
+                connection: "Connessione",
+                tools: "Strumenti",
+                doctor: "Diagnostica",
+                details: "Dettagli",
+            },
+            summaries: {
+                terminalDirect: "Nessun host del terminale",
+                agentReady: ({ agent }) => `${agent} è pronto`,
+                agentsReadyPair: ({ first, second }) => `${first} e ${second} sono pronti`,
+                agentsReadyCount: ({ count }) => `${count} agenti sono pronti`,
+                doctorChecked: ({ time }) => `Controllato ${time}`,
+            },
+            work: {
+                none: "Nessun lavoro",
+                working: ({ count }) => `${count} al lavoro`,
+            },
+            platformFact: ({ platform, arch }) => `${platform} · ${arch}`,
+        },
+        allMachines: {
+            rowTitle: "Tutte le macchine",
+            viewList: "Elenco",
+            viewGrid: "Griglia",
+            viewLabel: "Mostra le macchine come",
+            columnMachine: "Macchina",
+            columnWork: "Lavoro",
+            columnStatus: "Stato",
+            allMachinesGroup: "Tutte le macchine",
+            machinesCount: ({ count }) => count === 1 ? `1 macchina` : `${count} macchine`,
+            sessionsWorking: ({ count }) => count === 1 ? `1 sessione al lavoro` : `${count} sessioni al lavoro`,
         },
     }) };
 
@@ -6290,6 +6332,11 @@ const pluginSettingsPresentationTranslations = { it: {
             emptyBody: 'I plugin aggiungono pannelli, comandi e strumenti per i tuoi agenti. Inizia da quelli creati da Happier.',
             browsePlugins: 'Sfoglia i plugin',
             browseEmpty: 'Le tue fonti non offrono ancora alcun plugin.',
+            noSavedDetails: 'Nessun dettaglio dei plugin salvato per questa macchina.',
+            projectionFailedTitle: 'Impossibile caricare il registro dei plugin di questa macchina',
+            projectionFailedBody: 'Non è stato possibile caricare i dettagli dei plugin. Riprova per gestirli.',
+            machineOfflineTitle: 'Questa macchina è offline',
+            machineOfflineBody: 'Per le modifiche questa macchina deve essere online. Scegline un’altra nell’intestazione.',
             forDevelopers: 'Per sviluppatori',
             readFailedTitle: 'Impossibile leggere i plugin di questa macchina',
             readFailedBody: 'Non è stato modificato nulla. Riprova per interrogare di nuovo la macchina.',
@@ -6433,6 +6480,9 @@ const en = Shared_providerCollectionTranslations.en;
 const it: ProviderCollectionCopy = {
     settingsProvidersCollection: {
         gateway: {
+            statusRunning: 'In esecuzione',
+            statusIdle: 'Inattivo',
+            statusNotChecked: 'Non verificato',
             railGroup: 'Gateway',
             managedFromConnectedServices: 'Gestito da Servizi connessi',
             description: 'Permette a qualsiasi agente di usare i tuoi abbonamenti.',
@@ -6520,6 +6570,9 @@ const it: ProviderCollectionCopy = {
         addTitle: ({ provider }: { provider: string }) => `Aggiungi ${provider}`,
         addDescription: ({ provider }: { provider: string }) => `Aggiungi una chiave e i modelli di ${provider} compaiono in ogni agente che può eseguirli.`,
         addKeyDescription: 'Conservata come segreto salvato nel tuo account.',
+        addAccountScopeHint: 'Salvato subito nel tuo account, senza bisogno di un computer. Potrai provarlo poi da qualsiasi tuo computer.',
+        editConnection: 'Modifica connessione',
+        editDescription: 'Le modifiche valgono per le sessioni avviate dopo. Chiave e modelli restano nella sua pagina.',
         connectedTitle: ({ provider }: { provider: string }) => `${provider} è collegato`,
         connectedHiddenCountDescription: ({ provider, count }: { provider: string; count: number }) => `${count} modelli pronti. Sono nascosti dal selettore per impostazione predefinita, perché ${provider} offre molti modelli che potresti già avere. Scegline uno quando vuoi da «Passa da», oppure mostrali tutti.`,
         connectedHiddenDescription: ({ provider }: { provider: string }) => `I suoi modelli sono nascosti dal selettore per impostazione predefinita, perché ${provider} offre molti modelli che potresti già avere. Scegline uno quando vuoi da «Passa da», oppure mostrali tutti.`,
@@ -7574,7 +7627,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         linkLoadFailed: 'Impossibile verificare il link pubblico.',
         linkNetworkOff: 'Condividi i contenuti visivi senza accesso alla rete',
         linkNetworkConsequence: 'I contenuti visivi con accesso alla rete possono inviare il loro contenuto ad altri siti e rivelare l’indirizzo IP di chi li visualizza. Codice e risorse remoti possono cambiare. Disattivarlo mantiene interattivo il contenuto incluso senza richieste esterne.',
-        linkUnavailable: 'I link pubblici non sono disponibili su questa Home. Chiedi all’amministratore di configurare il loro hosting.',
+        linkUnavailable: "I link pubblici non sono disponibili su questa Home. Chiedi al proprietario di configurare un dominio isolato o consentire i link su questo nome host. Deve essere configurato anche il limite di richieste dei link pubblici.",
+        configurePublicLinks: "Configura link pubblici",
         justYouTitle: 'Lavorate insieme a questa sessione',
         justYouBody: ({ home }) => `Condividila con persone su ${home}. Potranno seguirla, parlarne qui e subentrare mentre sei via.`,
         share: 'Condividi',
@@ -8584,6 +8638,8 @@ const it: typeof en = {
     daemonTitle: 'Servizio in background',
     daemonDescription: 'Esegue le tue sessioni su questo computer e lo mantiene collegato alla tua Home.',
     unreadableTitle: ({ home }: { home: string }) => `Impossibile leggere le macchine di ${home}`,
+    indexViewTitle: 'Vista Tutte le macchine',
+    indexViewDescription: 'Mostra Tutte le macchine come elenco o con una scheda per macchina. Salvato su questo dispositivo.',
 };
 
 const settingsMachinesTranslations = { it };
@@ -9197,6 +9253,11 @@ const sidebarFooterTranslations = { it: {
         usageNextInOrder: ({ account }) => `Quando ${account} si esaurisce, il turno successivo passa all'account successivo in ordine`,
         usageNextMostLeft: ({ account }) => `Quando ${account} si esaurisce, il turno successivo passa all'account con più margine`,
         usageNextStays: ({ pool, account }) => `${pool} resta su ${account} finché non cambi`,
+        machinesEmptyTitle: 'Esegui sessioni sui tuoi computer',
+        machinesEmptyBody: 'Aggiungi questo computer, un server o una macchina cloud. Happier mostra cosa fa ognuna e ti avvisa quando una ha bisogno di te.',
+        machinesAddThisComputer: 'Aggiungi questo computer',
+        machinesAddAnotherMachine: 'Aggiungi un’altra macchina',
+        machinesHomeSignedOut: ({ home }) => `Sei disconnesso da ${home}, quindi le sue macchine non sono elencate.`,
     } } as const satisfies Pick<Record<string, SidebarFooterTranslation>, "it">;
 
 return { sidebarFooterTranslations };
@@ -11285,6 +11346,7 @@ const widgetAddTranslations = { it: {
         panes: 'Pannelli',
         panesHint: 'aggiunto come link che si apre in Dettagli',
         builtIn: 'Integrato',
+        prompts: { project: 'Quale progetto?', projects: 'Quali progetti?', session: 'Quale sessione?', workspace: 'Quale spazio di lavoro?' },
         nativeDescriptions: {
             session_summary: 'Attività e prossimi passi della sessione scelta.',
             agent_plan: 'Segui il piano dell’agente per la sessione scelta.',
@@ -11911,6 +11973,7 @@ const workflowExamplesTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'c
         sessionNotifyDescription: "Una notifica ogni volta che l’agente di questa sessione ha bisogno del tuo intervento.",
         sessionDailySummaryDescription: "Un riepilogo qui ogni giorno alle 09:00.",
         sessionTestDescription: "Esegue un comando di test modificabile dopo ogni turno completato, fallito o annullato.",
+        newTag: "Nuovo",
         notifyWhenAgentWaits: { title: "Avvisami quando un agente attende", description: "Scegli una sessione e ricevi una notifica quando il suo agente ha bisogno del tuo intervento." },
         dailySummaryInSession: { title: "Riepilogo giornaliero in questa sessione", description: "Scegli una sessione per un riepilogo ogni giorno alle 09:00." },
         memoryUpkeepInSession: { title: 'Manutenzione della memoria', description: 'Rivedi la memoria di questa sessione ogni giorno alle 09:00 e mantieni aggiornati i fatti utili.' },

@@ -2865,7 +2865,7 @@ const effectiveTranslations = { "zh-Hant": {
         "shortcutHint": ({ modifier }: { modifier: string }) => `${modifier}-點擊 · ${modifier}⇧L 切換淺色和深色`
     } } as const;
 
-const glassAppearanceTranslations = { 'zh-Hant': { iosReduceTransparencyPath: "設定 › 輔助使用 › 顯示與文字大小 › 降低透明度", title: '玻璃', material: '材質', solid: '不透明', auto: '自動', everywhere: '全域', custom: '自訂', blur: '模糊', off: '關閉', opacity: '不透明度', customize: '自訂', chrome: '視窗邊框', sidebar: '側邊欄', content: '內容', floating: '浮動介面', appearance: '外觀', moreSettings: '更多外觀設定…', customizeLink: '自訂…', toolbarTitle: '外觀按鈕', toolbarDescription: '在工具列顯示外觀。按住修飾鍵點擊可切換淺色和深色。', reduceTransparency: '已開啟降低透明度，因此顯示不透明材質', osSettings: '開啟輔助使用設定', themeCommand: '切換淺色和深色', autoDescription: "適應目前裝置：支援的桌面視窗使用分層玻璃，手機僅在浮動介面使用玻璃。", osSettingsUnavailable: "無法開啟輔助使用設定。請在裝置設定中開啟。", ...effectiveTranslations["zh-Hant"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "zh-Hant">;
+const glassAppearanceTranslations = { 'zh-Hant': { ...Shared_glassAppearanceTranslations.atmosphereTranslations['zh-Hant'], iosReduceTransparencyPath: "設定 › 輔助使用 › 顯示與文字大小 › 降低透明度", title: '玻璃', material: '材質', solid: '不透明', auto: '自動', everywhere: '全域', custom: '自訂', blur: '模糊', off: '關閉', opacity: '不透明度', customize: '自訂', chrome: '視窗邊框', sidebar: '側邊欄', content: '內容', floating: '浮動介面', appearance: '外觀', moreSettings: '更多外觀設定…', customizeLink: '自訂…', toolbarTitle: '外觀按鈕', toolbarDescription: '在工具列顯示外觀。按住修飾鍵點擊可切換淺色和深色。', reduceTransparency: '已開啟降低透明度，因此顯示不透明材質', osSettings: '開啟輔助使用設定', themeCommand: '切換淺色和深色', autoDescription: "適應目前裝置：支援的桌面視窗使用分層玻璃，手機僅在浮動介面使用玻璃。", osSettingsUnavailable: "無法開啟輔助使用設定。請在裝置設定中開啟。", ...effectiveTranslations["zh-Hant"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "zh-Hant">;
 
 return { effectiveTranslations, glassAppearanceTranslations };
 })();
@@ -4084,6 +4084,10 @@ const zhHant: typeof en = {
         },
     },
     reach: {
+        publicLinks: "公開連結",
+        allowPublicSubpath: "允許在此主機名稱上使用公開連結",
+        allowPublicSubpathDescription: "沒有獨立分享網域時，使用此 Home 的 HTTPS 位址分享工作階段和 Artifact。HTML 內容仍在受限沙箱中執行。本機服務連結仍需要獨立網域。",
+        publicLinksHelp: "預設關閉。獨立分享網域支援 PDF 預覽；此主機名稱上的連結提供 PDF 下載。",
         title: '存取方式',
         diagramTitle: ({ home }: { home: string }) => `新裝置如何抵達 ${home}`,
         yourDevices: '你的裝置',
@@ -5064,7 +5068,7 @@ const oidcEditorWords: Pick<Readonly<Record<IdentityAdministrationLanguage, Oidc
         allowRulesHint: '每行輸入一個值。留空表示不限制。', brandingHint: '留空以使用預設登入外觀。', invalidScopes: '要求的範圍必須包含 openid。', refreshFailed: '無法更新此連線', refreshFailedHint: '你的編輯已保留。重試以檢查 Home 上的變更。',
     } };
 
-const identityAdministrationTranslations = { zhHant: build({ ...en, homeWorkosChooseDetail: "選擇用於登入此 Home 的 WorkOS 連線。", homeWorkosAdd: "透過 WorkOS 進行公司登入", homeWorkosCompanyName: "公司名稱", homeWorkosPurpose: "公司成員可以使用工作帳戶登入此 Home。", homeWorkosEnableDetail: "成員隨後即可使用公司帳戶登入此 Home。", homeWorkosOffboarding: "僅靠 SSO 不會移除離職人員。", homeWorkosPlatformRequired: "請先在登入平台中設定 WorkOS。",  title: '身分提供者', subtitle: '可供 Team 使用的 Home 登入連線。', homeConnections: 'Home 登入連線', add: '新增連線', empty: '沒有 Home 登入連線', active: '已啟用', disabled: '已停用', configuration: '設定', issuer: '簽發者 URL', clientSecret: '用戶端密鑰', secretSet: '已設定', secretNotSet: '未設定', secretRetain: '留空以保留目前的密鑰。', advanced: '顯示進階設定', hideAdvanced: '隱藏進階設定', actions: '操作', test: '測試登入', testing: '正在開啟測試…', edit: '編輯連線', save: '儲存連線', saving: '正在儲存…', enable: '啟用連線', disable: '停用連線', remove: '移除連線', createTitle: '新增身分提供者', editTitle: '編輯身分提供者', displayName: '名稱', required: '請填寫必填欄位。', invalidIssuer: '請輸入有效的 HTTPS URL。', secretRequired: '請輸入用戶端密鑰。', error: '未能套用變更。', accounts: '受影響的 Account', connections: 'Team 連線', errorForbidden: '你已不再擁有此操作的權限。未變更任何內容。', errorConflict: '其他人先做了變更。你的編輯已保留：請重新載入後再試。', errorMissing: '該項目已不存在，可能已被移除。', errorInUse: '仍有內容依賴它，請先移除那些內容。', errorProviderUnavailable: '身分服務未回應。未變更任何內容。', errorRateLimited: '供應商要求稍後再試。', errorInvalid: 'Home 拒絕了這些值。請檢查設定後再試。', errorImmutable: '記錄啟用後此值即固定，請改為新建一筆。', errorAuthenticationRequired: '請重新登入此 Team 後再試。未變更任何內容。', errorPolicyUnavailable: '目前無法評估 Team 的驗證政策。未變更任何內容。', errorPolicyInUse: 'Team 的驗證政策仍依賴此連線。', errorNotAllowed: '此 Home 不允許 Team 設定此項。未變更任何內容。', errorNeedsAttention: '目錄同步需要處理。請執行一次完整同步。', errorSyncPaused: '該來源已暫停。「繼續同步」會開始一次新的完整同步。', alternateLogins: '需要其他登入方式的 Account', recoveryAuthenticationPolicy: '開啟 Team 驗證', recoveryAlternateLogin: '請先為這些 Account 提供其他登入方式', recoveryDirectory: '開啟目錄', recoveryGroupMappings: '開啟群組對應', recoveryTeamAuthentication: '重新登入', callbackUrl: '回呼 URL', callbackUrlHint: '請在你的身分提供者處註冊此 URL。' , workosSetupSso: '開啟 WorkOS 管理入口', workosSetupDirectory: '設定 WorkOS Directory Sync', workosCheckSetup: '檢查 WorkOS 設定', workosChooseConnection: '選擇連線', workosPortalConfirmBody: '你將在 WorkOS 中完成設定，然後回到這裡選擇連線。', workosDirectoryPortalConfirmBody: '你將在 WorkOS 中完成設定，然後回到這裡選擇目錄。', workosSetupSection: '設定', workosSetupFooter: '可以先離開再回來：設定會從已到達的步驟繼續。', workosStepPortalDetail: '在那裡連接你的身分提供者。回來後，設定會在這裡繼續。', workosStepPortalDone: '管理入口', workosStepPortalDoneDetail: '你的組織已連結。', workosOpenPortal: '開啟入口', workosOpenPortalAgain: '再次開啟', workosStepChooseDetail: '選擇成員用於登入的 WorkOS 連線。', workosStepChooseDone: '連線', workosFindConnections: '尋找連線', workosUseConnection: ({ name }: { name: string }) => `使用 ${name}`, workosCandidateDraft: '這是 WorkOS 中的草稿，請先在那裡完成。', workosStepTestDetail: '你自己登入一次。不會在任何人的帳戶中儲存內容。', workosTestPassed: '你的測試登入成功了。', workosTestAgain: '再次測試', workosStepEnable: '開啟', workosStepEnableDetail: '開啟後成員即可用它登入。若要設為必要，請在「成員如何登入」中選擇它。', workosTurnOn: '開啟', workosConnectionSection: '連線', workosConnectionRow: 'WorkOS 連線', workosConnectionNotChosen: '尚未選擇', workosChange: '變更', errorWorkosPlatformUnavailable: '此 Home 尚未設定 WorkOS。', errorSetupRequired: '需要先完成設定才能使用。', removeTitle: ({ name }: { name: string }) => `移除 ${name}？`, removeBody: ({ name }: { name: string }) => `${name} 將不再作為登入方式提供。使用過它的帳戶會保留。`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `仍有 ${connections} 個 Team 連線和 ${accounts} 個帳戶在使用。請先移除它們。`, disableTitle: ({ name }: { name: string }) => `關閉 ${name}？`, disableBody: ({ name }: { name: string }) => `在重新開啟之前，沒有人能透過 ${name} 登入。不會刪除任何內容。`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `移除 ${name} 上的安裝？`, githubRemoveInstallationBody: ({ name }: { name: string }) => `此 Home 將不再使用 ${name} 上的 App。GitHub 上不會有任何變化；如不再需要，請在那裡解除安裝。`, removeBlockedTitle: ({ name }: { name: string }) => `暫時無法移除 ${name}`, removeImpactPeople: ({ count }: { count: number }) => `有 ${count} 人透過它登入此 Team。`, removeImpactNobody: '還沒有人透過它登入此 Team。', removeImpactKept: '他們的帳戶和 Team 成員身分會保留。', removeBlockedAlternateLogins: ({ count }: { count: number }) => `有 ${count} 人沒有其他登入方式。`, removeBlockedDirectories: ({ count }: { count: number }) => `仍有 ${count} 個目錄來源在使用它。`, removeBlockedGroups: ({ count }: { count: number }) => `仍有 ${count} 個群組對應在使用它。`, removeBlockedMemberships: ({ count }: { count: number }) => `仍有 ${count} 個成員身分由它管理。` }, githubAccessWords.zhHant, oidcEditorWords.zhHant) };
+const identityAdministrationTranslations = { zhHant: build({ ...en, homeWorkosChooseDetail: "選擇用於登入此 Home 的 WorkOS 連線。", workosRequiredForTeamWork: "團隊工作所需", workosTeamPolicyHint: "在「成員如何登入」中變更允許的登入方式。", workosLifecycleFootnote: "關閉後將無法透過此連線登入，直到重新開啟。移除會從此Home刪除連線；WorkOS組織會保留。", homeWorkosAdd: "透過 WorkOS 進行公司登入", homeWorkosCompanyName: "公司名稱", homeWorkosPurpose: "公司成員可以使用工作帳戶登入此 Home。", homeWorkosEnableDetail: "成員隨後即可使用公司帳戶登入此 Home。", homeWorkosOffboarding: "僅靠 SSO 不會移除離職人員。", homeWorkosPlatformRequired: "請先在登入平台中設定 WorkOS。",  title: '身分提供者', subtitle: '可供 Team 使用的 Home 登入連線。', homeConnections: 'Home 登入連線', add: '新增連線', empty: '沒有 Home 登入連線', active: '已啟用', disabled: '已停用', configuration: '設定', issuer: '簽發者 URL', clientSecret: '用戶端密鑰', secretSet: '已設定', secretNotSet: '未設定', secretRetain: '留空以保留目前的密鑰。', advanced: '顯示進階設定', hideAdvanced: '隱藏進階設定', actions: '操作', test: '測試登入', testing: '正在開啟測試…', edit: '編輯連線', save: '儲存連線', saving: '正在儲存…', enable: '啟用連線', disable: '停用連線', remove: '移除連線', createTitle: '新增身分提供者', editTitle: '編輯身分提供者', displayName: '名稱', required: '請填寫必填欄位。', invalidIssuer: '請輸入有效的 HTTPS URL。', secretRequired: '請輸入用戶端密鑰。', error: '未能套用變更。', accounts: '受影響的 Account', connections: 'Team 連線', errorForbidden: '你已不再擁有此操作的權限。未變更任何內容。', errorConflict: '其他人先做了變更。你的編輯已保留：請重新載入後再試。', errorMissing: '該項目已不存在，可能已被移除。', errorInUse: '仍有內容依賴它，請先移除那些內容。', errorProviderUnavailable: '身分服務未回應。未變更任何內容。', errorRateLimited: '供應商要求稍後再試。', errorInvalid: 'Home 拒絕了這些值。請檢查設定後再試。', errorImmutable: '記錄啟用後此值即固定，請改為新建一筆。', errorAuthenticationRequired: '請重新登入此 Team 後再試。未變更任何內容。', errorPolicyUnavailable: '目前無法評估 Team 的驗證政策。未變更任何內容。', errorPolicyInUse: 'Team 的驗證政策仍依賴此連線。', errorNotAllowed: '此 Home 不允許 Team 設定此項。未變更任何內容。', errorNeedsAttention: '目錄同步需要處理。請執行一次完整同步。', errorSyncPaused: '該來源已暫停。「繼續同步」會開始一次新的完整同步。', alternateLogins: '需要其他登入方式的 Account', recoveryAuthenticationPolicy: '開啟 Team 驗證', recoveryAlternateLogin: '請先為這些 Account 提供其他登入方式', recoveryDirectory: '開啟目錄', recoveryGroupMappings: '開啟群組對應', recoveryTeamAuthentication: '重新登入', callbackUrl: '回呼 URL', callbackUrlHint: '請在你的身分提供者處註冊此 URL。' , workosSetupSso: '開啟 WorkOS 管理入口', workosSetupDirectory: '設定 WorkOS Directory Sync', workosCheckSetup: '檢查 WorkOS 設定', workosChooseConnection: '選擇連線', workosPortalConfirmBody: '你將在 WorkOS 中完成設定，然後回到這裡選擇連線。', workosDirectoryPortalConfirmBody: '你將在 WorkOS 中完成設定，然後回到這裡選擇目錄。', workosSetupSection: '設定', workosSetupFooter: '可以先離開再回來：設定會從已到達的步驟繼續。', workosStepPortalDetail: '在那裡連接你的身分提供者。回來後，設定會在這裡繼續。', workosStepPortalDone: '管理入口', workosStepPortalDoneDetail: '你的組織已連結。', workosOpenPortal: '開啟入口', workosOpenPortalAgain: '再次開啟', workosStepChooseDetail: '選擇成員用於登入的 WorkOS 連線。', workosStepChooseDone: '連線', workosFindConnections: '尋找連線', workosUseConnection: ({ name }: { name: string }) => `使用 ${name}`, workosCandidateDraft: '這是 WorkOS 中的草稿，請先在那裡完成。', workosStepTestDetail: '你自己登入一次。不會在任何人的帳戶中儲存內容。', workosTestPassed: '你的測試登入成功了。', workosTestAgain: '再次測試', workosStepEnable: '開啟', workosStepEnableDetail: '開啟後成員即可用它登入。若要設為必要，請在「成員如何登入」中選擇它。', workosTurnOn: '開啟', workosConnectionSection: '連線', workosConnectionRow: 'WorkOS 連線', workosConnectionNotChosen: '尚未選擇', workosChange: '變更', errorWorkosPlatformUnavailable: '此 Home 尚未設定 WorkOS。', errorSetupRequired: '需要先完成設定才能使用。', removeTitle: ({ name }: { name: string }) => `移除 ${name}？`, removeBody: ({ name }: { name: string }) => `${name} 將不再作為登入方式提供。使用過它的帳戶會保留。`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `仍有 ${connections} 個 Team 連線和 ${accounts} 個帳戶在使用。請先移除它們。`, disableTitle: ({ name }: { name: string }) => `關閉 ${name}？`, disableBody: ({ name }: { name: string }) => `在重新開啟之前，沒有人能透過 ${name} 登入。不會刪除任何內容。`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `移除 ${name} 上的安裝？`, githubRemoveInstallationBody: ({ name }: { name: string }) => `此 Home 將不再使用 ${name} 上的 App。GitHub 上不會有任何變化；如不再需要，請在那裡解除安裝。`, removeBlockedTitle: ({ name }: { name: string }) => `暫時無法移除 ${name}`, removeImpactPeople: ({ count }: { count: number }) => `有 ${count} 人透過它登入此 Team。`, removeImpactNobody: '還沒有人透過它登入此 Team。', removeImpactKept: '他們的帳戶和 Team 成員身分會保留。', removeBlockedAlternateLogins: ({ count }: { count: number }) => `有 ${count} 人沒有其他登入方式。`, removeBlockedDirectories: ({ count }: { count: number }) => `仍有 ${count} 個目錄來源在使用它。`, removeBlockedGroups: ({ count }: { count: number }) => `仍有 ${count} 個群組對應在使用它。`, removeBlockedMemberships: ({ count }: { count: number }) => `仍有 ${count} 個成員身分由它管理。` }, githubAccessWords.zhHant, oidcEditorWords.zhHant) };
 
 return { githubAccessWords, oidcEditorWords, identityAdministrationTranslations };
 })();
@@ -5286,6 +5290,44 @@ const machineDetailPageTranslations = { 'zh-Hant': translated({
             stopDaemonDescription: '執行中的工作階段會繼續。在這台機器上重新啟動它之前，無法啟動新的工作階段。',
             stopDaemonAction: '停止',
             detailsTitle: '機器詳細資料',
+            tabs: {
+                overview: "概覽",
+            },
+            thisMachineTitle: "此機器",
+            connectionFollowsAccount: "跟隨你的帳號",
+            subPages: {
+                sharing: "共享",
+                agents: "代理",
+                terminal: "終端機",
+                connection: "連線",
+                tools: "工具",
+                doctor: "診斷",
+                details: "詳細資料",
+            },
+            summaries: {
+                terminalDirect: "無終端機主機",
+                agentReady: ({ agent }) => `${agent} 已就緒`,
+                agentsReadyPair: ({ first, second }) => `${first} 和 ${second} 已就緒`,
+                agentsReadyCount: ({ count }) => `${count} 個代理已就緒`,
+                doctorChecked: ({ time }) => `檢查於 ${time}`,
+            },
+            work: {
+                none: "無工作",
+                working: ({ count }) => `${count} 個進行中`,
+            },
+            platformFact: ({ platform, arch }) => `${platform} · ${arch}`,
+        },
+        allMachines: {
+            rowTitle: "所有機器",
+            viewList: "清單",
+            viewGrid: "格狀",
+            viewLabel: "機器顯示方式",
+            columnMachine: "機器",
+            columnWork: "工作",
+            columnStatus: "狀態",
+            allMachinesGroup: "所有機器",
+            machinesCount: ({ count }) => count === 1 ? `${count} 台機器` : `${count} 台機器`,
+            sessionsWorking: ({ count }) => count === 1 ? `${count} 個工作階段進行中` : `${count} 個工作階段進行中`,
         },
     }) };
 
@@ -6279,6 +6321,11 @@ const pluginSettingsPresentationTranslations = { 'zh-Hant': {
             emptyBody: '外掛程式為你的代理程式新增面板、命令和工具。先從 Happier 推出的外掛程式開始吧。',
             browsePlugins: '瀏覽外掛程式',
             browseEmpty: '你的來源中暫時沒有可用的外掛程式。',
+            noSavedDetails: '這台電腦沒有已儲存的外掛程式詳細資料。',
+            projectionFailedTitle: '無法載入這台電腦的外掛程式登錄',
+            projectionFailedBody: '無法載入其外掛程式詳細資料。請重試以管理外掛程式。',
+            machineOfflineTitle: '這台電腦已離線',
+            machineOfflineBody: '變更需要這台電腦在線上。請在標題列中選擇另一台電腦。',
             forDevelopers: '開發人員',
             readFailedTitle: '無法讀取這台電腦的外掛程式',
             readFailedBody: '沒有任何變更。重試以再次詢問這台電腦。',
@@ -6422,6 +6469,9 @@ const en = Shared_providerCollectionTranslations.en;
 const zhHant: ProviderCollectionCopy = {
     settingsProvidersCollection: {
         gateway: {
+            statusRunning: '執行中',
+            statusIdle: '閒置',
+            statusNotChecked: '未檢查',
             railGroup: '閘道',
             managedFromConnectedServices: '在「已連線的服務」中管理',
             description: '讓任何代理都能使用你的訂閱。',
@@ -6509,6 +6559,9 @@ const zhHant: ProviderCollectionCopy = {
         addTitle: ({ provider }: { provider: string }) => `新增 ${provider}`,
         addDescription: ({ provider }: { provider: string }) => `新增金鑰後，${provider} 的模型會出現在每個能執行它們的代理中。`,
         addKeyDescription: '以已儲存的密鑰保存在你的帳戶中。',
+        addAccountScopeHint: '立即儲存到你的帳戶，無需電腦。之後可以在你的任何一台電腦上測試。',
+        editConnection: '編輯連線',
+        editDescription: '變更會套用到之後開始的工作階段。金鑰和模型仍在它的頁面上管理。',
         connectedTitle: ({ provider }: { provider: string }) => `${provider} 已連接`,
         connectedHiddenCountDescription: ({ provider, count }: { provider: string; count: number }) => `${count} 個模型已就緒。由於 ${provider} 列出的許多模型你可能已經擁有，它們預設不在選擇器中顯示。可隨時透過「執行通道」選擇，或全部顯示。`,
         connectedHiddenDescription: ({ provider }: { provider: string }) => `由於 ${provider} 列出的許多模型你可能已經擁有，它的模型預設不在選擇器中顯示。可隨時透過「執行通道」選擇，或全部顯示。`,
@@ -7559,7 +7612,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         linkLoadFailed: '無法檢查公開連結。',
         linkNetworkOff: '關閉視覺內容的網路存取後分享',
         linkNetworkConsequence: '具有網路存取權的視覺內容可以將內容傳送到其他網站，並透露檢視者的 IP 位址。遠端程式碼和資源可能變更。關閉網路存取後，內建內容仍可互動，不會發出外部請求。',
-        linkUnavailable: '此 Home 不支援公開連結。請聯絡管理員設定公開連結託管。',
+        linkUnavailable: "此 Home 不支援公開連結。請 Home 擁有者設定獨立分享網域，或允許在此主機名稱上使用連結。還必須設定公開連結請求頻率限制。",
+        configurePublicLinks: "設定公開連結",
         justYouTitle: '一起處理這個工作階段',
         justYouBody: ({ home }) => `與 ${home} 上的人分享。他們可以關注進度、在這裡討論,並在你離開時接手。`,
         share: '分享',
@@ -8569,6 +8623,8 @@ const zhHant: typeof en = {
     daemonTitle: '背景服務',
     daemonDescription: '在這台電腦上執行你的工作階段，並保持它與 Home 的連線。',
     unreadableTitle: ({ home }: { home: string }) => `無法讀取 ${home} 上的機器`,
+    indexViewTitle: '所有機器檢視',
+    indexViewDescription: '以清單或每台機器一張卡片的形式顯示所有機器。儲存在此裝置上。',
 };
 
 const settingsMachinesTranslations = { zhHant };
@@ -9182,6 +9238,11 @@ const sidebarFooterTranslations = { 'zh-Hant': {
         usageNextInOrder: ({ account }) => `${account} 用完後，下一輪將依序切換到下一個帳戶`,
         usageNextMostLeft: ({ account }) => `${account} 用完後，下一輪將切換到剩餘最多的帳戶`,
         usageNextStays: ({ pool, account }) => `在你切換之前，${pool} 會一直使用 ${account}`,
+        machinesEmptyTitle: '在你自己的電腦上執行工作階段',
+        machinesEmptyBody: '新增這台電腦、一台伺服器或雲端機器。Happier 會顯示每台機器在做什麼，並在需要你時提醒你。',
+        machinesAddThisComputer: '新增這台電腦',
+        machinesAddAnotherMachine: '新增另一台機器',
+        machinesHomeSignedOut: ({ home }) => `你已登出 ${home}，因此不會列出它的機器。`,
     } } as const satisfies Pick<Record<string, SidebarFooterTranslation>, "zh-Hant">;
 
 return { sidebarFooterTranslations };
@@ -11269,6 +11330,7 @@ const widgetAddTranslations = { 'zh-Hant': {
         panes: '面板',
         panesHint: '以連結形式新增，在詳細資訊中開啟',
         builtIn: '內建',
+        prompts: { project: '哪個專案？', projects: '哪些專案？', session: '哪個工作階段？', workspace: '哪個工作區？' },
         nativeDescriptions: {
             session_summary: '查看所選工作階段的活動與後續步驟。',
             agent_plan: '追蹤所選工作階段中代理的計畫。',
@@ -11895,6 +11957,7 @@ const workflowExamplesTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'c
         sessionNotifyDescription: "每當此工作階段的代理需要你的輸入時傳送通知。",
         sessionDailySummaryDescription: "每天 09:00 在這裡產生摘要。",
         sessionTestDescription: "在每個完成、失敗或取消的回合後執行可編輯的測試命令。",
+        newTag: "新",
         notifyWhenAgentWaits: { title: "在代理等待時通知我", description: "選擇一個工作階段，每當其中的代理需要你的輸入時，就會收到通知。" },
         dailySummaryInSession: { title: "在此工作階段中每日摘要", description: "選擇一個工作階段，每天09:00產生摘要。" },
         memoryUpkeepInSession: { title: '記憶維護', description: '每天09:00檢查此工作階段的記憶，並更新有用的資訊。' },

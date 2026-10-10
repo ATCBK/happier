@@ -2872,7 +2872,7 @@ const effectiveTranslations = { "ca": {
         "shortcutHint": ({ modifier }: { modifier: string }) => `${modifier}-clic · ${modifier}⇧L per canviar entre clar i fosc`
     } } as const;
 
-const glassAppearanceTranslations = { ca: { iosReduceTransparencyPath: "Ajustos › Accessibilitat › Pantalla i mida del text › Reduir transparència", title: 'Vidre', material: 'Material', solid: 'Sòlid', auto: 'Automàtic', everywhere: 'A tot arreu', custom: 'Personalitzat', blur: 'Desenfocament', off: 'Desactivat', opacity: 'Opacitat', customize: 'Personalitza', chrome: 'Marc de la finestra', sidebar: 'Barra lateral', content: 'Contingut', floating: 'Superfícies flotants', appearance: 'Aparença', moreSettings: 'Més opcions d’aparença…', customizeLink: 'Personalitza…', toolbarTitle: 'Botó d’aparença', toolbarDescription: 'Mostra Aparença a la barra d’eines. Un clic amb modificador canvia entre clar i fosc.', reduceTransparency: 'Sòlid perquè Reduir transparència està activat', osSettings: 'Obre els ajustos d’accessibilitat', themeCommand: 'Canvia entre clar i fosc', autoDescription: "S’adapta al dispositiu: vidre en capes a les finestres compatibles i a les superfícies flotants del telèfon.", osSettingsUnavailable: "No s’han pogut obrir els ajustos d’accessibilitat. Obre’ls als ajustos del dispositiu.", ...effectiveTranslations["ca"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "ca">;
+const glassAppearanceTranslations = { ca: { ...Shared_glassAppearanceTranslations.atmosphereTranslations['ca'], iosReduceTransparencyPath: "Ajustos › Accessibilitat › Pantalla i mida del text › Reduir transparència", title: 'Vidre', material: 'Material', solid: 'Sòlid', auto: 'Automàtic', everywhere: 'A tot arreu', custom: 'Personalitzat', blur: 'Desenfocament', off: 'Desactivat', opacity: 'Opacitat', customize: 'Personalitza', chrome: 'Marc de la finestra', sidebar: 'Barra lateral', content: 'Contingut', floating: 'Superfícies flotants', appearance: 'Aparença', moreSettings: 'Més opcions d’aparença…', customizeLink: 'Personalitza…', toolbarTitle: 'Botó d’aparença', toolbarDescription: 'Mostra Aparença a la barra d’eines. Un clic amb modificador canvia entre clar i fosc.', reduceTransparency: 'Sòlid perquè Reduir transparència està activat', osSettings: 'Obre els ajustos d’accessibilitat', themeCommand: 'Canvia entre clar i fosc', autoDescription: "S’adapta al dispositiu: vidre en capes a les finestres compatibles i a les superfícies flotants del telèfon.", osSettingsUnavailable: "No s’han pogut obrir els ajustos d’accessibilitat. Obre’ls als ajustos del dispositiu.", ...effectiveTranslations["ca"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "ca">;
 
 return { effectiveTranslations, glassAppearanceTranslations };
 })();
@@ -4091,6 +4091,10 @@ const ca: typeof en = {
         },
     },
     reach: {
+        publicLinks: "Enllaços públics",
+        allowPublicSubpath: "Permet enllaços públics en aquest nom d’amfitrió",
+        allowPublicSubpathDescription: "Fes servir l’adreça HTTPS d’aquest Home per als enllaços públics de sessions i Artifacts quan no hi hagi un domini separat. L’HTML es manté en un entorn restringit. Els serveis locals encara necessiten un domini separat.",
+        publicLinksHelp: "Desactivat per defecte. La previsualització de PDF està disponible en dominis aïllats; en aquest nom d’amfitrió els PDF es descarreguen.",
         title: 'Accés',
         diagramTitle: ({ home }: { home: string }) => `Com arriba un dispositiu nou a ${home}`,
         yourDevices: 'Els teus dispositius',
@@ -5073,7 +5077,7 @@ const oidcEditorWords: Pick<Readonly<Record<IdentityAdministrationLanguage, Oidc
         allowRulesHint: 'Introdueix un valor per línia. Deixa-ho buit per no restringir.', brandingHint: 'Deixa-ho buit per utilitzar l’aparença d’accés predeterminada.', invalidScopes: 'Inclou openid en els àmbits sol·licitats.', refreshFailed: 'No s’ha pogut actualitzar aquesta connexió', refreshFailedHint: 'Els canvis es conserven. Torna-ho a provar per comprovar els canvis al Home.',
     } };
 
-const identityAdministrationTranslations = { ca: build({ ...en, homeWorkosChooseDetail: "Tria la connexió de WorkOS amb què les persones inicien sessió en aquest Home.", homeWorkosAdd: "Inici de sessió d’empresa amb WorkOS", homeWorkosCompanyName: "Nom de l’empresa", homeWorkosPurpose: "Les persones de la teva empresa poden entrar en aquest Home amb el seu compte de feina.", homeWorkosEnableDetail: "Les persones podran entrar en aquest Home amb el seu compte d’empresa.", homeWorkosOffboarding: "L’SSO per si sol no elimina les persones que deixen l’empresa.", homeWorkosPlatformRequired: "Configura primer WorkOS a les plataformes d’inici de sessió.",  title: 'Proveïdors d’identitat', subtitle: 'Connexions d’accés del Home disponibles per als Teams.', homeConnections: 'Connexions del Home', add: 'Afegeix una connexió', empty: 'No hi ha connexions del Home', active: 'Activa', disabled: 'Desactivada', configuration: 'Configuració', issuer: 'URL de l’emissor', clientSecret: 'Secret del client', secretSet: 'Definit', secretNotSet: 'No definit', secretRetain: 'Deixa-ho buit per conservar el secret actual.', advanced: 'Mostra opcions avançades', hideAdvanced: 'Amaga opcions avançades', actions: 'Accions', test: 'Prova l’accés', testing: 'S’està obrint la prova…', edit: 'Edita la connexió', save: 'Desa la connexió', saving: 'S’està desant…', enable: 'Activa la connexió', disable: 'Desactiva la connexió', remove: 'Elimina la connexió', createTitle: 'Afegeix un proveïdor d’identitat', editTitle: 'Edita el proveïdor d’identitat', displayName: 'Nom', required: 'Completa els camps obligatoris.', invalidIssuer: 'Introdueix un URL HTTPS vàlid.', secretRequired: 'Introdueix un secret del client.', error: 'El canvi no s’ha aplicat.', accounts: 'Accounts afectats', connections: 'Connexions del Team', errorForbidden: 'Ja no tens permís per a això. No s’ha canviat res.', errorConflict: 'Algú altre ho ha canviat abans. Els teus canvis es conserven: torna a carregar i prova-ho de nou.', errorMissing: 'Això ja no existeix. Pot ser que algú ho hagi eliminat.', errorInUse: 'Encara hi ha coses que en depenen. Elimina-les primer.', errorProviderUnavailable: 'El servei d’identitat no ha respost. No s’ha canviat res.', errorRateLimited: 'El proveïdor demana esperar abans de tornar-ho a provar.', errorInvalid: 'El Home ha rebutjat aquests valors. Revisa la configuració i torna-ho a provar.', errorImmutable: 'Aquest valor queda fix quan el registre s’usa. Crea’n un de nou.', errorAuthenticationRequired: 'Torna a iniciar la sessió en aquest Team i torna-ho a provar. No s’ha canviat res.', errorPolicyUnavailable: 'La política d’autenticació del Team no es pot avaluar ara mateix. No s’ha canviat res.', errorPolicyInUse: 'La política d’autenticació del Team encara depèn d’aquesta connexió.', errorNotAllowed: 'Aquest Home no permet que els Teams configurin això. No s’ha canviat res.', errorNeedsAttention: 'La sincronització del directori requereix atenció. Executa una sincronització completa.', errorSyncPaused: 'Aquesta font està en pausa. «Reprèn la sincronització» inicia una sincronització completa nova.', alternateLogins: 'Accounts que necessiten un altre mètode d’accés', recoveryAuthenticationPolicy: 'Obre l’autenticació del Team', recoveryAlternateLogin: 'Dona primer un altre mètode d’accés a aquests Accounts', recoveryDirectory: 'Obre el directori', recoveryGroupMappings: 'Obre les assignacions de Grups', recoveryTeamAuthentication: 'Torna a iniciar la sessió', callbackUrl: 'URL de retorn', callbackUrlHint: 'Registra aquesta URL al teu proveïdor d’identitat.' , workosSetupSso: 'Obre el portal d’administració de WorkOS', workosSetupDirectory: 'Configura WorkOS Directory Sync', workosCheckSetup: 'Comprova la configuració de WorkOS', workosChooseConnection: 'Tria la connexió', workosPortalConfirmBody: 'Acabaràs la configuració a WorkOS i després tornaràs aquí per triar la connexió.', workosDirectoryPortalConfirmBody: 'Acabaràs la configuració a WorkOS i després tornaràs aquí per triar el directori.', workosSetupSection: 'Configuració', workosSetupFooter: 'Pots marxar i tornar: la configuració continua des del pas assolit.', workosStepPortalDetail: 'Connecta-hi el teu proveïdor d’identitat. Quan tornis, la configuració continua aquí.', workosStepPortalDone: 'Portal d’administració', workosStepPortalDoneDetail: 'La teva organització està vinculada.', workosOpenPortal: 'Obre el portal', workosOpenPortalAgain: 'Torna a obrir', workosStepChooseDetail: 'Tria quina connexió de WorkOS fan servir els membres per iniciar sessió.', workosStepChooseDone: 'Connexió', workosFindConnections: 'Cerca connexions', workosUseConnection: ({ name }: { name: string }) => `Utilitza ${name}`, workosCandidateDraft: 'Un esborrany a WorkOS. Acaba’l primer allà.', workosStepTestDetail: 'Inicia sessió una vegada tu mateix. No es desa res al compte de ningú.', workosTestPassed: 'El teu inici de sessió de prova ha funcionat.', workosTestAgain: 'Torna a provar', workosStepEnable: 'Activa-la', workosStepEnableDetail: 'Després els membres podran iniciar sessió amb ella. Per exigir-la, tria-la a Com inicien sessió els membres.', workosTurnOn: 'Activa', workosConnectionSection: 'Connexió', workosConnectionRow: 'Connexió de WorkOS', workosConnectionNotChosen: 'Encara no triada', workosChange: 'Canvia', errorWorkosPlatformUnavailable: 'WorkOS encara no està configurat en aquest Home.', errorSetupRequired: 'Cal configurar-ho abans de poder-ho fer servir.', removeTitle: ({ name }: { name: string }) => `Vols treure ${name}?`, removeBody: ({ name }: { name: string }) => `${name} deixa d’oferir-se per iniciar sessió. Els comptes que l’usaven es conserven.`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `Encara l’usen ${connections} connexió(ns) d’equip i ${accounts} compte(s). Treu-les primer.`, disableTitle: ({ name }: { name: string }) => `Vols desactivar ${name}?`, disableBody: ({ name }: { name: string }) => `Ningú no pot iniciar sessió amb ${name} fins que es torni a activar. No s’elimina res.`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `Vols treure la instal·lació a ${name}?`, githubRemoveInstallationBody: ({ name }: { name: string }) => `Aquest Home deixa d’usar l’App a ${name}. A GitHub no canvia res; desinstal·la-la allà si ja no la necessites.`, removeBlockedTitle: ({ name }: { name: string }) => `Encara no es pot treure ${name}`, removeImpactPeople: ({ count }: { count: number }) => count === 1 ? '1 persona inicia sessió en aquest equip amb ella.' : `${count} persones inicien sessió en aquest equip amb ella.`, removeImpactNobody: 'Encara ningú no inicia sessió en aquest equip amb ella.', removeImpactKept: 'Els seus comptes i membresies de l’equip es conserven.', removeBlockedAlternateLogins: ({ count }: { count: number }) => count === 1 ? '1 persona no té cap altra manera d’iniciar sessió.' : `${count} persones no tenen cap altra manera d’iniciar sessió.`, removeBlockedDirectories: ({ count }: { count: number }) => count === 1 ? 'Una font de directori encara la fa servir.' : `${count} fonts de directori encara la fan servir.`, removeBlockedGroups: ({ count }: { count: number }) => count === 1 ? 'Una assignació de grup encara la fa servir.' : `${count} assignacions de grup encara la fan servir.`, removeBlockedMemberships: ({ count }: { count: number }) => count === 1 ? '1 membresia encara la gestiona.' : `${count} membresies encara les gestiona.` }, githubAccessWords.ca, oidcEditorWords.ca) };
+const identityAdministrationTranslations = { ca: build({ ...en, homeWorkosChooseDetail: "Tria la connexió de WorkOS amb què les persones inicien sessió en aquest Home.", workosRequiredForTeamWork: "Necessari per treballar a l’equip", workosTeamPolicyHint: "Canvia els mètodes d’inici de sessió acceptats a Com inicien sessió els membres.", workosLifecycleFootnote: "Desactivar-la atura l’inici de sessió fins que la tornis a activar. Eliminar-la suprimeix la connexió d’aquest Home; l’organització de WorkOS es conserva.", homeWorkosAdd: "Inici de sessió d’empresa amb WorkOS", homeWorkosCompanyName: "Nom de l’empresa", homeWorkosPurpose: "Les persones de la teva empresa poden entrar en aquest Home amb el seu compte de feina.", homeWorkosEnableDetail: "Les persones podran entrar en aquest Home amb el seu compte d’empresa.", homeWorkosOffboarding: "L’SSO per si sol no elimina les persones que deixen l’empresa.", homeWorkosPlatformRequired: "Configura primer WorkOS a les plataformes d’inici de sessió.",  title: 'Proveïdors d’identitat', subtitle: 'Connexions d’accés del Home disponibles per als Teams.', homeConnections: 'Connexions del Home', add: 'Afegeix una connexió', empty: 'No hi ha connexions del Home', active: 'Activa', disabled: 'Desactivada', configuration: 'Configuració', issuer: 'URL de l’emissor', clientSecret: 'Secret del client', secretSet: 'Definit', secretNotSet: 'No definit', secretRetain: 'Deixa-ho buit per conservar el secret actual.', advanced: 'Mostra opcions avançades', hideAdvanced: 'Amaga opcions avançades', actions: 'Accions', test: 'Prova l’accés', testing: 'S’està obrint la prova…', edit: 'Edita la connexió', save: 'Desa la connexió', saving: 'S’està desant…', enable: 'Activa la connexió', disable: 'Desactiva la connexió', remove: 'Elimina la connexió', createTitle: 'Afegeix un proveïdor d’identitat', editTitle: 'Edita el proveïdor d’identitat', displayName: 'Nom', required: 'Completa els camps obligatoris.', invalidIssuer: 'Introdueix un URL HTTPS vàlid.', secretRequired: 'Introdueix un secret del client.', error: 'El canvi no s’ha aplicat.', accounts: 'Accounts afectats', connections: 'Connexions del Team', errorForbidden: 'Ja no tens permís per a això. No s’ha canviat res.', errorConflict: 'Algú altre ho ha canviat abans. Els teus canvis es conserven: torna a carregar i prova-ho de nou.', errorMissing: 'Això ja no existeix. Pot ser que algú ho hagi eliminat.', errorInUse: 'Encara hi ha coses que en depenen. Elimina-les primer.', errorProviderUnavailable: 'El servei d’identitat no ha respost. No s’ha canviat res.', errorRateLimited: 'El proveïdor demana esperar abans de tornar-ho a provar.', errorInvalid: 'El Home ha rebutjat aquests valors. Revisa la configuració i torna-ho a provar.', errorImmutable: 'Aquest valor queda fix quan el registre s’usa. Crea’n un de nou.', errorAuthenticationRequired: 'Torna a iniciar la sessió en aquest Team i torna-ho a provar. No s’ha canviat res.', errorPolicyUnavailable: 'La política d’autenticació del Team no es pot avaluar ara mateix. No s’ha canviat res.', errorPolicyInUse: 'La política d’autenticació del Team encara depèn d’aquesta connexió.', errorNotAllowed: 'Aquest Home no permet que els Teams configurin això. No s’ha canviat res.', errorNeedsAttention: 'La sincronització del directori requereix atenció. Executa una sincronització completa.', errorSyncPaused: 'Aquesta font està en pausa. «Reprèn la sincronització» inicia una sincronització completa nova.', alternateLogins: 'Accounts que necessiten un altre mètode d’accés', recoveryAuthenticationPolicy: 'Obre l’autenticació del Team', recoveryAlternateLogin: 'Dona primer un altre mètode d’accés a aquests Accounts', recoveryDirectory: 'Obre el directori', recoveryGroupMappings: 'Obre les assignacions de Grups', recoveryTeamAuthentication: 'Torna a iniciar la sessió', callbackUrl: 'URL de retorn', callbackUrlHint: 'Registra aquesta URL al teu proveïdor d’identitat.' , workosSetupSso: 'Obre el portal d’administració de WorkOS', workosSetupDirectory: 'Configura WorkOS Directory Sync', workosCheckSetup: 'Comprova la configuració de WorkOS', workosChooseConnection: 'Tria la connexió', workosPortalConfirmBody: 'Acabaràs la configuració a WorkOS i després tornaràs aquí per triar la connexió.', workosDirectoryPortalConfirmBody: 'Acabaràs la configuració a WorkOS i després tornaràs aquí per triar el directori.', workosSetupSection: 'Configuració', workosSetupFooter: 'Pots marxar i tornar: la configuració continua des del pas assolit.', workosStepPortalDetail: 'Connecta-hi el teu proveïdor d’identitat. Quan tornis, la configuració continua aquí.', workosStepPortalDone: 'Portal d’administració', workosStepPortalDoneDetail: 'La teva organització està vinculada.', workosOpenPortal: 'Obre el portal', workosOpenPortalAgain: 'Torna a obrir', workosStepChooseDetail: 'Tria quina connexió de WorkOS fan servir els membres per iniciar sessió.', workosStepChooseDone: 'Connexió', workosFindConnections: 'Cerca connexions', workosUseConnection: ({ name }: { name: string }) => `Utilitza ${name}`, workosCandidateDraft: 'Un esborrany a WorkOS. Acaba’l primer allà.', workosStepTestDetail: 'Inicia sessió una vegada tu mateix. No es desa res al compte de ningú.', workosTestPassed: 'El teu inici de sessió de prova ha funcionat.', workosTestAgain: 'Torna a provar', workosStepEnable: 'Activa-la', workosStepEnableDetail: 'Després els membres podran iniciar sessió amb ella. Per exigir-la, tria-la a Com inicien sessió els membres.', workosTurnOn: 'Activa', workosConnectionSection: 'Connexió', workosConnectionRow: 'Connexió de WorkOS', workosConnectionNotChosen: 'Encara no triada', workosChange: 'Canvia', errorWorkosPlatformUnavailable: 'WorkOS encara no està configurat en aquest Home.', errorSetupRequired: 'Cal configurar-ho abans de poder-ho fer servir.', removeTitle: ({ name }: { name: string }) => `Vols treure ${name}?`, removeBody: ({ name }: { name: string }) => `${name} deixa d’oferir-se per iniciar sessió. Els comptes que l’usaven es conserven.`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `Encara l’usen ${connections} connexió(ns) d’equip i ${accounts} compte(s). Treu-les primer.`, disableTitle: ({ name }: { name: string }) => `Vols desactivar ${name}?`, disableBody: ({ name }: { name: string }) => `Ningú no pot iniciar sessió amb ${name} fins que es torni a activar. No s’elimina res.`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `Vols treure la instal·lació a ${name}?`, githubRemoveInstallationBody: ({ name }: { name: string }) => `Aquest Home deixa d’usar l’App a ${name}. A GitHub no canvia res; desinstal·la-la allà si ja no la necessites.`, removeBlockedTitle: ({ name }: { name: string }) => `Encara no es pot treure ${name}`, removeImpactPeople: ({ count }: { count: number }) => count === 1 ? '1 persona inicia sessió en aquest equip amb ella.' : `${count} persones inicien sessió en aquest equip amb ella.`, removeImpactNobody: 'Encara ningú no inicia sessió en aquest equip amb ella.', removeImpactKept: 'Els seus comptes i membresies de l’equip es conserven.', removeBlockedAlternateLogins: ({ count }: { count: number }) => count === 1 ? '1 persona no té cap altra manera d’iniciar sessió.' : `${count} persones no tenen cap altra manera d’iniciar sessió.`, removeBlockedDirectories: ({ count }: { count: number }) => count === 1 ? 'Una font de directori encara la fa servir.' : `${count} fonts de directori encara la fan servir.`, removeBlockedGroups: ({ count }: { count: number }) => count === 1 ? 'Una assignació de grup encara la fa servir.' : `${count} assignacions de grup encara la fan servir.`, removeBlockedMemberships: ({ count }: { count: number }) => count === 1 ? '1 membresia encara la gestiona.' : `${count} membresies encara les gestiona.` }, githubAccessWords.ca, oidcEditorWords.ca) };
 
 return { githubAccessWords, oidcEditorWords, identityAdministrationTranslations };
 })();
@@ -5295,6 +5299,44 @@ const machineDetailPageTranslations = { ca: translated({
             stopDaemonDescription: 'Les sessions en curs continuen. No se’n poden iniciar de noves fins que el tornis a iniciar en aquesta màquina.',
             stopDaemonAction: 'Atura',
             detailsTitle: 'Detalls de la màquina',
+            tabs: {
+                overview: "Resum",
+            },
+            thisMachineTitle: "Aquesta màquina",
+            connectionFollowsAccount: "Segueix el teu compte",
+            subPages: {
+                sharing: "Compartició",
+                agents: "Agents",
+                terminal: "Terminal",
+                connection: "Connexió",
+                tools: "Eines",
+                doctor: "Diagnòstic",
+                details: "Detalls",
+            },
+            summaries: {
+                terminalDirect: "Sense amfitrió de terminal",
+                agentReady: ({ agent }) => `${agent} està a punt`,
+                agentsReadyPair: ({ first, second }) => `${first} i ${second} estan a punt`,
+                agentsReadyCount: ({ count }) => `${count} agents estan a punt`,
+                doctorChecked: ({ time }) => `Comprovat ${time}`,
+            },
+            work: {
+                none: "Sense feina",
+                working: ({ count }) => `${count} treballant`,
+            },
+            platformFact: ({ platform, arch }) => `${platform} · ${arch}`,
+        },
+        allMachines: {
+            rowTitle: "Totes les màquines",
+            viewList: "Llista",
+            viewGrid: "Graella",
+            viewLabel: "Mostra les màquines com a",
+            columnMachine: "Màquina",
+            columnWork: "Feina",
+            columnStatus: "Estat",
+            allMachinesGroup: "Totes les màquines",
+            machinesCount: ({ count }) => count === 1 ? `1 màquina` : `${count} màquines`,
+            sessionsWorking: ({ count }) => count === 1 ? `1 sessió treballant` : `${count} sessions treballant`,
         },
     }) };
 
@@ -6290,6 +6332,11 @@ const pluginSettingsPresentationTranslations = { ca: {
             emptyBody: 'Els connectors afegeixen panells, ordres i eines per als teus agents. Comença pels que fa Happier.',
             browsePlugins: 'Explora els connectors',
             browseEmpty: 'Les teves fonts encara no ofereixen cap connector.',
+            noSavedDetails: 'No hi ha detalls de connectors desats per a aquesta màquina.',
+            projectionFailedTitle: 'No s’ha pogut carregar el registre de connectors d’aquesta màquina',
+            projectionFailedBody: 'No s’han pogut carregar els detalls dels connectors. Torna-ho a provar per gestionar-los.',
+            machineOfflineTitle: 'Aquesta màquina està fora de línia',
+            machineOfflineBody: 'Per fer canvis, aquesta màquina ha d’estar en línia. Tria’n una altra a la capçalera.',
             forDevelopers: 'Per a desenvolupadors',
             readFailedTitle: 'No s’han pogut llegir els connectors d’aquesta màquina',
             readFailedBody: 'No s’ha canviat res. Torna-ho a provar per consultar de nou la màquina.',
@@ -6433,6 +6480,9 @@ const en = Shared_providerCollectionTranslations.en;
 const ca: ProviderCollectionCopy = {
     settingsProvidersCollection: {
         gateway: {
+            statusRunning: 'En execució',
+            statusIdle: 'Inactiva',
+            statusNotChecked: 'No comprovat',
             railGroup: 'Passarel·les',
             managedFromConnectedServices: 'Es gestiona des de Serveis connectats',
             description: 'Permet que qualsevol agent faci servir les teves subscripcions.',
@@ -6520,6 +6570,9 @@ const ca: ProviderCollectionCopy = {
         addTitle: ({ provider }: { provider: string }) => `Afegeix ${provider}`,
         addDescription: ({ provider }: { provider: string }) => `Afegeix una clau i els models de ${provider} apareixen a cada agent que els pot executar.`,
         addKeyDescription: 'Es desa com a secret al teu compte.',
+        addAccountScopeHint: 'Es desa al teu compte de seguida, sense cap ordinador. Després el pots provar des de qualsevol dels teus ordinadors.',
+        editConnection: 'Edita la connexió',
+        editDescription: 'Els canvis s’apliquen a les sessions que comencin després. La clau i els models es queden a la seva pàgina.',
         connectedTitle: ({ provider }: { provider: string }) => `${provider} està connectat`,
         connectedHiddenCountDescription: ({ provider, count }: { provider: string; count: number }) => `${count} models a punt. S’amaguen del selector per defecte perquè ${provider} ofereix molts models que potser ja tens. Tria’n un quan vulguis des de «S’executa a través de», o mostra’ls tots.`,
         connectedHiddenDescription: ({ provider }: { provider: string }) => `Els seus models s’amaguen del selector per defecte perquè ${provider} ofereix molts models que potser ja tens. Tria’n un quan vulguis des de «S’executa a través de», o mostra’ls tots.`,
@@ -7574,7 +7627,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         linkLoadFailed: 'No s’ha pogut comprovar l’enllaç públic.',
         linkNetworkOff: 'Comparteix amb l’accés de xarxa dels visuals desactivat',
         linkNetworkConsequence: 'Els visuals amb accés de xarxa poden enviar el seu contingut a altres llocs i revelar l’adreça IP de qui els veu. El codi i els recursos remots poden canviar. Desactivar-lo manté interactiu el contingut inclòs sense peticions externes.',
-        linkUnavailable: 'Els enllaços públics no estan disponibles en aquesta Home. Demana a l’administrador que configuri l’allotjament dels enllaços públics.',
+        linkUnavailable: "Els enllaços públics no estan disponibles en aquest Home. Demana al propietari que configuri un domini de compartició aïllat o permeti enllaços en aquest nom d’amfitrió. També cal configurar la limitació de peticions dels enllaços públics.",
+        configurePublicLinks: "Configura els enllaços públics",
         justYouTitle: 'Treballeu junts en aquesta sessió',
         justYouBody: ({ home }) => `Comparteix-la amb persones de ${home}. Podran seguir-la, parlar-ne aquí i continuar-la mentre no hi siguis.`,
         share: 'Comparteix',
@@ -8584,6 +8638,8 @@ const ca: typeof en = {
     daemonTitle: 'Servei en segon pla',
     daemonDescription: 'Executa les teves sessions en aquest ordinador i el manté connectat al teu Home.',
     unreadableTitle: ({ home }: { home: string }) => `No s’han pogut llegir les màquines de ${home}`,
+    indexViewTitle: 'Vista de Totes les màquines',
+    indexViewDescription: 'Mostra Totes les màquines com a llista o amb una targeta per màquina. Es desa en aquest dispositiu.',
 };
 
 const settingsMachinesTranslations = { ca };
@@ -9220,6 +9276,11 @@ const sidebarFooterTranslations = { ca: {
         usageNextInOrder: ({ account }) => `Quan ${account} s'esgoti, el torn següent passarà al compte següent en ordre`,
         usageNextMostLeft: ({ account }) => `Quan ${account} s'esgoti, el torn següent passarà al compte amb més marge`,
         usageNextStays: ({ pool, account }) => `${pool} es queda amb ${account} fins que canviïs`,
+        machinesEmptyTitle: 'Executa sessions als teus propis ordinadors',
+        machinesEmptyBody: 'Afegeix aquest ordinador, un servidor o una màquina al núvol. Happier mostra què fa cadascuna i t’avisa quan una et necessita.',
+        machinesAddThisComputer: 'Afegeix aquest ordinador',
+        machinesAddAnotherMachine: 'Afegeix una altra màquina',
+        machinesHomeSignedOut: ({ home }) => `Has tancat la sessió de ${home}, així que les seves màquines no apareixen.`,
     } } as const satisfies Pick<Record<string, SidebarFooterTranslation>, "ca">;
 
 return { sidebarFooterTranslations };
@@ -11308,6 +11369,7 @@ const widgetAddTranslations = { ca: {
         panes: 'Panells',
         panesHint: 's’afegeix com un enllaç que s’obre a Detalls',
         builtIn: 'Integrat',
+        prompts: { project: 'Quin projecte?', projects: 'Quins projectes?', session: 'Quina sessió?', workspace: 'Quin espai de treball?' },
         nativeDescriptions: {
             session_summary: 'Activitat i propers passos de la sessió que triïs.',
             agent_plan: 'Segueix el pla de l’agent per a la sessió que triïs.',
@@ -11934,6 +11996,7 @@ const workflowExamplesTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'c
         sessionNotifyDescription: "Una notificació cada cop que l’agent d’aquesta sessió necessiti la teva resposta.",
         sessionDailySummaryDescription: "Un resum aquí cada dia a les 09:00.",
         sessionTestDescription: "Executa una ordre de prova editable després de cada torn completat, fallit o cancel·lat.",
+        newTag: "Nou",
         notifyWhenAgentWaits: { title: "Avisa’m quan un agent espera", description: "Tria una sessió i rep una notificació quan el seu agent necessiti la teva intervenció." },
         dailySummaryInSession: { title: "Resum diari en aquesta sessió", description: "Tria una sessió per rebre un resum cada dia a les 09:00." },
         memoryUpkeepInSession: { title: 'Manteniment de la memòria', description: 'Revisa la memòria d’aquesta sessió cada dia a les 09:00 i mantén actualitzats els fets útils.' },

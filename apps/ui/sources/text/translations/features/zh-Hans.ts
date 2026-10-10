@@ -2865,7 +2865,7 @@ const effectiveTranslations = { "zh-Hans": {
         "shortcutHint": ({ modifier }: { modifier: string }) => `${modifier}-点击 · ${modifier}⇧L 切换浅色和深色`
     } } as const;
 
-const glassAppearanceTranslations = { 'zh-Hans': { iosReduceTransparencyPath: "设置 › 辅助功能 › 显示与文字大小 › 降低透明度", title: '玻璃', material: '材质', solid: '不透明', auto: '自动', everywhere: '全局', custom: '自定义', blur: '模糊', off: '关闭', opacity: '不透明度', customize: '自定义', chrome: '窗口边框', sidebar: '侧边栏', content: '内容', floating: '浮动界面', appearance: '外观', moreSettings: '更多外观设置…', customizeLink: '自定义…', toolbarTitle: '外观按钮', toolbarDescription: '在工具栏中显示外观。按住修饰键点击可切换浅色和深色。', reduceTransparency: '已开启降低透明度，因此显示不透明材质', osSettings: '打开辅助功能设置', themeCommand: '切换浅色和深色', autoDescription: "适应当前设备：支持的桌面窗口使用分层玻璃，手机仅在浮动界面使用玻璃。", osSettingsUnavailable: "无法打开辅助功能设置。请在设备设置中打开。", ...effectiveTranslations["zh-Hans"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "zh-Hans">;
+const glassAppearanceTranslations = { 'zh-Hans': { ...Shared_glassAppearanceTranslations.atmosphereTranslations['zh-Hans'], iosReduceTransparencyPath: "设置 › 辅助功能 › 显示与文字大小 › 降低透明度", title: '玻璃', material: '材质', solid: '不透明', auto: '自动', everywhere: '全局', custom: '自定义', blur: '模糊', off: '关闭', opacity: '不透明度', customize: '自定义', chrome: '窗口边框', sidebar: '侧边栏', content: '内容', floating: '浮动界面', appearance: '外观', moreSettings: '更多外观设置…', customizeLink: '自定义…', toolbarTitle: '外观按钮', toolbarDescription: '在工具栏中显示外观。按住修饰键点击可切换浅色和深色。', reduceTransparency: '已开启降低透明度，因此显示不透明材质', osSettings: '打开辅助功能设置', themeCommand: '切换浅色和深色', autoDescription: "适应当前设备：支持的桌面窗口使用分层玻璃，手机仅在浮动界面使用玻璃。", osSettingsUnavailable: "无法打开辅助功能设置。请在设备设置中打开。", ...effectiveTranslations["zh-Hans"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "zh-Hans">;
 
 return { effectiveTranslations, glassAppearanceTranslations };
 })();
@@ -4084,6 +4084,10 @@ const zhHans: typeof en = {
         },
     },
     reach: {
+        publicLinks: "公开链接",
+        allowPublicSubpath: "允许在此主机名上使用公开链接",
+        allowPublicSubpathDescription: "没有独立分享域名时，使用此 Home 的 HTTPS 地址分享会话和 Artifact。HTML 内容仍在受限沙箱中运行。本地服务链接仍需要独立域名。",
+        publicLinksHelp: "默认关闭。独立分享域名支持 PDF 预览；此主机名上的链接提供 PDF 下载。",
         title: '访问方式',
         diagramTitle: ({ home }: { home: string }) => `新设备如何到达 ${home}`,
         yourDevices: '你的设备',
@@ -5064,7 +5068,7 @@ const oidcEditorWords: Pick<Readonly<Record<IdentityAdministrationLanguage, Oidc
         allowRulesHint: '每行输入一个值。留空表示不限制。', brandingHint: '留空以使用默认登录外观。', invalidScopes: '请求的范围必须包含 openid。', refreshFailed: '无法刷新此连接', refreshFailedHint: '你的编辑已保留。重试以检查 Home 上的更改。',
     } };
 
-const identityAdministrationTranslations = { zhHans: build({ ...en, homeWorkosChooseDetail: "选择用于登录此 Home 的 WorkOS 连接。", homeWorkosAdd: "通过 WorkOS 进行公司登录", homeWorkosCompanyName: "公司名称", homeWorkosPurpose: "公司成员可以使用工作账户登录此 Home。", homeWorkosEnableDetail: "成员随后即可使用公司账户登录此 Home。", homeWorkosOffboarding: "仅靠 SSO 不会移除离职人员。", homeWorkosPlatformRequired: "请先在登录平台中设置 WorkOS。",  title: '身份提供商', subtitle: '可供 Team 使用的 Home 登录连接。', homeConnections: 'Home 登录连接', add: '添加连接', empty: '没有 Home 登录连接', active: '已启用', disabled: '已停用', configuration: '配置', issuer: '签发者 URL', clientSecret: '客户端密钥', secretSet: '已设置', secretNotSet: '未设置', secretRetain: '留空以保留当前密钥。', advanced: '显示高级设置', hideAdvanced: '隐藏高级设置', actions: '操作', test: '测试登录', testing: '正在打开测试…', edit: '编辑连接', save: '保存连接', saving: '正在保存…', enable: '启用连接', disable: '停用连接', remove: '移除连接', createTitle: '添加身份提供商', editTitle: '编辑身份提供商', displayName: '名称', required: '请填写必填字段。', invalidIssuer: '请输入有效的 HTTPS URL。', secretRequired: '请输入客户端密钥。', error: '未能应用更改。', accounts: '受影响的 Account', connections: 'Team 连接', errorForbidden: '你已不再拥有此操作的权限。未更改任何内容。', errorConflict: '其他人先做了更改。你的编辑已保留：请重新加载后再试。', errorMissing: '该项已不存在，可能已被移除。', errorInUse: '仍有内容依赖它，请先移除这些内容。', errorProviderUnavailable: '身份服务未响应。未更改任何内容。', errorRateLimited: '提供商要求稍后再试。', errorInvalid: 'Home 拒绝了这些值。请检查配置后再试。', errorImmutable: '记录启用后此值即固定，请改为新建一条。', errorAuthenticationRequired: '请重新登录此 Team 后再试。未更改任何内容。', errorPolicyUnavailable: '目前无法评估 Team 的身份验证策略。未更改任何内容。', errorPolicyInUse: 'Team 的身份验证策略仍依赖此连接。', errorNotAllowed: '此 Home 不允许 Team 配置此项。未更改任何内容。', errorNeedsAttention: '目录同步需要处理。请运行一次完整同步。', errorSyncPaused: '该来源已暂停。“继续同步”会开始一次新的完整同步。', alternateLogins: '需要其他登录方式的 Account', recoveryAuthenticationPolicy: '打开 Team 身份验证', recoveryAlternateLogin: '请先为这些 Account 提供其他登录方式', recoveryDirectory: '打开目录', recoveryGroupMappings: '打开群组映射', recoveryTeamAuthentication: '重新登录', callbackUrl: '回调 URL', callbackUrlHint: '请在你的身份提供商处注册此 URL。' , workosSetupSso: '打开 WorkOS 管理门户', workosSetupDirectory: '设置 WorkOS Directory Sync', workosCheckSetup: '检查 WorkOS 设置', workosChooseConnection: '选择连接', workosPortalConfirmBody: '你将在 WorkOS 中完成设置，然后回到这里选择连接。', workosDirectoryPortalConfirmBody: '你将在 WorkOS 中完成设置，然后回到这里选择目录。', workosSetupSection: '设置', workosSetupFooter: '可以先离开再回来：设置会从已到达的步骤继续。', workosStepPortalDetail: '在那里连接你的身份提供商。回来后，设置会在这里继续。', workosStepPortalDone: '管理门户', workosStepPortalDoneDetail: '你的组织已关联。', workosOpenPortal: '打开门户', workosOpenPortalAgain: '再次打开', workosStepChooseDetail: '选择成员用于登录的 WorkOS 连接。', workosStepChooseDone: '连接', workosFindConnections: '查找连接', workosUseConnection: ({ name }: { name: string }) => `使用 ${name}`, workosCandidateDraft: '这是 WorkOS 中的草稿，请先在那里完成。', workosStepTestDetail: '你自己登录一次。不会向任何人的账户保存内容。', workosTestPassed: '你的测试登录成功了。', workosTestAgain: '再次测试', workosStepEnable: '开启', workosStepEnableDetail: '开启后成员即可用它登录。要设为必需，请在“成员如何登录”中选择它。', workosTurnOn: '开启', workosConnectionSection: '连接', workosConnectionRow: 'WorkOS 连接', workosConnectionNotChosen: '尚未选择', workosChange: '更改', errorWorkosPlatformUnavailable: '此 Home 尚未设置 WorkOS。', errorSetupRequired: '需要先完成设置才能使用。', removeTitle: ({ name }: { name: string }) => `移除 ${name}？`, removeBody: ({ name }: { name: string }) => `${name} 将不再作为登录方式提供。使用过它的账户会保留。`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `仍有 ${connections} 个 Team 连接和 ${accounts} 个账户在使用。请先移除它们。`, disableTitle: ({ name }: { name: string }) => `关闭 ${name}？`, disableBody: ({ name }: { name: string }) => `在重新开启之前，没有人能通过 ${name} 登录。不会删除任何内容。`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `移除 ${name} 上的安装？`, githubRemoveInstallationBody: ({ name }: { name: string }) => `此 Home 将不再使用 ${name} 上的 App。GitHub 上不会有任何变化；如不再需要，请在那里卸载。`, removeBlockedTitle: ({ name }: { name: string }) => `暂时无法移除 ${name}`, removeImpactPeople: ({ count }: { count: number }) => `有 ${count} 人通过它登录此 Team。`, removeImpactNobody: '还没有人通过它登录此 Team。', removeImpactKept: '他们的账户和 Team 成员身份会保留。', removeBlockedAlternateLogins: ({ count }: { count: number }) => `有 ${count} 人没有其他登录方式。`, removeBlockedDirectories: ({ count }: { count: number }) => `仍有 ${count} 个目录源在使用它。`, removeBlockedGroups: ({ count }: { count: number }) => `仍有 ${count} 个群组映射在使用它。`, removeBlockedMemberships: ({ count }: { count: number }) => `仍有 ${count} 个成员身份由它管理。` }, githubAccessWords.zhHans, oidcEditorWords.zhHans) };
+const identityAdministrationTranslations = { zhHans: build({ ...en, homeWorkosChooseDetail: "选择用于登录此 Home 的 WorkOS 连接。", workosRequiredForTeamWork: "团队工作所需", workosTeamPolicyHint: "在“成员如何登录”中更改允许的登录方式。", workosLifecycleFootnote: "关闭后将无法通过此连接登录，直到重新开启。移除会从此Home删除连接；WorkOS组织会保留。", homeWorkosAdd: "通过 WorkOS 进行公司登录", homeWorkosCompanyName: "公司名称", homeWorkosPurpose: "公司成员可以使用工作账户登录此 Home。", homeWorkosEnableDetail: "成员随后即可使用公司账户登录此 Home。", homeWorkosOffboarding: "仅靠 SSO 不会移除离职人员。", homeWorkosPlatformRequired: "请先在登录平台中设置 WorkOS。",  title: '身份提供商', subtitle: '可供 Team 使用的 Home 登录连接。', homeConnections: 'Home 登录连接', add: '添加连接', empty: '没有 Home 登录连接', active: '已启用', disabled: '已停用', configuration: '配置', issuer: '签发者 URL', clientSecret: '客户端密钥', secretSet: '已设置', secretNotSet: '未设置', secretRetain: '留空以保留当前密钥。', advanced: '显示高级设置', hideAdvanced: '隐藏高级设置', actions: '操作', test: '测试登录', testing: '正在打开测试…', edit: '编辑连接', save: '保存连接', saving: '正在保存…', enable: '启用连接', disable: '停用连接', remove: '移除连接', createTitle: '添加身份提供商', editTitle: '编辑身份提供商', displayName: '名称', required: '请填写必填字段。', invalidIssuer: '请输入有效的 HTTPS URL。', secretRequired: '请输入客户端密钥。', error: '未能应用更改。', accounts: '受影响的 Account', connections: 'Team 连接', errorForbidden: '你已不再拥有此操作的权限。未更改任何内容。', errorConflict: '其他人先做了更改。你的编辑已保留：请重新加载后再试。', errorMissing: '该项已不存在，可能已被移除。', errorInUse: '仍有内容依赖它，请先移除这些内容。', errorProviderUnavailable: '身份服务未响应。未更改任何内容。', errorRateLimited: '提供商要求稍后再试。', errorInvalid: 'Home 拒绝了这些值。请检查配置后再试。', errorImmutable: '记录启用后此值即固定，请改为新建一条。', errorAuthenticationRequired: '请重新登录此 Team 后再试。未更改任何内容。', errorPolicyUnavailable: '目前无法评估 Team 的身份验证策略。未更改任何内容。', errorPolicyInUse: 'Team 的身份验证策略仍依赖此连接。', errorNotAllowed: '此 Home 不允许 Team 配置此项。未更改任何内容。', errorNeedsAttention: '目录同步需要处理。请运行一次完整同步。', errorSyncPaused: '该来源已暂停。“继续同步”会开始一次新的完整同步。', alternateLogins: '需要其他登录方式的 Account', recoveryAuthenticationPolicy: '打开 Team 身份验证', recoveryAlternateLogin: '请先为这些 Account 提供其他登录方式', recoveryDirectory: '打开目录', recoveryGroupMappings: '打开群组映射', recoveryTeamAuthentication: '重新登录', callbackUrl: '回调 URL', callbackUrlHint: '请在你的身份提供商处注册此 URL。' , workosSetupSso: '打开 WorkOS 管理门户', workosSetupDirectory: '设置 WorkOS Directory Sync', workosCheckSetup: '检查 WorkOS 设置', workosChooseConnection: '选择连接', workosPortalConfirmBody: '你将在 WorkOS 中完成设置，然后回到这里选择连接。', workosDirectoryPortalConfirmBody: '你将在 WorkOS 中完成设置，然后回到这里选择目录。', workosSetupSection: '设置', workosSetupFooter: '可以先离开再回来：设置会从已到达的步骤继续。', workosStepPortalDetail: '在那里连接你的身份提供商。回来后，设置会在这里继续。', workosStepPortalDone: '管理门户', workosStepPortalDoneDetail: '你的组织已关联。', workosOpenPortal: '打开门户', workosOpenPortalAgain: '再次打开', workosStepChooseDetail: '选择成员用于登录的 WorkOS 连接。', workosStepChooseDone: '连接', workosFindConnections: '查找连接', workosUseConnection: ({ name }: { name: string }) => `使用 ${name}`, workosCandidateDraft: '这是 WorkOS 中的草稿，请先在那里完成。', workosStepTestDetail: '你自己登录一次。不会向任何人的账户保存内容。', workosTestPassed: '你的测试登录成功了。', workosTestAgain: '再次测试', workosStepEnable: '开启', workosStepEnableDetail: '开启后成员即可用它登录。要设为必需，请在“成员如何登录”中选择它。', workosTurnOn: '开启', workosConnectionSection: '连接', workosConnectionRow: 'WorkOS 连接', workosConnectionNotChosen: '尚未选择', workosChange: '更改', errorWorkosPlatformUnavailable: '此 Home 尚未设置 WorkOS。', errorSetupRequired: '需要先完成设置才能使用。', removeTitle: ({ name }: { name: string }) => `移除 ${name}？`, removeBody: ({ name }: { name: string }) => `${name} 将不再作为登录方式提供。使用过它的账户会保留。`, removeBlocked: ({ accounts, connections }: { accounts: number; connections: number }) => `仍有 ${connections} 个 Team 连接和 ${accounts} 个账户在使用。请先移除它们。`, disableTitle: ({ name }: { name: string }) => `关闭 ${name}？`, disableBody: ({ name }: { name: string }) => `在重新开启之前，没有人能通过 ${name} 登录。不会删除任何内容。`, githubRemoveInstallationTitle: ({ name }: { name: string }) => `移除 ${name} 上的安装？`, githubRemoveInstallationBody: ({ name }: { name: string }) => `此 Home 将不再使用 ${name} 上的 App。GitHub 上不会有任何变化；如不再需要，请在那里卸载。`, removeBlockedTitle: ({ name }: { name: string }) => `暂时无法移除 ${name}`, removeImpactPeople: ({ count }: { count: number }) => `有 ${count} 人通过它登录此 Team。`, removeImpactNobody: '还没有人通过它登录此 Team。', removeImpactKept: '他们的账户和 Team 成员身份会保留。', removeBlockedAlternateLogins: ({ count }: { count: number }) => `有 ${count} 人没有其他登录方式。`, removeBlockedDirectories: ({ count }: { count: number }) => `仍有 ${count} 个目录源在使用它。`, removeBlockedGroups: ({ count }: { count: number }) => `仍有 ${count} 个群组映射在使用它。`, removeBlockedMemberships: ({ count }: { count: number }) => `仍有 ${count} 个成员身份由它管理。` }, githubAccessWords.zhHans, oidcEditorWords.zhHans) };
 
 return { githubAccessWords, oidcEditorWords, identityAdministrationTranslations };
 })();
@@ -5286,6 +5290,44 @@ const machineDetailPageTranslations = { 'zh-Hans': translated({
             stopDaemonDescription: '正在运行的会话会继续。在这台机器上重新启动它之前，无法启动新会话。',
             stopDaemonAction: '停止',
             detailsTitle: '机器详情',
+            tabs: {
+                overview: "概览",
+            },
+            thisMachineTitle: "此机器",
+            connectionFollowsAccount: "跟随你的账户",
+            subPages: {
+                sharing: "共享",
+                agents: "智能体",
+                terminal: "终端",
+                connection: "连接",
+                tools: "工具",
+                doctor: "诊断",
+                details: "详细信息",
+            },
+            summaries: {
+                terminalDirect: "无终端主机",
+                agentReady: ({ agent }) => `${agent} 已就绪`,
+                agentsReadyPair: ({ first, second }) => `${first} 和 ${second} 已就绪`,
+                agentsReadyCount: ({ count }) => `${count} 个智能体已就绪`,
+                doctorChecked: ({ time }) => `检查于 ${time}`,
+            },
+            work: {
+                none: "无工作",
+                working: ({ count }) => `${count} 个进行中`,
+            },
+            platformFact: ({ platform, arch }) => `${platform} · ${arch}`,
+        },
+        allMachines: {
+            rowTitle: "所有机器",
+            viewList: "列表",
+            viewGrid: "网格",
+            viewLabel: "机器显示方式",
+            columnMachine: "机器",
+            columnWork: "工作",
+            columnStatus: "状态",
+            allMachinesGroup: "所有机器",
+            machinesCount: ({ count }) => count === 1 ? `${count} 台机器` : `${count} 台机器`,
+            sessionsWorking: ({ count }) => count === 1 ? `${count} 个会话进行中` : `${count} 个会话进行中`,
         },
     }) };
 
@@ -6279,6 +6321,11 @@ const pluginSettingsPresentationTranslations = { 'zh-Hans': {
             emptyBody: '插件为你的智能体添加面板、命令和工具。先从 Happier 出品的插件开始吧。',
             browsePlugins: '浏览插件',
             browseEmpty: '你的来源中暂时没有可用插件。',
+            noSavedDetails: '这台电脑没有已保存的插件详情。',
+            projectionFailedTitle: '无法加载这台电脑的插件注册表',
+            projectionFailedBody: '无法加载其插件详情。请重试以管理插件。',
+            machineOfflineTitle: '这台电脑已离线',
+            machineOfflineBody: '更改需要这台电脑在线。请在标题栏中选择另一台电脑。',
             forDevelopers: '开发者',
             readFailedTitle: '无法读取这台电脑的插件',
             readFailedBody: '没有任何更改。重试以再次询问这台电脑。',
@@ -6422,6 +6469,9 @@ const en = Shared_providerCollectionTranslations.en;
 const zhHans: ProviderCollectionCopy = {
     settingsProvidersCollection: {
         gateway: {
+            statusRunning: '运行中',
+            statusIdle: '空闲',
+            statusNotChecked: '未检查',
             railGroup: '网关',
             managedFromConnectedServices: '在“已连接的服务”中管理',
             description: '让任何智能体都能使用你的订阅。',
@@ -6509,6 +6559,9 @@ const zhHans: ProviderCollectionCopy = {
         addTitle: ({ provider }: { provider: string }) => `添加 ${provider}`,
         addDescription: ({ provider }: { provider: string }) => `添加密钥后，${provider} 的模型会出现在每个能运行它们的智能体中。`,
         addKeyDescription: '作为已保存的密钥保存在你的账户中。',
+        addAccountScopeHint: '立即保存到你的账户，无需电脑。之后可以在你的任意一台电脑上测试。',
+        editConnection: '编辑连接',
+        editDescription: '更改将应用于之后开始的会话。密钥和模型仍在它的页面上管理。',
         connectedTitle: ({ provider }: { provider: string }) => `${provider} 已连接`,
         connectedHiddenCountDescription: ({ provider, count }: { provider: string; count: number }) => `${count} 个模型已就绪。由于 ${provider} 列出的许多模型你可能已经拥有，它们默认不在选择器中显示。可随时通过“运行通道”选择，或全部显示。`,
         connectedHiddenDescription: ({ provider }: { provider: string }) => `由于 ${provider} 列出的许多模型你可能已经拥有，它的模型默认不在选择器中显示。可随时通过“运行通道”选择，或全部显示。`,
@@ -7559,7 +7612,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         linkLoadFailed: '无法检查公开链接。',
         linkNetworkOff: '关闭可视内容的网络访问后分享',
         linkNetworkConsequence: '具有网络访问权限的可视内容可以将其内容发送到其他网站，并暴露查看者的 IP 地址。远程代码和资源可能发生变化。关闭网络访问后，内置内容仍可交互，不会发出外部请求。',
-        linkUnavailable: '此 Home 不支持公开链接。请联系管理员配置公开链接托管。',
+        linkUnavailable: "此 Home 不支持公开链接。请 Home 所有者配置独立分享域名，或允许在此主机名上使用链接。还必须配置公开链接请求频率限制。",
+        configurePublicLinks: "配置公开链接",
         justYouTitle: '一起处理这个会话',
         justYouBody: ({ home }) => `与 ${home} 上的人共享。他们可以关注进展、在这里讨论,并在你离开时接手。`,
         share: '共享',
@@ -8569,6 +8623,8 @@ const zhHans: typeof en = {
     daemonTitle: '后台服务',
     daemonDescription: '在这台计算机上运行你的会话，并保持它与 Home 的连接。',
     unreadableTitle: ({ home }: { home: string }) => `无法读取 ${home} 上的机器`,
+    indexViewTitle: '所有机器视图',
+    indexViewDescription: '以列表或每台机器一张卡片的形式显示所有机器。保存在此设备上。',
 };
 
 const settingsMachinesTranslations = { zhHans };
@@ -9182,6 +9238,11 @@ const sidebarFooterTranslations = { 'zh-Hans': {
         usageNextInOrder: ({ account }) => `${account} 用完后，下一轮将按顺序切换到下一个账户`,
         usageNextMostLeft: ({ account }) => `${account} 用完后，下一轮将切换到剩余最多的账户`,
         usageNextStays: ({ pool, account }) => `在你切换之前，${pool} 会一直使用 ${account}`,
+        machinesEmptyTitle: '在你自己的电脑上运行会话',
+        machinesEmptyBody: '添加这台电脑、一台服务器或云端机器。Happier 会显示每台机器在做什么，并在需要你时提醒你。',
+        machinesAddThisComputer: '添加这台电脑',
+        machinesAddAnotherMachine: '添加另一台机器',
+        machinesHomeSignedOut: ({ home }) => `你已退出 ${home}，因此不会列出它的机器。`,
     } } as const satisfies Pick<Record<string, SidebarFooterTranslation>, "zh-Hans">;
 
 return { sidebarFooterTranslations };
@@ -11269,6 +11330,7 @@ const widgetAddTranslations = { 'zh-Hans': {
         panes: '面板',
         panesHint: '以链接形式添加，在详情中打开',
         builtIn: '内置',
+        prompts: { project: '哪个项目？', projects: '哪些项目？', session: '哪个会话？', workspace: '哪个工作区？' },
         nativeDescriptions: {
             session_summary: '查看所选会话的活动和后续步骤。',
             agent_plan: '跟进所选会话中智能体的计划。',
@@ -11895,6 +11957,7 @@ const workflowExamplesTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'c
         sessionNotifyDescription: "每当此会话的代理需要你的输入时发送通知。",
         sessionDailySummaryDescription: "每天 09:00 在这里生成摘要。",
         sessionTestDescription: "在每个完成、失败或取消的回合后运行可编辑的测试命令。",
+        newTag: "新",
         notifyWhenAgentWaits: { title: "在代理等待时通知我", description: "选择一个会话，每当其中的代理需要你的输入时，就会收到通知。" },
         dailySummaryInSession: { title: "在此会话中每日总结", description: "选择一个会话，每天09:00生成总结。" },
         memoryUpkeepInSession: { title: '记忆维护', description: '每天09:00检查此会话的记忆，并更新有用的信息。' },
