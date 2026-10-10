@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { PluginApi, PluginProjectNativeAdapterRuntimeV1 } from '@happier-dev/plugin-sdk';
+import { isPluginError } from '@happier-dev/plugin-sdk';
 import { ingestCanonicalPluginManifest } from '@/plugins/manifest/ingest';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createProductionPluginInvocationServiceOwners } from '../../invocation/services/production';
@@ -73,6 +74,12 @@ describe('native lifecycle-only invocation recovery', () => {
         let replacement: Awaited<ReturnType<typeof activate>> | undefined;
         const releases: Array<() => Promise<void>> = [];
         try {
+            const unavailable = await resolveProjectNativeAdapter({ reference: instance.adapter, role: 'nativeServiceLifecycle', targets, registry: original });
+            if (unavailable.kind !== 'ready') throw new Error(unavailable.code);
+            const unavailableCapture = unavailable.lease.captureNativeServiceLifecycle(instance, { root });
+            if (unavailableCapture.kind !== 'ready') throw new Error(unavailableCapture.code);
+            await expect(unavailableCapture.lifecycle.inspect(instance)).rejects.toSatisfy((error: unknown) =>
+                isPluginError(error) && error.code === 'native_adapter_invocation_unavailable');
             const selected = await resolveProjectNativeAdapter({ reference: instance.adapter, role: 'nativeServiceLifecycle', targets, registry: original, createInvocationContext });
             if (selected.kind !== 'ready') throw new Error(selected.code);
             const captured = selected.lease.captureNativeServiceLifecycle(instance, { root });

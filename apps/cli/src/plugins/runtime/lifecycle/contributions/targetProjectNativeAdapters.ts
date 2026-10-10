@@ -9,6 +9,7 @@ import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins
 import type { PluginProjectNativeAdapterRuntimeV1, PluginProjectNativeInspectionV1, PluginProjectNativeCommandRequestV1, PluginProjectNativeEnvironmentRequestV1, PluginProjectNativeCommandResultV1, PluginProjectNativeEnvironmentResultV1, PluginProjectNativeFailureV1 } from '@happier-dev/plugin-sdk';
 import type { PluginCancellationOptions, PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { ManagedServiceNativeInstanceV1, ManagedServiceNativeLifecycleV1 } from '@happier-dev/plugin-sdk/managed-services';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import type { ActivatedPluginRuntimeRegistry } from '../manager';
 import type { ActivationTarget } from '../activation/targets';
 import { readPluginExecProcessCustodyForHost, type PluginExecProcessCustodyForHost } from '../../invocation/services/exec';
@@ -270,7 +271,7 @@ export async function resolveProjectNativeAdapter(params: Readonly<{
                     // The lifecycle role alone can acquire its own admitted services.
                     // Recovery never runs resolveCommand or the native starter again.
                     const acquired = acquireProduction(input);
-                    if (acquired.kind !== 'ready') throw new ProjectNativeAdapterInvocationError(acquired.code);
+                    if (acquired.kind !== 'ready') throw new PluginError({ code: acquired.code, details: { kind: acquired.kind } });
                     production = acquired.production;
                 }
                 return production.invocationContext;
