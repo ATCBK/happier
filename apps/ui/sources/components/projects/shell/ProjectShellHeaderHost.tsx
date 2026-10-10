@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { seedAndOpenProjectDraft } from '@/components/projects/activation/projectOpenDraftSeed';
 import { useNavigateToProjectOpen } from '@/components/projects/activation/projectOpenPresentation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -9,8 +8,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import type { PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { buildNewSessionLaunchRouteParams } from '@/components/sessions/new/navigation/newSessionRouteParams';
-import { seedAndOpenNewSession } from '@/components/sessions/new/newSessionSeedComposer';
+import { useProjectNewSessionAction } from '@/components/projects/useProjectNewSessionAction';
 import {
   PROJECT_PAGES,
   type ProjectPageV1,
@@ -223,7 +221,8 @@ export const ProjectShellHeaderHost = React.memo(
         menuActions?: readonly PageHeaderMenuAction[];
       }>,
   ) {
-    const router = useRouter();
+    const newSession = useProjectNewSessionAction({ serverId: props.workspaceRef.serverId,
+      machineId: props.workspaceRef.machineId, rootPath: props.activeRootPath });
     const { navigateToSegment } = useProjectRouteActions({
       workspaceRef: props.workspaceRef,
       activeRootPath: props.activeRootPath,
@@ -248,43 +247,19 @@ export const ProjectShellHeaderHost = React.memo(
       [changeCount, props.pages],
     );
 
-    const onNewSession = React.useCallback(() => {
-      const lifetime = captureActiveServerAccountScopeLifetime();
-      if (!lifetime) return;
-      seedAndOpenNewSession({
-        seed: {
-          placement: {
-            kind: 'exactTarget',
-            serverId: props.workspaceRef.serverId,
-            machineId: props.workspaceRef.machineId,
-            directory: props.activeRootPath,
-          },
-        },
-        scope: lifetime.scope,
-        isCurrent: lifetime.isCurrent,
-        navigateToNewSession: ({ draftId }) =>
-          router.push({
-            pathname: '/new',
-            params: buildNewSessionLaunchRouteParams({ draftId }),
-          }),
-      });
-    }, [
-      props.activeRootPath,
-      props.workspaceRef.machineId,
-      props.workspaceRef.serverId,
-      router,
-    ]);
-
     return (
-      <ProjectShellHeader
-        projectName={resolveWorkspaceRefDisplayName(props.workspaceRef)}
-        checkout={checkout}
-        pages={pages}
-        activePage={props.page}
-        onSelectPage={selectPage}
-        onNewSession={onNewSession}
-        menuActions={props.menuActions ?? []}
-      />
+      <>
+        <ProjectShellHeader
+          projectName={resolveWorkspaceRefDisplayName(props.workspaceRef)}
+          checkout={checkout}
+          pages={pages}
+          activePage={props.page}
+          onSelectPage={selectPage}
+          onNewSession={newSession.open}
+          menuActions={props.menuActions ?? []}
+        />
+        {newSession.approvalNotice}
+      </>
     );
   },
 );

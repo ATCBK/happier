@@ -1,10 +1,22 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { standardCleanup } from '@/dev/testkit';
+import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 import type { ScmDiffSummaryResult } from '@happier-dev/protocol/scm/diffSummaryResult';
 import { seedAndOpenNewSession } from '@/components/sessions/new/newSessionSeedComposer';
 import { readNewSessionDraftFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
-import { buildWorkspaceScmAuthoringSeed } from './workspaceScmAuthoring';
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+const navigate = vi.hoisted(() => vi.fn());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: { push: navigate } }).module);
+const { storage } = await import('@/sync/domains/state/storage');
+const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/actionSettings');
+const { buildWorkspaceScmAuthoringSeed, openWorkspaceScmAuthoringDraft } = await import('./workspaceScmAuthoring');
 
 const workspace = { serverId: 'home-a', workspaceId: 'checkout-exact', machineId: 'machine-a', rootPath: '/repo' };
 const scope = { serverId: workspace.serverId, accountId: 'alice' };
@@ -50,5 +62,75 @@ describe('workspace SCM ordinary authoring seed', () => {
         expect(buildWorkspaceScmAuthoringSeed({ workspace, accountId: scope.accountId, comparison, result: null, stopId: 'stop-one' })).toBeNull();
         expect(buildWorkspaceScmAuthoringSeed({ workspace, accountId: scope.accountId, comparison: { ...comparison, id: 'different' }, result })).toBeNull();
         expect(buildWorkspaceScmAuthoringSeed({ workspace: { ...workspace, rootPath: '/other' }, accountId: scope.accountId, comparison, result })).toBeNull();
+    });
+});
+
+describe('captured workspace SCM authoring Action admission', () => {
+    let serverId: string;
+    beforeEach(async () => {
+        await homes.reset(); await loadSyncSingletonForTests();
+        serverId = await homes.addHome({ name: 'Review Home', serverUrl: 'https://review-authoring.test', accountId: 'account-a' });
+        const ref = { id: workspace.workspaceId, serverId, machineId: workspace.machineId, rootPath: workspace.rootPath, createdAtMs: 1 };
+        const key = { kind: 'workspace-ref', serverId, id: ref.id };
+        homes.answer(serverId, 'POST /v1/account/project-rows/list', { body: { status: 'listed', coverage: 'complete',
+            rows: [{ key, revision: 0, content: { t: 'plain', v: { key, value: ref } } }] } });
+        const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+        await restoreConnectionToActiveServer({ token: homes.findByServerUrl('https://review-authoring.test')!.token! });
+        applyProjectAccountRowsFixture(storage, { workspaceRefs: [ref] });
+        navigate.mockClear();
+    });
+    afterEach(async () => {
+        await standardCleanup();
+        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+        await disconnectActiveServerConnection(); await homes.reset();
+    });
+    const open = (serverId: string) => openWorkspaceScmAuthoringDraft({
+        scope: { serverId, machineId: workspace.machineId, rootPath: workspace.rootPath },
+        comparison, result, isCurrent: () => true,
+    });
+    it('disabled authoring leaves captured Review drafts and navigation untouched', async () => {
+        const accountScope = { serverId, accountId: 'account-a' };
+        const settings = { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: { 'session.authoring.open': { disabledSurfaces: ['ui'] } },
+        }) };
+        storage.getState().applySettingsForScope(accountScope, settings, 1);
+        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+        const { listNewSessionDraftProjections } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        const before = listNewSessionDraftProjections(accountScope);
+        expect(await open(serverId)).toMatchObject({ kind: 'unavailable' });
+        expect(listNewSessionDraftProjections(accountScope)).toEqual(before);
+        expect(navigate).not.toHaveBeenCalled();
+        expect(storage.getState().sessions).toEqual({});
+    });
+    it('Ask retains the exact captured Review seed until rejection or approval', async () => {
+        await homes.requireUiApproval(serverId, 'session.authoring.open');
+        const accountScope = { serverId, accountId: 'account-a' };
+        const { listNewSessionDraftProjections } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        const before = listNewSessionDraftProjections(accountScope);
+        const pending = await open(serverId);
+        expect(pending).toMatchObject({ kind: 'approval_request_created', artifactId: expect.any(String) });
+        expect(listNewSessionDraftProjections(accountScope)).toEqual(before);
+        expect(navigate).not.toHaveBeenCalled();
+        if (!('artifactId' in pending) || typeof pending.artifactId !== 'string') throw new Error('Expected canonical approval receipt');
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        expect(await executor.execute('approval.request.decide', { artifactId: pending.artifactId, decision: 'reject' }, { surface: 'ui', serverId }))
+            .toMatchObject({ ok: true, result: { status: 'rejected' } });
+        expect(listNewSessionDraftProjections(accountScope)).toEqual(before);
+        const accepted = await open(serverId);
+        if (!('artifactId' in accepted) || typeof accepted.artifactId !== 'string') throw new Error('Expected fresh exact approval receipt');
+        expect(await executor.execute('approval.request.decide', { artifactId: accepted.artifactId, decision: 'approve' }, { surface: 'ui', serverId }))
+            .toMatchObject({ ok: true, result: { status: 'executed' } });
+        const drafts = listNewSessionDraftProjections(accountScope);
+        expect(drafts).toHaveLength(before.length + 1);
+        const created = drafts.find(item => !before.some(previous => previous.draftId === item.draftId));
+        const draft = created ? readNewSessionDraftFromRepository({ scope: accountScope, draftId: created.draftId }) : null;
+        expect(draft).toMatchObject({ selectedMachineId: workspace.machineId, selectedPath: '/repo', authoringOrigin: {
+            workspace: { ...workspace, serverId }, accountId: 'account-a', page: 'changes', comparisonId: comparison.id,
+        } });
+        expect(draft?.input).toContain('before-oid');
+        expect(draft?.input).not.toContain('DO_NOT_DISCLOSE');
+        expect(navigate).toHaveBeenCalledTimes(1);
+        expect(storage.getState().sessions).toEqual({});
     });
 });

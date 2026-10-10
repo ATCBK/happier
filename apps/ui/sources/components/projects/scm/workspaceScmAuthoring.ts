@@ -1,10 +1,11 @@
-import type { PluginUiNewSessionSeedV1, SessionNewSessionSeedOutcome } from '@happier-dev/protocol/plugins/ui';
+import { SessionAuthoringOpenResultV1Schema, type PluginUiNewSessionSeedV1, type SessionAuthoringOpenResultV1 } from '@happier-dev/protocol/plugins/ui';
+import { ActionApprovalRequestCreatedResultSchema, type ActionApprovalRequestCreatedResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { workspaceAddressFromRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import type { ScmComparison } from '@happier-dev/protocol/scm/comparison';
 import type { ScmDiffSummaryResult } from '@happier-dev/protocol/scm/diffSummaryResult';
 import { buildWalkthroughReading, type WalkthroughStop } from '@/components/sessions/files/walkthrough/walkthroughReading';
-import { openOrdinaryNewSessionSeed } from '@/components/sessions/new/newSessionSeedNavigation';
+import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { storage } from '@/sync/domains/state/storage';
@@ -50,6 +51,8 @@ export function buildWorkspaceScmAuthoringSeed(input: Readonly<{
     };
 }
 
+export type WorkspaceScmAuthoringOutcome = SessionAuthoringOpenResultV1 | ActionApprovalRequestCreatedResult;
+
 export async function openWorkspaceScmAuthoringDraft(input: Readonly<{
     scope: WorkspaceScopeBase;
     comparison: ScmComparison;
@@ -58,7 +61,7 @@ export async function openWorkspaceScmAuthoringDraft(input: Readonly<{
     /** Exact displayed comparison/revision + mounted host lifetime, supplied by the review owner. */
     isCurrent: () => boolean;
     signal?: AbortSignal;
-}>): Promise<SessionNewSessionSeedOutcome> {
+}>): Promise<WorkspaceScmAuthoringOutcome> {
     const lifetime = captureActiveServerAccountScopeLifetime();
     if (!lifetime || !areServerProfileIdentifiersEquivalent(input.scope.serverId, lifetime.scope.serverId)
         || !input.isCurrent()) return { kind: 'stale', reason: 'host_retired' };
@@ -68,8 +71,23 @@ export async function openWorkspaceScmAuthoringDraft(input: Readonly<{
     const seed = buildWorkspaceScmAuthoringSeed({ workspace, accountId: lifetime.scope.accountId,
         comparison: input.comparison, result: input.result, ...(input.stop ? { stopId: input.stop.id } : {}) });
     if (!seed) return { kind: 'unavailable', reason: 'origin_unavailable' };
-    return openOrdinaryNewSessionSeed({ seed, scope: lifetime.scope, ...(input.signal ? { signal: input.signal } : {}),
-        isCurrent: () => lifetime.isCurrent() && input.isCurrent()
-            && resolveWorkspaceRefByAddress(readProjectWorkspaceRefs(storage.getState()), workspace).kind === 'resolved',
-    });
+    const current = () => !input.signal?.aborted && lifetime.isCurrent() && input.isCurrent()
+        && resolveWorkspaceRefByAddress(readProjectWorkspaceRefs(storage.getState()), workspace).kind === 'resolved';
+    try {
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        if (!current()) return { kind: 'stale', reason: 'host_retired' };
+        const prepared = await createFrontDoorActionExecute(createDefaultActionExecutor()).prepare('session.authoring.open', { seed }, {
+            surface: 'ui', authority: 'present_user', serverId: lifetime.scope.serverId,
+            expectedAccountId: lifetime.scope.accountId, ...(input.signal ? { signal: input.signal } : {}),
+        });
+        if (!current()) return { kind: 'stale', reason: 'host_retired' };
+        const response = prepared.kind === 'settled' ? prepared.result : await prepared.invocation.run();
+        if (!response.ok) return { kind: 'unavailable', reason: 'navigation_unavailable' };
+        const approval = ActionApprovalRequestCreatedResultSchema.safeParse(response.result);
+        if (approval.success) return approval.data;
+        const outcome = SessionAuthoringOpenResultV1Schema.safeParse(response.result);
+        return outcome.success ? outcome.data : { kind: 'unavailable', reason: 'navigation_unavailable' };
+    } catch {
+        return current() ? { kind: 'unavailable', reason: 'navigation_unavailable' } : { kind: 'stale', reason: 'host_retired' };
+    }
 }

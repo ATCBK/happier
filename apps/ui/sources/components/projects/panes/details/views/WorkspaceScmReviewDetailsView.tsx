@@ -62,6 +62,9 @@ import { readSessionScmReviewTarget } from '@/components/sessions/panes/url/sess
 import { openWorkspaceScmAuthoringDraft } from '@/components/projects/scm/workspaceScmAuthoring';
 import { useScmWalkthrough } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
 import { normalizeWorkspaceRootPath } from '@/sync/domains/workspaces/workspaceScope';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 
 /** The same comparison body serves Changes and explicit review Details destinations. */
 const WORKSPACE_REVIEW_DETAILS_HEADER = Object.freeze({});
@@ -196,8 +199,14 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
     currentDisplayedIdentity.current = displayedIdentity;
     const displayedIsCurrent = React.useCallback(() => bound.isCurrent() && currentDisplayedIdentity.current === displayedIdentity,
         [bound.isCurrent, displayedIdentity]);
+    const router = useRouter();
+    const authoringApproval = useActionApprovalContinuation({
+        scopeKey: JSON.stringify([bound.scope?.serverId, bound.scope?.accountId, props.machineId, props.rootPath, displayedIdentity]),
+        serverId: props.serverId, onExecuted: () => {},
+    });
     const authoringDraft = (basis: Parameters<typeof openWorkspaceScmAuthoringDraft>[0]) => {
         void openWorkspaceScmAuthoringDraft(basis).then((outcome) => {
+            if (basis.isCurrent() && outcome.kind === 'approval_request_created') authoringApproval.requestApproval(outcome.artifactId);
             if (basis.isCurrent() && outcome.kind === 'unavailable') Modal.alert(t('common.error'), t('common.unavailable'));
         });
     };
@@ -343,6 +352,10 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
 
     return (
         <View style={{ flex: 1, minHeight: 0, minWidth: 0, backgroundColor: theme.colors.surface.base }}>
+            {authoringApproval.approvalId ? <ActionApprovalPendingNotice message={t('approvals.status.open')}
+                testID="workspace-review-authoring-approval" onOpenApproval={() => router.push(
+                    `/inbox/approvals/${encodeURIComponent(authoringApproval.approvalId!)}?serverId=${encodeURIComponent(props.serverId)}`,
+                )} /> : null}
             {reviewCommentsEnabled ? (
                 <ReviewCommentsSessionSurface
                     scope={bound.scope ?? undefined}

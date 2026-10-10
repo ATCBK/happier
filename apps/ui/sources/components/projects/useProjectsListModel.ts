@@ -31,6 +31,7 @@ import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs
 import { resolveWorkspaceRefByAddress } from '@/sync/domains/workspaces/workspaceRefs';
 import { ActionApprovalRequestCreatedResultSchema, type ActionApprovalRequestCreatedResult,
     type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { PluginUiNewSessionSeedV1 } from '@happier-dev/protocol/plugins/ui';
 
 type ProjectHideUndo = Readonly<{ isCurrent(): boolean; undo(): Promise<boolean> }>;
 
@@ -113,11 +114,10 @@ export function useProjectsListModel() {
         if (target.kind !== 'resolved') return { ok: false, errorCode: 'workspace_ref_unavailable', error: 'workspace_ref_unavailable' };
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         if (!lifetime.isCurrent()) return retired;
+        const seed = { placement: { kind: 'exactTarget', serverId: ref.serverId,
+            machineId: target.ref.machineId, directory: target.ref.rootPath } } satisfies PluginUiNewSessionSeedV1;
         const result = await createFrontDoorActionExecute(createDefaultActionExecutor())('session.authoring.open', {
-            seed: { placement: { kind: 'exactTarget', serverId: ref.serverId,
-                machineId: target.ref.machineId, directory: target.ref.rootPath },
-                origin: { kind: 'project', accountId: lifetime.scope.accountId,
-                    workspace: workspaceAddressFromRefV1(target.ref), page: 'overview' } },
+            seed,
         }, { surface: 'ui', authority: 'present_user', serverId: lifetime.scope.serverId,
             expectedAccountId: lifetime.scope.accountId });
         if (lifetime.isCurrent()) {

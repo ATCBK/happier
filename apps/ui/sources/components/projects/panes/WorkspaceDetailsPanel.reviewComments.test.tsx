@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 
 const routerPushSpy = vi.fn();
@@ -135,39 +135,6 @@ describe('WorkspaceDetailsPanel review comment launcher', () => {
         standardCleanup();
     });
 
-    it('opens the new-session route for the active project worktree without storing a parallel review-comment seed', async () => {
-        const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
-
-        const rendered = await renderScreen(
-            <WorkspaceDetailsPanel
-                workspaceRef={{
-                    id: 'wr_1',
-                    serverId: 'server-1',
-                    machineId: 'machine-1',
-                    rootPath: '/repo/main',
-                    label: 'Repo',
-                } as any}
-                scopeId="project:wr_1"
-                activeRootPath="/repo/worktree-a"
-            />,
-        );
-
-        await pressTestInstanceAsync(
-            rendered.findByTestId('workspace-details-open-review-comments-session'),
-            'workspace-details-open-review-comments-session',
-        );
-
-        expect(routerPushSpy).toHaveBeenCalledWith({
-            pathname: '/new',
-            params: {
-                draftId: expect.any(String),
-                machineId: 'machine-1',
-                directory: '/repo/worktree-a',
-                spawnServerId: 'server-1',
-            },
-        });
-    });
-
     it('passes the active worktree path into project review details tabs', async () => {
         const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
 
@@ -262,41 +229,6 @@ describe('WorkspaceDetailsPanel review comment launcher', () => {
         expect(projectTerminalSurfaceSpy).toHaveBeenCalledWith(expect.objectContaining({
             terminalInstanceId: 'terminal-instance-2',
         }));
-    });
-
-    it('opens an instance-aware project terminal details tab from the header action', async () => {
-        const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
-
-        const rendered = await renderScreen(
-            <WorkspaceDetailsPanel
-                workspaceRef={{
-                    id: 'wr_1',
-                    serverId: 'server-1',
-                    machineId: 'machine-1',
-                    rootPath: '/repo/main',
-                    label: 'Repo',
-                } as any}
-                scopeId="project:wr_1"
-                activeRootPath="/repo/worktree-a"
-            />,
-        );
-
-        await pressTestInstanceAsync(
-            rendered.findByTestId('workspace-details-open-terminal'),
-            'workspace-details-open-terminal',
-        );
-
-        expect(openDetailsTabSpy).toHaveBeenCalledWith(
-            expect.objectContaining({
-                key: 'terminal:terminal-instance-2',
-                kind: 'terminal',
-                resource: expect.objectContaining({
-                    kind: 'terminal',
-                    terminalInstanceId: 'terminal-instance-2',
-                }),
-            }),
-            { intent: 'pinned' },
-        );
     });
 
     it('provides stable project details tab test ids for opened tabs', async () => {

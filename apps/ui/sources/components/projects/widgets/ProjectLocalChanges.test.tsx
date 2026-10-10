@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol/account/authoringMemory';
@@ -18,6 +18,8 @@ import type { IModal } from '@/modal';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 
 let disposeActionLoader: (() => void) | undefined;
 beforeAll(async () => { disposeActionLoader = await installRealActionExecutorModuleLoader(); });
@@ -54,6 +56,11 @@ const { tryBuildWorkspaceCacheKey } = await import('@/sync/domains/workspaces/wo
 const { clearCachedWorkspaceRepositoryDirectoryEntries, getCachedWorkspaceRepositoryDirectoryEntries } = await import('@/sync/domains/workspaces/files/workspaceRepositoryDirectory');
 const { WorkspaceFileDetailsView } = await import('@/components/workspaces/files/details/WorkspaceFileDetailsView');
 const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
+const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/actionSettings');
+const approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
+let accountSettings: ReturnType<typeof storage.getState>['settings'] | null = null;
+let accountSettingsVersion = 0;
+afterEach(() => { approvalArtifacts.clear(); accountSettings = null; accountSettingsVersion = 0; });
 
 function snapshot(paths: readonly string[]) {
     return ScmWorkingSnapshotSchema.parse({
@@ -80,7 +87,9 @@ const runtime = installSessionPaneRuntimeTestHarness({
         if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list` && init?.method === 'POST')
             return Response.json(ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', rows: [], coverage: 'complete' }));
         if (path === '/v2/account/settings' && (init?.method ?? 'GET') === 'GET')
-            return Response.json({ content: null, version: 0 });
+            return Response.json(accountSettings ? { content: { t: 'plain', v: accountSettings }, version: accountSettingsVersion } : { content: null, version: 0 });
+        const artifactResponse = approvalArtifacts.handle(path, init);
+        if (artifactResponse) return artifactResponse;
         if (path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'm1', accountId: 'account-a' })]);
         if (path === '/v1/machines/m1')
             return Response.json({ machine: { id: 'm1', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
@@ -143,6 +152,9 @@ const runtime = installSessionPaneRuntimeTestHarness({
 });
 beforeEach(async () => {
     boundary.navigate.mockClear(); boundary.denied = false;
+    // The Action front door lazily loads the ordinary draft host. Bind its
+    // module-level router as well as useRouter to this same OS boundary spy.
+    vi.spyOn((await import('expo-router')).router, 'push').mockImplementation(boundary.navigate);
     boundary.confirmDiscard = false;
     boundary.confirmPush = false;
     boundary.rootReadme = false;
@@ -186,6 +198,82 @@ async function mount(rootPath = '/repo', id: 'project_changes' | 'project_checko
 }
 
 describe('Project Local Changes', () => {
+    it('ordinary Project terminal control opens the real bottom pane without creating a Details terminal tab', async () => {
+        const { WorkspaceDetailsPanel } = await import('@/components/projects/panes/WorkspaceDetailsPanel');
+        const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+        const observed: { pane: AppPaneScopeApi | null } = { pane: null };
+        function Probe() { observed.pane = useAppPaneScope('project:wr_1'); return null; }
+        const screen = await renderScreen(<runtime.Wrapper><Probe /><WorkspaceDetailsPanel
+            workspaceRef={{ id: 'wr_1', serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo', createdAtMs: 1 }}
+            activeRootPath="/repo/worktree-a" scopeId="project:wr_1" /></runtime.Wrapper>);
+        await screen.pressByTestIdAsync('workspace-details-open-terminal');
+        expect(observed.pane?.scopeState?.bottom).toMatchObject({ isOpen: true, activeTabId: 'terminal' });
+        expect(observed.pane?.scopeState?.details.tabs).toEqual([]);
+        expect(storage.getState().sessions).toEqual({});
+        await screen.unmount();
+    });
+    it.each(['header', 'comments'] as const)('ordinary Project authoring from %s defers the exact worktree draft until approval', async source => {
+        const scope = { serverId: runtime.serverId, accountId: 'account-a' };
+        accountSettings = { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: { 'session.authoring.open': { approvalRequiredSurfaces: ['ui'] } },
+        }) };
+        storage.getState().applySettingsForScope(scope, accountSettings, ++accountSettingsVersion);
+        const checkout = { id: 'wr_1', serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo', projectKey: 'project', createdAtMs: 1 };
+        const workspaceScope = { serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo/worktree-a' };
+        const cacheKey = tryBuildWorkspaceCacheKey(workspaceScope);
+        if (!cacheKey) throw new Error('Exact workspace scope missing');
+        storage.getState().upsertWorkspaceReviewCommentDraft(cacheKey, {
+            id: 'comment-a', filePath: 'src/a.ts', source: 'diff', body: 'Please verify this change.', createdAt: 1,
+            anchor: { kind: 'diffLine', startLine: 1, side: 'after', oldLine: 1, newLine: 1 },
+            snapshot: { selectedLines: ['+a'], beforeContext: ['-a'], afterContext: [] },
+        });
+        const commentsBefore = storage.getState().reviewCommentsDraftsByWorkspaceCacheKey[cacheKey];
+        const draftsBefore = listNewSessionDraftProjections(scope);
+        const { ProjectShellHeaderHost } = await import('@/components/projects/shell/ProjectShellHeaderHost');
+        const { WorkspaceDetailsPanel } = await import('@/components/projects/panes/WorkspaceDetailsPanel');
+        const screen = await renderScreen(<runtime.Wrapper>{source === 'header'
+            ? <ProjectShellHeaderHost workspaceRef={checkout} activeRootPath={workspaceScope.rootPath} onSelectRootPath={() => {}} page="overview" />
+            : <WorkspaceDetailsPanel workspaceRef={checkout} activeRootPath={workspaceScope.rootPath} scopeId="project:wr_1" />
+        }</runtime.Wrapper>);
+        const trigger = source === 'header' ? 'project-shell-header.newSession' : 'workspace-details-open-review-comments-session';
+        await screen.pressByTestIdAsync(trigger);
+        await vi.waitFor(() => expect(screen.findHostByTestId('project-new-session-approval')).not.toBeNull());
+        expect(listNewSessionDraftProjections(scope)).toEqual(draftsBefore);
+        expect(boundary.navigate).not.toHaveBeenCalled();
+        expect(storage.getState().reviewCommentsDraftsByWorkspaceCacheKey[cacheKey]).toEqual(commentsBefore);
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        const firstId = approvalArtifacts.list()[0]?.id;
+        if (!firstId) throw new Error('Missing authoring approval Artifact');
+        await act(async () => { expect(await executor.execute('approval.request.decide', { artifactId: firstId, decision: 'reject' }, { surface: 'ui', serverId: runtime.serverId }))
+            .toMatchObject({ ok: true, result: { status: 'rejected' } }); });
+        expect(listNewSessionDraftProjections(scope)).toEqual(draftsBefore);
+        await screen.pressByTestIdAsync(trigger);
+        await vi.waitFor(() => expect(approvalArtifacts.list()).toHaveLength(2));
+        await act(async () => { expect(await executor.execute('approval.request.decide', { artifactId: approvalArtifacts.list()[1]!.id, decision: 'approve' }, { surface: 'ui', serverId: runtime.serverId }))
+            .toMatchObject({ ok: true, result: { status: 'executed' } }); });
+        const newDraft = listNewSessionDraftProjections(scope).find(row => !draftsBefore.some(old => old.draftId === row.draftId));
+        if (!newDraft) throw new Error('Approved authoring did not retain a draft');
+        expect(readNewSessionDraftFromRepository({ scope, draftId: newDraft.draftId })).toMatchObject({ selectedMachineId: 'm1', selectedPath: workspaceScope.rootPath });
+        expect(boundary.navigate).toHaveBeenCalledOnce();
+        expect(storage.getState().sessions).toEqual({});
+        expect(storage.getState().reviewCommentsDraftsByWorkspaceCacheKey[cacheKey]).toEqual(commentsBefore);
+        accountSettings = { ...accountSettings, actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+            actions: { 'session.authoring.open': { disabledSurfaces: ['ui'] } } }) };
+        storage.getState().applySettingsForScope(scope, accountSettings, ++accountSettingsVersion);
+        await screen.pressByTestIdAsync(trigger);
+        expect(listNewSessionDraftProjections(scope)).toHaveLength(draftsBefore.length + 1);
+        expect(boundary.navigate).toHaveBeenCalledOnce();
+        expect(approvalArtifacts.list()).toHaveLength(2);
+        accountSettings = { ...accountSettings, actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {} }) };
+        storage.getState().applySettingsForScope(scope, accountSettings, ++accountSettingsVersion);
+        await screen.pressByTestIdAsync(trigger);
+        expect(listNewSessionDraftProjections(scope)).toHaveLength(draftsBefore.length + 2);
+        expect(boundary.navigate).toHaveBeenCalledTimes(2);
+        expect(storage.getState().sessions).toEqual({});
+        expect(storage.getState().reviewCommentsDraftsByWorkspaceCacheKey[cacheKey]).toEqual(commentsBefore);
+        await screen.unmount();
+    });
     it.each(['same-project', 'foreign-project', 'foreign-home'])('retains named dashboard context only for the qualified current Project (%s)', async relation => {
         const accountScope = storage.getState().profileScope;
         if (!accountScope) throw new Error('Connected fixture has no Account scope');
