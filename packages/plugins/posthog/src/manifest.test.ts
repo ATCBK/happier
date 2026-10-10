@@ -104,6 +104,7 @@ describe('PostHog plugin manifest', () => {
         ) as Readonly<{ exports: Readonly<Record<string, unknown>> }>;
 
         expect(packageJson.exports['./manifest']).toEqual({
+            'happier-source': './src/manifest.ts',
             types: './dist/manifest.d.ts',
             default: './dist/manifest.js',
         });

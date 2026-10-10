@@ -186,6 +186,10 @@ describe('OpenCode public External Sessions contribution', () => {
           baseUrl,
           directory: '/tmp/project',
         },
+        accountingSource: {
+          resourceKey: expect.stringMatching(/^opencode-resource-v2:external:[A-Za-z0-9_-]{43}$/u),
+          changeObservation: 'observe_resource',
+        },
       },
     });
     if (!resolved.ok) throw new Error('Expected managed configured source');
@@ -240,6 +244,10 @@ describe('OpenCode public External Sessions contribution', () => {
         source: {
           kind: 'opencodeServer',
           managedEndpoint: true,
+        },
+        accountingSource: {
+          resourceKey: expect.stringMatching(/^opencode-resource-v2:managed:[A-Za-z0-9_-]{43}$/u),
+          changeObservation: 'observe_resource',
         },
       },
     });

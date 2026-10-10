@@ -883,7 +883,7 @@ async function ensureV1RecordAccess(
             code: access.error === "session-not-found" ? "plugin_session_not_found" : "plugin_session_record_invalid_query",
         };
     }
-    const readAdmission = async (tx: Tx) => {
+    const readAdmission = async (tx: Tx): ReturnType<typeof ensureV1RecordAccess> => {
         const session = await tx.session.findUnique({
             where: { id: params.sessionId },
             select: { encryptionMode: true, accountId: true },
@@ -1866,7 +1866,7 @@ async function ensurePermissionMediationRecordAccess(
     if (access.access.level !== "owner") {
         return { ok: false, code: "permission_mediation_record_forbidden" };
     }
-    const readAdmission = async (tx: Tx) => {
+    const readAdmission = async (tx: Tx): ReturnType<typeof ensurePermissionMediationRecordAccess> => {
         const session = await tx.session.findUnique({
             where: { id: params.sessionId },
             select: { accountId: true, encryptionMode: true },

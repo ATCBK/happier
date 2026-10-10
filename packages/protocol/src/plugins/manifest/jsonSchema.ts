@@ -30,11 +30,12 @@ export function createPluginManifestJsonSchemaV2(): Readonly<core.JSONSchema.JSO
       target: 'draft-2020-12',
       unrepresentable: 'any',
       override: ({ zodSchema, jsonSchema }) => {
-        // Zod can extract an array's parent into $defs and leave its bounds
+        // Zod can extract an array or string's parent into $defs and leave its bounds
         // beside $ref. Strict validators need the applicable type locally;
-        // restore it from the canonical array owner, not from keyword guesses.
-        if (zodSchema._zod.def.type === 'array' && jsonSchema.type === undefined) {
-          jsonSchema.type = 'array';
+        // restore it from the canonical owner, not from keyword guesses.
+        const schemaType = zodSchema._zod.def.type;
+        if ((schemaType === 'array' || schemaType === 'string') && jsonSchema.type === undefined) {
+          jsonSchema.type = schemaType;
         }
       },
     }),

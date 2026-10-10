@@ -67,4 +67,19 @@ describe("dbMocks", () => {
         expect(txState.sessionShare.update).toHaveBeenCalledWith({ where: { id: "share-1" } });
         expect(result).toEqual({ id: "share-1" });
     });
+
+    it("runs snapshot readers against the database fixture and preserves read failures", async () => {
+        const txState = { account: { findUnique: vi.fn().mockResolvedValue({ id: "account-1" }) } };
+        const boundary = createDbTransactionMock(() => txState);
+
+        await expect(boundary.readSnapshot(async (reader) =>
+            await reader.account.findUnique({ where: { id: "account-1" } }),
+        )).resolves.toEqual({ id: "account-1" });
+
+        const unavailable = new Error("database unavailable");
+        txState.account.findUnique.mockRejectedValueOnce(unavailable);
+        await expect(boundary.readSnapshot(async (reader) =>
+            await reader.account.findUnique({ where: { id: "account-1" } }),
+        )).rejects.toBe(unavailable);
+    });
 });
