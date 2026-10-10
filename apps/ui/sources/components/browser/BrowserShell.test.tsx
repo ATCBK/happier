@@ -32,12 +32,24 @@ import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecut
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { createBrowserRuntimeActionExecutor } from '@/sync/domains/browser/actions/runtimeActionExecutor';
 import { browserControlActionId } from '@/sync/domains/browser/actions/controlActionId';
+import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
 const testState = vi.hoisted(() => ({
     useLocalServicePreviewState: vi.fn(),
     fetchBrowserDiagnosticsSnapshotViaMachineRpc: vi.fn(),
     machineRpc: vi.fn(),
+    previewFetch: vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(),
+    previewToken: 'header.eyJzdWIiOiJ2aWV3ZXItYWNjb3VudCJ9.signature',
 }));
+
+// Substitute only Home HTTP and credential storage; preview admission and URL selection stay real.
+vi.mock('@/utils/system/runtimeFetch', () => ({ runtimeFetch: (...args: Parameters<typeof testState.previewFetch>) => testState.previewFetch(...args) }));
+vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
+    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
+    return createTokenStorageModuleMock({ importOriginal, tokenStorage: {
+        getCredentialsForServerUrl: async () => ({ token: testState.previewToken }),
+    } });
+});
 
 function stubCryptoRandomUuid(): void {
     let sequence = 0;
@@ -409,6 +421,8 @@ describe('BrowserShell', () => {
         testState.useLocalServicePreviewState.mockReset();
         testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc.mockReset();
         testState.machineRpc.mockReset();
+        testState.previewFetch.mockReset();
+        testState.previewFetch.mockResolvedValue(Response.json({ error: 'preview_access_denied' }, { status: 403 }));
         const { createLocalServicePreviewState } = await import('@/sync/domains/local/services/preview/store');
         testState.useLocalServicePreviewState.mockReturnValue(createLocalServicePreviewState());
         testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc.mockResolvedValue({
@@ -754,7 +768,17 @@ describe('BrowserShell', () => {
         expect(screen.findAllByTestId('browser-shell-profile-status')).toHaveLength(0);
     });
 
-    it('uses live local preview state for browser views without a current URL', async () => {
+    it('uses live local preview state and viewer Home admission for browser views without a current URL', async () => {
+        const home = await upsertServerProfile({ serverUrl: 'https://shell-viewer-home.example.test' });
+        const viewerUrl = 'https://preview.happier.test/live/?previewToken=viewer';
+        testState.previewFetch.mockImplementation(async (url, init) => {
+            if (url === 'https://shell-viewer-home.example.test/v1/local-services/preview/preview_1/access'
+                && new Headers(init?.headers).get('Authorization') === `Bearer ${testState.previewToken}`) {
+                return Response.json({ v: 1, kind: 'server_preview', previewId: 'preview_1', machineId: 'machine_1',
+                    accessUrl: viewerUrl, expiresAt: 2_000_000_000_000 });
+            }
+            return Response.json({ error: 'preview_access_denied' }, { status: 403 });
+        });
         const { BrowserShell } = await import('./BrowserShell');
         const reducer = await import('@/sync/domains/browser/control/reducer');
         const {
@@ -766,7 +790,7 @@ describe('BrowserShell', () => {
             refreshState: 'idle',
             previews: [{
                 previewId: 'preview_1',
-                accessUrl: 'https://preview.happier.test/live/',
+                accessUrl: 'https://preview.happier.test/live/?previewToken=custodian',
                 expiresAt: 2_000,
                 diagnostics: [],
                 resource: {
@@ -824,6 +848,7 @@ describe('BrowserShell', () => {
                 platform="web"
                 state={state}
                 onCommand={onCommand}
+                localServicePreviewServerId={home.id}
                 testID="browser-shell"
             />,
         );
@@ -832,7 +857,8 @@ describe('BrowserShell', () => {
             machineId: 'machine_1',
             enabled: true,
         }));
-        expect(findBrowserIframe(screen).props.src).toBe('https://preview.happier.test/live/');
+        await flushHookEffects({ cycles: 40 });
+        expect(findBrowserIframe(screen).props.src).toBe(viewerUrl);
     });
 
 
