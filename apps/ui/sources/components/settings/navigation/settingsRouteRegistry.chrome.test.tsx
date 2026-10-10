@@ -11,13 +11,14 @@ import {
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const pathnameState = vi.hoisted(() => ({ value: '/settings' }));
+const paramsState = vi.hoisted(() => ({ category: undefined as string | undefined }));
 const navigateSpy = vi.hoisted(() => vi.fn());
 const dismissToSpy = vi.hoisted(() => vi.fn());
 
 // Minimal, self-contained mocks so the registry module imports without the shared testkit.
 vi.mock('expo-router', () => ({
     usePathname: () => pathnameState.value,
-    useLocalSearchParams: () => ({}),
+    useLocalSearchParams: () => paramsState,
     useRouter: () => ({ navigate: navigateSpy, dismissTo: dismissToSpy, back: () => {} }),
 }));
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
@@ -26,6 +27,7 @@ const identity = (key: string): string => key;
 
 afterEach(() => {
     pathnameState.value = '/settings';
+    paramsState.category = undefined;
     navigateSpy.mockReset();
     dismissToSpy.mockReset();
     clearActiveUnsavedChangesGuard();
@@ -96,6 +98,24 @@ describe('getSettingsStackScreenDefinitions', () => {
 });
 
 describe('settings header Back', () => {
+    it('leaves the focused Defaults category before leaving Defaults', async () => {
+        pathnameState.value = '/settings/machines/defaults';
+        paramsState.category = 'local';
+        const headerLeft = getSettingsStackScreenDefinitions(identity, { navigator: 'machines' })
+            .find((candidate) => candidate.name === 'defaults')?.options.headerLeft;
+        let tree!: ReactTestRenderer;
+        await act(async () => {
+            tree = create(React.createElement(headerLeft as React.ElementType, { tintColor: '#111111' }));
+        });
+        const back = tree.root.findAll((node) => (
+            node.props?.accessibilityLabel === 'common.back' && typeof node.props?.onPress === 'function'
+        ))[0];
+        await act(async () => { back.props.onPress(); });
+        expect(dismissToSpy).toHaveBeenCalledWith('/settings/machines/defaults');
+        expect(navigateSpy).not.toHaveBeenCalled();
+        await act(async () => { tree.unmount(); });
+    });
+
     it('returns to the parent screen already in the stack rather than stacking a new one', async () => {
         // Phone: Settings (with a search query) → a search result → header Back must land on that
         // same Settings screen, query and all, as browser Back does.

@@ -103,6 +103,19 @@ describe('settingsRouteRegistry', () => {
         expect(resolveSettingsRouteParentPathname('/session/s1')).toBeNull();
     });
 
+    it('returns from a machine-default category to Defaults before leaving the page', () => {
+        for (const category of ['local', 'running-only', 'stopped-billed', 'unknown']) {
+            expect(resolveSettingsRouteParentPathname('/settings/machines/defaults', { category }))
+                .toBe('/settings/machines/defaults');
+        }
+        expect(resolveSettingsRouteParentPathname('/settings/machines/defaults'))
+            .toBe('/settings/machines');
+        expect(resolveSettingsRouteParentPathname('/settings/machines/defaults', { category: 'not-a-category' }))
+            .toBe('/settings/machines');
+        expect(resolveSettingsRouteParentPathname('/settings/machines/add', { category: 'local' }))
+            .toBe('/settings/machines');
+    });
+
     it('skips non-route identity collection segments when navigating Home administration', () => {
         // Identity providers and GitHub Apps belong to the Sign-in providers page, so back lands there.
         expect(resolveSettingsRouteParentPathname('/settings/home/home-1/sign-in-providers/identity/new'))

@@ -7,6 +7,7 @@ import { useLocalSearchParams, usePathname, useRouter } from '@/components/appSh
 import type { TranslationKeyNoParams } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { MACHINE_RETENTION_CATEGORIES_V1 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
 
 type Translate = (key: TranslationKeyNoParams) => string;
 
@@ -141,11 +142,22 @@ function isMountedSettingsRoute(segments: readonly string[]): boolean {
  * route. Organizational segments with no screen of their own (a Team's Home segment, `pools`,
  * `github-apps`, a skill's `files`) are skipped, so back never lands on "Unmatched Route".
  */
-export function resolveSettingsRouteParentPathname(pathname: string | null | undefined): string | null {
+export function resolveSettingsRouteParentPathname(
+    pathname: string | null | undefined,
+    params?: Readonly<{ category?: string | string[] }>,
+): string | null {
     if (typeof pathname !== 'string') return null;
     const normalizedPathname = pathname.trim().replace(/\/+$/, '') || '/';
     if (normalizedPathname === '/settings') return null;
     if (!normalizedPathname.startsWith('/settings/')) return null;
+
+    // Phone Defaults categories are pushed as query-state pages. Leaving one removes the
+    // category first; leaving Defaults itself still returns to the Machines collection.
+    const category = Array.isArray(params?.category) ? params.category[0] : params?.category;
+    if (normalizedPathname === '/settings/machines/defaults'
+        && (MACHINE_RETENTION_CATEGORIES_V1 as readonly string[]).includes(category ?? '')) {
+        return normalizedPathname;
+    }
 
     // Custom ACP agents live in the Agents collection; `custom` alone is the new-agent draft, not
     // the parent of a saved agent, although it is a mounted route.
@@ -187,9 +199,9 @@ export function shouldShowSettingsParentBackButton(params: Readonly<{
 export function useSettingsParentBack(tag: string): Readonly<{ parentPathname: string | null; goToParent: () => void }> {
     const pathname = usePathname();
     const router = useRouter();
-    const params = useLocalSearchParams<{ settingsSearch?: string | string[] }>();
+    const params = useLocalSearchParams<{ settingsSearch?: string | string[]; category?: string | string[] }>();
     const searchOrigin = params[SETTINGS_SEARCH_RETURN_QUERY_PARAM];
-    const parentPathname = searchOrigin === '1' ? '/settings' : resolveSettingsRouteParentPathname(pathname);
+    const parentPathname = searchOrigin === '1' ? '/settings' : resolveSettingsRouteParentPathname(pathname, params);
     const goToParent = React.useCallback(() => {
         if (!parentPathname) return;
         const result = runGuardedNavigation(() => router.dismissTo(parentPathname as never));
