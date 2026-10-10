@@ -15,7 +15,7 @@ import { randomUUID } from '@/platform/randomUUID';
 /** Keep reads and the writes they derive in one exact Home/Account lifetime. */
 export async function withUiPromptLibraryArtifactStore<T>(
   run: (store: PromptLibraryArtifactStore, account: LazyActionAccountContext) => Promise<T>,
-  options?: Readonly<{ serverId?: string | null; signal?: AbortSignal }>,
+  options?: Readonly<{ serverId?: string | null; expectedAccountId?: string; signal?: AbortSignal }>,
 ): Promise<T> {
   throwIfAborted(options?.signal);
   const serverId =
@@ -31,6 +31,8 @@ export async function withUiPromptLibraryArtifactStore<T>(
     options?.signal,
   );
   try {
+    if (options?.expectedAccountId !== undefined && options.expectedAccountId !== account.accountId)
+      throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
     return await run(
       createUiPromptLibraryArtifactStore(account.workflowArtifacts, account),
       account,

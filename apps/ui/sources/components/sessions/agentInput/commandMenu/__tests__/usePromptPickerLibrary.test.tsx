@@ -6,6 +6,7 @@ import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/prompt
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -21,6 +22,7 @@ afterEach(() => { vi.restoreAllMocks(); });
 
 async function seed() {
     const serverId = await harness.addHome({ name: 'Picker Home', serverUrl: 'https://picker-library.test', accountId: 'picker-account' });
+    harness.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 2 }) });
     const catalog = createPromptLibraryCatalogBoundary({ records: [{ key: 'folders', value: { v: 1,
         folders: [{ id: 'folder', name: 'Personal' }] } }] });
     harness.answer(serverId, PROMPT_LIBRARY_ROWS_ROUTE_V1, { select: async () => ({ body: await (await catalog.handle(PROMPT_LIBRARY_ROWS_ROUTE_V1))!.json() }) });
