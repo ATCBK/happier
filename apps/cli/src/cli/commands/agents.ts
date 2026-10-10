@@ -23,6 +23,7 @@ import { promptConfirmYesNo } from '@/terminal/prompts/promptConfirmYesNo';
 import { waitForLocalAgentInstallJob } from './agents/installJobClient';
 import { bullets, cmd, createOutputBuilder, dim, errorFrame, fail, kv, neutral, ok, renderHelpPage, sectionTitle } from '@happier-dev/cli-common/output';
 import type { CapabilityId } from '@happier-dev/protocol';
+import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { resolveConnectTargetServiceIdsFromRegistry } from './connect/resolveConnectTargetServiceIds';
 
 function usage(agentRows: readonly AgentStatusRow[] = []): string {
@@ -177,6 +178,7 @@ function listAgentStatus(
     processEnv: NodeJS.ProcessEnv,
 ): AgentStatusRow[] {
     return registry.agents
+        .filter((contribution) => !contribution.identity || listAgentExecutionTargetsV1(contribution.identity).length > 0)
         .map((contribution) => {
             const runtimeSpec = readAgentCliRuntimeDescriptor(contribution);
             const resolution = runtimeSpec

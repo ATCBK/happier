@@ -5,11 +5,14 @@ import { DaemonContributionRegistryProjectionDescribeResponseSchema, resolveRole
 import { createCredentialedWorkflowMaterializationHostV1, createWorkflowMaterializationHostV1, type WorkflowMaterializationHostDeps } from './workflowMaterializationHost';
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 const credentials = { token: 'workflow-session-admission', encryption: null } as const;
 const sessionId = 'c123456789012345678901234';
 
-function sessionAdmissionHost(machineId: string, readHostActionContract?: WorkflowMaterializationHostDeps['readHostActionContract']) {
+function sessionAdmissionHost(machineId: string, readHostActionContract?: WorkflowMaterializationHostDeps['readHostActionContract'],
+  readAcpCatalog?: WorkflowMaterializationHostDeps['readAcpCatalog']) {
   // Only authenticated HTTP and daemon RPC are replaced; Session resolution,
   // owner-metadata opening, Machine authority and the materializer stay real.
   vi.spyOn(axios, 'get').mockImplementation(async (url) => {
@@ -28,6 +31,7 @@ function sessionAdmissionHost(machineId: string, readHostActionContract?: Workfl
     credentials, serverHttpBaseUrl: 'http://127.0.0.1:41371',
     readRoleSelection: async () => ({}), readLaunchProfile: async () => null,
     readWorkflowDefinition: async () => null,
+    ...(readAcpCatalog ? { readAcpCatalog } : {}),
     readHostActionContract: readHostActionContract ?? (async () => ({ inputSchema: { type: 'object' }, outputSchema: {} })),
     callMachineAction: async ({ method }) => {
       if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return {
@@ -185,6 +189,9 @@ describe('exact-machine workflow materialization effects', () => {
           }, nativeOnly: {
             id: 'nativeOnly', identity: { pluginId: 'native.agent', localId: 'agent' }, catalogAgentId: 'nativeOnly',
             capabilities: { executionRuns: { open: ['create'], checkpoint: false, stop: true } },
+          }, 'custom-acp': {
+            id: 'custom-acp', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1,
+            capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
           } } },
         };
         if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
@@ -216,6 +223,48 @@ describe('exact-machine workflow materialization effects', () => {
       conversation: { kind: 'existing_session', sessionId, machineId: 'run-machine' },
     }, executionTarget: { kind: 'session' } }, { sessionIds: [] })).resolves.toBe(false);
     expect(calls).toEqual([RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, RPC_METHODS.CAPABILITIES_DETECT]);
+  });
+
+  it('admits only the selected concrete Custom ACP definition from the Account catalog', async () => {
+    const identity = CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1;
+    const resolve = createWorkflowMaterializationHostV1({
+      credentials,
+      acpCatalogSnapshot: { status: 'ready', revision: 1, record: AcpCatalogRecordV1Schema.parse({ v: 1,
+        definitions: [{ id: 'selected', name: 'selected', title: 'Selected', command: 'selected', createdAt: 1, updatedAt: 1 }],
+      }) },
+      readRoleSelection: async () => ({}), readLaunchProfile: async () => null, readWorkflowDefinition: async () => null,
+      callMachineAction: async ({ method }) => method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+        ? { protocolVersion: 1, projection: { v: 2, generation: 1, agentsById: { 'custom-acp': {
+          id: 'custom-acp', identity, capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+        } } } }
+        : { protocolVersion: 1, results: {
+          'cli.custom-acp': { ok: true, data: { installed: false, version: null, latestVersion: null,
+            update: { supported: false, command: null }, signIn: { status: 'unknown', loginSupport: 'unsupported' },
+            platform: { supported: true }, install: { available: false, mode: 'none', sizeBytes: null, guideUrl: null }, dependencies: [] } },
+          'tool.executionRuns': { ok: true, data: { available: true, features: { detachedScope: true }, backends: {
+            'agent:happier.agent.custom-acp/custom-acp:definition:selected': { available: true },
+          } } },
+        } },
+    });
+    const context = await resolve({ machineId: 'run-machine', directory: '/repo' });
+    for (const kind of ['session', 'detached_run'] as const) {
+      await expect(context.effects.resolveTargetAvailability({ blockId: 'work', executionTarget: { kind },
+        selection: { agentTarget: { kind: 'agent', identity, definitionId: 'selected' } },
+      }, { sessionIds: [] })).resolves.toBe(true);
+      await expect(context.effects.resolveTargetAvailability({ blockId: 'work', executionTarget: { kind },
+        selection: { agentTarget: { kind: 'agent', identity, definitionId: 'deleted' } },
+      }, { sessionIds: [] })).resolves.toBe(false);
+    }
+  });
+
+  it('admits a native Agent without demanding unavailable ACP authority', async () => {
+    const host = sessionAdmissionHost('run-machine', undefined, async () => {
+      throw new Error('acp_catalog_unavailable');
+    });
+    const context = await host({ machineId: 'run-machine', directory: '/repo' });
+    await expect(context.effects.resolveTargetAvailability({ blockId: 'native', executionTarget: { kind: 'session' },
+      selection: { agentTarget: { kind: 'agent', identity: { pluginId: 'test.agent', localId: 'agent' } } },
+    }, { sessionIds: [] })).resolves.toBe(true);
   });
 
   it('fails unavailable machine observations closed at the leaf boundary', async () => {

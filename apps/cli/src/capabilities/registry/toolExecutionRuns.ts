@@ -1,8 +1,6 @@
 import type { Capability } from '../service';
 import { resolveCliFeatureDecision } from '../../features/featureDecisionService';
-import {
-  AGENT_IDS,
-} from '@happier-dev/agents';
+import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import {
   listExecutionRunProfileContributionDescriptors,
   listExecutionRunSupportedIntents,
@@ -18,19 +16,10 @@ import {
   evaluateContributionAvailability,
   resolveInvocationContributionPolicyFacts,
 } from '../../plugins/runtime/policy/evaluate';
-import {
-  listEngineRuntimeContributionIds,
-} from '../../agent/runtime/registry/engineRegistry/contributions';
 
 function resolveExecutionRunBackendAvailability(params: Readonly<{
-  backendId: string;
   agentContribution?: ResolvedAgentContribution;
 }>): boolean {
-  if (params.backendId === 'customAcp') {
-    // Compatibility backend id used as the UI "configured ACP" entrypoint.
-    return true;
-  }
-
   if (readAgentExecutionRunCapabilities(
     params.agentContribution?.richDefinition?.definition,
   )) {
@@ -91,9 +80,6 @@ export const executionRunsCapability: Capability = {
     const intents = voiceAgentEnabled
       ? activatableIntents
       : activatableIntents.filter((intent) => intent !== 'voice_agent');
-    const contributedBackendIds = listEngineRuntimeContributionIds(cliEngineRegistry.contributions);
-    const catalogBackendIds = Object.keys(cliEngineRegistry.contributions.catalogEntriesById);
-    const knownBuiltInAgentIds = AGENT_IDS;
     const reviewEngineAgentIds = selectReviewEngineAgentIds(cliEngineRegistry.contributions);
     const exactPathReviewEngineAgentIds = selectReviewEngineAgentIds(cliEngineRegistry.contributions, 'paths');
     const accountSnapshot = getActiveAccountSettingsSnapshot();
@@ -101,12 +87,9 @@ export const executionRunsCapability: Capability = {
       accountSnapshot?.settings ?? null,
       accountSnapshot?.acpCatalog,
     );
-    const backendIds = Array.from(new Set([
-      ...knownBuiltInAgentIds,
-      'customAcp',
-      ...contributedBackendIds,
-      ...catalogBackendIds,
-    ]));
+    const backendIds = [...cliEngineRegistry.contributions.agentDefinitionsById.values()]
+      .filter((agent) => agent.identity && listAgentExecutionTargetsV1(agent.identity).length > 0)
+      .map((agent) => agent.id);
 
     const supportsVendorResumeByBackend = Object.fromEntries(
       backendIds.map((backendId) => [
@@ -122,7 +105,6 @@ export const executionRunsCapability: Capability = {
       ...backendIds.map((backendId) => {
         const agentContribution = cliEngineRegistry.contributions.agentDefinitionsById.get(backendId);
         const available = resolveExecutionRunBackendAvailability({
-          backendId,
           agentContribution,
         });
         return [

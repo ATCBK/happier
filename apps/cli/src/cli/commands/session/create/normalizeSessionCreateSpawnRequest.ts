@@ -3,7 +3,7 @@ import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/cre
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { findSpawnConfigOptionAliasConflicts, mergeSpawnConfigOptionAliases } from '@happier-dev/protocol/actions/sessionSpawnConfigOptions';
 import { parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime/permissionIntentV1';
 import { resolveSessionModelSelectionInputRefV1 } from '@happier-dev/protocol/providers/model-selection';
 import type { SessionSpawnNewInputV2 } from '@happier-dev/protocol';
@@ -107,44 +107,35 @@ function resolveAgentTarget(
   agentTarget: SessionSpawnNewInputV2['agentTarget'];
   backendTargetKey: string;
 }> {
-  const requestedAgentIdentity = request.backendTargetKey
+  const requestedTarget = request.backendTargetKey
     ? (() => {
         try {
           const parsed = parseBackendTargetKeyV2(request.backendTargetKey);
-          return parsed.kind === 'agent' ? parsed.identity : null;
-        } catch {
-          return null;
-        }
-      })()
-    : null;
-  const requestedBackendTarget = request.backendTargetKey && !requestedAgentIdentity
-    ? (() => {
-        try {
-          return readBackendTargetRefV2(request.backendTargetKey);
+          return parseBackendTargetKeyV2(buildBackendTargetKeyV2(parsed));
         } catch {
           return invalidSessionCreateArgument('--backend does not identify an executable Agent.');
         }
       })()
     : null;
-  const selectedAgentId = requestedAgentIdentity
-    ? `${requestedAgentIdentity.pluginId}/${requestedAgentIdentity.localId}`
-    : requestedBackendTarget?.backendId ?? nonEmptyString(deps.defaultAgentId);
-  if (!selectedAgentId) {
+  const selectedAgentId = requestedTarget?.kind === 'backend'
+    ? requestedTarget.backendId : nonEmptyString(deps.defaultAgentId);
+  if (!requestedTarget && !selectedAgentId) {
     invalidSessionCreateArgument('the default Agent is unavailable.');
   }
-  const agent = [...deps.readAgentDefinitions()].find((candidate) => candidate.id === selectedAgentId);
+  const agent = [...deps.readAgentDefinitions()].find((candidate) => requestedTarget?.kind === 'agent'
+    ? candidate.identity?.pluginId === requestedTarget.identity.pluginId && candidate.identity.localId === requestedTarget.identity.localId
+    : candidate.id === selectedAgentId);
   if (!agent?.identity) {
     invalidSessionCreateArgument('--backend does not identify an executable Agent.');
   }
-  const backendTarget = readBackendTargetRefV2({
-    kind: 'backend',
-    backendId: agent.id,
-    sourceKind: 'built_in',
-  });
+  const agentTarget = requestedTarget?.kind === 'agent'
+    ? { ...requestedTarget, identity: agent.identity }
+    : listAgentExecutionTargetsV1(agent.identity)[0];
+  if (!agentTarget) invalidSessionCreateArgument('--backend does not identify an executable Agent.');
   return {
     agentId: agent.id,
-    agentTarget: { kind: 'agent', identity: agent.identity },
-    backendTargetKey: buildBackendTargetKeyV2(backendTarget),
+    agentTarget,
+    backendTargetKey: buildBackendTargetKeyV2(agentTarget),
   };
 }
 

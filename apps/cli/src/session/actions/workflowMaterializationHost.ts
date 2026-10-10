@@ -1,6 +1,10 @@
 import { DaemonContributionRegistryProjectionDescribeResponseSchema, DaemonPluginActionSchemasReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { buildMachineAgentsDetectRequest, buildMachineAgentInventoryDescriptors, projectMachineAgentsDetectResponse } from '@happier-dev/protocol/capabilities/machineAgentInventory';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { requireReadyAcpCatalog } from '@/agent/acp/catalog/configured/resolveBackend';
+import { refreshActiveAcpCatalog } from '@/agent/acp/catalog/hydrateAcpCatalog';
 import { readAccountLaunchProfiles } from '@/settings/profiles/readProfilesFromAccountSettings';
 import type { AiLaunchProfile, ResolveRoleSelectionV1Input, AccountSettings, materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -9,7 +13,7 @@ import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { StoredCredentials } from '@/persistence';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { prepareActiveAccountRoleOverrides } from '@/settings/prompts/hydratePromptLibraryCatalog';
 import { createRoleSourceReader, type RoleSourceReader } from '@/session/roles/roleSources';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -24,6 +28,8 @@ export type WorkflowMaterializationHostDeps = Readonly<{
   serverHttpBaseUrl?: string;
   callMachineAction: (input: Readonly<{ machineId: string; method: string; request: unknown; signal?: AbortSignal }>) => Promise<unknown>;
   readRoleSelection: (signal?: AbortSignal) => Promise<RoleSelection>;
+  acpCatalogSnapshot?: AcpCatalogSnapshotV1;
+  readAcpCatalog?: (signal?: AbortSignal) => Promise<AcpCatalogSnapshotV1>;
   readLaunchProfile: (profileId: string, signal?: AbortSignal) => Promise<AiLaunchProfile | null>;
   readWorkflowDefinition: (ref: Parameters<NonNullable<Materialization['effects']['readWorkflowDefinition']>>[0], signal?: AbortSignal)
     => ReturnType<NonNullable<Materialization['effects']['readWorkflowDefinition']>>;
@@ -80,15 +86,30 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
       return availability;
     };
     const roleSelection = { ...await deps.readRoleSelection(target.signal), ...target.roleSelection };
+    let catalogObservation: Promise<AcpCatalogSnapshotV1 | undefined> | undefined;
+    const readDefinitionIds = async (required = false) => {
+      catalogObservation ??= deps.readAcpCatalog
+        ? deps.readAcpCatalog(target.signal) : Promise.resolve(deps.acpCatalogSnapshot);
+      const catalog = await catalogObservation;
+      return catalog === undefined && !required ? [] : requireReadyAcpCatalog(catalog).record.definitions.map((definition) => definition.id);
+    };
     if (roleSelection.defaultEngine) {
       // Contextual second-opinion selection can choose another Agent family.
       // Observe that inventory before roles; availability is still decided by
       // the materializer only after its policy admission.
       const machine = await readMachine();
+      const definitionIds = machine && Object.values(machine.roster.projection.agentsById)
+        .some((agent) => agent.identity && listAgentExecutionTargetsV1(agent.identity).length === 0)
+        ? await readDefinitionIds() : [];
       roleSelection.availableAgentTargetKeys = machine ? Object.entries(machine.roster.projection.agentsById).flatMap(([agentId, agent]) => {
         const item = machine.inventory.items.find((candidate) => candidate.agentId === agentId);
-        return agent.identity && item?.installed && item.platform.supported && item.dependencies.every((dependency) => dependency.installed)
-          ? [buildBackendTargetKeyV2({ kind: 'agent', identity: agent.identity })] : [];
+        return agent.identity ? listAgentExecutionTargetsV1(agent.identity, definitionIds).flatMap((executionTarget) => {
+          const key = buildBackendTargetKeyV2(executionTarget);
+          const available = executionTarget.definitionId === undefined
+            ? item?.installed && item.platform.supported && item.dependencies.every((dependency) => dependency.installed)
+            : object(machine.detachedBackends?.[key])?.available === true;
+          return available ? [key] : [];
+        }) : [];
       }) : [];
     }
     const observeActionContract: NonNullable<Materialization['effects']['readActionContract']> = async (actionId) => {
@@ -145,20 +166,25 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
           if (leaf.kind === 'step' && leaf.executionTarget.kind === 'session'
             && (selection.conversation?.kind === 'origin_session' || selection.conversation?.kind === 'existing_session')) return true;
           if (!selection.agentTarget) return false;
+          const definitionIds = selection.agentTarget.definitionId === undefined ? [] : await readDefinitionIds(true);
+          if (selection.agentTarget.definitionId !== undefined && !definitionIds.includes(selection.agentTarget.definitionId)) return false;
           const key = buildBackendTargetKeyV2(selection.agentTarget);
           const machine = await readMachine();
           if (!machine) return false;
           const { roster, inventory, detachedFacts, detachedBackends, detachedFeatures } = machine;
           const entry = Object.entries(roster.projection.agentsById).find(([, agent]) => agent.identity
-            && buildBackendTargetKeyV2({ kind: 'agent', identity: agent.identity }) === key);
+            && listAgentExecutionTargetsV1(agent.identity, definitionIds).some((executionTarget) => buildBackendTargetKeyV2(executionTarget) === key));
           if (!entry) return false;
           const [agentId, agent] = entry;
+          const backend = object(detachedBackends?.[selection.agentTarget.definitionId === undefined ? agent.catalogAgentId ?? agentId : key]);
           if (leaf.executionTarget.kind === 'session') {
+            if (selection.agentTarget.definitionId !== undefined) {
+              return backend?.available === true && agent.capabilities?.sessions?.open.includes('create') === true;
+            }
             const current = inventory.items.find((item) => item.agentId === agentId);
             return Boolean(current?.installed && current.platform.supported && current.dependencies.every((dependency) => dependency.installed)
               && agent.capabilities?.sessions?.open.includes('create') === true);
           }
-          const backend = object(detachedBackends?.[agent.catalogAgentId ?? agentId]);
           return detachedFacts?.available === true && detachedFeatures?.detachedScope === true && backend?.available === true;
         },
       },
@@ -203,6 +229,21 @@ export function createCredentialedWorkflowMaterializationHostV1(params: Omit<Wor
         return matching.length === 1 && matching[0]!.enabled !== false ? matching[0]! : null;
       };
       const materialization = await createWorkflowMaterializationHostV1({ ...params,
+        acpCatalogSnapshot: getActiveAccountSettingsSnapshot()?.acpCatalog,
+        readAcpCatalog: async (signal) => {
+          if (getActiveAccountSettingsSnapshot()?.scopeKey !== roleAccount.scopeKey
+            || getActiveAccountSettingsSnapshotLifetimeToken() !== roleAccount.lifetimeToken) {
+            throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
+          }
+          const catalog = getActiveAccountSettingsSnapshot()?.acpCatalog;
+          const prepared = catalog?.status === 'ready' ? catalog : await refreshActiveAcpCatalog({ credentials: params.credentials, signal });
+          if (getActiveAccountSettingsSnapshot()?.scopeKey !== roleAccount.scopeKey
+            || getActiveAccountSettingsSnapshotLifetimeToken() !== roleAccount.lifetimeToken) {
+            throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
+          }
+          signal?.throwIfAborted();
+          return prepared;
+        },
         callMachineAction: (input) => params.serverHttpBaseUrl
           ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => params.callMachineAction(input)) : params.callMachineAction(input),
         ...(params.readHostActionContract ? { readHostActionContract: (actionId: string, machine: MachineTarget) => params.serverHttpBaseUrl

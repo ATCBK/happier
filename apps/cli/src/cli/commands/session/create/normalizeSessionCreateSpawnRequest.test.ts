@@ -1,4 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const { createBundledPluginPublicationFsFixture } = await import('@/plugins/projection/registry/builtIn/locators.testkit');
+  return createBundledPluginPublicationFsFixture(actual);
+});
 
 import {
   normalizeSessionCreateSpawnRequest,
@@ -33,6 +41,31 @@ function createDeps(
 }
 
 describe('normalizeSessionCreateSpawnRequest', () => {
+  it.each([
+    'agent:happier.agent.custom-acp/custom-acp:definition:chosen',
+    'backend:chosen:configured:chosen',
+  ])('preserves the configured definition through ordinary Session spawn admission: %s', async (backendTargetKey) => {
+    const normalized = await normalizeSessionCreateSpawnRequest({
+      directory: '/repo/project', backendTargetKey, modelId: 'chosen-model',
+    }, createDeps({ readAgentDefinitions: () => readAgentCatalogSnapshot().agentDefinitionsById.values() }));
+    expect(normalized.agentId).toBe('custom-acp');
+    expect(normalized.input.agentTarget).toEqual({
+      kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: 'chosen',
+    });
+    expect(normalized.input.modelSelection?.ref).toMatchObject({
+      agentTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:chosen', modelId: 'chosen-model',
+    });
+  });
+
+  it('resolves a qualified bundled target through its declared identity rather than its routing-id spelling', async () => {
+    const normalized = await normalizeSessionCreateSpawnRequest({
+      directory: '/repo/project', backendTargetKey: 'agent:happier.agent.claude/claude',
+    }, createDeps({ readAgentDefinitions: () => readAgentCatalogSnapshot().agentDefinitionsById.values() }));
+    expect(normalized.agentId).toBe('claude');
+    expect(normalized.input.agentTarget).toEqual({
+      kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' },
+    });
+  });
   it('normalizes permission aliases and rejects unknown modes before Action dispatch', async () => {
     const normalized = await normalizeSessionCreateSpawnRequest({
       directory: '/repo/project',
@@ -74,10 +107,10 @@ describe('normalizeSessionCreateSpawnRequest', () => {
     expect(nativeDefault.input.modelSelection).toBeUndefined();
   });
 
-  it('emits one strict V2 request with the exact target and configured external Agent identity', async () => {
+  it('emits one strict V2 request with the exact target and contributed external Agent identity', async () => {
     const normalized = await normalizeSessionCreateSpawnRequest({
       directory: '/repo/project',
-      backendTargetKey: 'backend:review-bot:configured:review-bot',
+      backendTargetKey: 'backend:review-bot',
       modelId: 'review-model',
       providerConnectionId: 'provider-1',
       permissionMode: 'safe-yolo',
@@ -100,7 +133,7 @@ describe('normalizeSessionCreateSpawnRequest', () => {
           v: 1,
           updatedAt: 100,
           ref: {
-            agentTargetKey: 'backend:review-bot',
+            agentTargetKey: 'agent:com.acme.review/review-bot',
             providerConnectionId: 'provider-1',
             modelId: 'review-model',
           },
@@ -141,7 +174,7 @@ describe('normalizeSessionCreateSpawnRequest', () => {
       identity: { pluginId: 'com.acme.review', localId: 'review-bot' },
     });
     expect(normalized.input.modelSelection?.ref).toMatchObject({
-      agentTargetKey: 'backend:com.acme.review/review-bot',
+      agentTargetKey: 'agent:com.acme.review/review-bot',
       modelId: 'review-model',
     });
   });
@@ -149,7 +182,7 @@ describe('normalizeSessionCreateSpawnRequest', () => {
   it('still rejects a qualified Agent key that no catalog Agent owns', async () => {
     await expect(normalizeSessionCreateSpawnRequest({
       directory: '/repo/project',
-      backendTargetKey: 'agent:com.acme.review/review-bot',
+      backendTargetKey: 'agent:missing.acme.review/review-bot',
     }, createDeps())).rejects.toThrow(/--backend does not identify an executable Agent/);
   });
 

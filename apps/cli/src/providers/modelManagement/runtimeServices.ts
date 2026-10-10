@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { createProviderErrorV1, ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/crypto/canonicalDigest';
 import { parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { sameQualifiedConnectedAccountGroupRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
@@ -940,7 +941,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     try {
       return [...lease.registry.contributes.agentDefinitionsById.values()]
         .flatMap((agent) => agent.identity
-          ? [buildBackendTargetKeyV2({ kind: 'agent', identity: agent.identity })]
+          ? listAgentExecutionTargetsV1(agent.identity).map(buildBackendTargetKeyV2)
           : []);
     } finally {
       await lease.release();
