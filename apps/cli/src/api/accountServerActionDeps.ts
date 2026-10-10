@@ -20,7 +20,7 @@ import { MachinePresetActionInputSchemasV1, MachinePresetActionOutputSchemasV1, 
 import { ManagedErrorV1Schema, ManagedMachineActionInputSchemasV1, ManagedMachineActionOutputSchemasV1, managedMachineActionEndpointPathV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 import { MachinePoolErrorV1Schema } from '@happier-dev/protocol/machines/pools/v1';
-import { projectSessionPublicLinkActionResultV1, projectSessionPublicLinkCreateActionResultV1 } from '@happier-dev/protocol/sessions/access/sessionAccessActionsV1';
+import { SessionPublicLinkCreateActionInputV1Schema, projectSessionPublicLinkActionResultV1, projectSessionPublicLinkCreateActionResultV1 } from '@happier-dev/protocol/sessions/access/sessionAccessActionsV1';
 import { SessionAccessErrorCodeV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { z } from 'zod';
 
@@ -62,6 +62,7 @@ import { applyUsageCoachPreferences } from '@happier-dev/protocol/usage/coach/ev
 import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
 import { readAccountSettingsV2Raw } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 export type AccountServerActionDeps = Pick<
   ActionExecutorDeps,
@@ -220,8 +221,8 @@ export function createAccountServerActionDeps(input: Readonly<{
   // supported ordinary V1 credentials are preserved while a missing
   // cryptographic identity fails closed instead of falling back to serverId.
   const serverIdentityId = input.serverIdentityId;
-  const accountServerTargetMismatch = (actionContext: Readonly<{ serverId?: string | null }> | undefined): ActionExecuteFailure | null =>
-    actionContext?.serverId && actionContext.serverId !== serverId
+  const accountServerTargetMismatch = async (actionContext: Readonly<{ serverId?: string | null }> | undefined): Promise<ActionExecuteFailure | null> =>
+    actionContext?.serverId && !await isServerProfileHomeIdentity(serverId, actionContext.serverId)
       ? { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' }
       : null;
   const externalAuthorizationUnavailable = (): ActionExecuteFailure => ({
@@ -235,7 +236,7 @@ export function createAccountServerActionDeps(input: Readonly<{
     context?: ActionExecutorContext;
     signal?: AbortSignal;
   }>): Promise<ActionExecuteFailure | null> => {
-    const mismatch = accountServerTargetMismatch(params.context);
+    const mismatch = await accountServerTargetMismatch(params.context);
     if (mismatch) return mismatch;
     if (params.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
     const snapshot = serverIdentityId ? undefined : await input.resolveServerFeaturesSnapshot?.();
@@ -356,7 +357,7 @@ export function createAccountServerActionDeps(input: Readonly<{
   };
   const readPrices = async (refresh: boolean, context: ActionExecutorContext) => {
     const failure = (errorCode: string): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode });
-    const mismatch = accountServerTargetMismatch(context);
+    const mismatch = await accountServerTargetMismatch(context);
     if (mismatch) return mismatch;
     if (context.signal?.aborted) return failure('cancelled');
     if (input.isCredentialCurrent && !await input.isCredentialCurrent()) return failure('credential_scope_retired');
@@ -379,7 +380,7 @@ export function createAccountServerActionDeps(input: Readonly<{
     return parsed.success ? parsed.data : failure(refresh ? 'outcome_unknown' : 'usage_price_catalog_invalid');
   };
   const readQuota: NonNullable<NonNullable<ActionExecutorDeps['usageActions']>['readQuota']> = async (request, context) => {
-        const mismatch = accountServerTargetMismatch(context);
+        const mismatch = await accountServerTargetMismatch(context);
         if (mismatch) return mismatch;
         const failure = (errorCode: string): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode });
         const check = async () => {
@@ -426,7 +427,7 @@ export function createAccountServerActionDeps(input: Readonly<{
         refresh: context => readPrices(true, context),
       },
       query: async (request, context) => {
-        const mismatch = accountServerTargetMismatch(context);
+        const mismatch = await accountServerTargetMismatch(context);
         if (mismatch) return mismatch;
         const retired = (): ActionExecuteFailure => ({ ok: false, errorCode: 'credential_scope_retired', error: 'credential_scope_retired' });
         if (input.isCredentialCurrent && !await input.isCredentialCurrent()) return retired();
@@ -575,7 +576,8 @@ export function createAccountServerActionDeps(input: Readonly<{
     projectWorkerAction: async ({ actionId, input: actionInput, context, signal }) => {
       const parsed = ProjectWorkerActionInputSchemasV1[actionId].parse(actionInput);
       const targetServerId = 'workspace' in parsed ? parsed.workspace.serverId : parsed.serverId;
-      if (targetServerId !== serverId || accountServerTargetMismatch(context)) {
+      if (!await isServerProfileHomeIdentity(serverId, targetServerId)
+        || await accountServerTargetMismatch(context)) {
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       }
       if (actionId === 'machines.worker.policy.get' || actionId === 'machines.worker.policy.set') {
@@ -621,9 +623,9 @@ export function createAccountServerActionDeps(input: Readonly<{
         const credentials = input.credentials?.token === input.token ? input.credentials : { token: input.token, encryption: null };
         try {
           if (!await isCurrent()) return { status: 'unavailable' };
-          const rows = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => readProjectAccountRows({ credentials, serverId, signal }));
-          const childMachines = await readWorkspaceSyncChildMachineFacts({ serverId, serverHttpBaseUrl, credentials, signal,
-            purpose: 'admitted_mapping', machineIds: rows.workspaceRefs.filter(ref => ref.serverId === serverId).map(ref => ref.machineId) });
+          const rows = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => readProjectAccountRows({ credentials, serverId: targetServerId, signal }));
+          const childMachines = await readWorkspaceSyncChildMachineFacts({ serverId: targetServerId, serverHttpBaseUrl, credentials, signal,
+            purpose: 'admitted_mapping', machineIds: rows.workspaceRefs.filter(ref => ref.serverId === targetServerId).map(ref => ref.machineId) });
           const actual = await observeProjectServicePlacementActualV1({ ...request,
             workspaceRefs: rows.workspaceRefs, relationships: rows.relationships, childMachines,
             isCurrent: async () => await isCurrent() && getActiveProjectAccountRowsSnapshot() === rows,
@@ -645,7 +647,7 @@ export function createAccountServerActionDeps(input: Readonly<{
         serverId: actionInput && typeof actionInput === 'object' ? Reflect.get(actionInput, 'serverId') : undefined,
         machineId: actionInput && typeof actionInput === 'object' ? Reflect.get(actionInput, 'machineId') : undefined,
       });
-      if (target.serverId !== serverId || accountServerTargetMismatch(actionContext)) {
+      if (!await isServerProfileHomeIdentity(serverId, target.serverId) || await accountServerTargetMismatch(actionContext)) {
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       }
       if (signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
@@ -768,9 +770,8 @@ export function createAccountServerActionDeps(input: Readonly<{
       return settleAccountServerActionHttpOutput({ data: response.data, outputSchema: MachinePresetActionOutputSchemasV1[actionId], sideEffectClass });
     },
     machinePoolAction: async ({ actionId, input: actionInput, context: actionContext, signal }) => {
-      if (actionContext?.serverId && actionContext.serverId !== serverId) {
-        return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
-      }
+      const mismatch = await accountServerTargetMismatch(actionContext);
+      if (mismatch) return mismatch;
       const path = machinePoolActionEndpointPathV1(actionId);
       const body = MachinePoolActionInputSchemasV1[actionId].parse(actionInput);
       const requestHeaders = resolveRequestHeaders({
@@ -821,9 +822,8 @@ export function createAccountServerActionDeps(input: Readonly<{
      * own transaction remains the authority for every governance decision.
      */
     homeDomainAction: async ({ actionId, input: actionInput, context: actionContext, signal }) => {
-      if (actionContext?.serverId && actionContext.serverId !== serverId) {
-        return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
-      }
+      const mismatch = await accountServerTargetMismatch(actionContext);
+      if (mismatch) return mismatch;
       const hasOrganizationDisplay = (actionId.startsWith('session.folders.') || actionId.startsWith('session.tags.'))
         && !actionId.endsWith('.delete');
       const organizationDisplay = hasOrganizationDisplay ? await captureSessionOrganizationDisplayHost({
@@ -887,9 +887,8 @@ export function createAccountServerActionDeps(input: Readonly<{
       return settled;
     },
     sessionAccessAction: async ({ actionId, input: actionInput, context: actionContext, signal }) => {
-      if (actionContext?.serverId && actionContext.serverId !== serverId) {
-        return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
-      }
+      const mismatch = await accountServerTargetMismatch(actionContext);
+      if (mismatch) return mismatch;
       const spec = getActionSpec(actionId);
       const mutation = spec.sideEffectClass !== 'none' && spec.sideEffectClass !== 'read';
       const publicRequest = bindSessionAccessActionHttpRequestV1(actionId, actionInput);
@@ -1075,7 +1074,8 @@ export function createAccountServerActionDeps(input: Readonly<{
         }
         if (actionId === 'session.public_link.get' || actionId === 'session.public_link.create') {
           const projected = localPublication
-            ? projectSessionPublicLinkCreateActionResultV1(response.data, localPublication)
+            ? projectSessionPublicLinkCreateActionResultV1(response.data, localPublication,
+                SessionPublicLinkCreateActionInputV1Schema.parse(actionInput).networkOff === true)
             : projectSessionPublicLinkActionResultV1(response.data);
           const result = spec.outputSchema?.parse(projected) ?? projected;
           if (localPublication && input.onPublicLinkIssued) {
@@ -1096,7 +1096,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       }
     },
     accountSessionsSignOutEverywhereAction: async ({ input: actionInput, context: actionContext, signal }) => {
-      const targetMismatch = accountServerTargetMismatch(actionContext);
+      const targetMismatch = await accountServerTargetMismatch(actionContext);
       if (targetMismatch) {
         throw Object.assign(new Error(targetMismatch.error), { code: targetMismatch.errorCode });
       }
@@ -1133,7 +1133,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       return AccountSessionsSignOutEverywhereServerOutputV1Schema.parse(response.data);
     },
     accountApiTokensCreateAction: async ({ input: actionInput, context: actionContext, signal }) => {
-      const targetMismatch = accountServerTargetMismatch(actionContext);
+      const targetMismatch = await accountServerTargetMismatch(actionContext);
       if (targetMismatch) return targetMismatch;
       const spec = getActionSpec('account.apiTokens.create');
       const body = AccountApiTokensCreateActionInputV1Schema.parse(actionInput);
@@ -1163,7 +1163,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       });
     },
     accountApiTokensUpdateAction: async ({ input: actionInput, context: actionContext, signal }) => {
-      const targetMismatch = accountServerTargetMismatch(actionContext);
+      const targetMismatch = await accountServerTargetMismatch(actionContext);
       if (targetMismatch) return targetMismatch;
       const spec = getActionSpec('account.apiTokens.update');
       const body = AccountApiTokensUpdateActionInputV1Schema.parse(actionInput);
@@ -1193,7 +1193,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       });
     },
     accountApiTokensListAction: async ({ input: actionInput, context: actionContext, signal }) => {
-      const targetMismatch = accountServerTargetMismatch(actionContext);
+      const targetMismatch = await accountServerTargetMismatch(actionContext);
       if (targetMismatch) return targetMismatch;
       const spec = getActionSpec('account.apiTokens.list');
       const body = AccountApiTokensListActionInputV1Schema.parse(actionInput);
@@ -1223,7 +1223,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       });
     },
     accountApiTokensRevokeAction: async ({ input: actionInput, context: actionContext, signal }) => {
-      const targetMismatch = accountServerTargetMismatch(actionContext);
+      const targetMismatch = await accountServerTargetMismatch(actionContext);
       if (targetMismatch) return targetMismatch;
       const spec = getActionSpec('account.apiTokens.revoke');
       const body = AccountApiTokensRevokeActionInputV1Schema.parse(actionInput);
@@ -1253,7 +1253,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       });
     },
     accountApiTokensRevokeAllAction: async ({ input: actionInput, context: actionContext, signal }) => {
-      const targetMismatch = accountServerTargetMismatch(actionContext);
+      const targetMismatch = await accountServerTargetMismatch(actionContext);
       if (targetMismatch) return targetMismatch;
       const spec = getActionSpec('account.apiTokens.revokeAll');
       const body = AccountApiTokensRevokeAllActionInputV1Schema.parse(actionInput);
@@ -1286,7 +1286,7 @@ export function createAccountServerActionDeps(input: Readonly<{
     // endpoint + signed Account credential) serves all intents; the Home
     // transaction remains the authority for every governance decision.
     accountSecurityGetAction: async ({ context: actionContext, signal }) => {
-      const targetMismatch = accountServerTargetMismatch(actionContext);
+      const targetMismatch = await accountServerTargetMismatch(actionContext);
       if (targetMismatch) return targetMismatch;
       const requestHeaders = resolveRequestHeaders({
         context: actionContext,
@@ -1304,7 +1304,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       });
     },
     accountSecurityTerminalPresentUserSetAction: async ({ input: actionInput, context: actionContext, signal }) => {
-      const targetMismatch = accountServerTargetMismatch(actionContext);
+      const targetMismatch = await accountServerTargetMismatch(actionContext);
       if (targetMismatch) return targetMismatch;
       const body = AccountTerminalPresentUserPolicySetRequestV1Schema.parse(actionInput);
       const requestHeaders = resolveRequestHeaders({
@@ -1326,7 +1326,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       });
     },
     accountPasswordEnrollAction: async ({ input: actionInput, context: actionContext, signal }) => {
-      const targetMismatch = accountServerTargetMismatch(actionContext);
+      const targetMismatch = await accountServerTargetMismatch(actionContext);
       if (targetMismatch) return targetMismatch;
       const body = AccountPasswordEnrollRequestV1Schema.parse(actionInput);
       const requestHeaders = resolveRequestHeaders({ context: actionContext, effectActionId: 'account.password.enroll', method: 'POST', path: ACCOUNT_PASSWORD_ENROLL_PATH_V1, body });
@@ -1342,7 +1342,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       });
     },
     accountPasswordChangeAction: async ({ input: actionInput, context: actionContext, signal }) => {
-      const targetMismatch = accountServerTargetMismatch(actionContext);
+      const targetMismatch = await accountServerTargetMismatch(actionContext);
       if (targetMismatch) return targetMismatch;
       const body = AccountPasswordChangeRequestV1Schema.parse(actionInput);
       const requestHeaders = resolveRequestHeaders({ context: actionContext, effectActionId: 'account.password.change', method: 'POST', path: ACCOUNT_PASSWORD_CHANGE_PATH_V1, body });
@@ -1358,7 +1358,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       });
     },
     accountPasswordRemoveAction: async ({ input: actionInput, context: actionContext, signal }) => {
-      const targetMismatch = accountServerTargetMismatch(actionContext);
+      const targetMismatch = await accountServerTargetMismatch(actionContext);
       if (targetMismatch) return targetMismatch;
       const body = AccountPasswordRemoveRequestV1Schema.parse(actionInput);
       const requestHeaders = resolveRequestHeaders({ context: actionContext, effectActionId: 'account.password.remove', method: 'POST', path: ACCOUNT_PASSWORD_REMOVE_PATH_V1, body });
@@ -1374,7 +1374,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       });
     },
     accountEmailChangeRequestAction: async ({ input: actionInput, context: actionContext, signal }) => {
-      const targetMismatch = accountServerTargetMismatch(actionContext);
+      const targetMismatch = await accountServerTargetMismatch(actionContext);
       if (targetMismatch) return targetMismatch;
       const body = AccountEmailChangeRequestV1Schema.parse(actionInput);
       const requestHeaders = resolveRequestHeaders({ context: actionContext, effectActionId: 'account.email.change.request', method: 'POST', path: ACCOUNT_EMAIL_CHANGE_REQUEST_PATH_V1, body });

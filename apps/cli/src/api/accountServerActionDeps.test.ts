@@ -46,6 +46,11 @@ import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { resolveSessionEncryptionContextFromCredentials } from '@/session/transport/encryption/sessionEncryptionContext';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
+import { updateSettings } from '@/persistence';
+import { reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { withTempDir } from '@/testkit/fs/tempDir';
 
 function createAccountProjectWorkerActionDeps(input: Parameters<typeof createAccountServerActionDeps>[0]) {
   const ctx = input.credentials ? resolveSessionEncryptionContextFromCredentials(input.credentials) : null;
@@ -297,6 +302,95 @@ describe('Account API token HTTP adapter', () => {
     }));
     expect(await executor.execute('projects.worker.preferences.get', { workspace: { serverId: 'home', refId: 'checkout' } }, { surface: 'cli', serverId: 'home' }))
       .toMatchObject({ ok: true, result: { status: 'ready', revision: 3, provenance: 'saved', preference: { allowAdHoc: true } } });
+  });
+
+  it('admits portable Home worker preferences without changing private HTTP custody or accepting lost bindings', async () => {
+    await withTempDir('worker-preference-portable-home-', async home => {
+      const scope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
+      const profileId = 'preferences-local-profile';
+      const serverId = 'srv_portablePreferences';
+      try {
+        scope.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: profileId });
+        reloadConfiguration();
+        const serverUrl = 'https://account.test';
+        restore();
+        restore = installAxiosFastifyAdapter({ app, origin: serverUrl });
+        const profile = { id: profileId, name: 'Preferences', serverUrl, webappUrl: serverUrl,
+          createdAt: 1, updatedAt: 1, lastUsedAt: 1, homeConnectionDescriptorAuthority: 'exact' as const,
+          homeConnectionDescriptor: HomeConnectionDescriptorV1Schema.parse({ v: 1, homeServerIdentityId: serverId,
+            canonicalServerUrl: serverUrl, revision: 1, endpoints: [{ kind: 'https', url: serverUrl }] }) };
+        await updateSettings(settings => ({ ...settings, activeServerId: profileId, servers: { [profileId]: profile } }));
+        let reads = 0;
+        app.get('/v1/account/encryption', async request => {
+          expect(request.headers.authorization).toBe('Bearer captured-private-owner');
+          return { mode: 'plain', updatedAt: 0 };
+        });
+        app.post('/v1/projects/execution/config/read', async request => {
+          reads++;
+          expect(request.headers.authorization).toBe('Bearer captured-private-owner');
+          expect(request.body).toEqual({ address: { serverId, refId: 'checkout' } });
+          return { status: 'present', revision: 3, content: { t: 'plain', v: {
+            enabled: false, unavailable: 'ask', allowAdHoc: true, scriptOverrides: {}, services: {},
+          } } };
+        });
+        let credentialCurrent = true;
+        const params = { token: 'captured-private-owner', serverIdentityId: serverId,
+          credentials: { token: 'captured-private-owner', encryption: null }, serverId: profileId,
+          serverHttpBaseUrl: serverUrl, isCredentialCurrent: () => credentialCurrent };
+        const deps = createAccountServerActionDeps(params);
+        const executor = createActionExecutor({ ...createAccountProjectWorkerActionDeps(params), machinePoolAction: deps.machinePoolAction,
+          accountApiTokensListAction: deps.accountApiTokensListAction });
+        const poolId = '10000000-0000-4000-8000-000000000005';
+        let poolReads = 0;
+        app.post('/v1/machines/pools/get', async request => {
+          poolReads++;
+          expect(request.headers.authorization).toBe('Bearer captured-private-owner');
+          expect(request.body).toEqual({ poolId });
+          return { pool: { id: poolId, name: 'Private workers', description: null, revision: 1, createdAt: 1, updatedAt: 1,
+            members: [] }, availability: { state: 'known', connectedCount: 0, enabledCount: 0 } };
+        });
+        let tokenListReads = 0;
+        app.post('/v1/auth/api-tokens/list', async request => {
+          tokenListReads++;
+          expect(request.headers.authorization).toBe('Bearer captured-private-owner');
+          return { tokens: [] };
+        });
+        const read = (homeId = serverId) => executor.execute('projects.worker.preferences.get',
+          { workspace: { serverId: homeId, refId: 'checkout' } }, { surface: 'cli', serverId: homeId });
+        expect(await read()).toMatchObject({ ok: true, result: { status: 'ready', revision: 3,
+          provenance: 'saved', preference: { allowAdHoc: true } } });
+        const poolResult = await executor.execute('machines.pools.get', { poolId }, { surface: 'cli', serverId });
+        expect.soft(poolResult, JSON.stringify(poolResult))
+          .toMatchObject({ ok: true, result: { pool: { id: poolId, name: 'Private workers' } } });
+        const tokenListResult = await executor.execute('account.apiTokens.list', {}, { surface: 'cli', serverId });
+        expect.soft(tokenListResult, JSON.stringify(tokenListResult)).toMatchObject({ ok: true, result: { tokens: [] } });
+        const unsigned = await deps.machinePoolAction!({ actionId: 'machines.pools.get', input: { poolId }, context: {
+          surface: 'api', serverId, authority: 'account_automation', externalActionTarget: { kind: 'machine', machineId: 'worker' },
+          externalActionExecutionAuthorization: { v: 1, token: 'proof-without-machine-signing-key', binding: {
+            serverIdentityId: serverId, accountId: 'other-requester', principalId: 'principal', credentialId: 'credential',
+            grant: API_TOKEN_FULL_GRANT_V1, machineId: 'worker', actionId: 'machines.pools.get', requestId: 'signed-pool',
+            requestEnvelopeDigest: 'A'.repeat(43), target: { kind: 'machine', machineId: 'worker' },
+          } },
+        } });
+        expect.soft(unsigned, JSON.stringify(unsigned)).toMatchObject({ ok: false, errorCode: 'not_authenticated' });
+        for (const scenario of ['wrong', 'ambiguous', 'retired'] as const) {
+          await updateSettings(settings => ({ ...settings, servers: scenario === 'wrong' ? { [profileId]: profile }
+            : scenario === 'ambiguous' ? { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } }
+              : { [profileId]: { ...profile, homeConnectionDescriptor: undefined } } }));
+          expect(await read(scenario === 'wrong' ? 'srv_otherPreferences' : serverId))
+            .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+          expect(await executor.execute('machines.pools.get', { poolId },
+            { surface: 'cli', serverId: scenario === 'wrong' ? 'srv_otherPreferences' : serverId }))
+            .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+        }
+        await updateSettings(settings => ({ ...settings, servers: { [profileId]: profile } }));
+        credentialCurrent = false;
+        expect(await read()).toMatchObject({ ok: true, result: { status: 'unavailable' } });
+        expect(reads).toBe(1);
+        expect(poolReads).toBe(1);
+        expect(tokenListReads).toBe(1);
+      } finally { scope.restore(); reloadConfiguration(); }
+    });
   });
 
   it('does not claim worker effect custody when Account-mode preflight retires before mutation', async () => {
@@ -2214,7 +2308,7 @@ describe('Session access HTTP adapter', () => {
           updatedAt: 1,
           keyDerivation: 'fragment_v1',
         },
-        isolatedOrigin: 'https://public.example.test',
+        viewerOrigin: 'https://public.example.test',
       };
     });
     const deps = createAccountServerActionDeps({
@@ -2223,7 +2317,7 @@ describe('Session access HTTP adapter', () => {
       serverHttpBaseUrl: 'http://access.test',
       onPublicLinkIssued: link => { issued.push(link); },
     });
-    const logicalInput = { sessionId: 'session-plain', isConsentRequired: false };
+    const logicalInput = { sessionId: 'session-plain', isConsentRequired: false, networkOff: false };
     const snapshot = JSON.parse(JSON.stringify(logicalInput));
 
     const result = await deps.sessionAccessAction!({
@@ -2243,12 +2337,18 @@ describe('Session access HTTP adapter', () => {
     expect(result).toMatchObject({ url: issued[0]?.url });
     expect(JSON.stringify(physical)).not.toContain(issued[0]?.secret);
     expect(physical).not.toHaveProperty('encryptedDataKey');
+    expect(physical).not.toHaveProperty('networkOff');
     expect(physical).toMatchObject({ isConsentRequired: false });
     expect(physical.subject).toEqual({ kind: 'session', id: 'session-plain' });
     const noCustody = createAccountServerActionDeps({ token: 'bound-home-token', serverId: 'home', serverHttpBaseUrl: 'http://access.test' });
     await expect(noCustody.sessionAccessAction!({ actionId: 'session.public_link.create', input: logicalInput,
       context: { surface: 'cli', serverId: 'home' } })).resolves.toMatchObject({ url: expect.stringMatching(/^https:\/\/public.example.test\/s\/[^#]+#k=.+$/) });
     expect(physicalBodies).toHaveLength(2);
+    await expect(deps.sessionAccessAction!({ actionId: 'session.public_link.create',
+      input: { ...logicalInput, networkOff: true }, context: { surface: 'cli', serverId: 'home' } }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'outcome_unknown' });
+    expect((physicalBodies[2] as { body: Record<string, unknown> }).body).toHaveProperty('networkOff', true);
+    expect(issued).toHaveLength(1);
   });
 
   it('does not rotate an older Home publication through a Session route that strips new fields', async () => {
@@ -2297,7 +2397,7 @@ describe('Session access HTTP adapter', () => {
           id: 'share-plain', expiresAt: null, maxUses: null, useCount: 0,
           isConsentRequired: false, createdAt: 1, updatedAt: 1, keyDerivation: 'fragment_v1',
         },
-        isolatedOrigin: 'https://public.example.test',
+        viewerOrigin: 'https://public.example.test',
       };
     });
     const installedAdapter = axios.getAdapter(axios.defaults.adapter);
@@ -2367,7 +2467,7 @@ describe('Session access HTTP adapter', () => {
           updatedAt: 1,
           keyDerivation: 'fragment_v1',
         },
-        isolatedOrigin: 'https://public.example.test',
+        viewerOrigin: 'https://public.example.test',
       };
     });
     const deps = createAccountServerActionDeps({

@@ -31,6 +31,7 @@ import { isProjectNativeProcessUncertain, preserveUnconfirmedNativeProcess, type
 import { ProjectNativeEnvironmentUncertainError } from '@/workspaces/environment/produceProjectNativeEnvironment';
 import type { ProjectNativeEffectCaptureForHost } from '@/plugins/runtime/invocation/services/exec';
 import { createNativeComposeLifecycle } from './nativeComposeLifecycle';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 type ActionContext = RuntimeActionExecuteArgs['context'];
 type CanonicalPoolRead = RuntimeActionExecuteArgs['executeCanonicalAction'];
@@ -120,13 +121,15 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         if (!request.workspace || !request.declaration) throw new ServiceStartRefusal('launcher_start_declaration_unavailable');
         const constrained = readProjectFiniteIngressRefusal(ingress);
         if (constrained) throw new ServiceStartRefusal(constrained.errorCode);
-        const runtime = await input.resolveRuntime(ingress);
-        if (!runtime) throw new ServiceStartRefusal('project_service_runtime_unavailable');
+        const authorityRuntime = await input.resolveRuntime(ingress);
+        if (!authorityRuntime) throw new ServiceStartRefusal('project_service_runtime_unavailable');
+        const runtime = { ...authorityRuntime, serverId: request.workspace.serverId };
         const admission = ingress.machineAdmission;
         if (admission.machineId !== runtime.machineId || request.machineId !== runtime.machineId
-            || request.workspace.serverId !== runtime.serverId
-            || context.serverId && context.serverId !== runtime.serverId) throw new ServiceStartRefusal('target_mismatch');
-        const requesterRefusal = await readProjectRuntimeRequesterRefusal(runtime, ingress);
+            || !await isServerProfileHomeIdentity(authorityRuntime.serverId, request.workspace.serverId)
+            || context.serverId && context.serverId !== authorityRuntime.serverId
+                && context.serverId !== request.workspace.serverId) throw new ServiceStartRefusal('target_mismatch');
+        const requesterRefusal = await readProjectRuntimeRequesterRefusal(authorityRuntime, ingress);
         if (requesterRefusal) throw new ServiceStartRefusal(requesterRefusal.errorCode);
         const signal = context.signal ? AbortSignal.any([ingress.signal, context.signal]) : ingress.signal;
         const assertCurrent = async () => {
@@ -521,7 +524,10 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                         // The Project supervisor retains this final capture until
                         // its existing cleanup proves the owned process tree settled.
                         retained = true;
-                        return { ...launch, async release() {
+                        return { ...launch,
+                            ...(current.command.kind === 'native' && current.command.source.tool === 'flox'
+                                ? { waitForGracefulRootExitBeforeTreeStop: true as const } : {}),
+                            async release() {
                             try { await launch.release(); }
                             finally { try { await releaseNativeLifecycle?.(); }
                                 finally { await nativeCustody.release({ waitForSettlement: false }); nativeCustody.dispose(); } }
