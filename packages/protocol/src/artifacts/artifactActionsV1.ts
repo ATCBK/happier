@@ -46,6 +46,9 @@ export const ArtifactUpdateInputV1Schema = lazyZodSchema(() => z.union([
   subject.extend({ expectedRevision: ArtifactRevisionV1Schema, header: ArtifactHeaderMetadataV1Schema, ...upload }).strict(),
 ]));
 export const ArtifactDeleteInputV1Schema = subject.extend({ expectedRevision: ArtifactRevisionV1Schema }).strict();
+export const ArtifactExportInputV1Schema = subject.extend({
+  path: z.string().min(1), overwrite: z.boolean().optional(),
+}).strict();
 export const ArtifactPublishFromFileInputV1Schema = lazyZodSchema(() => ArtifactWorkspacePublicationSourceV1Schema.extend({
   title: z.string().optional(), mime: z.string().min(1).optional(), kind: z.string().min(1).optional(),
 }).strict());
@@ -94,6 +97,7 @@ export const ArtifactBodyRevisionV1Schema = lazyZodSchema(() => ArtifactStoredBo
 export const ArtifactActionInputSchemasV1 = {
   'artifact.create': ArtifactCreateInputV1Schema,
   'artifact.get': subject,
+  'artifact.export': ArtifactExportInputV1Schema,
   'artifact.list': ArtifactListInputV1Schema,
   'artifact.update': ArtifactUpdateInputV1Schema,
   'artifact.delete': ArtifactDeleteInputV1Schema,
@@ -109,6 +113,7 @@ export const ArtifactActionInputSchemasV1 = {
 export const ArtifactActionOutputSchemasV1 = {
   'artifact.create': acknowledgement,
   'artifact.get': z.object({ artifact: ArtifactDocumentV1Schema.nullable(), ...htmlPreview }).strict(),
+  'artifact.export': subject.extend({ path: z.string().min(1), sizeBytes: z.number().int().nonnegative() }).strict(),
   'artifact.list': z.object({ items: z.array(ArtifactHeaderV1Schema), nextCursor: z.string().min(1).optional() }).strict(),
   'artifact.update': acknowledgement,
   'artifact.delete': subject.extend({ deleted: z.literal(true) }).strict(),

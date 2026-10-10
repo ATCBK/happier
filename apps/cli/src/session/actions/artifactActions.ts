@@ -1,9 +1,10 @@
 import { ArtifactActionInputSchemasV1, projectArtifactHeaderV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { artifactSavedByFromActionContextV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { isArtifactHtmlHeaderV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
+import { getArtifactKindPolicyV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
 import type { ActionExecutorContext, ArtifactActionIdV1, ArtifactPublicLinkIssuedV1 } from '@happier-dev/protocol';
 import type { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
-import { publishArtifactFromWorkspaceFile, readArtifactWorkspaceFile } from './publishArtifactFromWorkspaceFile';
+import { publishArtifactFromWorkspaceFile, readArtifactWorkspaceFile, writeArtifactWorkspaceFile } from './publishArtifactFromWorkspaceFile';
 
 type ArtifactPublishCaller = Readonly<{ sessionId: string; machineId: string; directory: string; runId?: string }>;
 
@@ -44,6 +45,22 @@ export function createCliArtifactActions(params: Readonly<{
           const input = ArtifactActionInputSchemasV1[args.actionId].parse(args.input);
           const artifact = await params.store.read(input.artifactId, { signal, includeSharedAudience: false });
           return { artifact };
+        }
+        case 'artifact.export': {
+          const input = ArtifactActionInputSchemasV1[args.actionId].parse(args.input);
+          const caller = await params.resolvePublishCaller(args.context);
+          if (!caller) throw Object.assign(new Error('artifact_source_unavailable'), { code: 'artifact_source_unavailable' });
+          const artifact = await params.store.read(input.artifactId, { signal, includeSharedAudience: false });
+          if (!artifact) throw Object.assign(new Error('not_found'), { code: 'not_found' });
+          if (!getArtifactKindPolicyV1(artifact.header.kind).browserListed) {
+            throw Object.assign(new Error('artifact_kind_internal'), { code: 'artifact_kind_internal' });
+          }
+          if (!artifact.body || typeof artifact.body === 'string') {
+            throw Object.assign(new Error('artifact_not_binary'), { code: 'artifact_not_binary' });
+          }
+          const bytes = await params.store.readBinary({ artifactId: input.artifactId, body: artifact.body, signal });
+          return { artifactId: input.artifactId, ...await writeArtifactWorkspaceFile({ caller,
+            path: input.path, overwrite: input.overwrite, bytes, sha256: artifact.body.sha256, signal }) };
         }
         case 'artifact.list': {
           const input = ArtifactActionInputSchemasV1[args.actionId].parse(args.input);

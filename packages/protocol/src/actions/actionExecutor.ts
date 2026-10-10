@@ -4362,7 +4362,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if ('header' in artifactInput && !getArtifactKindPolicyV1(artifactInput.header.kind).browserListed && !isUsageNoticeDismissInput
           || artifactActionId === 'artifact.publish_from_file' && 'kind' in artifactInput
             && !getArtifactKindPolicyV1(artifactInput.kind).browserListed) return internalKindRefusal;
-        if ((artifactActionId === 'artifact.update' || artifactActionId === 'artifact.delete'
+        if ((artifactActionId === 'artifact.update' || artifactActionId === 'artifact.delete' || artifactActionId === 'artifact.export'
           || artifactActionId === 'artifact.revisions.list' || artifactActionId === 'artifact.revisions.restore')
           && 'artifactId' in artifactInput) {
           // The keyholding host opens the actual current document and admits its access.

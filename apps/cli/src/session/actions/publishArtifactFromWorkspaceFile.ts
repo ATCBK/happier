@@ -10,9 +10,47 @@ import type { createAccountArtifactStore } from '@/api/artifacts/accountArtifact
 import { createTransferSessionLifecycle } from '@happier-dev/transfers/node';
 import { TransferSessionStore } from '@happier-dev/transfers/node';
 import { resolveWorkspaceFileDownloadSource } from '@/transfers/targets/resolveWorkspaceFileDownloadSource';
+import { resolveWorkspaceFileUploadTarget } from '@/transfers/targets/resolveWorkspaceFileUploadTarget';
 import { validatePath } from '@/rpc/handlers/pathSecurity';
 
 export type ArtifactWorkspaceCaller = Readonly<{ sessionId: string; machineId: string; directory: string; runId?: string }>;
+
+/** Account bytes use the incumbent confined upload target and transfer finalizer. */
+export async function writeArtifactWorkspaceFile(params: Readonly<{
+  caller: ArtifactWorkspaceCaller;
+  path: string;
+  overwrite?: boolean;
+  bytes: Uint8Array;
+  sha256: string;
+  signal?: AbortSignal;
+}>) {
+  params.signal?.throwIfAborted();
+  if (!params.caller.sessionId || !params.caller.machineId || !isAbsolute(params.caller.directory)) {
+    throw Object.assign(new Error('artifact_source_unavailable'), { code: 'artifact_source_unavailable' });
+  }
+  const resolved = resolveWorkspaceFileUploadTarget({ workingDirectory: params.caller.directory,
+    path: params.path, sizeBytes: params.bytes.byteLength, overwrite: params.overwrite ?? false,
+    accessPolicy: { kind: 'restrictedRoots', roots: [params.caller.directory] } });
+  if (!resolved.success) throw Object.assign(new Error('artifact_destination_forbidden'), { code: 'artifact_destination_forbidden' });
+  const transfers = new TransferSessionStore({ ttlMs: configuration.filesTransferSessionTtlMs });
+  const lifecycle = createTransferSessionLifecycle({ store: transfers, chunkSizeBytes: configuration.filesTransferChunkBytes });
+  try {
+    const session = await lifecycle.openUploadTransferSession({ target: resolved.target, sha256Expected: params.sha256 });
+    for (let offset = 0, index = 0; offset < params.bytes.byteLength; offset += session.chunkSizeBytes, index += 1) {
+      params.signal?.throwIfAborted();
+      const chunk = await lifecycle.writeUploadTransferChunk({ uploadId: session.uploadId, index,
+        contentBase64: Buffer.from(params.bytes.subarray(offset, offset + session.chunkSizeBytes)).toString('base64') });
+      if (!chunk.success) throw Object.assign(new Error('artifact_destination_transfer_failed'), { code: 'artifact_destination_transfer_failed' });
+    }
+    params.signal?.throwIfAborted();
+    const result = await lifecycle.finalizeUploadTransferSession({ uploadId: session.uploadId });
+    if (!result.success) {
+      const code = result.errorCode ?? 'artifact_destination_transfer_failed';
+      throw Object.assign(new Error(code), { code });
+    }
+    return { path: relative(params.caller.directory, resolved.target.destPath).split(sep).join('/'), sizeBytes: params.bytes.byteLength };
+  } finally { await transfers.dispose(); }
+}
 
 /** Every Artifact file input uses the same confined workspace transfer owner and its byte budget. */
 export async function readArtifactWorkspaceFile(params: Readonly<{

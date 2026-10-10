@@ -5224,6 +5224,7 @@ function projectPublicLinkCreationObservation(value: unknown): unknown {
 const ARTIFACT_ACTION_COPY = {
   'artifact.create': ['Create document', 'Save a new document to your account.'],
   'artifact.get': ['Read document', 'Open one document and read what is in it.'],
+  'artifact.export': ['Export document file', 'Save a binary document into the invoking session’s workspace. Existing files are preserved unless overwrite is approved.'],
   'artifact.list': ['List documents', 'See the documents saved in your account.'],
   'artifact.update': ['Update document', 'Save a new version of a document. Earlier versions are kept.'],
   'artifact.delete': ['Delete document', 'Remove a document from your account. People it was shared with lose it too.'],
@@ -5244,9 +5245,9 @@ const ARTIFACT_ACTION_SPECS: readonly (PreNormalizedActionSpec & Readonly<{
   return {
     id, title: ARTIFACT_ACTION_COPY[id][0], description: 'Read, publish and manage ordinary Account Artifacts through their mode-aware store.',
     safety: read ? 'safe' : 'danger', sideEffectClass: read || id === 'artifact.public_link.list' ? 'read' : 'write',
-    requiredAuthority: 'account_automation', executionPlacement: id === 'artifact.publish_from_file' ? 'machine' : 'account',
+    requiredAuthority: 'account_automation', executionPlacement: id === 'artifact.publish_from_file' || id === 'artifact.export' ? 'machine' : 'account',
     placements: [], bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_') },
-    surfaces: { ui: true, cli: true, rpc: true, agent: true, mcp: true, voice: false },
+    surfaces: { ui: id !== 'artifact.export', cli: true, rpc: true, agent: true, mcp: true, voice: false },
     inputSchema: ArtifactActionInputSchemasV1[id], outputSchema: ArtifactActionOutputSchemasV1[id],
     ...(['artifact.public_link.create', 'artifact.create', 'artifact.update', 'artifact.publish_from_file', 'artifact.get', 'artifact.revisions.restore'].includes(id)
       ? { projectObservationOutput: projectPublicLinkCreationObservation } : {}),
@@ -12641,7 +12642,7 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
     ...ACTION_ID_FAMILIES_V1.connected_services_configuration.filter((id) => id !== 'connectedServices.identityPrivacy.set' && id !== 'connectedServices.quota.reset' && id !== 'connectedServices.billing.open'),
     ...WORK_BOARD_ACTION_IDS_V1,
     ...ARTIFACT_ACCESS_ACTION_IDS_V1,
-    ...ARTIFACT_ACTION_IDS_V1.filter((id) => id !== 'artifact.publish_from_file'),
+    ...ARTIFACT_ACTION_IDS_V1.filter((id) => id !== 'artifact.publish_from_file' && id !== 'artifact.export'),
     ...ACTION_ID_FAMILIES_V1.notifications,
     ...ACTION_ID_FAMILIES_V1.session_attention,
     'action.spec.search',
@@ -12755,6 +12756,7 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
   register('machine', [
     ...MANAGED_MACHINE_ACTION_SPECS.filter((spec) => spec.executionPlacement === 'machine').map((spec) => spec.id),
     'artifact.publish_from_file',
+    'artifact.export',
     'connectedServices.quota.reset',
     ...MACHINE_TERMINAL_ACTION_IDS,
     ...ACTION_ID_FAMILIES_V1.machine_agent_install,

@@ -422,22 +422,54 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
           body: encodePlainArtifactStoredContent({ body }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
           ownerAccountId: 'owner', access: 'view', encryptionMode: 'plain',
           headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } }));
-    const executor = createActionExecutor({ ...deps(), isActionApprovalRequired: () => false });
-    const context = { surface: 'cli' as const, actionCaller: { kind: 'session' as const, sessionId: 'session', starterDepth: 0, turnDepth: 0 },
+    const executor = createActionExecutor(deps());
+    const context = { surface: 'cli' as const, authority: 'present_user' as const,
+      serverId: configuration.activeServerId, defaultSessionMachineId: 'local-machine', actionRequestId: 'export-binary-request',
+      actionCaller: { kind: 'session' as const, sessionId: 'session', starterDepth: 0, turnDepth: 0 },
       defaultSessionId: 'session', presentUserConfirmation: { actionId: 'artifact.export' as const } };
-    const result = await executor.execute('artifact.export', { artifactId, path: 'downloads/binary.pdf' }, context);
+    http.post.mockImplementation(async (_url: string, wire: unknown) => {
+      const input = readCarrierMutation(wire);
+      return { status: 200, data: { id: input.id, headerVersion: 1, bodyVersion: 1 } };
+    });
+    const input = { artifactId, path: 'downloads/binary.pdf' };
+    const admission = await executor.execute('artifact.export', input, context);
+    // Session callers retain Agent approval even with a CLI hint. This fixture has no human-decision transport.
+    expect(admission, JSON.stringify(admission)).toMatchObject({
+      ok: false, errorCode: 'approvals_not_supported',
+    });
+    await expect(readFile(join(root, 'workspace/downloads/binary.pdf'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const approval = readCarrierMutation(http.post.mock.calls[0]?.[1]);
+    const envelope = decodePlainArtifactStoredContent(approval.body as string);
+    if (!envelope || typeof envelope !== 'object' || !('body' in envelope) || typeof envelope.body !== 'string') {
+      throw new Error('invalid_approval_body');
+    }
+    expect(JSON.parse(envelope.body)).toMatchObject({
+      status: 'open', actionId: 'artifact.export', actionArgs: input,
+      executionOriginV1: { surface: 'agent', serverId: configuration.activeServerId, machineId: 'local-machine' },
+    });
+    // The host's approved replay is a trusted invocation boundary, not an Action input or policy mock.
+    const approvedContext = { ...context, bypassApprovals: true };
+    const result = await executor.execute('artifact.export', input, approvedContext);
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { artifactId, path: 'downloads/binary.pdf', sizeBytes: bytes.length } });
     expect(await readFile(join(root, 'workspace/downloads/binary.pdf'))).toEqual(bytes);
     await writeFile(join(root, 'workspace/downloads/binary.pdf'), 'keep');
-    expect(await executor.execute('artifact.export', { artifactId, path: 'downloads/binary.pdf' }, context)).toMatchObject({ ok: false });
+    expect(await executor.execute('artifact.export', { artifactId, path: 'downloads/binary.pdf' }, approvedContext)).toMatchObject({ ok: false });
     expect(await readFile(join(root, 'workspace/downloads/binary.pdf'), 'utf8')).toBe('keep');
-    expect(await executor.execute('artifact.export', { artifactId, path: '../private.pdf' }, context))
+    expect(await executor.execute('artifact.export', { artifactId, path: '../private.pdf' }, approvedContext))
       .toMatchObject({ ok: false, errorCode: 'artifact_destination_forbidden' });
     await symlink(root, join(root, 'workspace/escape'), process.platform === 'win32' ? 'junction' : 'dir');
-    expect(await executor.execute('artifact.export', { artifactId, path: 'escape/private.pdf' }, context))
+    expect(await executor.execute('artifact.export', { artifactId, path: 'escape/private.pdf' }, approvedContext))
       .toMatchObject({ ok: false, errorCode: 'artifact_destination_forbidden' });
-    const wrongHost = await executor.execute('artifact.export', { artifactId, path: 'foreign.pdf' }, { ...context, defaultSessionId: 'foreign' });
-    expect(wrongHost).toMatchObject({ ok: false, errorCode: 'artifact_source_unavailable' });
+    const wrongHost = await executor.execute('artifact.export', { artifactId, path: 'foreign.pdf' },
+      { ...approvedContext, actionCaller: { ...context.actionCaller, sessionId: 'foreign' } });
+    expect(wrongHost).toMatchObject({ ok: false, errorCode: 'account_encryption_currentness_unavailable' });
+    await expect(readFile(join(root, 'workspace/foreign.pdf'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const remoteMachine = createActionExecutor(createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      sessionId: 'session', mode: 'plain', ctx: null,
+      rawSession: { machineId: 'remote-machine', path: join(root, 'workspace') } }));
+    expect(await remoteMachine.execute('artifact.export', { artifactId, path: 'foreign.pdf' }, approvedContext))
+      .toMatchObject({ ok: false, errorCode: 'artifact_source_unavailable' });
+    await expect(readFile(join(root, 'workspace/foreign.pdf'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('creates and updates binary content only from the host-proved caller workspace', async () => {
