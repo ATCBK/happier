@@ -251,7 +251,8 @@ describe('ordinary Artifact Actions', () => {
       observeActionExecution });
     const result = await executor.execute(actionId, actionId === 'artifact.public_link.create' ? { artifactId: 'artifact' } : { sessionId: 'session' },
       { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' } });
-    expect(result).toEqual({ ok: true, result: output });
+    expect(result).toEqual({ ok: true, result: actionId === 'artifact.public_link.create'
+      ? { ...output, publicShare: { ...output.publicShare, networkOff: false } } : output });
     expect(observeActionExecution).toHaveBeenCalled();
     expect(JSON.stringify(observeActionExecution.mock.calls)).not.toContain('SECRET_FOR_CALLER');
   });

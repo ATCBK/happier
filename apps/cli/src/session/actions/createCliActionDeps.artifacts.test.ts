@@ -355,7 +355,7 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
     const executor = createActionExecutor(deps());
     const context = { surface: 'cli' as const, authority: 'present_user' as const };
     await expect(executor.execute('artifact.public_link.list', { artifactId },
-      { ...context, presentUserConfirmation: { actionId: 'artifact.public_link.list' } })).resolves.toEqual({ ok: true, result: { publicShares: [publicShare] } });
+      { ...context, presentUserConfirmation: { actionId: 'artifact.public_link.list' } })).resolves.toEqual({ ok: true, result: { publicShares: [{ ...publicShare, networkOff: false }] } });
     await expect(executor.execute('artifact.public_link.revoke', { artifactId, shareId: 'share-1' },
       { ...context, presentUserConfirmation: { actionId: 'artifact.public_link.revoke' } })).resolves.toMatchObject({ ok: true, result: { revoked: true } });
     await expect(executor.execute('artifact.public_link.create', { artifactId },
@@ -373,7 +373,7 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
     const executor = createActionExecutor({ ...deps(link => { issued.push(link); }), isActionApprovalRequired: () => false });
     const result = await executor.execute('artifact.public_link.create', { artifactId },
       { surface: 'cli', presentUserConfirmation: { actionId: 'artifact.public_link.create' } });
-    expect(result).toEqual({ ok: true, result: { publicShare, url: issued[0]?.url } });
+    expect(result).toEqual({ ok: true, result: { publicShare: { ...publicShare, networkOff: false }, url: issued[0]?.url } });
     expect(issued).toHaveLength(1);
     expect(issued[0]?.url).toBe(`https://public.example.test/s/${issued[0]?.lookupId}#k=${issued[0]?.secret}`);
     expect(JSON.stringify(http.post.mock.calls[0]?.[1])).not.toContain(issued[0]?.secret);
