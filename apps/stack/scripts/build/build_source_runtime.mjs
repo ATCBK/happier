@@ -467,11 +467,19 @@ async function emitSourceRuntimeBundle({ repoDir, outputDir, component, serverCo
     if (existsSync(assets)) await cp(assets, join(runtimeDir, 'package-dist/plugins/projection/registry/static-assets'), { recursive: true });
   } else {
     for (const name of ['generated', 'assets']) await linkInstalledDirectory(join(projectDir, name), join(runtimeDir, name));
-    if (existsSync(join(projectDir, 'prisma'))) await cp(join(projectDir, 'prisma'), join(runtimeDir, 'prisma'), {
-      recursive: true,
-      filter: async (path) => (await lstat(path)).isDirectory()
-        || /\.(?:prisma|sql)$/.test(path) || basename(path) === 'migration_lock.toml',
-    });
+    const copyPrismaInputs = async (source, destination) => {
+      await mkdir(destination, { recursive: true });
+      for (const name of await readdir(source)) {
+        const path = join(source, name);
+        const target = join(destination, name);
+        if ((await lstat(path)).isDirectory()) await copyPrismaInputs(path, target);
+        else if (/\.(?:prisma|sql)$/.test(name) || name === 'migration_lock.toml') {
+          // Record exactly the bytes emitted, just like the source-code loader.
+          await writeFile(target, await readSourceInput(path));
+        }
+      }
+    };
+    if (existsSync(join(projectDir, 'prisma'))) await copyPrismaInputs(join(projectDir, 'prisma'), join(runtimeDir, 'prisma'));
   }
   const distInputs = Object.keys(result.metafile.inputs).filter(file => isFirstPartyBuiltInput(file, workspacePackages));
   if (distInputs.length) throw new Error(`Source runtime consumed first-party built code: ${distInputs.join(', ')}`);
