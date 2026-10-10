@@ -10,6 +10,7 @@ import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import type { HappierWidgetFrameSourceDescriptor } from '@happier-dev/plugin-ui/presentation';
 import { t } from '@/text';
+import type { WidgetBindingValueLabels } from '@/components/widgets/surface/useWidgetBindingValueLabels';
 
 /** A value as people read it: text and numbers as they are, an object by its own name. */
 export function describeWidgetBindingValue(value: JsonValue): string | null {
@@ -27,10 +28,11 @@ export function describeWidgetBindingValue(value: JsonValue): string | null {
 /** The group's own value for its header's source slot ("📁 happier"): its first chosen value. */
 export function describeWidgetGroupContext(
   context: WidgetInputBindingsV1 | undefined,
+  labels?: WidgetBindingValueLabels,
 ): string | null {
-  for (const binding of Object.values(context ?? {})) {
+  for (const [slot, binding] of Object.entries(context ?? {})) {
     if (binding.kind === 'value') {
-      const label = describeWidgetBindingValue(binding.value);
+      const label = labels && Object.hasOwn(labels, slot) ? labels[slot] : describeWidgetBindingValue(binding.value);
       if (label) return label;
     }
   }
@@ -41,6 +43,7 @@ export function describeWidgetGroupContext(
 export function readWidgetGroupFollowedValue(
   instance: Pick<WidgetInstanceV1, 'bindings'>,
   context: WidgetInputBindingsV1 | undefined,
+  labels?: WidgetBindingValueLabels,
 ): string | null {
   if (!context) return null;
   for (const binding of Object.values(instance.bindings)) {
@@ -48,7 +51,7 @@ export function readWidgetGroupFollowedValue(
     const provided: WidgetInputBindingV1 | undefined = context[binding.slot];
     if (provided?.kind === 'value')
       return (
-        describeWidgetBindingValue(provided.value) ??
+        (labels && Object.hasOwn(labels, binding.slot) ? labels[binding.slot] : describeWidgetBindingValue(provided.value)) ??
         t('widgetFrame.followingGroup')
       );
   }
@@ -120,6 +123,7 @@ export function buildWidgetGroupInputsCandidate(
 export function widgetGroupSurfaceContext(
   base: WidgetSurfaceContext,
   context: WidgetInputBindingsV1 | undefined,
+  labels?: WidgetBindingValueLabels,
 ): WidgetSurfaceContext {
   if (!context) return base;
   const slots: Record<
@@ -132,7 +136,7 @@ export function widgetGroupSurfaceContext(
       label: t('widgetFrame.followingGroup'),
       value: {
         value: binding.value,
-        label: describeWidgetBindingValue(binding.value) ?? slot,
+        label: (labels && Object.hasOwn(labels, slot) ? labels[slot] : describeWidgetBindingValue(binding.value)) ?? slot,
       },
     };
   }

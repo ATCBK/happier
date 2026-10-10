@@ -1,8 +1,10 @@
 import { afterEach, expect, it } from 'vitest';
+import { act } from 'react-test-renderer';
 import type { InputHints } from '@happier-dev/protocol/inputs';
 import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storage';
 import { useWidgetInstanceBindingLabel } from './useWidgetInstanceBindingLabel';
+import { useWidgetBindingValueLabels } from './useWidgetBindingValueLabels';
 import { describeWidgetGroupContext, readWidgetGroupFollowedValue, widgetGroupSurfaceContext } from '../group/widgetGroupInputs';
 
 afterEach(() => standardCleanup());
@@ -19,13 +21,26 @@ it('names declared Session pins and group followers by their exact Home-qualifie
   expect(hook.getCurrent()).toBe('Review invoices');
   const checkout = await renderHook(() => useWidgetInstanceBindingLabel({ bindings: { checkout: context.checkout } }, { inputs: { fields: [fields[1]!] } }));
   expect(checkout.getCurrent()).toBe('happier');
-  const labels = { session: hook.getCurrent()!, checkout: checkout.getCurrent()! };
+  const groupLabels = await renderHook(() => useWidgetBindingValueLabels(context, { inputs: { fields } }));
+  const labels = groupLabels.getCurrent();
+  expect(labels).toEqual({ session: 'Review invoices', checkout: 'happier' });
   expect(describeWidgetGroupContext(context, labels)).toBe('Review invoices');
   expect(readWidgetGroupFollowedValue({ bindings: { session: { kind: 'context', slot: 'session' } } }, context, labels)).toBe('Review invoices');
   expect(widgetGroupSurfaceContext({}, context, labels).slots?.checkout?.value?.label).toBe('happier');
-  storage.setState({ sessions: { ...storage.getState().sessions, B: { ...session, serverId: 'other', metadata: { ...session.metadata!, name: 'Other Home' } } } });
+  await act(async () => storage.setState({ sessions: { ...storage.getState().sessions, B: { ...session, serverId: 'other', metadata: { ...session.metadata!, name: 'Other Home' } } } }));
   await hook.rerender();
   expect(hook.getCurrent()).toBeNull();
+  await groupLabels.rerender();
+  expect(describeWidgetGroupContext(context, groupLabels.getCurrent())).toBe('happier');
+});
+
+it('retains an installed descriptor explicit Session target even without field hints', async () => {
+  const session = createSessionFixture({ id: 'installed', serverId: 'home', metadata: { path: '/repo', host: 'host', name: 'Installed Session' } });
+  storage.setState({ sessions: { ...storage.getState().sessions, installed: session } });
+  const hook = await renderHook(() => useWidgetInstanceBindingLabel({ bindings: {
+    selected: { kind: 'value', value: { serverId: 'home', sessionId: 'installed' } },
+  } }, { sessionInputPath: 'selected' }));
+  expect(hook.getCurrent()).toBe('Installed Session');
 });
 
 const label = async (
@@ -80,4 +95,14 @@ it('names a copy by its chosen option words or its typed text, never by a stored
   expect(await label(typed, { branch: { kind: 'value', value: 'main' } })).toBe(
     'main',
   );
+});
+
+it('resolves a JSON choice by the canonical option identity rather than raw object names', async () => {
+  const inputs: InputHints = { fields: [{ path: 'filter', title: 'Filter', widget: 'json', options: [
+    { value: { name: 'stored-id', period: 'month' }, label: 'Monthly costs' },
+  ] }] };
+  const hook = await renderHook(() => useWidgetInstanceBindingLabel({ bindings: {
+    filter: { kind: 'value', value: { period: 'month', name: 'stored-id' } },
+  } }, { inputs }));
+  expect(hook.getCurrent()).toBe('Monthly costs');
 });

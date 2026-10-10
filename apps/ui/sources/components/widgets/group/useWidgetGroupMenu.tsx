@@ -5,6 +5,8 @@ import type { WidgetInputBindingsV1, WidgetLayoutGroupV1, WidgetSurfaceRefV1 } f
 import { useWidgetFrameRename } from '@/components/widgets/frame/useWidgetFrameRename';
 import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import type { WidgetSetupSubmitResult } from '@/components/widgets/add/widgetSetupModel';
+import type { WidgetBindingValueLabels } from '@/components/widgets/surface/useWidgetBindingValueLabels';
 
 import { useWidgetGroupInputsEditor } from './useWidgetGroupInputsEditor';
 import { useWidgetGroupKeepFlows } from './useWidgetGroupKeepFlows';
@@ -19,9 +21,10 @@ export function useWidgetGroupMenu(input: Readonly<{
     context: WidgetSurfaceContext;
     operations: WidgetGroupOperations;
     showWidth: boolean;
+    geometry?: WidgetGroupMenuInput['geometry'];
     /** Explicitly absent for read-only hosts. */
     rename: ((title: string | undefined) => void | Promise<void>) | undefined;
-    setInputs: ((bindings: WidgetInputBindingsV1) => Promise<unknown>) | undefined;
+    setInputs: ((bindings: WidgetInputBindingsV1) => Promise<WidgetSetupSubmitResult>) | undefined;
     testID: string;
 }>): Readonly<{
     menuInput: WidgetGroupMenuInput;
@@ -30,6 +33,7 @@ export function useWidgetGroupMenu(input: Readonly<{
     /** The group's name write (an empty name makes it untitled); absent for read-only hosts. */
     commitName: ((next: string) => void | Promise<void>) | undefined;
     overlays: React.ReactNode;
+    labels: WidgetBindingValueLabels;
 }> {
     const { group, childTitle, scope, testID } = input;
     const name = describeWidgetGroup(group, childTitle);
@@ -50,12 +54,13 @@ export function useWidgetGroupMenu(input: Readonly<{
     const keep = useWidgetGroupKeepFlows({ group, name, scope, candidates: input.candidates, anchorRef: inputs.anchorRef, testID });
     return {
         menuInput: {
-            group, childTitle, operations: input.operations, showWidth: input.showWidth,
+            group, childTitle, operations: input.operations, showWidth: input.showWidth, geometry: input.geometry,
             editInputs: inputs.editInputs, onRename: renaming.begin, onSave: keep.onSave, onAddTo: keep.onAddTo,
         },
         anchorRef: inputs.anchorRef,
         renameField: renaming.field,
         commitName,
         overlays: <>{inputs.popover}{keep.overlay}</>,
+        labels: inputs.labels,
     };
 }

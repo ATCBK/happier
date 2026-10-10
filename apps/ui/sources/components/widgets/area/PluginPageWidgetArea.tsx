@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
-import { WidgetInstanceActionInputSchemasV1, WidgetSurfaceReadV1Schema, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { WidgetInstanceActionInputSchemasV1, WidgetSurfaceReadV1Schema, readWidgetActionSurfaceV1, buildWidgetSurfaceArtifactIdV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { PluginUiWidgetAreaOperationV1Schema } from '@happier-dev/protocol/plugins/ui';
 import type { PluginUiWidgetAreaPresentation } from '@happier-dev/plugin-ui/advanced';
 
 import type { WidgetSurfaceContext, WidgetSurfaceContextSlot } from '@/components/widgets/surface/widgetSurfaceSetup';
@@ -8,9 +9,15 @@ import { widgetProvidedContext } from '@/components/widgets/surface/widgetSurfac
 import { executeWidgetEntityMovement, widgetMovementRefused } from '@/sync/ops/actions/widgetEntityMovement';
 import { t } from '@/text';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
+import { Modal } from '@/modal';
+import { useDeviceType } from '@/utils/platform/responsive';
+import { useWidgetAreaLayouts, type WidgetAreaLayoutsExecute } from '@/components/projects/overview/useProjectDashboards';
 
 import { WidgetArea } from './WidgetArea';
-import type { WidgetAreaPort } from './useWidgetAreaLayout';
+import { useWidgetAreaLayout, type WidgetAreaPort } from './useWidgetAreaLayout';
+import { WidgetAreaLayoutBar, type WidgetAreaLayoutActions, type WidgetAreaLayoutLabels } from './WidgetAreaLayoutBar';
+import { WidgetAreaPresetLine } from './WidgetAreaPresetLine';
+import { registerWidgetAreaLayoutSelectionOwner, widgetAreaLayoutBaseSurface } from './widgetAreaLayoutSelection';
 
 /** A page value as people read it: a string is itself; anything else is its compact JSON. */
 function describePageValue(value: JsonValue): string {
@@ -41,12 +48,18 @@ export function PluginPageWidgetArea(props: PluginUiWidgetAreaPresentation & Rea
     // Keyed by value, not identity: a page re-rendering with the same filter keeps one binding.
     const pageContext = React.useMemo(() => JSON.parse(contextKey) as Readonly<Record<string, JsonValue>>, [contextKey]);
     const { port: pagePort } = props;
+    const [selected, setSelected] = React.useState<Readonly<{ port: typeof pagePort; layoutId?: string }> | null>(null);
+    const selectedLayoutId = selected?.port === pagePort ? selected.layoutId : undefined;
     const context = React.useMemo(() => pluginPageWidgetContext(pageContext), [pageContext]);
+    const mounted = React.useRef(true);
+    const currentBinding = React.useRef({ pagePort, pageContext });
+    currentBinding.current = { pagePort, pageContext };
+    React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     const port = React.useMemo<WidgetAreaPort>(() => {
         // The mounted area port admits declaration, context and lifetime and supplies identity.
         // Authored page values never select a Home/Account or a different destination.
         const readMovementContext = async (destination: WidgetSurfaceRefV1, signal?: AbortSignal) => {
-            const result = await pagePort.execute({ actionId: 'widgets.item.list' }, pageContext, signal ? { signal } : undefined);
+            const result = await pagePort.execute({ actionId: 'widgets.item.list' }, pageContext, { signal, layoutId: selectedLayoutId });
             if (!result.ok) return { ok: false, code: result.errorCode ?? 'widget_area_unavailable' } as const;
             const read = WidgetSurfaceReadV1Schema.safeParse(result.result);
             if (!read.success) return { ok: false, code: 'invalid_widget_area_result' } as const;
@@ -54,7 +67,7 @@ export function PluginPageWidgetArea(props: PluginUiWidgetAreaPresentation & Rea
             return { ok: true, context: { surface: read.data.surface, values: widgetProvidedContext(context) } } as const;
         };
         return {
-            execute: (operation, signal) => pagePort.execute(operation, pageContext, signal ? { signal } : undefined),
+            execute: (operation, signal) => pagePort.execute(operation, pageContext, { signal, layoutId: selectedLayoutId }),
             movement: {
                 readAdmission: async (ref, destination, signal) => {
                     const admitted = await readMovementContext(destination, signal);
@@ -72,16 +85,124 @@ export function PluginPageWidgetArea(props: PluginUiWidgetAreaPresentation & Rea
                 },
             },
         };
-    }, [context, pageContext, pagePort]);
+    }, [context, pageContext, pagePort, selectedLayoutId]);
+    const layout = useWidgetAreaLayout(port, context);
+    const ready = layout.state.status === 'ready' ? layout.state : null;
+    const baseKey = ready ? stableJsonStringify(widgetAreaLayoutBaseSurface(ready.surface)) : '';
+    const base = React.useMemo(() => baseKey ? JSON.parse(baseKey) as WidgetSurfaceRefV1 : null, [baseKey]);
+    React.useEffect(() => {
+        if (!base) return;
+        const isCurrent = () => mounted.current && currentBinding.current.pagePort === pagePort && currentBinding.current.pageContext === pageContext;
+        return registerWidgetAreaLayoutSelectionOwner({ surface: base, isCurrent,
+            read: (destination, signal) => pagePort.execute({ actionId: 'widgets.item.list' }, pageContext,
+                { signal, layoutId: 'layoutId' in destination.owner ? destination.owner.layoutId : undefined }),
+            select: destination => {
+                if (destination.owner.kind === 'pluginArea') setSelected({ port: pagePort, layoutId: destination.owner.layoutId });
+            },
+        });
+    }, [base, pageContext, pagePort]);
+    const executeLayoutAction = React.useCallback<WidgetAreaLayoutsExecute>(async (actionId, raw) => {
+        const failed = (errorCode: string) => ({ ok: false as const, errorCode, error: errorCode });
+        const parsed = WidgetInstanceActionInputSchemasV1[actionId].safeParse(raw);
+        const target = parsed.success ? readWidgetActionSurfaceV1(parsed.data) : null;
+        if (!base || !parsed.success || !target || !sameStrictJsonValue(widgetAreaLayoutBaseSurface(target), base)) return failed('widget_area_owner_mismatch');
+        const fields: Record<string, unknown> = { ...parsed.data };
+        delete fields.surface;
+        delete fields.fromSurface;
+        if (actionId === 'widgets.area.layout.create') {
+            const create = WidgetInstanceActionInputSchemasV1[actionId].parse(raw);
+            if (create.fromSurface) {
+                if (!sameStrictJsonValue(widgetAreaLayoutBaseSurface(create.fromSurface), base)) return failed('widget_area_owner_mismatch');
+                fields.fromLayoutId = 'layoutId' in create.fromSurface.owner ? create.fromSurface.owner.layoutId ?? null : null;
+            }
+        } else if (actionId === 'widgets.area.layout.select') {
+            fields.layoutId = 'layoutId' in target.owner ? target.owner.layoutId ?? null : null;
+        } else if (actionId === 'widgets.area.layout.undo') {
+            const { capture } = WidgetInstanceActionInputSchemasV1[actionId].parse(raw);
+            const { surface: _surface, ...previousLayout } = capture.previousLayout;
+            fields.capture = { expectedRevision: capture.expectedRevision, previousLayout,
+                ...('layoutId' in capture.surface.owner && capture.surface.owner.layoutId ? { layoutId: capture.surface.owner.layoutId } : {}) };
+        }
+        const operation = PluginUiWidgetAreaOperationV1Schema.safeParse({ ...fields, actionId });
+        return operation.success ? pagePort.execute(operation.data, pageContext,
+            { layoutId: 'layoutId' in target.owner ? target.owner.layoutId : undefined }) : failed('invalid_widget_area_request');
+    }, [base, pageContext, pagePort]);
+    const layouts = useWidgetAreaLayouts({ surface: base, execute: executeLayoutAction });
+    const listed = layouts.state.dashboards;
+    const defaultId = base ? buildWidgetSurfaceArtifactIdV1(base) : 'default';
+    const options = React.useMemo(() => [
+        ...(!listed.some(row => row.artifactId === defaultId) ? [{ id: defaultId, name: t('projects.dashboard.default'), isDefault: true }] : []),
+        ...listed.map(row => ({ id: row.artifactId, name: row.name, isDefault: row.isDefault || row.artifactId === defaultId, edited: row.isEdited })),
+    ], [defaultId, listed]);
+    const selectedId = ready ? ready.surface.artifactId ?? buildWidgetSurfaceArtifactIdV1(ready.surface) : defaultId;
+    const selectLayout = React.useCallback(async (id: string) => {
+        const summary = listed.find(row => row.artifactId === id);
+        if (summary) return layouts.select(summary);
+        if (id !== defaultId) return { ok: false as const, errorCode: 'widget_area_layout_not_found' };
+        return executeLayoutAction('widgets.area.layout.select', { surface: base });
+    }, [base, defaultId, executeLayoutAction, layouts, listed]);
+    const isCurrent = React.useCallback(() => mounted.current && currentBinding.current.pagePort === pagePort && currentBinding.current.pageContext === pageContext,
+        [pageContext, pagePort]);
+    const create = React.useCallback(async () => {
+        const source = ready?.surface;
+        const name = (await Modal.prompt(t('usage.board.page.newViewTitle'), undefined,
+            { placeholder: t('usage.board.page.newViewPlaceholder'), confirmText: t('common.create') }))?.trim();
+        if (!name || !source || !isCurrent()) return;
+        const created = await layouts.create(name, source);
+        if (created.ok && created.dashboard && isCurrent()) await layouts.select(created.dashboard);
+    }, [isCurrent, layouts, ready?.surface]);
+    const selectedSummary = listed.find(row => row.artifactId === selectedId);
+    const actions = React.useMemo((): WidgetAreaLayoutActions | null => {
+        if (!selectedSummary || !ready?.canEdit) return null;
+        const index = listed.indexOf(selectedSummary);
+        const before = listed[index - 1];
+        const after = listed[index + 1];
+        return {
+            rename: async () => {
+                const name = (await Modal.prompt(t('usage.board.page.renameViewTitle'), undefined,
+                    { defaultValue: selectedSummary.name, confirmText: t('common.save') }))?.trim();
+                if (name && name !== selectedSummary.name && isCurrent()) await layouts.rename(selectedSummary, name);
+            },
+            ...(before ? { moveBefore: { name: before.name, onPress: () => { if (isCurrent()) void layouts.reorder(selectedSummary, { anchorId: before.artifactId, placement: 'before' }); } } } : {}),
+            ...(after ? { moveAfter: { name: after.name, onPress: () => { if (isCurrent()) void layouts.reorder(selectedSummary, { anchorId: after.artifactId, placement: 'after' }); } } } : {}),
+            delete: selectedSummary.isPreset ? { disabledReason: t('projects.dashboard.defaultProtected') } : { onPress: async () => {
+                const confirmed = await Modal.confirm(t('usage.board.page.deleteViewTitle', { name: selectedSummary.name }), t('usage.board.page.deleteViewBody'),
+                    { confirmText: t('common.delete'), destructive: true });
+                if (!confirmed || !isCurrent()) return;
+                const removed = await layouts.remove(selectedSummary);
+                if (removed.ok && isCurrent()) await executeLayoutAction('widgets.area.layout.select', { surface: base });
+            } },
+        };
+    }, [base, executeLayoutAction, isCurrent, layouts, listed, ready?.canEdit, selectedSummary]);
+    const labels: WidgetAreaLayoutLabels = {
+        list: t('usage.board.page.viewsLabel'), current: name => `${t('usage.board.page.viewsLabel')}: ${name}`,
+        create: t('usage.board.page.newView'), createEllipsis: t('usage.board.page.newView'), defaultLayout: t('projects.dashboard.default'),
+        actions: name => t('usage.board.page.viewActions', { name }), rename: t('usage.board.page.renameView'),
+        moveBefore: name => t('usage.board.page.moveViewBefore', { name }), moveAfter: name => t('usage.board.page.moveViewAfter', { name }),
+        delete: t('usage.board.page.deleteView'), deleteLabel: t('usage.board.page.deleteView'),
+    };
+    const phone = useDeviceType() === 'phone';
+    const testID = props.testID ?? `widget-area.${props.area}`;
     return (
+        <>
+        {ready ? <WidgetAreaLayoutBar layouts={options} selectedId={selectedId} onSelect={id => { void selectLayout(id); }}
+            narrow={phone} onCreate={ready.canEdit ? () => { void create(); } : null} actions={actions} labels={labels} testID={`${testID}.layouts`} /> : null}
+        {ready?.preset?.isEdited ? <WidgetAreaPresetLine preset={ready.preset} surface={ready.surface} testID={`${testID}.preset`}
+            presetActions={{ resetPreset: async () => {
+                const result = await port.execute({ actionId: 'widgets.item.list' });
+                const read = result.ok ? WidgetSurfaceReadV1Schema.safeParse(result.result) : null;
+                return read?.success ? port.execute({ actionId: 'widgets.area.layout.reset', expectedRevision: read.data.revision ?? null }) : result;
+            }, undoReset: capture => executeLayoutAction('widgets.area.layout.undo', { capture }) }} /> : null}
         <WidgetArea
             port={port}
+            layout={layout}
             context={context}
             geometry="grid"
             title={props.title ?? t('widgetAdd.areaPinned')}
             meta={props.description ?? t('widgetAdd.areaPinnedMeta')}
             surfaceName={props.surfaceName}
-            testID={props.testID ?? `widget-area.${props.area}`}
+            testID={testID}
         />
+        </>
     );
 }

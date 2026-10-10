@@ -5,6 +5,7 @@ import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { WidgetCandidate } from '../widgetCatalog';
 import type { WidgetSetupSubmitResult } from '../add/widgetSetupModel';
 import { WidgetSetupStep } from '../add/WidgetSetupStep';
+import { WidgetSetupPopover } from '../add/WidgetSetupPopover';
 import { useWidgetGroupInputsEditor } from './useWidgetGroupInputsEditor';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -26,6 +27,9 @@ it.each(['pending', 'refused', 'applied'] as const)('keeps the typed %s acknowle
   }));
   await act(async () => hook.getCurrent().editInputs!.onPress());
   const popover = hook.getCurrent().popover!;
+  if (!React.isValidElement<React.ComponentProps<typeof WidgetSetupPopover>>(popover) || popover.type !== WidgetSetupPopover) {
+    throw new Error('Missing widget setup popover');
+  }
   const setup = popover.props.setup();
   const screen = await renderScreen(<WidgetSetupStep setup={setup} phone={false} testID="edit" onDone={popover.props.onDone ?? popover.props.onRequestClose} />);
   await act(async () => screen.changeTextByTestId('edit.field.filter.input', 'release'));
@@ -35,6 +39,8 @@ it.each(['pending', 'refused', 'applied'] as const)('keeps the typed %s acknowle
   else {
     expect(hook.getCurrent().popover).not.toBeNull();
     expect(screen.findByTestId('edit.field.filter.input')!.props.value).toBe('release');
-    expect(await setup.submit({ bindings: {} })).toEqual(kind === 'pending' ? { ok: true, approvalPending: true } : { ok: false, message: 'Refused' });
+    let outcome: WidgetSetupSubmitResult | undefined;
+    await act(async () => { outcome = await setup.submit({ bindings: {} }); });
+    expect(outcome).toEqual(kind === 'pending' ? { ok: true, approvalPending: true } : { ok: false, message: 'Refused' });
   }
 });

@@ -19,6 +19,7 @@ export function WidgetSetupPopover(props: Readonly<{
     setup: () => WidgetSetup;
     onRequestClose: () => void;
     onDone?: (result: Extract<WidgetSetupSubmitResult, { ok: true }>) => void;
+    notice?: string | null;
     serverId?: string | null;
     sessionId?: string | null;
     /** A repair opens the step at the input it names, its choices open. */
@@ -39,6 +40,7 @@ function OpenWidgetSetupPopover(props: React.ComponentProps<typeof WidgetSetupPo
             onCancel={props.onRequestClose}
             onClose={props.onRequestClose}
             onDone={props.onDone ?? props.onRequestClose}
+            notice={props.notice}
             {...(props.serverId ? { serverId: props.serverId } : {})}
             {...(props.sessionId ? { sessionId: props.sessionId } : {})}
             {...(props.focusPath ? { focusPath: props.focusPath } : {})}

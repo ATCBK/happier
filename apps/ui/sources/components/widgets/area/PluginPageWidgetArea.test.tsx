@@ -38,6 +38,7 @@ import { PluginDeclarativeProjectedModelV1Schema } from '@happier-dev/protocol';
 import { PluginPageWidgetArea } from './PluginPageWidgetArea';
 import { WidgetArea } from './WidgetArea';
 import { WidgetAreaLayoutBar } from './WidgetAreaLayoutBar';
+import { selectMountedWidgetAreaLayout } from './widgetAreaLayoutSelection';
 import { ProjectAsideWidgets, ProjectWidgetArea } from './ProjectWidgetArea';
 import { SessionSurfaceEntityDragHandle } from '@/components/sessions/board/SessionSurfaceEntityDrag';
 import { storage } from '@/sync/domains/state/storage';
@@ -126,7 +127,13 @@ function widgetPlacements(layout: WidgetAreaLayoutV1) {
  */
 function createArea() {
     const boundary = createWorkBoardArtifactBoundary({ v: 1, boards: [] });
-    const transport = { ...boundary.forAccount(scope.accountId), list: boundary.transport.list!, delete: boundary.transport.delete! };
+    const transport = { ...boundary.forAccount(scope.accountId),
+        // The scoped Artifact listing serves the same owner/access/revision as its row read.
+        list: async (args: Parameters<NonNullable<typeof boundary.transport.list>>[0]) => {
+            const result = await boundary.transport.list!(args);
+            return { ...result, items: result.items.map(row => ({ ...row, ownerAccountId: scope.accountId, access: 'owner' as const,
+                bodyVersion: boundary.rows.get(row.artifactId)!.revision.bodyVersion })) };
+        }, delete: boundary.transport.delete! };
     const store = createWidgetSurfaceArtifactPortV1(transport, { surface, isCurrent: () => true });
     const area = createWidgetAreaActionPortV1(ref => createWidgetSurfaceArtifactPortV1(transport, { surface: ref, isCurrent: () => true }));
     const widgetInputs = createWidgetActionInputResolverV1({
@@ -136,6 +143,7 @@ function createArea() {
     });
     const layouts = createWidgetAreaLayoutArtifactPortV1(transport, { surface, isCurrent: () => true });
     const executor = createActionExecutor(createActionExecutorBoundaryFixture({ widgetAccountScope: () => scope, widgetSurfaceActions: { pluginArea: area }, widgetInputs,
+        widgetAreaLayoutSelect: (target, _context, signal) => selectMountedWidgetAreaLayout(target, signal),
         widgetAreaLayouts: {
             list: (_args, _context, signal) => layouts.list(signal),
             create: (args, _context, signal) => layouts.create(args, signal),
@@ -247,6 +255,44 @@ function projectMovementFixture() {
 }
 
 describe('a plugin page widget area', () => {
+    it.each(['applied', 'approvalPending', 'refused'] as const)('retains the group input draft until its real area write is applied (%s)', async kind => {
+        const fixture = createArea();
+        await fixture.store.apply({ kind: 'add', instance: follow, size: 'small' });
+        await fixture.store.apply({ kind: 'group_create', groupId: 'inputs', instanceIds: [follow.id] });
+        await fixture.store.apply({ kind: 'rename', instanceId: 'inputs', displayName: 'Checks' });
+        const hostApi: PluginUiHostApi = { ...fixture.hostApi, widgetArea: async (raw, options) => {
+            const request = PluginUiWidgetAreaRequestV1Schema.parse(raw);
+            if (request.operation.actionId === 'widgets.group.inputs.set' && kind !== 'applied') {
+                return PluginUiWidgetAreaResultV1Schema.parse(kind === 'approvalPending'
+                    ? { ok: true, result: { kind: 'approval_request_created', artifactId: 'approval-group', actionId: 'widgets.group.inputs.set' } }
+                    : { ok: false, errorCode: 'permission_denied' });
+            }
+            return fixture.hostApi.widgetArea(raw, options);
+        } };
+        const screen = await renderScreen(page(hostApi, 'happier'));
+        await flushHookEffects({ cycles: 6 });
+        const menu = screen.findByTestId('prs.pinned.group.inputs.menu')!.findByType(ItemRowActions);
+        const edit = menu.props.actions.find((entry: { id: string }) => entry.id === 'groupInputs');
+        const editInputs = edit?.onPress;
+        if (!editInputs) throw new Error('Missing group inputs action');
+        await act(async () => editInputs());
+        const fieldId = 'prs.pinned.group.inputs.groupInputs.field.repository';
+        const field = screen.findAllByType(DropdownMenu).find(row => row.props.testID === fieldId)!;
+        expect(field.props.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'follow' })]));
+        // Select through the real field control; overlay placement is the platform boundary above.
+        await act(async () => field.props.onSelect('follow'));
+        await screen.pressByTestIdAsync('prs.pinned.group.inputs.groupInputs.submit');
+        await flushHookEffects({ cycles: 6 });
+        const group = (await fixture.store.read()).items.find(item => item.kind === 'group');
+        if (kind === 'applied') {
+            expect(screen.findByTestId(`${fieldId}.trigger`)).toBeNull();
+            expect(group?.kind === 'group' ? group.context : null).toEqual({ repository: { kind: 'context', slot: 'repository' } });
+        } else {
+            expect(screen.findAllByType(DropdownMenu).find(row => row.props.testID === fieldId)!.props.selectedId).toBe('follow');
+            expect(group?.kind === 'group' ? group.context ?? {} : null).toEqual({});
+            expect(screen.getTextContent()).toContain(kind === 'approvalPending' ? 'widgetAdd.areaApprovalPending' : 'widgetAdd.saveFailed');
+        }
+    });
     it('shows named layouts through the shared tab owner and switches the displayed document through an agent Action', async () => {
         const { store, hostApi, executor } = createArea();
         await store.apply({ kind: 'add', instance: follow, size: 'small' });
@@ -254,15 +300,19 @@ describe('a plugin page widget area', () => {
         const screen = await renderScreen(page(hostApi, 'happier'));
         await flushHookEffects({ cycles: 6 });
         expect(screen.findAllByType(WidgetAreaLayoutBar)).toHaveLength(1);
-        await vi.waitFor(() => expect(screen.root.findByType(WidgetAreaLayoutBar).props.layouts).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'Empty' })])));
+        await vi.waitFor(() => {
+            const displayed = screen.findByType(WidgetArea)?.props.layout?.state;
+            expect(displayed, JSON.stringify(displayed)).toMatchObject({ status: 'ready' });
+            expect(screen.findByType(WidgetAreaLayoutBar)?.props.layouts).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'Empty' })]));
+        });
         expect(screen.findByTestId('prs.pinned.widget.follow')).not.toBeNull();
         await act(async () => {
             const selected = await executor.execute('widgets.area.layout.select', { surface: { ...surface, owner: { ...surface.owner, layoutId: 'empty' } } }, { surface: 'mcp', bypassApprovals: true });
             expect(selected, JSON.stringify(selected)).toMatchObject({ ok: true });
         });
         await vi.waitFor(() => expect(screen.findByTestId('prs.pinned.widget.follow')).toBeNull());
-        const defaultTab = screen.root.findByType(WidgetAreaLayoutBar).props.layouts.find((entry: { isDefault?: boolean }) => entry.isDefault);
-        await act(async () => screen.root.findByType(WidgetAreaLayoutBar).props.onSelect(defaultTab.id));
+        const defaultTab = screen.findByType(WidgetAreaLayoutBar).props.layouts.find((entry: { isDefault?: boolean }) => entry.isDefault);
+        await act(async () => screen.findByType(WidgetAreaLayoutBar).props.onSelect(defaultTab.id));
         await vi.waitFor(() => expect(screen.findByTestId('prs.pinned.widget.follow')).not.toBeNull());
         await screen.unmount();
         expect(await executor.execute('widgets.area.layout.select', { surface }, { surface: 'mcp', bypassApprovals: true })).toMatchObject({ ok: false, errorCode: 'widget_area_layout_owner_unavailable' });

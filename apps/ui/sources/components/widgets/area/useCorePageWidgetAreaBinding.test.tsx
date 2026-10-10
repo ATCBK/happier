@@ -45,65 +45,6 @@ it('discovers externally created layouts and ignores other areas without remount
     await hook.unmount();
 });
 
-it('an agent select changes the mounted area document, and refuses after its owner unmounts', async () => {
-    const input = { serverId: runtime.serverId, pageId: 'automation', area: 'main', context: {}, presets: [
-        { id: 'overview', name: 'Overview', items: [{ kind: 'widget' as const,
-            instance: { v: 1 as const, id: 'child', definition: { kind: 'builtin' as const, id: 'project_about' }, bindings: {} } }] },
-        { id: 'empty', name: 'Empty', items: [] },
-    ] };
-    const hook = await renderHook(() => {
-        const binding = useCorePageWidgetAreaBinding(input);
-        return { binding, layout: useWidgetAreaLayout(binding.port!, input.context) };
-    });
-    await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', placements: [{ instance: { id: 'child' } }] }));
-    const surface = hook.getCurrent().binding.surface!;
-    const { createUiClientActionReverseHandler } = await import('@/sync/ops/actions/clientActionReverseDispatch');
-    const receive = createUiClientActionReverseHandler({ serverId: surface.serverId, accountId: surface.accountId, isCurrent: () => true });
-    const execute = async (selectedSurface: typeof surface) => (await receive({ v: 1, actionId: 'widgets.area.layout.select', input: { surface: selectedSurface },
-        context: { surface: 'mcp', authority: 'account_automation' } }, { signal: new AbortController().signal })).execution;
-    await act(async () => {
-        const result = await execute({ ...surface, owner: { ...surface.owner, layoutId: 'empty' } });
-        expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
-    });
-    await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', surface: { owner: { layoutId: 'empty' } }, placements: [] }));
-    await hook.unmount();
-    expect(await execute(surface)).toMatchObject({ ok: false, errorCode: 'widget_area_layout_owner_unavailable' });
-});
-
-it('refuses an ambiguous mounted area instead of changing either selection', async () => {
-    const input = { serverId: runtime.serverId, pageId: 'twice', area: 'main', context: {}, presets: [
-        { id: 'overview', name: 'Overview', items: [] }, { id: 'empty', name: 'Empty', items: [] },
-    ] };
-    const hook = await renderHook(() => ({ first: useCorePageWidgetAreaBinding(input), second: useCorePageWidgetAreaBinding(input) }));
-    const surface = hook.getCurrent().first.surface!;
-    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-    expect(await createDefaultActionExecutor().execute('widgets.area.layout.select', { surface: { ...surface, owner: { ...surface.owner, layoutId: 'empty' } } }, {
-        surface: 'mcp', serverId: surface.serverId, expectedAccountId: surface.accountId,
-    })).toMatchObject({ ok: false, errorCode: 'widget_area_layout_owner_ambiguous' });
-    expect(hook.getCurrent().first.surface).toEqual(surface);
-    expect(hook.getCurrent().second.surface).toEqual(surface);
-    await hook.unmount();
-});
-
-it('a bound select Action changes the displayed core document without a caller-side state update', async () => {
-    const input = { serverId: runtime.serverId, pageId: 'bound-action', area: 'main', context: {}, presets: [
-        { id: 'overview', name: 'Overview', items: [] }, { id: 'empty', name: 'Empty', items: [] },
-    ] };
-    const hook = await renderHook(() => {
-        const binding = useCorePageWidgetAreaBinding(input);
-        return { binding, layout: useWidgetAreaLayout(binding.port!, input.context) };
-    });
-    await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', surface: { owner: { layoutId: 'overview' } } }));
-    const surface = hook.getCurrent().binding.surface!;
-    await act(async () => {
-        expect(await hook.getCurrent().binding.executeLayoutAction('widgets.area.layout.select', {
-            surface: { ...surface, owner: { ...surface.owner, layoutId: 'empty' } },
-        })).toMatchObject({ ok: true });
-    });
-    await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', surface: { owner: { layoutId: 'empty' } } }));
-    await hook.unmount();
-});
-
 it('keeps the Usage tabs and the live preset projection in agreement after edit, Reset and Undo without remounting', async () => {
     const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
         { id: 'overview', name: 'Overview', items: [{ kind: 'widget' as const,

@@ -161,13 +161,7 @@ export async function executeWidgetInstanceActionV1(
   if (actionId === 'widgets.area.layout.select') {
     const account = readWidgetActionAccountScopeAdmissionV1(deps, surface, context);
     if (!account.ok) return account;
-    // Selection is a presentation effect on the answering workspace. Keep the incumbent
-    // workspace Action as the only tab/navigation owner, then let the mounted area owner
-    // resolve its captured defaults and return the selected layout.
-    if (!deps.workspaceAction) return { ok: false, errorCode: 'unavailable', error: 'noClient' };
-    const opened = await deps.workspaceAction({ actionId: 'workspace.tabs.open', input: {}, signal: context.signal });
-    const openFailure = ActionExecuteFailureSchema.safeParse(opened);
-    if (openFailure.success) return openFailure.data;
+    // The answering mounted area owns its route/local selection and captured defaults.
     return deps.widgetAreaLayoutSelect ? deps.widgetAreaLayoutSelect(surface, context, context.signal)
       : failure('widget_area_layout_owner_unavailable');
   }

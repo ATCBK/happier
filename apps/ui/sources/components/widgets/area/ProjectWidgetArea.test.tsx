@@ -41,8 +41,12 @@ it.each([false, true])('agent selection changes the mounted Project document wit
     const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'viewer', encryptionMode: 'plain' });
     const fallback = createHomeHubArtifactHttpBoundary('viewer');
     const connection = await restoreServerAccountForTest({ serverUrl: `https://project-layout-select-${routeOwned}.test`, accountId: 'viewer',
-        request: (input, init) => new URL(String(input)).pathname.startsWith('/v1/artifacts')
-            ? artifacts.handle(new URL(String(input)).pathname, init) : fallback.request(input, init) });
+        request: async (input, init) => {
+            const response = new URL(String(input)).pathname.startsWith('/v1/artifacts')
+                ? await artifacts.handle(new URL(String(input)).pathname, init) : await fallback.request(input, init);
+            if (!response) throw new Error('Unexpected Project layout request');
+            return response;
+        } });
     const restoreLoader = await installRealActionExecutorModuleLoader();
     try {
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');

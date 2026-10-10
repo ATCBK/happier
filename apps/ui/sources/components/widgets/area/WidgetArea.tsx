@@ -51,6 +51,7 @@ import { WidgetFrameBodyActionsContext } from '@/components/widgets/frame/widget
 import { useWidgetDefinitionFlows } from '@/components/widgets/definitions/useWidgetDefinitionFlows';
 import { useWidgetInputsEditor } from '@/components/widgets/surface/useWidgetInputsEditor';
 import { useWidgetInstanceBindingLabel } from '@/components/widgets/surface/useWidgetInstanceBindingLabel';
+import type { WidgetBindingValueLabels } from '@/components/widgets/surface/useWidgetBindingValueLabels';
 import { useWidgetInstanceDescriptors } from '@/components/widgets/surface/useWidgetInstanceDescriptor';
 import { WidgetSurface } from '@/components/widgets/surface/WidgetSurface';
 import { runAcknowledgedWidgetSetupCommand, widgetProvidedContext, type WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
@@ -406,9 +407,9 @@ function WidgetAreaPlacements(props: PlacementsProps): React.ReactElement {
             descriptors={item.children.map(child => byId.get(child.instance.id)?.descriptor ?? null)}
             operations={operations}
             childTitle={childTitle}
-            renderChild={(instanceId, placement) => {
+            renderChild={(instanceId, placement, labels) => {
                 const at = item.children.findIndex(child => child.instance.id === instanceId);
-                return renderWidget(instanceId, at, item.children.length, columns[index]!, { group: item, index: at, wide: placement.wide || phone });
+                return renderWidget(instanceId, at, item.children.length, columns[index]!, { group: item, index: at, wide: placement.wide || phone, labels });
             }}
         />
     ));
@@ -440,7 +441,7 @@ export function projectWidgetAreaItems(items: readonly WidgetLayoutItemV1[], pla
 }
 
 /** A child's place in its group, and whether its cell spans the group (room for the full follow phrase). */
-type WidgetAreaGroupChild = Readonly<{ group: WidgetLayoutGroupV1; index: number; wide: boolean }>;
+type WidgetAreaGroupChild = Readonly<{ group: WidgetLayoutGroupV1; index: number; wide: boolean; labels: WidgetBindingValueLabels }>;
 
 /** The area's group operations, each one semantic operation through the area's port. */
 function useWidgetAreaGroupOperations(write: WidgetAreaWrite, area: 'main' | 'aside' | undefined): WidgetGroupOperations {
@@ -465,22 +466,25 @@ function WidgetAreaGroup(props: PlacementsProps & Readonly<{
     descriptors: readonly (WidgetCandidate | null)[];
     operations: WidgetGroupOperations;
     childTitle: (instanceId: string) => string;
-    renderChild: (instanceId: string, placement: WidgetGroupChildPlacement) => React.ReactNode;
+    renderChild: (instanceId: string, placement: WidgetGroupChildPlacement, labels: WidgetBindingValueLabels) => React.ReactNode;
 }>) {
     const { group, write } = props;
     const hover = useRowActionHoverHost();
+    const phone = useDeviceType() === 'phone';
     const testID = `${props.testID}.group.${group.id}`;
     const name = describeWidgetGroup(group, props.childTitle);
     const menu = useWidgetGroupMenu({
         group, childTitle: props.childTitle, candidates: props.descriptors, scope: props.canEdit ? props.surface : null, context: props.context,
-        operations: props.operations, showWidth: props.columns === 2 || group.width === 'half', testID,
+        operations: props.operations, showWidth: true, geometry: { phone, columns: props.columns }, testID,
         rename: props.canEdit ? async (title) => {
             const outcome = await write({ actionId: 'widgets.item.rename', instanceId: group.id, displayName: title ?? null });
             if (outcome.kind === 'refused') throw new Error(outcome.errorCode);
         } : undefined,
-        setInputs: props.canEdit ? (bindings: WidgetInputBindingsV1) => write({ actionId: 'widgets.group.inputs.set', instanceId: group.id, bindings })
-            .then(outcome => { if (outcome.kind === 'refused') throw new Error(outcome.errorCode); }) : undefined,
+        setInputs: props.canEdit ? (bindings: WidgetInputBindingsV1) => runAcknowledgedWidgetSetupCommand(
+            () => write({ actionId: 'widgets.group.inputs.set', instanceId: group.id, bindings }), t('widgetAdd.saveFailed'),
+        ) : undefined,
     });
+    const labels = menu.labels;
     // The whole group lifts by its grip and is a drop target: into it, or beside it (lab wgdnd B).
     const drop = useSessionSurfaceEntityDrag(props.current && props.canEdit ? {
         scope: props.surface, title: name, isCurrent: () => props.current && props.canEdit,
@@ -500,7 +504,7 @@ function WidgetAreaGroup(props: PlacementsProps & Readonly<{
     // "add one" in the empty slot opens this area's Add aimed at the group.
     const slotAnchorRef = React.useRef<View | null>(null);
     const [slotAddOpen, setSlotAddOpen] = React.useState(false);
-    const source = describeWidgetGroupContext(group.context);
+    const source = describeWidgetGroupContext(group.context, labels);
     return (
         <View style={styles.cell} {...hover.hoverProps}>
             <WidgetGroupFrame
@@ -516,7 +520,7 @@ function WidgetAreaGroup(props: PlacementsProps & Readonly<{
                 source={source ? widgetGroupPinnedSource(source) : undefined}
                 menu={props.canEdit && !props.organizing ? <WidgetGroupMenuButton input={menu.menuInput} visible={hover.isHovered} anchorRef={menu.anchorRef} testID={`${testID}.menu`} /> : null}
                 accessibilityLabel={t('widgetFrame.groupA11y', { name })}
-                renderChild={props.renderChild}
+                renderChild={(instanceId, placement) => props.renderChild(instanceId, placement, labels)}
                 dropRef={drop.ref}
                 carriedStyle={carriedStyle}
                 onDropLayout={drop.onLayout}
@@ -599,9 +603,10 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
     }, []);
     const parent = props.parent;
     const groupContext = parent?.group.context;
-    const itemContext = React.useMemo(() => widgetGroupSurfaceContext(context, groupContext), [context, groupContext]);
+    const groupLabels = parent?.labels;
+    const itemContext = React.useMemo(() => widgetGroupSurfaceContext(context, groupContext, groupLabels), [context, groupContext, groupLabels]);
     const bindingLabel = useWidgetInstanceBindingLabel(instance, candidate, itemContext);
-    const followed = readWidgetGroupFollowedValue(instance, groupContext);
+    const followed = readWidgetGroupFollowedValue(instance, groupContext, groupLabels);
     // The body may name what it shows; a followed group value still wins the source slot.
     const [bodyCaption, setBodyCaption] = React.useState<string | null>(null);
     // The body may also lend the entries that act on what it shows; the frame's ⋯ stays the one menu.
@@ -698,7 +703,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                                     ...(props.area ? { area: props.area } : {}) }); },
                             }),
                         })),
-                        ...(supportsGroups ? buildWidgetGroupMembershipActions({ instanceId: instance.id, size, items: props.layoutItems,
+                        ...(supportsGroups ? buildWidgetGroupMembershipActions({ instanceId: instance.id, size, items: props.layoutItems, area: props.area,
                             childTitle: props.childTitle, operations: props.groupOperations }) : []),
                     ],
                     definition: buildWidgetDefinitionActions({ onAbout: definition.about }),

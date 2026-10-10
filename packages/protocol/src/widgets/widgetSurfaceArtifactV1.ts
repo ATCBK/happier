@@ -218,6 +218,14 @@ export function buildWidgetSurfaceArtifactHeaderV1(layout: WidgetAreaLayoutV1, s
         title: layout.name ?? (layout.surface.owner.kind === 'project' ? 'Overview' : 'Widget area'),
         surface: storedSurface(layout.surface), sortKey };
 }
+/** Inventory discovery and publication observers share the stored header's identity rule. */
+export function readWidgetSurfaceArtifactHeaderV1(row: Readonly<{ artifactId: string; header: unknown }>):
+    Readonly<z.infer<typeof WidgetSurfaceArtifactHeaderV1Schema> & { surface: WidgetSurfaceRefV1 }> | null {
+    const parsed = WidgetSurfaceArtifactHeaderV1StoredSchema.safeParse(row.header);
+    if (!parsed.success || !parsed.data.surface || parsed.data.surface.artifactId
+        || buildWidgetSurfaceArtifactIdV1(parsed.data.surface) !== row.artifactId) return null;
+    return { ...parsed.data, surface: parsed.data.surface };
+}
 export function readWidgetSurfaceArtifactV1(row: Pick<HomeHubArtifactV1, 'artifactId' | 'header' | 'body'>): WidgetAreaLayoutV1 | null {
     const header = WidgetSurfaceArtifactHeaderV1StoredSchema.safeParse(row.header);
     if (!header.success || typeof row.body !== 'string') return null;
@@ -403,16 +411,15 @@ export function createWidgetAreaLayoutArtifactPortV1(transport: WidgetAreaLayout
             const page = await transport.list({ limit: 500, ...(cursor ? { cursor } : {}), signal }); check(signal);
             for (const item of page.items) {
                 if (item.ownerAccountId !== scope.accountId || item.access !== 'owner') continue;
-                const parsed = WidgetSurfaceArtifactHeaderV1StoredSchema.safeParse(item.header);
-                if (!parsed.success || !parsed.data.surface || parsed.data.surface.artifactId || !sameAreaOwner(parsed.data.surface)
-                    || buildWidgetSurfaceArtifactIdV1(parsed.data.surface) !== item.artifactId) continue;
+                const header = readWidgetSurfaceArtifactHeaderV1(item);
+                if (!header || !sameAreaOwner(header.surface)) continue;
                 const revision = 'bodyVersion' in item && typeof item.bodyVersion === 'number'
                     ? { headerVersion: item.headerVersion, bodyVersion: item.bodyVersion } : null;
-                if (presetFor(parsed.data.surface)) {
-                    const row = await fetch(parsed.data.surface, signal);
+                if (presetFor(header.surface)) {
+                    const row = await fetch(header.surface, signal);
                     // A concurrently removed personal copy returns to the host preset projection.
                     if (row) entries.set(item.artifactId, rowSummary(row));
-                } else entries.set(item.artifactId, summarize(parsed.data.surface, parsed.data.title, parsed.data.sortKey ?? 'a0', revision));
+                } else entries.set(item.artifactId, summarize(header.surface, header.title, header.sortKey ?? 'a0', revision));
             }
             cursor = page.nextCursor;
         } while (cursor);

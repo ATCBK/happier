@@ -12,6 +12,8 @@ import { registerWidgetAreaLayoutSelectionOwner, type WidgetAreaLayoutSelectionO
 /** A core page supplies defaults and context, while the existing Account area owner keeps its edits. */
 export function useCorePageWidgetAreaBinding(input: Readonly<{
     serverId: string; pageId: string; area: string; preset?: WidgetAreaPresetV1; presets?: readonly WidgetAreaPresetV1[]; context: WidgetSurfaceContext;
+    /** A route may record the acknowledged selection; it is not another selected-layout owner. */
+    onSelectLayout?: (layoutId: string) => void;
 }>): Readonly<{
     surface: WidgetSurfaceRefV1 | null; port: WidgetAreaPort | null; context: WidgetSurfaceContext;
     resetPreset(): Promise<ActionExecuteResult>;
@@ -31,7 +33,7 @@ export function useCorePageWidgetAreaBinding(input: Readonly<{
         return WidgetSurfaceRefV1Schema.parse({ serverId: lifetime.scope.serverId, accountId: lifetime.scope.accountId,
             owner: { kind: 'corePage', pageId: input.pageId, area: input.area, ...(layoutId ? { layoutId } : {}) } });
     }, [input.area, input.pageId, layoutId, input.serverId, lifetime, viewer]);
-    const bindingIdentity = React.useMemo(() => ({}), [input.context, input.preset, input.presets, surface]);
+    const bindingIdentity = React.useMemo(() => ({}), [input.context, input.onSelectLayout, input.preset, input.presets, surface]);
     const liveBinding = React.useRef(bindingIdentity);
     liveBinding.current = bindingIdentity;
     const mounted = React.useRef(true);
@@ -68,6 +70,7 @@ export function useCorePageWidgetAreaBinding(input: Readonly<{
             select: target => {
                 if (target.owner.kind === 'corePage') setSelected({ serverId: target.serverId, accountId: target.accountId,
                     pageId: input.pageId, area: input.area, layoutId: target.owner.layoutId });
+                if (target.owner.kind === 'corePage' && target.owner.layoutId) input.onSelectLayout?.(target.owner.layoutId);
             },
         } : null;
         return { selectionOwner, port, resetPreset: async () => {
@@ -83,7 +86,7 @@ export function useCorePageWidgetAreaBinding(input: Readonly<{
             },
             executeLayoutAction: execute,
             undoReset: (capture: WidgetAreaPresetUndoV1) => execute('widgets.area.layout.undo', { capture }) };
-    }, [bindingIdentity, input.area, input.context, input.pageId, input.preset, input.presets, lifetime, surface]);
+    }, [bindingIdentity, input.area, input.context, input.onSelectLayout, input.pageId, input.preset, input.presets, lifetime, surface]);
     React.useEffect(() => binding.selectionOwner ? registerWidgetAreaLayoutSelectionOwner(binding.selectionOwner) : undefined, [binding.selectionOwner]);
     return React.useMemo(() => {
         const { selectionOwner: _selectionOwner, ...operations } = binding;

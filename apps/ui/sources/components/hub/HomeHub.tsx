@@ -23,6 +23,7 @@ import { WidgetGroupMenuButton } from '@/components/widgets/group/WidgetGroupMen
 import { WidgetGroupBar } from '@/components/widgets/group/WidgetGroupBar';
 import { buildWidgetGroupMembershipActions, describeWidgetGroup, resolveWidgetGroupChildSizeLimit, type WidgetGroupOperations } from '@/components/widgets/group/widgetGroupMenu';
 import { describeWidgetGroupContext, readWidgetGroupFollowedValue, widgetGroupPinnedSource, widgetGroupSurfaceContext } from '@/components/widgets/group/widgetGroupInputs';
+import type { WidgetBindingValueLabels } from '@/components/widgets/surface/useWidgetBindingValueLabels';
 import { resolveWidgetGroupCells, resolveWidgetGroupColumns } from '@/components/widgets/group/widgetGroupLayout';
 import { resolveWidgetCardPointerDestination, resolveWidgetGroupPointerDestination, widgetGroupDropTarget, widgetLayoutCardDropTarget, widgetLayoutEndDropTarget, widgetLayoutSiblingIds } from '@/components/widgets/group/widgetGroupDropTarget';
 import { HomeWidgetAddPopover } from '@/components/widgets/add/HomeWidgetAddPopover';
@@ -83,7 +84,7 @@ type HubGroupSection = Extract<HomeHubSection<WidgetCandidate>, { kind: 'group' 
 type HubWidgetSectionModel = Extract<HomeHubSection<WidgetCandidate>, { kind: 'widget' }>;
 
 /** A widget inside a group: where it sits there, and whether its cell has room for the full follow phrase. */
-type HubGroupChildPlacement = Readonly<{ group: HubGroupSection; index: number; wide: boolean }>;
+type HubGroupChildPlacement = Readonly<{ group: HubGroupSection; index: number; wide: boolean; labels: WidgetBindingValueLabels }>;
 
 /**
  * One home section with its hover-revealed "⋯" menu. Memoized on stable props, so a hub render
@@ -164,14 +165,17 @@ function HubGroupSlot(props: SlotProps & Readonly<{ section: HubGroupSection }>)
     const testID = `home-hub.section.${section.id}`;
     const childTitle = React.useMemo(() => homeChildTitle(layout), [layout]);
     const name = describeWidgetGroup(group, childTitle);
+    const candidates = React.useMemo(() => section.children.map(child => child.widget ?? null), [section.children]);
     const cells = React.useMemo(() => resolveWidgetGroupCells('home', section.children.map(child => ({ id: child.id, size: child.size }))),
         [section.children]);
     const columns = resolveWidgetGroupColumns(group.width, phone);
     const menu = useWidgetGroupMenu({
-        group, childTitle, candidates: section.children.map(child => child.widget ?? null), scope: props.homeSurface, context: HOME_CONTEXT,
-        operations: props.groupOperations, showWidth: !phone,
-        rename: title => layout.rename(group.id, title), setInputs: bindings => layout.setGroupInputs(group.id, bindings), testID,
+        group, childTitle, candidates, scope: props.homeSurface, context: HOME_CONTEXT,
+        operations: props.groupOperations, showWidth: true, geometry: { phone, columns },
+        rename: title => layout.rename(group.id, title),
+        setInputs: bindings => runWidgetSetupCommand(() => layout.setGroupInputs(group.id, bindings), t('widgetAdd.saveFailed')), testID,
     });
+    const labels = menu.labels;
     // The whole group lifts by its grip (or, with a fine pointer, by its frame) and is a drop target:
     // into it, or beside it at its top or bottom edge (lab wgdnd B).
     const homeSurface = props.homeSurface;
@@ -191,13 +195,13 @@ function HubGroupSlot(props: SlotProps & Readonly<{ section: HubGroupSection }>)
     const openSlotAdd = React.useCallback(() => setSlotAddOpen(true), []);
     const closeSlotAdd = React.useCallback(() => setSlotAddOpen(false), []);
     const grip = props.widgetDrag && props.showGrips ? <SessionSurfaceEntityDragHandle drag={drop} title={name} testID={`${testID}.move`} /> : null;
-    const sourceValue = describeWidgetGroupContext(group.context);
+    const sourceValue = describeWidgetGroupContext(group.context, labels);
     const renderChild = React.useCallback((instanceId: string, placement: Readonly<{ wide: boolean }>) => {
         const index = section.children.findIndex(child => child.id === instanceId);
         const child = section.children[index];
         if (!child) return null;
-        return <HubWidgetSlot {...props} section={child} index={index} parent={{ group: section, index, wide: placement.wide }} />;
-    }, [props, section]);
+        return <HubWidgetSlot {...props} section={child} index={index} parent={{ group: section, index, wide: placement.wide, labels }} />;
+    }, [labels, props, section]);
     return (
         <View {...hover.hoverProps} style={styles.card}>
             <WidgetGroupFrame
@@ -246,11 +250,12 @@ function HubWidgetSlot(props: SlotProps & Readonly<{
     ), [instance.id, setInputs]);
     // Inside a group with inputs, following the group is one of this copy's choices.
     const groupContext = props.parent?.group.group.context;
-    const context = React.useMemo(() => widgetGroupSurfaceContext(HOME_CONTEXT, groupContext), [groupContext]);
+    const groupLabels = props.parent?.labels;
+    const context = React.useMemo(() => widgetGroupSurfaceContext(HOME_CONTEXT, groupContext, groupLabels), [groupContext, groupLabels]);
     const edit = useWidgetInputsEditor({ instance, candidate: widget, scope, context, audience: 'personal', setInputs: saveInputs, testID });
-    const followed = readWidgetGroupFollowedValue(instance, groupContext);
+    const followed = readWidgetGroupFollowedValue(instance, groupContext, groupLabels);
     const childTitle = React.useMemo(() => homeChildTitle(props.layout), [props.layout]);
-    const groupActions = buildWidgetGroupMembershipActions({ instanceId: instance.id, size: props.section.size, items: props.layout.items,
+    const groupActions = buildWidgetGroupMembershipActions({ instanceId: instance.id, size: props.section.size, items: props.layout.items, topLevelIds: props.topLevelIds,
         childTitle, operations: props.groupOperations });
     const parent = props.parent;
     const sizeLimit = parent ? resolveWidgetGroupChildSizeLimit({ group: parent.group.group, groupName: homeHubSectionTitle(parent.group),

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ActionExecutorDeps } from '../actions/actionExecutor.js';
+import { createActionExecutor } from '../actions/actionExecutor.js';
 import { executeWidgetInstanceActionV1 } from './executeWidgetInstanceActionV1.js';
 
 const selected = { serverId: 'home', accountId: 'account',
@@ -8,8 +9,8 @@ const selected = { serverId: 'home', accountId: 'account',
 const context = { surface: 'ui' as const, serverId: selected.serverId, bypassApprovals: true };
 
 describe('widget layout selection', () => {
-  it('opens through the mounted workspace and refuses when no answering client exists', async () => {
-    const workspaceAction = vi.fn(async () => ({ ok: true as const }));
+  it('selects through the mounted area without opening a workspace tab and refuses without that owner', async () => {
+    const workspaceAction = vi.fn(async () => { throw new Error('Layout selection must not open a tab'); });
     const widgetAreaLayoutSelect = vi.fn(async () => ({ ok: true as const, result: {
       surface: selected, instances: [], canEdit: true,
     } }));
@@ -21,13 +22,15 @@ describe('widget layout selection', () => {
 
     expect(await executeWidgetInstanceActionV1(deps, 'widgets.area.layout.select', { surface: selected }, context))
       .toMatchObject({ ok: true });
-    expect(workspaceAction).toHaveBeenCalledWith({ actionId: 'workspace.tabs.open', input: {}, signal: undefined });
-    expect(widgetAreaLayoutSelect).toHaveBeenCalledOnce();
+    expect(workspaceAction).not.toHaveBeenCalled();
 
     expect(await executeWidgetInstanceActionV1({
       widgetAccountScope: deps.widgetAccountScope,
-      widgetAreaLayoutSelect,
     }, 'widgets.area.layout.select', { surface: selected }, context))
-      .toEqual({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+      .toMatchObject({ ok: false, errorCode: 'widget_area_layout_owner_unavailable' });
+
+    // The host's mounted-area port is the answering client; a Companion is unrelated.
+    expect(await createActionExecutor({ widgetAccountScope: deps.widgetAccountScope, widgetAreaLayoutSelect })
+      .execute('widgets.area.layout.select', { surface: selected }, context)).toMatchObject({ ok: true });
   });
 });

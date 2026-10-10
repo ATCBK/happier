@@ -3845,7 +3845,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         }
         return delivered;
       }
-      if (executionPlacement === 'client' && actionId !== 'widgets.item.refresh'
+      if (executionPlacement === 'client' && actionId !== 'widgets.item.refresh' && actionId !== 'widgets.area.layout.select'
         && isActionFamilyId(actionId, WidgetInstanceActionIdV1Schema)
         && !deps.widgetSurfaceActions?.companion) return clientActionUnavailable(actionId);
 

@@ -16,6 +16,7 @@ import { t } from '@/text';
 import { WidgetGroupMenuButton } from './WidgetGroupMenuButton';
 import {
   resolveWidgetGroupWidthChoices,
+  isWidgetGroupWidthAvailable,
   type WidgetGroupMenuInput,
 } from './widgetGroupMenu';
 
@@ -37,7 +38,7 @@ export function WidgetGroupBar(
   }>,
 ) {
   const { group, operations } = props.input;
-  const widths = props.input.showWidth
+  const widths = isWidgetGroupWidthAvailable(props.input)
     ? resolveWidgetGroupWidthChoices(group.children, props.input.childTitle)
     : [];
   const tabs = React.useMemo(

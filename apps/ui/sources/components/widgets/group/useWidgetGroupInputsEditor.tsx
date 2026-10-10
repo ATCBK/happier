@@ -20,6 +20,7 @@ import {
   type WidgetSurfaceContext,
 } from '@/components/widgets/surface/widgetSurfaceSetup';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import { useWidgetBindingValueLabels, type WidgetBindingValueLabels } from '@/components/widgets/surface/useWidgetBindingValueLabels';
 import { t } from '@/text';
 
 import {
@@ -43,7 +44,7 @@ export function useWidgetGroupInputsEditor(
     context: WidgetSurfaceContext;
     /** The surface's group inputs write; absent where this viewer cannot change the group. */
     setInputs?:
-      | ((bindings: WidgetInputBindingsV1) => Promise<unknown>)
+      | ((bindings: WidgetInputBindingsV1) => Promise<WidgetSetupSubmitResult>)
       | undefined;
     childTitle?: (instanceId: string) => string;
     testID: string;
@@ -54,15 +55,22 @@ export function useWidgetGroupInputsEditor(
     | Readonly<{ onPress: () => void; binding: string | null }>
     | undefined;
   popover: React.ReactElement | null;
+  labels: WidgetBindingValueLabels;
 }> {
   const anchorRef = React.useRef<View | null>(null);
   const [open, setOpen] = React.useState(false);
+  const [notice, setNotice] = React.useState<string | null>(null);
   const { group, scope, context, setInputs, testID } = input;
   // Built once when the step opens (the popover keeps its first setup); cheap to derive per render.
-  const candidate = buildWidgetGroupInputsCandidate({ title: input.title, candidates: input.candidates });
-  const show = React.useCallback(() => setOpen(true), []);
+  const candidate = React.useMemo(() => buildWidgetGroupInputsCandidate({ title: input.title, candidates: input.candidates }), [input.title, input.candidates]);
+  const show = React.useCallback(() => { setNotice(null); setOpen(true); }, []);
   const close = React.useCallback(() => setOpen(false), []);
-  const binding = describeWidgetGroupContext(group.context);
+  const done = React.useCallback((result: Extract<WidgetSetupSubmitResult, { ok: true }>) => {
+    if (result.approvalPending) setNotice(t('widgetAdd.areaApprovalPending'));
+    else close();
+  }, [close]);
+  const labels = useWidgetBindingValueLabels(group.context ?? {}, candidate, input.candidates);
+  const binding = describeWidgetGroupContext(group.context, labels);
   const editable =
     candidate !== null && scope !== null && setInputs !== undefined;
   const editInputs = React.useMemo(
@@ -88,7 +96,7 @@ export function useWidgetGroupInputsEditor(
       scope,
       submit: (draft): Promise<WidgetSetupSubmitResult> =>
         runWidgetSetupCommand(
-          () => setInputs!(draft.bindings).then(() => undefined),
+          () => { setNotice(null); return setInputs!(draft.bindings); },
           t('widgetAdd.saveFailed'),
         ),
     });
@@ -123,11 +131,13 @@ export function useWidgetGroupInputsEditor(
         anchorRef={anchorRef}
         setup={buildSetup}
         onRequestClose={close}
+        onDone={done}
+        notice={notice}
         serverId={scope!.serverId}
         testID={`${testID}.groupInputs`}
       />
     ) : null;
-  return { anchorRef, editInputs, popover };
+  return { anchorRef, editInputs, popover, labels };
 }
 
 /** Who follows the group and who keeps its own value, then the boundary: the group grants nothing. */

@@ -46,6 +46,8 @@ it('select through the answering client changes the mounted document and refuses
     });
     await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', placements: [{ instance: { id: 'child' } }] }));
     const surface = hook.getCurrent().binding.surface!;
+    if (surface.owner.kind !== 'corePage') throw new Error('Expected core-page area');
+    const owner = surface.owner;
     const receive = createUiClientActionReverseHandler({ serverId: surface.serverId, accountId: surface.accountId, isCurrent: () => true });
     const execute = async (selectedSurface: typeof surface) => (await receive({ v: 1, actionId: 'widgets.area.layout.select', input: { surface: selectedSurface },
         context: { surface: 'mcp', authority: 'account_automation', externalActionCredential: {
@@ -53,7 +55,7 @@ it('select through the answering client changes the mounted document and refuses
             grant: { ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: ['widgets.area.layout.select'] } },
         } } }, { signal: new AbortController().signal })).execution;
     await act(async () => {
-        const result = await execute({ ...surface, owner: { ...surface.owner, layoutId: 'empty' } });
+        const result = await execute({ ...surface, owner: { ...owner, layoutId: 'empty' } });
         expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     });
     await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', surface: { owner: { layoutId: 'empty' } }, placements: [] }));

@@ -75,7 +75,7 @@ it.each(['project', 'home', 'account', 'retired'] as const)('withdraws private i
     let failed = false;
     let release: (() => void) | undefined;
     let pending: Promise<void> | undefined;
-    const transport = { ...boundary.forAccount(scope.accountId), list: async (...args: Parameters<typeof boundary.transport.list>) => {
+    const transport = { ...boundary.forAccount(scope.accountId), delete: boundary.transport.delete, list: async (...args: Parameters<typeof boundary.transport.list>) => {
         await pending;
         if (failed) throw new Error('Home unavailable');
         return boundary.transport.list(...args);
@@ -95,8 +95,9 @@ it.each(['project', 'home', 'account', 'retired'] as const)('withdraws private i
     try {
         storage.setState({ artifacts: {} });
         expect(await execute('widgets.area.layout.create', { surface, layoutId: 'private-a', name: 'Private A' })).toMatchObject({ ok: true });
+        const initialProps: { target: WidgetSurfaceRefV1 | null } = { target: surface };
         const hook = await renderHook(({ target }: { target: WidgetSurfaceRefV1 | null }) => useWidgetAreaLayouts({ surface: target, execute }),
-            { initialProps: { target: surface } });
+            { initialProps });
         await vi.waitFor(() => expect(hook.getCurrent().state.dashboards.map(row => row.name)).toContain('Private A'));
         const retiredCreate = hook.getCurrent().create;
         pending = new Promise<void>(resolve => { release = resolve; });

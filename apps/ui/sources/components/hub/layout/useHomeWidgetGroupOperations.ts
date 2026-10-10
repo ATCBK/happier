@@ -17,10 +17,11 @@ export function useHomeWidgetGroupOperations(
     | 'ungroup'
     | 'remove'
     | 'moveItem'
+    | 'moveTo'
     | 'createGroup'
   >,
 ): WidgetGroupOperations {
-  const { setGroup, setFrameStyle, ungroup, remove, moveItem, createGroup } =
+  const { setGroup, setFrameStyle, ungroup, remove, moveItem, moveTo, createGroup } =
     layout;
   const quiet = (promise: Promise<void>) => {
     void promise.catch(() => {});
@@ -35,9 +36,9 @@ export function useHomeWidgetGroupOperations(
       ungroup: (groupId) => quiet(ungroup(groupId)),
       remove: (groupId) => quiet(remove(groupId)),
       move: (instanceId, toIndex, groupId) =>
-        quiet(moveItem(instanceId, toIndex, groupId)),
+        quiet(groupId === null ? moveTo(instanceId, { nativeIndex: toIndex }) : moveItem(instanceId, toIndex, groupId)),
       create: (instanceIds) => quiet(createGroup(randomUUID(), instanceIds)),
     }),
-    [createGroup, moveItem, remove, setFrameStyle, setGroup, ungroup],
+    [createGroup, moveItem, moveTo, remove, setFrameStyle, setGroup, ungroup],
   );
 }

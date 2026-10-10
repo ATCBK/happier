@@ -1,4 +1,4 @@
-import { AnchoredListPositionV1Schema, resolveAnchoredListMoveV1 } from '@happier-dev/protocol/actions/anchoredListOrderV1';
+import { AnchoredListPositionV1Schema, resolveAnchoredListMoveV1, type AnchoredListPositionV1 } from '@happier-dev/protocol/actions/anchoredListOrderV1';
 import { z } from 'zod';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { entityDragScopesEqualV1, type EntityDragItemV1, type EntityDropAdmissionV1, type EntityDropPreviewV1 } from '@happier-dev/protocol/plugins/ui';
@@ -28,6 +28,27 @@ export function widgetEntitySourceRef(item: EntityDragItemV1): WidgetInstanceRef
     if (item.kind === 'session-board-item') return { surface: { ...item.scope, owner: { kind: 'sessionBoard', sessionId: item.address.sessionId } }, instanceId: item.itemId };
     if (item.kind === 'companion-item' && item.item.kind === 'instance') return { surface: { ...item.scope, owner: { kind: 'companion', sessionId: item.address.sessionId } }, instanceId: item.item.instance.id };
     return null;
+}
+
+/** An anchored insertion uses the destination's order after an empty source group dissolves. */
+export function resolveWidgetLayoutInsertionIndex(input: Readonly<{
+    ids: readonly string[];
+    position: AnchoredListPositionV1;
+    dissolvedGroupId?: string;
+}>): number | null {
+    const { ids, position } = input;
+    const anchor = position.anchorId === null ? null : ids.indexOf(position.anchorId);
+    if (anchor === -1) return null;
+    let index = anchor === null ? position.placement === 'before' ? 0 : ids.length
+        : anchor + (position.placement === 'after' ? 1 : 0);
+    if (input.dissolvedGroupId) {
+        const parentIndex = ids.indexOf(input.dissolvedGroupId);
+        if (parentIndex >= 0) {
+            if (position.anchorId === input.dissolvedGroupId) index = parentIndex;
+            else if (parentIndex < index) index -= 1;
+        }
+    }
+    return index;
 }
 
 /** Geometry supplies semantic anchors; the canonical Action remains the only writer. */
@@ -110,16 +131,9 @@ export function resolveWidgetLayoutEntityDrop(input: Readonly<{
         if (index === ids.indexOf(ref.instanceId)) return refused('same-position');
     } else {
         if (ids.includes(ref.instanceId)) return refused('widget_instance_already_exists');
-        const anchor = position.anchorId === null ? null : ids.indexOf(position.anchorId);
-        index = anchor === null ? position.placement === 'before' ? 0 : ids.length : anchor + (position.placement === 'after' ? 1 : 0);
-    }
-    // The last child takes its dissolved parent's slot; native insertion excludes that container.
-    if (!position.groupId && sourceParent?.children.length === 1) {
-        const parentIndex = ids.indexOf(sourceParent.id);
-        if (parentIndex >= 0) {
-            if (position.anchorId === sourceParent.id) index = parentIndex;
-            else if (parentIndex < index) index -= 1;
-        }
+        index = resolveWidgetLayoutInsertionIndex({ ids, position,
+            ...(!position.groupId && sourceParent?.children.length === 1 ? { dissolvedGroupId: sourceParent.id } : {}),
+        })!;
     }
     return { status: 'allowed', effect: { actionId: 'widgets.item.move', input: { ref, to: { surface: input.surface, index,
         ...(area ? { area } : {}), groupId: position.groupId ?? null } }, preview } };

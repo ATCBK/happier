@@ -3,17 +3,20 @@ import { View } from 'react-native';
 import {
   getWidgetSizeFootprintV1,
   resolveWidgetGroupWidthFitV1,
+  getWidgetLayoutItemIdV1,
   type WidgetSurfaceRefV1,
   type WidgetGroupWidthV1,
   type WidgetLayoutGroupV1,
   type WidgetLayoutItemV1,
   type WidgetSizeV1,
+  type WidgetProjectAreaV1,
 } from '@happier-dev/protocol/widgets';
 
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { t } from '@/text';
+import { resolveWidgetLayoutInsertionIndex } from '@/components/ui/treeDragDrop/widgetLayoutEntityDrop';
 
 /**
  * A group's own operations on its surface (Home's layout owner, or an area's port). Each is one
@@ -102,7 +105,14 @@ export type WidgetGroupMenuInput = Readonly<{
   onAddTo: (() => void) | undefined;
   /** Phones have one column: everything is full width there, so Width is not offered. */
   showWidth: boolean;
+  geometry?: Readonly<{ phone: boolean; columns: number }>;
 }>;
+
+/** Phone geometry takes precedence over a saved half width on every group surface. */
+export function isWidgetGroupWidthAvailable(input: Pick<WidgetGroupMenuInput, 'showWidth' | 'geometry' | 'group'>): boolean {
+  return input.showWidth && (!input.geometry || !input.geometry.phone
+    && (input.geometry.columns === 2 || input.group.width === 'half'));
+}
 
 /**
  * A group's ⋯ (lab `widget-groups` wgmenu M), in the widget menu's order: Inputs… and Rename, then
@@ -120,7 +130,7 @@ export function buildWidgetGroupActions(
   const options = { id: OPTIONS_SECTION, title: '' };
   const keep = { id: 'groupKeep', title: '' };
   const end = { id: 'groupEnd', title: '' };
-  const widths = input.showWidth
+  const widths = isWidgetGroupWidthAvailable(input)
     ? resolveWidgetGroupWidthChoices(group.children, input.childTitle)
     : [];
   return [
@@ -254,7 +264,7 @@ export function WidgetGroupOptionRows(
   props: WidgetGroupMenuInput & Readonly<{ testID: string; only?: 'width'; /** Drawn as menu rows (the group ⋯). */ inMenu?: boolean }>,
 ) {
   const { group, operations } = props;
-  const widths = props.showWidth
+  const widths = isWidgetGroupWidthAvailable(props)
     ? resolveWidgetGroupWidthChoices(group.children, props.childTitle)
     : [];
   return (
@@ -326,6 +336,8 @@ export function buildWidgetGroupMembershipActions(
     instanceId: string;
     size: WidgetSizeV1 | undefined;
     items: readonly WidgetLayoutItemV1[];
+    topLevelIds?: readonly string[];
+    area?: WidgetProjectAreaV1;
     childTitle: (instanceId: string) => string;
     operations: WidgetGroupOperations;
   }>,
@@ -376,7 +388,11 @@ export function buildWidgetGroupMembershipActions(
   };
   if (parent) {
     const section = { id: 'moveToGroup', title: t('widgetFrame.moveToGroup') };
-    const at = items.indexOf(parent);
+    const area = input.area ?? parent.area;
+    const ids = input.topLevelIds ?? (area ? items.filter(item => (item.area ?? 'main') === area) : items).map(getWidgetLayoutItemIdV1);
+    const at = resolveWidgetLayoutInsertionIndex({ ids, position: { anchorId: parent.id, placement: 'after' },
+      ...(parent.children.length === 1 ? { dissolvedGroupId: parent.id } : {}),
+    });
     return [
       ...groups.map((group) => into(group, section)),
       {
@@ -384,7 +400,8 @@ export function buildWidgetGroupMembershipActions(
         title: t('widgetFrame.removeFromGroup'),
         subtitle: t('widgetFrame.removeFromGroupSubtitle'),
         icon: 'arrow-square-out',
-        onPress: () => operations.move(instanceId, at + 1, null),
+        ...(at === null ? { disabled: true } : {}),
+        onPress: () => { if (at !== null) operations.move(instanceId, at, null); },
       },
       {
         id: 'ungroup',

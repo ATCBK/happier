@@ -98,7 +98,10 @@ describe('ItemRowActions', () => {
         const named = (text: string) => text.split('Morning glance').length - 1;
         const screen = await renderScreen(React.createElement(WidgetGroupMenuButton, { input, visible: true, testID: 'group-menu' }));
         await screen.pressByTestIdAsync('group-menu.trigger');
-        expect(named(screen.getTextContent())).toBe(1);
+        // Count the visible sheet, not BaseModal's separate hidden accessibility label.
+        const sheetText = screen.findByTestId('group-menu.sheet')!.findAll(node => typeof node.type === 'string')
+            .flatMap(node => node.children.filter((child): child is string => typeof child === 'string')).join(' ');
+        expect(named(sheetText)).toBe(1);
         expect(screen.tree.root.findAll(node => node.props.testID === 'removeGroup' && node.props.destructive === true).length).toBeGreaterThan(0);
         await screen.pressByTestIdAsync('group-menu.done');
         viewport.width = 900;
