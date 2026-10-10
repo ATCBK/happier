@@ -1235,9 +1235,10 @@ export async function sessionStop(sessionId: string): Promise<SessionStopRespons
 
 export async function sessionStopWithServerScope(
     sessionId: string,
-    opts?: Readonly<{ serverId?: string | null }>,
+    opts?: Omit<Parameters<typeof stopSessionUsingCanonicalStrategy>[0], 'sessionId'>,
 ): Promise<SessionStopResponse> {
     const stopResult = await stopSessionUsingCanonicalStrategy({
+        ...opts,
         sessionId,
         serverId: opts?.serverId ?? null,
     });

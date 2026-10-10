@@ -55,6 +55,7 @@ describe('sessionStopWithServerScope', () => {
   it('treats the released machine Stop response as request acknowledgement without patching inactive', async () => {
     mockStorageState.sessions = {
       'sid-daemon': {
+        serverId: 'server-a',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },
@@ -94,6 +95,7 @@ describe('sessionStopWithServerScope', () => {
   it('marks daemon Stop as issued so transport fallback cannot replay it onto a resumed replacement', async () => {
     mockStorageState.sessions = {
       'sid-one-shot': {
+        serverId: 'server-a',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },
@@ -126,6 +128,7 @@ describe('sessionStopWithServerScope', () => {
   it('falls back to session kill RPC when daemon machine stop is unavailable', async () => {
     mockStorageState.sessions = {
       'sid-old-daemon': {
+        serverId: 'server-a',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },
@@ -171,6 +174,7 @@ describe('sessionStopWithServerScope', () => {
   it('falls back to the live runner when the server reports missing exact machine control', async () => {
     mockStorageState.sessions = {
       'sid-missing-machine-control': {
+        serverId: 'server-a',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },
@@ -201,6 +205,7 @@ describe('sessionStopWithServerScope', () => {
   it('does not fall back through a genuine forbidden machine response', async () => {
     mockStorageState.sessions = {
       'sid-forbidden-machine-control': {
+        serverId: 'server-a',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },
@@ -223,6 +228,7 @@ describe('sessionStopWithServerScope', () => {
   it('falls back to session kill RPC when daemon machine stop returns a method-not-found envelope', async () => {
     mockStorageState.sessions = {
       'sid-old-daemon-envelope': {
+        serverId: 'server-a',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },
@@ -259,6 +265,7 @@ describe('sessionStopWithServerScope', () => {
   it('falls back to session kill RPC when daemon machine stop reports the session was not found', async () => {
     mockStorageState.sessions = {
       'sid-stale-machine-target': {
+        serverId: 'server-a',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },
@@ -327,6 +334,7 @@ describe('sessionStopWithServerScope', () => {
   it('reports current strict stopped only when the daemon confirms physical exit and never owns reachability', async () => {
     mockStorageState.sessions = {
       'sid-strict': {
+        serverId: 'server-a',
         active: true,
         runtimeActivity: { state: 'active', activeCount: 1, observedAt: 10, revision: 2 },
         metadata: { machineId: 'machine-1', path: '/repo' },
@@ -349,6 +357,7 @@ describe('sessionStopWithServerScope', () => {
   it('preserves current strict requested, not-found, and incomplete outcomes without false success', async () => {
     mockStorageState.sessions = {
       'sid-strict-outcomes': {
+        serverId: 'server-a',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },
@@ -389,6 +398,7 @@ describe('sessionStopWithServerScope', () => {
   it('falls back to the live runner when the daemon lost only its tracked-runner entry', async () => {
     mockStorageState.sessions = {
       'sid-untracked-runner': {
+        serverId: 'server-a',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },
@@ -419,6 +429,7 @@ describe('sessionStopWithServerScope', () => {
   it('preserves tracked-runner evidence when the fallback runner route is also unavailable', async () => {
     mockStorageState.sessions = {
       'sid-untracked-runner-offline': {
+        serverId: 'server-a',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },
@@ -460,6 +471,7 @@ describe('sessionStopWithServerScope', () => {
   it('preserves daemon not-found evidence when the disconnected runner has no RPC route', async () => {
     mockStorageState.sessions = {
       'sid-stale-active': {
+        serverId: 'server-a',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },
@@ -540,6 +552,7 @@ describe('sessionStopWithServerScope', () => {
   it('fails closed for a current daemon response that violates the strict Stop protocol', async () => {
     mockStorageState.sessions = {
       'sid-protocol-mismatch': {
+        serverId: 'server-b',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },
@@ -573,6 +586,7 @@ describe('sessionStopWithServerScope', () => {
   it('reports the released relay inner Forbidden response without a misleading protocol error or runner fallback', async () => {
     mockStorageState.sessions = {
       'sid-released-relay-forbidden': {
+        serverId: 'server-b',
         active: true,
         metadata: { machineId: 'machine-1', path: '/repo' },
       },

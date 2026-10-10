@@ -1,15 +1,29 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred, createMachineFixture, flushHookEffects, standardCleanup } from '@/dev/testkit';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { installTerminalRouteCommonModuleMocks } from '@/__tests__/routes/(app)/terminal/terminalRouteTestHelpers';
 import { arrangeMachineDetailsHomeForTests, initializeMachineDetailsRuntimeForTests } from './machineDetailsRuntimeHarness';
+import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { DaemonExecutionRunEntrySchema } from '@happier-dev/protocol';
+import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { socketRpcCodec } from '@happier-dev/sync-client';
+
+const stopDialogs = vi.hoisted(() => ({ alert: vi.fn(), confirm: vi.fn(async () => true) }));
+const routeParams = vi.hoisted(() => ({ current: { id: 'machine-missing' } as Record<string, string> }));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
+    spies: stopDialogs,
+}).module);
 
 installTerminalRouteCommonModuleMocks({
-    router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ params: { id: 'machine-missing' } }).module,
+    router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ params: () => routeParams.current }).module,
 });
 const network = await initializeMachineDetailsRuntimeForTests();
+const disposeActionExecutorLoader = await installRealActionExecutorModuleLoader();
+afterAll(disposeActionExecutorLoader);
 const MachineDetailScreen = (await import('@/app/(app)/machine/[id]')).default;
 
 let home: Awaited<ReturnType<typeof arrangeMachineDetailsHomeForTests>> | undefined;
@@ -21,6 +35,182 @@ afterEach(async () => {
     await home?.dispose();
     home = undefined;
     network.resetRequests();
+    stopDialogs.alert.mockClear();
+    stopDialogs.confirm.mockClear();
+    routeParams.current = { id: 'machine-missing' };
+});
+
+describe('MachineDetailScreen canonical Stop fallback', () => {
+    it.each(['abort', 'account-retirement'] as const)(
+        'does not issue cold Session Stop after %s during the exact-Home snapshot read', async interruption => {
+            const machine = createMachineFixture({ id: 'cold-stop-machine', activeAt: Date.now() });
+            const session = createSessionFixture({ id: 'cold-stop-session', active: true,
+                metadata: { ...createSessionFixture().metadata!, machineId: machine.id } });
+            home = await arrangeMachineDetailsHomeForTests(network, {
+                serverUrl: `https://machine-stop-cold-${interruption}.example.test`, machines: [machine], sessions: [session],
+                settings: { actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+                    approvalWaivedSurfaces: { 'session.stop': ['ui'] } }) },
+            });
+            home.storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
+            const controller = new AbortController();
+            const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+            const account = await captureLazyActionAccountContext(home.home.id, controller.signal);
+            let boundaryEntered = false;
+            const released = createDeferred<void>();
+            home.state.beforeSessionRead = async () => { boundaryEntered = true; await released.promise; };
+            network.setRpcResponder(async request => {
+                const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, request.payload,
+                    `${request.targetId}:${request.method}`);
+                return await socketRpcCodec.encodeResponse({ mode: 'plain' }, { status: 'stopped' }, decoded.callId);
+            });
+            const { stopSessionUsingCanonicalStrategy } = await import('@/sync/ops/sessionStopStrategy');
+            // The caller supplies its real admitted lifetime, not a newly resolved Home Account.
+            const invocation = { sessionId: session.id, serverId: home.home.id,
+                scope: account.accountLifetime.scope, isCurrent: account.accountLifetime.isCurrent, signal: controller.signal };
+            const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+            const stopped = interruption === 'abort'
+                ? createDefaultActionExecutor().execute('session.stop', { sessionId: session.id },
+                    { surface: 'ui', serverId: home.home.id, signal: controller.signal })
+                : stopSessionUsingCanonicalStrategy(invocation);
+            try {
+                await vi.waitFor(() => expect(boundaryEntered).toBe(true));
+                if (interruption === 'abort') controller.abort();
+                else {
+                    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+                    const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+                    expect(await TokenStorage.setCredentialsForServerUrl(home.home.serverUrl,
+                        { serverId: home.home.id }, { token: createAccountTokenForTests('replacement-account') })).toBe(true);
+                    network.setAccount(home.home.serverUrl, 'replacement-account');
+                }
+                expect(account.accountLifetime.isCurrent()).toBe(false);
+                released.resolve();
+                if (interruption === 'abort') await expect(stopped).rejects.toMatchObject({ name: 'AbortError' });
+                else expect(await stopped).toMatchObject({ success: false, reason: 'failed', errorCode: 'action_account_scope_changed' });
+                expect(network.requests.filter(request => request.method === RPC_METHODS.STOP_SESSION
+                    || request.method === 'killSession')).toEqual([]);
+            } finally {
+                released.resolve();
+                account.dispose();
+            }
+        },
+    );
+
+    it.each(['disabled', 'refused', 'requested', 'unavailable', 'route-home'] as const)(
+        'preserves %s session.stop settlement after an issued run Stop fails', async settlement => {
+            const machine = createMachineFixture({ id: 'machine-missing', activeAt: Date.now() });
+            const session = createSessionFixture({ id: 'stop-session', active: true,
+                metadata: { ...createSessionFixture().metadata!, machineId: machine.id } });
+            const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1,
+                approvalWaivedSurfaces: { 'execution.run.stop': ['ui'], 'session.stop': ['ui'] },
+                ...(settlement === 'disabled' ? { actions: { 'session.stop': { disabledSurfaces: ['ui'] } } } : {}),
+            });
+            home = await arrangeMachineDetailsHomeForTests(network, {
+                serverUrl: `https://machine-stop-${settlement}.example.test`, machines: [machine], sessions: [session],
+                settings: { actionsSettingsV1 },
+            });
+            let focusedServerId: string | undefined;
+            if (settlement === 'route-home') {
+                routeParams.current = { id: machine.id, serverId: home.home.id };
+                const focused = await network.addHome('https://machine-stop-focused-elsewhere.example.test', 'focused-account');
+                focusedServerId = focused.id;
+                const { setActiveServerId, getActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+                const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+                await setActiveServerId(focused.id, { scope: 'device' });
+                await restoreConnectionToActiveServer({ token: focused.token });
+                expect(getActiveServerId()).toBe(focused.id);
+                home.storage.setState({ machineListByServerId: { ...home.storage.getState().machineListByServerId,
+                    [home.home.id]: [machine] } });
+            }
+            home.storage.setState({ sessions: { [session.id]: { ...session, serverId: home.home.id } } });
+            const run = DaemonExecutionRunEntrySchema.parse({
+                happyHomeDir: '/test/happier', pid: 123, happySessionId: session.id,
+                runId: 'stop-run', callId: 'call', sidechainId: 'side', intent: 'review',
+                backendTarget: { kind: 'backend', backendId: 'codex' },
+                runClass: 'bounded', ioMode: 'request_response', retentionPolicy: 'ephemeral',
+                status: 'running', startedAtMs: 1, updatedAtMs: 1,
+            });
+            network.setRpcResponder(async request => {
+                const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, request.payload,
+                    `${request.targetId}:${request.method}`);
+                const response = request.method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST ? { runs: [run] }
+                    : request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP
+                        ? { ok: false, error: 'Run control failed', errorCode: 'execution_run_failed' }
+                    : request.method === RPC_METHODS.STOP_SESSION
+                        ? settlement === 'unavailable' ? { error: 'RPC method not available', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }
+                            : settlement === 'refused' ? { status: 'incomplete', reason: 'destroy_failed' } : { status: 'requested' }
+                    : request.method === 'killSession'
+                        ? { success: false, message: 'RPC method not available', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }
+                    : {};
+                return await socketRpcCodec.encodeResponse({ mode: 'plain' }, response, decoded.callId);
+            });
+            const screen = await home.render(MachineDetailScreen);
+            await vi.waitFor(() => expect(screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' }).length).toBeGreaterThan(0));
+            await act(async () => {
+                await screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' })[0]!.props.onPress();
+                await flushHookEffects({ cycles: 2, turns: 2 });
+            });
+            // A genuine issued run failure, not a pre-issuance policy/setup refusal, offers fallback.
+            expect(network.requests.some(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toBe(true);
+            expect(network.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP
+                || request.method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST).every(request => request.serverUrl === home!.home.serverUrl)).toBe(true);
+            expect(stopDialogs.confirm).toHaveBeenCalledWith('runs.stop.stopRunFailedTitle', 'runs.stop.stopRunFailedBody',
+                expect.objectContaining({ destructive: true }));
+            const stopEffects = network.requests.filter(request => request.method === RPC_METHODS.STOP_SESSION);
+            if (settlement === 'disabled') {
+                expect(stopEffects).toEqual([]);
+                expect(stopDialogs.alert).toHaveBeenCalledWith('common.error', expect.stringContaining('action_disabled'));
+            } else {
+                expect(stopEffects.map(request => ({ serverUrl: request.serverUrl, machineId: request.targetId })))
+                    .toEqual([{ serverUrl: home.home.serverUrl, machineId: machine.id }]);
+                if (settlement === 'refused') expect(stopDialogs.alert).toHaveBeenCalledWith('common.error',
+                    'Session stop incomplete: destroy_failed');
+                else if (settlement === 'unavailable') expect(stopDialogs.alert).toHaveBeenCalledWith('errors.daemonUnavailableTitle',
+                    expect.any(String), expect.arrayContaining([expect.objectContaining({ text: 'common.retry', onPress: expect.any(Function) })]));
+                else expect(stopDialogs.alert).not.toHaveBeenCalled();
+                const state = home.storage.getState();
+                if (settlement === 'route-home') {
+                    // Cold route-Home control must not publish private metadata into another Account.
+                    expect(state.profileScope).toMatchObject({ serverId: focusedServerId, accountId: 'focused-account' });
+                    expect(state.settingsScope).toMatchObject({ serverId: focusedServerId, accountId: 'focused-account' });
+                    expect(state.sessions[session.id]).toBeUndefined();
+                    expect(state.sessionListRowsByServerId[home.home.id]?.[session.id]).toBeUndefined();
+                } else {
+                    // A request receipt is not evidence that the process became inactive.
+                    expect(state.sessions[session.id]?.active).toBe(true);
+                }
+            }
+            expect(screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' })[0]!.props.disabled).toBe(false);
+        },
+    );
+
+    it('resolves the canonical Stop strategy machine from its explicit Home despite an ambient same-id Session', async () => {
+        const machine = createMachineFixture({ id: 'machine-exact', activeAt: Date.now() });
+        home = await arrangeMachineDetailsHomeForTests(network, {
+            serverUrl: 'https://machine-stop-exact-home.example.test', machines: [machine],
+        });
+        const ambient = await network.addHome('https://machine-stop-ambient.example.test', 'other-account');
+        const session = createSessionFixture({ id: 'same-session', serverId: ambient.id, active: true,
+            metadata: { ...createSessionFixture().metadata!, machineId: 'machine-ambient' } });
+        home.storage.setState({
+            sessions: { [session.id]: session },
+            machines: { 'machine-ambient': createMachineFixture({ id: 'machine-ambient', activeAt: Date.now() }) },
+            sessionListRowsByServerId: { [home.home.id]: { [session.id]: createSessionListRenderableSessionFixture({
+                id: session.id, active: true, metadata: { path: '/exact/project', machineId: machine.id },
+            }) } },
+            machineListByServerId: { [home.home.id]: [machine] },
+        });
+        network.setRpcResponder(async request => {
+            const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, request.payload,
+                `${request.targetId}:${request.method}`);
+            return await socketRpcCodec.encodeResponse({ mode: 'plain' }, { status: 'stopped' }, decoded.callId);
+        });
+        const { stopSessionUsingCanonicalStrategy } = await import('@/sync/ops/sessionStopStrategy');
+        expect(await stopSessionUsingCanonicalStrategy({ sessionId: session.id, serverId: home.home.id }))
+            .toEqual({ success: true, effect: 'process_stopped', method: 'daemon_machine_rpc' });
+        expect(network.requests.filter(request => request.method === RPC_METHODS.STOP_SESSION)
+            .map(request => ({ serverUrl: request.serverUrl, machineId: request.targetId })))
+            .toEqual([{ serverUrl: home.home.serverUrl, machineId: machine.id }]);
+    });
 });
 
 describe('MachineDetailScreen hydration', () => {

@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { afterAll, vi } from 'vitest';
-import type { Machine } from '@/sync/domains/state/storageTypes';
+import type { Machine, Session } from '@/sync/domains/state/storageTypes';
+import type { Settings } from '@/sync/domains/settings/settings';
 import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
 import type { RenderScreenResult } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary, type SessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
@@ -11,6 +12,7 @@ type MachineDetailsHome = {
         machines: readonly Machine[];
         machineListRequests: number;
         readMachines: (() => Promise<readonly Machine[]>) | null;
+        beforeSessionRead: (() => Promise<void>) | null;
     };
     storage: typeof import('@/sync/domains/state/storage').storage;
     sync: typeof import('@/sync/sync').sync;
@@ -46,13 +48,16 @@ export async function initializeMachineDetailsRuntimeForTests(): Promise<Session
 
 export async function arrangeMachineDetailsHomeForTests(
     network: SessionOpsNetworkBoundary,
-    options: Readonly<{ serverUrl: string; machines?: readonly Machine[] }>,
+    options: Readonly<{ serverUrl: string; machines?: readonly Machine[]; sessions?: readonly Session[]; settings?: Partial<Settings> }>,
 ): Promise<MachineDetailsHome> {
     const { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } = await import('@happier-dev/protocol');
     const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
     const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
     const { storage } = await import('@/sync/domains/state/storage');
-    const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+    const { settingsDefaults, settingsParse } = await import('@/sync/domains/settings/settings');
+    const { V2SessionByIdResponseSchema } = await import('@happier-dev/protocol/sessions/control/contract');
+    const { SessionCurrentProjectionRecordV1Schema } = await import('@happier-dev/protocol/sessions/listing/response');
+    const { projectLegacySessionAccessCapabilitiesV1 } = await import('@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1');
     const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
     const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
     const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
@@ -61,6 +66,7 @@ export async function arrangeMachineDetailsHomeForTests(
         machines: options.machines ?? [],
         machineListRequests: 0,
         readMachines: null as (() => Promise<readonly Machine[]>) | null,
+        beforeSessionRead: null as (() => Promise<void>) | null,
     };
     const toWire = (machine: Machine): FetchedMachineRow => ({
         id: machine.id, kind: machine.kind,
@@ -76,6 +82,22 @@ export async function arrangeMachineDetailsHomeForTests(
         if (url.pathname === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({}));
         if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
         if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: options.settings ?? {} }, version: 1 });
+        const session = options.sessions?.find(candidate => url.pathname === `/v2/sessions/${encodeURIComponent(candidate.id)}`);
+        if (session) {
+            await state.beforeSessionRead?.();
+            // This Home advertises current sharing projections: owner records include the
+            // actual access decision and complete (unassigned) responsibility pair.
+            return Response.json(V2SessionByIdResponseSchema.parse({ session: SessionCurrentProjectionRecordV1Schema.parse({
+            id: session.id, seq: session.seq, createdAt: session.createdAt, updatedAt: session.updatedAt,
+            active: session.active, activeAt: session.activeAt, encryptionMode: 'plain', dataEncryptionKey: null,
+            metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion,
+            agentState: null, agentStateVersion: session.agentStateVersion,
+            share: null, responsibleAccountId: null, responsibleAccount: null,
+            effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+                capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner', canApprovePermissions: true }) },
+            }) }));
+        }
         if (url.pathname === '/v1/machines') {
             state.machineListRequests += 1;
             return Response.json((state.readMachines ? await state.readMachines() : state.machines).map(toWire));
@@ -88,6 +110,9 @@ export async function arrangeMachineDetailsHomeForTests(
     await setActiveServerId(home.id, { scope: 'device' });
     await restoreConnectionToActiveServer({ token: home.token });
     storage.setState({ settings: settingsDefaults });
+    if (options.settings) storage.getState().applySettingsForScope(
+        { serverId: home.id, accountId: home.accountId }, settingsParse(options.settings), 1,
+    );
     const { sync } = await import('@/sync/sync');
     await sync.refreshMachines();
     const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');

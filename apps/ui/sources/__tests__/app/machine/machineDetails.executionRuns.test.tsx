@@ -18,8 +18,6 @@ const {
     routerPushSpy,
     runRefreshDiagnosticActionSpy,
     stopDaemonSpy,
-    stopRunSpy,
-    stopSessionSpy,
 } = vi.hoisted(() => ({
     activeServerIdRef: { current: 'server-a' },
     machineExecutionRunsListSpy: vi.fn(async () => ({ ok: true, runs: [] as any[] })),
@@ -35,8 +33,6 @@ const {
     stopDaemonSpy: vi.fn<(machineId: string, options?: Record<string, unknown>) => Promise<{ message: string }>>(
         async () => ({ message: 'noop' }),
     ),
-    stopRunSpy: vi.fn<(..._args: any[]) => Promise<any>>(async (..._args: any[]) => ({ ok: true })),
-    stopSessionSpy: vi.fn<(..._args: any[]) => Promise<any>>(async (..._args: any[]) => ({ ok: true })),
 }));
 
 installMachineDetailsCommonModuleMocks({
@@ -124,14 +120,8 @@ vi.mock('@/components/sessions/runs/ExecutionRunRow', () => ({
 vi.mock('@/sync/ops', () => ({
     machineSpawnNewSession: vi.fn(async () => ({ type: 'error', errorCode: 'unexpected', errorMessage: 'noop' })),
     machineStopDaemon: (machineId: string, options?: Record<string, unknown>) => stopDaemonSpy(machineId, options),
-    machineStopSession: (...args: any[]) => stopSessionSpy(...args),
     machineUpdateMetadata: vi.fn(async () => ({})),
     machineExecutionRunsList: machineExecutionRunsListSpy,
-}));
-
-vi.mock('@/sync/ops/sessionExecutionRuns', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/ops/sessionExecutionRuns')>(),
-    sessionExecutionRunStop: (...args: any[]) => stopRunSpy(...args),
 }));
 
 vi.mock('@/hooks/session/useNavigateToSession', () => ({ useNavigateToSession: () => () => { } }));
@@ -255,8 +245,6 @@ describe('MachineDetailScreen (execution runs section)', () => {
         stopDaemonSpy.mockClear();
         routerPushSpy.mockClear();
         runRefreshDiagnosticActionSpy.mockClear();
-        stopRunSpy.mockClear();
-        stopSessionSpy.mockClear();
         modalSpies.alert.mockClear();
         modalSpies.confirm.mockClear();
     });
@@ -394,7 +382,6 @@ describe('MachineDetailScreen (execution runs section)', () => {
     });
 
     it('offers a stop control for running runs', async () => {
-        stopRunSpy.mockClear();
         machineExecutionRunsListSpy.mockResolvedValueOnce({
             ok: true,
             runs: [createExecutionRun({ runId: 'run-running' })],
@@ -406,10 +393,6 @@ describe('MachineDetailScreen (execution runs section)', () => {
         await flushHookEffects();
 
         expect(screen.findByTestId('execution-run-stop:run-running')).toBeTruthy();
-        await screen.pressByTestIdAsync('execution-run-stop:run-running');
-        await flushHookEffects();
-
-        expect(stopRunSpy).toHaveBeenCalledWith('sess-1', { runId: 'run-running' }, { serverId: 'server-a' });
     });
 
     it('navigates to run details when pressing an execution run row', async () => {
@@ -448,58 +431,6 @@ describe('MachineDetailScreen (execution runs section)', () => {
         expect(screen.findByTestId('item:runs.sessionTitle')).toBeNull();
         expect(row.props.onPress).toBeUndefined();
         expect(screen.findByTestId('execution-run-stop:run-detached')).toBeNull();
-        expect(stopRunSpy).not.toHaveBeenCalled();
-        expect(stopSessionSpy).not.toHaveBeenCalled();
-    });
-
-    it('can stop a run and falls back to stopping the whole session process when session RPC stop is unavailable', async () => {
-        modalSpies.confirm.mockResolvedValueOnce(true);
-
-        machineExecutionRunsListSpy.mockResolvedValueOnce({
-            ok: true,
-            runs: [createExecutionRun({ runId: 'run-running' })],
-        });
-
-        stopRunSpy.mockResolvedValueOnce({ ok: false, error: 'Unsupported response from session RPC' });
-        stopSessionSpy.mockResolvedValueOnce({ ok: true });
-
-        stopRunSpy.mockClear();
-        stopSessionSpy.mockClear();
-
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
-
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
-        await flushHookEffects();
-
-        expect(screen.findByTestId('execution-run-stop:run-running')).toBeTruthy();
-        await screen.pressByTestIdAsync('execution-run-stop:run-running');
-        await flushHookEffects();
-
-        expect(stopRunSpy).toHaveBeenCalled();
-        expect(stopSessionSpy).toHaveBeenCalledWith('machine-1', 'sess-1', { serverId: 'server-a' });
-    });
-
-    it('uses the requested route server when stopping runs and fallback session processes', async () => {
-        routeParamsRef.current = { id: 'machine-1', serverId: 'server-b' };
-        activeServerIdRef.current = 'server-a';
-        modalSpies.confirm.mockResolvedValueOnce(true);
-        machineExecutionRunsListSpy.mockResolvedValue({
-            ok: true,
-            runs: [createExecutionRun({ runId: 'run-running' })],
-        });
-        stopRunSpy.mockResolvedValueOnce({ ok: false, error: 'Unsupported response from session RPC' });
-        stopSessionSpy.mockResolvedValueOnce({ ok: true });
-
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
-        await flushHookEffects();
-
-        await screen.pressByTestIdAsync('execution-run-stop:run-running');
-        await flushHookEffects();
-
-        expect(stopRunSpy).toHaveBeenCalledWith('sess-1', { runId: 'run-running' }, { serverId: 'server-b' });
-        expect(stopSessionSpy).toHaveBeenCalledWith('machine-1', 'sess-1', { serverId: 'server-b' });
-        expect(machineExecutionRunsListSpy).toHaveBeenLastCalledWith('machine-1', { serverId: 'server-b' });
     });
 
     it('uses the requested route server when stopping the daemon', async () => {

@@ -4,10 +4,17 @@ import {
     readRpcErrorCode as readSessionRpcErrorCode,
 } from '../runtime/rpcErrors';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
+import { sessionRpcWithServerAccountScope, sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
+import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { readSessionSnapshotForAuthority, SessionSnapshotReadError } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { storage } from '@/sync/domains/state/storage';
+import { resolveMachineControlTargetForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
+import { serverFetch } from '@/sync/http/client';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { StopSessionResultSchema, type StopSessionResult } from '@happier-dev/protocol/sessionStop';
-import { isRpcSessionMachineControlUnavailableError, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { createRpcCallError, isRpcSessionMachineControlUnavailableError, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { readMachineControlTargetForSession, shouldFallbackFromMachineRpc } from './sessionMachineTarget';
 import { log } from '@/log';
 
@@ -155,6 +162,8 @@ export async function stopSessionViaDaemonMachineRpc(params: Readonly<{
     machineId: string;
     sessionId: string;
     serverId?: string | null;
+    accountId?: string;
+    signal?: AbortSignal;
 }>): Promise<DaemonMachineSessionStopAttempt> {
     try {
         const response = await machineRpcWithServerScope<unknown, { sessionId: string }>({
@@ -166,6 +175,8 @@ export async function stopSessionViaDaemonMachineRpc(params: Readonly<{
                 sessionId: params.sessionId,
             },
             serverId: params.serverId,
+            ...(params.accountId ? { accountId: params.accountId } : {}),
+            ...(params.signal ? { signal: params.signal } : {}),
             // Stop is safe to reroute only before emission. Once issued, replaying the
             // same session id can terminate a replacement that resumed after the first exit.
             onIssued: () => {},
@@ -239,14 +250,19 @@ export async function stopSessionViaDaemonMachineRpc(params: Readonly<{
 async function stopSessionViaRunnerRpc(params: Readonly<{
     sessionId: string;
     serverId?: string | null;
+    scope?: ServerAccountScope;
+    signal?: AbortSignal;
 }>): Promise<unknown> {
     try {
-        return await sessionRpcWithServerScope<StopSessionResult | LegacySessionKillResponse, SessionKillRequest>({
+        const request = {
             sessionId: params.sessionId,
-            serverId: params.serverId ?? null,
             method: 'killSession',
             payload: {},
-        });
+            ...(params.signal ? { signal: params.signal } : {}),
+        };
+        return params.scope
+            ? await sessionRpcWithServerAccountScope<StopSessionResult | LegacySessionKillResponse, SessionKillRequest>({ ...request, scope: params.scope })
+            : await sessionRpcWithServerScope<StopSessionResult | LegacySessionKillResponse, SessionKillRequest>({ ...request, serverId: params.serverId ?? null });
     } catch (error) {
         const errorCode = readSessionRpcErrorCode(error);
         return {
@@ -260,14 +276,67 @@ async function stopSessionViaRunnerRpc(params: Readonly<{
 export async function stopSessionUsingCanonicalStrategy(params: Readonly<{
     sessionId: string;
     serverId?: string | null;
+    /** The original admitted Account; legacy Home-only callers do not recapture it. */
+    scope?: ServerAccountScope;
+    isCurrent?: () => boolean;
+    signal?: AbortSignal;
 }>): Promise<SessionStopStrategyOutcome> {
     let daemonFallback: Extract<DaemonMachineSessionStopAttempt, { type: 'fallback' }> | null = null;
-    const machineTarget = readMachineControlTargetForSession(params.sessionId);
+    const serverId = params.scope?.serverId ?? params.serverId ?? null;
+    const assertCurrent = () => {
+        params.signal?.throwIfAborted();
+        if (params.isCurrent && !params.isCurrent()) {
+            throw createRpcCallError({ error: 'action_account_scope_changed', errorCode: 'action_account_scope_changed' });
+        }
+    };
+    const failed = (error: unknown, failedAt: 'daemon_machine_rpc' | 'session_rpc'): SessionStopStrategyOutcome => {
+        const errorCode = error instanceof SessionSnapshotReadError ? error.errorCode : readRpcErrorCode(error);
+        return { success: false, failedAt, reason: 'failed', message: unknownErrorMessage(error),
+            ...(errorCode ? { errorCode } : {}) };
+    };
+    let machineTarget = readMachineControlTargetForSession(params.scope
+        ? { ...params.scope, sessionId: params.sessionId }
+        : serverId ? { serverId, sessionId: params.sessionId } : params.sessionId);
+    try {
+        assertCurrent();
+        if (!machineTarget && params.serverId && params.scope) {
+            // A route Home need not have published its private Session into the focused store.
+            // Read through the existing exact-Account authority and keep this projection local.
+            const { session } = await runWithServerRequestAuthorityForServerAccountScope({
+                scope: params.scope, activeRequest: serverFetch,
+            }, async authority => {
+                assertCurrent();
+                return await readSessionSnapshotForAuthority({
+                    authority: { ...authority, request: async (path, init, options) => {
+                        const cancellation = mergeAbortSignals([params.signal, init?.signal ?? undefined]);
+                        try {
+                            assertCurrent();
+                            return await authority.request(path, { ...init, signal: cancellation.signal }, options);
+                        } finally { cancellation.dispose(); }
+                    } },
+                    sessionId: params.sessionId,
+                    isCurrent: () => !params.signal?.aborted && (params.isCurrent?.() ?? true),
+                });
+            });
+            assertCurrent();
+            machineTarget = resolveMachineControlTargetForSessionFromState({
+                ...storage.getState(), sessions: { [params.sessionId]: session }, sessionListRowsByServerId: {},
+            }, { ...params.scope, sessionId: params.sessionId });
+        }
+        assertCurrent();
+    } catch (error) {
+        // A failed authority/read is not evidence that another stop authority is available.
+        try { assertCurrent(); }
+        catch (interruption) { return failed(interruption, 'daemon_machine_rpc'); }
+        return failed(error, 'daemon_machine_rpc');
+    }
     if (machineTarget) {
         const daemonStop = await stopSessionViaDaemonMachineRpc({
             machineId: machineTarget.machineId,
             sessionId: params.sessionId,
-            serverId: params.serverId ?? null,
+            serverId,
+            ...(params.scope ? { accountId: params.scope.accountId } : {}),
+            ...(params.signal ? { signal: params.signal } : {}),
         });
         if (daemonStop.type === 'stopped') {
             return { success: true, effect: 'process_stopped', method: 'daemon_machine_rpc' };
@@ -293,9 +362,13 @@ export async function stopSessionUsingCanonicalStrategy(params: Readonly<{
         daemonFallback = daemonStop;
     }
 
+    try { assertCurrent(); }
+    catch (error) { return failed(error, 'session_rpc'); }
     const killResult = await stopSessionViaRunnerRpc({
         sessionId: params.sessionId,
-        serverId: params.serverId ?? null,
+        serverId,
+        ...(params.scope ? { scope: params.scope } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
     });
     const strictKillResult = readStrictStopSessionResult(killResult);
     if (strictKillResult?.status === 'stopped') {
