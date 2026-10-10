@@ -111,18 +111,21 @@ export async function startReviewOfComparison(params: Readonly<{
     /** The launcher owns exact-target admission, Session resume and Action dispatch. */
     start: (input: Record<string, unknown>) => Promise<ActionExecuteResult>;
 }>): Promise<ReviewOfComparisonStarted | Failure> {
+    if (params.sessionId === null && !params.machineId) {
+        return { ok: false, error: 'review_comparison_unavailable', errorCode: 'review_comparison_unavailable' };
+    }
     const captured = await resolveComparisonId(params);
     if (!captured.ok) return captured;
     const result = await params.start({
         ...params.launchInput,
         ...buildReviewStartWithWalkthroughInput({
-            sessionId: params.sessionId,
+            ...(params.sessionId !== null ? { sessionId: params.sessionId }
+                : { sessionId: null, machineId: params.machineId!, cwd: params.cwd }),
             plan: params.plan,
             instructions: params.instructions,
             comparisonId: captured.comparisonId,
             pending: params.comparison.kind === 'workingTree',
         }),
-        ...(!params.sessionId ? { target: { kind: 'detached' }, machineId: params.machineId, cwd: params.cwd } : {}),
     });
     if (!result.ok) return failure(result, 'review_start_failed');
     const output = (result.result ?? {}) as {

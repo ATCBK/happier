@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, standardCleanup } from '@/dev/testkit';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { ScmComparisonCaptureOutputSchema } from '@happier-dev/protocol/scm';
+import { ExecutionRunStartResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 
@@ -56,7 +58,7 @@ describe('WorkspaceScmReviewDetailsView', () => {
         expect(opened?.props).not.toHaveProperty('sessionId');
         expect(fixture.requests.some(request => request.targetId === 's1')).toBe(false);
     });
-    it('captures separately authorized Session evidence through that Session, never the Machine scope', async () => {
+    it('captures separately authorized Session evidence with Session qualification on its admitted Machine', async () => {
         const captured = { id: 'session-evidence', source: { kind: 'session' as const, sessionId: 's1' },
             repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete' as const, files: [], reasons: [] } };
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request => {
@@ -70,7 +72,7 @@ describe('WorkspaceScmReviewDetailsView', () => {
             evidenceSessionId="s1" comparison={{ kind: 'session' }} />);
         await flushHookEffects({ cycles: 20 });
         expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture')).toEqual([
-            expect.objectContaining({ targetId: 's1', payload: expect.objectContaining({ cwd: '/repo', source: captured.source }) }),
+            expect.objectContaining({ targetId: 'm1', payload: expect.objectContaining({ cwd: '/repo', sessionId: 's1', source: captured.source }) }),
         ]);
     });
     it('starts a no-Session review using captured Machine evidence and the canonical detached Action', async () => {
@@ -79,25 +81,35 @@ describe('WorkspaceScmReviewDetailsView', () => {
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request => {
             if (request.method === 'scm.diffSummary.capture') return ScmComparisonCaptureOutputSchema.parse({
                 success: true, comparison: captured, metadata: { source: captured.source, sourceKey: captured.id } });
-            if (request.method === 'execution.run.start') return { runId: 'review-1', callId: 'call-1', status: 'running' };
+            if (request.method === 'execution.run.start') return ExecutionRunStartResponseSchema.parse({
+                runId: 'review-1', callId: 'call-1', sidechainId: 'sidechain-1',
+            });
             if (request.method === 'capabilities.detect') return { protocolVersion: 1, results: { 'tool.executionRuns': {
                 ok: true, checkedAt: 1, data: { protocolVersion: 2, backends: { claude: { available: true, intents: ['review'] } },
-                    features: { detachedScope: true, runScopedAgentBindings: true, secretReferenceOverlay: true } } } } };
+                    features: { detachedScope: true, startAndWait: true, runScopedAgentBindings: true, secretReferenceOverlay: true } } } } };
             return undefined;
-        } });
+        }, request: async url => new URL(String(url)).pathname === ACP_CATALOG_ROWS_ROUTE_V1
+            ? Response.json(AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
+                content: { t: 'plain', v: { v: 1, definitions: [] } } }))
+            : Response.json({}, { status: 404 }),
+        });
         fixture.storage.setState({ sessions: {} });
-        const { startReviewOfComparison } = await import('@/sync/ops/reviews/reviewWalkthrough');
+        const { startReviewOfComparison, listReviewWalkthroughEngines } = await import('@/sync/ops/reviews/reviewWalkthrough');
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const { resolveReviewWalkthroughPlan } = await import('@/sync/domains/reviews/reviewWalkthroughPlan');
         const executor = createDefaultActionExecutor();
+        const inventory = await listReviewWalkthroughEngines({ sessionId: null, machineId: 'm1', serverId: fixture.home.id });
+        expect(inventory, JSON.stringify({ inventory, methods: fixture.requests.map(request => request.method) }))
+            .toMatchObject({ ok: true, engines: expect.arrayContaining([expect.objectContaining({ engineId: 'claude', enabled: true })]) });
         const outcome = await startReviewOfComparison({ sessionId: null, machineId: 'm1', serverId: fixture.home.id, cwd: '/repo',
             comparison: { kind: 'workingTree' }, instructions: 'Review the pending changes',
-            plan: resolveReviewWalkthroughPlan({ engines: [{ engineId: 'claude', label: 'Claude', enabled: true, structuredNarration: false }],
+            plan: resolveReviewWalkthroughPlan({ engines: inventory.ok ? inventory.engines : [],
                 selectedEngineIds: ['claude'], walkthrough: false, narratorEngineId: null }),
             start: input => executor.execute('review.start', input, { serverId: fixture.home.id,
                 externalActionTarget: { kind: 'machine', machineId: 'm1' }, executionRunTargetMachineId: 'm1' }),
         });
-        expect(outcome).toMatchObject({ ok: true, comparisonId: captured.id, reviewRunIds: ['review-1'] });
+        expect(outcome, JSON.stringify({ outcome, methods: fixture.requests.map(request => request.method) }))
+            .toMatchObject({ ok: true, comparisonId: captured.id, reviewRunIds: ['review-1'] });
         expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture')).toEqual([
             expect.objectContaining({ targetId: 'm1', payload: expect.objectContaining({ cwd: '/repo', source: captured.source }) }),
         ]);

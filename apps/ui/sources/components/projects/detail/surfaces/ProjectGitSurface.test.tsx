@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { flushHookEffects, standardCleanup } from '@/dev/testkit';
 import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { activeReviewFileKeyForWorkspace, readActiveReviewFile, requestActiveReviewFile } from '@/components/workspaces/scm/review/activeReviewFile';
+import { ScmLogListResponseSchema } from '@happier-dev/protocol/scm';
 
 installSessionFilesViewBoundaries();
 await prepareSessionFilesViewTestkit();
@@ -19,6 +20,7 @@ describe('Project Changes destination', () => {
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request => {
             if (request.method === 'scm.status.snapshot') return { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo', entries }) };
             if (request.method === 'scm.diff.file') return { success: true, diff: 'diff --git a/src/b.ts b/src/b.ts\n--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1 +1 @@\n-old\n+new\n' };
+            if (request.method === 'scm.log.list') return ScmLogListResponseSchema.parse({ success: true, entries: [] });
             return undefined;
         } });
         fixture.storage.setState({ sessions: {} });
@@ -48,8 +50,11 @@ describe('Project Changes destination', () => {
         expect(readActiveReviewFile(key).activePath).toBe('src/b.ts');
     });
     it('opens the shared comparison directly and retains its view across Git and host remount', async () => {
-        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
-            request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo' }) } : undefined });
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request => {
+            if (request.method === 'scm.status.snapshot') return { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo' }) };
+            if (request.method === 'scm.log.list') return ScmLogListResponseSchema.parse({ success: true, entries: [] });
+            return undefined;
+        } });
         fixture.storage.setState({ sessions: {} });
         const noop = () => {};
         const surface = <ProjectGitSurface scopeId="project:wr" serverId={fixture.home.id} machineId="m1" rootPath="/repo"

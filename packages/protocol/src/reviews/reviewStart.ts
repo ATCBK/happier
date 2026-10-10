@@ -48,6 +48,7 @@ export const ReviewStartInputSchema = lazyZodSchema(() => z
     launchProfileId: z.string().trim().min(1).optional(),
     sessionId: z.string().min(1).optional(),
     target: z.object({ kind: z.literal('detached') }).strict().optional(),
+    cwd: ExecutionRunStartRequestBaseSchema.shape.cwd,
     engineIds: z.array(ReviewEngineIdSchema).min(1),
     instructions: z.string().trim().min(1),
     outputs: z.array(z.literal('walkthrough')).min(1).optional(),

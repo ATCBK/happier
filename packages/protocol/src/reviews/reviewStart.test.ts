@@ -7,6 +7,13 @@ const reviewStartExports = reviewStart as typeof reviewStart & {
 };
 
 describe('ReviewStartInputSchema', () => {
+  it('validates the authored detached working directory before routing a Run', () => {
+    const input = { target: { kind: 'detached' }, engineIds: ['claude'], instructions: 'Review.' };
+    expect(reviewStart.ReviewStartInputSchema.parse({ ...input, cwd: '/repo/exact' }).cwd).toBe('/repo/exact');
+    expect(reviewStart.ReviewStartInputSchema.safeParse({ ...input, cwd: 42 }).success).toBe(false);
+    expect(reviewStart.ReviewStartInputSchema.safeParse({ ...input, cwd: '   ' }).success).toBe(false);
+  });
+
   it('owns narration selection strictly while retaining findings-only defaults', () => {
     const input = { engineIds: ['codex'], instructions: 'Review.' };
     expect(reviewStart.ReviewStartInputSchema.parse(input).outputs).toBeUndefined();
