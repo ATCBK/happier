@@ -24,6 +24,8 @@ const { AppShellPluginUiProjectionValueProvider } = await import('@/components/a
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { storage } = await import('@/sync/domains/state/storage');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/actionSettings');
+const { act } = await import('react-test-renderer');
 
 const ACCOUNT_ID = 'account-a';
 const DRAFT = { name: 'Release checks', inputs: { fields: [] }, inputSchema: { type: 'object' },
@@ -33,8 +35,9 @@ const NO_INSTANCES = Object.freeze([]);
 const LABELS = { count: String, submit: 'Add' };
 const addInstance = async () => ({ ok: true as const });
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+let previousSettings: ReturnType<typeof storage.getState>['settings'] | null = null;
 
-async function renderGallery() {
+async function renderGallery(options: Readonly<{ waiveManagementApproval?: boolean }> = {}) {
     const serverId = await harness.addHome({ name: 'Home A', serverUrl: 'https://fragments-home.example', accountId: ACCOUNT_ID });
     const account = { serverId, accountId: ACCOUNT_ID };
     storage.setState({ profileScope: account, settingsScope: account });
@@ -46,6 +49,15 @@ async function renderGallery() {
     connection = await restoreServerAccountForTest({ serverUrl: 'https://fragments-home.example', accountId: ACCOUNT_ID, request: harness.request });
     installHomeGovernanceBoundaries(harness);
     storage.setState({ profileScope: account, settingsScope: account });
+    previousSettings = storage.getState().settings;
+    if (options.waiveManagementApproval !== false) {
+        // Persisted Account policy, not an executor bypass: success cases opt out of default Ask.
+        const settings = { ...previousSettings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: {}, approvalWaivedSurfaces: { 'widgets.fragment.update': ['ui'], 'widgets.fragment.delete': ['ui'] },
+        }) };
+        storage.setState({ settings });
+        harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+    }
     expect(captureActiveServerAccountScopeLifetime()?.scope).toEqual(account);
     const executor = createDefaultActionExecutor();
     const context = { serverId, surface: 'ui', authority: 'present_user' } as const;
@@ -61,6 +73,7 @@ async function renderGallery() {
         serverId, platform: 'web', reloadConnectedAccountProjection: () => {}, accountLifetime: captureActiveServerAccountScopeLifetime(),
         clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {},
     }}><Gallery /></AppShellPluginUiProjectionValueProvider>);
+    await act(async () => { await flushHookEffects({ cycles: 2 }); });
     await vi.waitFor(() => expect(screen.findByTestId('gallery.entry.group-saved')).not.toBeNull());
     async function choose(action: string) {
         await screen.pressByTestIdAsync('gallery.entry.group-saved.actions');
@@ -75,6 +88,7 @@ describe('saved-group Gallery management', () => {
     afterEach(async () => {
         standardCleanup();
         if (connection) { await connection.dispose(); connection = null; installHomeGovernanceBoundaries(harness); }
+        if (previousSettings) { storage.setState({ settings: previousSettings }); previousSettings = null; }
     });
 
     it('renames the saved group through current Artifact revisions, duplicates independently, and refreshes after delete', async () => {
@@ -86,36 +100,51 @@ describe('saved-group Gallery management', () => {
             expect(await executor.execute('widgets.fragment.update', { account, artifactId: 'saved', patch: { description: 'Kept by another client' } }, context)).toMatchObject({ ok: true });
         });
         await choose('rename');
+        await vi.waitFor(async () => {
+            const renamed = await executor.execute('widgets.fragment.get', { account, artifactId: 'saved' }, context);
+            expect(renamed).toMatchObject({ ok: true, result: { fragment: { name: 'Release room', description: 'Kept by another client', group: DRAFT.group } } });
+        });
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('Release room'));
-        const renamed = await executor.execute('widgets.fragment.get', { account, artifactId: 'saved' }, context);
-        expect(renamed).toMatchObject({ ok: true, result: { fragment: { name: 'Release room', description: 'Kept by another client', group: DRAFT.group } } });
         expect(screen.findByTestId('gallery.detail.submit')?.props.disabled).toBe(true);
         await choose('duplicate');
         await vi.waitFor(() => expect(harness.artifacts(serverId).list()).toHaveLength(2));
         const copyId = harness.artifacts(serverId).list().find(row => row.id !== 'saved')!.id;
         await vi.waitFor(() => expect(screen.findByTestId(`gallery.entry.group-${copyId}`)).not.toBeNull());
         expect(await executor.execute('widgets.fragment.get', { account, artifactId: copyId }, context)).toMatchObject({ ok: true, result: { fragment: { id: copyId, group: DRAFT.group } } });
-        modalBoundary.confirm.mockResolvedValue(true);
         await choose('delete');
         await vi.waitFor(() => expect(screen.findByTestId('gallery.entry.group-saved')).toBeNull());
         expect(harness.artifacts(serverId).read('saved')).toBeNull();
         expect(harness.artifacts(serverId).read(copyId)).not.toBeNull();
     });
 
-    it('cancels naming/deletion without a write and keeps a refused mutation visible and retryable', async () => {
+    it('cancels naming without a write and retains management controls after refusal', async () => {
         const { screen, choose, serverId } = await renderGallery();
         const original = harness.artifacts(serverId).readPlainBody('saved');
         modalBoundary.prompt.mockResolvedValue(null);
         await choose('rename');
-        modalBoundary.confirm.mockResolvedValue(false);
-        await choose('delete');
+        await vi.waitFor(() => expect(modalBoundary.prompt).toHaveBeenCalled());
+        await flushHookEffects({ cycles: 2 });
         expect(harness.artifacts(serverId).readPlainBody('saved')).toBe(original);
         modalBoundary.prompt.mockResolvedValue('Release room');
-        harness.answer(serverId, 'POST /v1/artifacts/saved', { status: 503, body: { error: 'unavailable' } });
+        // A terminal Home refusal, not a transient 503 serviced by the transport's retry owner.
+        harness.answer(serverId, 'POST /v1/artifacts/saved', { status: 403, body: { error: 'forbidden' } });
         await choose('rename');
         await vi.waitFor(() => expect(modalBoundary.alert).toHaveBeenCalled());
+        expect(modalBoundary.alert.mock.calls.at(-1)?.[0]).toBe('Error');
         expect(harness.artifacts(serverId).readPlainBody('saved')).toBe(original);
         expect(screen.findByTestId('gallery.entry.group-saved.actions')).not.toBeNull();
+    });
+
+    it.each(['rename', 'delete'] as const)('leaves the saved group unchanged while default policy places %s in approval custody', async (intent) => {
+        const { choose, serverId } = await renderGallery({ waiveManagementApproval: false });
+        const original = harness.artifacts(serverId).readPlainBody('saved');
+        modalBoundary.prompt.mockResolvedValue('Release room');
+        await choose(intent);
+        await vi.waitFor(() => expect(modalBoundary.alert).toHaveBeenCalled());
+        expect(modalBoundary.alert.mock.calls.at(-1)?.[0]).toBe('Info');
+        expect(modalBoundary.confirm).not.toHaveBeenCalled();
+        expect(harness.artifacts(serverId).readPlainBody('saved')).toBe(original);
+        expect(harness.artifacts(serverId).list()).toHaveLength(2);
     });
 
     it('does not finish a pending rename after its Account lifetime retires', async () => {
@@ -127,6 +156,8 @@ describe('saved-group Gallery management', () => {
             return 'Wrong Account';
         });
         await choose('rename');
+        await vi.waitFor(() => expect(modalBoundary.prompt).toHaveBeenCalled());
+        await flushHookEffects({ cycles: 2 });
         expect(harness.artifacts(serverId).readPlainBody('saved')).toBe(original);
     });
 });

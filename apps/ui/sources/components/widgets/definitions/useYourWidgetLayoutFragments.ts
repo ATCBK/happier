@@ -49,6 +49,14 @@ export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null
         };
         try {
             if (!current()) return;
+            if (intent === 'delete') {
+                // The canonical Action's Account approval policy owns destructive confirmation.
+                const deleted = await runWidgetDefinitionCommand('widgets.fragment.delete', { account: scope, artifactId }, scope, signal);
+                if (!current()) return;
+                if (deleted.kind === 'applied') refresh();
+                else notify(deleted.kind);
+                return;
+            }
             if (intent === 'duplicate') {
                 // The Action owns the copy's name/default and its independent Artifact identity.
                 const copied = await runWidgetDefinitionCommand('widgets.fragment.duplicate',
@@ -62,28 +70,17 @@ export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null
             if (!current()) return;
             if (opened.kind !== 'applied') { notify(opened.kind); return; }
             const name = opened.result.fragment.name;
-            if (intent === 'rename') {
-                const answer = await Modal.prompt(t('common.rename'), name, {
-                    defaultValue: name, placeholder: t('widgetDefinition.name'), confirmText: t('common.save'), cancelText: t('common.cancel'),
-                });
-                const nextName = answer?.trim();
-                if (!current() || !nextName || nextName === name) return;
-                // This patch stays on the Fragment port; its Artifact CAS/retry owns revisions.
-                const renamed = await runWidgetDefinitionCommand('widgets.fragment.update',
-                    { account: scope, artifactId, patch: { name: nextName } }, scope, signal);
-                if (!current()) return;
-                if (renamed.kind === 'applied') refresh();
-                else notify(renamed.kind);
-            } else {
-                const confirmed = await Modal.confirm(t('common.delete'), `${name}\n\n${t('widgetDefinition.deleteSavedGroupNote')}`, {
-                    confirmText: t('common.delete'), cancelText: t('common.cancel'), destructive: true,
-                });
-                if (!current() || !confirmed) return;
-                const deleted = await runWidgetDefinitionCommand('widgets.fragment.delete', { account: scope, artifactId }, scope, signal);
-                if (!current()) return;
-                if (deleted.kind === 'applied') refresh();
-                else notify(deleted.kind);
-            }
+            const answer = await Modal.prompt(t('common.rename'), name, {
+                defaultValue: name, placeholder: t('widgetDefinition.name'), confirmText: t('common.save'), cancelText: t('common.cancel'),
+            });
+            const nextName = answer?.trim();
+            if (!current() || !nextName || nextName === name) return;
+            // This patch stays on the Fragment port; its Artifact CAS/retry owns revisions.
+            const renamed = await runWidgetDefinitionCommand('widgets.fragment.update',
+                { account: scope, artifactId, patch: { name: nextName } }, scope, signal);
+            if (!current()) return;
+            if (renamed.kind === 'applied') refresh();
+            else notify(renamed.kind);
         } finally { cancellation.dispose(); }
     }, [scope]);
     const actionsFor = React.useCallback((fragment: WidgetLayoutFragmentSummaryV1): ItemAction[] => [

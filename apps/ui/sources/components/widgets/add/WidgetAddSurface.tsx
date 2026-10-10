@@ -608,7 +608,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRadius: HAPPIER_COLLECTION_LIST_METRICS.rowRadius,
     },
     rowHover: { backgroundColor: theme.colors.surface.pressed },
-    rowWithActions: { flexDirection: 'row', alignItems: 'center' },
+    rowWithActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     rowPick: { flex: 1, minWidth: 0 },
     rowSelected: { backgroundColor: theme.colors.surface.selected },
     // The mark sits on the title's line.
