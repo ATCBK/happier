@@ -567,14 +567,17 @@ describe('acquireCanonicalExternalSessionFollowLease background recovery', () =>
     });
 
     it('does not commit an advanced cursor when release starts during final link validation', async () => {
-        let finalValidationStarted = false;
+        let notifyFinalValidationStarted!: () => void;
+        const finalValidationStarted = new Promise<void>((resolve) => {
+            notifyFinalValidationStarted = resolve;
+        });
         let releaseFinalValidation!: () => void;
         const finalValidation = new Promise<void>((resolve) => {
             releaseFinalValidation = resolve;
         });
         afterMetadataPublication = () => {
             beforeSessionResponse = async () => {
-                finalValidationStarted = true;
+                notifyFinalValidationStarted();
                 await finalValidation;
             };
         };
@@ -616,9 +619,7 @@ describe('acquireCanonicalExternalSessionFollowLease background recovery', () =>
         });
 
         const refresh = lease.requestTranscriptRefresh?.();
-        await vi.waitFor(() => {
-            expect(finalValidationStarted).toBe(true);
-        });
+        await finalValidationStarted;
         let releaseCompleted = false;
         const release = lease.release().then(() => {
             releaseCompleted = true;
