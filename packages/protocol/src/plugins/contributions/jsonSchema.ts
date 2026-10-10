@@ -122,7 +122,7 @@ export type PluginJsonSchemaV2 = {
   not?: PluginJsonSchemaV2;
 };
 
-export const PluginJsonSchemaV2Schema: z.ZodType<PluginJsonSchemaV2> = z.lazy(() => z.object({
+const PluginJsonSchemaV2Definition: z.ZodType<PluginJsonSchemaV2> = lazyZodSchema(() => z.object({
   $schema: z.literal('http://json-schema.org/draft-07/schema#').optional(),
   $ref: z.string().regex(/^#(?:\/.*)?$/u, 'Schema references must be document-local JSON Pointers').optional(),
   definitions: z.record(z.string(), PluginJsonSchemaV2Schema).optional(),
@@ -145,3 +145,7 @@ export const PluginJsonSchemaV2Schema: z.ZodType<PluginJsonSchemaV2> = z.lazy(()
   anyOf: z.array(PluginJsonSchemaV2Schema).optional(), oneOf: z.array(PluginJsonSchemaV2Schema).optional(), allOf: z.array(PluginJsonSchemaV2Schema).optional(),
   not: PluginJsonSchemaV2Schema.optional(),
 }).strict());
+
+// Native projection revisits recursive getters; construct this declaration
+// once while retaining the public lazy root and its recursive admission.
+export const PluginJsonSchemaV2Schema: z.ZodType<PluginJsonSchemaV2> = z.lazy(() => PluginJsonSchemaV2Definition);

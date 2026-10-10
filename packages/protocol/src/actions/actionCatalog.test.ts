@@ -287,6 +287,26 @@ describe('actionCatalog action-definition adapter', () => {
       isActionEnabled: (id) => id === hostSpec.id,
       additionalDefinitions: [contributedDefinition('fresh-contribution-two')],
     });
+    const matchingContribution = (id: string, title: string): ActionDefinitionV1 => ({
+      ...contributedDefinition(id),
+      title,
+      description: hostSpec.id,
+    });
+    const mixedSearch = searchSerializedActionSpecsForSurface({
+      surface: 'api',
+      query: hostSpec.id,
+      limit: 2,
+      isActionEnabled: (id) => id === hostSpec.id,
+      additionalDefinitions: [
+        matchingContribution('matching-contribution-b', 'B matching contribution'),
+        matchingContribution(hostSpec.id, '000 shadowed host'),
+        {
+          ...matchingContribution('hidden-contribution', '000 hidden contribution'),
+          surfaces: { ...hostSpec.surfaces, api: false },
+        },
+        matchingContribution('matching-contribution-a', 'A matching contribution'),
+      ],
+    });
 
     expect(firstHostSearch.map((definition) => definition.id)).toEqual([hostSpec.id]);
     expect(repeatedHostSearch.map((definition) => definition.id)).toEqual([hostSpec.id]);
@@ -295,6 +315,11 @@ describe('actionCatalog action-definition adapter', () => {
     expect(secondContributedSearch.map((definition) => definition.id)).toEqual(['fresh-contribution-two']);
     expect(repeatedHostSearch[0]).toBe(firstHostSearch[0]);
     expect(Object.isFrozen(firstHostSearch[0])).toBe(true);
+    expect(mixedSearch.map((definition) => definition.id)).toEqual([
+      hostSpec.id,
+      'matching-contribution-a',
+    ]);
+    expect(mixedSearch[0]).toBe(firstHostSearch[0]);
   });
 
   it('projects contributed Action summaries through named public fields', () => {
