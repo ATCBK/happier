@@ -18,6 +18,33 @@ function deferred<T>() {
 }
 
 describe('current Machine work summary ingress', () => {
+    it('answers its custodian whatever id the caller\'s device gives this Home', async () => {
+        // A Home id in the input is the caller's own server-profile id (a browser's differs from the
+        // daemon's). The server-admitted machine admission, not that local id, says which machine is asked.
+        const unavailableOwner = createLiveWorkProducerGroup(() => null);
+        const activity = createManagedActivityInventory({ producers: [unavailableOwner] });
+        const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+        registerMachineWorkSummaryRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
+            target, custodianAccountId: custodian.accountId, activity,
+            readAccess: async () => ({ machineId: target.machineId, custodian,
+                access: { custodian, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+                canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [], currentRequesterDisplayIdentities: [] }),
+        });
+        const owner: RpcHandlerContext = { signal: new AbortController().signal,
+            machineAdmission: { actorAccountId: 'alice', custodianAccountId: 'alice', machineId: target.machineId,
+                installationId: target.installationId, role: 'manage', encryptionMode: 'plain' },
+            verifyMachineAdmissionCurrent: async () => true };
+        try {
+            const result = await handlers.get('machines.work.summary.get')!({ serverId: 'browser-profile-for-home', machineId: target.machineId }, owner);
+            expect(result).not.toEqual({ kind: 'refused', code: 'access_denied' });
+            expect(await handlers.get('machines.work.summary.get')!({ serverId: 'browser-profile-for-home', machineId: 'another-machine' }, owner))
+                .toEqual({ kind: 'refused', code: 'access_denied' });
+        } finally {
+            activity.dispose();
+            unavailableOwner.dispose();
+        }
+    });
+
     it('preserves independent finite load when the managed requester inventory is unavailable', async () => {
         // The real startup group has no installed producer yet; it reports
         // unknown coverage rather than manufacturing an empty requester list.
@@ -203,7 +230,8 @@ describe('current Machine work summary ingress', () => {
         expect(await call({ ...context, machineAdmission: { ...context.machineAdmission!, actorAccountId: 'bob', role: 'use' } }))
             .toEqual({ kind: 'refused', code: 'access_denied' });
         expect(await call({ signal: context.signal })).toEqual({ kind: 'refused', code: 'access_denied' });
-        expect(await call(context, { serverId: 'other-home', machineId: target.machineId }))
+        // Another machine is refused; the caller's own id for this Home is not compared (see the test above).
+        expect(await call(context, { serverId: target.serverId, machineId: 'other-machine' }))
             .toEqual({ kind: 'refused', code: 'access_denied' });
         retireDuringRead = true;
         expect(await call()).toEqual({ kind: 'refused', code: 'access_denied' });

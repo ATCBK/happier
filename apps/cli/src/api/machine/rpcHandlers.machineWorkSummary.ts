@@ -33,7 +33,10 @@ export function registerMachineWorkSummaryRpcHandlers(params: MachineWorkSummary
     };
     params.rpcHandlerManager.registerHandler(RPC_METHODS.MACHINES_WORK_SUMMARY_GET, async (raw: unknown, context): Promise<MachineWorkSummaryGetResultV1> => {
         const input = MachineWorkSummaryGetInputV1Schema.safeParse(raw);
-        if (!input.success || input.data.serverId !== params.target.serverId || input.data.machineId !== params.target.machineId
+        // `serverId` is the caller's own profile id for this Home (it selected the connection on the caller's
+        // device) and need not equal this daemon's; the Home is the one this request arrived through, and the
+        // server-admitted machine admission below is what names this machine and its custodian.
+        if (!input.success || input.data.machineId !== params.target.machineId
             || !await current(context) || !context) return refused();
         try {
             const access = MachineAccessGrantsListResponseV1Schema.safeParse(await params.readAccess(context.signal));
