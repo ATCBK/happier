@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import * as z from "zod/mini";
 import {
     createStoredReadSchema,
+    StrictJsonValueSchema,
     createManagedMachineV1Schema,
     ManagedMachineV1Schema,
     RetainedManagedLaunchSnapshotV1Schema,
@@ -46,6 +47,13 @@ export class ManagedMachineError extends Error {
     constructor(readonly code: "invalid_request" | "permission_denied" | "admission_unavailable" | "acquisition_disabled" | "controller_unavailable" | "controller_retired" | "credential_unavailable" | "provider_unavailable" | "request_conflict" | "intent_changed" | "managed_not_found" | "enrollment_retired" | "resource_mismatch" | "preset_not_found" | "preset_archived" | "preset_limit_reached") {
         super(code);
     }
+}
+
+/** Exact raw-row CAS retains unknown stored members rather than the read projection. */
+export function readManagedJsonEqualityOperand(value: unknown): Prisma.InputJsonValue {
+    const parsed = StrictJsonValueSchema.safeParse(value);
+    if (!parsed.success || parsed.data === null) throw new ManagedMachineError("request_conflict");
+    return parsed.data;
 }
 
 // One private row contains immutable acquisition identity, current intent admission,

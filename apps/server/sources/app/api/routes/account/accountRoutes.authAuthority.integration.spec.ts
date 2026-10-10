@@ -141,6 +141,59 @@ describe("accountRoutes (direct-route auth authority) (integration)", () => {
         }
     });
 
+    it('preserves the origin-denied auth response before a remote host catalog write', async () => {
+        harness.resetEnv({ HAPPIER_WEBAPP_URL: 'https://happier.test/app' });
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain', settingsVersion: 0 } });
+        const pat = await auth.createApiToken({ accountId: account.id, tokenId: crypto.randomUUID(), label: 'Remote host origin',
+            grant: { v: 1, actions: null, targets: null, approve: false, origins: [], models: null, permissionModes: null, create: null } });
+        const app = createTestApp();
+        await app.ready();
+        try {
+            // The real global Origin hook runs before this route's ordinary PAT refusal.
+            const response = await app.inject({ method: 'POST', url: '/v1/account/entity-rows/remote-hosts',
+                headers: { authorization: `Bearer ${pat.token}`, origin: 'https://denied.test',
+                    'content-type': 'application/json', ...currentAccountStoredContentCompatibilityHeaders },
+                payload: { mutation: { expectedRevision: 'absent', sourceSettingsVersion: 0, referencedSavedSecretRevisions: [],
+                    content: { t: 'plain', v: { v: 1, hosts: [] } } } } });
+            expect({ status: response.statusCode, body: response.json() })
+                .toEqual({ status: 403, body: { error: 'credential_origin_denied' } });
+            expect(await db.userKVStore.count({ where: { accountId: account.id } })).toBe(0);
+            expect(await db.savedSecretResource.count({ where: { ownerAccountId: account.id } })).toBe(0);
+            expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).settingsVersion).toBe(0);
+            expect(await db.accountSettingsSnapshot.count({ where: { accountId: account.id } })).toBe(0);
+        } finally {
+            await app.close();
+        }
+    });
+
+    it('preserves the not-eligible auth response before a remote host catalog write', async () => {
+        harness.resetEnv({ AUTH_REQUIRED_LOGIN_PROVIDERS: 'github', AUTH_GITHUB_ALLOWED_USERS: 'bob',
+            AUTH_LOGIN_ELIGIBILITY_CACHE_TTL_MS: '0' });
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain', settingsVersion: 0 } });
+        await db.accountIdentity.create({ data: { accountId: account.id, provider: 'github', providerUserId: '123',
+            providerLogin: 'octocat', profile: { id: 123, login: 'octocat' } } });
+        const token = await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' });
+        const app = createTestApp();
+        await app.ready();
+        try {
+            // The real provider catalog and persisted linked identity resolve the configured allowlist.
+            const response = await app.inject({ method: 'POST', url: '/v1/account/entity-rows/remote-hosts',
+                headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json',
+                    ...currentAccountStoredContentCompatibilityHeaders },
+                payload: { mutation: { expectedRevision: 'absent', sourceSettingsVersion: 0, referencedSavedSecretRevisions: [],
+                    content: { t: 'plain', v: { v: 1, hosts: [] } } } } });
+            expect({ status: response.statusCode, body: response.json() })
+                .toEqual({ status: 403, body: { error: 'not-eligible' } });
+            expect(await db.userKVStore.count({ where: { accountId: account.id } })).toBe(0);
+            expect(await db.savedSecretResource.count({ where: { ownerAccountId: account.id } })).toBe(0);
+            expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).settingsVersion).toBe(0);
+            expect(await db.accountSettingsSnapshot.count({ where: { accountId: account.id } })).toBe(0);
+        } finally {
+            await app.close();
+            await db.accountIdentity.deleteMany({ where: { accountId: account.id } });
+        }
+    });
+
     it("allows an interactive signed session to update Settings but refuses a PAT before the direct write", async () => {
         const account = await db.account.create({
             data: {

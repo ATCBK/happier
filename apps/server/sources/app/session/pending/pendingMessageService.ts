@@ -1942,9 +1942,9 @@ export async function updatePendingRequestedAction(params: Readonly<{
         const nextUpdatedAt = new Date(Math.max(Date.now(), existing.updatedAt.getTime() + 1));
 
         return await inTx(async (tx) => {
-            if (!params.automaticResetReleaseTarget) {
-                const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
-                if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
+            const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
+            if (!params.automaticResetReleaseTarget && !access.ok) {
+                return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
             }
             if (requestedActionResult.data.kind === "reset_start" || params.automaticResetReleaseTarget) {
                 const target = await readCurrentPendingResetStartTargetInTx(tx, sessionId, existing,
@@ -1967,7 +1967,7 @@ export async function updatePendingRequestedAction(params: Readonly<{
                 if (retained !== 1) {
                     return { ok: false, error: "action-conflict" } as const;
                 }
-                const shouldArmActivation = targetExecutionRunId === null && shouldArmPendingActivationAuthorization({
+                const shouldArmActivation = access.ok && targetExecutionRunId === null && shouldArmPendingActivationAuthorization({
                     requestedAction: requestedActionResult.data,
                     resumeWhenAvailable: params.resumeWhenAvailable,
                 });
@@ -2023,7 +2023,7 @@ export async function updatePendingRequestedAction(params: Readonly<{
             if (updatedCount !== 1) {
                 return { ok: false, error: "action-conflict" } as const;
             }
-            const shouldArmActivation = targetExecutionRunId === null && shouldArmPendingActivationAuthorization({
+            const shouldArmActivation = access.ok && targetExecutionRunId === null && shouldArmPendingActivationAuthorization({
                 requestedAction: requestedActionResult.data,
                 resumeWhenAvailable: params.resumeWhenAvailable,
             });

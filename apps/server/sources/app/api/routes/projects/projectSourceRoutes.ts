@@ -12,11 +12,16 @@ import { createProjectSourceInTx, readProjectSourceInTx, listProjectSourcesInTx,
 import type { Fastify } from '../../types';
 
 const params = z.object({ id: z.string().min(1) }).strict();
-const resultStatus = (result: { ok: boolean; error?: string }) => result.ok ? 200
+function resultStatus(result: { ok: boolean; error?: 'source_invalid' | 'source_unavailable' }): 200 | 400 | 404;
+function resultStatus(result: { ok: boolean; error?: 'source_invalid' | 'source_unavailable' | 'source_access_denied' | 'source_conflict' }): 200 | 400 | 403 | 404 | 409;
+function resultStatus(result: { ok: boolean; error?: string }): 200 | 400 | 403 | 404 | 409 | 503;
+function resultStatus(result: { ok: boolean; error?: string }): 200 | 400 | 403 | 404 | 409 | 503 {
+    return result.ok ? 200
     : result.error === 'source_conflict' ? 409
     : result.error === 'source_access_denied' ? 403
     : result.error === 'source_unavailable' ? 404
     : result.error === 'artifact_unavailable' || result.error === 'source_backend_unavailable' ? 503 : 400;
+}
 
 /** Metadata-only front doors share one admission, membership and CAS owner. */
 export function projectSourceRoutes(app: Fastify): void {

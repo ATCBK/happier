@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 
 import type { Fastify } from "../types";
 import { log } from "@/utils/logging/log";
@@ -23,6 +24,7 @@ import {
 } from "./apiTokenRouteAdmission";
 import { readBearerCredential, verifyRequestPrincipal, type RequestPrincipalVerification } from "./verifyRequestPrincipal";
 import { isApiTokenRequestOriginAllowed } from "./isApiTokenRequestOriginAllowed";
+import { PresentUserRequiredResponseSchema } from "./requirePresentUser";
 import {
     EXTERNAL_ACTION_EFFECT_ACTION_HEADER,
     EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER,
@@ -35,6 +37,14 @@ import {
     verifyExternalActionDomainExecutionRequest,
     verifyExternalActionExecutionAuthorizationCurrentness,
 } from "@/app/auth/externalActionExecutionAuthorization";
+
+/** Ordinary Account routes without Session-purpose or custom restricted-error configuration. */
+export const AccountRouteAuthenticationForbiddenResponseSchema = z.union([
+    PresentUserRequiredResponseSchema,
+    z.object({ error: z.literal("provider-required"), provider: z.string() }).strict(),
+    z.object({ error: z.literal("not-eligible") }).strict(),
+    z.object({ error: z.literal("credential_origin_denied") }).strict(),
+]);
 
 function readScalarHeader(value: unknown): string | null {
     return typeof value === "string" && value.length > 0 ? value : null;
