@@ -196,6 +196,9 @@ test('lane browser forwards are retired only by their owning QA Stack browser in
     stopProcess: child => killProcessTree(child, 'SIGINT'),
     fetchImpl: async () => ({ ok: true, json: async () => ({ webSocketDebuggerUrl: 'ws://localhost/devtools/browser/fixture' }) }),
   });
+  // Inventory retirement can settle the SSH process before the assertions run.
+  // Observe its rejection immediately so the ownership assertion decides RED.
+  const settled = session.then(() => null, error => error);
   try {
     await ready;
     const producer = await stopQaBrowsers({ stackName: 'producer', envPath: producerEnvPath });
@@ -205,7 +208,8 @@ test('lane browser forwards are retired only by their owning QA Stack browser in
     assert.ok(owning.pids.includes(tunnel.pid), 'owning QA browser retirement must select the actual forward');
   } finally {
     signalSource.emit('SIGINT');
-    await session.catch(error => assert.match(error.message, /QA browser SSH forward exited/));
+    const error = await settled;
+    if (error) assert.match(error.message, /QA browser SSH forward exited/);
   }
 });
 

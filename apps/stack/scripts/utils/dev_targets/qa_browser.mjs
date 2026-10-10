@@ -13,7 +13,7 @@ import { resolveDevTargetSshConfigFile } from './mutagen_runtime.mjs';
 import { buildRemoteQaBrowserStopCommand, buildSshForwardArgs, buildSshWorkerArgs, resolveRemoteStackStatePaths } from './remote_commands.mjs';
 import { loadControlledRuntimeConfig } from './service_placement.mjs';
 import { killPidOwnedByStack, listPsPidsForEnvQueries, observePsEnvLine } from '../proc/ownership.mjs';
-import { resolveExplicitStackEnvFilePath } from '../paths/paths.mjs';
+import { resolveExplicitStackEnvFilePath, resolveStackEnvPath } from '../paths/paths.mjs';
 
 const READY_MARKER = 'HSTACK_QA_BROWSER=';
 // Chromium's PointerType::kPointerFineType=4 and HoverType::kHoverHoverType=2:
@@ -318,7 +318,9 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
         sshArgs,
         forwards: [{ direction: 'reverse-dynamic', listenHost: '127.0.0.1', listenPort: ready.proxyPort },
           { direction: 'local', listenPort: localPort, targetPort: ready.port }],
-      }), { ...env, HAPPIER_STACK_PROCESS_KIND: 'browser' }, { silent: true, persistOutput: false });
+      }), { ...env, HAPPIER_STACK_STACK: stackName,
+        HAPPIER_STACK_ENV_FILE: resolveStackEnvPath(stackName, env).envPath,
+        HAPPIER_STACK_PROCESS_KIND: 'browser' }, { silent: true, persistOutput: false });
       void tunnel.completion.then(() => {
         if (lifecycleFinished || cancelled) return;
         failure = new Error('[dev-targets] QA browser SSH forward exited');
