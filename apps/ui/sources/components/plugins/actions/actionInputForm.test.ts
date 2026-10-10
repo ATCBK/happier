@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createActionInputForm } from './actionInputForm';
 import { createActionExecutor, getActionSpec } from '@happier-dev/protocol/actions';
 import type { ActionId } from '@happier-dev/protocol/actions';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 
 const widgetRequiredFields = {
     'widgets.catalog.list': ['surface'], 'widgets.item.list': ['surface'],
@@ -38,7 +39,7 @@ const widgetRequiredFields = {
 function createSpecForm(actionId: ActionId) {
     const spec = getActionSpec(actionId);
     return createActionInputForm({
-        presentation: { title: spec.title, description: spec.description, inputHints: spec.inputHints! },
+        presentation: { title: spec.title, description: spec.description ?? null, inputHints: spec.inputHints! },
         submit: async candidate => ({ ok: spec.inputSchema.safeParse(candidate).success }),
     });
 }
@@ -100,7 +101,7 @@ describe('generic Action input form', () => {
     });
 
     it('discovers the same group and frame choices through Action options and the real form', async () => {
-        const executor = createActionExecutor({});
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({}));
         for (const [actionId, path, values] of [
             ['widgets.group.set', 'width', ['half', 'full']],
             ['widgets.group.set', 'dividers', ['hairline', 'none']],

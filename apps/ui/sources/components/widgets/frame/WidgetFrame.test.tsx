@@ -55,9 +55,9 @@ describe('WidgetFrame', () => {
         const runtime = Unistyles.useUnistyles();
         const themedRuntime = vi.spyOn(Unistyles, 'useUnistyles').mockReturnValue({ ...runtime, theme });
         try {
-            const screen = await renderScreen(renderWidgetSizeMenuSection({
+            const screen = await renderScreen(<>{renderWidgetSizeMenuSection({
                 surface: 'home', sizes: ['small', 'medium'], size: 'small', onSet: () => {},
-            }, 'size', 'frame.size'));
+            }, 'size', 'frame.size')}</>);
             const label = screen.root.findAll(node => typeof node.type === 'string' && node.props.children === 'widgetAdd.size')[0];
             expect(label).toBeDefined();
             // Accessibility regression: an unset host ink paints black on the dark floating surface.

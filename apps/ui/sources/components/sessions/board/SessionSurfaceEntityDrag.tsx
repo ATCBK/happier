@@ -247,7 +247,7 @@ export function SessionSurfaceEntityContainerFeedback(props: Readonly<{
 }>) {
     const { drag } = props;
     const enters = React.useRef(props.enters); enters.current = props.enters;
-    const state = React.useSyncExternalStore(drag.runtime.subscribe, (): 'into' | 'top' | 'bottom' | 'none' => {
+    const state = React.useSyncExternalStore<'into' | 'top' | 'bottom' | 'none'>(drag.runtime.subscribe, () => {
         const snapshot = drag.runtime.getSnapshot();
         if (snapshot.phase !== 'carrying' || snapshot.admission?.status !== 'allowed') return 'none';
         const effect = snapshot.admission.effect;

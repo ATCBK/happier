@@ -91,7 +91,7 @@ function restoreRightPane(right: Readonly<{
         [scopeId]: {
             right: { ...right, tabState: {} },
             details: { isOpen: false, tabs: [], activeTabKey: null, tabState: {} },
-            bottom: { isOpen: false, activeTabId: null, tabState: {} },
+            bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
         },
     } }, { persist: false });
 }

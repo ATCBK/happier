@@ -377,6 +377,8 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
                 } : {})}
                 {...(Platform.OS === 'web' && !props.phone ? { autoFocus: true } : {})}
             />
+            {/* RN's role union omits RNW's standard listbox role; the web-only role is tested in the DOM. */}
+            {/* @ts-expect-error React Native typings omit the supported React Native Web listbox role. */}
             <ScrollView nativeID={props.listboxId} accessibilityLabel={props.searchPlaceholder}
                 {...(Platform.OS === 'web' ? { role: 'listbox' as const } : {})}
                 style={props.phone ? null : styles.fill} contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="always">

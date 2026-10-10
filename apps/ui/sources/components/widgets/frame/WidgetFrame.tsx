@@ -291,8 +291,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                     {props.titleMeta}
                 </View>
             ) : props.title}
-            // A half cell of a group draws the short source at once instead of crowding the title first.
-            {...(props.source ? { source: props.compactHeader && props.compactSource ? props.compactSource : props.source } : {})}
+            {...(props.source ? { source: props.source } : {})}
             renderSourceGlyph={renderSourceGlyph}
             sourcePlacement={phone ? 'below' : 'inline'}
             meta={meta}
