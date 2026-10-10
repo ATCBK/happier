@@ -13,7 +13,6 @@ import {
 import {
     BrowserDetailsSurface,
     createBrowserViewDetailsSurfaceRenderer,
-    createOpenBrowserTargetInWorkspace,
     mergeBrowserSurfaceProductModels,
     resolveBrowserSurfacePlatform,
     type BrowserDetailsSurfaceRendererOptions,
@@ -95,6 +94,7 @@ type SessionDetailsSurfaceRendererOptions = Readonly<{
     launchpadRows?: BrowserDetailsSurfaceRendererOptions['launchpadRows'];
     launchpadRefreshStatus?: BrowserDetailsSurfaceRendererOptions['launchpadRefreshStatus'];
     launchpadRefreshError?: BrowserDetailsSurfaceRendererOptions['launchpadRefreshError'];
+    onOpenTarget?: BrowserDetailsSurfaceRendererOptions['onOpenTarget'];
     nowMs?: () => number;
     requestClose: () => void;
     openFileTab: SessionDetailsOpenFile;
@@ -244,21 +244,10 @@ export function createSessionDetailsSurfaceRenderers(
         browserRecording: options.browserRecording,
     });
 
-    // Canonical "open target → details tab + live content record" owner. Every launchpad row /
-    // URL-box open from this session's browser surface routes here, producing a NEW workspace tab
-    // (not an in-place host swap) plus the seeded content record under one identity. Wired only
-    // when the pane supplies a details-tab sink (it always does in product).
+    // The pane registers the real workspace opener before any Browser view exists. Renderers
+    // consume that admitted callback; only the mounted renderer materializes Browser state.
     const openDetailsTab = options.openDetailsTab;
-    const openBrowserViewTarget = openDetailsTab
-        ? createOpenBrowserTargetInWorkspace({
-            openDetailsTab,
-            scope: 'sessionDetails',
-            // OWNER-PLATFORM: resolve through the one Tauri-aware resolver (never a `?? 'web'`
-            // fallback, which silently misclassified desktop — DV-PLATFORM-CLOSURE).
-            platform: resolveBrowserSurfacePlatform(options.platform),
-            localServicePreviewState: options.localServicePreviewState,
-        })
-        : undefined;
+    const openBrowserViewTarget = options.onOpenTarget;
     const pluginDetailsDestinationMount = {
         machineId: options.machineId,
         serverId: options.serverId,

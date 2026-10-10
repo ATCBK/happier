@@ -45,6 +45,7 @@ export const RUNTIME_DANGER_ACTION_IDS: ReadonlySet<RuntimeActionIdV1> = new Set
   'browser.goForward',
   'browser.stop',
   'browser.view.open',
+  'browser.workspace.open',
   'browser.view.close',
   'browser.automation.navigate',
   'browser.automation.reload',

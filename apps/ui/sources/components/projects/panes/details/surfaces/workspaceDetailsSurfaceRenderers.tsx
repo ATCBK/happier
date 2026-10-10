@@ -10,7 +10,6 @@ import {
 } from '@/components/appShell/panes/details/surfaces/pluginDetailsDestination';
 import {
     createBrowserViewDetailsSurfaceRenderer,
-    createOpenBrowserTargetInWorkspace,
     resolveBrowserSurfacePlatform,
     type BrowserDetailsSurfaceRendererOptions,
 } from '@/components/browser/surfaces';
@@ -96,20 +95,9 @@ function readCommitSha(resource: unknown): string {
 export function createWorkspaceDetailsSurfaceRenderers(
     options: WorkspaceDetailsSurfaceRendererOptions,
 ): readonly DetailsSurfaceRendererV1[] {
-    // Canonical "open target → details tab + live content record" owner for the workspace pane —
-    // the same single owner the session pane uses, so opening behaves identically everywhere.
-    // Wired only when the pane supplies a details-tab sink (it always does in product).
+    // Consume the pane's registered workspace Action owner, not an unmounted Browser view.
     const openDetailsTab = options.openDetailsTab;
-    const openBrowserViewTarget = openDetailsTab
-        ? createOpenBrowserTargetInWorkspace({
-            openDetailsTab,
-            scope: 'workspaceDetails',
-            // OWNER-PLATFORM: resolve through the one Tauri-aware resolver (never a `?? 'web'`
-            // fallback, which silently misclassified desktop — DV-PLATFORM-CLOSURE).
-            platform: resolveBrowserSurfacePlatform(options.platform),
-            localServicePreviewState: options.localServicePreviewState,
-        })
-        : undefined;
+    const openBrowserViewTarget = options.onOpenTarget;
     const pluginDetailsDestinationMount = {
         machineId: options.machineId,
         serverId: options.serverId,

@@ -58,6 +58,7 @@ import {
   DaemonBrowserRecordingTerminalResultV1Schema,
 } from '../../browser/recording/v1.js';
 import type { RuntimeActionSpecFamily } from './common.js';
+import { BrowserViewTargetV1Schema } from '../../browser/target/v1.js';
 
 const BrowserAutomationActionResultV1Schema = lazyZodSchema(() => z.union([
   BrowserAutomationEngineActionResultV1Schema, BrowserAutomationInterruptedResultV1Schema,
@@ -136,6 +137,7 @@ export const BROWSER_RUNTIME_ACTION_TITLES: Readonly<Partial<Record<RuntimeActio
   'browser.sandbox.install': 'Install managed browser sandbox permission',
   'browser.control.takeControl': 'Yield browser control to the human',
   'browser.control.handBack': 'Return browser control to the Session',
+  'browser.workspace.open': 'Open browser target in workspace',
   'browser.view.open': 'Open browser view',
   'browser.view.openExternal': 'Open browser page in the system browser',
   'browser.view.close': 'Close browser view',
@@ -207,6 +209,7 @@ export const BROWSER_RUNTIME_ACTION_DESCRIPTIONS: Readonly<Partial<Record<Runtim
   'browser.sandbox.install': 'Install an executable-scoped AppArmor userns profile for this machine’s managed Chromium. Approval is required by default; the human must separately authorize sudo on that machine.',
   'browser.control.takeControl': 'Interrupt browser automation and yield control to the human through the existing controller owner.',
   'browser.control.handBack': 'Return browser control to the Session after accepted input settles. The agent must observe again before its next mutation.',
+  'browser.workspace.open': 'Open a target in the exact answering-client workspace, before a Browser view exists. Requires the current Home and mounted workspace owner.',
   'browser.view.open': 'Open a browser view inside an existing browser session.',
   'browser.view.openExternal': 'Open the exact mounted page in the answering client\'s system browser without replacing its view.',
   'browser.view.close': 'Close a browser view and detach it from its session.',
@@ -283,6 +286,11 @@ export const BROWSER_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
   'browser.sandbox.install': BrowserSandboxInstallInputV1Schema,
   'browser.control.takeControl': BrowserTakeControlCommandV1Schema,
   'browser.control.handBack': BrowserHandBackCommandV1Schema,
+  'browser.workspace.open': lazyZodSchema(() => z.object({
+    scopeId: z.string().trim().min(1),
+    commandId: BrowserOpenViewCommandV1Schema.shape.commandId,
+    target: BrowserViewTargetV1Schema,
+  }).strict()),
   'browser.view.open': BrowserOpenViewCommandV1Schema,
   'browser.view.openExternal': RuntimeBrowserViewInputSchema.extend({ commandId: z.string().trim().min(1).max(256) }).strict(),
   'browser.view.close': BrowserCloseViewCommandV1Schema,
@@ -354,6 +362,7 @@ export const BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'browser.sandbox.install': BrowserSandboxInstallResultV1Schema,
   'browser.control.takeControl': z.union([BrowserCommandDispatchResultV1Schema, BrowserAutomationInterruptedResultV1Schema]),
   'browser.control.handBack': z.union([BrowserCommandDispatchResultV1Schema, BrowserAutomationInterruptedResultV1Schema]),
+  'browser.workspace.open': BrowserCommandDispatchResultV1Schema,
   'browser.view.open': BrowserCommandDispatchResultV1Schema,
   'browser.view.openExternal': BrowserCommandDispatchResultV1Schema,
   'browser.view.close': BrowserCommandDispatchResultV1Schema,

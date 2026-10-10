@@ -40,6 +40,7 @@ const RUNTIME_RECORDING_HOST_EFFECT_ACTION_IDS: ReadonlySet<RuntimeActionIdV1> =
 );
 
 const RUNTIME_EXTERNAL_NAVIGATION_HOST_EFFECT_ACTION_IDS: ReadonlySet<RuntimeActionIdV1> = new Set<RuntimeActionIdV1>([
+  'browser.workspace.open',
   'browser.navigate',
   'browser.reload',
   'browser.goBack',

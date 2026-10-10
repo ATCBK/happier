@@ -3,9 +3,14 @@ import type {
     BrowserViewTargetV1,
     FeatureDecision,
     LocalServiceLaunchTargetV1,
+    ApprovalRequest,
 } from '@happier-dev/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isDeepStrictEqual } from 'node:util';
+import { createBrowserWorkspaceOpeningFixture } from '@/dev/testkit/fixtures/browserWorkspaceOpening';
+import { ActionsSettingsV1Schema, isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { clearBrowserRuntimeControlRegistryForTests } from '@/sync/domains/browser/actions/runtimeControlRegistry';
 
 // The OS-tab handoff is a genuine platform boundary (`window.open` / `Linking.openURL`); the
 // selection and fulfilment logic beneath it stays real.
@@ -24,7 +29,6 @@ import {
 
 import {
     bindServicesOpenInBrowser,
-    createOpenBrowserTargetInWorkspace,
     mapLocalServiceLaunchTargetToBrowserTarget,
     resolveBrowserViewTargetOpen,
     resolveBrowserViewTargetOpenTab,
@@ -62,6 +66,11 @@ const enabledBrowserDecision = {
     evaluatedAt: 1_000,
     scope: { scopeKind: 'runtime' },
 } satisfies FeatureDecision;
+
+const disabledOpeningSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'browser.workspace.open': { enabled: false } } });
+const confirmOpeningSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'browser.workspace.open': { approvalRequiredSurfaces: ['ui'] } } });
+const requiresOpeningApproval = (id: Parameters<typeof isApprovalRequiredByActionsSettings>[0], context: Parameters<typeof isApprovalRequiredByActionsSettings>[2]) =>
+    isApprovalRequiredByActionsSettings(id, confirmOpeningSettings, context);
 
 const sessionBrowserProfile = {
     profileId: 'profile_session_1',
@@ -145,6 +154,136 @@ describe('openBrowserTargetInWorkspace', () => {
     afterEach(() => {
         resetLocalServicePreviewStoreForTests();
         machineRpcMock.mockReset();
+        clearBrowserRuntimeControlRegistryForTests();
+    });
+    it('Action admission: disabling workspace opening prevents both a workspace tab and an OS tab', async () => {
+        openExternalUrlMock.mockClear();
+        const openDetailsTab = vi.fn();
+        for (const platform of ['web', 'desktop'] as const) {
+            const { open, dispose } = createBrowserWorkspaceOpeningFixture({
+                openDetailsTab,
+                scope: 'sessionDetails',
+                platform,
+                browserFeatureDecision: enabledBrowserDecision,
+                desktopWebViewAvailability: unembeddableDesktopWebView,
+            }, { isActionEnabled: (id, context) => isActionEnabledByActionsSettings(id, disabledOpeningSettings, context) });
+            expect(await open(externalTarget)).toMatchObject({ ok: false });
+            dispose();
+        }
+        expect(openDetailsTab).not.toHaveBeenCalled();
+        expect(openExternalUrlMock).not.toHaveBeenCalled();
+    });
+    it('Action admission: rejection prevents both tab creation and OS opening', async () => {
+        openExternalUrlMock.mockClear();
+        const openDetailsTab = vi.fn();
+        for (const platform of ['web', 'desktop'] as const) {
+            let stored: ApprovalRequest | null = null;
+            const { open, executor, context, dispose } = createBrowserWorkspaceOpeningFixture({ openDetailsTab, scope: 'sessionDetails',
+                platform, browserFeatureDecision: enabledBrowserDecision, desktopWebViewAvailability: unembeddableDesktopWebView }, {
+                isActionApprovalRequired: requiresOpeningApproval,
+                // Account-private approval Artifact storage is a system boundary. Its lifecycle,
+                // transition and replay remain the real Action executor's responsibility.
+                approvalsCreate: async ({ request }) => { stored = request; return { artifactId: 'approval_1' }; },
+                approvalsGet: async () => stored,
+                approvalsUpdate: async ({ request }) => { stored = request; return { ok: true }; },
+                approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject', request }),
+            });
+            // UI retains the canonical durable approval flow; it must not open while pending.
+            expect(await open(externalTarget)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+            expect(openDetailsTab).not.toHaveBeenCalled();
+            expect(openExternalUrlMock).not.toHaveBeenCalled();
+            expect(await executor.execute('approval.request.decide', { artifactId: 'approval_1', decision: 'reject' },
+                { ...context, surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
+            expect(await executor.execute('browser.workspace.open', { scopeId: 'workspace_1', commandId: 'agent_rejected', target: externalTarget },
+                { ...context, surface: 'agent', authority: 'account_automation' }))
+                .toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+            dispose();
+        }
+        expect(openDetailsTab).not.toHaveBeenCalled();
+        expect(openExternalUrlMock).not.toHaveBeenCalled();
+    });
+    it('Agent default Ask first admits the same deterministic target as UI without a mounted Browser view', async () => {
+        const tabs: DetailsTab[] = [];
+        const approvals: string[] = [];
+        const { open, executor, context } = createBrowserWorkspaceOpeningFixture({ scope: 'sessionDetails', platform: 'web',
+            openDetailsTab: tab => { tabs.push(tab); } }, {
+            approvalsCreate: async ({ request }) => { approvals.push(request.actionId); return { artifactId: 'approval_1' }; },
+            approvalsWaitForDecision: async ({ request }) => ({ decision: 'approve', decisionAuthority: 'present_user', request }),
+        });
+        expect(await open(localServicePreviewTarget)).toMatchObject({ ok: true });
+        expect(await executor.execute('browser.workspace.open', { scopeId: 'workspace_1', commandId: 'agent_open',
+            target: localServicePreviewTarget }, { ...context, surface: 'agent', authority: 'account_automation' }))
+            .toMatchObject({ ok: true, result: { commandId: 'agent_open', status: 'dispatched' } });
+        expect(approvals).toEqual(['browser.workspace.open']);
+        expect(tabs).toHaveLength(2);
+        expect(tabs[1]).toEqual(tabs[0]);
+        expect(Object.keys(tabs[1].resource as Record<string, unknown>).sort())
+            .toEqual(['browserSessionId', 'kind', 'target', 'viewId']);
+    });
+    it('does not resolve an absent workspace or another Home/Account with the same scope id', async () => {
+        const openDetailsTab = vi.fn();
+        const { executor, context } = createBrowserWorkspaceOpeningFixture({ scope: 'sessionDetails', platform: 'web', openDetailsTab });
+        const input = { scopeId: 'workspace_1', commandId: 'agent_open', target: localServicePreviewTarget };
+        for (const request of [
+            { input: { ...input, scopeId: 'absent' }, context },
+            { input, context: { ...context, serverId: 'other_home' } },
+            { input, context: { ...context, runtimeAccountId: 'other_account' } },
+        ]) {
+            expect(await executor.execute('browser.workspace.open', request.input, { ...request.context, surface: 'ui', authority: 'present_user' }))
+                .toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+        }
+        expect(openDetailsTab).not.toHaveBeenCalled();
+    });
+    it('reports an OS refusal without creating a substitute workspace tab', async () => {
+        const openDetailsTab = vi.fn();
+        openExternalUrlMock.mockResolvedValueOnce(false);
+        const { open } = createBrowserWorkspaceOpeningFixture({ openDetailsTab, scope: 'sessionDetails', platform: 'desktop',
+            browserFeatureDecision: enabledBrowserDecision, desktopWebViewAvailability: unembeddableDesktopWebView });
+        expect(await open(externalTarget)).toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+        expect(openDetailsTab).not.toHaveBeenCalled();
+    });
+    it('refuses oversized command correlation before effects and accepts the existing dispatch boundary', async () => {
+        const openDetailsTab = vi.fn();
+        const { executor, context } = createBrowserWorkspaceOpeningFixture({ openDetailsTab, scope: 'sessionDetails', platform: 'web' });
+        const input = { scopeId: 'workspace_1', target: localServicePreviewTarget };
+        expect(await executor.execute('browser.workspace.open', { ...input, commandId: 'x'.repeat(257) },
+            { ...context, surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+        expect(openDetailsTab).not.toHaveBeenCalled();
+        expect(await executor.execute('browser.workspace.open', { ...input, commandId: 'x'.repeat(256) },
+            { ...context, surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
+        expect(openDetailsTab).toHaveBeenCalledTimes(1);
+    });
+    it('revalidates captured Home and workspace policy after an approval wait', async () => {
+        openExternalUrlMock.mockClear();
+        const openDetailsTab = vi.fn();
+        for (const retiredHome of [false, true]) {
+            let approve!: () => void;
+            let waiting!: () => void;
+            const decision = new Promise<void>(resolve => { approve = resolve; });
+            const started = new Promise<void>(resolve => { waiting = resolve; });
+            let allowExternalUrlBrowsing = true;
+            const facts = { scope: 'sessionDetails' as const, platform: 'desktop' as const,
+                browserFeatureDecision: enabledBrowserDecision, desktopWebViewAvailability: unembeddableDesktopWebView };
+            const { executor, context, retire, dispose } = createBrowserWorkspaceOpeningFixture({ ...facts, openDetailsTab,
+                readOpenFacts: () => ({ ...facts, allowExternalUrlBrowsing }) }, {
+                isActionApprovalRequired: requiresOpeningApproval,
+                approvalsCreate: async () => ({ artifactId: 'approval_1' }),
+                approvalsWaitForDecision: async ({ request }) => {
+                    waiting(); await decision; return { decision: 'approve', decisionAuthority: 'present_user', request };
+                },
+            });
+            const result = executor.execute('browser.workspace.open', { scopeId: 'workspace_1', commandId: 'agent_wait', target: externalTarget },
+                { ...context, surface: 'agent', authority: 'account_automation' });
+            // Fail visibly if admission settles before reaching the approval port; never wait
+            // indefinitely on a fixture that did not enter the intended real approval path.
+            await Promise.race([started, Promise.resolve(result).then(value => { throw new Error(JSON.stringify(value)); })]);
+            if (retiredHome) retire(); else allowExternalUrlBrowsing = false;
+            approve();
+            expect(await result).toMatchObject({ ok: false });
+            dispose();
+        }
+        expect(openDetailsTab).not.toHaveBeenCalled();
+        expect(openExternalUrlMock).not.toHaveBeenCalled();
     });
     it('opens the actual source-qualified managed service without retargeting a launch id or Session', async () => {
         const serviceTarget = { kind: 'managed_service' as const, machineId: 'machine_123', managedServiceId: 'actual-instance',
@@ -195,10 +334,10 @@ describe('openBrowserTargetInWorkspace', () => {
         expect(resolved.seededState.currentTarget).toEqual(localServicePreviewTarget);
     });
 
-    it('opens the tab once with intent default and remembers the recent target', () => {
+    it('opens the tab once with intent default and remembers the recent target', async () => {
         const openDetailsTab = vi.fn();
         const remembered: BrowserViewTargetV1[] = [];
-        const openBrowserViewTarget = createOpenBrowserTargetInWorkspace({
+        const { open: openBrowserViewTarget } = createBrowserWorkspaceOpeningFixture({
             openDetailsTab,
             scope: 'sessionDetails',
             platform: 'web',
@@ -207,7 +346,7 @@ describe('openBrowserTargetInWorkspace', () => {
             },
         });
 
-        openBrowserViewTarget(localServicePreviewTarget);
+        await openBrowserViewTarget(localServicePreviewTarget);
 
         expect(openDetailsTab).toHaveBeenCalledTimes(1);
         const [tab, options] = openDetailsTab.mock.calls[0] as [DetailsTab, { intent?: string } | undefined];
@@ -217,15 +356,15 @@ describe('openBrowserTargetInWorkspace', () => {
         expect(remembered).toEqual([localServicePreviewTarget]);
     });
 
-    it('DV-OPEN-SEAM: the opened tab resource carries ONLY the deterministic inputs (target + identity), no state blob', () => {
+    it('DV-OPEN-SEAM: the opened tab resource carries ONLY the deterministic inputs (target + identity), no state blob', async () => {
         const openDetailsTab = vi.fn();
-        const openBrowserViewTarget = createOpenBrowserTargetInWorkspace({
+        const { open: openBrowserViewTarget } = createBrowserWorkspaceOpeningFixture({
             openDetailsTab,
             scope: 'sessionDetails',
             platform: 'web',
         });
 
-        openBrowserViewTarget(localServicePreviewTarget);
+        await openBrowserViewTarget(localServicePreviewTarget);
 
         const [tab] = openDetailsTab.mock.calls[0] as [DetailsTab];
         // The resource narrows to the canonical single-view shape: { kind, browserSessionId, viewId, target }.
@@ -285,7 +424,8 @@ describe('openBrowserTargetInWorkspace', () => {
         const preview = { previewId: resource.previewId, resource, accessUrl: 'https://preview-123.preview.test/?previewToken=fresh', expiresAt: 61_000, diagnostics: [] };
         machineRpcMock.mockResolvedValueOnce({ protocolVersion: 1, status: 'created', preview, snapshot: { v: 1, machineId: resource.machineId, generatedAt: 1_000, refreshState: 'idle', resources: [resource], previews: [preview], diagnostics: [] } });
         const openDetailsTab = vi.fn();
-        const openInBrowser = bindServicesOpenInBrowser({ openDetailsTab, scope: 'sessionDetails', platform: 'web' });
+        const { open } = createBrowserWorkspaceOpeningFixture({ openDetailsTab, scope: 'sessionDetails', platform: 'web' });
+        const openInBrowser = bindServicesOpenInBrowser({ onOpenTarget: open, platform: 'web' });
         expect(await openInBrowser(target)).toEqual({ status: 'succeeded' });
         expect(machineRpcMock).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine_123', payload: { machineId: 'machine_123', sessionId: 'session_123', inventoryEntryId: 'svc_1' } }));
         const [tab] = openDetailsTab.mock.calls[0] as [DetailsTab];
@@ -318,11 +458,13 @@ describe('openBrowserTargetInWorkspace', () => {
 
     it('binds an external service target to the browser opener and refuses an unmappable target', async () => {
         const openDetailsTab = vi.fn();
-        const openInBrowser = bindServicesOpenInBrowser({
+        const { open } = createBrowserWorkspaceOpeningFixture({
             openDetailsTab,
             scope: 'sessionDetails',
             platform: 'web',
+            browserFeatureDecision: enabledBrowserDecision,
         });
+        const openInBrowser = bindServicesOpenInBrowser({ onOpenTarget: open, platform: 'web' });
 
         await openInBrowser({ ...serviceTargetWithBrowserTarget, source: 'terminal_url', browserTarget: externalTarget });
         expect(openDetailsTab).toHaveBeenCalledTimes(1);
@@ -451,11 +593,11 @@ describe('openBrowserTargetInWorkspace', () => {
     // and it did not. The launchpad enables those rows (the selection is `ok`), so on Windows/Linux
     // clicking one opened a workspace tab whose `openView` is rejected as `adapter_unavailable`,
     // leaving an empty tab: the same dead end the fix was supposed to remove, one seam over.
-    it('R-3: hands an allowed external URL to the system browser instead of opening a dead tab where the desktop host cannot embed it', () => {
+    it('R-3: hands an allowed external URL to the system browser instead of opening a dead tab where the desktop host cannot embed it', async () => {
         openExternalUrlMock.mockClear();
         const openDetailsTab = vi.fn();
         const remembered: BrowserViewTargetV1[] = [];
-        const openBrowserViewTarget = createOpenBrowserTargetInWorkspace({
+        const { open: openBrowserViewTarget } = createBrowserWorkspaceOpeningFixture({
             openDetailsTab,
             scope: 'sessionDetails',
             platform: 'desktop',
@@ -468,7 +610,7 @@ describe('openBrowserTargetInWorkspace', () => {
             },
         });
 
-        openBrowserViewTarget(externalTarget);
+        await openBrowserViewTarget(externalTarget);
 
         expect(openExternalUrlMock).toHaveBeenCalledWith('https://example.com/');
         expect(openDetailsTab).not.toHaveBeenCalled();
@@ -478,10 +620,10 @@ describe('openBrowserTargetInWorkspace', () => {
 
     // The neighbouring case: a host that CAN embed still opens the in-app tab. Discriminates
     // against "always hand external URLs to the OS".
-    it('still opens a workspace tab for an allowed external URL the desktop host can embed', () => {
+    it('still opens a workspace tab for an allowed external URL the desktop host can embed', async () => {
         openExternalUrlMock.mockClear();
         const openDetailsTab = vi.fn();
-        const openBrowserViewTarget = createOpenBrowserTargetInWorkspace({
+        const { open: openBrowserViewTarget } = createBrowserWorkspaceOpeningFixture({
             openDetailsTab,
             scope: 'sessionDetails',
             platform: 'desktop',
@@ -491,7 +633,7 @@ describe('openBrowserTargetInWorkspace', () => {
             desktopWebViewAvailability: availableDesktopWebView,
         });
 
-        openBrowserViewTarget(externalTarget);
+        await openBrowserViewTarget(externalTarget);
 
         expect(openExternalUrlMock).not.toHaveBeenCalled();
         expect(openDetailsTab).toHaveBeenCalledTimes(1);

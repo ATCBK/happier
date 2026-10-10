@@ -4,7 +4,13 @@ import type {
     BrowserViewTargetV1,
     FeatureDecision,
     LocalServiceLaunchTargetV1,
+    ActionExecuteResult,
+    ActionExecutorContext,
+    ActionId,
 } from '@happier-dev/protocol';
+import { BrowserCommandDispatchResultV1Schema } from '@happier-dev/protocol/browser/control/v1';
+import type { BrowserRuntimeWorkspaceOpeningAdapter } from '@/sync/domains/browser/actions/runtimeActionExecutor';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 import type { BrowserLaunchpadOpenTargetOptions } from '@/components/browser/launchpad/BrowserLaunchpad';
 import type { DetailsTab } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
@@ -62,6 +68,14 @@ export type ResolveBrowserViewTargetOpenInput = Readonly<{
 }>;
 
 export type CreateOpenBrowserTargetInWorkspaceDeps = ResolveBrowserViewTargetOpenInput & Readonly<{
+    scopeId: string;
+    accountLifetime: ServerAccountScopeLifetime | null;
+    /** Originating workspace cancellation, including an approval wait. */
+    readonly signal?: AbortSignal;
+    /** Latest owning workspace facts, read only after Action admission. */
+    readOpenFacts?: () => ResolveBrowserViewTargetOpenInput;
+    isCurrent?: () => boolean;
+    actionExecute?: (actionId: ActionId, input: unknown, context?: ActionExecutorContext) => Promise<ActionExecuteResult>;
     openDetailsTab: OpenDetailsTab;
     /**
      * Records the opened target as a recent. Supplied by the caller because the recents store lives
@@ -105,13 +119,17 @@ export type BrowserViewTargetReplacementInput = Readonly<{
 
 /**
  * Matches the launchpad `onOpenTarget` seam so renderers pass it straight through. The optional
- * per-open `options` carry the caller's already-resolved context (the launchpad row resolves its
- * own policy/url with the profile in hand) — the opener prefers those over re-resolving.
+ * per-open `options` are presentation hints. The admitted opener re-resolves current owning
+ * workspace policy and URL facts so UI and Agent callers cannot override navigation authority.
  */
 export type OpenBrowserViewTarget = (
     target: BrowserViewTargetV1,
     options?: BrowserLaunchpadOpenTargetOptions,
-) => void;
+) => void | Promise<ActionExecuteResult>;
+
+export type BrowserWorkspaceTargetOpener = OpenBrowserViewTarget & Readonly<{
+    runtimeAdapter: BrowserRuntimeWorkspaceOpeningAdapter;
+}>;
 
 /**
  * Canonical resource builder for an in-place browser-view retarget. Unlike a new open, a retarget
@@ -301,49 +319,58 @@ export function resolveBrowserViewTargetOpen(
 }
 
 /**
- * Canonical opener: the ONE place that turns a {@link BrowserViewTargetV1} into a details-workspace
- * tab AND a live browser content/view record, atomically, from every caller (launcher rows, the
- * URL box, and the Services "open in browser" seam). The returned `openBrowserViewTarget` matches
- * the launchpad `onOpenTarget` seam so renderers pass it straight through.
+ * Canonical admitted workspace opener. The runtime leaf selects the target and opens only the
+ * deterministic tab resource; the renderer materializes live Browser state when it mounts.
  */
 export function createOpenBrowserTargetInWorkspace(
     deps: CreateOpenBrowserTargetInWorkspaceDeps,
-): OpenBrowserViewTarget {
-    const openBrowserViewTarget: OpenBrowserViewTarget = (
-        target: BrowserViewTargetV1,
-        options?: BrowserLaunchpadOpenTargetOptions,
-    ): void => {
-        // R-3 (G9): where the platform cannot host an ALLOWED site in-app, the selector resolves to
-        // the fulfilled `openExternalTab` outcome and this opener performs it instead of creating a
-        // tab. Without it, Windows/Linux/pre-14-macOS get a workspace tab whose `openView` is
-        // rejected as `adapter_unavailable` — an empty tab, which is the same dead end R-3 removes
-        // on the in-place seam (`BrowserSurfaceHost#navigateCurrentTabInPlace`). Same selector, same
-        // fulfilment owner, both callers. Scoped to external sites — nothing else can resolve to an
-        // OS-tab handoff, so no other target kind's availability is re-derived here.
-        if (target.kind === 'externalUrl') {
-            const browserSessionId = resolveBrowserTargetSurfaceSessionId(
-                SCOPE_SESSION_ID_PART[deps.scope],
-                target,
-            );
-            const openOptions = resolveOpenOptions(deps, target, options, browserSessionId);
+): BrowserWorkspaceTargetOpener {
+    const unavailable = (): ActionExecuteResult => ({ ok: false, errorCode: 'runtime_action_disabled',
+        error: 'runtime_action_disabled:browser:browser_view_unavailable' });
+    const runtimeAdapter: BrowserRuntimeWorkspaceOpeningAdapter = {
+        scopeId: deps.scopeId,
+        accountLifetime: deps.accountLifetime,
+        open: async (request, context) => {
+            const current = () => deps.accountLifetime?.isCurrent() === true
+                && deps.isCurrent?.() !== false && !context.signal?.aborted;
+            if (!current()) return unavailable();
+            const facts = deps.readOpenFacts?.() ?? deps;
+            const target = request.target;
+            const resolved = resolveBrowserViewTargetOpenTab(facts, target);
+            // Launchpad policy/URL options are presentation hints, not authority. UI and Agent
+            // resolve the same current workspace facts after approval, at this one selector.
+            const openOptions = resolveOpenOptions(facts, target, undefined, resolved.browserSessionId);
             const selection = selectBrowserTargetAdapter({
                 target,
                 platform: openOptions.platform,
                 targetPolicyDecision: openOptions.targetPolicyDecision,
                 desktopWebViewAvailability: openOptions.desktopWebViewAvailability,
             });
-            if (selection.ok && selection.outcome === 'openExternalTab') {
-                void openBrowserExternalTabSelection(selection);
-                return;
+            if (!selection.ok) return { ok: false, errorCode: 'runtime_action_disabled',
+                error: 'runtime_action_disabled:browser:browser_adapter_unavailable' };
+            if (!current()) return unavailable();
+            if (selection.outcome === 'openExternalTab') {
+                if (!await openBrowserExternalTabSelection(selection)) return { ok: false,
+                    errorCode: 'runtime_action_disabled', error: 'runtime_action_disabled:browser:browser_adapter_unavailable' };
+            } else {
+                deps.openDetailsTab(resolved.tab, { intent: 'default' });
+                deps.onRememberRecentTarget?.(target);
             }
-        }
-        // Tab-only resolution: NO throwaway `seededState` compute (B-RC2 / DV-OPEN-SEAM). The live
-        // content record is derived once at the renderer from the resource's `target`.
-        const resolved = resolveBrowserViewTargetOpenTab(deps, target, options);
-        deps.openDetailsTab(resolved.tab, { intent: 'default' });
-        deps.onRememberRecentTarget?.(target);
+            return BrowserCommandDispatchResultV1Schema.parse({ v: 1, commandId: request.commandId,
+                status: 'dispatched', adapterKind: selection.adapterKind, events: [] });
+        },
     };
-    return openBrowserViewTarget;
+    const open: OpenBrowserViewTarget = async (target) => {
+        if (!deps.accountLifetime?.isCurrent() || deps.isCurrent?.() === false || deps.signal?.aborted) return unavailable();
+        const execute = deps.actionExecute ?? (await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')).createFrontDoorActionExecute();
+        return await execute('browser.workspace.open', {
+            scopeId: runtimeAdapter.scopeId,
+            commandId: `workspace-open:${Date.now()}`,
+            target,
+        }, { surface: 'ui', authority: 'present_user', serverId: deps.accountLifetime?.scope.serverId,
+            expectedAccountId: deps.accountLifetime?.scope.accountId, signal: deps.signal });
+    };
+    return Object.assign(open, { runtimeAdapter });
 }
 
 /**
@@ -366,10 +393,10 @@ export type ServicesOpenInBrowserResult =
     | Readonly<{ status: 'succeeded' }>
     | Readonly<{ status: 'denied'; reasonCode: string }>;
 
-type ServicesOpenInBrowserDeps = (CreateOpenBrowserTargetInWorkspaceDeps | Readonly<{
+type ServicesOpenInBrowserDeps = Readonly<{
     onOpenTarget: OpenBrowserViewTarget;
     platform: BrowserPlatformV1;
-}>) & Readonly<{
+}> & Readonly<{
     serverId?: string | null;
     sessionId?: string | null;
 }>;
@@ -377,7 +404,7 @@ type ServicesOpenInBrowserDeps = (CreateOpenBrowserTargetInWorkspaceDeps | Reado
 export function bindServicesOpenInBrowser(
     deps: ServicesOpenInBrowserDeps,
 ): (target: LocalServiceLaunchTargetV1) => Promise<ServicesOpenInBrowserResult> {
-    const openBrowserViewTarget = 'onOpenTarget' in deps ? deps.onOpenTarget : createOpenBrowserTargetInWorkspace(deps);
+    const openBrowserViewTarget = deps.onOpenTarget;
     return async (target: LocalServiceLaunchTargetV1): Promise<ServicesOpenInBrowserResult> => {
         if (target.state === 'unavailable' || !target.machineId.trim()) {
             return { status: 'denied', reasonCode: 'browser_target_unavailable' };
@@ -435,16 +462,18 @@ export function bindServicesOpenInBrowser(
             };
             // Admission expires; an admitted viewer remains live with its registration.
             // A no-private-route row opens the existing runs-elsewhere and Share state.
-            openBrowserViewTarget(registeredTarget, {
+            const opened = await openBrowserViewTarget(registeredTarget, {
                 platform: deps.platform,
                 ...(preview.accessUrl ? { currentUrl: preview.accessUrl } : {}),
             });
+            if (opened && !opened.ok) return { status: 'denied', reasonCode: opened.errorCode ?? 'browser_target_unavailable' };
             return { status: 'succeeded' };
         }
         if (!browserTarget) {
             return { status: 'denied', reasonCode: 'browser_target_unavailable' };
         }
-        openBrowserViewTarget(browserTarget);
+        const opened = await openBrowserViewTarget(browserTarget);
+        if (opened && !opened.ok) return { status: 'denied', reasonCode: opened.errorCode ?? 'browser_target_unavailable' };
         return { status: 'succeeded' };
     };
 }

@@ -7,9 +7,9 @@ import { renderScreen } from '@/dev/testkit';
 import type { BrowserLaunchpadRow } from '@/sync/domains/browser/targets/suggestions';
 import { resolveBrowserViewIdForTarget } from '@/sync/domains/browser/store';
 import {
-    createOpenBrowserTargetInWorkspace,
     resolveBrowserViewTargetOpen,
 } from '@/components/browser/surfaces/openBrowserTargetInWorkspace';
+import { createBrowserWorkspaceOpeningFixture } from '@/dev/testkit/fixtures/browserWorkspaceOpening';
 import type { DetailsTab } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 import type { BrowserLaunchpadOpenTargetOptions } from './BrowserLaunchpad';
 import type { LocalServiceLaunchTarget } from '@/sync/domains/local/services/launch';
@@ -509,7 +509,7 @@ describe('BrowserLaunchpad', () => {
         // Wire the launcher through the REAL FP-BRW-OPEN-TARGET-1 opener. The launcher only calls
         // props.onOpenTarget; the opener is the single owner of tab + content-record creation. No
         // open/dispatch path is re-implemented in the test — the opener does the work.
-        const onOpenTarget = createOpenBrowserTargetInWorkspace({
+        const { open: onOpenTarget, dispose } = createBrowserWorkspaceOpeningFixture({
             scope: 'sessionDetails',
             platform: 'android',
             openDetailsTab: (tab) => {
@@ -528,6 +528,7 @@ describe('BrowserLaunchpad', () => {
         );
 
         await screen.pressByTestIdAsync('browser-launchpad-service:preview:preview_vite-open');
+        dispose();
 
         // (i) a canonical browser-view details-workspace tab for the target…
         expect(openedTabs).toHaveLength(1);

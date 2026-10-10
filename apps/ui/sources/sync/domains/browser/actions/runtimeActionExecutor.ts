@@ -2,9 +2,13 @@ import { ACTION_ID_FAMILIES_V1, type RuntimeActionIdV1 } from '@happier-dev/prot
 import { BrowserAutomationCancelActiveResultV1Schema, BrowserAutomationActionRequestV1Schema, resolveBrowserAutomationActionRequester, type BrowserAutomationActionRequestV1 } from '@happier-dev/protocol/browser/automation/v1';
 import { BrowserCommandDispatchResultV1Schema, BrowserCommandV1Schema, type BrowserCommandV1 } from '@happier-dev/protocol/browser/control/v1';
 import { createUnavailableRuntimeActionExecutor, resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actions/executor/dispatch';
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { getActionSpec, PUBLIC_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { RuntimeActionExecute, RuntimeActionExecuteArgs } from '@happier-dev/protocol/actions/executor/types';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
+import type { PublicActionInputById } from '@happier-dev/protocol/actions/actionSpecs';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { readRegisteredBrowserRuntimeWorkspaceOpeningAdapter } from './runtimeControlRegistry';
 
 import {
     dispatchBrowserControlCommand,
@@ -54,6 +58,13 @@ export type BrowserRuntimeControlAdapter = Readonly<{
 
 export type BrowserRuntimeAutomationAdapter = Readonly<{
     controlService: BrowserAutomationControlService | null | undefined;
+}>;
+
+/** A real workspace presentation owner, with no synthetic Browser view or control state. */
+export type BrowserRuntimeWorkspaceOpeningAdapter = Readonly<{
+    scopeId: string;
+    accountLifetime: ServerAccountScopeLifetime | null;
+    open: (input: PublicActionInputById['browser.workspace.open'], context: ActionExecutorContext) => Promise<unknown>;
 }>;
 
 export type CreateBrowserRuntimeActionExecutorInput = Readonly<{
@@ -193,6 +204,24 @@ async function executeBrowserControlAction(
     args: RuntimeActionExecuteArgs,
     input: Pick<CreateBrowserRuntimeActionExecutorInput, 'control' | 'resolveControl' | 'automation' | 'resolveAutomation'>,
 ): Promise<unknown> {
+    if (args.actionId === 'browser.workspace.open') {
+        // Input is parsed by the catalog schema, not a second workspace parser.
+        const parsed = PUBLIC_ACTION_INPUT_SCHEMAS['browser.workspace.open'].safeParse(args.input ?? {});
+        if (!parsed.success) return invalidParametersResult;
+        const request = parsed.data;
+        const scope = args.context.serverId && args.context.runtimeAccountId
+            ? { serverId: args.context.serverId, accountId: args.context.runtimeAccountId } : null;
+        const owner = scope ? readRegisteredBrowserRuntimeWorkspaceOpeningAdapter(scope, request.scopeId) : null;
+        if (!owner || owner.scopeId !== request.scopeId) return browserRuntimeActionDisabledResult('browser_view_unavailable');
+        const lifetime = owner.accountLifetime;
+        if (!lifetime?.isCurrent() || args.context.signal?.aborted
+            || args.context.serverId !== lifetime.scope.serverId
+            || args.context.runtimeAccountId !== lifetime.scope.accountId) {
+            return browserRuntimeActionDisabledResult('browser_view_unavailable');
+        }
+        return await owner.open(request, args.context);
+    }
+
     const parsed = parseRuntimeActionInput(args);
     if (!parsed.ok) return parsed.result;
 

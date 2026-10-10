@@ -23,7 +23,9 @@ import {
     resolveBrowserTabPresentation,
     selectBrowserWorkspaceViewerTab,
 } from './browserSurfaceDetailsTabModel';
-import { createOpenBrowserTargetInWorkspace, type OpenBrowserTargetScope } from './openBrowserTargetInWorkspace';
+import type { OpenBrowserTargetScope } from './openBrowserTargetInWorkspace';
+import { useOpenBrowserTargetInWorkspace } from './useOpenBrowserTargetInWorkspace';
+import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useRetainedPresentationSlotVisible } from '@/components/ui/presentation/retainedPresentationSlots';
@@ -72,12 +74,16 @@ export function BrowserScopedWorkspace(props: Readonly<{
         ? props.scope.serverId ?? null
         : props.pluginProjection?.serverId ?? null;
 
-    const openBrowserViewTarget = React.useMemo(() => createOpenBrowserTargetInWorkspace({
+    const viewerAccountLifetime = useSessionViewerSourceAccountLifetime();
+    const openBrowserViewTarget = useOpenBrowserTargetInWorkspace({
+        scopeId: props.scopeId,
+        accountLifetime: props.pluginProjection?.accountLifetime ?? viewerAccountLifetime,
         openDetailsTab: pane.openDetailsTab,
         scope: props.openScope,
         platform: props.platform,
+        browserProfile: props.productModels?.browserProfile?.profile,
         localServicePreviewState: props.localServicePreviewState,
-    }), [pane.openDetailsTab, props.localServicePreviewState, props.openScope, props.platform]);
+    });
 
     const renderers = React.useMemo(() => [
         createBrowserViewDetailsSurfaceRenderer({

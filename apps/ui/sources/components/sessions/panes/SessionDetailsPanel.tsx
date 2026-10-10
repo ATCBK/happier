@@ -50,7 +50,8 @@ import {
     mergeBrowserSurfaceProductModels,
     type BrowserSurfaceProductModels,
 } from '@/components/browser/surfaces';
-import { useBrowserSurfaceHostProps } from '@/components/browser/surfaces/useBrowserSurfaceHostProps';
+import { resolveBrowserSurfacePlatform, useBrowserSurfaceHostProps } from '@/components/browser/surfaces/useBrowserSurfaceHostProps';
+import { useOpenBrowserTargetInWorkspace } from '@/components/browser/surfaces/useOpenBrowserTargetInWorkspace';
 import { useSessionDetailsPanelPluginRuntime } from './useSessionDetailsPanelPluginRuntime';
 import { useLocalServicePreviewState } from '@/sync/domains/local/services/preview/useLocalServicePreviewState';
 import { usePeerMediationObservabilityStore } from '@/sync/domains/machines/peer/mediation/observability/usePeerMediationObservabilityStore';
@@ -316,7 +317,17 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         pane.unpinDetailsTab,
     ]);
 
+    const openBrowserViewTarget = useOpenBrowserTargetInWorkspace({
+        scopeId: props.scopeId,
+        scope: 'sessionDetails',
+        accountLifetime: pluginRuntime.accountLifetime,
+        openDetailsTab,
+        platform: resolveBrowserSurfacePlatform(pluginRuntime.platform),
+        browserProfile: browserProductModels?.browserProfile?.profile,
+        localServicePreviewState,
+    });
     const detailsSurfaceRenderers = React.useMemo(() => session ? createSessionDetailsSurfaceRenderers({
+            onOpenTarget: openBrowserViewTarget,
             sessionId: props.sessionId,
             session,
             scopeId: props.scopeId,
@@ -350,6 +361,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             boardHost: paneFocusMode.active ? 'focusedDetails' : 'details',
             resolveBoardPrimaryHost: props.resolveBoardPrimaryHost,
         }) : [], [
+        openBrowserViewTarget,
         browserLaunchpad,
         browserProductModels,
         getStartEditingFileHandler,

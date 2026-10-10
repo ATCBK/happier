@@ -1,0 +1,28 @@
+import { describe, expect, it } from 'vitest';
+import { getActionSpec } from './actionSpecs.js';
+import { resolveActionSurfaceAvailability } from './actionSurfaceAvailability.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
+import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
+
+describe('pre-mount Browser workspace Action contract', () => {
+  it('admits a typed target on the client and preserves configurable Agent Ask-first policy', () => {
+    const spec = getActionSpec('browser.workspace.open');
+    expect(spec).toMatchObject({ safety: 'danger', executionPlacement: 'client',
+      surfaces: { ui: true, agent: true, mcp: false, voice: false, cli: false } });
+    expect(resolveActionSurfaceAvailability({ actionId: spec.id, surface: 'agent' }))
+      .toMatchObject({ available: true });
+    const context = { surface: 'agent', authority: 'account_automation' } as const;
+    expect(isApprovalRequiredByActionsSettings(spec.id, normalizeActionsSettingsV1({ v: 1 }), context)).toBe(true);
+    const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [spec.id]: ['agent'] } });
+    expect(isApprovalRequiredByActionsSettings(spec.id, waived, context)).toBe(false);
+    const input = { scopeId: 'workspace_1', commandId: 'open_1',
+      target: { kind: 'localServicePreview', targetId: 'preview_1', machineId: 'machine_1' } };
+    expect(spec.inputSchema.safeParse(input).success).toBe(true);
+    for (const extra of [{ url: 'https://bypass.test/' }, { platform: 'desktop' }, { browserSessionId: 'fake' },
+      { targetPolicyDecision: { allowed: true } }, { runtimeAccountId: 'other_account' }]) {
+      expect(spec.inputSchema.safeParse({ ...input, ...extra }).success).toBe(false);
+    }
+    expect(spec.inputSchema.safeParse({ ...input, target: { url: 'https://bypass.test/' } }).success).toBe(false);
+    expect(spec.inputSchema.safeParse({ ...input, scopeId: '' }).success).toBe(false);
+  });
+});

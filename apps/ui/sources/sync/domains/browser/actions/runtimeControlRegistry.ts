@@ -1,7 +1,9 @@
 import type {
     BrowserRuntimeAutomationAdapter,
     BrowserRuntimeControlAdapter,
+    BrowserRuntimeWorkspaceOpeningAdapter,
 } from './runtimeActionExecutor';
+import { serverAccountScopedResourceKey, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 type BrowserRuntimeControlRegistrationToken = Readonly<{
     id: symbol;
@@ -20,6 +22,34 @@ export type BrowserRuntimeControlAdapterRegistration = Readonly<{
 }>;
 
 const registrationsBySessionId = new Map<string, BrowserRuntimeControlRegistration[]>();
+// Workspace presentation is registered here with the other Browser runtime owners. It does not
+// register a view or create control state; Account qualification prevents same-id Home collisions.
+const workspaceOpeners = new Map<string, BrowserRuntimeWorkspaceOpeningAdapter[]>();
+
+export function registerBrowserRuntimeWorkspaceOpeningAdapter(owner: BrowserRuntimeWorkspaceOpeningAdapter): () => void {
+    const lifetime = owner.accountLifetime;
+    if (!lifetime?.isCurrent()) return () => {};
+    const key = serverAccountScopedResourceKey(lifetime.scope, owner.scopeId);
+    workspaceOpeners.set(key, [...(workspaceOpeners.get(key) ?? []), owner]);
+    const dispose = () => {
+        const remaining = (workspaceOpeners.get(key) ?? []).filter(candidate => candidate !== owner);
+        if (remaining.length) workspaceOpeners.set(key, remaining);
+        else workspaceOpeners.delete(key);
+    };
+    const retirement = lifetime.onRetire(dispose);
+    return () => { retirement.dispose(); dispose(); };
+}
+
+export function readRegisteredBrowserRuntimeWorkspaceOpeningAdapter(
+    scope: ServerAccountScope,
+    scopeId: string,
+): BrowserRuntimeWorkspaceOpeningAdapter | null {
+    const owners = workspaceOpeners.get(serverAccountScopedResourceKey(scope, scopeId)) ?? [];
+    for (let index = owners.length - 1; index >= 0; index--) {
+        if (owners[index].accountLifetime?.isCurrent()) return owners[index];
+    }
+    return null;
+}
 
 function normalizeBrowserSessionId(browserSessionId: string): string {
     return browserSessionId.trim();
@@ -79,4 +109,5 @@ export function readRegisteredBrowserRuntimeAutomationAdapter(
 
 export function clearBrowserRuntimeControlRegistryForTests(): void {
     registrationsBySessionId.clear();
+    workspaceOpeners.clear();
 }
