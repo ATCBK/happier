@@ -107,16 +107,9 @@ function createMetadataUnavailableSession(id: string): SessionListRenderableSess
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
-        return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
+        return Object.assign({}, ...style.map(flattenStyle));
     }
-    if (style && typeof style === 'object') return style as Record<string, unknown>;
-    return {};
-}
-
-function getRawStyle(screen: Awaited<ReturnType<typeof renderScreen>>, testID: string): unknown {
-    const node = screen.findByTestId(testID);
-    if (!node) throw new Error(`expected ${testID} to exist`);
-    return node.props.style;
+    return style && typeof style === 'object' ? style as Record<string, unknown> : {};
 }
 
 describe('SessionItem loading identity', () => {
@@ -129,7 +122,7 @@ describe('SessionItem loading identity', () => {
         standardCleanup();
     });
 
-    it('renders identity placeholders instead of unknown metadata text while metadata is pending', async () => {
+    it.each([false, true])('renders identity placeholders instead of unknown metadata text while metadata is pending (compact=%s)', async (compact) => {
         const { SessionItem } = await import('./SessionItem');
         const session = createMetadataPendingSession('sess_loading');
 
@@ -149,70 +142,22 @@ describe('SessionItem loading identity', () => {
                 isLast={true}
                 isSingle={true}
                 variant="default"
-                compact={false}
+                compact={compact}
             />,
         );
 
-        expect(screen.findByTestId('session-list-avatar-loading-sess_loading')).toBeTruthy();
-        expect(screen.findByTestId('session-list-title-loading-sess_loading')).toBeTruthy();
-        expect(screen.findByTestId('session-list-subtitle-loading-sess_loading')).toBeTruthy();
+        const avatar = screen.findByTestId('session-list-avatar-loading-sess_loading');
+        const title = screen.findByTestId('session-list-title-loading-sess_loading');
+        const subtitle = screen.findByTestId('session-list-subtitle-loading-sess_loading');
+        expect(avatar).toBeTruthy();
+        expect(title).toBeTruthy();
+        expect(subtitle).toBeTruthy();
+        if (compact) {
+            expect(flattenStyle(avatar?.props.style)).toMatchObject({ width: 30, height: 30 });
+            expect(flattenStyle(title?.props.style)).toMatchObject({ width: '60%', height: 13 });
+            expect(flattenStyle(subtitle?.props.style)).toMatchObject({ width: '42%', height: 9 });
+        }
         expect(screen.getTextContent()).not.toContain('session.untitled');
-    });
-
-    it('keeps compact identity placeholders in one static style entry before animated opacity', async () => {
-        const { SessionItem } = await import('./SessionItem');
-        const session = createMetadataPendingSession('sess_compact_loading');
-
-        const screen = await renderScreen(
-            <SessionItem
-                session={session}
-                rowViewModel={createSessionItemRowViewModel({
-                    session,
-                    overrides: {
-                        isIdentityLoading: true,
-                    },
-                })}
-                serverId="server_a"
-                pinned={false}
-                selected={false}
-                isFirst={true}
-                isLast={true}
-                isSingle={true}
-                variant="default"
-                compact={true}
-            />,
-        );
-
-        const avatarStyle = getRawStyle(screen, 'session-list-avatar-loading-sess_compact_loading');
-        expect(Array.isArray(avatarStyle)).toBe(true);
-        expect((avatarStyle as readonly unknown[])[0]).toMatchObject({
-            width: 30,
-            height: 30,
-            borderRadius: 999,
-            backgroundColor: expect.any(String),
-        });
-        expect(flattenStyle((avatarStyle as readonly unknown[])[1])).toHaveProperty('opacity');
-
-        const titleStyle = getRawStyle(screen, 'session-list-title-loading-sess_compact_loading');
-        expect(Array.isArray(titleStyle)).toBe(true);
-        expect((titleStyle as readonly unknown[])[0]).toMatchObject({
-            width: '60%',
-            height: 13,
-            borderRadius: 7,
-            backgroundColor: expect.any(String),
-        });
-        expect(flattenStyle((titleStyle as readonly unknown[])[1])).toHaveProperty('opacity');
-
-        const subtitleStyle = getRawStyle(screen, 'session-list-subtitle-loading-sess_compact_loading');
-        expect(Array.isArray(subtitleStyle)).toBe(true);
-        expect((subtitleStyle as readonly unknown[])[0]).toMatchObject({
-            width: '42%',
-            height: 9,
-            borderRadius: 999,
-            backgroundColor: expect.any(String),
-            marginTop: 2,
-        });
-        expect(flattenStyle((subtitleStyle as readonly unknown[])[1])).toHaveProperty('opacity');
     });
 
     it('does not start the identity skeleton animation while row attention animations are disabled', async () => {

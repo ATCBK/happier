@@ -174,7 +174,7 @@ export function adaptStorageStoreLike(storeLike: StorageStoreLike): StorageStore
 }
 
 /**
- * The real storage store always exposes these identity/list records, even when
+ * The real storage store always exposes these identity/list/organization records, even when
  * empty. A minimal fixture must mirror that boundary so readers can index into
  * them without guarding; fixture values always win over the empty base.
  */
@@ -193,6 +193,19 @@ function completePartialStorageState(state: Partial<StorageState>): StorageState
         sessionListIndexByServerId: {},
         concurrentSessionListCacheByServerId: {},
         sessionListQueryMembershipByKey: {},
+        sessionOrganizationSnapshotVersionByServerId: {},
+        sessionOrganizationSchemaVersionByServerId: {},
+        sessionOrganizationPinsBySessionKey: {},
+        sessionOrganizationAttentionStandingsBySessionKey: {},
+        sessionOrganizationFoldersByFolderKey: {},
+        sessionOrganizationFolderAssignmentsBySessionKey: {},
+        sessionOrganizationTagsByTagKey: {},
+        sessionOrganizationTagAssignmentsBySessionKey: {},
+        sessionOrganizationOrderEntriesByScopeKey: {},
+        sessionOrganizationLabelsByLabelKey: {},
+        sessionOrganizationLoadingByServerId: {},
+        sessionOrganizationErrorByServerId: {},
+        sessionOrganizationOptimisticRecords: {},
         authoringMemory: authoringMemoryDefaults,
         applyAuthoringMemory: () => undefined,
         resetAuthoringMemory: () => undefined,

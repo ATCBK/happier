@@ -29,9 +29,6 @@ import { t, tLoose } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
-import { resolveSelectedVoiceProviderTitleKey } from '@/voice/registry/providerSelection';
-import { useVoiceProviderRegistryRevision } from '@/voice/registry/useVoiceProviderRegistryRevision';
 import {
   useVoiceSessionSnapshot,
   voiceSessionManager,
@@ -46,8 +43,6 @@ import type { VoiceCatalogPreviewSynthesizer } from '@/voice/settings/panels/rea
 import { resolveSessionVoicePreference } from '@/voice/settings/resolveSessionVoicePreference';
 
 import { readSessionVoiceInUse, resolveSessionVoiceLine } from './sessionVoiceLine';
-
-const providerRegistry = createDefaultVoiceProviderRegistry();
 
 const FOLLOW_ACCOUNT_ID = '__follow__';
 const CUSTOM_ID = '__custom__';
@@ -84,16 +79,12 @@ export const SessionVoiceSection = React.memo(function SessionVoiceSection(
     [voiceSetting],
   );
   const settings = useBundledConversationProviderSettings(voice);
-  useVoiceProviderRegistryRevision(providerRegistry);
   if (voiceEnabled !== true || !settings.providerId) return null;
   const choice = settings.sessionChoice;
   if (!choice) return null;
   const declaration = choice.declaration;
   const field = declaration ? readSessionVoiceSettingFieldV1(declaration) : null;
-  const providerLabel =
-    tLoose(
-      resolveSelectedVoiceProviderTitleKey(voice, providerRegistry) ?? '',
-    ) || choice.providerId;
+  const providerLabel = tLoose(choice.providerTitleKey ?? '') || choice.providerId;
   return (
     <WorkSection
       testID="session-work-voice"

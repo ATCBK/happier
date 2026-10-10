@@ -1,12 +1,31 @@
 import { describe, expect, it } from 'vitest';
 
-import { createLiveStorageStoreMock, createStorageModuleMock, createStorageModuleStub, createUseSettingMock } from './storage';
+import { createLiveStorageStoreMock, createStorageModuleMock, createStorageModuleStub, createStorageStoreMock, createUseSettingMock } from './storage';
+import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization';
 import { createSessionFixture } from '../fixtures/sessionFixtures';
 import { createToolCallMessageFixture } from '../fixtures/transcriptFixtures';
 import { clearSessionMessageDerivedCachesForServerScopeReset, readSessionMessagesSnapshot } from '@/sync/store/hooks';
 import { clearSessionTranscriptDerivedCachesForSession } from '@/sync/runtime/sessionTranscriptDerivedCaches';
 
 describe('storage fixture setting readers', () => {
+    it('supports unhydrated organization reads and preserves injected Home-qualified pin records', () => {
+        const sessionId = 'shared-session';
+        const homeAKey = buildSessionOrganizationSessionKey('home-a', sessionId);
+        const homeBKey = buildSessionOrganizationSessionKey('home-b', sessionId);
+        const readRailPinned = (store: ReturnType<typeof createStorageStoreMock>, key: string) =>
+            store((state) => state.sessionOrganizationPinsBySessionKey[key]?.railPinned === true);
+        const emptyStore = createStorageStoreMock({});
+        expect(readRailPinned(emptyStore, homeAKey)).toBe(false);
+
+        const pins = {
+            [homeBKey]: { sessionId, sortKey: null, pinnedAt: 1, listPinned: false, railPinned: true },
+        };
+        const store = createStorageStoreMock({ sessionOrganizationPinsBySessionKey: pins });
+        expect(store.getState().sessionOrganizationPinsBySessionKey).toBe(pins);
+        expect(readRailPinned(store, homeAKey)).toBe(false);
+        expect(readRailPinned(store, homeBKey)).toBe(true);
+    });
+
     it('reads the injected Session owner and keeps the canonical ordered transcript snapshot', () => {
         const session = createSessionFixture();
         let sessions = { [session.id]: session };
