@@ -28,9 +28,12 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
+import { HappierDisclosure } from '@happier-dev/plugin-ui/presentation';
 import { readPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
+import { memoryDocumentActions } from '@/sync/ops/promptLibrary/memoryDocuments';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -88,6 +91,7 @@ beforeEach(async ({ signal }) => {
     storage.getState().activateProfileScope(scope);
 });
 afterEach(async () => {
+    setReducedMotionPreferenceOverride(null);
     standardCleanup();
     await connection?.dispose();
     connection = null;
@@ -157,6 +161,10 @@ async function savedDraft(screen: Awaited<ReturnType<typeof renderScreen>>) {
     await settled(() => expect(!screen.findByTestId('memory.draft') || vi.mocked(Modal.alert).mock.calls.length > 0).toBe(true));
     expect(Boolean(screen.findByTestId('memory.draft')), boundaryDiagnostic()).toBe(false);
     expect(vi.mocked(Modal.alert).mock.calls, boundaryDiagnostic()).toEqual([]);
+}
+/** A fact's place in the list: `expanded` false while its row collapses after an accepted forget. */
+function factSlot(screen: Awaited<ReturnType<typeof renderScreen>>, id: string) {
+    return screen.findAllByType(HappierDisclosure).find(node => node.props.testID === `memory.fact.${id}.slot`) ?? null;
 }
 async function renderDocument(ref: PromptDocArtifactRefV1, props: Omit<React.ComponentProps<typeof Host>, 'documentRef'> = {}) {
     const screen = await renderScreen(<Host documentRef={ref} {...props} />);
@@ -249,7 +257,7 @@ describe('MemoryDocumentBody', () => {
         let release!: () => void;
         const held = new Promise<void>(resolve => { release = resolve; });
         homes.answer(foreignHome, '/v1/artifacts/' + ref.artifactId, { status: 503, body: { error: 'offline' }, respondAfter: held });
-        let pending!: Promise<void>;
+        let pending!: ReturnType<ReturnType<typeof useMemoryDocument>['refresh']>;
         await React.act(async () => { pending = screen.findByType(MemoryDocumentBody).props.source.refresh(); });
         try {
             for (const status of ['refreshing', 'unavailable']) {
@@ -328,7 +336,7 @@ describe('MemoryDocumentBody', () => {
         let release!: () => void;
         const held = new Promise<void>(resolve => { release = resolve; });
         homes.answer(serverId, '/v1/artifacts/' + ref.artifactId, { body: homes.artifacts(serverId).read(ref.artifactId), respondAfter: held });
-        let pending!: Promise<void>;
+        let pending!: ReturnType<ReturnType<typeof useMemoryDocument>['refresh']>;
         await React.act(async () => { pending = hook.getCurrent().refresh(); });
         await settled(() => expect(hook.getCurrent().status).toBe('refreshing'));
         seen.length = 0;
@@ -626,7 +634,8 @@ describe('MemoryDocumentBody', () => {
         const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
         await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress(); });
         await settled(() => {
-            expect(Boolean(screen.findByTestId('memory.fact.original'))).toBe(false);
+            // The accepted forget collapses the row in place (lab `c-mem` Motion); it leaves once closed.
+            expect(factSlot(screen, 'original')?.props.expanded).toBe(false);
             // Undo is offered on the app's one notice owner, not on a card of this section's own.
             expect(readPresentationNotice()?.undo).toBeTruthy();
             const source = screen.findByType(MemoryDocumentBody).props.source;
@@ -644,19 +653,178 @@ describe('MemoryDocumentBody', () => {
                 || vi.mocked(Modal.alert).mock.calls.length > 0;
             expect(Boolean(restored || refused)).toBe(true);
         });
-        expect(screen.findByTestId('memory.conflict'), boundaryDiagnostic()).toBeNull();
-        expect(screen.findByTestId('memory.refused'), boundaryDiagnostic()).toBeNull();
+        expect(Boolean(screen.findByTestId('memory.conflict')), boundaryDiagnostic()).toBe(false);
+        expect(Boolean(screen.findByTestId('memory.refused')), boundaryDiagnostic()).toBe(false);
         expect(vi.mocked(Modal.alert).mock.calls, boundaryDiagnostic()).toEqual([]);
         const source = screen.findByType(MemoryDocumentBody).props.source;
         expect(source.status).toBe('ready');
         expect(source.target.expectedRevision.bodyVersion).toBeGreaterThan(afterForget.bodyVersion);
         expect(Boolean(screen.findByTestId('memory.fact.original'))).toBe(true);
+        // Undo puts the row back where it was, open.
+        expect(factSlot(screen, 'original')?.props.expanded).toBe(true);
         const restored = await readMemory(ref, topic);
         expect('topic' in restored ? restored.topic.facts : restored.body.index).toEqual([original]);
         expect(await readMemory(ref, 'archive')).toMatchObject({ topic: { facts: [] } });
         const persisted = storedBody(ref);
         expect(topic ? persisted.topics.find(section => section.title === topic)?.facts : persisted.index).toEqual([original]);
         expect([...persisted.index, ...persisted.topics.flatMap(section => section.facts)]).toEqual([original]);
+    });
+
+    it('under reduced motion a forgotten fact leaves at once and its neighbours stay', async () => {
+        setReducedMotionPreferenceOverride(true);
+        const ref = await seedDocument({ v: 1, index: [fact('gone', 'Forget me.'), fact('kept', 'Keep me.')], topics: [] });
+        const screen = await renderDocument(ref);
+        const actions: readonly ItemAction[] = screen.findAllByType(ItemRowActions)[0]!.props.actions;
+        await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress(); });
+        await settled(() => {
+            expect(readPresentationNotice()?.undo).toBeTruthy();
+            expect(factSlot(screen, 'gone')).toBeNull();
+        });
+        expect(factSlot(screen, 'kept')?.props.expanded).toBe(true);
+    });
+
+    it('a fact that lands while the list is open arrives with a wash; facts read first do not', async () => {
+        const ref = await seedDocument({ v: 1, index: [fact('first', 'Already here.')], topics: [] });
+        const screen = await renderDocument(ref);
+        expect(Boolean(screen.findByTestId('memory.fact.first.arrived'))).toBe(false);
+        const before = screen.findByType(MemoryDocumentBody).props.source.target.expectedRevision;
+        let written!: Awaited<ReturnType<ReturnType<typeof createDefaultActionExecutor>['execute']>>;
+        await React.act(async () => {
+            written = await createDefaultActionExecutor().execute('memory.remember', {
+                ref, expectedRevision: before, text: 'Landed while watching.',
+            }, { serverId, surface: 'ui', authority: 'present_user' });
+        });
+        expect(written, JSON.stringify(written)).toMatchObject({ ok: true });
+        await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.view.facts).toHaveLength(2));
+        const landed = screen.findByType(MemoryDocumentBody).props.source.view.facts
+            .find((entry: MemoryFactV1) => entry.text === 'Landed while watching.');
+        expect(Boolean(screen.findByTestId(`memory.fact.${landed.id}.arrived`))).toBe(true);
+        expect(Boolean(screen.findByTestId('memory.fact.first.arrived'))).toBe(false);
+    });
+
+    it('Undo refuses a concurrent document change instead of rebasing the archived fact', async () => {
+        const original = fact('original', 'Keep the original fact.');
+        const ref = await seedDocument({ v: 1, index: [original], topics: [] });
+        const screen = await renderDocument(ref);
+        const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
+        await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress(); });
+        await settled(() => {
+            expect(factSlot(screen, 'original')?.props.expanded).toBe(false);
+            expect(readPresentationNotice()?.undo).toBeTruthy();
+            expect(screen.findByType(MemoryDocumentBody).props.source.target).toBeTruthy();
+        });
+        const undo = readPresentationNotice()!.undo!;
+        const afterForget = screen.findByType(MemoryDocumentBody).props.source.target.expectedRevision;
+        let concurrent!: Awaited<ReturnType<ReturnType<typeof createDefaultActionExecutor>['execute']>>;
+        await React.act(async () => {
+            concurrent = await createDefaultActionExecutor().execute('memory.remember', {
+                ref, expectedRevision: afterForget, text: 'A concurrent fact.',
+            }, { serverId, surface: 'ui', authority: 'present_user' });
+        });
+        expect(concurrent, JSON.stringify(concurrent)).toMatchObject({ ok: true });
+        const beforeUndo = storedBody(ref);
+        const revisionBeforeUndo = (await readMemory(ref)).revision;
+        await settled(() => {
+            const source = screen.findByType(MemoryDocumentBody).props.source;
+            expect(source.status).toBe('ready');
+            expect(source.target?.expectedRevision).toEqual(revisionBeforeUndo);
+        });
+        await React.act(async () => { undo.run(); });
+        await settled(() => expect(Boolean(screen.findByTestId('memory.conflict') || screen.findByTestId('memory.refused')
+            || vi.mocked(Modal.alert).mock.calls.length > 0)).toBe(true));
+        expect(Boolean(screen.findByTestId('memory.conflict')), boundaryDiagnostic()).toBe(true);
+        expect(Boolean(screen.findByTestId('memory.refused')), boundaryDiagnostic()).toBe(false);
+        expect(vi.mocked(Modal.alert).mock.calls, boundaryDiagnostic()).toEqual([]);
+        expect(readPresentationNotice()).toBeNull();
+        expect(storedBody(ref)).toEqual(beforeUndo);
+        expect((await readMemory(ref)).revision).toEqual(revisionBeforeUndo);
+        expect(beforeUndo.index).toEqual([expect.objectContaining({ text: 'A concurrent fact.' })]);
+        expect(beforeUndo.topics.find(section => section.title === 'archive')?.facts).toEqual([original]);
+    });
+
+    it.each(['current', 'retired'] as const)('Undo retains Account custody when its replacement can edit the same shared document (%s target)', async (targetKind) => {
+        const original = fact('original', 'Keep the original fact.');
+        const ref = await seedDocument({ v: 1, index: [original], topics: [] });
+        const screen = await renderDocument(ref);
+        const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
+        await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress(); });
+        await settled(() => {
+            expect(readPresentationNotice()?.undo).toBeTruthy();
+            expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready');
+            expect(storedBody(ref).topics.find(section => section.title === 'archive')?.facts).toEqual([original]);
+        });
+        const undo = readPresentationNotice()!.undo!;
+        const restoreTarget = screen.findByType(MemoryDocumentBody).props.source.target;
+        const afterForget = restoreTarget.expectedRevision;
+        await connection?.dispose();
+        connection = null;
+        await homes.switchAccount(serverId, 'account-b');
+        // The same Plain Artifact remains owned by A and edit-granted to B. Reads expose B's
+        // actual grant; the incumbent HTTP/CAS boundary still admits version-matching writes.
+        homes.answer(serverId, 'GET /v1/artifacts/' + ref.artifactId, { select: () => ({ body: {
+            ...homes.artifacts(serverId).read(ref.artifactId), ownerAccountId: 'account-a', access: 'edit',
+        } }) });
+        homes.answer(serverId, '/v1/artifacts?limit=500', { select: () => {
+            const shared = homes.artifacts(serverId).read(ref.artifactId)!;
+            const { body: _body, ...header } = shared;
+            return { body: [{ ...header, ownerAccountId: 'account-a', access: 'edit' }] };
+        } });
+        homes.answer(serverId, '/v1/artifacts/' + ref.artifactId + '/access/grants', { body: {
+            artifactId: ref.artifactId, ownerAccountId: 'account-a', access: 'edit', grants: [],
+        } });
+        // B explicitly allows this UI Action. Sharing's Ask-first default must not mask
+        // whether a retained A intent borrows B's admitted writer.
+        const replacementSettings = { ...baseline.settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, approvalWaivedSurfaces: { 'memory.update': ['ui'] },
+        }) };
+        homes.answer(serverId, 'GET /v2/account/settings', { body: {
+            content: { t: 'plain', v: replacementSettings }, version: 2,
+        } });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://memory-body.test', accountId: 'account-b', request: homes.request });
+        installHomeGovernanceBoundaries(homes);
+        await React.act(async () => {
+            const scope = { serverId, accountId: 'account-b' };
+            storage.getState().applySettingsForScope(scope, replacementSettings, 2);
+            storage.getState().activateProfileScope(scope);
+        });
+        await settled(() => {
+            const source = screen.findByType(MemoryDocumentBody).props.source;
+            expect(source.status).toBe('ready');
+            expect(source.view.access).toBe('edit');
+            expect(source.target.expectedRevision).toEqual(afterForget);
+        });
+        if (targetKind === 'current') {
+            const currentTarget = screen.findByType(MemoryDocumentBody).props.source.target;
+            const currentResult = await memoryDocumentActions.restore(currentTarget, original.id);
+            expect(currentResult, JSON.stringify(currentResult)).toMatchObject({ ok: true,
+                result: { ok: true, artifactId: ref.artifactId, factId: original.id } });
+            expect(storedBody(ref).index).toEqual([original]);
+            expect(storedBody(ref).topics.find(section => section.title === 'archive')?.facts).toEqual([]);
+            expect((await readMemory(ref)).revision.bodyVersion).toBeGreaterThan(afterForget.bodyVersion);
+            return;
+        }
+        const beforeUndo = storedBody(ref);
+        const requestIndex = homes.requests.length;
+        await React.act(async () => { undo.run(); });
+        await settled(() => {
+            const source = screen.findByType(MemoryDocumentBody).props.source;
+            const restored = source.status === 'ready' && source.target?.expectedRevision.bodyVersion > afterForget.bodyVersion;
+            const refused = screen.findByTestId('memory.refused') || vi.mocked(Modal.alert).mock.calls.length > 0;
+            expect(Boolean(restored || refused)).toBe(true);
+        });
+        expect(Boolean(screen.findByTestId('memory.refused')), boundaryDiagnostic()).toBe(true);
+        expect(readPresentationNotice()).toBeNull();
+        expect(homes.requests.slice(requestIndex).filter(request => request.path === '/v1/artifacts/' + ref.artifactId
+            && request.input !== null), boundaryDiagnostic()).toEqual([]);
+        // The document adapter retains the same Account custody even if a caller invokes it
+        // without the notice's pre-issuance currentness check.
+        const retiredResult = await memoryDocumentActions.restore(restoreTarget, original.id);
+        expect(retiredResult.ok).toBe(false);
+        if (!retiredResult.ok) expect(retiredResult.errorCode).toBe('action_account_scope_changed');
+        expect(homes.requests.slice(requestIndex).filter(request => request.path === '/v1/artifacts/' + ref.artifactId
+            && request.input !== null), boundaryDiagnostic()).toEqual([]);
+        expect(storedBody(ref)).toEqual(beforeUndo);
+        expect((await readMemory(ref)).revision).toEqual(afterForget);
     });
 
     it.each(['account', 'project'] as const)('remembers the first %s scope fact and attaches the actual persisted document', async (scope) => {

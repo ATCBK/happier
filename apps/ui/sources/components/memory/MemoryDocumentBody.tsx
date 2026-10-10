@@ -1,4 +1,4 @@
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { HappierDisclosure, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
 import {
@@ -6,25 +6,31 @@ import {
   type MemoryFactV1,
 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import * as React from 'react';
+import { View } from 'react-native';
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { InlineAddExpander } from '@/components/ui/forms/InlineAddExpander';
 import { Icon } from '@/components/ui/icons/Icon';
+import { reanimatedDisclosureMotion } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { motionTokens } from '@/components/ui/motion';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useSessionSelector } from '@/sync/domains/state/storage';
 import {
   memoryDocumentActions,
   readMemoryActionOutcome,
   readMemoryCreationReceipt,
   type MemoryCreationReceipt,
+  type MemoryDocumentTarget,
   type MemorySessionTarget,
 } from '@/sync/ops/promptLibrary/memoryDocuments';
 import { getPreferredLanguage, t } from '@/text';
@@ -39,6 +45,50 @@ import type { MemoryDocumentSource } from './useMemoryDocument';
 const JUST_NOW_MS = 60_000;
 
 type Notice = 'pending' | 'conflict' | 'refused' | null;
+
+/** A forgotten fact holding its place while its row collapses; `settled` once the row has closed. */
+type CollapsingFact = Readonly<{ fact: MemoryFactV1; index: number; settled: boolean }>;
+
+const NO_FACT_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * The rows to draw: the shown facts, with each forgotten fact kept at its place until its row has
+ * collapsed, even once the refreshed view no longer holds it.
+ */
+function mergeCollapsingFacts(
+  shown: readonly MemoryFactV1[],
+  collapsing: readonly CollapsingFact[],
+): readonly Readonly<{ fact: MemoryFactV1; leaving: boolean }>[] {
+  const rows = shown.map((fact) => ({
+    fact,
+    leaving: collapsing.some((entry) => entry.fact.id === fact.id),
+  }));
+  for (const entry of collapsing) {
+    if (entry.settled || rows.some((row) => row.fact.id === entry.fact.id)) continue;
+    rows.splice(Math.min(entry.index, rows.length), 0, { fact: entry.fact, leaving: true });
+  }
+  return rows;
+}
+
+/**
+ * The facts that landed while this document or topic was on screen (lab `c-mem W`): none on its first
+ * read, then each id that appears afterwards, once.
+ */
+function useArrivedFactIds(viewKey: string | null, facts: readonly MemoryFactV1[]): ReadonlySet<string> {
+  const seenRef = React.useRef<Readonly<{ key: string; ids: ReadonlySet<string> }> | null>(null);
+  const seen = viewKey !== null && seenRef.current?.key === viewKey ? seenRef.current.ids : null;
+  const arrived = React.useMemo(
+    () => (seen === null ? NO_FACT_IDS : new Set(facts.filter((fact) => !seen.has(fact.id)).map((fact) => fact.id))),
+    [facts, seen],
+  );
+  React.useEffect(() => {
+    if (viewKey === null) return;
+    const previous = seenRef.current?.key === viewKey ? seenRef.current.ids : null;
+    if (previous && facts.every((fact) => previous.has(fact.id))) return;
+    seenRef.current = { key: viewKey, ids: new Set([...(previous ?? []), ...facts.map((fact) => fact.id)]) };
+  }, [facts, viewKey]);
+  return arrived;
+}
 
 export function formatMemoryDate(ms: number): string {
   return formatWithCachedDateTimeFormatter(ms, getPreferredLanguage(), {
@@ -106,10 +156,15 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   const [draft, setDraft] = React.useState('');
   const [draftTopic, setDraftTopic] = React.useState('');
   const draftRef = React.useRef<React.ElementRef<typeof FieldTextInput>>(null);
+  const reducedMotion = useReducedMotionPreference();
+  // A forgotten fact keeps its place while its row collapses (lab `c-mem` Motion), then leaves.
+  const [collapsing, setCollapsing] = React.useState<readonly CollapsingFact[]>([]);
+  const factsRef = React.useRef<readonly MemoryFactV1[]>([]);
+  factsRef.current = view?.facts ?? [];
 
   const refresh = source.refresh;
   const settle = React.useCallback(
-    async (run: () => Promise<ActionExecuteResult>): Promise<boolean> => {
+    async (run: () => Promise<ActionExecuteResult>): Promise<Readonly<{ applied: boolean; target: MemoryDocumentTarget | null }>> => {
       setBusy(true);
       setNotice(null);
       try {
@@ -122,11 +177,11 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
         // and close its draft so retrying cannot create a second copy of that fact.
         if (receipt) onCreatedMemory?.(receipt);
         // A conflict hands back the current version; show it and keep what was typed.
-        if (outcome !== 'refused') await refresh();
-        return outcome === 'applied' || receipt !== null;
+        const target = outcome !== 'refused' ? await refresh() : null;
+        return { applied: outcome === 'applied' || receipt !== null, target };
       } catch {
         setNotice('refused');
-        return false;
+        return { applied: false, target: null };
       } finally {
         setBusy(false);
       }
@@ -152,7 +207,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     if (!target && !canCreate) return;
     fireAndForget(
       (async () => {
-        const applied = await settle(() => {
+        const { applied } = await settle(() => {
           if (editingId && target)
             return memoryDocumentActions.update(target, {
               factId: editingId,
@@ -198,10 +253,23 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       if (!target) return;
       fireAndForget(
         (async () => {
-          const applied = await settle(() =>
-            memoryDocumentActions.forget(target, fact.id),
-          );
+          const { applied, target: restoreTarget } = await settle(async () => {
+            const result = await memoryDocumentActions.forget(target, fact.id);
+            // Only the accepted forget collapses the row, and before the refreshed view drops it.
+            if (readMemoryActionOutcome(result) === 'applied') {
+              const index = factsRef.current.findIndex((entry) => entry.id === fact.id);
+              setCollapsing((list) => [
+                ...list.filter((entry) => entry.fact.id !== fact.id),
+                { fact, index: Math.max(0, index), settled: false },
+              ]);
+            }
+            return result;
+          });
           if (!applied) return;
+          if (!restoreTarget) {
+            setNotice('refused');
+            return;
+          }
           // The fact is already in the archive topic; Undo is offered on the app's one notice owner
           // (its lifetime, its place) and restores this exact fact to where it was.
           const key = `memory-forget:${fact.id}`;
@@ -214,8 +282,14 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
               label: t('memoryContext.memory.undo'),
               run: () => {
                 retirePresentationNotice(key);
+                if (!restoreTarget.isCurrent()) {
+                  setNotice('refused');
+                  return;
+                }
+                // Undo puts the row back in place: it stops leaving and returns with the restored view.
+                setCollapsing((list) => list.filter((entry) => entry.fact.id !== fact.id));
                 fireAndForget(
-                  settle(() => memoryDocumentActions.restore(target, fact.id, restoreTopic)),
+                  settle(() => memoryDocumentActions.restore(restoreTarget, fact.id, restoreTopic)),
                   { tag: 'MemoryDocumentBody.undoForget' },
                 );
               },
@@ -227,6 +301,26 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     },
     [settle, target, topic],
   );
+
+  const settleCollapse = React.useCallback((factId: string) => {
+    setCollapsing((list) =>
+      list.flatMap((entry) =>
+        entry.fact.id !== factId
+          ? [entry]
+          : factsRef.current.some((fact) => fact.id === factId)
+            ? [{ ...entry, settled: true }]
+            : [],
+      ),
+    );
+  }, []);
+  // A closed row whose fact has left the refreshed view is done.
+  const viewFacts = view?.facts;
+  React.useEffect(() => {
+    setCollapsing((list) => {
+      const next = list.filter((entry) => !entry.settled || (viewFacts ?? []).some((fact) => fact.id === entry.fact.id));
+      return next.length === list.length ? list : next;
+    });
+  }, [viewFacts]);
 
   const startEdit = React.useCallback(
     (fact: MemoryFactV1) => {
@@ -261,6 +355,11 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       ? facts
       : facts.slice(0, limit);
   const hiddenCount = facts.length - shown.length;
+  const rows = mergeCollapsingFacts(shown, collapsing);
+  const arrivedFactIds = useArrivedFactIds(
+    view ? `${JSON.stringify(view.ref)}\u0000${topic?.title ?? ''}` : null,
+    facts,
+  );
   const topics = view?.topics ?? [];
   const draftForm = (
     <InlineAddExpander
@@ -366,22 +465,31 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
         />
       ) : null}
       {props.composing && !editingId && writable && (target || canCreate) ? draftForm : null}
-      {shown.map((fact) =>
+      {rows.map(({ fact, leaving }) =>
         editingId === fact.id ? (
           <React.Fragment key={fact.id}>{draftForm}</React.Fragment>
         ) : (
-          <MemoryFactRow
+          <MemoryFactSlot
             key={fact.id}
-            testID={`${testID}.fact.${fact.id}`}
-            fact={fact}
-            serverId={serverId}
-            archived={archive}
-            writable={writable && target !== null}
-            disabled={busy}
-            onEdit={startEdit}
-            onForget={forget}
-            onOpenSession={props.onOpenSession}
-          />
+            testID={`${testID}.fact.${fact.id}.slot`}
+            factId={fact.id}
+            leaving={leaving}
+            reducedMotion={reducedMotion}
+            onCollapsed={settleCollapse}
+          >
+            <MemoryFactRow
+              testID={`${testID}.fact.${fact.id}`}
+              fact={fact}
+              serverId={serverId}
+              archived={archive}
+              writable={writable && target !== null && !leaving}
+              disabled={busy}
+              arrived={arrivedFactIds.has(fact.id)}
+              onEdit={startEdit}
+              onForget={forget}
+              onOpenSession={props.onOpenSession}
+            />
+          </MemoryFactSlot>
         ),
       )}
       {hiddenCount > 0 ? (
@@ -468,6 +576,65 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   );
 });
 
+function ignoreExpandedChange() {}
+
+/**
+ * A fact's place in the list. Forgetting collapses its height and opacity together on the
+ * disclosure owner's clock (lab `c-mem` Motion); reduced motion removes it at once.
+ */
+function MemoryFactSlot(
+  props: Readonly<{
+    testID: string;
+    factId: string;
+    leaving: boolean;
+    reducedMotion: boolean;
+    onCollapsed: (factId: string) => void;
+    children: React.ReactNode;
+  }>,
+) {
+  const { factId, onCollapsed } = props;
+  const onSettled = React.useCallback(
+    (expanded: boolean) => {
+      if (!expanded) onCollapsed(factId);
+    },
+    [factId, onCollapsed],
+  );
+  return (
+    <HappierDisclosure
+      testID={props.testID}
+      expanded={!props.leaving}
+      onExpandedChange={ignoreExpandedChange}
+      header={null}
+      showDivider={false}
+      reducedMotion={props.reducedMotion}
+      motion={reanimatedDisclosureMotion}
+      onSettled={onSettled}
+    >
+      {props.children}
+    </HappierDisclosure>
+  );
+}
+
+/** The soft wash a newly landed fact arrives with (lab `c-mem W`), fading on the compositor. */
+function MemoryFactArrival(props: Readonly<{ testID: string; onDone: () => void }>) {
+  const opacity = useSharedValue(1);
+  const { onDone } = props;
+  React.useEffect(() => {
+    opacity.value = withTiming(0, { duration: motionTokens.durationMs.slow }, (finished) => {
+      'worklet';
+      if (finished) runOnJS(onDone)();
+    });
+  }, [onDone, opacity]);
+  const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return (
+    <Animated.View
+      testID={props.testID}
+      pointerEvents="none"
+      style={[stylesheet.arrival, style]}
+    />
+  );
+}
+
 /**
  * One remembered fact: the fact (two lines at most in a list), then one quiet line of date, expiry and
  * the Session it came from. "⋯" holds Edit, Forget and Open source; an archived fact is read-only.
@@ -480,6 +647,8 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
     archived: boolean;
     writable: boolean;
     disabled: boolean;
+    /** It landed while the list was on screen: it arrives with a soft wash that fades. */
+    arrived: boolean;
     onEdit: (fact: MemoryFactV1) => void;
     onForget: (fact: MemoryFactV1) => void;
     onOpenSession?: (
@@ -489,6 +658,11 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
 ) {
   const styles = stylesheet;
   const { fact, onEdit, onForget, onOpenSession } = props;
+  const [highlighting, setHighlighting] = React.useState(props.arrived);
+  React.useEffect(() => {
+    if (props.arrived) setHighlighting(true);
+  }, [props.arrived]);
+  const endHighlight = React.useCallback(() => setHighlighting(false), []);
   const source = fact.sourceSessionRef;
   // Row-local: only this fact's source Session title, and only when that Session is loaded here.
   const sourceName = useSessionSelector(
@@ -544,6 +718,8 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
     return list;
   }, [fact, onEdit, onForget, props.disabled, props.writable]);
   return (
+    <View>
+    {highlighting ? <MemoryFactArrival testID={`${props.testID}.arrived`} onDone={endHighlight} /> : null}
     <Item
       testID={props.testID}
       mode="info"
@@ -577,6 +753,7 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
         ) : undefined
       }
     />
+    </View>
   );
 });
 
@@ -621,5 +798,13 @@ const stylesheet = StyleSheet.create((theme) => ({
   },
   topicField: {
     marginTop: 8,
+  },
+  arrival: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: theme.colors.state.info.background,
   },
 }));
