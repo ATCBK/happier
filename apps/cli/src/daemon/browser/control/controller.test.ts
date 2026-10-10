@@ -162,7 +162,7 @@ describe('daemon browser controller commands', () => {
     } finally { harness.dispose(); }
   });
 
-  it('retains uncertain cleanup in the controller after human navigation and hand back', async () => {
+  it('quarantines human navigation after uncertain cleanup until hand back and a fresh observation', async () => {
     const harness = navigationHarness({ cleanupFails: true });
     try {
       await harness.open();
@@ -172,11 +172,18 @@ describe('daemon browser controller commands', () => {
       expect(harness.automation.getStatus(harness.view).controller).toBe('human');
       harness.releasePress.resolve(); harness.releaseCleanup.resolve();
       expect(await active).toMatchObject({ status: 'canceled', resultSummary: { completion: 'uncertain' } });
-      expect(await navigation).toMatchObject({ status: 'dispatched' });
+      expect(await navigation).toMatchObject({ status: 'failed', error: { code: 'permission_denied' } });
+      expect(harness.navigationUrls).toEqual([]);
       expect(harness.automation.getStatus(harness.view)).toMatchObject({ controller: 'human', uncertain: true });
-      await harness.routes.dispatchCommand({ ...harness.view, kind: 'handBack', commandId: 'back' }, { authority: 'present_user' });
+      expect(await harness.routes.dispatchCommand({ ...harness.view, kind: 'handBack', commandId: 'back' }, { authority: 'present_user' }))
+        .toMatchObject({ status: 'dispatched' });
       expect(harness.automation.getStatus(harness.view).uncertain).toBe(true);
       expect(await harness.automation.execute({ ...harness.request, automationRequestId: 'unobserved' })).toMatchObject({ errorCode: 'stale_navigation' });
+      await harness.automation.execute({ ...harness.request, automationRequestId: 'observe', actionKind: 'snapshot', payload: {} });
+      expect(harness.automation.getStatus(harness.view).uncertain).toBe(false);
+      expect(await harness.routes.dispatchCommand({ ...harness.view, kind: 'navigate', commandId: 'recovered', url: 'https://example.test/recovered' }, { authority: 'present_user' }))
+        .toMatchObject({ status: 'dispatched' });
+      expect(harness.navigationUrls).toEqual(['https://example.test/recovered']);
     } finally { harness.dispose(); }
   });
 
@@ -243,13 +250,19 @@ describe('daemon browser controller commands', () => {
       const human = harness.routes.dispatchCommand({ ...harness.view, kind: 'navigate', commandId: 'human', url: 'https://example.test/human' }, { authority: 'present_user' });
       harness.releaseNavigation.resolve();
       expect(await agent).toMatchObject({ status: 'failed', error: { code: 'adapter_unavailable' } });
-      expect(await human).toMatchObject({ status: 'dispatched', events: expect.arrayContaining([
-        expect.objectContaining({ kind: 'controllerChanged', state: expect.objectContaining({ controller: 'human', uncertain: true }) }),
-      ]) });
+      expect(await human).toMatchObject({ status: 'failed', error: { code: 'permission_denied' } });
+      expect(harness.navigationUrls).toEqual(['https://example.test/pending-agent']);
       expect(harness.automation.getStatus(harness.view)).toMatchObject({ controller: 'human', uncertain: true });
-      await harness.routes.dispatchCommand({ ...harness.view, kind: 'handBack', commandId: 'back' }, { authority: 'present_user' });
+      expect(await harness.routes.dispatchCommand({ ...harness.view, kind: 'handBack', commandId: 'back' }, { authority: 'present_user' }))
+        .toMatchObject({ status: 'dispatched' });
       expect(await harness.routes.dispatchCommand({ ...harness.view, kind: 'reload', commandId: 'unobserved' }, { authority: 'account_automation' }))
         .toMatchObject({ status: 'failed', error: { code: 'permission_denied' } });
+      expect(harness.pageCommands).not.toContain('Page.reload');
+      await harness.automation.execute({ ...harness.request, automationRequestId: 'observe', actionKind: 'snapshot', payload: {} });
+      expect(harness.automation.getStatus(harness.view).uncertain).toBe(false);
+      expect(await harness.routes.dispatchCommand({ ...harness.view, kind: 'reload', commandId: 'recovered' }, { authority: 'account_automation' }))
+        .toMatchObject({ status: 'dispatched' });
+      expect(harness.pageCommands).toContain('Page.reload');
     } finally { harness.dispose(); }
   });
 
