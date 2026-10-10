@@ -88,7 +88,10 @@ old processes disappear. This integration is unreleased and still under validati
 
 The existing Pending Input numeric protocol revision 4 advertises the new
 identity-bound `reset_start` arm, installed Machine release, and source-filtered
-waiting read. Earlier positive revisions retain their own main/target-aware input
+waiting read. That read can also return optional `unboundEntries`: content-free
+identities of owned, admitted, unconsumed Session Pending input. Its omission by
+an older reader is not authority to invent an Account-wide queue or disclose
+prompt content. Earlier positive revisions retain their own main/target-aware input
 behavior. A new daemon must omit its reset operation leaf unless the cached Home
 supports revision 4 and the concrete reset owner is mounted: Machine capability
 publication is a strict complete projection, not a place to send unknown leaves.
@@ -98,6 +101,20 @@ treats an unknown non-null action as a blocked unsupported row, never as default
 enqueue; other rows remain readable. The server holds reset rows before claim,
 refuses reset admission to unsupported Machines, and releases to the already
 supported enqueue shape. This adds no reverse writer or rollback representation.
+
+The reset set Action retains the existing-row request and additionally accepts a
+strict `initialInput` in the canonical plain or Session-encrypted content envelope.
+The initial-input effect uses the same Pending admission owner and creates the
+row held from its first write; it never enqueues ordinary input before binding.
+The stored message projection preserves the existing `modelSelectionV1` carrier,
+including malformed presence. Its canonical model-selection reader validates the
+intent; projection cannot erase it and cause a legacy-model fallback.
+Fresh opened B and its exact accepted witness qualify the current window before
+the effect. The server also checks installed-target capability and accepted
+history identity before creating custody. Unknown or stale windows do not fall
+back to immediate delivery. Signed reset roots currently authorize only exact
+Pending effects, not preparatory B reads; they refuse those reads until an
+input-bound authorization contract is approved.
 
 ### Project and checkout identity (0.3 development)
 
@@ -283,6 +300,27 @@ Full status responses remain valid inputs to the same schema and UI mapper. This
 transport changes no persisted repository or Session data. The one-way 0.3
 component upgrade does not support an older UI reading sparse responses from a
 new daemon; update the producer and its consumers together.
+
+### SCM reviewed marks selectors (development)
+
+The canonical `scm.diffSummary.reviewed.mark` and `.unmark` Actions retain the
+implicit V1 saved-result selector (`cwd`, `resultId`, `changeRefs`). Files-only
+reviews also use a closed V2 selector (`v: 2`, `cwd`, `comparisonId`, `source`,
+optional Session namespace, and `changeRefs`); they do not require a generated
+or saved narration. The selected Home/Machine/root authority reads the retained
+comparison before the existing Account reviewed-marks owner can write. Caller
+comparison bytes are not authority. Session and turn sources additionally retain
+their Session admission. Both selectors use the same reviewed-marks Record V1
+and persistence key; this adds no parallel store or RPC.
+
+V2 is an explicit operation epoch because the captured selector is an
+authority-bearing input, not an ignorable optional field. A terminal supporting
+only the strict saved-result form rejects V2 before an Account write; unaffected
+operations and V1 remain usable. This is a development contract, not a claim
+that a released terminal advertises V2. The inspected `../0.2` predecessor at
+`e087d15a2f0cce1de6de8ef0895d9c8bcc035056` had no reviewed-marks producer in the
+relevant protocol/CLI SCM paths, which were clean. Released-artifact support at
+this seam has not been established.
 
 ### Plugin projection invalidation (development)
 
@@ -2261,27 +2299,37 @@ Stored items without a creation destination read as `board`; current creation
 records `transcript`, `board` or `both`. Pin and Unpin remain layout operations and
 do not change that creation intent or create another item.
 
-The centralized transcript producer captures a small visual reference before
-sealing an acknowledged tool completion. The negotiated transcript observation V2
-epoch carries it to the existing message writer; V1 retains ordinary text delivery
+The centralized transcript producer captures a small collection of corresponding
+visual references before sealing acknowledged tool completions. Multiple native
+tool results in one raw message remain one message, with every corresponding
+visual represented. The negotiated transcript observation V2 epoch carries the
+collection to the existing message writer; V1 retains ordinary text delivery
 without the unsupported association. Historical import V3 carries the same optional
-reference through the existing batch writer. Its older V2 fallback preserves the
+collection through the existing batch writer. Its older V2 fallback preserves the
 messages but omits the association, so a public visual is honestly unavailable
 rather than read through a parent or generic-record fallback.
 
-The server-private message association names an item and its acknowledged record
-incarnation in the current Session. The committing writer validates that record;
-an unavailable or removed visual omits the association without rejecting an
-otherwise valid message. Content correction clears an old association unless the
-writer admits a replacement. Public reads address a published message under the
-existing share grant and cutoff, not an independently supplied item id. Fork imports
-associate independently owned child records; their original address remains a
-recognition hint, never parent-read authority.
+The retained server-private message JSON column stores the canonical collection;
+one shared read codec also accepts the earlier development singleton. Each current
+member names an item and its acknowledged record incarnation in the current
+Session, plus the exact original item/revision/address for recognition. The
+committing writer validates every local record independently: an unavailable member
+does not discard valid siblings or otherwise valid text. Content correction clears
+an old collection unless the writer admits a replacement. Public reads select an
+admitted member index of a published message under the existing share grant and
+cutoff, not an independently supplied item id. Fork imports associate independently
+owned child records. Original identity is recognition only, never parent-read
+authority. An earlier copied singleton without original identity cannot safely
+identify a sibling and fails correspondence closed; no source identity is invented.
 
 Public Session-share requests add optional `networkOff`, with absence reading as
-`false`. Older strict servers can refuse a request containing the new option;
-that refusal does not issue a link or relax network policy. The stored option can
-restrict the shared sandbox but does not itself admit network access. See the
+`false`. The canonical request binder omits false, preserving the ordinary request
+shape. An explicit true must also be acknowledged as true before either client
+reports successful issuance. Older strict servers can refuse the option; an older
+permissive server that strips it leaves the existing outcome-unknown result, never
+a falsely confirmed network-off link. That unknown result does not prove that no
+server-side link was created. The stored option can restrict the shared sandbox but
+does not itself admit network access. See the
 [Session share API](api.md) and [public encryption boundary](encryption.md) for
 the canonical envelopes and viewer contract. The additive message/share columns
 require the canonical provider migrations; source generation alone does not prove

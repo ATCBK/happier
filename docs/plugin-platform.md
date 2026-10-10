@@ -327,6 +327,29 @@ the workflow additional Action authority.
 
 The CLI reads the current serving occurrence from its contribution registry. The UI's Account Workflow Action owner reads the serving machine through the existing Account-scoped daemon projection cache and shares the same descriptor projection and reference resolver. A failed or retained projection is not a current plugin source; saved Account workflows remain readable without a serving machine. Closed Work menus do not subscribe to or load the detailed Workflow library.
 
+### Atmosphere pictures and scene planets (0.3 development source)
+
+Plugins declare `atmospherePictures` in `definePlugin`, keyed by local id. Each
+entry supplies its title, credit, full/thumbnail source URLs, crop and horizon,
+theme grades, optional adjustments, and release look. The
+[closed picture schema](../packages/protocol/src/plugins/contributions/atmospherePictures.ts)
+owns admission. This data-only family has no registration callback: the existing
+manifest catalog and occurrence projection own its publication and retirement.
+
+The host [picture catalog](../apps/ui/sources/components/atmosphere/pictureCatalog.ts)
+merges the built-in pictures with admitted contributions. Plugin ids are qualified
+as `pluginId/localId`, including in the existing picture selection and remembered
+look keys. Selecting one downloads and caches its full and thumbnail URLs through
+the existing device-local picture store. Until bytes are available, or after the
+contribution disappears, the atmosphere resolver shows the Home default. Authors
+must provide image hosts usable by the client, including browser CORS support,
+and credit the picture's licence; no Happier image proxy is added.
+
+Plugin UI scenes keep their existing `planetAt` declaration. Its optional
+`style`, `fullness`, and `digits` fields describe the same host-rendered brand
+planet; omitted fields preserve the scene's existing defaults. Rendering stays
+with the host scene/planet owner rather than an additional SDK planet component.
+
 ## Public seam and authority
 
 Development Connected Account manual modes may have no credential fields when
@@ -394,7 +417,7 @@ In 0.3 development source, public `WidgetFrame` and the core widget adapter shar
 
 Measured `FrameRect` placement and `resolveFloatingFrameRect` share companion geometry with core. Callers supply available space and measured avoid rectangles; the result reports when no non-overlapping placement fits so the domain can use its dock composition. Pointer listeners, native gestures and measurements remain host adapters. These foundations do not create a viewer registry or assert that every capture/viewer shell is integrated.
 
-Public `/presentation` exports `FloatingFrame` / `FloatingFrameProps`: one controlled neutral frame (`floating`, `expanded`, `docked`, `closed`) with a controls band and one body. It owns only geometry and shell mode: drag, velocity and release use the shared companion interaction owner, settling uses `resolveFloatingFrameRect` and asks to dock when nothing fits, arrow keys snap corners and the grip resizes with the body's aspect. `moveInput` decides whether the body or only the controls band and grip move it; the host decides that from its own control facts. While the body moves the frame, a double-click on it expands (and restores) the frame, and Escape restores an expanded frame. An optional `footer` stands one presence capsule below the body (`HAPPIER_FLOATING_FRAME_METRICS.footerHeight` is that capsule's height); `aspectRatio` is the body's own shape, so placement (`resolveFloatingFrameRect` with `chromeHeight`) shrinks both axes together, and `minWidth` is the host's measured usable minimum below which resizing stops and placement docks. A frame's chrome is public beside it, so an author's frame matches the viewer's without copying it: `FloatingFramePicture` is the body's material (the picture rounded to the frame's body radius and lifted on the host's `elevationStyle`, never a card; `drivenRingColor` draws the thin ring that says the person drives it; `framed={false}` draws the same element tree flush in a pane so a body is not remounted when it moves), `HappierControlCapsule` holds a group of controls on the floating material for the `controls` slot (`HAPPIER_CONTROL_CAPSULE_METRICS`, `HAPPIER_CONTROL_CAPSULE_BUTTON_SIZE`; the material is a backing, not a clip, so a control's touch target may overhang the band without the capsule growing), and `HappierIdentityCapsule` names what the frame shows (a Machine, with a `leading` status dot) as plain text, never a live region. `HappierStatusCapsule` remains the announcing capsule for a state that is not normal. `resolveFloatingFrameSettleTransition` returns the duration and critically damped `linear()` curve a released frame travels on, for a host that draws the body in another layer and must move it in step; `HAPPIER_FLOATING_FRAME_METRICS.resizeStep` is the one resize step for the grip's keys and a host's Larger/Smaller. On the web the controls reveal on hover and focus for a pointer that hovers and stay shown for one that cannot (`(hover: none)`, or once a touch reaches the frame). The platform pointer boundary comes from the `pointer` prop or the presentation host's `companionPointer`; without one the frame moves by keyboard and menu only. It has no target, Session, network or trust props. In 0.3 development source the Session viewer is its first consumer: it frames the retained Computer or Browser body, publishes its settled rectangle to the shell's measured Voice/pet geometry and moves the reading column aside on snap. Development-only until 0.3 ships.
+Public `/presentation` exports `FloatingFrame` / `FloatingFrameProps`: one controlled neutral frame (`floating`, `expanded`, `docked`, `closed`) with a controls band and one body. It owns only geometry and shell mode: drag, velocity and release use the shared companion interaction owner, settling uses `resolveFloatingFrameRect` and asks to dock when nothing fits, arrow keys snap corners and the grip resizes with the body's aspect. `moveInput` decides whether the body or only the controls band and grip move it; the host decides that from its own control facts. While the body moves the frame, a double-click on it expands (and restores) the frame, and Escape restores an expanded frame. An optional `footer` stands one presence capsule below the body (`HAPPIER_FLOATING_FRAME_METRICS.footerHeight` is that capsule's height); `aspectRatio` is the body's own shape, so placement (`resolveFloatingFrameRect` with `chromeHeight`) shrinks both axes together, and `minWidth` is the host's measured usable minimum below which resizing stops and placement docks. A frame's chrome is public beside it, so an author's frame matches the viewer's without copying it: `FloatingFramePicture` is the body's material (the picture rounded to the frame's body radius and lifted on the host's `elevationStyle`, never a card; `drivenRingColor` draws the thin ring that says the person drives it; `framed={false}` draws the same element tree flush in a pane so a body is not remounted when it moves), `HappierControlCapsule` holds a group of controls on the floating material for the `controls` slot (`HAPPIER_CONTROL_CAPSULE_METRICS`, `HAPPIER_CONTROL_CAPSULE_BUTTON_SIZE`; the material is a backing, not a clip, so a control's touch target may overhang the band without the capsule growing), and `HappierIdentityCapsule` names what the frame shows (a Machine, with a `leading` status dot) as plain text, never a live region. `HappierStatusCapsule` remains the announcing capsule for a state that is not normal. `resolveFloatingFrameSettleTransition` returns the duration, critically damped `linear()` curve and transitioned properties a released frame travels on, and `resolveFloatingFramePlacementStyle` places a rectangle the way the frame does (on the web a compositor `transform` for its position, so only a size change lays out), for a host that draws the body in another layer and must move it in step; `HAPPIER_FLOATING_FRAME_METRICS.resizeStep` is the one resize step for the grip's keys and a host's Larger/Smaller. On the web the controls reveal on hover and focus for a pointer that hovers and stay shown for one that cannot (`(hover: none)`, or once a touch reaches the frame). The platform pointer boundary comes from the `pointer` prop or the presentation host's `companionPointer`; without one the frame moves by keyboard and menu only. It has no target, Session, network or trust props. In 0.3 development source the Session viewer is its first consumer: it frames the retained Computer or Browser body, publishes its settled rectangle to the shell's measured Voice/pet geometry and moves the reading column aside on snap. Development-only until 0.3 ships.
 
 The public root and `/components` export the themed `FloatingFrame` adapter and
 its props over that same neutral owner. It supplies host theme and accessibility
@@ -650,6 +673,21 @@ Declarative metric, table and single-series chart nodes use [typed data-source r
 
 The development public `@happier-dev/plugin-ui/presentation` palette also exposes finite neutral series, grids, intervals, capacity, composition, ranked rows and outcome forms from that same data owner. Callers supply identities, exact values, labels, units and any qualified projections; charts do not fetch Usage, infer accounting totals or decide status. A missing observation remains distinct from zero. Compact presentation retains exact accessible values rather than truncating the dataset. Composition takes an explicit whole, so overlapping categories retain their supplied denominator instead of becoming a misleading stacked total. App tooltip and scrolling-frame adapters may wrap shared visuals, but own no second plot geometry. Capacity and row proportions reuse the existing progress primitive; ledgers remain `DataTable`. The existing declarative one-series `Chart` is the widgets-owned consumer for the subsequent AR-2 renderer consolidation. Visible ink may be compacted through a caller formatter (`317M`, `$1,555`) while assistive technology keeps the exact value: `Metric` adds `hero`/`stat` sizes with a visible label and caption, `RankedRows` takes an explicit whole for share chips and leading identity marks, and a series takes one labelled reference level (a typical day) drawn as a quiet rule. Stacked areas part on a thin paper seam rather than an outline.
 
+In development source, `StackedSeriesChart` line appearance and `BurnUpChart` can fill a band between two caller-supplied series on the same scale. Missing, non-finite or inverted bounds break the fill; an isolated point has no area. Bounds retain their exact values in the chart's accessible readout and table. The caller supplies any range meaning and sample-count disclosure; the renderer does not infer confidence or forecast facts.
+
+The unreleased machine-vitals forms extend this same neutral owner rather than
+adding app-owned chart geometry. `StackedSeriesChart` accepts a caller-labelled
+warning/error threshold, clipping its semantic ink to the values above that
+level. A caller-supplied mean/max band can expose a bucket's upper edge without
+discarding either exact value. Mirrored series use signed coordinates around
+zero while their readouts retain absolute magnitudes; callers choose direction
+and units. [`CoreLoadBars`](../packages/plugin-ui/src/presentation/data/CoreLoadBars.tsx)
+reuses the series/bar owner, orders declared performance/efficiency clusters,
+wraps by measured width and keeps each core's exact accessible label. Unknown
+observations remain unknown. These forms decide no machine pressure, polling,
+sample cadence or alert status; those belong to the
+[machine-vitals owner](cli-architecture.md#machine-vitals-03-development).
+
 `IntervalTimeline` also accepts point events: one known coordinate, without an inferred duration or end. The shared owner places caller-supplied marker ink and retains exact rows when the plot cannot fit. `CapacityBar` can draw a remaining-capacity projection using the same progress owner, with the projected solid remainder bounded by the current remainder. `CompositionStrip` offers a compact static/export legend; art may supply palette and type ink, but every series keeps its supplied whole and exact accessible share. Usage Reset, paced meters and recap cards consume these seams rather than owning private timeline, overlay or segmented-bar geometry.
 
 Metric comparisons project a typed value and authored label with explicit
@@ -737,16 +775,25 @@ their ordinary Resource/renderer rights. There is no input-type callback registr
 
 Actions, Workflow input adapters and widgets consume the neutral
 [field owner](../packages/protocol/src/inputs/inputFields.ts) and
-[options resolver](../packages/protocol/src/inputs/inputOptions.ts). A consuming
-field cannot currently combine its type with static choices. Contributed typed
-fields cannot declare a source different from their type source; host fields
-can declare an explicit source. Workflow input declarations retain their
-existing domain exclusion between a type and an explicit source or enum.
-Broader authored field constraints are not yet supported across executable
-consumers. The shared
+[options resolver](../packages/protocol/src/inputs/inputOptions.ts). A field has a
+noun `title` and an optional localized `prompt` for its setup question. Widget
+setup, group Inputs, saved-group Add and shared Action/Workflow fields show
+`prompt ?? title`; summaries and value descriptions keep the noun title. The
+prompt is presentation-only: it changes neither value admission, requiredness
+nor authority. A typed consuming field can declare static choices that narrow
+its type's schema; choices never admit values rejected by that schema. Static
+choices also intersect the type's declared Resource choices when it has them;
+an unavailable Resource fails closed. Neutral fields can also declare an
+explicit source whose resolved choices intersect both the type schema and its
+declared Resource choices. Workflow input declarations retain their
+existing domain exclusion between a type and an explicit source or enum, and
+public plugin Action hints still do not admit arbitrary `optionsSourceId`.
+The shared
 [value admission](../packages/protocol/src/inputs/inputTypeRuntime.ts) intersects
 the type schema with resolved choices for picker results, saved inputs and mounted
-followed values, failing closed when a declared dynamic constraint is unresolved.
+followed values and headless contributed Action submissions, failing closed
+when a declared dynamic constraint is unresolved. Choices are compared with
+the submitted value before host normalization, and disabled choices are refused.
 Native Session and Workspace schemas confer no read authority
 and unconstrained exact references add no discovery prerequisite. Discovery
 admits the current consuming descriptor and grants before reading choices.
@@ -965,7 +1012,15 @@ owner. `still` defaults true; false admits event-only pose transitions, not
 ambient or microphone-driven motion. Status cells retain the host's motion,
 reduced-motion and presentation rules. `SetupBlockTile` and `SetupBlockGrid`
 delegate to the existing setup owners. `HappierSetupSteps` is the one ordered
-composition over `HappierStep`, consumed by both the app and author `SetupSteps`.
+composition over `HappierStep`, consumed by both the app and author `SetupSteps`:
+setup states (done/current/upcoming) and reported progress
+(running/waiting/failed/cancelled) in a numbered rail, a glyph checklist or
+compact lines. The app's former private progress checklist is deleted; system
+tasks, imports, plugin transcript activity, machine setup and creation progress
+all render it. `HappierLocalDateTimeField` is the one typed-or-picked local
+date and time; the host supplies its platform picker through the presentation
+host's `localDateTimePicker` (absent, the field is typed alone), and the app's
+`LocalDateTimeEditor` only binds its theme and that picker.
 Author `SelectionTiles` forwards the shared owner's useful geometry controls,
 bare mark, badge, test identity and footer; the app no longer synthesizes mark
 glyph tokens. Optional host bindings have explicit author fallbacks; they do
@@ -1248,6 +1303,23 @@ GitHub comparison evidence uses its existing configured-source Action and
 validated continuations; display projections do not become authority or select
 credentials. Missing backend/model capabilities fail closed rather than enabling
 an id-based host fallback.
+
+Repository publishing selects concrete deployments through the hosting registry,
+not static declarations. Routing contributions may enumerate admitted deployments
+using the same Connected Account bases as remote detection. The registry also
+resolves the snapshot-selected Git remote through its canonical detector and keeps
+its repository coordinates. Publish targets carry the qualified provider id and
+base URL; an unavailable or ambiguous selection is refused before provider writes.
+GitHub supports cloud target discovery without a remote. Configured GitHub
+Enterprise origins are admitted, but the current publishing adapter still refuses
+Enterprise provisioning. Azure DevOps and Bitbucket publishing retains coordinates
+from an existing recognized remote; empty-repository target discovery is not
+implemented for those providers.
+
+Forge throttling uses the canonical `REMOTE_RATE_LIMITED` failure and, when the
+forge supplies one, `retryNotBeforeMs`. PR and repository-provisioning responses
+share the validated failure fields. Git publishing, PR reads, checkout, clone and
+stacked actions preserve that retry instant without inventing a fallback deadline.
 
 ### Machine-native GitHub credentials (0.3 development)
 
@@ -1792,6 +1864,12 @@ Buffered catalog, npm metadata, key and attestation reads follow explicit
 caller/operator byte budgets without separate implicit defaults or clamps.
 These JSON reads still materialize their values in memory; this policy is not a
 streaming JSON or hostile-input memory-isolation guarantee.
+Archive staging reads complete `package.json` and `ui-artifacts.json` documents
+without a separate 1 MiB ceiling, while retaining strict JSON and semantic
+validation. The tar parser's bounded PAX metadata buffer remains: oversized
+metadata is ignored by that parser, not treated as a staging JSON quota. npm
+resolution retains all blocked newer versions needed to explain its selected
+version, without a 32-version evidence ceiling.
 Accepted daemon installation changes retain their existing drain/status recovery
 contract; ending a caller's observation does not cancel an accepted effect.
 
@@ -1801,6 +1879,40 @@ wait for ownership or caller cancellation rather than failing after ten seconds.
 Unknown lock bytes are not reclaimed merely because they are old. Exact dead
 owner recovery, successor protection, compare-and-swap and atomic publication
 remain at the existing lock/publication owners.
+
+The daemon's server report projects only persisted installation facts. Fresh
+reporter lifetimes rejoin an unchanged materialization without a revision or
+change event; a real semantic change still replaces it. Release-less manifest
+and UI declarations stay on live daemon/device custody paths and are not
+persisted. Older descriptor-bearing reports remain accepted through the same
+persisted-fact projection.
+
+Executable startup has no implicit handshake or WebSocket-connect deadline.
+Authored budgets are honored without a shorter host clamp; cancellation and
+actual process/transport terminal facts settle pending startup, including an
+asynchronous handshake decoder. Plugin tool readiness similarly waits under
+its operation signal rather than borrowing diagnostic probe timeouts. Elapsed
+time alone does not make a plugin persistently unavailable.
+
+Executable RPC request/handler/write queues, callback queues and plugin
+WebSocket backlogs have no implicit count or aggregate-byte ceilings. Explicit
+authored budgets remain enforceable; this is not a bounded aggregate-memory
+guarantee. Individual frame/message and encoded-header byte contracts, RFC
+protocol-token validation and the WebSocket driver's peer-security defaults
+remain. In particular, the driver retains its fragment/chunk allocation
+protections documented in
+[GHSA-96hv-2xvq-fx4p](https://github.com/websockets/ws/security/advisories/GHSA-96hv-2xvq-fx4p),
+without Happier's former tighter 1,024-fragment override.
+
+Plugin KV and Secrets owner locks wait for ownership or operation/occurrence
+cancellation, without an age-based stale-owner deadline. Permission-grant
+reads, requests and execution no longer borrow the session-control HTTP
+deadline; a cold grant read waits for its authoritative result instead of
+substituting an empty local projection. Grant security checks remain unchanged.
+Account Settings/Data HTTP requests likewise use their Account/operation
+cancellation without a descendant deadline, including Account Data's real
+encryption-currentness preflight. Currentness and mode checks still fail closed
+before disclosure or mutation.
 
 Source registries and npm profile, scope and paused-source inventories have no
 independent count ceilings. Mutation receipts remain for the npm registry file's

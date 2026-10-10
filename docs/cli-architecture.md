@@ -80,13 +80,26 @@ private Sync source route retain the local profile for credentials and requester
 custody, while Workspace and Source addressing uses the admitted Home id. Current
 Machine admission and requester authorization remain required.
 
-Finite Project script/preparation and local saved-review Actions use the same exact
-Home admission helper. Finite execution keeps the original local profile for
+Finite Project script/preparation, declared Service admission, passive definitions
+and readiness, and local saved-review Actions use the same exact Home admission
+helper. Project execution/review keeps the original local profile for
 requester credential/custody validation, then uses the admitted Home for Account
 rows and Workspace refs. Private Account row and setup-trust readers admit that
 Home through the exact binding without relaxing requester Account/HTTP custody
 equality. Saved-review filesystem access instead receives the active local profile
 after admission; retained directory and Session authorization checks still apply.
+
+Account Project listing and metadata keep the admitted Home in refs and row keys.
+Sync reads recover that Home from the accepted endpoint row before topology checks;
+usage transport receives the admitted request Home. The private requester Artifact
+projection validates qualified refs through the same exact binding while its HTTP
+route and credentials remain attached to the original local profile.
+
+Worker Status, preferences, source inspection and clean-copy preparation also
+admit the qualified Home at their CLI host adapters. Snapshots, worker candidates
+and dequeue route checks retain that Home; local executor and HTTP credentials
+retain their captured profile. The shared Account Action target guard applies the
+same exact binding without replacing signed-request or cryptographic Home checks.
 
 Daemon authenticated startup establishes an exact descriptor for a saved URL-only
 profile through `server/serverProfiles.ts#refreshServerProfileHomeConnectionDescriptor`
@@ -425,10 +438,27 @@ Compose containers, networks and volumes; fixture cleanup removes its own resour
 This is development-source Linux qualification for Docker 29.9.0 / Compose 5.6.0,
 not stable/preview availability or macOS/Windows certification.
 
-Flox 1.18.1 remains `native_service_lifecycle_unsupported`: the installed binary
-requires activation before services Start and stops services when the last
-activation ends. A shell-owned activation holder would not meet the required
-starter-independent native lifetime. Selected-worker native/non-host effects
+Builtin Flox 1.18.1 uses the owned-process mode: Happier owns a foreground
+`flox activate --no-start-services -c ...` which starts only the selected service,
+streams `flox services logs --follow`, and observes that service through real
+`flox services status --json` array output. The activation recipe exits on native
+Stop or completion and propagates a failed service's exit code. An already-active
+selected service is refused before taking cleanup custody. A log follower alone
+remains alive after service exit because Flox keeps its internal service
+manager running. The recipe therefore uses the incumbent Project supervisor's
+observation cadence, with no separate deadline, restart policy or durable registry.
+Stop signals the activation root first so its signal/exit cleanup can ask Flox
+to stop the selected service inside that activation. The incumbent process
+supervisor then confirms owned-tree settlement; signalling descendants first
+can kill Flox's cleanup watchdog and strand its internal manager. The existing
+termination join budget still bounds the caller's wait, not resource custody.
+Graceful daemon restart
+retires this owned activation; a fresh admitted Start creates a new occurrence,
+rather than adopting it as a starter-independent native resource. Optional endpoint
+discovery remains the existing owned-tree observation; no address means no HTTP
+health claim. This is development-source Linux qualification for the installed
+1.18.1-gf264cf2 binary, not stable/preview availability or macOS/Windows certification.
+Selected-worker native/non-host effects
 still return `project_service_worker_effect_unavailable`; their effect/currentness
 producer is separate from these native codecs.
 
@@ -1850,6 +1880,17 @@ even if its SIGTERM handler exits successfully. Caller-owned cancellation and tr
 termination hooks remain in effect. Bash argv stays literal and keeps its existing
 uncapped output behavior.
 
+In development source, `processes/census/processCensus.ts` owns asynchronous process
+observations for identity, Doctor, execution-run statistics, terminal custody,
+session correlation and local-services inventory. Linux reads procfs without spawning;
+macOS and Windows call the existing native helper's `process-census` subcommand.
+Shared reads coalesce only while in flight; identity-sensitive callers request a fresh
+read. Persisted start witnesses retain their existing derivation. Private argv, paths
+and the narrow daemon-ownership environment projection are read only for the daemon's
+principal. `processes/tree/processTree.ts` owns pure lineage and containment queries
+over those rows, without per-hop process reads or a depth limit. Synchronous
+`cli-common/processInstance` lock fingerprints retain their separate contract.
+
 The shared CLI process-tree owner gives Windows `taskkill` the containing
 teardown phase's budget and spends only the remainder on liveness checks. A
 hung tool is force-stopped at the same subprocess boundary. Cleanup that cannot
@@ -2989,6 +3030,73 @@ The identity-free env-derived-profile adoption path carries the credential's mac
 account and reconnect-cursor maps into an empty named profile. It leaves existing
 destination state alone and remains disabled after a Home identity is observed;
 it does not repair an already-split installation.
+
+### Machine vitals (0.3 development)
+
+The current, unreleased machine-vitals primitives keep sampling and retained
+history at the daemon. The Home transports reads; it does not sample the host or
+persist a second history. [`createMachineVitalsReader`](../apps/cli/src/daemon/vitals/createMachineVitalsReader.ts)
+selects one platform reader with a stable `MachineVitalsReader.read` contract;
+[`createMachineVitalsSampler`](../apps/cli/src/daemon/vitals/createMachineVitalsSampler.ts)
+owns that reader's cadence, counter baselines, live ring and minute aggregation.
+[`startDaemon`](../apps/cli/src/daemon/startDaemon.ts) creates and starts this
+single sampler, attaches its read routes through the existing Machine RPC route
+cache, and stops it on shutdown or startup failure. Its history directory is
+`vitals` beside the installation's `daemon.state.json`. This is development
+source wiring, not released availability or a claim that summary publication,
+alerts or the entire machine-resource program are complete.
+
+The sampler uses one unref'ed timer and the fastest held demand: wall-minute
+alignment at 60 seconds without a viewer, 15 seconds for summary demand, and
+2 seconds for live or Overview demand. In-process live demand does not request
+Overview extras. GPU, thermal and battery reads are Overview-only, cached for
+15 seconds. Linux's always-on reader spawns zero processes. Its optional NVIDIA
+read first checks for an NVIDIA device and an executable `nvidia-smi` on PATH,
+then runs at most one system-tool call per extras read; a missing or failing tool
+does not hide the base sample. Non-Overview responses omit extras even when a
+concurrent Overview has populated that cache. Missing counters and stale/reset
+intervals remain unreported rather than becoming zero rates.
+
+[`minuteHistoryStore`](../apps/cli/src/daemon/vitals/history/minuteHistoryStore.ts)
+restores the last seven days from protected, UTC-day-partitioned JSONL files.
+Minute timestamps are the end of their measured interval; accepted minutes are
+strictly increasing, including after a backward wall-clock change. Startup and
+day rollover prune whole expired day files. Tolerant stored readers accept
+unknown fields, skip malformed rows and ignore an unfinished final append.
+Alert-episode rows use this same stream, not another store; this is a persistence
+seam, not an alert producer. Missing minutes remain gaps. The 1-hour projection
+combines the live ring with restored minutes, while 24-hour and 7-day projections
+use 5-minute and 30-minute buckets with means and maxima and explicit null
+buckets. Today's received/sent byte totals use observed minute deltas since UTC
+midnight. [`isSustainedV1`](../packages/protocol/src/machines/vitals/isSustainedV1.ts)
+evaluates consecutive minute records; a missing or stale minute breaks both a
+firing streak and a predicate-defined recovery streak.
+
+The [`read RPC owner`](../apps/cli/src/rpc/handlers/daemonMachineVitals.ts) serves
+latest snapshots and history immediately after current Machine admission; reads
+do not wait for the next sample or hold faster demand. A watch returns existing
+newer samples immediately, or uses the shared
+[`parkWatch`](../apps/cli/src/daemon/lifecycle/parkWatch.ts) and
+[`waitForChangeOrDeadline`](../apps/cli/src/daemon/lifecycle/waitForChangeOrDeadline.ts)
+owners for the 25-second park window, cancellation and cleanup. Only a parked
+watch holds its summary/Overview demand, and admission is checked again before
+disclosure after the wait. Watch deadline and sample cadence are separate
+contracts. The protocol's
+[`machine-vitals Action specs`](../packages/protocol/src/actions/specs/machineVitals.ts)
+declare safe get/history reads and the account-level summaries-list seam;
+declaring that seam does not establish a summary publisher.
+
+The UI's neutral
+[`machineResourceStore`](../apps/ui/sources/sync/domains/machines/resources/machineResourceStore.ts)
+reuses [`sharedSubscriptionStore`](../apps/ui/sources/sync/runtime/subscriptions/sharedSubscriptionStore.ts),
+keyed by server, Machine and view (or history range). Multiple viewers share one
+in-flight refresh and one outstanding watch per key, with no client polling
+timer. Last authorized values survive a failed read; unsupported older-daemon
+results remain `not_reported` until daemon-state change permits a retry.
+Summary warming reads once without holding a watch. Overview hooks hold demand
+only while the host is actively viewed and release it on unmount or inactivity;
+summary and in-process live consumers cannot activate Overview extras. Client
+state is a retained projection, not a second persisted history or sampler.
 
 ## RPC and tool bridge
 
