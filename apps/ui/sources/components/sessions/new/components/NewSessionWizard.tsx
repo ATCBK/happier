@@ -709,7 +709,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                         composerDecorations={props.footer.composerDocument?.composerDecorations ?? []}
                                         composerInputLock={props.footer.composerDocument?.composerInputLock ?? null}
                                         onSend={handleSend}
-                                        isSendDisabled={!canCreate || props.footer.composerDocument?.composerInputLock !== null}
+                                        isSendDisabled={!canCreate || (props.footer.composerDocument?.composerInputLock ?? null) !== null}
                                         disabled={props.footer.composerDocument?.composerInputLock?.mode === 'editAndSubmit'}
                                         isSending={isCreating}
                                         submitAccessibilityLabel={props.footer.submitAccessibilityLabel}

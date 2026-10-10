@@ -156,7 +156,7 @@ export function NewSessionComposerCard(input: Readonly<{
                         composerInputLock={props.composerDocument?.composerInputLock ?? null}
                         onSend={handleSend}
                         {...(input.voiceAffordance === 'none' ? { voiceAffordance: 'none' as const } : {})}
-                        isSendDisabled={!props.canCreate || props.composerDocument?.composerInputLock !== null}
+                        isSendDisabled={!props.canCreate || (props.composerDocument?.composerInputLock ?? null) !== null}
                         disabled={props.composerDocument?.composerInputLock?.mode === 'editAndSubmit'}
                         isSending={props.isCreating}
                         placeholder={props.inputPlaceholder ?? t('session.inputPlaceholder')}

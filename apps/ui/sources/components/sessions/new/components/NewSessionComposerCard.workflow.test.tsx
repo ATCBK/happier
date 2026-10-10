@@ -63,6 +63,13 @@ function panelProps(): NewSessionSimplePanelProps {
 }
 
 describe('New workflow entry', () => {
+    it('allows an ordinary session to submit without an optional composer document', async () => {
+        const props = panelProps();
+        const screen = await renderScreen(<NewSessionComposerCard panelProps={props} layout="screen" attachments={false} />);
+        expect(screen.findByTestId('new-session-composer-send')?.props.disabled).toBe(false);
+        await screen.update(<NewSessionComposerCard panelProps={{ ...props, canCreate: false }} layout="screen" attachments={false} />);
+        expect(screen.findByTestId('new-session-composer-send')?.props.disabled).toBe(true);
+    });
     it('retains the selected workflow and its inputs when the screen panel recomposes across phone width', async () => {
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
         const previous = getStorage().getState().profileScope;
