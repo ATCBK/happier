@@ -97,7 +97,7 @@ export function createWorkspaceActionAdapter(input: Readonly<{
                         if (findTarget.kind === 'native-message') {
                             if (target?.kind !== 'session' || !target.params.id) return workspaceActionFailure('workspace_find_unavailable');
                             cancelFind = input.chatFind.handoff.stageChat({ sessionId: target.params.id,
-                                serverId: authority.scope.serverId, accountId: authority.scope.accountId }, data.find, authority);
+                                serverId: authority.scope.serverId, accountId: authority.scope.accountId }, { ...data.find, target: findTarget }, authority);
                         } else {
                             if (target?.kind !== 'project' || target.params.workspaceRefId !== findTarget.workspaceRefId
                                 || (target.params.serverId && target.params.serverId !== findTarget.serverId)
