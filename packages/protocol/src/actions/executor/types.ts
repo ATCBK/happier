@@ -793,8 +793,12 @@ export type RuntimeActionExecuteArgsFor<TActionId extends RuntimeActionIdV1 = Ru
     actionId: TActionId;
     input: unknown;
     context: ActionExecutorContext;
-    /** Host-private current pool read for receiving placement; not a child-execution capability. */
-    executeCanonicalAction?: (actionId: 'machines.pools.get', input: unknown) => Promise<ActionExecuteResult>;
+    /** Host-private canonical child effects for admitted compound runtime Actions. */
+    executeCanonicalAction?: (actionId:
+      | 'machines.pools.get'
+      | 'projects.service.placement.set'
+      | 'projects.worker.status'
+      | 'localServices.launcher.start', input: unknown) => Promise<ActionExecuteResult>;
   }>;
 
 export type RuntimeActionExecuteArgs = RuntimeActionExecuteArgsFor<RuntimeActionIdV1>;

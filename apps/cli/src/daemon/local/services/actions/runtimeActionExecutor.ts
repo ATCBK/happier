@@ -25,7 +25,8 @@ export type LocalServicesRuntimeActionRoutes = Readonly<{
     previewRoutes?: Pick<LocalServicePreviewRoutes, 'getSnapshot'> & Partial<Pick<LocalServicePreviewRoutes, 'openOrCreate' | 'revoke'>>;
     actionRoutes?: Pick<LocalServiceActionRoutes, 'execute'>;
     publicPreviewRoutes?: LocalServicePublicPreviewRoutes;
-    relocateService?: (request: ProjectServiceRelocateInputV1, context: RuntimeActionExecuteArgs['context']) => Promise<ActionExecuteResult>;
+    relocateService?: (request: ProjectServiceRelocateInputV1, context: RuntimeActionExecuteArgs['context'],
+        executeCanonicalAction?: RuntimeActionExecuteArgs['executeCanonicalAction']) => Promise<ActionExecuteResult>;
 }>;
 
 type CreateLocalServicesDaemonRuntimeActionExecutorInput = Readonly<{
@@ -201,7 +202,7 @@ export function createLocalServicesDaemonRuntimeActionExecutor(
             if (!relocate) return disabledResult('local_services_runtime_action_unbacked');
             const request = ProjectServiceRelocateInputV1Schema.safeParse(parsed.input);
             if (!request.success) return invalidParametersResult;
-            const result = await relocate(request.data, args.context);
+            const result = await relocate(request.data, args.context, args.executeCanonicalAction);
             return result.ok ? result.result : result;
         }
 

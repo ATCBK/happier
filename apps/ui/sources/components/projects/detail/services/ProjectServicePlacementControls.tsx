@@ -36,6 +36,8 @@ import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import type { ServiceRow } from '@/sync/domains/local/services/serviceRow';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
+import { useMachinePoolSelection } from '@/components/sessions/new/hooks/machines/useMachinePoolSelection';
+import type { ServerScopedMachinePoolSelection } from '@/components/sessions/new/components/machineSelection/useMachineSelectionListModel';
 
 /** The SOURCE checkout a declared service belongs to: its Home, accepted ref and own Machine. */
 export type ProjectServiceSource = Readonly<{ serverId: string; refId: string; machineId: string }>;
@@ -119,16 +121,6 @@ export function useProjectServicePlacement(
   return { ...setting, address, actual, desiredPlacement, displayChoice, canSaveNextStart, canMove, save };
 }
 
-function sameChoice(left: ProjectExecutionChoiceV1, right: ProjectExecutionChoiceV1): boolean {
-  if (left.kind !== right.kind) return false;
-  if (left.kind === 'primary' || right.kind === 'primary') return true;
-  const a = left.destination;
-  const b = right.destination;
-  return a.kind === 'machine'
-    ? b.kind === 'machine' && a.machineId === b.machineId
-    : b.kind === 'pool' && a.poolId === b.poolId;
-}
-
 function noticeText(notice: ObservedWorkerSettingNotice): string | null {
   switch (notice) {
     case 'saving':
@@ -161,16 +153,17 @@ function choiceMatchesActual(
 }
 
 type MoveState =
-  | Readonly<{ phase: 'confirm'; destination: ProjectExecutionChoiceV1 }>
-  | Readonly<{ phase: 'requesting'; destination: ProjectExecutionChoiceV1 }>
-  | Readonly<{ phase: 'approval'; destination: ProjectExecutionChoiceV1; artifactId: string }>
+  | Readonly<{ phase: 'resolving'; destination: ProjectExecutionChoiceV1 }>
+  | Readonly<{ phase: 'confirm'; destination: ProjectExecutionChoiceV1; selectedMachineId: string }>
+  | Readonly<{ phase: 'requesting'; destination: ProjectExecutionChoiceV1; selectedMachineId: string }>
+  | Readonly<{ phase: 'approval'; destination: ProjectExecutionChoiceV1; selectedMachineId: string; artifactId: string }>
   | Readonly<{ phase: 'refused'; text: string; code?: string }>
   | null;
 
 /**
  * Runs `projects.service.relocate` through the canonical Action front door for the Account that
- * showed the service. The single reviewed set-plus-Move producer (Main71) is not published: today
- * the catalog keeps the Action off every surface, which this surface reports as is.
+ * showed the service. Its request carries the placement CAS and reviewed exact Machine effect so
+ * the source coordinator can settle the single set-plus-Move producer before native Stop.
  */
 async function requestServiceRelocation(
   input: Readonly<{
@@ -178,6 +171,8 @@ async function requestServiceRelocation(
     serviceName: string;
     actual: ManagedActual;
     destination: ProjectExecutionChoiceV1;
+    currentPlacement: ReadyPlacement;
+    selectedMachineId: string;
     expectedAccountId: string;
     signal: AbortSignal;
     onApprovalPending: (registration: ActionApprovalRegistration) => void;
@@ -212,6 +207,16 @@ async function requestServiceRelocation(
             ...(input.actual.declaration ? { declaration: input.actual.declaration } : {}),
           },
           destination: input.destination,
+          desiredPlacement: {
+            workspace: input.address,
+            serviceName: input.serviceName,
+            expectedRevision: input.currentPlacement.revision,
+            expected: input.currentPlacement.provenance === 'saved'
+              ? { kind: 'value', value: input.currentPlacement.placement }
+              : { kind: 'absent' },
+            value: { ...input.currentPlacement.placement, runsOn: input.destination },
+          },
+          selectedTarget: { machineId: input.selectedMachineId },
         },
         context: {
           surface: 'ui',
@@ -270,11 +275,30 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
   const observation = useProjectServicePlacementObservation(props.serviceName);
   const move = observation.attachment ? { phase: 'operation' as const, ...observation.attachment } : requestedMove;
   const { binding } = useServerCredentialAccountScopeBinding(props.source.serverId);
+  const poolSelection = useMachinePoolSelection({
+    requestKey: JSON.stringify(['project-service-move', props.source.serverId, props.source.refId, props.serviceName]),
+    scopeKey: binding?.accountId,
+    purpose: 'service-start',
+    workspace: placement.address,
+    ...(props.declaration?.memoryDemand ? { memoryDemand: props.declaration.memoryDemand } : {}),
+    onResolved: target => setMove(current => current?.phase === 'resolving'
+      && current.destination.kind === 'workers'
+      && current.destination.destination.kind === 'pool'
+      && current.destination.destination.poolId === target.poolId
+      ? { phase: 'confirm', destination: current.destination, selectedMachineId: target.machineId }
+      : current),
+  });
   const moveRequest = React.useRef<AbortController | null>(null);
   React.useEffect(() => {
     setMove(null);
+    poolSelection.cancelPendingSelection();
     return () => { moveRequest.current?.abort(); };
-  }, [binding, props.source.serverId, props.source.refId, props.source.machineId, props.serviceName]);
+  }, [binding, poolSelection.cancelPendingSelection, props.source.serverId, props.source.refId, props.source.machineId, props.serviceName]);
+  React.useEffect(() => {
+    if (requestedMove?.phase !== 'resolving'
+      || (poolSelection.status.kind !== 'unavailable' && poolSelection.status.kind !== 'error')) return;
+    setMove({ phase: 'refused', text: t('projectServices.moveRefused'), code: 'service_target_selection_required' });
+  }, [poolSelection.status, requestedMove?.phase]);
 
   const state = placement.state;
   const ready = state.kind === 'ready' ? state.value : null;
@@ -288,6 +312,9 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
   const actualMachine = useServerScopedMachine(props.source.serverId, actual?.machineId ?? '');
   const pendingDestination = move && move.phase !== 'refused' ? move.destination : null;
   const pendingLabel = useWorkerDestinationLabel(props.source.serverId, pendingDestination, props.source.machineId);
+  const pendingMachineId = move && move.phase !== 'refused' && move.phase !== 'operation' && move.phase !== 'resolving'
+    ? move.selectedMachineId : null;
+  const pendingMachine = useServerScopedMachine(props.source.serverId, pendingMachineId ?? '');
 
   const approval = useActionApprovalContinuation({
     scopeKey: JSON.stringify(['projects.service.relocate', props.source.serverId, props.source.refId, props.serviceName]),
@@ -318,10 +345,13 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
     && operation?.observation === 'available' && observed?.status === 'absent';
 
   const custodyKnown = observed?.status === 'present' || observed?.status === 'absent';
-  const moving = move?.phase === 'requesting' || move?.phase === 'approval' || (move?.phase === 'operation' && !stoppedBeforeStart);
+  const moving = move?.phase === 'resolving' || move?.phase === 'requesting' || move?.phase === 'approval'
+    || (move?.phase === 'operation' && !stoppedBeforeStart);
   const disabled = !ready || placement.busy || moving || !custodyKnown || !portable;
   const notice = noticeText(placement.notice);
-  const toName = pendingLabel.name ?? (pendingDestination?.kind === 'primary' ? sourceName : '');
+  const toName = pendingMachineId
+    ? (pendingMachine ? getMachineDisplayName(pendingMachine) : pendingMachineId)
+    : pendingLabel.name ?? (pendingDestination?.kind === 'primary' ? sourceName : '');
   const operationBanner = move?.phase === 'operation' ? (
     <AttentionBanner
       testID={`${testID}.move.operation`}
@@ -386,31 +416,48 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
               ? t('projectServices.runsHere')
               : label.name ? t('projectServices.runsOnWorker', { name: label.name }) : undefined;
 
-  const choose = (choice: ProjectExecutionChoiceV1) => {
+  const choose = (choice: ProjectExecutionChoiceV1, selectedPool?: ServerScopedMachinePoolSelection) => {
     setPickerOpen(false);
     if (!ready || !custodyKnown || !portable || placement.busy || moving) return;
     if (actual) {
       // A running service never moves on selection: a different target asks first, the same one is a no-op.
-      if (placement.canMove && !choiceMatchesActual(choice, actual, props.source.machineId)) setMove({ phase: 'confirm', destination: choice });
+      if (!placement.canMove || choiceMatchesActual(choice, actual, props.source.machineId)) return;
+      if (choice.kind === 'workers' && choice.destination.kind === 'pool') {
+        if (!selectedPool || choice.destination.selection !== 'automatic') {
+          setMove({ phase: 'refused', text: t('projectServices.moveRefused'), code: 'service_target_selection_required' });
+          return;
+        }
+        setMove({ phase: 'resolving', destination: choice });
+        void poolSelection.selectPool(selectedPool);
+        return;
+      }
+      setMove({ phase: 'confirm', destination: choice,
+        selectedMachineId: choice.kind === 'primary' ? props.source.machineId : choice.destination.machineId });
       return;
     }
-    if (!placement.canSaveNextStart || sameChoice(choice, ready.placement.runsOn)) return;
+    if (!placement.canSaveNextStart || projectExecutionChoicesEqualV1(choice, ready.placement.runsOn)) return;
     void placement.save({ ...ready.placement, runsOn: choice });
   };
 
-  const confirmMove = async (destination: ProjectExecutionChoiceV1) => {
+  const confirmMove = async (destination: ProjectExecutionChoiceV1, selectedMachineId: string) => {
     if (!actual || !placement.canMove || !portable || !binding?.isCurrent() || moveRequest.current) return;
+    if (!ready) {
+      setMove({ phase: 'refused', text: t('projectServices.moveRefused'), code: 'service_target_selection_required' });
+      return;
+    }
     const lifetime = new AbortController();
     moveRequest.current = lifetime;
     const retirement = binding.onRetire(() => lifetime.abort());
-    setMove({ phase: 'requesting', destination });
+    setMove({ phase: 'requesting', destination, selectedMachineId });
     try {
       const result = await requestServiceRelocation({
         address: placement.address, serviceName: props.serviceName, actual, destination,
+        currentPlacement: ready, selectedMachineId,
         expectedAccountId: binding.accountId, signal: lifetime.signal,
         onApprovalPending: registration => {
           approval.requestApproval(registration);
-          setMove({ phase: 'approval', destination, artifactId: typeof registration === 'string' ? registration : registration.artifactId });
+          setMove({ phase: 'approval', destination, selectedMachineId,
+            artifactId: typeof registration === 'string' ? registration : registration.artifactId });
         },
       });
       if (lifetime.signal.aborted) return;
@@ -418,7 +465,9 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
         publishActionOperationObservation({ serverId: props.source.serverId, machineId: result.operation.scope.machineId,
           observation: 'available', snapshots: [result.operation] });
         setMove(null);
-        observation.attach({ destination, operationId: result.operation.operationId });
+        observation.attach({ destination: destination.kind === 'primary' ? destination
+          : { kind: 'workers', destination: { kind: 'machine', machineId: selectedMachineId } },
+          operationId: result.operation.operationId });
         return;
       }
       if (result.status === 'moved' || result.status === 'unchanged') {
@@ -429,8 +478,6 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
       setMove({
         phase: 'refused',
         text:
-          // The relocation producer is not published yet: the executor answers `unsupported`, and
-          // the catalog keeps the Action off every surface (`action_disabled`). Both mean the same.
           result.status === 'unsupported' || (result.status === 'failed'
             && (result.errorCode === 'action_disabled' || result.errorCode === 'unsupported_action'))
             ? t('projectServices.moveUnavailable')
@@ -507,6 +554,13 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
         }}
       />
       {notice ? <AttentionBanner testID={`${testID}.notice`} tone="neutral" title={notice} /> : null}
+      {move?.phase === 'resolving' ? (
+        <AttentionBanner testID={`${testID}.move.resolving`} tone="neutral" title={t('machinePools.resolvingTarget')}
+          secondaryAction={{ label: t('common.cancel'), testID: `${testID}.move.cancel`, onPress: () => {
+            poolSelection.cancelPendingSelection();
+            setMove(null);
+          } }} />
+      ) : null}
       {move?.phase === 'confirm' || move?.phase === 'requesting' ? (
         <AttentionBanner
           testID={`${testID}.move`}
@@ -518,7 +572,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
             testID: `${testID}.move.confirm`,
             loading: move.phase === 'requesting',
             disabled: move.phase === 'requesting',
-            onPress: () => void confirmMove(move.destination),
+            onPress: () => void confirmMove(move.destination, move.selectedMachineId),
           }}
           secondaryAction={{
             label: t('common.cancel'),

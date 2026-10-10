@@ -10,6 +10,9 @@ import { storage } from '@/sync/domains/state/storage';
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
 import { publishActionOperationObservation } from '@/sync/domains/actionOperations/actionOperationRuntime';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
+import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUtils';
+import type { ServerScopedMachinePoolSelection } from '@/components/sessions/new/components/machineSelection/useMachineSelectionListModel';
+import { getActionSpec } from '@happier-dev/protocol/actions';
 
 const remote = vi.hoisted(() => vi.fn());
 // The addressed daemons are the network boundary; placement, relocation and Action policy stay real.
@@ -36,7 +39,7 @@ vi.mock(
 );
 vi.mock('@/text', async () =>
   (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
-    translate: (key) => key,
+    translate: (key, params) => key === 'projectServices.moveConfirm' ? `${key}:${JSON.stringify(params)}` : key,
   }),
 );
 vi.mock(
@@ -78,6 +81,7 @@ async function setup(options: Readonly<{
   sharedObservation?: boolean;
 }>) {
   const writes: WorkspaceExecutionSettingsV1[] = [];
+  const poolReads: unknown[] = [];
   let placementReadsFail = false;
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
@@ -104,16 +108,34 @@ async function setup(options: Readonly<{
             cursor: writes.length,
           });
         }
+        if (path === '/v1/machines/pools/list') return json({ pools: [] });
+        if (path === '/v1/machines/pools/get') {
+          const { poolId } = JSON.parse(String(init?.body)) as { poolId: string };
+          poolReads.push({ poolId });
+          return json({
+            pool: { id: poolId, name: 'Build pool', description: null, revision: 1,
+              createdAt: 1, updatedAt: 1, members: [{ machineId: 'pool-worker', priorityTier: 0,
+                enabled: true, state: 'connected' }] },
+            availability: { state: 'known', connectedCount: 1, enabledCount: 1 },
+          });
+        }
         return null;
       },
+      serverFeatures: (() => {
+        const features = buildServerFeaturesResponse();
+        return { ...features, features: { ...features.features,
+          machines: { ...features.features.machines, pools: { enabled: true } } } };
+      })(),
     },
   );
+  const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+  await getServerFeaturesSnapshot({ serverId: fixture.home.id, force: true });
   // Ask first is the Action default; these cases waive it in the Account's canonical settings.
   const { settingsParse } = await import('@/sync/domains/settings/settings');
   const settingsScope = storage.getState().settingsScope;
   if (!settingsScope) throw new Error('expected_settings_scope');
   storage.getState().applySettingsForScope(settingsScope, settingsParse({ ...storage.getState().settings,
-    actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'projects.service.placement.set': ['ui'], 'projects.service.relocate': ['ui'], 'action.operations.cancel': ['ui'] } },
+    actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'projects.service.placement.set': ['ui'], 'projects.service.relocate': ['ui'], 'machines.pools.resolve': ['ui'], 'action.operations.cancel': ['ui'] } },
   }), (storage.getState().settingsVersion ?? 0) + 1);
   const serverId = fixture.home.id;
   const scope = { serverId, accountId: 'artifact-account' };
@@ -160,8 +182,16 @@ async function setup(options: Readonly<{
     confidence: 'high',
     actions: ['manage'],
   };
-  remote.mockImplementation(async ({ machineId, method }) => {
+  const workerStatusMethod = getActionSpec('projects.worker.status').bindings?.rpcMethod;
+  if (!workerStatusMethod) throw new Error('missing_worker_status_method');
+  remote.mockImplementation(async ({ machineId, method, params }) => {
     if (method === 'actionOperation.cancel.v1') return { kind: 'requested' };
+    if (method === workerStatusMethod) return {
+      eligible: machineId === 'pool-worker',
+      candidate: machineId === 'pool-worker' ? { serverId, machineId } : null,
+      load: { kind: 'unknown' },
+      explanation: machineId === 'pool-worker' ? 'load_unknown' : 'not_accepting',
+    };
     if (options.actualFails) throw new Error('owner_unavailable');
     return {
     protocolVersion: 1,
@@ -238,8 +268,22 @@ async function setup(options: Readonly<{
         });
     });
   };
+  const choosePool = async (poolId: string) => {
+    const selection: ServerScopedMachinePoolSelection = {
+      serverId,
+      accountId: 'artifact-account',
+      pool: { pool: { id: poolId, name: 'Build pool', description: null, revision: 1,
+        createdAt: 1, updatedAt: 1, members: [] },
+        availability: { state: 'known', connectedCount: 1, enabledCount: 1 } },
+    };
+    await act(async () => {
+      await screen.tree.findByType(WorkerDestinationPicker).props.onChoose({
+        kind: 'workers', destination: { kind: 'pool', poolId, selection: 'automatic' },
+      }, selection);
+    });
+  };
   const runsOn = () => screen.findAllByTestId('placement.runsOn')[0]!;
-  return { screen, writes, choose, runsOn, model: () => model!, serverId,
+  return { screen, writes, poolReads, choose, choosePool, runsOn, model: () => model!, serverId,
     failPlacementReads: () => { placementReadsFail = true; },
     setLifecycle: (key: string) => setLifecycle(key), setDetail: (open: boolean) => setDetail!(open),
     setSourceRef: (refId: string) => setSourceRef!(refId), attach: (operation: ActionOperationSnapshotV1) => attach!(operation) };
@@ -478,6 +522,24 @@ describe('Service Runs on through the placement and relocation Actions', () => {
         'projectServices.moveUnavailable',
       ),
     );
+    expect(writes).toEqual([]);
+  });
+
+  it('resolves an Automatic pool to one exact Machine before showing and executing Move review', async () => {
+    const poolId = '00000000-0000-4000-8000-000000000032';
+    const { screen, writes, poolReads, choosePool } = await setup({ running: true });
+    await choosePool(poolId);
+    await vi.waitFor(() => expect(screen.findByTestId('placement.move')).toBeTruthy());
+    expect(poolReads).toEqual([{ poolId }]);
+    expect(screen.getTextContent()).toContain('pool-worker');
+    await screen.pressByTestIdAsync('placement.move.confirm');
+    await vi.waitFor(() => expect(screen.findByTestId('placement.move.refused')).toBeTruthy());
+    expect(JSON.stringify(remote.mock.calls)).toContain('pool-worker');
+    expect(remote.mock.calls).toContainEqual([expect.objectContaining({
+      machineId: 'pool-worker', payload: expect.objectContaining({
+        purpose: 'service-start', workspace: expect.objectContaining({ refId: 'checkout' }),
+      }),
+    })]);
     expect(writes).toEqual([]);
   });
 });

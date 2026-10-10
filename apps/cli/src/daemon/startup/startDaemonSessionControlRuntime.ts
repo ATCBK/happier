@@ -199,6 +199,7 @@ import {
 } from '@/api/session/transcriptQueries';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { createLocalServicesDaemonRuntimeActionExecutor } from '@/daemon/local/services/actions/runtimeActionExecutor';
+import { createProjectServiceRelocationRoute } from '@/daemon/local/services/actions/projectServiceRelocationRoute';
 import { createLocalServicesDaemonFeatureGate } from '@/daemon/local/services/featureGate';
 import { pluginReloadController as localServicesPluginRuntimeController } from '@/plugins/runtime/reload/singleton';
 import type { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
@@ -2357,6 +2358,8 @@ export async function startDaemonSessionControlRuntime(
     /** Current registered finite installation, resolved at the same exact-target request boundary. */
     resolveProjectAction?: () => ActionExecutorDeps['projectAction'];
     resolveProjectWorkerAction?: () => ActionExecutorDeps['projectWorkerAction'];
+    /** Current source-daemon Sync preparation owner for compound service relocation. */
+    resolveWorkspaceSyncHandoffAdapter?: () => import('@/workspaces/sync/workspaceSyncHandoffAdapter').WorkspaceSyncHandoffAdapter | null;
     /** Canonical daemon owner for External Session hook installation mutations. */
     externalSessionPluginAdmissionOwner?: ExternalSessionPluginAdmissionOwner;
     /** Current exact daemon spawn transport; it may change after machine sync. */
@@ -11686,6 +11689,12 @@ export async function startDaemonSessionControlRuntime(
       token: params.credentials.token,
       accountId: readPreviewAccountIdFromToken(params.credentials.token),
       serverBaseUrl: params.serverBaseUrl,
+    }),
+    relocateService: createProjectServiceRelocationRoute({
+      serverBaseUrl: params.serverBaseUrl,
+      credentials: params.credentials,
+      projectManagedServices,
+      resolveWorkspaceSyncHandoffAdapter: () => params.resolveWorkspaceSyncHandoffAdapter?.() ?? null,
     }),
   };
   // Install-on-first-automation-attempt (user ruling, 2026-08-23). Startup deliberately does NOT

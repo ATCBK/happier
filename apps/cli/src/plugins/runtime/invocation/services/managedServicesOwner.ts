@@ -102,6 +102,8 @@ export type ProjectManagedServiceWitness = Readonly<{
     cwd: string;
     requester: RequesterWorkAttributionV1;
     serviceId: string;
+    /** Declaration execution class captured by the admitted native start. */
+    execution?: 'primary' | 'portable';
 }>;
 export type ProjectManagedServiceHandle = ManagedServiceHandle & ProjectManagedServiceWitness & Readonly<{
     instanceId: string;

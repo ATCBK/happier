@@ -19,7 +19,7 @@ import {
   type ActionDefinitionSummaryV1,
   type ActionDefinitionV1,
 } from './actionDefinitionV1.js';
-import { zodSchemaToJsonSchemaObject } from './actionInputJsonSchema.js';
+import { ActionJsonSchemaProjectionError, zodSchemaToJsonSchemaObject } from './actionInputJsonSchema.js';
 
 export type SerializedActionSpec = ActionDefinitionSummaryV1;
 
@@ -150,6 +150,18 @@ export function serializeActionSpec(
   params?: ActionCatalogSurfaceParams,
 ): SerializedActionSpec {
   const projection = resolveActionCatalogSurfaceProjection(spec, params?.surface);
+  let outputSchema: Readonly<Record<string, unknown>> | undefined;
+  if (projection.outputSchema) {
+    try {
+      outputSchema = zodSchemaToJsonSchemaObject(projection.outputSchema);
+    } catch (error) {
+      // Output schemas are optional discovery metadata. One genuinely
+      // unrepresentable output must not hide every otherwise discoverable
+      // Action; omit only that unsupported claim. Input projection remains
+      // strict in actionSpecToActionDefinitionV1 because callers author it.
+      if (!(error instanceof ActionJsonSchemaProjectionError)) throw error;
+    }
+  }
   return {
     id: spec.id,
     title: spec.title,
@@ -166,7 +178,7 @@ export function serializeActionSpec(
     inputHints: projection.inputHints ?? null,
     ...(spec.toolExposure ? { toolExposure: spec.toolExposure } : {}),
     ...(spec.contextualDefaults ? { contextualDefaults: spec.contextualDefaults } : {}),
-    ...(projection.outputSchema ? { outputSchema: zodSchemaToJsonSchemaObject(projection.outputSchema) } : {}),
+    ...(outputSchema ? { outputSchema } : {}),
     ...(spec.execution ? { execution: spec.execution } : {}),
     ...(spec.sideEffectClass ? { sideEffectClass: spec.sideEffectClass } : {}),
     ...(spec.operation ? { operation: spec.operation } : {}),
@@ -426,7 +438,12 @@ export function searchSerializedActionSpecsForSurface(params: Readonly<{
   isActionEnabled?: (id: ActionId) => boolean;
   additionalDefinitions?: readonly ActionDefinitionSummaryV1[];
 }>): readonly SerializedActionSpec[] {
+  const query = normalizeActionSearchQuery(params.query ?? '');
   const hostDefinitions = listActionSpecsForCatalogSurface(params)
+    // Search raw canonical metadata before projecting JSON Schema. Besides
+    // avoiding unrelated projection work, this prevents a non-matching
+    // Action's optional output metadata from influencing this query.
+    .filter((spec) => !query.text || actionSearchScore(spec, query) > 0)
     .map((spec) => getHostActionSearchSummary(spec, params));
   const hostIds = new Set(hostDefinitions.map((summary) => summary.definition.id));
   const additionalDefinitions = (params.additionalDefinitions ?? [])

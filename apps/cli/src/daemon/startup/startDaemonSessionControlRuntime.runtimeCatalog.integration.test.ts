@@ -40,6 +40,7 @@ import { decodeBase64, encodeBase64, encrypt } from '@/api/encryption';
 import { ApiMachineClient } from '@/api/apiMachine';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { createLocalServicesDaemonRuntimeActionExecutor } from '@/daemon/local/services/actions/runtimeActionExecutor';
 import { MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { materializeNextPendingQueueV2MessageViaHttp } from '@/api/session/pendingQueueV2Transport';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
@@ -14068,6 +14069,8 @@ describe('startDaemonSessionControlRuntime', () => {
         vi.mocked(startDaemonControlServer).mockClear();
         const registerLocalServicesPreviewRoutes = vi.fn();
         const registerLocalServicesRoutes = vi.fn();
+        const registerComputerRoutes = vi.fn();
+        const registerMachineAccessLossReceiver = vi.fn();
         const registerBrowserDiagnosticsRoutes = vi.fn();
         const registerBrowserRecordingRoutes = vi.fn();
         const registerSimulatorPreviewRoutes = vi.fn();
@@ -14094,6 +14097,8 @@ describe('startDaemonSessionControlRuntime', () => {
             getApiMachineForSessions: () => ({
                 registerLocalServicesPreviewRoutes,
                 registerLocalServicesRoutes,
+                registerComputerRoutes,
+                registerMachineAccessLossReceiver,
                 registerBrowserDiagnosticsRoutes,
                 registerBrowserRecordingRoutes,
                 registerSimulatorPreviewRoutes,
@@ -14154,13 +14159,13 @@ describe('startDaemonSessionControlRuntime', () => {
             startTarget: expect.any(Function),
         }));
         expect(registerLocalServicesPreviewRoutes).not.toHaveBeenCalled();
-        expect(registerLocalServicesRoutes).toHaveBeenCalledWith({
+        expect(registerLocalServicesRoutes).toHaveBeenCalledWith(expect.objectContaining({
             localServicesInventory: controlServerInput?.localServicesInventory,
             localServicesLauncher: controlServerInput?.localServicesLauncher,
             localServicesPreview: controlServerInput?.localServicesPreview,
             localServicesActions: controlServerInput?.localServicesActions,
             localServicesPublicPreview: controlServerInput?.localServicesPublicPreview,
-        });
+        }));
         expect(registerSimulatorPreviewRoutes).toHaveBeenCalledWith(expect.objectContaining({
             getSnapshot: expect.any(Function),
             dispatchAction: expect.any(Function),
@@ -14175,7 +14180,32 @@ describe('startDaemonSessionControlRuntime', () => {
             previewRoutes: controlServerInput?.localServicesPreview,
             actionRoutes: controlServerInput?.localServicesActions,
             publicPreviewRoutes: controlServerInput?.localServicesPublicPreview,
+            relocateService: expect.any(Function),
         });
+        const relocationExecutor = createLocalServicesDaemonRuntimeActionExecutor({
+            routes: apiLocalServicesRoutesProvider?.() as never,
+            featureGate: { isEnabled: () => true, refresh: async () => {} },
+        });
+        await expect(relocationExecutor({
+            actionId: 'projects.service.relocate',
+            input: {
+                workspace: { serverId: 'home', refId: 'workspace' },
+                serviceName: 'server',
+                requestId: 'move-startup-composition',
+                currentTarget: {
+                    kind: 'managed_service', managedServiceId: 'missing-service', machineId: 'machine-local-services',
+                    workspaceId: 'workspace', cwd: '/workspace',
+                    declaration: { workspaceRefId: 'workspace', selection: { kind: 'manifest', name: 'server' } },
+                },
+                destination: { kind: 'primary' },
+                desiredPlacement: {
+                    workspace: { serverId: 'home', refId: 'workspace' }, serviceName: 'server', expectedRevision: 'absent',
+                    expected: { kind: 'absent' }, value: { runsOn: { kind: 'primary' }, unavailable: 'fail' },
+                },
+                selectedTarget: { machineId: 'machine-local-services' },
+            },
+            context: { surface: 'ui', authority: 'present_user', serverId: 'home' },
+        })).resolves.toMatchObject({ ok: false, errorCode: 'unknown_managed_service' });
         expect(setSimulatorPreviewRoutesProvider).toHaveBeenCalledWith(expect.any(Function));
         const apiSimulatorRoutesProvider = setSimulatorPreviewRoutesProvider.mock.calls[0]?.[0] as
             | (() => unknown)

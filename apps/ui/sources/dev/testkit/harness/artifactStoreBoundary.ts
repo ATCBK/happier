@@ -259,6 +259,8 @@ export function createArtifactStoreBoundary(params: Readonly<{
 /** Real qualified client operations above the shared HTTP/CAS boundary. */
 export async function createPlainArtifactHomeFixture(serverUrl: string, options?: Readonly<{
     accountSettingsVersion?: number;
+    /** Optional real wire payload for feature-gated consumers using this Home fixture. */
+    serverFeatures?: unknown;
     /** Additional real Home HTTP routes needed by the consumer under test. */
     handleRequest?: (path: string, init?: RequestInit) => Promise<Response | null>;
 }>) {
@@ -275,7 +277,8 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
     setRuntimeFetch(async (input, init) => {
         const url = new URL(String(input));
         const path = `${url.pathname}${url.search}`;
-        if (url.pathname === '/health' || url.pathname === '/v1/auth/ping' || url.pathname === '/v1/features') return json({});
+        if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') return json({});
+        if (url.pathname === '/v1/features') return json(options?.serverFeatures ?? {});
         if (url.pathname === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
         if (url.pathname === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture({
             version: 0, updatedAt: 0, settingsVersion: options?.accountSettingsVersion,

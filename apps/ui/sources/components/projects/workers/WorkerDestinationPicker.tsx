@@ -7,7 +7,7 @@ import type {
   WorkspaceExecutionConfigAddressV1,
 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 
-import { useMachineSelectionListModel } from '@/components/sessions/new/components/machineSelection/useMachineSelectionListModel';
+import { useMachineSelectionListModel, type ServerScopedMachinePoolSelection } from '@/components/sessions/new/components/machineSelection/useMachineSelectionListModel';
 import { useMachinePoolGroups } from '@/components/sessions/new/hooks/machines/useMachinePoolGroups';
 import { useServerScopedMachineOptions } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 import { useNewSessionActiveServerSource } from '@/components/sessions/new/hooks/serverTarget/useNewSessionActiveServerSource';
@@ -58,7 +58,7 @@ export type WorkerDestinationPickerProps = Readonly<{
   /** Service anatomy (32s1, lab PICK): untitled rows, each pool named "Any worker" that picks when the service starts. */
   servicePresentation?: boolean;
   selected: ProjectExecutionChoiceV1 | null;
-  onChoose: (choice: ProjectExecutionChoiceV1) => void;
+  onChoose: (choice: ProjectExecutionChoiceV1, pool?: ServerScopedMachinePoolSelection) => void;
   selectedManagedMachine?: ManagedMachineSelectionDraft | null;
   onChooseManagedMachine?: (draft: ManagedMachineSelectionDraft) => void;
   initialManagedConfiguration?: ManagedMachineConfigurationContinuation;
@@ -173,7 +173,7 @@ function OpenWorkerDestinationPicker(props: WorkerDestinationPickerProps) {
           poolId: selection.pool.pool.id,
           selection: poolSelection,
         },
-      }),
+      }, selection),
     serverId,
     showFavorites: false,
     showRecent: false,

@@ -55,6 +55,7 @@ type Review = Readonly<{
     setupReview?: Readonly<{ code: 'project_setup_consent_required' | 'project_setup_effect_changed'; reviewedEffect: JsonValue; reviewedEffectDigest: string }>;
     declaration: ProjectServiceDeclarationRefV1;
     serviceId: string;
+    execution: 'primary' | 'portable';
     command: SupportedServiceCommand;
     processMode: ProjectManagedServiceSupervisionInput['processSpec']['mode'];
     nativeLifecycleLease?: ProjectNativeAdapterLeaseV1;
@@ -348,6 +349,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         const declaration = { ...request.declaration, workspaceRefId: association.workspace.id };
         return { kind: 'target', runtime, preparation, plan, declaration,
             serviceId: createProjectServiceDeclarationTargetIdV1(association.workspace, declaration.selection),
+            execution: service?.execution ?? 'primary',
             setupNotRequired: prepared.kind === 'notRequired', ...(prepared.kind === 'pendingApproval' ? { setupReview: {
                 code: prepared.code, reviewedEffect: projectNativeJsonValueForTransport(plan.reviewedEffect), reviewedEffectDigest: plan.reviewedEffectDigest } } : {}),
             command, processMode, ...(nativeLifecycleLease ? { nativeLifecycleLease } : {}), ...(builtinNative ? { builtinNative } : {}), ...(releaseNativeLifecycle ? { releaseNativeLifecycle } : {}), reviewedEffect: worker?.reviewedEffect ?? reviewedEffect,
@@ -496,7 +498,8 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                 cwd: current.command.kind === 'literal' ? current.command.cwd : current.command.resolution.cwd,
                 requester: { serverId: current.runtime.serverId, accountId: ingress.machineAdmission!.actorAccountId,
                     machineId: ingress.machineAdmission!.machineId, installationId: ingress.machineAdmission!.installationId },
-                serviceId: current.serviceId, specIdentity: selected.reviewedEffectDigest, signal: current.preparation.signal, isCurrent,
+                serviceId: current.serviceId, execution: current.execution,
+                specIdentity: selected.reviewedEffectDigest, signal: current.preparation.signal, isCurrent,
                 processSpec: { mode: current.processMode },
                 authorizeLaunch: async ({ signal }) => {
                     const launchInvocations = new Set<ProjectNativeEffectCaptureForHost>();

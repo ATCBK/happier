@@ -1849,6 +1849,7 @@ export async function startDaemon(
       ).machines.find(machine => machine.id === managedId) ?? null,
       externalActionAccountId,
       resolveProjectWorkerAction: () => projectWorkerAction,
+      resolveWorkspaceSyncHandoffAdapter: () => workspaceSyncRuntimeCustody.get()?.handoffAdapter ?? null,
       serverId: configuration.activeServerId,
       serverBaseUrl: resolveServerHttpBaseUrl(),
       runtimeActionExecute: browserRuntimeActionExecute,
