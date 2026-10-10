@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
 import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
 
 // File identities belong to Node, not Vite's client asset URL transform.
 const { URL: NodeURL } = getVitestNodeBuiltin<typeof import('node:url')>('node:url');
@@ -24,10 +25,12 @@ export type ServedHomeRequest = Readonly<{
 }>;
 
 type HomeSpec = Readonly<{ key: string; serverUrl: string; accountId: string; settings?: Readonly<Record<string, unknown>>;
-    accountMode?: 'plain' | 'e2ee'; credentials?: AuthCredentials }>;
+    accountMode?: 'plain' | 'e2ee'; credentials?: AuthCredentials; currentAccount?: boolean }>;
 
-function tokenFor(accountId: string): string {
-    return `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+function tokenFor(accountId: string, currentAccount = false): string {
+    return `header.${Buffer.from(JSON.stringify({ sub: accountId, ...(currentAccount ? {
+        provenance: AuthTokenProvenanceSchema.parse({ v: 1, kind: 'account', authority: 'present_user' }), tokenEpoch: 0,
+    } : {}) })).toString('base64url')}.signature`;
 }
 
 function accountOf(init: RequestInit | undefined): string | null {
@@ -117,7 +120,8 @@ export async function serveAccountHomes(params: Readonly<{
         const key = byOrigin.get(new URL(serverUrl).origin);
         const accountId = key ? accounts.get(key) : undefined;
         const spec = key ? specsByHome.get(key) : undefined;
-        return accountId ? { ...(spec?.accountId === accountId ? spec.credentials : undefined), token: tokenFor(accountId) } : null;
+        return accountId ? { ...(spec?.accountId === accountId ? spec.credentials : undefined),
+            token: tokenFor(accountId, spec?.accountId === accountId && spec.currentAccount === true) } : null;
     });
     return {
         homes,

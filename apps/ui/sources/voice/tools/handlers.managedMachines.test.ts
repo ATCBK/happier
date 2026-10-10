@@ -114,7 +114,7 @@ describe('Machines advertised UI and eligible Voice execution', () => {
   });
 
   it.each(['ui', 'voice'] as const)('reads presets through the named %s Home instead of the focused Home', async surface => {
-    const homeId = 'srv_par_recipes';
+    const homeId = `srv_par_recipes_${surface}`;
     const features = createRootLayoutFeaturesResponse({ features: { machines: { pools: { enabled: true } } },
       capabilities: { serverIdentity: { serverIdentityId: homeId } } });
     const preset = { id: 'preset', homeId, revision: 1, name: 'Guest recipe', owner: { kind: 'account', accountId: 'owner' },
@@ -125,8 +125,8 @@ describe('Machines advertised UI and eligible Voice execution', () => {
     const pool = { kind: 'resolved', poolId, machineId: 'machine', priorityTier: 1 };
     const settings = { experiments: true, featureToggles: { voice: true } };
     const home = await serveActionHomes({ homes: [
-      { key: 'compute', serverUrl: 'https://par-recipes.test', accountId: 'owner', settings },
-      { key: 'focused', serverUrl: 'https://par-recipes-focused.test', accountId: 'other' },
+      { key: 'compute', serverUrl: `https://par-recipes-${surface}.test`, accountId: 'owner', settings },
+      { key: 'focused', serverUrl: `https://par-recipes-focused-${surface}.test`, accountId: 'other' },
     ], route: request => request.home === 'compute' && request.path === '/v1/features' ? Response.json(features)
       : request.home === 'compute' && request.path === '/v1/machines/presets/list' ? Response.json(presets)
       : request.home === 'compute' && request.path === '/v1/machines/pools/resolve' ? Response.json(pool) : undefined });

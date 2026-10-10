@@ -223,6 +223,8 @@ describe('MachineDefaultsView', () => {
     await act(async () => {
       screen.pressByTestId('settings.machineDefaults.local.header');
     });
+    // An inherited category has nothing to reset until its real Account write is published.
+    expect(screen.findByTestId('settings.machineDefaults.local.keep:reset')).toBeNull();
 
     const field = screen.findAll(
       (node) => node.props?.itemTrigger?.title === 'When unused',
@@ -244,10 +246,10 @@ describe('MachineDefaultsView', () => {
       },
     });
 
-    // An inherited category has nothing to reset; an overridden one does, and Reset removes only it.
-    expect(
+    // The applied local override now offers Reset; removing another category preserves it.
+    await waitForHomeGovernance(() => expect(
       screen.findByTestId('settings.machineDefaults.local.keep:reset'),
-    ).toBeNull();
+    ).not.toBeNull());
     await act(async () => {
       screen.pressByTestId('settings.machineDefaults.unknown.header');
     });
@@ -259,6 +261,9 @@ describe('MachineDefaultsView', () => {
       retention: { kind: 'unused', afterMs: 1_800_000, effect: 'stop' },
       wakeOnAcceptedMessage: true,
     } });
+    const { storage } = await import('@/sync/domains/state/storage');
+    await waitForHomeGovernance(() => expect(storage.getState().settings.machineRetentionDefaultsV1).toEqual(state.writes.at(-1)));
+    await waitForHomeGovernance(() => expect(screen.findByTestId('settings.machineDefaults.unknown.keep:reset')).toBeNull());
   });
 
   it('offers explicit Until-delete wake off by default, preserves Stop wake defaults, and excludes destruction', async () => {

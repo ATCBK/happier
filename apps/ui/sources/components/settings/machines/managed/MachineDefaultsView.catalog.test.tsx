@@ -42,7 +42,7 @@ describe('Machine Defaults installed provisioner names', () => {
         };
         const features = createRootLayoutFeaturesResponse();
         const home = await serveActionHomes({ homes: [
-            { key: 'build', serverUrl: `https://par-defaults-${operation}.test`, accountId: 'owner', settings },
+            { key: 'build', serverUrl: `https://par-defaults-${operation}.test`, accountId: 'owner', settings, currentAccount: true },
         ], route: request => request.path === '/v1/features' || request.path === '/v1/features/authenticated'
             ? Response.json(features) : undefined });
         onTestFinished(() => {
@@ -92,7 +92,7 @@ describe('Machine Defaults installed provisioner names', () => {
         const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId: 'srv_build' } } });
         const home = await serveActionHomes({ homes: [
             { key: 'other', serverUrl: 'https://par-defaults-other.test', accountId: 'other' },
-            { key: 'build', serverUrl: 'https://par-defaults-build.test', accountId: 'owner' },
+            { key: 'build', serverUrl: 'https://par-defaults-build.test', accountId: 'owner', currentAccount: true },
         ], route: request => {
             if (request.home !== 'build') return undefined;
             if (request.path === '/v1/features' || request.path === '/v1/features/authenticated') return Response.json(features);
@@ -123,6 +123,7 @@ describe('Machine Defaults installed provisioner names', () => {
         const { useManagedProvisioners } = await import('./useManagedProvisioners');
         const catalog = await renderHook(() => useManagedProvisioners(focusedHome, undefined, controllers));
         await vi.waitFor(() => expect(catalog.getCurrent().loading).toBe(false));
+        expect(catalog.getCurrent().error).toBeNull();
         expect(catalog.getCurrent().provisioners.map(row => row.descriptor.title)).toEqual(['Local guest', 'Cloud service']);
         await catalog.unmount();
         const { MachineDefaultsView } = await import('./MachineDefaultsView');
