@@ -35,6 +35,10 @@ function matchRouteSegments(pattern: readonly string[], segments: readonly strin
     return dynamic ? 'dynamic' : 'static';
 }
 
+function routeStaticSegmentCount(pattern: readonly string[]): number {
+    return pattern.filter((part) => !(part.startsWith('[') && part.endsWith(']'))).length;
+}
+
 /**
  * The title key of the settings route at `pathname`, from the same registry that titles the native
  * header, so an in-content page header and the navigation bar can never disagree. A fully static route
@@ -46,7 +50,7 @@ export function resolveSettingsRouteTitleKey(pathname: string | null | undefined
     const normalized = pathname.trim().replace(/\/+$/, '') || '/';
     if (normalized !== '/settings' && !normalized.startsWith('/settings/')) return null;
     const segments = normalized === '/settings' ? [] : normalized.slice('/settings/'.length).split('/');
-    let dynamicMatch: TranslationKeyNoParams | null = null;
+    let dynamicMatch: Readonly<{ titleKey: TranslationKeyNoParams; staticSegments: number }> | null = null;
     for (const definition of SETTINGS_ROUTE_CHROME_DEFINITIONS) {
         if (!definition.titleKey) continue;
         const nameSegments = (definition.navigator ? `${definition.navigator}/${definition.name}` : definition.name).split('/');
@@ -56,10 +60,15 @@ export function resolveSettingsRouteTitleKey(pathname: string | null | undefined
         for (const candidate of candidates) {
             const match = matchRouteSegments(candidate, segments);
             if (match === 'static') return definition.titleKey;
-            if (match === 'dynamic' && dynamicMatch === null) dynamicMatch = definition.titleKey;
+            if (match === 'dynamic') {
+                const staticSegments = routeStaticSegmentCount(candidate);
+                if (dynamicMatch === null || staticSegments > dynamicMatch.staticSegments) {
+                    dynamicMatch = { titleKey: definition.titleKey, staticSegments };
+                }
+            }
         }
     }
-    return dynamicMatch;
+    return dynamicMatch?.titleKey ?? null;
 }
 
 /**
@@ -82,16 +91,21 @@ export function resolveSettingsNestedRouteName(
         return null;
     }
     const segments = pathSegments.slice(rootPattern.length);
-    let dynamicMatch: string | null = null;
+    let dynamicMatch: Readonly<{ name: string; staticSegments: number }> | null = null;
     for (const definition of SETTINGS_ROUTE_CHROME_DEFINITIONS) {
         if (definition.navigator !== navigator) continue;
         const nameSegments = definition.name.split('/');
         const candidate = nameSegments[nameSegments.length - 1] === 'index' ? nameSegments.slice(0, -1) : nameSegments;
         const match = matchRouteSegments(candidate, segments);
         if (match === 'static') return definition.name;
-        if (match === 'dynamic' && dynamicMatch === null) dynamicMatch = definition.name;
+        if (match === 'dynamic') {
+            const staticSegments = routeStaticSegmentCount(candidate);
+            if (dynamicMatch === null || staticSegments > dynamicMatch.staticSegments) {
+                dynamicMatch = { name: definition.name, staticSegments };
+            }
+        }
     }
-    return dynamicMatch;
+    return dynamicMatch?.name ?? null;
 }
 
 /**

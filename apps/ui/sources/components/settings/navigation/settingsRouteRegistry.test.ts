@@ -223,7 +223,7 @@ describe('settingsRouteRegistry', () => {
     it('keeps the Machines collection, its machine detail, setup and pool editors in one nested navigator', () => {
         const machines = getSettingsStackScreenDefinitions(translate as never, { navigator: 'machines' });
         expect(machines.map((definition) => definition.name)).toEqual([
-            'index', '[id]', 'managed/[id]', 'add', 'add/[provisioner]', 'presets/new', 'presets/[presetId]',
+            'index', '[id]/index', '[id]/[page]', 'managed/[id]', 'add', 'add/[provisioner]', 'presets/new', 'presets/[presetId]',
             'this-computer', 'defaults', 'pools/[poolId]', 'pools/new',
         ]);
         expect(machines.find((definition) => definition.name === 'pools/new')?.options.headerTitle).toBe('machinePools.add');
