@@ -1,5 +1,4 @@
 import React from 'react';
-import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { flattenTestStyle, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -62,15 +61,14 @@ describe('ProjectRefSelect', () => {
     expect(hasFieldBox()).toBe(true);
   });
 
-  it('is a value row on a phone: the label, the chosen ref and a press that opens the same menu', async () => {
+  it('is a value row on a phone: the label and the chosen ref, as the same menu\'s trigger', async () => {
     const { screen, hasFieldBox, menu } = await renderRefSelect(true);
     expect(hasFieldBox()).toBe(false);
     expect(screen.getTextContent()).toContain('Branch');
     expect(screen.getTextContent()).toContain('release/0.4');
-    expect(menu().props.open).toBe(false);
-    await act(async () => {
-      await screen.pressByTestIdAsync('ref.row');
-    });
-    expect(menu().props.open).toBe(true);
+    // The row is the menu's own trigger (its press runs the menu's toggle), not a second picker.
+    expect(menu().props.itemTrigger).toBeUndefined();
+    expect(typeof menu().props.trigger).toBe('function');
+    expect(screen.findByTestId('ref.row')?.props.onPress).toEqual(expect.any(Function));
   });
 });
