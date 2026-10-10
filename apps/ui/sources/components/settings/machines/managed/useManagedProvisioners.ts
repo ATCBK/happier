@@ -32,11 +32,13 @@ export function useManagedProvisioners(serverId: string, onApprovalPending?: (re
         void Promise.all(controllers.map(selected => client.read('machines.provisioners.list', { homeId, controller: selected },
             { signal: abort.signal, onApprovalPending: registration => approvalRef.current?.(registration) }))).then(results => {
             if (abort.signal.aborted || !binding.isCurrent()) return;
+            // Each controller answers for its own installs: one that cannot answer does not hide the others'.
             const failure = results.find(result => result.kind === 'failed');
+            const answered = results.some(result => result.kind === 'succeeded');
             setState(current => current.binding !== binding || current.requestKey !== requestKey ? current : {
                 ...current, loading: false,
-                provisioners: failure ? current.provisioners : results.flatMap(result => result.kind === 'succeeded' ? result.value.provisioners : []),
-                error: failure?.kind === 'failed' ? failure.code : null,
+                provisioners: answered ? results.flatMap(result => result.kind === 'succeeded' ? result.value.provisioners : []) : current.provisioners,
+                error: !answered && failure?.kind === 'failed' ? failure.code : null,
             });
         }).catch(() => {
             if (!abort.signal.aborted && binding.isCurrent()) setState(current => current.binding === binding && current.requestKey === requestKey

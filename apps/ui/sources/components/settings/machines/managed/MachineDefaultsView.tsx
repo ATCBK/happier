@@ -40,6 +40,7 @@ import {
 } from '../machinesDefaultsSettings';
 import { ManagedMachineKeepControl } from './ManagedMachineKeepControl';
 import { useManagedProvisioners } from './useManagedProvisioners';
+import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { useManagedProvisionerPresentation } from './useManagedProvisionerPresentation';
 import { projectManagedRetentionProviders } from './managedRetentionProviders';
 import {
@@ -79,7 +80,8 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
   const execution = useMountedActionExecution(activeHome.serverId);
   const writeSetting = useDeclaredSettingsWrite(execution);
   const machines = useMachineListForServer(activeHome.serverId);
-  const controllers = React.useMemo(() => (machines ?? []).flatMap(machine => machine.installationId
+  // Only a controller that is online can answer; an offline one would hold every name until it returns.
+  const controllers = React.useMemo(() => (machines ?? []).flatMap(machine => machine.installationId && isMachineOnline(machine)
     ? [{ machineId: machine.id, installationId: machine.installationId }] : []), [machines]);
   const provisioners = useManagedProvisioners(activeHome.serverId, undefined, controllers);
   const { localized } = useManagedProvisionerPresentation({ serverId: activeHome.serverId });

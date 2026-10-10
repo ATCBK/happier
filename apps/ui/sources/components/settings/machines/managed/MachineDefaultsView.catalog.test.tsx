@@ -98,6 +98,8 @@ describe('Machine Defaults installed provisioner names', () => {
             if (request.path === '/v1/features' || request.path === '/v1/features/authenticated') return Response.json(features);
             if (request.path !== '/v1/actions/machines.provisioners.list') return undefined;
             const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.body);
+            // A controller that is online but cannot answer its catalog: the others' names still arrive.
+            if (envelope.target.kind === 'machine' && envelope.target.machineId === 'failing-controller') return Response.json({ error: 'unavailable' }, { status: 503 });
             const rows = envelope.target.kind === 'machine' && envelope.target.machineId === 'local-controller'
                 ? [provisioner('Local guest', 'local')] : [provisioner('Cloud service', 'cloud')];
             return Response.json({ v: 1, actionId: 'machines.provisioners.list', requestId: envelope.requestId,
@@ -113,7 +115,10 @@ describe('Machine Defaults installed provisioner names', () => {
         const otherHome = resolveServerProfileScopeIdForIdentifier(home.homes.other!.id);
         expect(getActiveServerSnapshot().serverId).toBe(focusedHome);
         storage.setState({ machineListByServerId: {
-            [focusedHome]: [createMachineFixture({ id: 'local-controller', installationId: 'local-installation' }), createMachineFixture({ id: 'cloud-controller', installationId: 'cloud-installation' }), createMachineFixture({ id: 'guest-without-installation' })],
+            [focusedHome]: [createMachineFixture({ id: 'local-controller', installationId: 'local-installation', activeAt: Date.now() }), createMachineFixture({ id: 'cloud-controller', installationId: 'cloud-installation', activeAt: Date.now() }), createMachineFixture({ id: 'guest-without-installation' }),
+                // An offline controller cannot answer, so Defaults does not wait on it; a failing one does not hide the rest.
+                createMachineFixture({ id: 'offline-controller', installationId: 'offline-installation', active: false, activeAt: 1 }),
+                createMachineFixture({ id: 'failing-controller', installationId: 'failing-installation', activeAt: Date.now() })],
             [otherHome]: [createMachineFixture({ id: 'other-controller', installationId: 'other-installation' })],
         } });
         const controllers: readonly ManagedControllerV1[] = [
@@ -138,6 +143,8 @@ describe('Machine Defaults installed provisioner names', () => {
         ]));
         expect(home.requests.filter(request => request.path === '/v1/actions/machines.provisioners.list')
             .every(request => request.home === 'build' && request.accountId === 'owner')).toBe(true);
+        expect(home.requests.some(request => request.path === '/v1/actions/machines.provisioners.list'
+            && JSON.stringify(request.body).includes('offline-controller'))).toBe(false);
         expect(home.requests.some(request => request.path.endsWith('/acquire'))).toBe(false);
         await screen.unmount();
     });
