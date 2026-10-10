@@ -186,7 +186,11 @@ export type HostingProviderResolvedRegistry = Readonly<{
     getRepositoryPublishing: (id: string) => HostingProviderRepositoryPublishingCapability | undefined;
     getRepositoryClone: (id: string) => HostingProviderRepositoryCloneCapability | undefined;
     /** Enumerate concrete deployments admitted by their routing owner, never declarations. */
-    listDeployments?: (input?: Readonly<{ providerId?: string; providerKind?: string }>) => readonly HostingProviderResolvedRemote[];
+    listDeployments?: (input?: Readonly<{
+        providerId?: string;
+        providerKind?: string;
+        remote?: HostingProviderRemoteDetectionInput;
+    }>) => readonly HostingProviderResolvedRemote[];
     detectRemote: (input: HostingProviderRemoteDetectionInput) => HostingProviderRemoteDetectionResult;
     buildCompareUrl: (input: Readonly<{
         provider: HostingProviderResolvedRemote | HostingProviderUnresolvedRemote;

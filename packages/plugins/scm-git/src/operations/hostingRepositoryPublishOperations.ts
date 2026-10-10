@@ -201,8 +201,16 @@ function admittedProviderRefs(input: Readonly<{
     registry: HostingRepositoryRegistry;
     providerId?: string;
     providerKind?: ScmHostingProviderKind;
+    snapshot?: ScmWorkingSnapshot | null;
 }>): ScmHostingProviderRef[] {
-    return (input.registry.listDeployments?.({ providerId: input.providerId, providerKind: input.providerKind }) ?? [])
+    const remoteName = input.snapshot?.hostingProvider?.remoteName;
+    const remote = remoteName && input.snapshot ? findRemote(input.snapshot, remoteName) : null;
+    const remoteUrl = remote?.pushUrl ?? remote?.fetchUrl;
+    return (input.registry.listDeployments?.({
+        providerId: input.providerId,
+        providerKind: input.providerKind,
+        ...(remoteUrl ? { remote: { remoteName: remote?.name ?? null, remoteUrl } } : {}),
+    }) ?? [])
         .flatMap((provider) => {
             const providerKind = ScmHostingProviderKindSchema.safeParse(provider.providerKind ?? provider.kind);
             if (!providerKind.success) return [];
@@ -211,6 +219,9 @@ function admittedProviderRefs(input: Readonly<{
                 kind: providerKind.data,
                 displayName: provider.displayName,
                 baseUrl: provider.baseUrl,
+                ...(provider.nameWithOwner ? { nameWithOwner: provider.nameWithOwner } : {}),
+                ...(provider.repositoryWebUrl ? { repositoryWebUrl: provider.repositoryWebUrl } : {}),
+                ...(provider.remoteName ? { remoteName: provider.remoteName } : {}),
                 urlSafety: {
                     ...(provider.urlSafety?.allowedBaseUrls ? { allowedBaseUrls: [...provider.urlSafety.allowedBaseUrls] } : {}),
                     ...(provider.urlSafety?.allowedOrigins ? { allowedOrigins: [...provider.urlSafety.allowedOrigins] } : {}),
@@ -317,6 +328,7 @@ export function createGitHostingRepositoryPublishOperation(
             const registry = await readRegistry();
             const providers = admittedProviderRefs({
                 registry,
+                snapshot,
                 ...(request.providerId ? { providerId: request.providerId } : {}),
                 providerKind: request.providerKind,
             });
@@ -470,6 +482,7 @@ export function createGitHostingRepositoryPublishOperation(
             const registry = await readRegistry();
             const providers = admittedProviderRefs({
                 registry,
+                snapshot: await readSnapshot({ context }),
                 ...(request.providerId ? { providerId: request.providerId } : {}),
                 ...(request.providerKind ? { providerKind: request.providerKind } : {}),
             });

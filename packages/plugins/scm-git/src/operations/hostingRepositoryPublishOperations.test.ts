@@ -13,6 +13,7 @@ import {
 } from '@happier-dev/plugin-sdk/scm';
 import {
   type HostingProviderRepositoryPublishingCapability,
+  type HostingProviderRuntimeServices,
   type ScmHostingProviderRef } from '@happier-dev/plugin-sdk/scm/hosting';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -26,6 +27,10 @@ import { createGithubScmHostingProviderAdapter, githubHostingProviderAdapter, GI
 import { PLUGIN_MANIFEST as GITHUB_PLUGIN_MANIFEST } from '../../../scm-github/src/manifest.js';
 import { createScmHostingProviderRegistry } from '../../../../../apps/cli/src/scm/hostingProviders/registry';
 import { snapshotScmHostingProviderRuntime } from '../../../../plugin-sdk/src/host/registration/staticRegistrationSnapshots.js';
+import { PLUGIN_MANIFEST as AZURE_PLUGIN_MANIFEST } from '../../../scm-azure-devops/src/manifest.js';
+import { azureDevopsOperationsAdapter } from '../../../scm-azure-devops/src/operations/azureDevopsAdapter.js';
+import { PLUGIN_MANIFEST as BITBUCKET_PLUGIN_MANIFEST } from '../../../scm-bitbucket/src/manifest.js';
+import { bitbucketApiAdapter } from '../../../scm-bitbucket/src/operations/bitbucketApiAdapter.js';
 
 const provider: ScmHostingProviderRef = {
     id: GITHUB_SCM_HOSTING_PROVIDER_ID,
@@ -211,6 +216,58 @@ function publishRequest(overrides: Partial<ScmHostingRepositoryPublishRequest> =
 }
 
 describe('git hosting repository publish operation', { timeout: 20_000 }, () => {
+    it.each([
+        { manifest: AZURE_PLUGIN_MANIFEST, adapter: azureDevopsOperationsAdapter,
+            remoteUrl: 'https://dev.azure.com/happier-dev/platform/_git/happier',
+            baseUrl: 'https://dev.azure.com/happier-dev', owner: 'happier-dev/platform',
+            nameWithOwner: 'happier-dev/platform/happier' },
+        { manifest: BITBUCKET_PLUGIN_MANIFEST, adapter: bitbucketApiAdapter,
+            remoteUrl: 'https://bitbucket.org/happier-dev/happier.git',
+            baseUrl: 'https://bitbucket.org', owner: 'happier-dev', nameWithOwner: 'happier-dev/happier' },
+    ])('retains known-remote publishing coordinates for $manifest.id through the real registry', async (fixture) => {
+        const declaration = fixture.manifest.contributes.scmHostingProviders?.[0];
+        if (!declaration) throw new Error('Hosting provider declaration missing');
+        const { title, ...definition } = declaration;
+        const providerId = `${fixture.manifest.id}/${declaration.id}`;
+        const registry = createScmHostingProviderRegistry({
+            providers: [{ ...definition, pluginId: fixture.manifest.id,
+                displayName: typeof title === 'string' ? title : title.fallback }],
+            runtimeRegistrations: [{ pluginId: fixture.manifest.id, occurrenceId: 'fixture', registration: {
+                id: declaration.id, ...snapshotScmHostingProviderRuntime({
+                    adapter: { routing: fixture.adapter, repositoryPublishing: fixture.adapter },
+                }),
+            } }],
+        });
+        const runtimeServices: HostingProviderRuntimeServices = {
+            resolveScmHostingProviderRegistry: async () => registry,
+            executeCommand: async () => ({ ok: true, stdout: JSON.stringify({ user: { name: 'fixture' } }), stderr: '', exitCode: 0 }),
+            resolveScmHostingBasicAuthMaterialization: async () => ({ kind: 'available', username: 'fixture', password: 'fixture' }),
+        };
+        const workspace = mkdtempSync(join(tmpdir(), 'happier-publish-known-remote-'));
+        git(workspace, ['init', '-b', 'main']);
+        git(workspace, ['remote', 'add', 'origin', fixture.remoteUrl]);
+        const actualContext = { ...context, cwd: workspace, detection: { ...context.detection, rootPath: workspace } };
+        const operation = createGitHostingRepositoryPublishOperation({ registry, runtimeServices });
+        const response = await runWithRealGitScmRuntime(() => operation.describePublishTargets({
+            context: actualContext, request: { providerId },
+        }), { hostingProviderRuntimeServices: runtimeServices });
+        expect(response).toMatchObject({ success: true, targets: [expect.objectContaining({
+            owner: fixture.owner, provider: expect.objectContaining({
+                id: providerId, baseUrl: fixture.baseUrl, nameWithOwner: fixture.nameWithOwner,
+            }),
+        })] });
+        expect(await runWithRealGitScmRuntime(() => operation.publish({
+            context: actualContext, request: publishRequest({
+                providerId, providerKind: declaration.kind, providerBaseUrl: 'https://attacker.example',
+            }),
+        }), { hostingProviderRuntimeServices: runtimeServices }))
+            .toMatchObject({ success: false, errorCode: 'INVALID_REQUEST' });
+        expect(await runWithRealGitScmRuntime(() => operation.publish({
+            context: actualContext, request: publishRequest({ providerId, providerKind: 'github' }),
+        }), { hostingProviderRuntimeServices: runtimeServices }))
+            .toMatchObject({ success: false, errorCode: 'FEATURE_UNSUPPORTED' });
+        expect(git(workspace, ['remote', 'get-url', 'origin'])).toBe(fixture.remoteUrl);
+    });
     it('discovers and publishes an explicit deployment from a real registered declaration without an existing remote', async () => {
         const requests: string[] = [];
         const restAdapter = createGithubRepositoryRestAdapter({
@@ -243,7 +300,9 @@ describe('git hosting repository publish operation', { timeout: 20_000 }, () => 
         git(workspace, ['init', '-b', 'main']);
         const actualContext = { ...context, cwd: workspace, detection: { ...context.detection, rootPath: workspace } };
         const operation = createGitHostingRepositoryPublishOperation({ registry, runtimeServices: {} });
-        const targets = await operation.describePublishTargets({ context: actualContext, request: { providerId: GITHUB_SCM_HOSTING_PROVIDER_ID } });
+        const targets = await runWithRealGitScmRuntime(() => operation.describePublishTargets({
+            context: actualContext, request: { providerId: GITHUB_SCM_HOSTING_PROVIDER_ID },
+        }));
         expect(targets).toMatchObject({ success: true, targets: [expect.objectContaining({
             owner: 'happier-dev', provider: expect.objectContaining({ id: GITHUB_SCM_HOSTING_PROVIDER_ID, baseUrl: 'https://github.com' }),
         })] });

@@ -120,7 +120,11 @@ export type ResolvedScmHostingProviderRegistry = Readonly<{
     getPullRequestCheckout: (id: string) => HostingProviderPullRequestCheckoutCapability | undefined;
     getRepositoryPublishing: (id: string) => HostingProviderRepositoryPublishingCapability | undefined;
     getRepositoryClone: (id: string) => HostingProviderRepositoryCloneCapability | undefined;
-    listDeployments?: (input?: Readonly<{ providerId?: string; providerKind?: string }>) => readonly ScmHostingProviderResolvedRemote[];
+    listDeployments?: (input?: Readonly<{
+        providerId?: string;
+        providerKind?: string;
+        remote?: ScmHostingProviderRemoteDetectionInput;
+    }>) => readonly ScmHostingProviderResolvedRemote[];
     detectRemote: (input: ScmHostingProviderRemoteDetectionInput) => ScmHostingProviderRemoteDetectionResult;
     buildCompareUrl: (input: Readonly<{
         provider: HostingProviderResolvedRemote | UnresolvedScmHostingProvider;
@@ -506,6 +510,41 @@ export function createScmHostingProviderRegistry(params: Readonly<{
 
     const providers = Object.freeze([...providersById.values()].sort((left, right) => left.id.localeCompare(right.id)));
 
+    function detectRemote(input: ScmHostingProviderRemoteDetectionInput): ScmHostingProviderRemoteDetectionResult {
+        for (const provider of providers) {
+            try {
+                const routing = provider.runtime?.registration.adapter.routing;
+                if (!routing) continue;
+                const detected = routing.detectRemote({
+                    ...input,
+                    ...(provider.connectedAccountBases
+                        ? { connectedAccountBases: provider.connectedAccountBases }
+                        : {}),
+                });
+                if (!detected) continue;
+                const normalized = normalizeDetectedProvider(detected, provider);
+                if (!normalized) continue;
+                return Object.freeze({
+                    kind: 'resolved' as const,
+                    providerId: provider.id,
+                    provider: normalized,
+                });
+            } catch {
+                // A single plugin-owned detector must not block unrelated providers.
+                continue;
+            }
+        }
+        return Object.freeze({
+            kind: 'unknown' as const,
+            provider: createUnknownProvider(
+                input.remoteName,
+                hasIncompleteConfiguredDeployments
+                    ? 'configured_deployment_listing_incomplete'
+                    : 'no_registered_provider_detected',
+            ),
+        });
+    }
+
     return Object.freeze({
         providers,
         providersById: Object.freeze(providersById),
@@ -540,6 +579,12 @@ export function createScmHostingProviderRegistry(params: Readonly<{
         },
         listDeployments(input = {}) {
             const deployments = new Map<string, ScmHostingProviderResolvedRemote>();
+            const detected = input.remote ? detectRemote(input.remote) : null;
+            if (detected?.kind === 'resolved'
+                && (!input.providerId || input.providerId === detected.provider.id)
+                && (!input.providerKind || input.providerKind === detected.provider.kind)) {
+                deployments.set(`${detected.provider.id}\n${detected.provider.baseUrl}`, detected.provider);
+            }
             for (const provider of providers) {
                 if (input.providerId && input.providerId !== provider.id) continue;
                 if (input.providerKind && input.providerKind !== provider.kind) continue;
@@ -549,7 +594,10 @@ export function createScmHostingProviderRegistry(params: Readonly<{
                         ...(provider.connectedAccountBases ? { connectedAccountBases: provider.connectedAccountBases } : {}),
                     }) ?? []) {
                         const normalized = normalizeDetectedProvider(deployment, provider);
-                        if (normalized) deployments.set(`${normalized.id}\n${normalized.baseUrl}`, normalized);
+                        if (normalized) {
+                            const key = `${normalized.id}\n${normalized.baseUrl}`;
+                            if (!deployments.has(key)) deployments.set(key, normalized);
+                        }
                     }
                 } catch {
                     // Failed admission cannot supply a deployment, nor block another provider.
@@ -557,44 +605,7 @@ export function createScmHostingProviderRegistry(params: Readonly<{
             }
             return Object.freeze([...deployments.values()]);
         },
-        detectRemote(input) {
-            for (const provider of providers) {
-                try {
-                    const routing = provider.runtime?.registration.adapter.routing;
-                    if (!routing) continue;
-                    const detected = routing.detectRemote({
-                        ...input,
-                        ...(provider.connectedAccountBases
-                            ? { connectedAccountBases: provider.connectedAccountBases }
-                            : {}),
-                    });
-                    if (!detected) {
-                        continue;
-                    }
-                    const normalized = normalizeDetectedProvider(detected, provider);
-                    if (!normalized) {
-                        continue;
-                    }
-                    return Object.freeze({
-                        kind: 'resolved' as const,
-                        providerId: provider.id,
-                        provider: normalized,
-                    });
-                } catch {
-                    // A single plugin-owned detector must not block unrelated providers.
-                    continue;
-                }
-            }
-            return Object.freeze({
-                kind: 'unknown' as const,
-                provider: createUnknownProvider(
-                    input.remoteName,
-                    hasIncompleteConfiguredDeployments
-                        ? 'configured_deployment_listing_incomplete'
-                        : 'no_registered_provider_detected',
-                ),
-            });
-        },
+        detectRemote,
         buildCompareUrl(input) {
             const provider = input.provider;
             if (isUnresolvedScmHostingProvider(provider)) {
