@@ -113,15 +113,18 @@ it('keeps root creation, upload and View controls usable without a second search
     await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-source.ts')).toBeTruthy());
     expect(screen.findByTestId('workspace-repository-tree-search')).toBeNull();
     await screen.pressByTestIdAsync('repository-tree-create-button');
+    await vi.waitFor(() => expect(screen.findByTestId('repository-tree-create-file')).toBeTruthy());
     await screen.pressByTestIdAsync('repository-tree-create-file');
     await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-created.ts')).toBeTruthy());
     expect(onOpenFilePinned).toHaveBeenCalledWith('created.ts');
     await screen.pressByTestIdAsync('repository-tree-create-button');
+    await vi.waitFor(() => expect(screen.findByTestId('repository-tree-upload-files')).toBeTruthy());
     await screen.pressByTestIdAsync('repository-tree-upload-files');
     await vi.waitFor(() => expect(nativePicker).toHaveBeenCalledWith({ multiple: true, type: '*/*' }));
     expect(fixture.requests.filter(request => request.method === RPC_METHODS.WRITE_FILE)).toHaveLength(1);
     const listedBeforeRefresh = fixture.requests.filter(request => request.method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY).length;
     await screen.pressByTestIdAsync('workspace-repository-tree-view');
+    await vi.waitFor(() => expect(screen.findByTestId('workspace-repository-tree-refresh')).toBeTruthy());
     await screen.pressByTestIdAsync('workspace-repository-tree-refresh');
     await vi.waitFor(() => expect(fixture!.requests.filter(request => request.method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY).length).toBeGreaterThan(listedBeforeRefresh));
 });
