@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { describe, expect, it } from 'vitest';
 
 import type { ReactTestRenderer } from 'react-test-renderer';
@@ -254,7 +254,7 @@ describe('browser presentation portal (UX-6 webview-above-router)', () => {
         const result = await renderWithAppProviders(slot(true));
         const portalSlot = () => result.tree.root.findByProps({ testID: 'browser-presentation-portal-slot-watched' });
         // Watched: shown in place, but the frame beneath takes the pointer (it moves and expands by it).
-        expect(portalSlot().props.style).toMatchObject({ left: 10, top: 20, width: 320, height: 200 });
+        expect(StyleSheet.flatten(portalSlot().props.style)).toMatchObject({ left: 10, top: 20, width: 320, height: 200 });
         expect(portalSlot().props.pointerEvents).toBe('none');
         await result.update(slot(false));
         expect(portalSlot().props.pointerEvents).toBe('auto');

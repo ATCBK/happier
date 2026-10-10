@@ -28,6 +28,7 @@ import { resolveSettingsSecretsKeySet } from '@/sync/encryption/resolveSettingsS
 import { normalizeAccountSettingsForLocalStorage } from '@/sync/domains/settings/accountSettingsNormalization';
 import { applyAccountSettingsSavedSecretMutation } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -57,6 +58,8 @@ let rememberSucceeds = false;
 let rememberOutcomeUnknown = false;
 let holdPrivateReply: Promise<void> | null = null;
 let rememberedSettings: Readonly<Record<string, unknown>> | null = null;
+let savedResourceForChoice = false;
+const savedResourceRef = formatSharedSavedSecretRefV1('secret-1');
 
 async function enterOnceValue(screen: Awaited<ReturnType<typeof renderScreen>>) {
     await vi.waitFor(() => expect(screen.findByTestId('approvals.secret-value')?.props.editable).toBe(true));
@@ -90,6 +93,7 @@ installDisconnectedServerSocketBoundary(socket => {
 describe('confidential approval human continuation', () => {
     beforeAll(loadSyncSingletonForTests);
     beforeEach(async () => {
+        savedResourceForChoice = false;
         deliveries = []; writes = []; uncertain = false; submitUnknown = false; refusal = null; rememberSucceeds = false; rememberOutcomeUnknown = false; rememberedSettings = null; holdPrivateReply = null;
         connection = await restoreServerAccountForTest({ serverUrl: 'https://confidential-approval.example.test',
             serverIdentityId: 'srv_confidential-home', accountId: 'account-a', request: async (url, init) => {
@@ -123,9 +127,15 @@ describe('confidential approval human continuation', () => {
                 }
                 if (path === '/v2/account/settings' && rememberOutcomeUnknown && rememberedSettings) return new Response('{}', { status: 503 });
                 if (path === '/v2/account/settings') return Response.json(AccountSettingsV2GetResponseSchema.parse({
-                    content: { t: 'plain', v: rememberedSettings ?? { secrets: personal } }, version: rememberedSettings ? 2 : 1,
+                    content: { t: 'plain', v: rememberedSettings ?? { secrets: savedResourceForChoice ? [] : personal } }, version: rememberedSettings ? 2 : 1,
                 }));
-                if (path === '/v1/account/saved-secrets/resources/materials') return Response.json(SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: [] }));
+                if (path === '/v1/account/saved-secrets/resources/materials') return Response.json(SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: savedResourceForChoice ? [{
+                    resourceId: 'secret-1', encryptionMode: 'plain', recipientEnvelope: null,
+                    entry: { ref: savedResourceRef, source: 'shared_resource', relationship: 'owner',
+                        name: personal[0].name, kind: personal[0].kind, encryptionMode: 'plain', revision: 1,
+                        materialStatus: 'ready', capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true } },
+                    storedContent: { t: 'plain', v: { v: 1, name: personal[0].name, kind: personal[0].kind, value: personal[0].encryptedValue.value } },
+                }] : [] }));
                 return new Response('{}', { status: 404 });
             } });
         const serverId = resolveServerProfileScopeIdForIdentifier(connection.home.id);
@@ -221,7 +231,7 @@ describe('confidential approval human continuation', () => {
         const model: InboxModel = {
             source: { isDataReady: true, sessionsById: {}, sessionListRowsByServerId: {},
                 ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
-            openApprovals: [artifact], friendRequests: [],
+            openApprovals: [artifact], openUsageNotices: [], friendRequests: [],
             sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [] },
             targetBySessionAddress: new Map(), actionOperationEntries: [], pendingReadKeys: new Set(),
             markAllPending: false, isLoading: false, hasPrimaryAttention: true, hasContent: true, showCaughtUp: false,
@@ -254,14 +264,15 @@ describe('confidential approval human continuation', () => {
     });
 
     it('passes a Saved Secret reference and fingerprint, never the hydrated catalog value', async () => {
+        savedResourceForChoice = true;
         const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
         const screen = await renderScreen(<ApprovalDetailScreen artifactId="approval-1" />);
         await vi.waitFor(() => expect(screen.findByTestId('approvals.secret-source:saved')).toBeTruthy());
         await act(async () => { screen.pressByTestId('approvals.secret-source:saved'); });
-        await vi.waitFor(() => expect(screen.findByTestId('saved-secret:secret-1')).toBeTruthy());
-        await act(async () => { screen.pressByTestId('saved-secret:secret-1'); });
+        await vi.waitFor(() => expect(screen.findByTestId(`saved-secret:${savedResourceRef}`)).toBeTruthy());
+        await act(async () => { screen.pressByTestId(`saved-secret:${savedResourceRef}`); });
         await continueChoice(screen);
-        expect(deliveries).toEqual([expect.objectContaining({ choice: { kind: 'saved', ref: 'secret-1', fingerprint: 'personal:secret-1:1', revision: null } })]);
+        expect(deliveries).toEqual([expect.objectContaining({ choice: { kind: 'saved', ref: savedResourceRef, fingerprint: `shared:${savedResourceRef}:1`, revision: 1 } })]);
         expect(JSON.stringify(deliveries)).not.toContain(personal[0].encryptedValue.value);
         expect(writes).toEqual([]);
     });
@@ -470,7 +481,7 @@ describe('confidential approval human continuation', () => {
             const request = ApprovalRequestV2Schema.parse({ ...original, actionId,
                 executionOriginV1: { ...original.executionOriginV1, actionId },
                 actionArgs: ComputerSecretFillRequestV1Schema.parse({
-                    serverId: connection!.home.id, sessionId: 'session-1', machineId: 'machine-1', purpose: 'Sign in',
+                    serverId: resolveServerProfileScopeIdForIdentifier(connection!.home.id), sessionId: 'session-1', machineId: 'machine-1', purpose: 'Sign in',
                     sourceId: 'native-window', target: { kind: 'window', displayId: 'primary', pid: 123, windowId: 456 },
                     captureId: 'capture', geometry: { captureWidth: 100, captureHeight: 100, nativeWidth: 100, nativeHeight: 100,
                         originX: 0, originY: 0, scaleX: 1, scaleY: 1, crop: { x: 0, y: 0, width: 100, height: 100 } },

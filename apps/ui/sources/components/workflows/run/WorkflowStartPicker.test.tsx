@@ -262,8 +262,10 @@ describe('WorkflowStartPicker plugin workflows', () => {
         storage.setState({ isDataReady: true, sessions: { [session.id]: session } });
         const screen = await renderScreen(<WorkflowExamplesSection presentation="list"
             session={{ sessionId: session.id, machineId: 'machine-1' }} />);
-        // Only examples that run in a Session are offered here.
-        expect(screen.findByTestId('workflow-examples:ask-once')).toBeNull();
+        // A Session offers the complete starter catalog, with its target already selected.
+        for (const example of WORKFLOW_STARTER_EXAMPLES_V1) {
+            expect(screen.findByTestId(`workflow-examples:${example.key}`)).not.toBeNull();
+        }
         // Already bound to this Session: no description asks to choose one.
         expect(screen.getTextContent()).toContain(t('workflows.examples.sessionNotifyDescription'));
         expect(screen.getTextContent()).not.toContain(t('workflows.examples.notifyWhenAgentWaits.description'));

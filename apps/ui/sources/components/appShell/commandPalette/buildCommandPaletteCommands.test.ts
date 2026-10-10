@@ -944,7 +944,7 @@ describe('buildCommandPaletteCommands', () => {
     const call = createSessionActionDraftSpy.mock.calls[0] ?? [];
     const created = call[2] as any;
     expect(created?.actionId).toBe('subagents.plan.start');
-    expect(created?.input?.backendTargetKeys).toEqual(['backend:review-bot:configured:review-bot']);
+    expect(created?.input?.backendTargetKeys).toEqual(['agent:happier.agent.custom-acp/custom-acp:definition:review-bot']);
   });
 
   it('omits command_palette actions when disabled for that placement', async () => {

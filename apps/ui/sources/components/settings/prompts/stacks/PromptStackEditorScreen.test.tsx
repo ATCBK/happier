@@ -67,6 +67,10 @@ describe('PromptStackEditorScreen', () => {
             'edit',
             'moveUp',
             'moveDown',
+            'budget.all',
+            'budget.3000',
+            'budget.9000',
+            'budget.24000',
             'delete',
         ]);
     });

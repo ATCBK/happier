@@ -70,7 +70,8 @@ describe('ProjectContextBody', () => {
         expect(rowTitle('project-context.personal.gone-entry')).toBe('contextPages.project.privateDocument');
         const actionIds = screen.findAllByType('ItemRowActions' as never).map((node) => (node.props.actions as { id: string }[]).map((action) => action.id));
         expect(actionIds).toContainEqual(['delete']);
-        expect(actionIds).toContainEqual(['edit', 'moveUp', 'moveDown', 'delete']);
+        expect(actionIds).toContainEqual(['edit', 'moveUp', 'moveDown',
+            'budget.all', 'budget.3000', 'budget.9000', 'budget.24000', 'delete']);
     });
 
     it('does not substitute personal memory for an unavailable Source-owned Project memory', async () => {

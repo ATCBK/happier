@@ -10,6 +10,7 @@ await loadSyncSingletonForTests();
 
 const { storage } = await import('@/sync/domains/state/storage');
 const { ChatListFooterWithKeyboardInset } = await import('./ChatListFrameSlots');
+const { AppSessionTranscriptSourceProvider } = await import('./source/appSessionTranscriptSource');
 const { projectUiSessionAwareness } = await import('@/sync/domains/session/awareness/sessionAwareness');
 const { presentSessionAwarenessV1 } = await import('@/utils/sessions/sessionUtils');
 
@@ -24,8 +25,10 @@ describe('hidden transcript Session activity', () => {
         let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
         try {
             storage.getState().applySessions([shell]);
-            screen = await renderScreen(<ChatListFooterWithKeyboardInset sessionId={shell.id}
-                serverId={shell.serverId} showToolCalls={false} />);
+            screen = await renderScreen(<AppSessionTranscriptSourceProvider sessionId={shell.id} serverId={shell.serverId ?? null}>
+                <ChatListFooterWithKeyboardInset sessionId={shell.id}
+                    serverId={shell.serverId} showToolCalls={false} />
+            </AppSessionTranscriptSourceProvider>);
             expect(screen.findByTestId('transcript-session-activity-status')).not.toBeNull();
             expect(screen.findByTestId('transcript-session-activity-timer')).not.toBeNull();
             expect(screen.getTextContent()).toContain(presentSessionAwarenessV1(projectUiSessionAwareness(shell, 100_000)).statusText);
@@ -48,8 +51,10 @@ describe('hidden transcript Session activity', () => {
                 activeAt: 100_001, thinkingAt: 100_001, latestTurnStatusObservedAt: 100_001,
             }]); });
             expect(screen.findByTestId('transcript-session-activity-status')).not.toBeNull();
-            await screen.update(<ChatListFooterWithKeyboardInset sessionId={shell.id}
-                serverId="another-home" showToolCalls={false} />);
+            await screen.update(<AppSessionTranscriptSourceProvider sessionId={shell.id} serverId="another-home">
+                <ChatListFooterWithKeyboardInset sessionId={shell.id}
+                    serverId="another-home" showToolCalls={false} />
+            </AppSessionTranscriptSourceProvider>);
             expect(screen.findByTestId('transcript-session-activity-status')).toBeNull();
         } finally {
             await screen?.unmount();
