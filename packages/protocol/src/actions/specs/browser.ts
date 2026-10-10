@@ -16,6 +16,7 @@ import type { BrowserAutomationActionKindV1 } from '../../browser/automation/v1.
 import {
   BrowserCloseViewCommandV1Schema,
   BrowserCommandDispatchResultV1Schema,
+  BrowserWorkspaceOpenResultV1Schema,
   BrowserFocusViewCommandV1Schema,
   BrowserGoBackCommandV1Schema,
   BrowserGoForwardCommandV1Schema,
@@ -362,7 +363,7 @@ export const BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'browser.sandbox.install': BrowserSandboxInstallResultV1Schema,
   'browser.control.takeControl': z.union([BrowserCommandDispatchResultV1Schema, BrowserAutomationInterruptedResultV1Schema]),
   'browser.control.handBack': z.union([BrowserCommandDispatchResultV1Schema, BrowserAutomationInterruptedResultV1Schema]),
-  'browser.workspace.open': BrowserCommandDispatchResultV1Schema,
+  'browser.workspace.open': BrowserWorkspaceOpenResultV1Schema,
   'browser.view.open': BrowserCommandDispatchResultV1Schema,
   'browser.view.openExternal': BrowserCommandDispatchResultV1Schema,
   'browser.view.close': BrowserCommandDispatchResultV1Schema,

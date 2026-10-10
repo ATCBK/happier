@@ -16,6 +16,7 @@ import { ProjectContextBody } from '@/components/projects/context/ProjectContext
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
 import { useServicesOpenInBrowser } from '@/components/sessions/localServices/useServicesOpenInBrowser';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useProjectSurfaceActions } from '@/components/projects/detail/useProjectSurfaceActions';
 import { useProjectSurfaceController } from '@/components/projects/detail/useProjectSurfaceController';
 import { useProjectRouteSurfaceSync } from '@/components/projects/detail/useProjectRouteSurfaceSync';
@@ -62,11 +63,13 @@ export const ProjectCockpitShell = React.memo((props: ProjectCockpitShellProps) 
     const switchToBrowserSurface = React.useCallback(() => {
         navigateToSurface('browser');
     }, [navigateToSurface]);
+    const { binding: accountLifetime } = useServerCredentialAccountScopeBinding(props.workspaceRef.serverId);
     // The mobile browser is a separate full-screen surface with its own pane scope; open a service
     // into that browser workspace, then switch the cockpit to it (only after a mappable target).
     const openServiceInBrowser = useServicesOpenInBrowser({
         scopeId: `${props.scopeId}:browser`,
         scope: 'sessionMobile',
+        accountLifetime,
         machineId: props.workspaceRef.machineId,
         serverId: props.workspaceRef.serverId,
         onAfterOpen: switchToBrowserSurface,

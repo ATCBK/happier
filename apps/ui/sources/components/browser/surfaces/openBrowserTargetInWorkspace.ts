@@ -8,7 +8,8 @@ import type {
     ActionExecutorContext,
     ActionId,
 } from '@happier-dev/protocol';
-import { BrowserCommandDispatchResultV1Schema } from '@happier-dev/protocol/browser/control/v1';
+import { BrowserWorkspaceOpenResultV1Schema } from '@happier-dev/protocol/browser/control/v1';
+import { ActionApprovalRequestCreatedResultSchema, type ActionApprovalRequestCreatedResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { BrowserRuntimeWorkspaceOpeningAdapter } from '@/sync/domains/browser/actions/runtimeActionExecutor';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
@@ -127,7 +128,10 @@ export type OpenBrowserViewTarget = (
     options?: BrowserLaunchpadOpenTargetOptions,
 ) => void | Promise<ActionExecuteResult>;
 
-export type BrowserWorkspaceTargetOpener = OpenBrowserViewTarget & Readonly<{
+export type BrowserWorkspaceTargetOpener = ((
+    target: BrowserViewTargetV1,
+    options?: BrowserLaunchpadOpenTargetOptions,
+) => Promise<ActionExecuteResult>) & Readonly<{
     runtimeAdapter: BrowserRuntimeWorkspaceOpeningAdapter;
 }>;
 
@@ -356,11 +360,12 @@ export function createOpenBrowserTargetInWorkspace(
                 deps.openDetailsTab(resolved.tab, { intent: 'default' });
                 deps.onRememberRecentTarget?.(target);
             }
-            return BrowserCommandDispatchResultV1Schema.parse({ v: 1, commandId: request.commandId,
-                status: 'dispatched', adapterKind: selection.adapterKind, events: [] });
+            return BrowserWorkspaceOpenResultV1Schema.parse({ v: 1, commandId: request.commandId,
+                status: 'dispatched', adapterKind: selection.adapterKind, events: [],
+                outcome: selection.outcome === 'openExternalTab' ? 'externalTab' : 'workspaceTab' });
         },
     };
-    const open: OpenBrowserViewTarget = async (target) => {
+    const open = async (target: BrowserViewTargetV1): Promise<ActionExecuteResult> => {
         if (!deps.accountLifetime?.isCurrent() || deps.isCurrent?.() === false || deps.signal?.aborted) return unavailable();
         const execute = deps.actionExecute ?? (await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')).createFrontDoorActionExecute();
         return await execute('browser.workspace.open', {
@@ -391,7 +396,8 @@ export function mapLocalServiceLaunchTargetToBrowserTarget(
  */
 export type ServicesOpenInBrowserResult =
     | Readonly<{ status: 'succeeded' }>
-    | Readonly<{ status: 'denied'; reasonCode: string }>;
+    | Readonly<{ status: 'denied'; reasonCode: string }>
+    | ActionApprovalRequestCreatedResult;
 
 type ServicesOpenInBrowserDeps = Readonly<{
     onOpenTarget: OpenBrowserViewTarget;
@@ -467,6 +473,8 @@ export function bindServicesOpenInBrowser(
                 ...(preview.accessUrl ? { currentUrl: preview.accessUrl } : {}),
             });
             if (opened && !opened.ok) return { status: 'denied', reasonCode: opened.errorCode ?? 'browser_target_unavailable' };
+            const approval = opened && ActionApprovalRequestCreatedResultSchema.safeParse(opened.result);
+            if (approval && approval.success) return approval.data;
             return { status: 'succeeded' };
         }
         if (!browserTarget) {
@@ -474,6 +482,8 @@ export function bindServicesOpenInBrowser(
         }
         const opened = await openBrowserViewTarget(browserTarget);
         if (opened && !opened.ok) return { status: 'denied', reasonCode: opened.errorCode ?? 'browser_target_unavailable' };
+        const approval = opened && ActionApprovalRequestCreatedResultSchema.safeParse(opened.result);
+        if (approval && approval.success) return approval.data;
         return { status: 'succeeded' };
     };
 }

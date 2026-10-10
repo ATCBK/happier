@@ -1,14 +1,19 @@
 import * as React from 'react';
 
 import type { LocalServiceLaunchTargetV1 } from '@happier-dev/protocol';
+import { BrowserWorkspaceOpenResultV1Schema } from '@happier-dev/protocol/browser/control/v1';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import {
     bindServicesOpenInBrowser,
     type OpenBrowserTargetScope,
     type ServicesOpenInBrowserResult,
 } from '@/components/browser/surfaces/openBrowserTargetInWorkspace';
 import { resolveBrowserSurfacePlatform } from '@/components/browser/surfaces/useBrowserSurfaceHostProps';
+import { useOpenBrowserTargetInWorkspace } from '@/components/browser/surfaces/useOpenBrowserTargetInWorkspace';
+import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { useLocalServicePreviewState } from '@/sync/domains/local/services/preview/useLocalServicePreviewState';
 
 export type UseServicesOpenInBrowserInput = Readonly<{
@@ -22,6 +27,8 @@ export type UseServicesOpenInBrowserInput = Readonly<{
     machineId?: string | null;
     serverId?: string | null;
     sessionId?: string | null;
+    /** Project/standalone surfaces pass their admitted lifetime; Session shells supply it in context. */
+    accountLifetime?: ServerAccountScopeLifetime | null;
     /**
      * Side effect to run AFTER a service target is successfully opened (i.e. it mapped to a browser
      * target and a tab was created). The mobile cockpits use it to switch the active full-screen
@@ -35,14 +42,14 @@ export type UseServicesOpenInBrowserInput = Readonly<{
 
 /**
  * Single owner of the Services → Browser open binding. Resolves the canonical opener dependencies
- * (the pane's `openDetailsTab`, the browser platform, and the live local-service preview state for
- * access-URL/expiry seeding) once, then returns the `onOpenServiceInBrowser` callback the Services
- * surface host expects. The existing {@link bindServicesOpenInBrowser} owns mapping and admission
+ * (the admitted Account lifetime, pane, platform, and live preview state) once, then returns the
+ * `onOpenServiceInBrowser` callback the Services surface host expects. The existing
+ * {@link bindServicesOpenInBrowser} owns mapping and admission
  * through the canonical workspace opener. Its typed outcome reaches the Services action runner;
  * an unmappable target is refused and does not invoke `onAfterOpen`.
  *
- * Centralizing this here keeps the four Services mount sites (session/project right panels +
- * session/project mobile cockpits) from each re-deriving the same opener wiring.
+ * Centralizing this here keeps the Session/Project panels, mobile cockpits, and Companion glance
+ * from each re-deriving the same opener wiring.
  */
 export function useServicesOpenInBrowser(
     input: UseServicesOpenInBrowserInput,
@@ -56,21 +63,45 @@ export function useServicesOpenInBrowser(
     });
     const onAfterOpen = input.onAfterOpen;
     const onAfterDetailsOpen = input.onAfterDetailsOpen;
+    const postOpen = React.useRef({ onAfterOpen, onAfterDetailsOpen });
+    postOpen.current = { onAfterOpen, onAfterDetailsOpen };
+    const viewerAccountLifetime = useSessionViewerSourceAccountLifetime();
+    const accountLifetime = input.accountLifetime === undefined ? viewerAccountLifetime : input.accountLifetime;
+    const mountedAction = useMountedActionExecution(accountLifetime?.scope);
+    const actionExecution = React.useRef(mountedAction);
+    actionExecution.current = mountedAction;
+    // The opener's presentation lifetime stays stable while credential readiness changes.
+    const actionExecute = React.useCallback<NonNullable<Parameters<typeof useOpenBrowserTargetInWorkspace>[0]['actionExecute']>>(
+        (actionId, actionInput, context) => actionExecution.current.execute(actionId, actionInput, context), []);
+    const onOpenTarget = useOpenBrowserTargetInWorkspace({
+        scopeId: input.scopeId,
+        accountLifetime,
+        actionExecute,
+        openDetailsTab,
+        scope: input.scope,
+        platform,
+        localServicePreviewState,
+    });
+    const currentOpener = React.useRef(onOpenTarget);
+    currentOpener.current = onOpenTarget;
 
-    return React.useCallback(async (target: LocalServiceLaunchTargetV1): Promise<ServicesOpenInBrowserResult> => {
-        const openService = bindServicesOpenInBrowser({
-            openDetailsTab: (tab, options) => {
-                openDetailsTab(tab, options);
-                onAfterDetailsOpen?.();
-            },
-            scope: input.scope,
-            platform,
-            localServicePreviewState,
-            serverId: input.serverId,
-            sessionId: input.sessionId,
-        });
-        const result = await openService(target);
-        if (result.status === 'succeeded') onAfterOpen?.();
+    const openAndFollowCommit = React.useCallback(async (...args: Parameters<typeof onOpenTarget>) => {
+        const result = await onOpenTarget(...args);
+        if (result?.ok && currentOpener.current === onOpenTarget
+            && actionExecution.current.isCurrent() && accountLifetime?.isCurrent()) {
+            const opened = BrowserWorkspaceOpenResultV1Schema.safeParse(result.result);
+            if (opened.success && opened.data.status === 'dispatched' && opened.data.outcome === 'workspaceTab') {
+                postOpen.current.onAfterDetailsOpen?.();
+                postOpen.current.onAfterOpen?.();
+            }
+        }
         return result;
-    }, [input.scope, input.serverId, input.sessionId, localServicePreviewState, onAfterOpen, onAfterDetailsOpen, openDetailsTab, platform]);
+    }, [accountLifetime, onOpenTarget]);
+
+    return React.useMemo(() => bindServicesOpenInBrowser({
+        onOpenTarget: openAndFollowCommit,
+        platform,
+        serverId: input.serverId,
+        sessionId: input.sessionId,
+    }), [input.serverId, input.sessionId, openAndFollowCommit, platform]);
 }

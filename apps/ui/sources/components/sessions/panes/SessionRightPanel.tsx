@@ -392,6 +392,7 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
     const openServiceInBrowser = useServicesOpenInBrowser({
         scopeId: props.scopeId,
         scope: 'sessionDetails',
+        accountLifetime: pluginRuntime.accountLifetime,
         machineId: pluginRuntime.machineId,
         serverId: pluginRuntime.serverId,
         sessionId: props.sessionId,

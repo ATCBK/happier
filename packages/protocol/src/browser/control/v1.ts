@@ -146,6 +146,15 @@ export const BrowserCommandDispatchResultV1Schema = lazyZodSchema(() => z.discri
 ]));
 export type BrowserCommandDispatchResultV1 = z.infer<typeof BrowserCommandDispatchResultV1Schema>;
 
+/** Workspace opening reports the selected presentation effect, not page-load completion. */
+export const BrowserWorkspaceOpenResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
+  BrowserCommandDispatchResultV1Schema.options[0].extend({
+    outcome: z.enum(['workspaceTab', 'externalTab']),
+  }).strict(),
+  BrowserCommandDispatchResultV1Schema.options[1],
+]));
+export type BrowserWorkspaceOpenResultV1 = z.infer<typeof BrowserWorkspaceOpenResultV1Schema>;
+
 const IdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
 
 /**

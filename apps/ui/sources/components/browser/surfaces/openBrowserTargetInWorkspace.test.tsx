@@ -610,7 +610,8 @@ describe('openBrowserTargetInWorkspace', () => {
             },
         });
 
-        await openBrowserViewTarget(externalTarget);
+        expect(await openBrowserViewTarget(externalTarget)).toMatchObject({ ok: true,
+            result: { status: 'dispatched', adapterKind: 'externalUrl', outcome: 'externalTab' } });
 
         expect(openExternalUrlMock).toHaveBeenCalledWith('https://example.com/');
         expect(openDetailsTab).not.toHaveBeenCalled();
@@ -633,7 +634,8 @@ describe('openBrowserTargetInWorkspace', () => {
             desktopWebViewAvailability: availableDesktopWebView,
         });
 
-        await openBrowserViewTarget(externalTarget);
+        expect(await openBrowserViewTarget(externalTarget)).toMatchObject({ ok: true,
+            result: { status: 'dispatched', outcome: 'workspaceTab' } });
 
         expect(openExternalUrlMock).not.toHaveBeenCalled();
         expect(openDetailsTab).toHaveBeenCalledTimes(1);

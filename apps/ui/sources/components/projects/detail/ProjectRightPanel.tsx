@@ -344,6 +344,7 @@ function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
     const openServiceInBrowser = useServicesOpenInBrowser({
         scopeId: props.scopeId,
         scope: 'workspaceDetails',
+        accountLifetime: pluginProjection.accountLifetime,
         machineId: props.workspaceRef.machineId,
         serverId: props.workspaceRef.serverId,
     });

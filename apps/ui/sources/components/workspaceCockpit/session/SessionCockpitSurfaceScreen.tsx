@@ -49,6 +49,7 @@ import { SessionView } from '@/components/sessions/shell/SessionView';
 import { useSessionViewShellSession } from '@/components/sessions/shell/sessionViewStableSession';
 import { SessionBoardPane } from '@/components/sessions/board/SessionBoardPane';
 import { useSessionPluginRuntime } from '@/components/sessions/plugins/useSessionPluginRuntime';
+import { SessionViewerSourceAccountScopeProvider } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
 import { useSessionBoardPrimaryMountResolver } from '@/components/sessions/board/useSessionBoardPrimaryMountHost';
 import { SessionCompanionScreen } from '@/components/sessions/companion/SessionCompanionScreen';
 import { SessionPresentedSurfacePresentationTarget } from '@/components/sessions/companion/presentation/SessionPresentedSurfacePresentationTarget';
@@ -149,6 +150,7 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
         [props.sessionId, servicesServerId],
     );
     const sessionMachineTarget = useSessionMachineTarget(sessionAddress);
+    const pluginProjection = useSessionPluginRuntime({ address: sessionAddress });
     const session = useSessionViewShellSession(props.sessionId, servicesServerId);
     const collaborationAdmitted = useSessionCollaborationDestinationAdmitted(servicesServerId ?? '');
     const sessionSharingAvailable = Boolean(servicesServerId) && collaborationAdmitted;
@@ -161,6 +163,7 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
     const openServiceInBrowser = useServicesOpenInBrowser({
         scopeId: `${props.scopeId}:browser`,
         scope: 'sessionMobile',
+        accountLifetime: pluginProjection.accountLifetime,
         machineId: sessionMachineTarget?.machineId ?? null,
         serverId: servicesServerId,
         sessionId: props.sessionId,
@@ -184,7 +187,6 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
     const setRightTab = pane.setRightTab;
     const terminalTabAvailable = props.terminalTabAvailable !== false;
     const hasDeepLinkedDetailsTarget = props.paneUrlState?.details != null;
-    const pluginProjection = useSessionPluginRuntime({ address: sessionAddress });
     const runtimeAdmission = React.useMemo(() => Object.freeze({
         platform: pluginProjection.platform,
         formFactor: resolvePluginUiRuntimeFormFactor({ deviceType }),
@@ -698,14 +700,16 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
             <SessionCockpitFullscreenSurface screenTestID="session-companion-screen" safeAreaPadding={false} header={companionSurfaceHeader}>
                 {sessionAddress ? (<>
                     {presentedSurfaceTarget}
-                    <SessionCompanionScreen
-                        sessionId={props.sessionId}
-                        address={sessionAddress}
-                        onRevealBoardItem={revealMobileBoardItem}
-                        onRequestClose={revealChatSurface}
-                        summaryDestinations={companionSummaryDestinations}
-                        resolvePrimaryHost={resolveBoardPrimaryHost}
-                    />
+                    <SessionViewerSourceAccountScopeProvider accountLifetime={pluginProjection.accountLifetime}>
+                        <SessionCompanionScreen
+                            sessionId={props.sessionId}
+                            address={sessionAddress}
+                            onRevealBoardItem={revealMobileBoardItem}
+                            onRequestClose={revealChatSurface}
+                            summaryDestinations={companionSummaryDestinations}
+                            resolvePrimaryHost={resolveBoardPrimaryHost}
+                        />
+                    </SessionViewerSourceAccountScopeProvider>
                 </>) : <PaneLoadingFallback />}
             </SessionCockpitFullscreenSurface>,
         );
