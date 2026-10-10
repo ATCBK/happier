@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { workflowRunRowFromAutomationRun } from '@/sync/store/domains/workflowRuns';
 import { act } from 'react-test-renderer';
 import {
@@ -41,7 +41,6 @@ vi.mock('react-native-mmkv', () => {
     return { MMKV };
 });
 
-const retireLifetime = vi.hoisted(() => vi.fn());
 const getAutomationRunDetail = vi.hoisted(() => vi.fn());
 const fetchAccountEncryptionCurrentness = vi.hoisted(() => vi.fn());
 const cancelAutomationRun = vi.hoisted(() => vi.fn());
@@ -53,12 +52,6 @@ const clearAutomationRunHistory = vi.hoisted(() => vi.fn());
 const pauseAutomationDefinition = vi.hoisted(() => vi.fn());
 const resumeAutomationDefinition = vi.hoisted(() => vi.fn());
 const fetchAndApplyAutomationRuns = vi.hoisted(() => vi.fn());
-vi.mock('./domains/scope/activeServerAccountScope', () => ({
-    getActiveServerAccountScope: () => null,
-    captureActiveServerAccountScopeLifetime: () => null,
-    retireActiveServerAccountScopeLifetime: retireLifetime,
-}));
-
 vi.mock('@/sync/api/account/apiAccountEncryptionMode', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/sync/api/account/apiAccountEncryptionMode')>();
     return {
@@ -88,7 +81,9 @@ vi.mock('@/sync/api/session/apiSocket', () => ({
         connect: vi.fn(),
         disconnect: vi.fn(),
         initialize: vi.fn(),
+        invalidateRequests: vi.fn(),
         request: vi.fn(async () => new Response('ok', { status: 200 })),
+        createRequestForPreparedTarget: vi.fn(() => async () => new Response('ok', { status: 200 })),
         emitWithAck: vi.fn(),
         send: vi.fn(),
     },
@@ -133,10 +128,14 @@ import './syncEngine';
 import { sync } from './sync';
 import { storage } from './domains/state/storage';
 import { getActiveServerSnapshot } from './domains/server/serverRuntime';
+import { captureActiveServerAccountScopeLifetime } from './domains/scope/activeServerAccountScope';
+import { publishAppliedActiveServerSnapshot } from './runtime/orchestration/appliedActiveServerRuntime';
 
 /** Test-only view of the incumbent owner; production code never exposes this seam. */
 type SyncResetOwnerTestSeam = {
     serverScopeGeneration: number;
+    appliedServerTarget: ReturnType<typeof getActiveServerSnapshot>;
+    serverID: string | null;
     automationRunTraversalTokensByAutomationId: Map<string, number>;
     resetServerScopedRuntimeState(): void;
     projectAndUpsertAutomationDefinition(
@@ -251,27 +250,39 @@ const eventRunDetail = AutomationV3RunDetailSchema.parse({
     events: [],
 });
 
+beforeEach(() => {
+    const owner = sync as unknown as SyncResetOwnerTestSeam;
+    const appliedServer = getActiveServerSnapshot();
+    const accountId = 'active-account';
+    storage.getState().activateProfileScope({ serverId: appliedServer.serverId, accountId });
+    publishAppliedActiveServerSnapshot(appliedServer);
+    owner.appliedServerTarget = appliedServer;
+    owner.serverID = accountId;
+});
+
 describe('Sync Server/Account lifetime reset boundary', () => {
     it('retires synchronously before advancing generation and never waits for consumer cleanup', () => {
         const owner = sync as unknown as SyncResetOwnerTestSeam;
         const generationBeforeReset = owner.serverScopeGeneration;
         const unresolvedCleanup = new Promise<void>(() => {});
-        retireLifetime.mockImplementation(() => {
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        expect(lifetime).not.toBeNull();
+        let cancellationObserved = false;
+        lifetime!.onRetire(() => {
             expect(owner.serverScopeGeneration).toBe(generationBeforeReset);
-            // A losing implementation that awaits this thenable leaves the
-            // generation unchanged at the assertion below.
-            return unresolvedCleanup;
+            cancellationObserved = true;
+            return unresolvedCleanup as never;
         });
 
         owner.resetServerScopedRuntimeState();
 
-        expect(retireLifetime).toHaveBeenCalledTimes(1);
+        expect(cancellationObserved).toBe(true);
+        expect(lifetime!.isCurrent()).toBe(false);
         expect(owner.serverScopeGeneration).toBe(generationBeforeReset + 1);
     });
 
     it('preserves per-Home Pool rows across active-sync teardown until credential ownership changes', () => {
         const owner = sync as unknown as SyncResetOwnerTestSeam;
-        retireLifetime.mockReset();
         const activeServerId = getActiveServerSnapshot().serverId;
         const otherServerId = `${activeServerId}-other`;
         const row = { pool: { id: 'pool', name: 'Private', members: [] }, availability: { state: 'unknown' } } as never;
@@ -311,7 +322,6 @@ describe('Sync Server/Account lifetime reset boundary', () => {
         // The preceding synchronous-retirement discriminator deliberately
         // leaves its never-settling cleanup mock installed. This route-level
         // projection check needs the normal, synchronous lifecycle boundary.
-        retireLifetime.mockReset();
         const previousState = storage.getState();
         const definition = createAutomationDefinitionFromDetail(eventDetail(3));
         const routeAutomationId = definition.id;
@@ -390,7 +400,7 @@ describe('Sync Server/Account lifetime reset boundary', () => {
 
     it('does not return a direct Automation definition after its server-account scope expires', async () => {
         const owner = sync as unknown as SyncResetOwnerTestSeam;
-        let scopeCurrent = true;
+        let currentnessChecks = 0;
         const detail = AutomationDefinitionDetailSchema.parse({
             id: 'automation-stale-scope',
             name: 'Stale scope',
@@ -428,8 +438,7 @@ describe('Sync Server/Account lifetime reset boundary', () => {
             },
         });
 
-        const operation = owner.projectAndUpsertAutomationDefinition(detail, () => scopeCurrent);
-        scopeCurrent = false;
+        const operation = owner.projectAndUpsertAutomationDefinition(detail, () => ++currentnessChecks === 1);
 
         await expect(operation).rejects.toThrow('Automation server-account scope changed');
     });
@@ -458,11 +467,7 @@ describe('Sync Server/Account lifetime reset boundary', () => {
             resolveRead(eventRunDetail);
 
             await expect(operation).rejects.toThrow('Automation server-account scope changed');
-            expect(getAutomationRunDetail).toHaveBeenCalledWith(
-                credentials,
-                eventRunDetail.automationId,
-                eventRunDetail.id,
-            );
+            expect(getAutomationRunDetail).not.toHaveBeenCalled();
         } finally {
             owner.credentials = previousCredentials;
             owner.serverScopeGeneration = previousGeneration;
@@ -495,8 +500,9 @@ describe('Sync Server/Account lifetime reset boundary', () => {
                 credentials,
                 eventRunDetail.automationId,
                 eventRunDetail.id,
+                expect.objectContaining({ request: expect.any(Function), serverId: getActiveServerSnapshot().serverId }),
             );
-            expect(fetchAccountEncryptionCurrentness).toHaveBeenCalledWith(credentials);
+            expect(fetchAccountEncryptionCurrentness).toHaveBeenCalledWith(credentials, expect.objectContaining({ request: expect.any(Function) }));
         } finally {
             owner.credentials = previousCredentials;
         }
@@ -521,7 +527,8 @@ describe('Sync Server/Account lifetime reset boundary', () => {
                 id: eventRunDetail.id,
                 state: 'cancelled',
             });
-            expect(cancelAutomationRun).toHaveBeenCalledWith(credentials, eventRunDetail.id);
+            expect(cancelAutomationRun).toHaveBeenCalledWith(credentials, eventRunDetail.id,
+                expect.objectContaining({ request: expect.any(Function), serverId: getActiveServerSnapshot().serverId }));
         } finally {
             owner.credentials = previousCredentials;
         }
@@ -547,7 +554,8 @@ describe('Sync Server/Account lifetime reset boundary', () => {
                 id: eventRunDetail.id,
                 replyHandoffState: 'ready',
             });
-            expect(retryAutomationReplyHandoff).toHaveBeenCalledWith(credentials, eventRunDetail.id);
+            expect(retryAutomationReplyHandoff).toHaveBeenCalledWith(credentials, eventRunDetail.id,
+                expect.objectContaining({ request: expect.any(Function), serverId: getActiveServerSnapshot().serverId }));
         } finally {
             owner.credentials = previousCredentials;
         }
@@ -581,9 +589,10 @@ describe('Sync Server/Account lifetime reset boundary', () => {
             });
             await expect(owner.clearAutomationRunHistory('automation-event-1')).resolves.toEqual({ clearedRuns: 3 });
 
-            expect(getAutomationSettings).toHaveBeenCalledWith(credentials);
-            expect(updateAutomationSettings).toHaveBeenCalledWith(credentials, settings);
-            expect(clearAutomationRunHistory).toHaveBeenCalledWith(credentials, 'automation-event-1');
+            const requestContext = expect.objectContaining({ request: expect.any(Function), serverId: getActiveServerSnapshot().serverId });
+            expect(getAutomationSettings).toHaveBeenCalledWith(credentials, requestContext);
+            expect(updateAutomationSettings).toHaveBeenCalledWith(credentials, settings, requestContext);
+            expect(clearAutomationRunHistory).toHaveBeenCalledWith(credentials, 'automation-event-1', requestContext);
             expect(fetchRuns).toHaveBeenCalledWith('automation-event-1');
         } finally {
             owner.credentials = previousCredentials;
