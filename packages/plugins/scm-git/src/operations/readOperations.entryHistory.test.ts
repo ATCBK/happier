@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resolveBackendCommandMaxOutputBytes, type BackendRuntimeContext } from '@happier-dev/plugin-sdk/scm/backend';
+import { resolveBackendCommandMaxOutputBytes, type BackendCommandRunResult, type BackendRuntimeContext } from '@happier-dev/plugin-sdk/scm/backend';
 import { createRealGitScmBackendRuntimeServices, runWithGitScmCommandRunner, runWithRealGitScmRuntime } from '../testkit/scmRuntime.test-support.js';
 import * as reads from './readOperations.js';
 
@@ -59,6 +59,9 @@ describe('Git demanded entry history', () => {
         }
         expect(response.entries.at(-1)).toMatchObject({ path: '', kind: 'commit', commit: { oid: git(root, ['rev-parse', 'HEAD']) } });
         expect(response.entries[0]).toMatchObject({ commit: { committedAt: expect.any(Number) } });
+        expect(await history([''])).toMatchObject({ success: true, entries: [
+            { path: '', kind: 'commit', commit: { oid: git(root, ['rev-parse', 'HEAD']) } },
+        ] });
     });
     it('reports unborn as no commits, and conflicting witnesses as source changed', async () => {
         expect(await history(['untracked'])).toEqual({ success: true, headOid: null, entries: [{ path: 'untracked', kind: 'none' }] });
@@ -100,11 +103,27 @@ describe('Git demanded entry history', () => {
         expect(bytesRead).toBeLessThan(commandOutputBoundary);
         // An unsettled demand still needs exhaustion and must never turn an
         // incomplete traversal into a fabricated no-touch fact.
-        expect(await history(['recent', 'missing', ''])).toMatchObject({ success: true, entries: [
+        const boundaryEvidence: Array<{ args: readonly string[]; maxOutputBytes?: number; admittedBytes: number; result: BackendCommandRunResult }> = [];
+        const incompleteResponse = await runWithGitScmCommandRunner(async input => {
+            if (!('stdoutConsumer' in input)) return services.runCommand(input);
+            let admittedBytes = 0;
+            const result = await services.runCommandStreaming!({ ...input, stdoutConsumer: chunk => {
+                admittedBytes += chunk.byteLength;
+                return input.stdoutConsumer(chunk);
+            } });
+            boundaryEvidence.push({ args: input.args, maxOutputBytes: input.maxOutputBytes, admittedBytes, result });
+            return result;
+        }, () => reads.gitHistoryEntries({ context: context(), request: { cwd: root, folder: '', paths: ['recent', 'missing', ''] } }));
+        expect(incompleteResponse, JSON.stringify(boundaryEvidence)).toMatchObject({ success: true, entries: [
             { path: 'recent', kind: 'commit', commit: { oid: recent } },
             { path: 'missing', kind: 'unavailable', reason: 'command_output_limit_exceeded' },
             { path: '', kind: 'commit', commit: { oid: recent } },
         ] });
+        expect(boundaryEvidence, JSON.stringify(incompleteResponse)).toMatchObject([{
+            maxOutputBytes: commandOutputBoundary,
+            admittedBytes: commandOutputBoundary,
+            result: { success: false, outputLimitExceeded: true },
+        }]);
     });
     it('keeps repository-relative literal identities when detection starts inside a workspace subdirectory', async () => {
         const repositoryFile = await commit('same', 'repository file');

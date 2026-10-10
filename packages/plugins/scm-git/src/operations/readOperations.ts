@@ -172,7 +172,9 @@ export async function gitHistoryEntries(input: {
     const history = await runScmCommand({ bin: 'git', cwd, signal, args: [
         'log', '--full-history', '--date-order', '--raw', '-z', '--no-renames', '--root', '-m',
         '--format=%x00%H%x00%an%x00%ct%x00%s%x00',
-        headOid!, '--', ...demanded.map(({ historyPath }) => toRepoRootLiteralPathspec(historyPath || '.')),
+        // An empty top-level literal pathspec selects the whole root. Literal
+        // '.' selects no tracked paths, unlike Git's ordinary dot pathspec.
+        headOid!, '--', ...demanded.map(({ historyPath }) => toRepoRootLiteralPathspec(historyPath)),
     ], stdoutConsumer: chunk => {
         try { return reader.consume(chunk); }
         catch (error) { invalidOutput = true; throw error; }
