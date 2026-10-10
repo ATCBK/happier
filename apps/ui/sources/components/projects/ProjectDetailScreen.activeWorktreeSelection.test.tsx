@@ -12,7 +12,6 @@ import { installSessionDetailsPanelNonRnModuleMocks } from '@/components/session
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { PAGE_COLUMN_MAX_WIDTH_PX } from '@/components/ui/layout/contentWidthMode';
-import { ConstrainedScreenContent } from '@/components/ui/layout/ConstrainedScreenContent';
 
 installSessionDetailsPanelNonRnModuleMocks();
 vi.mock('react-native', async () => {
@@ -123,8 +122,9 @@ describe('ProjectDetailScreen active worktree selection', () => {
 
         await screen.update(renderProject('code'));
         expect(headerWidth()).toBe(PAGE_COLUMN_MAX_WIDTH_PX.wide);
-        const codeColumn = screen.findByType(ProjectCockpitShell).findByType(ConstrainedScreenContent);
-        expect(columnWidth(codeColumn)).toBe(PAGE_COLUMN_MAX_WIDTH_PX.wide);
+        await vi.waitFor(() => expect(screen.findHostByTestId('workspace-code')).not.toBeNull());
+        const codeSurface = screen.findHostByTestId('workspace-code');
+        expect(codeSurface ? columnWidth(codeSurface) : undefined).toBe(PAGE_COLUMN_MAX_WIDTH_PX.wide);
 
         await screen.update(renderProject('context'));
         expect(headerWidth()).toBe(PAGE_COLUMN_MAX_WIDTH_PX.reading);

@@ -96,10 +96,6 @@ vi.mock('@/components/ui/text/Text', () => ({
         React.createElement('Text', props, props.children),
 }));
 
-vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}), mono: () => ({}) },
-}));
-
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
     if (style && typeof style === 'object') return style as Record<string, unknown>;
