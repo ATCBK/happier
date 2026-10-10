@@ -131,6 +131,22 @@ describe.each(['all', 'prompt'] as const)('shared folder inline writes (%s)', ki
         ])));
     });
 
+    it('files the entry into the folder the Move chooser\'s New folder… creates', async () => {
+        const state = await setup(kind, [
+            { id: 'original', name: 'Original', parentId: null },
+            { id: 'child', name: 'Child', parentId: 'original' },
+        ]);
+        await state.select('move:new', 'child');
+        await state.changeName('Fresh home');
+        await state.screen.pressByTestIdAsync('folders:edit:save');
+        await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:name')).toBeNull());
+        await vi.waitFor(() => {
+            const fresh = state.read().folders.find(folder => folder.name === 'Fresh home');
+            expect(fresh).toEqual(expect.objectContaining({ parentId: null }));
+            expect(state.read().folders.find(folder => folder.id === 'child')?.parentId).toBe(fresh!.id);
+        });
+    });
+
     it.each(['conflict', 'failed'] as const)('keeps the create draft and inline error after %s, then saves on retry', async outcome => {
         const state = await setup(kind);
         state.setOutcome(outcome);

@@ -150,15 +150,46 @@ const SETTLE_SPRING_EASING_CSS = `linear(${Array.from(
   },
 ).join(', ')})`;
 
+/** On web a frame travels by transform (the compositor); only a size change lays it out again. */
+const FLOATING_FRAME_SETTLE_PROPERTIES = 'transform, width, height';
+
+/**
+ * Where a floating frame stands inside its container. On web its place is a transform so the settle
+ * travels on the compositor; native places it by its own binding.
+ */
+export function resolveFloatingFramePlacementStyle(rect: FrameRect): ViewStyle {
+  return Platform.OS === 'web'
+    ? {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: rect.width,
+        height: rect.height,
+        transform: [{ translateX: rect.x }, { translateY: rect.y }],
+      }
+    : {
+        position: 'absolute',
+        left: rect.x,
+        top: rect.y,
+        width: rect.width,
+        height: rect.height,
+      };
+}
+
 /**
  * How a released frame travels to where it settles: one critically damped spring curve (it arrives
- * without overshoot or wobble). A host that draws the frame's body in another layer applies this
- * same transition to it, so the two cannot drift apart.
+ * without overshoot or wobble), on `properties` (`transform` for its place, then its size). A host that
+ * draws the frame's body in another layer places it with `resolveFloatingFramePlacementStyle` and
+ * applies this same transition, so the two cannot drift apart.
  */
 export function resolveFloatingFrameSettleTransition(
   motion: Pick<CompanionReleaseMotion, 'durationMs'> = DEFAULT_RELEASE_MOTION,
-): Readonly<{ durationMs: number; easingCss: string }> {
-  return { durationMs: motion.durationMs, easingCss: SETTLE_SPRING_EASING_CSS };
+): Readonly<{ durationMs: number; easingCss: string; properties: string }> {
+  return {
+    durationMs: motion.durationMs,
+    easingCss: SETTLE_SPRING_EASING_CSS,
+    properties: FLOATING_FRAME_SETTLE_PROPERTIES,
+  };
 }
 
 /** The primary pointer cannot hover (a phone or tablet browser): nothing can reveal on hover. */
@@ -510,7 +541,7 @@ export function FloatingFrame(props: FloatingFrameProps) {
     !interacting &&
     props.reducedMotion !== true
       ? {
-          transitionProperty: 'left, top, width, height',
+          transitionProperty: FLOATING_FRAME_SETTLE_PROPERTIES,
           transitionDuration: `${settle.durationMs}ms`,
           transitionTimingFunction: settle.easingCss,
         }
@@ -526,21 +557,9 @@ export function FloatingFrame(props: FloatingFrameProps) {
   const frameStyle =
     props.mode === 'docked'
       ? { width: '100%' as const }
-      : props.mode === 'expanded'
-        ? {
-            position: 'absolute' as const,
-            left: props.availableRect.x,
-            top: props.availableRect.y,
-            width: props.availableRect.width,
-            height: props.availableRect.height,
-          }
-        : {
-            position: 'absolute' as const,
-            left: props.rect.x,
-            top: props.rect.y,
-            width: props.rect.width,
-            height: props.rect.height,
-          };
+      : resolveFloatingFramePlacementStyle(
+          props.mode === 'expanded' ? props.availableRect : props.rect,
+        );
   const bodyStyle =
     props.mode === 'docked'
       ? {
@@ -554,7 +573,7 @@ export function FloatingFrame(props: FloatingFrameProps) {
     onKeyDown,
     onFocus: () => setFocused(true),
     onBlur: () => setFocused(false),
-    onPointerEnter: (event) => {
+    onPointerEnter: (event: Readonly<{ pointerType?: string; nativeEvent?: unknown }>) => {
       if (event.pointerType === 'touch') setTouchPointer(true);
       setHovered(true);
     },

@@ -178,12 +178,13 @@ type FolderEdit = Readonly<{
   scopeKey: string;
   titles: HappierCollectionDraftTitleStore;
 }> & (
-  | Readonly<{ kind: 'create'; id: string; parentId: string | null }>
+  // `moveSourceId`: the tree entry the Move chooser's "New folder…" files into the folder once it exists.
+  | Readonly<{ kind: 'create'; id: string; parentId: string | null; moveSourceId: string | null }>
   | Readonly<{ kind: 'rename'; folder: PromptFolderEntryV1 }>
 );
 
 export type ArtifactFolderTreeHandle = Readonly<{
-  createFolder: (parentId: string | null) => void;
+  createFolder: (parentId: string | null, moveSourceId?: string) => void;
 }>;
 
 type TreeContextValue = Readonly<{
@@ -202,7 +203,7 @@ type TreeContextValue = Readonly<{
   registerRow: (key: string, node: unknown) => void;
   onOpenArtifact: (artifactId: string) => void;
   onArtifactDeleted: (artifactId: string) => void;
-  createFolder: (parentId: string | null) => void;
+  createFolder: (parentId: string | null, moveSourceId?: string) => void;
   renameFolder: (folder: PromptFolderEntryV1) => void;
 }>;
 const TreeContext = React.createContext<TreeContextValue | null>(null);
@@ -288,21 +289,30 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
       return next;
     });
   }, [folders]);
-  const createFolder = React.useCallback((parentId: string | null) => {
+  const createFolder = React.useCallback((parentId: string | null, moveSourceId?: string) => {
     if (!commands.canWrite) return;
     revealFolder(parentId);
     setEdit(current =>
       current?.scopeKey === scopeKey && current.kind === 'create' && current.parentId === parentId
+        && current.moveSourceId === (moveSourceId ?? null)
         ? current
         : {
             kind: 'create',
             id: randomUUID(),
             parentId,
+            moveSourceId: moveSourceId ?? null,
             scopeKey,
             titles: createHappierCollectionDraftTitleStore(),
           },
     );
   }, [commands.canWrite, revealFolder, scopeKey]);
+  // "New folder…" from the Move chooser: once the folder it named is in the catalog, the entry moves
+  // into it through the same semantic move the chooser's other places perform.
+  const [pendingMove, setPendingMove] = React.useState<Readonly<{ sourceId: string; folderId: string }> | null>(null);
+  const onFolderCreated = React.useCallback((created: FolderEdit, folderId: string) => {
+    if (created.kind === 'create' && created.moveSourceId)
+      setPendingMove({ sourceId: created.moveSourceId, folderId });
+  }, []);
   const renameFolder = React.useCallback((folder: PromptFolderEntryV1) => {
     if (!commands.canWrite) return;
     revealFolder(folder.parentId ?? null);
@@ -447,6 +457,17 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
       }
     },
   });
+  React.useEffect(() => {
+    if (!pendingMove || !folders?.folders.some(folder => folder.id === pendingMove.folderId)) return;
+    setPendingMove(null);
+    fireAndForget(
+      (async () => {
+        const outcome = await runtime.perform(pendingMove.sourceId, targetId, { folderId: pendingMove.folderId }, 'chooser');
+        if (outcome && outcome.status !== 'applied') Modal.alert(t('common.error'), outcome.reason.message);
+      })(),
+      { tag: 'ArtifactFolderTree.moveIntoNewFolder' },
+    );
+  }, [folders, pendingMove, runtime, targetId]);
   const dropDom = useEntityDropDomBinding(scope ? runtime : undefined);
   const hostRef = React.useCallback(
     (node: unknown) => {
@@ -542,9 +563,10 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
         canWrite={context.canWrite}
         testID={props.testID}
         onFinish={finishEdit}
+        onCreated={onFolderCreated}
       />
     ) : null,
-    [commands, context.canWrite, currentEdit, editKey, finishEdit, props.testID, scopeKey],
+    [commands, context.canWrite, currentEdit, editKey, finishEdit, onFolderCreated, props.testID, scopeKey],
   );
 
   const onExpandedChange = React.useCallback(
@@ -675,6 +697,7 @@ function FolderInlineEditor(props: Readonly<{
   canWrite: boolean;
   testID: string;
   onFinish: (edit: FolderEdit) => void;
+  onCreated: (edit: FolderEdit, folderId: string) => void;
 }>) {
   const name = props.edit.titles.useTitle();
   const [error, setError] = React.useState<string | null>(null);
@@ -687,11 +710,12 @@ function FolderInlineEditor(props: Readonly<{
     setError(null);
     try {
       if (props.edit.kind === 'create') {
-        await props.commands.create({
+        const folderId = await props.commands.create({
           id: props.edit.id,
           parentId: props.edit.parentId,
           name,
         });
+        props.onCreated(props.edit, folderId);
       } else {
         await props.commands.rename(props.edit.folder, name);
       }
@@ -1041,7 +1065,8 @@ function useMoveMenu(
                   };
                 },
               ), {
-                // At the foot: a place that does not exist yet. It opens the tree's own name editor.
+                // At the foot: a place that does not exist yet. It opens the tree's own name editor, and
+                // the entry moves into the folder once it is created.
                 id: MOVE_NEW_FOLDER_ID,
                 testID: `${tree.testID}:menu:${node.key}:move:new`,
                 category: '',
@@ -1071,7 +1096,7 @@ function useMoveMenu(
     (id: string): boolean => {
       if (!id.startsWith(MOVE_PREFIX)) return false;
       if (id === MOVE_NEW_FOLDER_ID) {
-        tree.createFolder(null);
+        tree.createFolder(null, sourceId);
         return true;
       }
       const destination = destinations[Number(id.slice(MOVE_PREFIX.length))];
@@ -1119,6 +1144,9 @@ function RowMenu(
       items={props.items}
       onSelect={props.onSelect}
       selectedId={null}
+      // A phone gets the shared bottom sheet, and so does its Move chooser (lab `c-art TAp`).
+      popoverPhonePresentation="sheet"
+      popoverAccessibilityLabel={t('artifacts.browser.folders.options', { name: props.title })}
       trigger={({ toggle }) => (
         <View style={revealed ? null : stylesheet.concealed}>
           <IconButton

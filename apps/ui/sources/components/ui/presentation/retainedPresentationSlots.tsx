@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { StyleSheet } from 'react-native-unistyles';
-import { Platform, View, type LayoutChangeEvent } from 'react-native';
+import { Platform, View, type LayoutChangeEvent, type ViewStyle } from 'react-native';
+import { resolveFloatingFramePlacementStyle } from '@happier-dev/plugin-ui/presentation';
 import Animated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 
 import { PluginSurfaceFocusEligibilityProvider, useLayoutPresentationActive, useRetainedPluginSurfaceFocusNode } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
@@ -8,8 +9,11 @@ import { useRetainedDestinationNode } from '@/components/appShell/workspace/Dest
 export { useLayoutPresentationActive as useRetainedPresentationSlotVisible } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 export type RetainedPresentationRect = Readonly<{ x: number; y: number; width: number; height: number }>;
-/** How a slot travels to new geometry on web (a settling floating frame); absent, it moves at once. */
-export type RetainedPresentationGeometryTransition = Readonly<{ durationMs: number; easingCss: string }>;
+/**
+ * How a slot travels to new geometry on web (a settling floating frame: its settle transition from
+ * `resolveFloatingFrameSettleTransition`); absent, it moves at once.
+ */
+export type RetainedPresentationGeometryTransition = Readonly<{ durationMs: number; easingCss: string; properties: string }>;
 
 /** The same shared position as a native frame; the portal subtracts its settled layout anchor. */
 export type RetainedPresentationNativeMotion = Readonly<{
@@ -67,6 +71,7 @@ function portalEntriesEqual(
         && (a.inputPassthrough ?? false) === (b.inputPassthrough ?? false)
         && a.transition?.durationMs === b.transition?.durationMs
         && a.transition?.easingCss === b.transition?.easingCss
+        && a.transition?.properties === b.transition?.properties
         && a.geometry?.x === b.geometry?.x
         && a.geometry?.y === b.geometry?.y
         && a.geometry?.width === b.geometry?.width
@@ -199,13 +204,7 @@ const EMPTY_PORTAL_ENTRIES: readonly RetainedPresentationSlotEntry[] = [];
  * geometry yet) is kept MOUNTED but parked off-screen so its native/DOM webview is preserved without
  * painting over the active route.
  */
-function resolvePortalSlotStyle(entry: RetainedPresentationSlotEntry): {
-    position: 'absolute';
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-    opacity?: number;
+function resolvePortalSlotStyle(entry: RetainedPresentationSlotEntry): ViewStyle & {
     transitionProperty?: string;
     transitionDuration?: string;
     transitionTimingFunction?: string;
@@ -215,14 +214,12 @@ function resolvePortalSlotStyle(entry: RetainedPresentationSlotEntry): {
         return { position: 'absolute', left: -100000, top: 0, width: 1, height: 1, opacity: 0 };
     }
     return {
-        position: 'absolute',
-        left: rect.x,
-        top: rect.y,
-        width: rect.width,
-        height: rect.height,
+        // The frame owner's placement: on web a transform, so the slot and a settling frame travel
+        // on the compositor together; native keeps its offsets under the shared native motion.
+        ...resolveFloatingFramePlacementStyle(rect),
         // A settling frame and the body it presents travel on the same curve (web only).
         ...(entry.transition && Platform.OS === 'web' ? {
-            transitionProperty: 'left, top, width, height',
+            transitionProperty: entry.transition.properties,
             transitionDuration: `${entry.transition.durationMs}ms`,
             transitionTimingFunction: entry.transition.easingCss,
         } : {}),
