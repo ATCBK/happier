@@ -199,6 +199,10 @@
 | `.` | `trimBugReportTextToMaxBytes` | value | any |
 | `./actions` | `AccountApiTokensActionInputById` | type | any |
 | `./actions` | `AccountApiTokensActionResultById` | type | any |
+| `./actions` | `AccountCreationOperand` | type | any |
+| `./actions` | `AccountHomeContinuationActionInputById` | type | any |
+| `./actions` | `AccountHomeContinuationActionResultById` | type | any |
+| `./actions` | `AccountOperand` | type | any |
 | `./actions` | `AccountPluginDataActionInputById` | type | any |
 | `./actions` | `AccountPluginDataActionResultById` | type | any |
 | `./actions` | `AccountSecurityActionInputById` | type | any |
@@ -244,6 +248,7 @@
 | `./actions` | `AutomationEventsActionResultById` | type | any |
 | `./actions` | `BoardsActionInputById` | type | any |
 | `./actions` | `BoardsActionResultById` | type | any |
+| `./actions` | `BoundedLegacyJsonValue` | type | any |
 | `./actions` | `BrowserAutomationActionInputById` | type | any |
 | `./actions` | `BrowserAutomationActionResultById` | type | any |
 | `./actions` | `BrowserContextActionInputById` | type | any |
@@ -295,6 +300,10 @@
 | `./actions` | `HomeGovernanceActionResultById` | type | any |
 | `./actions` | `HomeHubLayoutActionInputById` | type | any |
 | `./actions` | `HomeHubLayoutActionResultById` | type | any |
+| `./actions` | `HomeIdentityActionInputById` | type | any |
+| `./actions` | `HomeIdentityActionResultById` | type | any |
+| `./actions` | `HomeRuntimeActionInputById` | type | any |
+| `./actions` | `HomeRuntimeActionResultById` | type | any |
 | `./actions` | `IdentityGithubAppsActionInputById` | type | any |
 | `./actions` | `IdentityGithubAppsActionResultById` | type | any |
 | `./actions` | `IdentityProvidersActionInputById` | type | any |
@@ -391,6 +400,7 @@
 | `./actions` | `PluginPermissionGrantsActionInputById` | type | any |
 | `./actions` | `PluginPermissionGrantsActionResultById` | type | any |
 | `./actions` | `PluginPolicyExpressionV2` | type | any |
+| `./actions` | `PluginSettingFieldSchemaV2` | type | any |
 | `./actions` | `PluginSettingsAdministrationActionInputById` | type | any |
 | `./actions` | `PluginSettingsAdministrationActionResultById` | type | any |
 | `./actions` | `PluginWebhooksActionInputById` | type | any |
@@ -469,6 +479,10 @@
 | `./actions` | `SettingsDeclarationsActionResultById` | type | any |
 | `./actions` | `SubagentRegistryActionInputById` | type | any |
 | `./actions` | `SubagentRegistryActionResultById` | type | any |
+| `./actions` | `SystemTaskJsonArray` | type | any |
+| `./actions` | `SystemTaskJsonObject` | type | any |
+| `./actions` | `SystemTaskJsonPrimitive` | type | any |
+| `./actions` | `SystemTaskJsonValue` | type | any |
 | `./actions` | `TeamsActionInputById` | type | any |
 | `./actions` | `TeamsActionResultById` | type | any |
 | `./actions` | `TodoSessionLinkActionInputById` | type | any |
@@ -487,8 +501,12 @@
 | `./actions` | `WidgetsActionResultById` | type | any |
 | `./actions` | `WorkflowAuthoringActionInputById` | type | any |
 | `./actions` | `WorkflowAuthoringActionResultById` | type | any |
+| `./actions` | `WorkflowDiagnosticsActionInputById` | type | any |
+| `./actions` | `WorkflowDiagnosticsActionResultById` | type | any |
 | `./actions` | `WorkflowEffectsActionInputById` | type | any |
 | `./actions` | `WorkflowEffectsActionResultById` | type | any |
+| `./actions` | `WorkflowEventCatalogActionInputById` | type | any |
+| `./actions` | `WorkflowEventCatalogActionResultById` | type | any |
 | `./actions` | `WorkflowsActionInputById` | type | any |
 | `./actions` | `WorkflowsActionResultById` | type | any |
 | `./actions` | `WorkspaceFileSearchActionInputById` | type | any |
@@ -886,6 +904,7 @@
 | `./agents/runtime` | `ForkSessionMetadata` | type | any |
 | `./agents/runtime` | `ForkSurfaceV1` | type | daemon |
 | `./agents/runtime` | `HandoffAvailabilityRequestV1` | type | daemon |
+| `./agents/runtime` | `HandoffExistingStateRequestV1` | type | daemon |
 | `./agents/runtime` | `HandoffExportRequestV1` | type | daemon |
 | `./agents/runtime` | `HandoffExportResultV1` | type | daemon |
 | `./agents/runtime` | `HandoffExportSessionMetadata` | type | any |
@@ -1921,6 +1940,7 @@
 | `./scm` | `ScmPullRequestCheckoutRequest` | type | any |
 | `./scm` | `ScmPullRequestCheckoutResponse` | type | any |
 | `./scm` | `ScmPullRequestChecksState` | type | any |
+| `./scm` | `ScmPullRequestErrorResponse` | type | any |
 | `./scm` | `ScmPullRequestGetRequest` | type | any |
 | `./scm` | `ScmPullRequestGetResponse` | type | any |
 | `./scm` | `ScmPullRequestListRequest` | type | any |
@@ -2030,6 +2050,7 @@
 | `./scm/backend` | `BackendCommandRunInput` | type | daemon |
 | `./scm/backend` | `BackendCommandRunResult` | type | daemon |
 | `./scm/backend` | `BackendCommandSpec` | type | daemon |
+| `./scm/backend` | `BackendCommandStreamInput` | type | daemon |
 | `./scm/backend` | `BackendRuntime` | type | daemon |
 | `./scm/backend` | `BackendRuntimeContext` | type | daemon |
 | `./scm/backend` | `BackendRuntimeDetection` | type | daemon |
@@ -2582,6 +2603,9 @@
 | `./testing` | `createPluginUiTestkit` | value | daemon |
 | `./testing` | `createSurfaceContextFixture` | value | any |
 | `./testing` | `readPluginUiTestkitTargetedSurfaceAdmission` | value | daemon |
+| `./ui` | `ARTIFACT_HTML_CONTENT_CSP_V1` | value | any |
+| `./ui` | `ARTIFACT_HTML_SANDBOX_V1` | value | any |
+| `./ui` | `ArtifactHtmlBundleV1` | type | any |
 | `./ui` | `COMPOSER_CONTROL_STATE_CONTENT_TYPE_V1` | value | any |
 | `./ui` | `CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1` | value | any |
 | `./ui` | `CURRENT_UI_CONTEXT_MAX_COMMANDS_V1` | value | any |
@@ -2658,6 +2682,7 @@
 | `./ui` | `PluginHostedWebAccountDataBridgeOperationV1Schema` | value | any |
 | `./ui` | `PluginHostedWebAccountDataBridgeResponseV1` | type | any |
 | `./ui` | `PluginHostedWebAccountDataBridgeResponseV1Schema` | value | any |
+| `./ui` | `PluginHostedWebBridgeBootstrapConfigV1` | type | any |
 | `./ui` | `PluginLiveStreamReferenceV1` | type | any |
 | `./ui` | `PluginSurfaceTarget` | type | any |
 | `./ui` | `PluginUiActionExecutionOptions` | type | any |
@@ -2749,6 +2774,8 @@
 | `./ui` | `WidgetSizeFootprintV1` | type | any |
 | `./ui` | `WidgetSizeV1` | type | any |
 | `./ui` | `WorkBoardPreviewLayoutV1` | type | any |
+| `./ui` | `artifactHtmlBundleFromBodyV1` | value | any |
+| `./ui` | `buildArtifactHtmlDocumentV1` | value | any |
 | `./ui` | `defineHostedWebBridgeMessage` | value | any |
 | `./ui` | `definePluginDeclarativeDocumentV1` | value | any |
 | `./ui` | `normalizePluginUiSubPathV1` | value | any |

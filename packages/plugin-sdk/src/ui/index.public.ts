@@ -1,6 +1,7 @@
 export type { HostedWebBridgeEnvelopeV1 } from '../ui.js';
 export { artifactHtmlBundleFromBodyV1 } from './hostedWeb.js';
 export type { ArtifactHtmlBundleV1 } from './hostedWeb.js';
+export type { PluginHostedWebBridgeBootstrapConfigV1 } from './hostedWeb.js';
 export { buildArtifactHtmlDocumentV1, ARTIFACT_HTML_SANDBOX_V1, ARTIFACT_HTML_CONTENT_CSP_V1 } from './hostedWeb.js';
 export type { WidgetSizeV1, WidgetSizeFootprintV1 } from './hostApi.js';
 export type { PluginUiWidgetAreaDeclarationV1 } from '../ui.js';

@@ -1,19 +1,19 @@
 import type {
     TeamIdentityConnectionCreateInputV1,
     IdentityEligibleProviderV1,
-    TeamAdmissionModeApplicabilityV1,
+    TeamIdentityConnectionListResultV1,
     TeamIdentityConnectionRefInputV1,
     TeamIdentityConnectionSettingsUpdateInputV1,
     TeamIdentityConnectionRemoveResultV1,
     TeamIdentityConnectionRemovalBlockerV1,
-    IdentityConnectionRemovalPreflightV1,
+    TeamIdentityConnectionRemovalPreflightV1,
     TeamIdentityConnectionTestConsumeInputV1,
-    IdentityConnectionTestConsumeResultV1,
+    TeamIdentityConnectionTestConsumeResultV1,
     TeamIdentityConnectionTestStartInputV1,
     TeamIdentityConnectionTestStartResultV1,
-    IdentityConnectionV1,
     TeamIdentityErrorCodeV1,
 } from "@happier-dev/protocol/teams";
+import type { HomeIdentityConnectionListResultV1, HomeIdentityConnectionRemovalPreflightV1, HomeIdentityConnectionTestConsumeResultV1 } from "@happier-dev/protocol/home";
 import { isDeepStrictEqual } from "node:util";
 
 import { consumeIdentityConnectionTestResultInTx } from "@/app/api/routes/connect/oauthExternal/identityConnectionTestResult";
@@ -68,7 +68,9 @@ import type { TeamOperationAuthenticationContext } from "../actorContext";
 import { authorizeTeamIdentityAdministrationInTx, identityConnectionOwner } from "./teamIdentityAdministrationAuthority";
 import {
     projectCurrentTeamIdentityConnectionV1InTx,
+    projectIdentityConnectionResult,
     readTeamIdentityCurrentnessInputsInTx,
+    type ScopedIdentityConnectionV1 as IdentityConnectionV1,
 } from "./teamIdentityConnectionProjection";
 import { resolveTeamIdentityConnectionReturnUrl } from "./teamIdentityConnectionUrls";
 
@@ -76,6 +78,8 @@ import { resolveTeamAdmissionModeApplicabilityInTx } from "./teamAdmissionModeAp
 import type { WorkosAdministrationDependencies } from "./teamWorkosAdministration";
 
 type TeamIdentityConnectionView = LifecycleConnectionView<string | null>;
+type IdentityConnectionRemovalPreflightV1 = HomeIdentityConnectionRemovalPreflightV1 | TeamIdentityConnectionRemovalPreflightV1;
+type IdentityConnectionTestConsumeResultV1 = HomeIdentityConnectionTestConsumeResultV1 | TeamIdentityConnectionTestConsumeResultV1;
 type ScopedInput<T> = Omit<T, "teamId"> & Readonly<{ teamId: string | null }>;
 
 type Result<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; error: TeamIdentityErrorCodeV1 }>;
@@ -206,19 +210,21 @@ async function resolveTeamIdentityConnectionRemovalPreflightInTx(
 
     return {
         ok: true,
-        value: {
-            v: 1,
-            canRemove: blockers.length === 0,
-            connection: await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: resolved.connection }),
-            impact: {
-                linkedAccounts: accountIds.length,
-                accountsRequiringAlternateLogin,
-                directorySources,
-                externalGroupBindings,
-                managedMemberships,
+        value: projectIdentityConnectionResult(
+            await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: resolved.connection }),
+            {
+                v: 1 as const,
+                canRemove: blockers.length === 0,
+                impact: {
+                    linkedAccounts: accountIds.length,
+                    accountsRequiringAlternateLogin,
+                    directorySources,
+                    externalGroupBindings,
+                    managedMemberships,
+                },
+                blockers,
             },
-            blockers,
-        },
+        ),
     };
 }
 
@@ -302,40 +308,49 @@ export async function startTeamIdentityConnectionTestForActor(
  * and completes the wire result there, so there is one link renderer rather
  * than a second origin decision inside the identity transaction.
  */
-export type TeamIdentityConnectionListProjectionV1 = Readonly<{
-    items: IdentityConnectionV1[];
-    eligibleProviders: IdentityEligibleProviderV1[];
-    admissionModeApplicability?: TeamAdmissionModeApplicabilityV1;
-}>;
+export type TeamIdentityConnectionListProjectionV1<TeamId extends string | null = string | null> =
+    TeamId extends null ? HomeIdentityConnectionListResultV1 : Omit<TeamIdentityConnectionListResultV1, "memberSignInUrl">;
 
+export function listTeamIdentityConnectionsForActor<TeamId extends string | null>(
+    input: Partial<TeamOperationAuthenticationContext> & Readonly<{ teamId: TeamId; actorAccountId: string; env: NodeJS.ProcessEnv }>,
+): Promise<Result<TeamIdentityConnectionListProjectionV1<TeamId>>>;
 export async function listTeamIdentityConnectionsForActor(
     input: Partial<TeamOperationAuthenticationContext> & Readonly<{ teamId: string | null; actorAccountId: string; env: NodeJS.ProcessEnv }>,
 ): Promise<Result<TeamIdentityConnectionListProjectionV1>> {
     return await inTx(async (tx) => {
         const authority = await authorizeTeamIdentityAdministrationInTx(tx, input, "view");
         if (!authority.ok) return authority;
-        const connections = await listTeamIdentityConnectionsInTx(tx, input);
-        const inputs = await readTeamIdentityCurrentnessInputsInTx(tx, { env: input.env, teamId: input.teamId });
-        const projectedItems = await Promise.all(connections.map((connection) => projectCurrentTeamIdentityConnectionV1InTx(tx, {
-            env: input.env,
-            teamId: input.teamId,
-            connection,
-            inputs,
-        })));
-        const items = authority.canMutate ? projectedItems : projectedItems.map((item) => ({ ...item, allowedActions: [] }));
-        const [eligibleProviders, admissionModeApplicability] = await Promise.all([
-            authority.canMutate ? listEligibleTeamIdentityProvidersInTx(tx, {
-                env: input.env,
-                teamId: input.teamId,
-                connectedProviderInstanceIds: new Set(connections.map((connection) => connection.providerInstanceId)),
-            }) : Promise.resolve([]),
-            input.teamId === null ? Promise.resolve(null) : resolveTeamAdmissionModeApplicabilityInTx({ tx, env: input.env, teamId: input.teamId }),
+        if (input.teamId === null) {
+            return { ok: true, value: await projectListInTx(tx, { ...input, teamId: null }, authority.canMutate) };
+        }
+        const [projection, admissionModeApplicability] = await Promise.all([
+            projectListInTx(tx, { ...input, teamId: input.teamId }, authority.canMutate),
+            resolveTeamAdmissionModeApplicabilityInTx({ tx, env: input.env, teamId: input.teamId }),
         ]);
-        return {
-            ok: true,
-            value: { items, eligibleProviders: [...eligibleProviders], ...(admissionModeApplicability ? { admissionModeApplicability } : {}) },
-        };
+        return { ok: true, value: { ...projection, admissionModeApplicability } };
     });
+}
+
+async function projectListInTx<TeamId extends string | null>(
+    tx: Tx,
+    input: Readonly<{ teamId: TeamId; env: NodeJS.ProcessEnv }>,
+    canMutate: boolean,
+): Promise<Readonly<{ items: IdentityConnectionV1<TeamId>[]; eligibleProviders: IdentityEligibleProviderV1[] }>> {
+    const connections = await listTeamIdentityConnectionsInTx(tx, input);
+    const inputs = await readTeamIdentityCurrentnessInputsInTx(tx, { env: input.env, teamId: input.teamId });
+    const projectedItems = await Promise.all(connections.map((connection) => projectCurrentTeamIdentityConnectionV1InTx(tx, {
+        env: input.env,
+        teamId: input.teamId,
+        connection,
+        inputs,
+    })));
+    const items = canMutate ? projectedItems : projectedItems.map((item) => ({ ...item, allowedActions: [] }));
+    const eligibleProviders = canMutate ? await listEligibleTeamIdentityProvidersInTx(tx, {
+        env: input.env,
+        teamId: input.teamId,
+        connectedProviderInstanceIds: new Set(connections.map((connection) => connection.providerInstanceId)),
+    }) : [];
+    return { items, eligibleProviders: [...eligibleProviders] };
 }
 
 export async function createTeamIdentityConnectionForActor(
@@ -818,14 +833,14 @@ export async function consumeTeamIdentityConnectionTestForActor(
             await publishCommittedHomeProviderMutationInTx(tx, identityConnectionOwner(input.teamId), recorded.connection.providerInstanceId, true, null);
             return {
                 ok: true,
-                value: {
-                    connection: await projectCurrentTeamIdentityConnectionV1InTx(tx, {
+                value: projectIdentityConnectionResult(
+                    await projectCurrentTeamIdentityConnectionV1InTx(tx, {
                         env: input.env,
                         teamId: input.teamId,
                         connection: recorded.connection,
                     }),
-                    ...(result.diagnostics ? { diagnostics: result.diagnostics } : {}),
-                },
+                    result.diagnostics ? { diagnostics: result.diagnostics } : {},
+                ),
             };
         }
         return { ok: false, error: "identity_connection_test_invalid" };

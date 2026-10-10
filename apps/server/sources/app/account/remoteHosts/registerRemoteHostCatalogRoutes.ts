@@ -11,6 +11,7 @@ import type { Fastify } from '@/app/api/types';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
 import { requirePresentUser } from '@/app/api/utils/requirePresentUser';
+import { AccountRouteAuthenticationForbiddenResponseSchema } from '@/app/api/utils/enableAuthentication';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
 import { inTx, type Tx } from '@/storage/inTx';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
@@ -98,7 +99,8 @@ export function registerRemoteHostCatalogRoutes(app: Fastify): void {
     schema: { body: z.object({ mutation: asServerProtocolZod(RemoteHostCatalogRowMutationV1Schema),
       savedSecretResources: z.array(SharedSavedSecretCreateInputV1Schema).optional(),
       referenceCensus: SavedSecretCatalogReferenceCensusV1Schema.optional() }).strict(),
-      response: { 200: asServerProtocolZod(RemoteHostCatalogRowMutationResponseV1Schema) } },
+      response: { 200: asServerProtocolZod(RemoteHostCatalogRowMutationResponseV1Schema),
+        403: AccountRouteAuthenticationForbiddenResponseSchema } },
   }, async (request, reply) => {
     const authentication = readTeamOperationAuthenticationFromRequest(request);
     try {

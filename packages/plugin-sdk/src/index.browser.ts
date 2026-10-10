@@ -5,6 +5,54 @@ export type { DefinedPluginActionContracts } from './definePlugin.js';
 export type { DefinedPluginContributes } from './definePlugin.js';
 export type { DefinedPluginManifest } from './definePlugin.js';
 export type {
+    PluginCaptureSourceDefinition,
+    PluginConnectedAccountDefinition,
+    ReadonlyAuthorDeclaration,
+} from './definePlugin.js';
+export type {
+    EntityDragItemV1,
+    EntityDragKindV1,
+    EntityDragScopeV1,
+    EntityDropAdmissionV1,
+    EntityDropEffectV1,
+    EntityDropOutcomeV1,
+    EntityDropPreviewV1,
+    EntityDropReasonV1,
+    PluginDragSourceRuntime,
+    PluginDropTargetRuntime,
+} from './entityDragDrop.js';
+export type {
+    PluginCaptureCodecIdV1,
+    PluginCaptureFrameV1,
+    PluginCaptureReceiptV1,
+    PluginCaptureSourceDeclaration,
+    PluginCaptureSourceRuntime,
+} from './captureSources.js';
+export type {
+    PluginDragSourceContributionV1,
+    PluginDropTargetContributionV1,
+    PluginInputTypeReferenceV1,
+    PluginProjectNativeAdapterContributionV1,
+    PluginWorkflowContributionV1,
+} from './manifest.js';
+export type {
+    PluginProjectNativeAdapterDeclarationV1,
+    PluginProjectNativeAdapterDefinitionV1,
+    PluginProjectNativeAdapterRuntimeV1,
+    PluginProjectNativeCommandRequestV1,
+    PluginProjectNativeCommandResultV1,
+    PluginProjectNativeCommandV1,
+    PluginProjectNativeEnvironmentRequestV1,
+    PluginProjectNativeEnvironmentResultV1,
+    PluginProjectNativeFailureV1,
+    PluginProjectNativeFileFactV1,
+    PluginProjectNativeInspectionV1,
+    ProjectDefinitionDetectionV1,
+    ProjectEnvironmentSelectionV1,
+    ProjectNativeAdapterRoleV1,
+    ProjectNativeRefV1,
+} from './projectNativeAdapters.js';
+export type {
     ComposerAttachmentAuthorDeclaration,
     ComposerAttachmentAuthorDisplay,
     ComposerAttachmentAuthorPreview,

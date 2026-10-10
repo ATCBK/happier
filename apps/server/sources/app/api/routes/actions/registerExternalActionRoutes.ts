@@ -314,8 +314,9 @@ async function readHandoffContinuation(request: FastifyRequest, actionId: string
         const input = privatePrepare.success ? privatePrepare.data.input : body.envelope.input;
         if (typeof input !== 'object' || input === null || Array.isArray(input)
             || (actionId === 'session.spawn_new'
-                ? input.type !== 'resume-session' || input.sessionId !== handoff.sessionId || body.machineId !== handoff.targetMachineId
-                : input.handoffId !== continuation.handoffId)
+                ? !('type' in input) || input.type !== 'resume-session' || !('sessionId' in input)
+                    || input.sessionId !== handoff.sessionId || body.machineId !== handoff.targetMachineId
+                : !('handoffId' in input) || input.handoffId !== continuation.handoffId)
             || ('sessionId' in input && input.sessionId !== handoff.sessionId)
             || ('sourceMachineId' in input && input.sourceMachineId !== handoff.sourceMachineId)
             || ('targetMachineId' in input && input.targetMachineId !== handoff.targetMachineId)) return null;
@@ -429,18 +430,8 @@ async function readManagedGuestContinuation(
             }
         }
     });
-    let continuationPrincipal: ExternalActionServerPrincipalV1;
-    if ('authentication' in principal) {
-        continuationPrincipal = principal.authority === 'account_automation' && 'sessionActionOrigin' in principal
-            ? { accountId: principal.accountId, authority: principal.authority, authentication: principal.authentication,
-                sessionActionOrigin: principal.sessionActionOrigin }
-            : { accountId: principal.accountId, authority: principal.authority, authentication: principal.authentication };
-    } else {
-        if ('authentication' in root) return null;
-        // Preserve the original root grant, never a subsequently widened PAT.
-        continuationPrincipal = { accountId: root.accountId, authority: principal.authority,
-            principalId: root.principalId, credentialId: root.credentialId, grant: root.grant };
-    }
+    const continuationPrincipal = projectExternalActionBoundPrincipal(root, principal);
+    if (!continuationPrincipal) return null;
     return { principal: continuationPrincipal,
         ...(root.sessionActionOrigin ? { sessionActionSource: root.sessionActionSource } : {}),
         managedContinuation: { ...body.managedContinuation, controller,

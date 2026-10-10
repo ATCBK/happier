@@ -6,7 +6,7 @@ import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
-import { isAuthenticationEvidenceCurrentInTx } from "./authenticationEvidence";
+import { isAuthenticationEvidenceCurrentInTx, resolveCurrentAuthenticationEvidenceForTeamQualificationInTx } from "./authenticationEvidence";
 
 describe("authentication-evidence native method currentness", () => {
     let harness: LightSqliteHarness;
@@ -130,13 +130,13 @@ describe("authentication-evidence native method currentness", () => {
         expect(await isCurrent(mtlsAccount.id, "mtls")).toBe(false);
     });
 
-    async function createTeamConnectionEvidence(presentationStatus: string) {
+    async function createTeamConnectionEvidence(presentationStatus: string, scope: "team" | "home" = "team") {
         const team = await db.team.create({
             data: { name: `WorkOS Evidence Team ${presentationStatus}` },
         });
         const provider = await db.identityProviderInstance.create({
             data: {
-                ownerTeamId: team.id,
+                ownerTeamId: scope === "team" ? team.id : null,
                 kind: "workos_sso",
                 displayName: "Evidence WorkOS",
                 enabled: true,
@@ -146,7 +146,7 @@ describe("authentication-evidence native method currentness", () => {
         });
         const connection = await db.teamIdentityConnection.create({
             data: {
-                teamId: team.id,
+                teamId: scope === "team" ? team.id : null,
                 providerInstanceId: provider.id,
                 enabled: true,
                 firstEnabledAt: new Date(),
@@ -181,10 +181,8 @@ describe("authentication-evidence native method currentness", () => {
                 profile: {},
             },
         });
-        const descriptors = await inTx((tx) => listProviderDescriptorsInTx(tx, process.env, {
-            kind: "team",
-            teamId: team.id,
-        }));
+        const descriptors = await inTx((tx) => listProviderDescriptorsInTx(tx, process.env,
+            scope === "team" ? { kind: "team", teamId: team.id } : { kind: "home" }));
         const descriptor = descriptors.find(({ reference }) => reference.id === provider.id);
         return {
             accountId: account.id,
@@ -228,6 +226,11 @@ describe("authentication-evidence native method currentness", () => {
         // A live Team connection derives `connected` and keeps its evidence current.
         const live = await createTeamConnectionEvidence("active");
         expect(await isEvidenceCurrent(live)).toBe(true);
+        expect(await inTx((tx) => resolveCurrentAuthenticationEvidenceForTeamQualificationInTx(tx, {
+            env: process.env,
+            accountId: live.accountId,
+            evidence: [live.evidence],
+        }))).toEqual([live.evidence]);
 
         // The same connection whose upstream presentation is no longer active
         // derives `needs_attention`. Qualification, policy resolution, admission
@@ -237,6 +240,17 @@ describe("authentication-evidence native method currentness", () => {
         // any implementation that re-derives usability from them.
         const stale = await createTeamConnectionEvidence("inactive");
         expect(await isEvidenceCurrent(stale)).toBe(false);
+
+        const home = await createTeamConnectionEvidence("active", "home");
+        expect(home.evidence.runtimeFingerprint).not.toBe("no-descriptor");
+        expect({
+            single: await isEvidenceCurrent(home),
+            batch: await inTx((tx) => resolveCurrentAuthenticationEvidenceForTeamQualificationInTx(tx, {
+                env: process.env,
+                accountId: home.accountId,
+                evidence: [home.evidence],
+            })),
+        }).toEqual({ single: false, batch: [] });
 
         harness.restoreEnv();
     });

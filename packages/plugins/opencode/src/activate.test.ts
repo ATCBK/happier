@@ -152,6 +152,7 @@ describe('activate', () => {
     expect(agent?.providerBinding).toEqual({
       v: 1,
       adapterVersion: OPENCODE_PROVIDER_BINDING_ADAPTER_V1.adapterVersion,
+      supportsModelSettings: true,
       prepare: expect.any(Function),
       materialize: expect.any(Function),
     });
@@ -171,6 +172,7 @@ describe('activate', () => {
     expect(Object.keys(externalSessions ?? {}).sort()).toEqual([
       'listCandidates',
       'pageTranscript',
+      'readAccounting',
       'readAfterTranscript',
       'resolveLinkIdentity',
       'resolveLinkedIdentity',

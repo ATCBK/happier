@@ -25,7 +25,7 @@ export {
 
 import { AccountSettingsPersistedObjectSchema } from './accountSettingsPersistedObject.js';
 import { LEGACY_AUTHORING_MEMORY_SETTINGS_KEYS } from './legacyAuthoringMemorySettingsV1.js';
-import { DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, SessionAgentStartAllowListsV1Schema } from './sessionAgentStartAllowListsV1.js';
+import { DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, SessionAgentStartAllowListsV1Schema, SessionAgentStartAllowListsV1StrictSchema } from './sessionAgentStartAllowListsV1.js';
 export { DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, SessionAgentStartAllowListsV1Schema, type SessionAgentStartAllowListsV1 } from './sessionAgentStartAllowListsV1.js';
 import { SessionReminderPresetsV1Schema } from './sessionReminderPresetsV1.js';
 import { buildSettingArtifacts, type SettingArtifacts } from '../../settings/registry/buildSettingArtifacts.js';
@@ -558,8 +558,10 @@ type AccountCatalogDefinitionOptions = Readonly<{
   compatibility?: Readonly<{ provenance: string; removalCondition: string }>;
   /** Present malformed authority-bearing values must fail instead of recovering to a default. */
   recoverMalformed?: boolean;
-  storedRead?: boolean;
   /** Use the canonical additive stored projection while mutation admission stays strict. */
+  storedRead?: boolean;
+  /** Strict write admission when the stored schema deliberately recovers malformed fields. */
+  mutationSchema?: z.core.$ZodType;
 }>;
 
 /**
@@ -619,7 +621,7 @@ export function accountCatalogDefinition<TSchema extends z.core.$ZodType>(schema
         const boundIssue = inspectAccountSettingValueBounds(value, options.maximumSerializedValueBytes, structuralBoundsOwner);
         return boundIssue
             ? { success: false, issues: [boundIssue.message], reason: boundIssue.reason }
-            : parseAccountSettingMutationValue(schema, value, storedRead);
+            : parseAccountSettingMutationValue(storedRead ? schema : options.mutationSchema ?? schema, value, storedRead);
     };
     return {
         // Preserve Zod `.default(...)` semantics: a parsed transform result is returned as-is for
@@ -1279,8 +1281,8 @@ const ACCOUNT_SETTING_CANDIDATES = {
     sessionPendingQueueDrainMode: accountCatalogDefinition(z._default(SessionPendingQueueDrainModeSchema, DEFAULT_SESSION_PENDING_QUEUE_DRAIN_MODE), DEFAULT_SESSION_PENDING_QUEUE_DRAIN_MODE, { semanticDomain: 'pending queue delivery', classification: 'policy', maximumSerializedValueBytes: 64 }),
     sessionInactiveResumePolicy: accountCatalogDefinition(z._default(SessionInactiveResumePolicySchema, DEFAULT_SESSION_INACTIVE_RESUME_POLICY), DEFAULT_SESSION_INACTIVE_RESUME_POLICY, { semanticDomain: 'pending queue activation', classification: 'preference', maximumSerializedValueBytes: 32 }),
     sessionPendingQueueDeliveryTiming: accountCatalogDefinition(z._default(SessionPendingQueueDeliveryTimingSchema, DEFAULT_SESSION_PENDING_QUEUE_DELIVERY_TIMING), DEFAULT_SESSION_PENDING_QUEUE_DELIVERY_TIMING, { semanticDomain: 'pending queue delivery', classification: 'policy', maximumSerializedValueBytes: 64 }),
-    sessionAgentSpawnPolicyV1: accountCatalogDefinition(z._default(SessionAgentSpawnPolicyV1Schema, DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1), DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, { semanticDomain: 'agent spawn policy', classification: 'policy', maximumSerializedValueBytes: 8 * 1024, recoverMalformed: false }),
-    sessionAgentStartAllowListsV1: accountCatalogDefinition(z._default(SessionAgentStartAllowListsV1Schema, DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1), DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, { semanticDomain: 'agent start allow-lists', classification: 'policy', maximumSerializedValueBytes: 8 * 1024, recoverMalformed: false }),
+    sessionAgentSpawnPolicyV1: accountCatalogDefinition(z._default(SessionAgentSpawnPolicyV1Schema, DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1), DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, { semanticDomain: 'agent spawn policy', classification: 'policy', maximumSerializedValueBytes: 8 * 1024, recoverMalformed: false, mutationSchema: SessionAgentSpawnPolicyV1StrictSchema }),
+    sessionAgentStartAllowListsV1: accountCatalogDefinition(z._default(SessionAgentStartAllowListsV1Schema, DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1), DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, { semanticDomain: 'agent start allow-lists', classification: 'policy', maximumSerializedValueBytes: 8 * 1024, recoverMalformed: false, mutationSchema: SessionAgentStartAllowListsV1StrictSchema }),
     approvalReviewerEnabled: accountCatalogDefinition(z.catch(z._default(z.boolean(), false), false), false, { semanticDomain: 'approval reviewer', classification: 'policy', maximumSerializedValueBytes: 64 }),
     workDepthLimit: accountCatalogDefinition(z.catch(z._default(z.number().check(z.int(), z.nonnegative()), 4), 4), 4, { semanticDomain: 'agent delegation depth', classification: 'policy', maximumSerializedValueBytes: 64 }),
     connectedServicesDefaultAuthByAgentIdV1: accountCatalogDefinition(z._default(BuiltInLegacyConnectedServicesDefaultAuthByAgentIdV1IngressSchema, DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1), DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1, { semanticDomain: 'connected service defaults', classification: 'preference', maximumSerializedValueBytes: 16 * 1024 }),

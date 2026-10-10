@@ -28,7 +28,7 @@ export const WorkflowTriggerSummaryInputV1Schema = lazyZodSchema(() => z.discrim
   z.object({ kind: z.literal('ciFailed') }).strict(),
 ]));
 export type WorkflowTriggerSummaryInputV1 = z.infer<typeof WorkflowTriggerSummaryInputV1Schema>;
-const ContextFields = AutomationStoredWorkflowDefinitionV2Schema.omit({ workspace: true, inlineDefinition: true, onComplete: true });
+const ContextFields = lazyZodSchema(() => AutomationStoredWorkflowDefinitionV2Schema.omit({ workspace: true, inlineDefinition: true, onComplete: true }));
 export const WorkflowTriggerListRequestV1Schema = lazyZodSchema(() => z.union([
   z.object({ workflow: WorkflowDefinitionRefV1StringSchema }).strict(),
   z.object({ scope: z.enum(['account_inline', 'account_all']) }).strict(),
@@ -116,7 +116,7 @@ export type WorkflowTriggerRunNowRequestV1 = z.infer<typeof WorkflowTriggerRunNo
 export type WorkflowTriggerSetV1 = z.infer<typeof WorkflowTriggerSetV1Schema>;
 
 const SessionId = asProtocolZod(SessionIdSchema);
-const SessionContextFields = AutomationStoredWorkflowDefinitionV2Schema.omit({ workspace: true, inlineDefinition: true });
+const SessionContextFields = lazyZodSchema(() => AutomationStoredWorkflowDefinitionV2Schema.omit({ workspace: true, inlineDefinition: true }));
 const SessionPullRequestTriggerSchema = lazyZodSchema(() => AutomationPullRequestTriggerSchema.extend({
   pullRequest: AutomationPullRequestTriggerSchema.shape.pullRequest.optional(),
 }).strict());

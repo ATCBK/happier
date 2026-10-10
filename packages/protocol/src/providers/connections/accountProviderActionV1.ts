@@ -336,12 +336,25 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
             : removeProviderManualModelV1(settings, { connectionId: connection.id, modelId: input.modelId });
           output = { status: 'success', action: input.action }; break;
         }
-        case 'providers.models.source_visibility.set': settings = setProviderModelPickerVisibilityV1(settings, request.input); output = { status: 'updated' }; break;
-        case 'providers.models.visibility.set': settings = setProviderModelVisibilityV1(settings, request.input); output = { status: 'success', action: request.input.action }; break;
-        case 'providers.models.visibility.reset': settings = resetProviderModelVisibilityV1(settings, request.input); output = { status: 'success', action: request.input.action }; break;
-        case 'providers.models.visibility.bulk':
-          for (const change of request.input.changes) settings = setProviderModelVisibilityV1(settings, change);
+        case 'providers.models.source_visibility.set': {
+          find(request.input.connectionId);
+          settings = setProviderModelPickerVisibilityV1(settings, request.input); output = { status: 'updated' }; break;
+        }
+        case 'providers.models.visibility.set': {
+          if (request.input.ref.providerConnectionId !== null) find(request.input.ref.providerConnectionId);
+          settings = setProviderModelVisibilityV1(settings, request.input); output = { status: 'success', action: request.input.action }; break;
+        }
+        case 'providers.models.visibility.reset': {
+          if (request.input.scope.kind === 'connection') find(request.input.scope.connectionId);
+          settings = resetProviderModelVisibilityV1(settings, request.input); output = { status: 'success', action: request.input.action }; break;
+        }
+        case 'providers.models.visibility.bulk': {
+          for (const change of request.input.changes) {
+            if (change.ref.providerConnectionId !== null) find(change.ref.providerConnectionId);
+            settings = setProviderModelVisibilityV1(settings, change);
+          }
           output = { status: 'success', action: request.input.action }; break;
+        }
         case 'providers.models.experimental.confirm': {
           const input = request.input; requireRevision(find(input.connectionId), input.expectedConnectionRevision);
           settings = setProviderExperimentalConfirmationV1(settings, { ...input, confirmedAt: now });

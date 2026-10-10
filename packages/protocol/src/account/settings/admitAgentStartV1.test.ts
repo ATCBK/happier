@@ -121,6 +121,16 @@ describe('admitAgentStartV1', () => {
     expect(SessionAgentSpawnPolicyV1StrictSchema.safeParse({ allowCrossMachine: false, unknownFutureField: true }).success).toBe(false);
     expect(SessionAgentSpawnPolicyV1StrictSchema.safeParse({ allowCrossMachine: false, allowModelOverride: 'invalid' }).success).toBe(false);
   });
+  it('preserves stored allow-list restrictions across additive fields and malformed siblings', () => {
+    const additive = accountSettingsParse({ sessionAgentStartAllowListsV1: {
+      allowedRoleIds: ['builder'], allowedAgentTargetKeys: [engine.agentTargetKey], futureField: true,
+    } }).sessionAgentStartAllowListsV1;
+    expect(additive).toEqual({ v: 1, allowedRoleIds: ['builder'], allowedAgentTargetKeys: [engine.agentTargetKey] });
+    const malformed = accountSettingsParse({ sessionAgentStartAllowListsV1: {
+      allowedRoleIds: ['builder'], allowedAgentTargetKeys: 'invalid',
+    } }).sessionAgentStartAllowListsV1;
+    expect(malformed).toEqual({ v: 1, allowedRoleIds: ['builder'], allowedAgentTargetKeys: [] });
+  });
   it('stamps the selected role workspace policy rather than the starter policy', () => {
     const reviewer: ResolvedRoleV1 = { ...role, roleId: 'reviewer', runsAs: { kind: 'background_run', intent: 'review' }, workspaceWrites: 'deny' };
     expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, {

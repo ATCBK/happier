@@ -86,6 +86,7 @@ describe('activate', () => {
             providerBinding: {
                 v: 1,
                 adapterVersion: CLAUDE_PROVIDER_BINDING_ADAPTER_V1.adapterVersion,
+                supportsClaudeHelperModels: true,
                 prepare: expect.any(Function),
                 materialize: expect.any(Function),
             },
@@ -96,6 +97,7 @@ describe('activate', () => {
                 resolveLinkedIdentity: expect.any(Function),
                 pageTranscript: expect.any(Function),
                 readAfterTranscript: expect.any(Function),
+                readAccounting: expect.any(Function),
             },
             externalSessionTakeover: { resolveLaunch: expect.any(Function) },
             externalSessionObservation: {
@@ -133,6 +135,7 @@ describe('activate', () => {
         ).sort()).toEqual([
             'listCandidates',
             'pageTranscript',
+            'readAccounting',
             'readAfterTranscript',
             'resolveLinkIdentity',
             'resolveLinkedIdentity',

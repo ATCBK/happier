@@ -63,8 +63,8 @@ export function resolveWorkosAuthProviderFeatures(
  * so linked identities remain presentable after a provider is disabled or offboarded.
  */
 export function extractWorkosLinkedProvider(
-    { providerLogin }: Parameters<IdentityProvider["extractLinkedProvider"]>[0],
-): ReturnType<IdentityProvider["extractLinkedProvider"]> {
+    { providerLogin }: Parameters<NonNullable<IdentityProvider["extractLinkedProvider"]>>[0],
+): ReturnType<NonNullable<IdentityProvider["extractLinkedProvider"]>> {
     return { displayName: providerLogin, avatarUrl: null, profileUrl: null };
 }
 

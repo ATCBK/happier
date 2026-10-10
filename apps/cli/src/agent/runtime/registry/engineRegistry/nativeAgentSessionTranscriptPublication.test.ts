@@ -2,9 +2,23 @@ import { describe, expect, it, vi } from 'vitest';
 import { isPluginError } from '@happier-dev/plugin-sdk';
 import { createClaudeNativeAgentSdkContext } from '../../../../../../../packages/plugins/claude/src/agent/runtime/nativeServices';
 
-import type { ApiSessionClient } from '@/api/session/sessionClient';
+import { ApiSessionClient } from '@/api/session/sessionClient';
+import { createSessionScopedSocketConnection } from '@/api/session/sockets';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPlainSessionFixture } from '@/testkit/backends/sessionFixtures';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { createPublicAcpRuntimeProtocols } from '@/agent/acp/runtime/publicSession/createPublicAcpRuntimeProtocols';
+import { createPluginInvocationPresentation } from '@/plugins/runtime/invocation/services/interactions';
 import { PluginTerminalHostError } from '@/plugins/runtime/context/terminalHost';
+import { resolveBackendEngineAdapterResolution } from '../engineRegistry';
+import { createNativeAgentSessionHostServiceOwners } from './nativeAgentSessionHostServiceOwners';
+import { createNativeAgentSessionPublications } from './nativeAgentSessionPublications';
+import { createNativeAgentSessionWorkStateService } from './nativeAgentSessionWorkState';
 import { composeNativeAgentSessionRuntimeContext, createNativeAgentSessionHostServices } from './nativeAgentSession';
+
+// Home Socket.IO is the transport boundary; Session custody and runtime owners remain real.
+vi.mock('socket.io-client', () => ({ io: () => createApiSessionSocketStub() }));
 
 describe('native Agent durable transcript publication', () => {
     it('projects a typed Session event through the canonical durable runtime transcript owner', async () => {
@@ -66,90 +80,121 @@ describe('native Agent durable transcript publication', () => {
     });
 
     it('custodies exact Claude prompt echoes through the native adapter and rejects a retired occurrence', async () => {
-        const committed: Array<Parameters<ApiSessionClient['enqueueAgentMessageCommitted']>> = [];
-        // Durable transport acknowledgement is the system boundary; the adapter and host writer stay real.
-        const enqueueAgentMessageCommitted = async (...record: Parameters<ApiSessionClient['enqueueAgentMessageCommitted']>) => {
-            committed.push(record);
-            return { persisted: true, delivered: false };
-        };
+        const fixture = await createAdmittedPluginRuntimeFixture({
+            runtimeOptions: { pluginIds: ['happier.agent.claude'] },
+        });
         const signal = new AbortController().signal;
-        let current = true;
-        const services = createNativeAgentSessionHostServices({
-            owners: {
-                features: { isEnabled: () => false },
-                sessionHooks: {},
-                transcripts: { fileFollow: {} },
-                accountUsage: {},
-                mcp: {},
-                toolExecution: {},
-            },
-            agentId: 'claude',
-            sessionId: 'session-source-fact',
-            directory: '/tmp/session-source-fact',
-            signal,
-            isCurrent: () => current,
-            session: {
-                sessionId: 'session-source-fact',
-                updateMetadata: vi.fn(),
-                enqueueAgentMessageCommitted,
-            },
-            publications: {
-                models: { bind: () => ({ dispose() {} }) },
-                modes: { bind: () => ({ dispose() {} }) },
-                activeInput: { bind: () => ({ dispose() {} }), publishStatus: vi.fn() },
-            },
-            readToolExecutionCapability: () => null,
-        } as never);
-
-        const context = composeNativeAgentSessionRuntimeContext({
-            identity: { pluginId: 'claude', pluginVersion: '1.0.0', agentId: 'claude' },
-            contributionId: 'runtime',
-            invokedAtMs: 0,
-            sessionId: 'session-source-fact',
-            signal,
-            sessionServices: services,
-            // Unused invocation capabilities are inert fixture fields, not mocked transcript logic.
-            services: {
-                logger: { debug() {}, info() {}, warn() {}, error() {} },
-                exec: {},
-            } as never,
-            ui: {} as never,
-            protocols: {} as never,
-            workState: {} as never,
-        });
-        const transcripts = createClaudeNativeAgentSdkContext(context).agentRuntime.transcripts;
-        const result = await transcripts.markSourceFactConsumed?.({
-            localId: 'claude-jsonl:main:user:user-1',
-            reason: 'host_prompt_echo',
-        });
-
-        const expectedRecord = [
-            'claude',
-            {
-                type: 'output',
-                data: {
-                    type: 'progress',
-                    marker: 'source_fact_consumed',
-                    reason: 'host_prompt_echo',
+        const sessionId = 'session-source-fact';
+        const token = 'native-transcript-test-token';
+        const serverUrl = 'https://native-transcript.example.test';
+        let session: ApiSessionClient | undefined;
+        let owners: ReturnType<typeof createNativeAgentSessionHostServiceOwners> | undefined;
+        let publications: ReturnType<typeof createNativeAgentSessionPublications> | undefined;
+        try {
+            session = new ApiSessionClient(token, createPlainSessionFixture({ id: sessionId }), {
+                metadataAuthority: { kind: 'shared_editor' },
+                durableMutationDeliveryInitiallyActive: false,
+                transport: {
+                    serverId: 'native-transcript-home', serverUrl,
+                    createSessionSocketTransport: ({ sessionId, machineId }) => createSessionScopedSocketConnection({
+                        token, sessionId, machineId, serverUrl,
+                    }),
                 },
-            },
-            {
+            });
+            const enqueue = vi.spyOn(session, 'enqueueAgentMessageCommitted');
+            const resolution = await resolveBackendEngineAdapterResolution('claude', { runtimeRegistry: fixture.registry });
+            const lease = fixture.registry.agentRuntimesByAgentId.get('claude');
+            if (!resolution || !lease) throw new Error('Expected admitted Claude runtime');
+            const directory = fixture.happyHomeDir;
+            const services = await fixture.registry.createAgentInvocationServices({
+                pluginId: lease.pluginId, pluginVersion: lease.pluginVersion,
+                agentId: 'claude', occurrenceId: lease.occurrenceId,
+                correlationId: sessionId, cwd: directory, signal, isOccurrenceCurrent: lease.isCurrent,
+            });
+            owners = createNativeAgentSessionHostServiceOwners({
+                runtimeRegistry: fixture.registry,
+                identity: {
+                    pluginId: lease.pluginId, agentId: 'claude', pluginVersion: lease.pluginVersion,
+                    occurrenceId: lease.occurrenceId, isCurrent: lease.isCurrent,
+                },
+                backend: resolution.backend, agent: resolution.agent,
+                hostSession: {
+                    session, machineId: 'native-transcript-machine', accountSettingsAuthority: 'session',
+                    permissionHandler: new ProviderEnforcedPermissionHandler(session, { logPrefix: 'Native transcript fixture' }),
+                },
+                sessionId, directory, signal, happyHomeDir: fixture.happyHomeDir,
+            });
+            publications = createNativeAgentSessionPublications({
+                agentId: 'claude', session, signal, isCurrent: lease.isCurrent, supportsInFlightSteer: false,
+            });
+            const sessionServices = createNativeAgentSessionHostServices({
+                owners, agentId: 'claude', sessionId, directory, signal, isCurrent: lease.isCurrent,
+                session, publications: publications.services, readToolExecutionCapability: () => null,
+            });
+            const context = composeNativeAgentSessionRuntimeContext({
+                identity: { pluginId: lease.pluginId, pluginVersion: lease.pluginVersion, agentId: 'claude' },
+                contributionId: 'claude',
+                invokedAtMs: 0,
+                sessionId,
+                signal,
+                sessionServices, services,
+                ui: createPluginInvocationPresentation({ currentSession: null, signal, isOccurrenceCurrent: lease.isCurrent }),
+                protocols: createPublicAcpRuntimeProtocols({
+                    pluginId: lease.pluginId, agentId: 'claude', signal, isCurrent: lease.isCurrent,
+                    services, models: sessionServices.models,
+                }),
+                workState: createNativeAgentSessionWorkStateService({
+                    session, pluginId: lease.pluginId, contributionId: 'claude', agentId: 'claude',
+                    occurrenceId: lease.occurrenceId, declarations: [], isCurrent: lease.isCurrent,
+                }),
+            });
+            const transcripts = createClaudeNativeAgentSdkContext(context).agentRuntime.transcripts;
+            const result = await transcripts.markSourceFactConsumed?.({
                 localId: 'claude-jsonl:main:user:user-1',
-                meta: {
-                    happier: { kind: 'source_fact_consumed.v1' },
-                },
-                provenance: { kind: 'non_dependent', source: 'external' },
-            },
-        ];
-        expect(committed).toEqual([expectedRecord]);
-        expect(result).toEqual({ status: 'custodied' });
+                reason: 'host_prompt_echo',
+            });
 
-        current = false;
-        await expect(transcripts.markSourceFactConsumed?.({
-            localId: 'claude-jsonl:main:user:user-2',
-            reason: 'host_prompt_echo',
-        })).rejects.toMatchObject({ code: 'plugin_generation_stale' });
-        expect(committed).toEqual([expectedRecord]);
+            const expectedRecord = [
+                'claude',
+                {
+                    type: 'output',
+                    data: {
+                        type: 'progress',
+                        marker: 'source_fact_consumed',
+                        reason: 'host_prompt_echo',
+                    },
+                },
+                {
+                    localId: 'claude-jsonl:main:user:user-1',
+                    meta: {
+                        happier: { kind: 'source_fact_consumed.v1' },
+                    },
+                    provenance: { kind: 'non_dependent', source: 'external' },
+                },
+            ];
+            expect(enqueue.mock.calls).toEqual([expectedRecord]);
+            await expect(enqueue.mock.results[0]?.value).resolves.toMatchObject({ persisted: true });
+            expect(result).toEqual({ status: 'custodied' });
+
+            await fixture.lease.release();
+            await fixture.controller.shutdown();
+            await expect(transcripts.markSourceFactConsumed?.({
+                localId: 'claude-jsonl:main:user:user-2',
+                reason: 'host_prompt_echo',
+            })).rejects.toMatchObject({ code: 'plugin_generation_stale' });
+            expect(enqueue.mock.calls).toEqual([expectedRecord]);
+        } finally {
+            try {
+                publications?.dispose();
+                try {
+                    await owners?.dispose();
+                } finally {
+                    await session?.close();
+                }
+            } finally {
+                await fixture.dispose();
+            }
+        }
     });
 
     it('does not bypass the exact durable session identity for a source fact', async () => {

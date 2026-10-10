@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { defineProtocolJsonValue } from '../../plugins/actions/protocolComposableSchema.js';
 
 /**
  * Wire-level `systemTasks` contract shared between protocol consumers.
@@ -69,10 +70,19 @@ function isSystemTaskJsonValue(
   }
 }
 
-export const SystemTaskJsonValueSchema = lazyZodSchema(() => z.custom<SystemTaskJsonValue>(
-  (value): value is SystemTaskJsonValue => isSystemTaskJsonValue(value),
-  'Expected a JSON-safe value',
-));
+export const SystemTaskJsonValueSchema = lazyZodSchema(() => {
+  const schema = z.custom<SystemTaskJsonValue>(
+    (value): value is SystemTaskJsonValue => isSystemTaskJsonValue(value),
+    'Expected a JSON-safe value',
+  );
+  // Preserve native SystemTask admission while projecting its JSON wire position
+  // through the canonical JSON definition, as other Protocol boundary adapters do.
+  const jsonSchema = defineProtocolJsonValue().jsonSchema;
+  schema._zod.processJSONSchema = (_context, projection) => {
+    Object.assign(projection, jsonSchema);
+  };
+  return schema;
+});
 
 export const SystemTaskSpecSchema = lazyZodSchema(() => z.object({
   protocolVersion: z.literal(SYSTEM_TASK_PROTOCOL_VERSION),

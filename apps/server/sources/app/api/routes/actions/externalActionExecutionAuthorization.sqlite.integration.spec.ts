@@ -64,7 +64,8 @@ import { projectSourceRoutes } from '@/app/api/routes/projects/projectSourceRout
 import { buildProjectAccountRowPhysicalKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { hasCurrentSessionScopedMachineAccessInTx } from '@/app/api/socket/sessionScopedBinding';
 import { auth } from "@/app/auth/auth";
-import { verifyExternalActionMachineRpcExecution, verifyCurrentExternalActionPrincipal, verifyWorkspaceSyncHandoffSourceAuthorization, verifyExternalActionDomainExecutionRequest } from "@/app/auth/externalActionExecutionAuthorization";
+import { verifyExternalActionMachineRpcExecution, verifyCurrentExternalActionPrincipal, verifyWorkspaceSyncHandoffSourceAuthorization,
+    readCurrentWorkspaceSyncProjectSourceAuthorization, verifyExternalActionDomainExecutionRequest } from "@/app/auth/externalActionExecutionAuthorization";
 import { qualifyTeamAuthenticationInTx } from "@/app/auth/entry/qualifyTeamAuthentication";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
@@ -825,6 +826,17 @@ describe("external Action execution authorization", () => {
                 sourceContext: { machineAdmission: context, callerAuthority: 'present_user' as const }, originalActionEnvelope };
             expect(workspaceSyncSourceRouting.operationId).not.toBe(root.binding.requestId);
             expect(workspaceSyncSourceRouting).not.toHaveProperty('sourceSessionId');
+            if (version === 1 && boundary === 'Home') {
+                const current = await verifyCurrentExternalActionPrincipal(root.binding);
+                expect(current).toMatchObject({ authority: 'present_user' });
+                const attenuated = await readCurrentWorkspaceSyncProjectSourceAuthorization(root, {
+                    ...workspaceSyncSourceRouting,
+                    sourceContext: { ...workspaceSyncSourceRouting.sourceContext, callerAuthority: 'account_automation' },
+                }, writer.id);
+                expect(attenuated).not.toBeNull();
+                expect(attenuated?.verified.principal).toEqual(current);
+                expect(attenuated?.verified).toMatchObject({ effectiveAuthority: 'account_automation' });
+            }
             const originalTransportRequestId = crypto.randomUUID();
             const signedRequest = { authorizationToken: root.token, effectActionId: 'projects.open', target: root.binding.target,
                 installationId: target.installationId!, method, requestId: originalTransportRequestId, params: input,
@@ -2440,6 +2452,19 @@ describe("external Action execution authorization", () => {
                 sourceMachineId: child.id, sourceRootPath: '/child/source', sourceSessionId: session.id,
                 sourceContext: { machineAdmission, callerAuthority: 'account_automation',
                     callerInputConstraints } };
+            await auth.updateApiToken({ accountId: fixture.account.id, tokenId: pat.tokenId,
+                grant: { ...API_TOKEN_FULL_GRANT_V1, ...callerInputConstraints } });
+            const current = await verifyCurrentExternalActionPrincipal(authorization.binding);
+            if (!current || 'authentication' in current) throw new Error('Current verified PAT facts required');
+            const boundFacts = { ...current, grant: authorization.binding.grant };
+            const admittedSource = await verifyWorkspaceSyncHandoffSourceAuthorization(authorization,
+                WorkspaceSyncSourceRoutingV1Schema.parse({ ...workspaceSyncSourceRouting,
+                    operationId: authorization.binding.requestId }), resolvePublisher);
+            expect(admittedSource).not.toBeNull();
+            expect(admittedSource?.principal).toEqual(boundFacts);
+            expect(admittedSource).toMatchObject({ effectiveAuthority: 'account_automation' });
+            expect((await verifyExternalActionMachineRpcExecution(execution, { method, requestId, params,
+                resolveCurrentSessionMachine: resolvePublisher }))?.principal).toEqual(boundFacts);
             const call = (callParams: unknown = params, sourceRouting: unknown = workspaceSyncSourceRouting) => getSocketHandler(socket, SOCKET_RPC_EVENTS.CALL)({ method, requestId,
                 params: callParams, externalActionExecution: execution, workspaceSyncSourceRouting: sourceRouting }, callback);
             const callback = vi.fn();

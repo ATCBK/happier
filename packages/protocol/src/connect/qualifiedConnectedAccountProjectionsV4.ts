@@ -83,6 +83,20 @@ export const QualifiedConnectedAccountGroupRefSchema = lazyZodSchema(() => z.obj
   groupId: ConnectedServiceAuthGroupIdSchema,
 }).strict());
 
+export type QualifiedConnectedAccountGroupRef = z.infer<
+  typeof QualifiedConnectedAccountGroupRefSchema
+>;
+
+/** Canonical equality for the complete qualified group identity. */
+export function sameQualifiedConnectedAccountGroupRef(
+  left: QualifiedConnectedAccountGroupRef,
+  right: QualifiedConnectedAccountGroupRef,
+): boolean {
+  return left.service.pluginId === right.service.pluginId
+    && left.service.localId === right.service.localId
+    && left.groupId === right.groupId;
+}
+
 /**
  * Opaque identity of one persisted group lifetime. Unlike generation and
  * runtime-state revision, it does not reset when a logical group id is

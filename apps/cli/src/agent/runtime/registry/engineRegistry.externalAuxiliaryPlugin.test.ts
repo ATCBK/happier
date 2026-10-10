@@ -60,6 +60,7 @@ async function materializeAuxiliaryOnlyPlugin(pluginRoot: string): Promise<void>
     await writeFile(join(pluginRoot, 'daemon.mjs'), `
         const encoder = new TextEncoder();
         const abortedMethods = new Set();
+        const pendingMethods = new Set();
 
         function utf8Bytes(value) {
             return encoder.encode(JSON.stringify(value)).byteLength;
@@ -128,14 +129,16 @@ async function materializeAuxiliaryOnlyPlugin(pluginRoot: string): Promise<void>
             ) {
                 await new Promise((resolve) => {
                     const signal = request.signal;
-                    const timer = setTimeout(
+                    pendingMethods.add(method);
+                    const timer = mode === 'delayed' ? null : setTimeout(
                         finish,
                         mode === 'after-deadline'
                             ? 46_000
                             : 100,
                     );
                     function finish() {
-                        clearTimeout(timer);
+                        if (timer !== null) clearTimeout(timer);
+                        pendingMethods.delete(method);
                         signal?.removeEventListener('abort', onAbort);
                         resolve();
                     }
@@ -189,6 +192,17 @@ async function materializeAuxiliaryOnlyPlugin(pluginRoot: string): Promise<void>
                 },
                 async listCandidates(request) {
                     await maybeDelay(request, 'listCandidates');
+                    if (request.searchTerm === 'observed-pending') {
+                        return {
+                            ok: true,
+                            value: {
+                                candidates: [...pendingMethods].map((method, index) =>
+                                    candidate(index, { remoteSessionId: 'pending-' + method })
+                                ),
+                                nextCursor: null,
+                            },
+                        };
+                    }
                     if (request.searchTerm === 'observed-aborts') {
                         return {
                             ok: true,
@@ -815,7 +829,19 @@ describe('non-bundled auxiliary-only Agent contribution', () => {
                 searchTerm: 'delayed',
                 signal: caller.signal,
             });
-            await Promise.resolve();
+            // Cancellation must reach an already-entered physical leaf, not
+            // only the host's pre-dispatch fence.
+            await vi.waitFor(async () => {
+                await expect(externalSession!.listCandidates!({
+                    source: runtimeSource,
+                    limit: 6,
+                    searchTerm: 'observed-pending',
+                })).resolves.toMatchObject({
+                    candidates: expect.arrayContaining([
+                        expect.objectContaining({ remoteSessionId: 'pending-listCandidates' }),
+                    ]),
+                });
+            });
             caller.abort();
             await expect(cancelledCall).rejects.toMatchObject({
                 name: 'ExternalSessionProviderFailureError',

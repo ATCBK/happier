@@ -203,7 +203,7 @@ export async function publishGitHubAppRegistrationTeamsChangedInTx(
     ]);
     return await publishTeamsChangedInTx(tx, {
         teamIds: [
-            ...identityConnections.map(({ teamId }) => teamId),
+            ...identityConnections.flatMap(({ teamId }) => teamId === null ? [] : [teamId]),
             ...directorySources.map(({ teamId }) => teamId),
         ],
     });

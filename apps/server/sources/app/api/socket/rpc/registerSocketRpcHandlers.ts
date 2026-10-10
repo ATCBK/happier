@@ -1096,6 +1096,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 });
                 return;
             }
+            const validatedMethod = method;
 
             const rawTransferRouting = (data as { transferRouting?: unknown } | undefined)?.transferRouting;
             const reverseAutomationSeparator = method.indexOf(':');
@@ -1278,7 +1279,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
             const requestAuthentication = verifiedExternalAction
                 ? {
                     env: process.env,
-                    authority: verifiedExternalAction.principal.authority,
+                    authority: verifiedExternalAction.effectiveAuthority,
                     authenticationEvidence: verifiedExternalAction.principal.authenticationEvidence,
                     ...('grant' in verifiedExternalAction.binding ? { callerInputConstraints: {
                         models: verifiedExternalAction.binding.grant.models,
@@ -1714,7 +1715,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                         || workspaceSyncRouting.accountServerId !== binding.serverIdentityId
                         || claimed.machineId !== binding.machineId || claimed.installationId !== binding.installationId
                         || claimed.actorAccountId !== binding.accountId || claimed.custodianAccountId !== binding.custodianAccountId
-                        || workspaceSyncContext.callerAuthority !== verifiedExternalAction.principal.authority
+                        || workspaceSyncContext.callerAuthority !== verifiedExternalAction.effectiveAuthority
                         || !isDeepStrictEqual(workspaceSyncContext.sessionActionOrigin, binding.sessionActionOrigin)
                         || ('grant' in binding && !isDeepStrictEqual(workspaceSyncContext.callerInputConstraints, {
                             models: binding.grant.models, permissionModes: binding.grant.permissionModes,
@@ -1865,7 +1866,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 ...(externalActionExecution?.success ? [{
                     filterTargets: async (targets) => targets,
                     runOperation: async ({ operation }) => await verifyExternalActionMachineRpcExecution(externalActionExecution.data, {
-                        method, ...(callerRequestId === undefined ? {} : { requestId: callerRequestId }),
+                        method: validatedMethod, ...(callerRequestId === undefined ? {} : { requestId: callerRequestId }),
                         resolveCurrentSessionMachine: input => resolveCurrentSessionMachineFromServer({ io: params.io, presence: params.sessionPublisherPresence, ...input }),
                         ...(callParams === undefined ? {} : { params: callParams }),
                         ...(isProjectSource && workspaceSyncSourceRouting ? { workspaceSyncSourceRouting } : {}),
@@ -1900,7 +1901,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 ...(workspaceSyncContext ? {
                     callerAuthority: sessionActionOrigin ? 'account_automation' as const : workspaceSyncContext.callerAuthority,
                 } : (isHandoffCurrent || isTransitionRoot) && verifiedExternalAction
-                    ? { callerAuthority: verifiedExternalAction.principal.authority } : {}),
+                    ? { callerAuthority: verifiedExternalAction.effectiveAuthority } : {}),
                 ...(explicitMachineStopRequest
                     ? { transportResponseEnvelopeVersion: 1 as const }
                     : {}),

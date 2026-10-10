@@ -686,7 +686,7 @@ function projectGitHubAppTeamConsumers(input: Readonly<{
         connections: readonly Readonly<{
             id: string;
             enabled: boolean;
-            team: Readonly<{ id: string; name: string }>;
+            team: Readonly<{ id: string; name: string }> | null;
         }>[];
     }>[];
     directorySources: readonly Readonly<{
@@ -696,7 +696,7 @@ function projectGitHubAppTeamConsumers(input: Readonly<{
     }>[];
 }>): readonly ManagedGitHubAppTeamConsumerV1[] {
     const consumers: ManagedGitHubAppTeamConsumerV1[] = [
-        ...input.identityProviderInstances.flatMap((provider) => provider.connections.map((connection) => ({
+        ...input.identityProviderInstances.flatMap((provider) => provider.connections.flatMap((connection) => connection.team === null ? [] : [{
             team: connection.team,
             binding: {
                 kind: "identity_connection" as const,
@@ -704,7 +704,7 @@ function projectGitHubAppTeamConsumers(input: Readonly<{
                 providerInstanceId: provider.id,
                 enabled: connection.enabled,
             },
-        }))),
+        }])),
         ...input.directorySources.map((source) => ({
             team: source.team,
             binding: {

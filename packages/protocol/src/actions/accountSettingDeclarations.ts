@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { AccountSettings } from '../account/settings/accountSettings.js';
 import { SessionAgentSpawnPolicyV1Schema, SessionAgentSpawnPolicyV1StrictSchema, type SessionAgentSpawnPolicyV1 } from '../account/settings/sessionAgentSpawnPolicyV1.js';
-import { SessionAgentStartAllowListsV1Schema } from '../account/settings/sessionAgentStartAllowListsV1.js';
+import { SessionAgentStartAllowListsV1Schema, SessionAgentStartAllowListsV1StrictSchema } from '../account/settings/sessionAgentStartAllowListsV1.js';
 import { readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations.js';
 import { BUILT_IN_SETTINGS_METADATA_V1 } from './settings/builtInSettingsMetadata.js';
 export * from './settings/settingsDeclarations.js';
@@ -34,10 +34,10 @@ function startAllowListSetting<Field extends 'allowedRoleIds' | 'allowedAgentTar
   return { ...declaration,
     storage: { ...declaration.storage, field },
     // Persisted malformed lists recover fail closed; Action writes reject malformed values.
-    parseValue: (value: unknown) => SessionAgentStartAllowListsV1Schema.removeCatch().shape[field].removeCatch().safeParse(value),
+    parseValue: (value: unknown) => SessionAgentStartAllowListsV1StrictSchema.shape[field].safeParse(value),
     readValue: (settings: Pick<AccountSettings, 'sessionAgentStartAllowListsV1'>) => SessionAgentStartAllowListsV1Schema.parse(settings.sessionAgentStartAllowListsV1)[field],
     updateValue: (settings: Pick<AccountSettings, 'sessionAgentStartAllowListsV1'>, value: unknown) =>
-      SessionAgentStartAllowListsV1Schema.parse({ ...SessionAgentStartAllowListsV1Schema.parse(settings.sessionAgentStartAllowListsV1), [field]: value }),
+      SessionAgentStartAllowListsV1StrictSchema.parse({ ...SessionAgentStartAllowListsV1Schema.parse(settings.sessionAgentStartAllowListsV1), [field]: value }),
   } as const;
 }
 

@@ -38,4 +38,5 @@ export const PluginHostedWebAccountDataBridgeResponseV1Schema:
     canonicalPluginHostedWebAccountDataBridgeResponseV1Schema;
 export { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 export type { ArtifactHtmlBundleV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
+export type { PluginHostedWebBridgeBootstrapConfigV1 } from '@happier-dev/protocol/plugins/ui/hostedWebBridge';
 export { buildArtifactHtmlDocumentV1, ARTIFACT_HTML_SANDBOX_V1, ARTIFACT_HTML_CONTENT_CSP_V1 } from '@happier-dev/protocol/artifacts/artifactHtmlDocumentV1';

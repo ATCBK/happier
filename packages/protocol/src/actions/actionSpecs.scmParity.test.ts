@@ -118,7 +118,6 @@ describe('SCM Action parity', () => {
     const history = { cwd: '/repo', folder: '', paths: ['', ':(glob)*', '-dash', 'line\nbreak', 'space '] };
     expect(schema('scm.history.entries').parse(history)).toEqual(history);
     expect(schema('scm.history.entries').safeParse({ ...history, unknown: true }).success).toBe(false);
-    const { zodSchemaToJsonSchemaObject } = await import('./actionInputJsonSchema.js');
     expect(zodSchemaToJsonSchemaObject(schema('scm.history.entries'))).toMatchObject({
       type: 'object', additionalProperties: false, required: ['cwd', 'folder', 'paths'],
     });

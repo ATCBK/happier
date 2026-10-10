@@ -88,6 +88,13 @@ describe('Claude native External Sessions contribution', () => {
                     configDir: expect.any(String),
                     projectId: 'project-a',
                 },
+                accountingSource: {
+                    rootPath: configDir,
+                    rootField: 'configDir',
+                    resourceKey: expect.stringMatching(/^claude:accounting:[A-Za-z0-9_-]{43}$/u),
+                    changeObservation: 'watch_file_changes',
+                    watchFileChanges: { files: [], topologyDirectories: [join(configDir, 'projects')] },
+                },
             },
         });
     });
@@ -116,6 +123,7 @@ describe('Claude native External Sessions contribution', () => {
         expect(Object.keys(contribution).sort()).toEqual([
             'listCandidates',
             'pageTranscript',
+            'readAccounting',
             'readAfterTranscript',
             'resolveLinkIdentity',
             'resolveLinkedIdentity',

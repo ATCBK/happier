@@ -6,6 +6,7 @@ import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, type ProviderConnectionsCatalo
 import { parseProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
 import { resolveProviderModelPickerVisibility } from '@happier-dev/protocol/providers/catalog/modelPickerVisibility';
 import {
+  ProviderConnectionIdSchema,
   ProviderContributionV1Schema,
   type ProviderConnectionMutationRequest,
   type ProviderContribution,
@@ -39,7 +40,7 @@ describe('Provider authoring through the public manifest SDK', () => {
       displayName: 'Acme', savedSecretId: null, enable: false,
     }), {})).toMatchObject({ ok: true });
     const update = {
-      action: 'update', connectionId: 'pc_acme', expectedRevision: 0,
+      action: 'update', connectionId: ProviderConnectionIdSchema.parse('pc_acme'), expectedRevision: 0,
       deployment: { kind: 'managedLocal', purposeBindingDefaults: {
         upstream: { kind: 'group', service: { pluginId: 'acme.auth', localId: 'subscription' }, groupId: 'acme-pool' },
       } },

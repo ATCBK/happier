@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 type PackageExportEntry = Readonly<{
+    'happier-source'?: string;
     default?: string;
     types?: string;
 }>;
@@ -21,6 +22,7 @@ describe('Claude permission mode package exports', () => {
         ) as ClaudePackageJson;
 
         expect(packageJson.exports?.['./agent/runtime/permissionMode']).toEqual({
+            'happier-source': './src/agent/runtime/permissionMode.ts',
             types: './dist/agent/runtime/permissionMode.d.ts',
             default: './dist/agent/runtime/permissionMode.js',
         });

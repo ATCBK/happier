@@ -1,9 +1,9 @@
 import type {
-    IdentityConnectionV1,
     TeamIdentityErrorCodeV1,
     TeamIdentityWorkosConnectionCreateInputV1,
-    IdentityWorkosReconcileResultV1,
+    TeamIdentityWorkosReconcileResultV1,
 } from "@happier-dev/protocol/teams";
+import type { HomeIdentityWorkosReconcileResultV1 } from "@happier-dev/protocol/home";
 
 import {
     createIdentityProviderInstanceInTx,
@@ -34,12 +34,13 @@ import {
 import { publishCommittedHomeProviderMutationInTx } from "@/app/home/governance/homeManagedIdentityProviders";
 import type { TeamOperationAuthenticationContext } from "../actorContext";
 import { authorizeTeamIdentityAdministrationInTx, identityConnectionOwner } from "./teamIdentityAdministrationAuthority";
-import { projectCurrentTeamIdentityConnectionV1InTx } from "./teamIdentityConnectionProjection";
+import { projectCurrentTeamIdentityConnectionV1InTx, projectIdentityConnectionResult, type ScopedIdentityConnectionV1 as IdentityConnectionV1 } from "./teamIdentityConnectionProjection";
 import { resolveTeamIdentityConnectionReturnUrl } from "./teamIdentityConnectionUrls";
 
 
 type TeamIdentityConnectionView = LifecycleConnectionView<string | null>;
 type ScopedInput<T> = Omit<T, "teamId"> & Readonly<{ teamId: string | null }>;
+type IdentityWorkosReconcileResultV1 = HomeIdentityWorkosReconcileResultV1 | TeamIdentityWorkosReconcileResultV1;
 
 type Result<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; error: TeamIdentityErrorCodeV1 }>;
 
@@ -457,15 +458,14 @@ export async function reconcileTeamWorkosConnection(
     if (selectedConnectionId === null && candidates.length > 1) {
         return {
             ok: true,
-            value: {
-                outcome: "selection_required",
-                connection: await inTx((tx) => projectCurrentTeamIdentityConnectionV1InTx(tx, {
+            value: projectIdentityConnectionResult(
+                await inTx((tx) => projectCurrentTeamIdentityConnectionV1InTx(tx, {
                     env: input.env,
                     teamId: input.teamId,
                     connection: preflight.value.connection,
                 })),
-                candidates,
-            },
+                { outcome: "selection_required" as const, candidates },
+            ),
         };
     }
     if (candidates.length === 0) {
@@ -503,17 +503,13 @@ export async function reconcileTeamWorkosConnection(
                 ? { ok: true as const, value: await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: result.connection }) }
                 : { ok: false as const, error: mapConnectionMutationError(result.status) };
         });
-        return observed.ok
-            ? {
-                ok: true,
-                value: {
-                    outcome: preflight.value.connection.externalReference.connectionId === null
-                        ? "setting_up" as const
-                        : "needs_attention" as const,
-                    connection: observed.value,
-                },
-            }
-            : observed;
+        if (!observed.ok) return observed;
+        return {
+            ok: true,
+            value: preflight.value.connection.externalReference.connectionId === null
+                ? projectIdentityConnectionResult(observed.value, { outcome: "setting_up" as const })
+                : projectIdentityConnectionResult(observed.value, { outcome: "needs_attention" as const }),
+        };
     }
 
     const now = (dependencies.now ?? (() => new Date()))();
@@ -531,17 +527,13 @@ export async function reconcileTeamWorkosConnection(
         });
         return result;
     });
-    return recorded.ok
-        ? {
-            ok: true,
-            value: {
-                outcome: candidates[0]!.status.toLowerCase() === "active"
-                    ? "connected"
-                    : "needs_attention",
-                connection: recorded.value,
-            },
-        }
-        : recorded;
+    if (!recorded.ok) return recorded;
+    return {
+        ok: true,
+        value: candidates[0]!.status.toLowerCase() === "active"
+            ? projectIdentityConnectionResult(recorded.value, { outcome: "connected" as const })
+            : projectIdentityConnectionResult(recorded.value, { outcome: "needs_attention" as const }),
+    };
 }
 
 export async function setTeamWorkosConnection(

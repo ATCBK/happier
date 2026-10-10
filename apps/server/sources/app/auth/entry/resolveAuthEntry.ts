@@ -152,7 +152,7 @@ async function resolveAuthenticatedAccountPresentationInTx(
 const AUTH_ENTRY_UTF8_ENCODER = new TextEncoder();
 
 export function projectUnavailableHomeAuthEntry(
-    reason: 'not_account_service' | 'authentication_policy_unavailable',
+    reason: Extract<AuthEntryProjectionV1, { scope: { kind: 'home' }; reason: unknown }>['reason'],
 ): AuthEntryProjectionV1 {
     return AuthEntryProjectionV1Schema.parse({
         v: 1,
@@ -853,7 +853,7 @@ export async function resolveAuthEntry(
     if (homeMethods.status !== 'ready') {
         return projectUnavailableHomeAuthEntry('authentication_policy_unavailable');
     }
-    const email = input.scope.kind === 'home' ? input.email : undefined;
+    const email = input.scope.kind === 'home' && 'email' in input ? input.email : undefined;
     if (email !== undefined) {
         homeMethods = await resolveHomeCompanyChoicesByEmail(email, context.env, emailDeliveryReady, homeMethods);
         if (homeMethods.status !== 'ready') return projectUnavailableHomeAuthEntry('entry_not_available');

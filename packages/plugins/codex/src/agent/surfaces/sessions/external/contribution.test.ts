@@ -388,6 +388,22 @@ describe('Codex public Agent External Sessions contribution', () => {
         value: {
           source: { kind: 'codexHome', home: 'user', homePath: codexHome },
           transcriptMediaReadRoots: [codexHome],
+          accountingSource: {
+            rootPath: codexHome,
+            rootField: 'homePath',
+            resourceKey: expect.stringMatching(/^codex:accounting:[A-Za-z0-9_-]{43}$/u),
+            changeObservation: 'watch_file_changes',
+            watchFileChanges: {
+              files: [firstFile, join(sessionsDir, `rollout-2026-07-23T09-00-00-${secondSessionId}.jsonl`)],
+              topologyDirectories: [
+                join(codexHome, 'archived_sessions'),
+                join(codexHome, 'sessions'),
+                join(codexHome, 'sessions', '2026'),
+                join(codexHome, 'sessions', '2026', '07'),
+                sessionsDir,
+              ],
+            },
+          },
         },
       });
       if (!resolvedSource.ok) throw new Error('Expected resolved Codex source');

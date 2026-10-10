@@ -97,7 +97,7 @@ Notes:
 When the same approved source must ship to both channels without a second
 operator cycle, use the private conductor target `preview-and-production`.
 It dispatches the canonical top-level `release.yml` with the combined target
-and `confirm=release dev to preview and main`. That owner snapshots source/dev
+and `confirm=release dev to preview and main`. That owner snapshots source/dev/preview
 issue eligibility once and invokes `release-channel.yml` for preview and
 production in parallel. Its automatic validation profile is `stable` for
 combined publication and `integrated` for a single channel; an explicit profile
@@ -111,9 +111,11 @@ that evidence against the same bound SHA. They do not share built artifacts:
 preview and production
 embed different feature-policy environments, so each channel must build and
 verify its own bytes. Same-channel releases still serialize; the two channel
-calls use separate non-cancelling concurrency groups. The outer workflow moves
-its source/dev issue snapshot directly to `stage:stable` only after both calls
-complete post-publication verification successfully.
+calls use separate non-cancelling concurrency groups. The outer workflow records
+the highest channel with successful post-publication verification and canonical
+terminal completion. Production completion advances eligible issues to
+`stage:stable`; preview completion alone advances source/dev issues to
+`stage:preview`. A failed sibling channel does not erase verified availability.
 
 Use GitHub's failed-job rerun while workflow control is unchanged. After a
 control fix, resume from the prior combined run; each channel reads its own
@@ -135,10 +137,20 @@ Preview and production releases snapshot only stages proven by their selected
 source topology: `dev` → `preview` snapshots source/dev, `preview` → `main`
 snapshots preview, and direct `dev` → `main` snapshots source/dev. This lets an
 authorized channel bypass advance issues without attributing unrelated
-post-preview dev changes to a preview candidate. Failed and dry-run releases
-move nothing. The reconciler re-reads each snapshotted issue, preserves
+post-preview dev changes to a preview candidate. Failed channels and dry-run
+releases move nothing. Standalone surface retries do not establish channel
+completion; use the canonical release resume to verify the complete channel
+before stage advancement. The reconciler re-reads each snapshotted issue, preserves
 unrelated labels, and skips closed or manually restaged issues. It never
 comments on or closes an issue.
+
+Pinned issue snapshots check correction references in the exact candidate's
+cumulative ancestry, including references older than the target branch tip.
+References must identify the current complete correction. Missing references
+and issues with newer reference-bearing work on canonical dev stay queued with
+an explicit provenance diagnostic. Candidates outside canonical dev ancestry
+fail closed. A manually applied stage label does not substitute for candidate
+inclusion proof. Current-dev nightlies retain their whole-queue contract.
 
 `website` and `docs` are independent release targets. Either may be selected
 without the other, and each has its own change decision, deploy job, status
@@ -636,10 +648,13 @@ When only desktop publication remains, an authorized maintainer can dispatch
 `build-tauri.yml` from corrected `dev` control with `source_ref` set to the exact
 approved candidate, `resume_run_id` set to its terminal original run, and
 `release_notes_id` set to the approved notes. For a release origin, also set
-`resume_workflow=release.yml` or `release-preview-and-production.yml` and
+`resume_workflow=release.yml` for either single-channel or combined releases, and
 `resume_operation_id` to the exact conductor operation. `environment` selects
 the channel's status and artifacts; the canonical resolver still verifies the
-operation, source, run, and archive digests. All available finalized platforms
+operation, source, run, and archive digests. It selects the channel-scoped status
+for combined origins and the unscoped status for single-channel or nightly
+origins; ambiguous status topology or a missing channel fails admission.
+All available finalized platforms
 skip builds, signing, and notarization. This desktop-only recovery does not run
 mobile flows or change the failed parent operation's status.
 
@@ -647,6 +662,10 @@ mobile flows or change the failed parent operation's status.
 
 Standard release recovery can retain accepted OTA, native iOS/Android, and APK
 flows from exact-source successful jobs and their decisive successful steps.
+The admitted status binds the approved candidate source and conductor operation;
+job evidence binds the exact origin run, workflow control SHA, and channel. A
+different workflow control SHA from the candidate does not discard completed
+flows when those bindings and successful steps match.
 The canonical status projection records the original Expo action; completion is
 reused only for that same action. Missing historical mode or ambiguous job evidence
 keeps the flow enabled. Saved status also carries the original web, Expo, and

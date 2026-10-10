@@ -28,7 +28,11 @@ installDbModuleMock(() => ({
 }));
 // The database boundary is an in-memory SQLite stand-in, not a generated Prisma client.
 // Its failure fixture throws a plain Error, not a Prisma-coded database error.
-installPrismaModuleMock({ getDbProviderFromEnv: () => "sqlite", isPrismaErrorCode: () => false });
+installPrismaModuleMock({
+    getDbProviderFromEnv: () => "sqlite",
+    isPrismaErrorCode: () => false,
+    withSqliteReadSnapshot: dbTransactionMock.readSnapshot,
+});
 
 // Keep the real route graph for this file; request configuration remains live.
 const { voiceRoutes } = await import("./voiceRoutes");

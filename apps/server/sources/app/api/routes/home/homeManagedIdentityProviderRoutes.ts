@@ -157,6 +157,7 @@ async function projectProviders(instances: readonly IdentityProviderInstanceView
                 },
             });
             for (const connection of connections) {
+                if (connection.team === null) continue;
                 const consumers = teamConsumersByProviderId.get(connection.providerInstanceId) ?? [];
                 consumers.push({
                     team: connection.team,

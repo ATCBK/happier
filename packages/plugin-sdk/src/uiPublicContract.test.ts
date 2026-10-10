@@ -233,6 +233,9 @@ describe('UI/testing public type contract', () => {
     });
 
     it('projects Protocol’s closed declarative node and tone grammar without a UI-local dialect', () => {
+        // Canonical mapped intersections and flattened DTOs need strict structural
+        // branding, not TypeScript's private identical-to comparison. It retains
+        // readonly, optional, key and union checks rather than mere assignability.
         expectTypeOf<PluginUiDeclarativeNodeV2['kind']>()
             .toEqualTypeOf<CanonicalPluginDeclarativeNodeV2['kind']>();
         expectTypeOf<SdkDeclarativeNodeOfKind<'text'>>()
@@ -255,19 +258,19 @@ describe('UI/testing public type contract', () => {
         expectTypeOf<SdkDeclarativeNodeOfKind<'status'>>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'status'>>();
         expectTypeOf<Omit<SdkDeclarativeNodeOfKind<'action'>, 'hostAction'>>()
-            .toEqualTypeOf<Omit<CanonicalDeclarativeNodeOfKind<'action'>, 'hostAction'>>();
+            .branded.toEqualTypeOf<Omit<CanonicalDeclarativeNodeOfKind<'action'>, 'hostAction'>>();
         expectTypeOf<SdkDeclarativeNodeOfKind<'action'>['hostAction']>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'action'>['hostAction']>();
         expectTypeOf<SdkDeclarativeNodeOfKind<'list'>>()
-            .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'list'>>();
+            .branded.toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'list'>>();
         expectTypeOf<SdkDeclarativeNodeOfKind<'section'>>()
-            .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'section'>>();
+            .branded.toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'section'>>();
         expectTypeOf<SdkDeclarativeNodeOfKind<'item'>>()
-            .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'item'>>();
+            .branded.toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'item'>>();
         expectTypeOf<SdkDeclarativeNodeOfKind<'state'>>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'state'>>();
         expectTypeOf<SdkDeclarativeNodeOfKind<'targetedSurface'>>()
-            .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'targetedSurface'>>();
+            .branded.toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'targetedSurface'>>();
         expectTypeOf<SdkDeclarativeNodeOfKind<'metadata'>>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'metadata'>>();
         expectTypeOf<Omit<SdkDeclarativeNodeOfKind<'actionPanel'>, 'children'>>()
@@ -275,12 +278,12 @@ describe('UI/testing public type contract', () => {
         expectTypeOf<SdkDeclarativeNodeOfKind<'actionPanel'>['children'][number]['kind']>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'actionPanel'>['children'][number]['kind']>();
         expectTypeOf<SdkDeclarativeNodeOfKind<'collectionList'>>()
-            .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'collectionList'>>();
+            .branded.toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'collectionList'>>();
         expectTypeOf<PluginUiDeclarativeToneV2>().toEqualTypeOf<CanonicalPluginUiDeclarativeToneV2>();
         // Every named export the SDK derives from the grammar is pinned too, so
         // one drifting projection cannot hide behind its matching node member.
         expectTypeOf<Omit<PluginDeclarativeActionNodeV2, 'hostAction'>>()
-            .toEqualTypeOf<Omit<CanonicalDeclarativeNodeOfKind<'action'>, 'hostAction'>>();
+            .branded.toEqualTypeOf<Omit<CanonicalDeclarativeNodeOfKind<'action'>, 'hostAction'>>();
         expectTypeOf<PluginDeclarativeActionNodeV2['hostAction']>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'action'>['hostAction']>();
         expectTypeOf<Omit<PluginDeclarativeActionPanelNodeV2, 'children'>>()
@@ -288,25 +291,25 @@ describe('UI/testing public type contract', () => {
         expectTypeOf<PluginDeclarativeActionPanelNodeV2['children'][number]['kind']>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'actionPanel'>['children'][number]['kind']>();
         expectTypeOf<PluginDeclarativeCollectionListNodeV2>()
-            .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'collectionList'>>();
+            .branded.toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'collectionList'>>();
         expectTypeOf<PluginDeclarativeComposerApplyEffectV1>()
             .toEqualTypeOf<NonNullable<CanonicalDeclarativeNodeOfKind<'action'>['effect']>>();
         expectTypeOf<PluginDeclarativeControlV2>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'field'>['control']>();
         expectTypeOf<PluginDeclarativeItemNodeV2>()
-            .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'item'>>();
+            .branded.toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'item'>>();
         expectTypeOf<PluginDeclarativeListNodeV2>()
-            .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'list'>>();
+            .branded.toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'list'>>();
         expectTypeOf<PluginDeclarativeMetadataNodeV2>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'metadata'>>();
         expectTypeOf<PluginDeclarativeSectionNodeV2>()
-            .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'section'>>();
+            .branded.toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'section'>>();
         expectTypeOf<PluginDeclarativeStateNodeV2>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'state'>>();
         expectTypeOf<PluginDeclarativeTargetedSurfaceNodeV2>()
-            .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'targetedSurface'>>();
+            .branded.toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'targetedSurface'>>();
         expectTypeOf<PluginDeclarativeTargetedSurfaceReferenceV1>()
-            .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'targetedSurface'>['surface']>();
+            .branded.toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'targetedSurface'>['surface']>();
         expectTypeOf<PluginDeclarativeToneV2>().toEqualTypeOf<CanonicalPluginUiDeclarativeToneV2>();
         // The grammar's own leaf vocabularies, derived from the same canonical
         // union rather than reached through a second Protocol import path.
@@ -317,9 +320,9 @@ describe('UI/testing public type contract', () => {
         expectTypeOf<PluginDeclarativeMetadataEntryV2>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'metadata'>['entries'][number]>();
         expectTypeOf<PluginDeclarativeRowNodeV2>()
-            .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'section'>['children'][number]>();
+            .branded.toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'section'>['children'][number]>();
         expectTypeOf<PluginCollectionRowCommandV1>()
-            .toEqualTypeOf<NonNullable<CanonicalDeclarativeNodeOfKind<'collectionList'>['primaryCommand']>>();
+            .branded.toEqualTypeOf<NonNullable<CanonicalDeclarativeNodeOfKind<'collectionList'>['primaryCommand']>>();
         expectTypeOf<PluginCollectionProjectedScalarFieldRefV1>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'collectionList'>['projection']['titleField']>();
         // The author-facing localized string and contribution reference are the
@@ -328,7 +331,7 @@ describe('UI/testing public type contract', () => {
         expectTypeOf<PluginLocalizedStringV2>()
             .toEqualTypeOf<CanonicalDeclarativeNodeOfKind<'text'>['text']>();
         expectTypeOf<PluginContributionReference>()
-            .toEqualTypeOf<NonNullable<CanonicalDeclarativeNodeOfKind<'item'>['action']>>();
+            .branded.toEqualTypeOf<NonNullable<CanonicalDeclarativeNodeOfKind<'item'>['action']>>();
     });
 
     it('projects Protocol’s Agent UI authoring grammar without a manifest-local dialect', () => {

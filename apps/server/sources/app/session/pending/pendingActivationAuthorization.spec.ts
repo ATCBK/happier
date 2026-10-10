@@ -1,12 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
+import { Prisma } from '@prisma/client';
+import * as storageBoundary from '@/storage/prisma';
+import { installDbModuleMock } from '@/app/api/testkit/dbMocks';
 
-import {
+// Transaction delegates are fixtures; supply the real Prisma metadata without
+// opening a database connection or mocking activation policy.
+installDbModuleMock({ ...storageBoundary, getActivePrismaRuntime: () => Prisma });
+
+const {
     armPendingActivationAuthorizationInTx,
     clearPendingActivationAuthorizationForPublisherActivityData,
     mapPendingActivationAuthorization,
     markPendingActivationAuthorizationFailedInTx,
     reconcilePendingActivationAuthorizationForRemovedRequestInTx,
-} from './pendingActivationAuthorization';
+} = await import('./pendingActivationAuthorization');
 
 function createTx(session: Record<string, unknown>, row?: Record<string, unknown>) {
     const updateMany = vi.fn(async ({ where, data }: any) => {

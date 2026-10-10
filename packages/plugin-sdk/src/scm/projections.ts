@@ -1237,7 +1237,7 @@ export type ScmPullRequestWorkEvidence = {
     pullRequest: ScmPullRequestSummary;
 };
 
-type ScmPullRequestErrorResponse = Extract<ScmRepositoryCloneOutput, { success: false }> & {
+export type ScmPullRequestErrorResponse = Extract<ScmRepositoryCloneOutput, { success: false }> & {
     result?: 'opened_compose';
     composeUrl?: string;
 };

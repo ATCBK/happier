@@ -93,6 +93,7 @@ describe('activate', () => {
             resolveLinkedIdentity: expect.any(Function),
             pageTranscript: expect.any(Function),
             readAfterTranscript: expect.any(Function),
+            readAccounting: expect.any(Function),
           },
           externalSessionTakeover: { resolveLaunch: expect.any(Function) },
           externalSessionHooks: {
@@ -124,6 +125,7 @@ describe('activate', () => {
       expect(Object.keys(agent?.externalSessions ?? {}).sort()).toEqual([
         'listCandidates',
         'pageTranscript',
+        'readAccounting',
         'readAfterTranscript',
         'resolveLinkIdentity',
         'resolveLinkedIdentity',

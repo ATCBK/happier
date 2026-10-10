@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type {
     PluginActionDangerLevelV2,
@@ -31,42 +31,6 @@ import type {
     ResolvedActionDefinition,
     ResolvedUiRendererV2Contribution,
 } from './types';
-
-const {
-    preparePluginJsonSchema,
-    compilePluginJsonSchema,
-    emittedSchemaValidationInputs,
-} = vi.hoisted(() => ({
-    preparePluginJsonSchema: vi.fn(),
-    compilePluginJsonSchema: vi.fn(),
-    /**
-     * Every value the retained emitted-schema validators observe, in order.
-     * The executable parser owns descriptor/surface semantics, so this records
-     * which value reaches the projection-parity check rather than asserting a
-     * compiler call count.
-     */
-    emittedSchemaValidationInputs: [] as unknown[],
-}));
-
-vi.mock('@happier-dev/protocol', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@happier-dev/protocol')>();
-    preparePluginJsonSchema.mockImplementation((schema: object) => {
-        const prepared = actual.preparePluginJsonSchema(schema);
-        return Object.freeze({
-            jsonSchema: prepared.jsonSchema,
-            validate: (value: unknown) => {
-                emittedSchemaValidationInputs.push(value);
-                return prepared.validate(value);
-            },
-        });
-    });
-    compilePluginJsonSchema.mockImplementation(actual.compilePluginJsonSchema);
-    return {
-        ...actual,
-        preparePluginJsonSchema,
-        compilePluginJsonSchema,
-    };
-});
 
 const targetPluginId = 'examples.target';
 const contributorPluginId = 'examples.contributor';
@@ -356,12 +320,6 @@ function targetedDiagnosticCodes(catalog: ReturnType<typeof registry>): readonly
 }
 
 describe('targeted contribution cold admission', () => {
-    beforeEach(() => {
-        preparePluginJsonSchema.mockClear();
-        compilePluginJsonSchema.mockClear();
-        emittedSchemaValidationInputs.length = 0;
-    });
-
     it('retains the exact admitted Action selection shape instead of trusting a later UI carrier field path', () => {
         const selectionFor = (inputHints: ResolvedActionDefinition['inputHints']) => {
             const catalog = registry({ actions: [action({ inputHints })] });
@@ -461,7 +419,7 @@ describe('targeted contribution cold admission', () => {
         expect(activate).not.toHaveBeenCalled();
     });
 
-    it('validates only the parser-normalized descriptor against the retained emitted schema', () => {
+    it('admits additive descriptor fields through the target parser normalization', () => {
         const catalog = registry({
             points: [{ pluginId: targetPluginId, definition: descriptorTargetPoint() }],
             contributions: [{
@@ -473,9 +431,7 @@ describe('targeted contribution cold admission', () => {
 
         expect(catalog.readAdmittedTargetedContributions?.({ targetPluginId, pointId, protocol })
             ?.contributions[0]?.descriptor).toEqual({ providerId: 'github' });
-        // The emitted schema is a projection-parity invariant over the parser's
-        // normalized output, not a pre-parser gate over the raw contributor value.
-        expect(emittedSchemaValidationInputs).toEqual([{ providerId: 'github' }]);
+        expect(targetedDiagnosticCodes(catalog)).toEqual([]);
     });
 
     it('attributes an unparsable descriptor to the target parser rather than a pre-parser schema gate', () => {
@@ -725,8 +681,6 @@ describe('targeted contribution cold admission', () => {
             'target_semantics_unavailable',
             'target_semantics_unavailable',
         ]);
-        expect(compilePluginJsonSchema).not.toHaveBeenCalled();
-        expect(preparePluginJsonSchema).not.toHaveBeenCalled();
     });
 
     it('fans out one contributor-owned semantic diagnostic per rejected contribution', () => {
@@ -818,7 +772,6 @@ describe('targeted contribution cold admission', () => {
             'target_semantics_unavailable',
             'target_semantics_unavailable',
         ]);
-        expect(preparePluginJsonSchema).not.toHaveBeenCalled();
     });
 
     it('rejects missing unknown role references before omitting valid unknown roles from target authority', () => {

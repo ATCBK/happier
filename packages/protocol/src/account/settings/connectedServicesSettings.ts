@@ -27,7 +27,7 @@ import type { QualifiedConnectedAccountPurposeV1 } from '../../connect/connected
 import { buildQualifiedPluginContributionKey } from '../../plugins/contributionIdentity.js';
 import { resolveGeneratedSessionPresentationAgentIdV1 } from '../../agents/generated/sessionPresentationCompatV1.js';
 import { sameQualifiedConnectedAccountRef } from '../../connect/qualifiedConnectedAccountPersistence.js';
-import { sameQualifiedConnectedAccountGroupRef } from '../../connect/qualifiedConnectedAccountsV4.js';
+import { sameQualifiedConnectedAccountGroupRef } from '../../connect/qualifiedConnectedAccountProjectionsV4.js';
 
 const AgentIdSettingsKeySchema = lazyZodSchema(() => z.string().trim().min(1));
 

@@ -51,7 +51,10 @@ describe("managed acquisition durable authority", () => {
             admittedActionRequestId: 'setup-create', admittedInput: {}, presetId: 'setup-preset', presetRevision: 1,
             launch, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false, allocation: 'bound', enrolledMachineId: guestId,
             resource: { contributionRef: launch.provider, schemaVersion: 1, value: { id: 'same-native' } },
-            environmentSetup: { environment, state: 'pending' } } });
+            // CAS must compare the complete retained JSON, not its known-field read projection.
+            environmentSetup: { environment, state: 'pending', futureStoredMember: { nested: [null, { opaque: true }] } } } });
+        expect(row.environmentSetup).toEqual({ environment, state: 'pending',
+            futureStoredMember: { nested: [null, { opaque: true }] } });
         const app = fastify().withTypeProvider<ZodTypeProvider>();
         app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
         let signer = guestId;
@@ -1113,8 +1116,12 @@ describe("managed acquisition durable authority", () => {
         const requestId = 'immutable-purchase';
         const row = await db.managedMachine.create({ data: { homeId, custodianAccountId: account.id,
             controllerMachineId: controller.machineId, controllerInstallationId: controller.installationId,
-            admittedActionRequestId: requestId, admittedInput: { computeInput: input, continuation: null }, launch,
+            // The retained-row read projection drops this member; raw CAS must not.
+            admittedActionRequestId: requestId, admittedInput: { computeInput: input, continuation: null,
+                futureStoredMember: { nested: [null, { opaque: true }] } }, launch,
             allocation: 'may-exist', retention: input.selection.retention, wakeOnAcceptedMessage: false } });
+        expect(row.admittedInput).toEqual({ computeInput: input, continuation: null,
+            futureStoredMember: { nested: [null, { opaque: true }] } });
         await admitManagedControl({ actorAccountId: account.id, custodianAccountId: account.id, input: {
             action: 'machines.managed.retire', requestId: 'current-control', input: { homeId, managedId: row.id, expectedIntentRevision: 0, manualResponsibility: true } } });
         expect(await admitManagedAcquire({ custodianAccountId: account.id, requesterAccountId: account.id,
