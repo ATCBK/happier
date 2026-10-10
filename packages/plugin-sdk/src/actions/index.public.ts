@@ -6,7 +6,10 @@ export type { SessionTerminalLayoutV1, QualifiedAudienceSelection, SessionAudien
 export type { ProviderCatalogParserV1, VoiceProviderSettingsJsonValueV1 } from './dtos/pluginActionDtoSupport.generated.js';
 export type { ExternalSessionsSource } from './dtos/pluginActionDtoSupport.generated.js';
 /** Named dependencies of the canonical host Action input/result maps. */
+export type { AccountOperand, AccountCreationOperand, BoundedLegacyJsonValue, PluginSettingFieldSchemaV2 } from './dtos/pluginActionDtoSupport.generated.js';
+export type { SystemTaskJsonValue, SystemTaskJsonPrimitive, SystemTaskJsonArray, SystemTaskJsonObject } from './dtos/pluginActionDtoSupport.generated.js';
 export type { AccountApiTokensActionInputById, AccountApiTokensActionResultById } from './dtos/accountApiTokensActionDtos.generated.js';
+export type { AccountHomeContinuationActionInputById, AccountHomeContinuationActionResultById } from './dtos/accountHomeContinuationActionDtos.generated.js';
 export type { AccountPluginDataActionInputById, AccountPluginDataActionResultById } from './dtos/accountPluginDataActionDtos.generated.js';
 export type { AccountSecurityActionInputById, AccountSecurityActionResultById } from './dtos/accountSecurityActionDtos.generated.js';
 export type { AccountSessionsActionInputById, AccountSessionsActionResultById } from './dtos/accountSessionsActionDtos.generated.js';
@@ -44,6 +47,8 @@ export type { FilesystemActionInputById, FilesystemActionResultById } from './dt
 export type { WorkspaceFileSearchActionInputById, WorkspaceFileSearchActionResultById } from './dtos/workspaceFileSearchActionDtos.generated.js';
 export type { HomeGovernanceActionInputById, HomeGovernanceActionResultById } from './dtos/homeGovernanceActionDtos.generated.js';
 export type { HomeHubLayoutActionInputById, HomeHubLayoutActionResultById } from './dtos/homeHubLayoutActionDtos.generated.js';
+export type { HomeIdentityActionInputById, HomeIdentityActionResultById } from './dtos/homeIdentityActionDtos.generated.js';
+export type { HomeRuntimeActionInputById, HomeRuntimeActionResultById } from './dtos/homeRuntimeActionDtos.generated.js';
 export type { IdentityGithubAppsActionInputById, IdentityGithubAppsActionResultById } from './dtos/identityGithubAppsActionDtos.generated.js';
 export type { IdentityProvidersActionInputById, IdentityProvidersActionResultById } from './dtos/identityProvidersActionDtos.generated.js';
 export type { IntentStartActionInputById, IntentStartActionResultById } from './dtos/intentStartActionDtos.generated.js';
@@ -109,7 +114,9 @@ export type { TodoSessionLinkActionInputById, TodoSessionLinkActionResultById } 
 export type { VoiceControlsActionInputById, VoiceControlsActionResultById } from './dtos/voiceControlsActionDtos.generated.js';
 export type { WidgetsActionInputById, WidgetsActionResultById } from './dtos/widgetsActionDtos.generated.js';
 export type { WorkflowAuthoringActionInputById, WorkflowAuthoringActionResultById } from './dtos/workflowAuthoringActionDtos.generated.js';
+export type { WorkflowDiagnosticsActionInputById, WorkflowDiagnosticsActionResultById } from './dtos/workflowDiagnosticsActionDtos.generated.js';
 export type { WorkflowEffectsActionInputById, WorkflowEffectsActionResultById } from './dtos/workflowEffectsActionDtos.generated.js';
+export type { WorkflowEventCatalogActionInputById, WorkflowEventCatalogActionResultById } from './dtos/workflowEventCatalogActionDtos.generated.js';
 export type { WorkflowsActionInputById, WorkflowsActionResultById } from './dtos/workflowsActionDtos.generated.js';
 export type { WorkspaceLayoutActionInputById, WorkspaceLayoutActionResultById } from './dtos/workspaceLayoutActionDtos.generated.js';
 export type { ProjectWorkersActionInputById, ProjectWorkersActionResultById } from './dtos/projectWorkersActionDtos.generated.js';

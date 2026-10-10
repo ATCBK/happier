@@ -1,3 +1,6 @@
+export { ARTIFACT_HTML_CONTENT_CSP_V1 } from './hostedWeb.js';
+export { ARTIFACT_HTML_SANDBOX_V1 } from './hostedWeb.js';
+export type { ArtifactHtmlBundleV1 } from './hostedWeb.js';
 export { COMPOSER_CONTROL_STATE_CONTENT_TYPE_V1 } from './hostApi.js';
 export { CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1 } from './hostApi.js';
 export { CURRENT_UI_CONTEXT_MAX_COMMANDS_V1 } from './hostApi.js';
@@ -74,6 +77,7 @@ export type { PluginHostedWebAccountDataBridgeOperationV1 } from './hostedWeb.js
 export { PluginHostedWebAccountDataBridgeOperationV1Schema } from './hostedWeb.js';
 export type { PluginHostedWebAccountDataBridgeResponseV1 } from './hostedWeb.js';
 export { PluginHostedWebAccountDataBridgeResponseV1Schema } from './hostedWeb.js';
+export type { PluginHostedWebBridgeBootstrapConfigV1 } from './hostedWeb.js';
 export type { PluginLiveStreamReferenceV1 } from './hostApi.js';
 export type { PluginSurfaceTarget } from './hostApi.js';
 export type { PluginUiActionExecutionOptions } from './hostApi.js';
@@ -165,6 +169,8 @@ export type { UiView } from '../ui.js';
 export type { WidgetSizeFootprintV1 } from './hostApi.js';
 export type { WidgetSizeV1 } from './hostApi.js';
 export type { WorkBoardPreviewLayoutV1 } from './publicContract.js';
+export { artifactHtmlBundleFromBodyV1 } from './hostedWeb.js';
+export { buildArtifactHtmlDocumentV1 } from './hostedWeb.js';
 export { defineHostedWebBridgeMessage } from './hostedWeb.js';
 export { definePluginDeclarativeDocumentV1 } from './declarativeDocument.js';
 export { normalizePluginUiSubPathV1 } from './hostApi.js';

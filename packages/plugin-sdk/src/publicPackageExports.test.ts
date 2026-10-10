@@ -38,8 +38,12 @@ import * as runtimePublicApi from './runtime/index.js';
 import * as testingPublicApi from './testing/index.js';
 
 type PackageExportTarget = Readonly<{
+    'happier-source': string;
     types: string;
-    browser?: string;
+    browser?: string | Readonly<{
+        'happier-source': string;
+        default: string;
+    }>;
     default: string;
 }>;
 type ApiSurfaceInventory = Readonly<{
@@ -77,6 +81,15 @@ type PluginSdkPackageJson = Readonly<{
 
 // The inventory is generated on demand from current package source.
 const apiSurfaceInventory = await readCurrentApiSurfaceInventory() as ApiSurfaceInventory;
+// The checked JavaScript producer owns the source and packaged condition projection.
+const apiSurfaceGenerationModulePath: string = '../scripts/apiSurface.mjs';
+const createApiSurfaceGenerationPlan = (
+    await import(apiSurfaceGenerationModulePath) as Readonly<{
+        createApiSurfaceGenerationPlan(input: unknown): Readonly<{
+            packageExports: PluginSdkPackageJson['exports'];
+        }>;
+    }>
+).createApiSurfaceGenerationPlan;
 // The explicit nonwriting source lane defers the assertions that also read
 // emitted package output to the sole ordered publisher.
 const inventoryIt = process.env.HAPPIER_PLUGIN_SDK_SOURCE_ONLY === '1' ? it.skip : it;
@@ -228,12 +241,9 @@ describe('CORE-A curated package exports', () => {
             await readFile(new URL('../package.json', import.meta.url), 'utf8'),
         ) as PluginSdkPackageJson;
 
-        expect(packageJson.exports).toEqual(Object.fromEntries(
-            apiSurfaceInventory?.entrypoints.map((entrypoint) => [
-                entrypoint.specifier,
-                entrypoint.conditions,
-            ]) ?? [],
-        ));
+        expect(packageJson.exports).toEqual(
+            createApiSurfaceGenerationPlan(apiSurfaceInventory).packageExports,
+        );
     });
 
     it('keeps retired package paths and host-private values off author surfaces', async () => {
@@ -259,7 +269,7 @@ describe('CORE-A curated package exports', () => {
             .toEqualTypeOf<ProtocolPluginMachineMaterializationRefV1>();
         expect(rootPublicApi).not.toHaveProperty('PluginMachineExecutionOriginV1Schema');
         expectTypeOf<ActionsPluginMachineExecutionOriginV1>()
-            .toEqualTypeOf<ProtocolPluginMachineExecutionOriginV1>();
+            .branded.toEqualTypeOf<ProtocolPluginMachineExecutionOriginV1>();
 
         expect(packageJson.exports['./api']).toBeUndefined();
         expect(packageJson.exports['./experimental/agent-runtime-v1']).toBeUndefined();
@@ -413,7 +423,10 @@ describe('CORE-A curated package exports', () => {
 
         const browserTarget = rootEntrypoint.conditions.browser;
         expect(browserTarget).toBe('./dist/index.browser.js');
-        expect(packageJson.exports['.']?.browser).toBe(browserTarget);
+        expect(packageJson.exports['.']?.browser).toEqual({
+            'happier-source': './src/index.browser.ts',
+            default: browserTarget,
+        });
 
         const browserNames = await readNamedBarrelExports(
             sourceModuleForRuntimeCondition(browserTarget!),
@@ -644,6 +657,7 @@ describe('CORE-A curated package exports', () => {
         )).filter((name) => name.includes('Observation'));
 
         expect(observationTypes.sort()).toEqual([
+            'AgentExternalSessionAccountingObservation',
             'AgentExternalSessionObservationContribution',
             'AgentExternalSessionObservationDescribeResourceRequest',
             'AgentExternalSessionObservationLinkEvidenceBatchV1',
@@ -659,6 +673,7 @@ describe('CORE-A curated package exports', () => {
             'AgentExternalSessionObservationResourceGroupingV1',
             'AgentExternalSessionObservationResourceKeyV1',
             'AgentExternalSessionObservationWatchFileChangesV1',
+            'AgentExternalSessionTerminalObservation',
         ]);
         expect(observationTypes.some((name) => name.startsWith('ExternalAgentObservation')))
             .toBe(false);

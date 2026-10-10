@@ -83,6 +83,7 @@ export type { ScmPullRequestAuthState } from './projections.js';
 export type { ScmPullRequestCheckoutRequest } from './projections.js';
 export type { ScmPullRequestCheckoutResponse } from './projections.js';
 export type { ScmPullRequestChecksState } from './projections.js';
+export type { ScmPullRequestErrorResponse } from './projections.js';
 export type { ScmPullRequestGetRequest } from './projections.js';
 export type { ScmPullRequestGetResponse } from './projections.js';
 export type { ScmPullRequestListRequest } from './projections.js';

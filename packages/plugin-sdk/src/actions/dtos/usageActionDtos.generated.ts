@@ -1639,6 +1639,7 @@ export type UsageActionResultById = {
                         breakdown?: Record<string, number> | undefined;
                         effectiveUsd?: number | undefined;
                     };
+                    eventCount?: number | undefined;
                     backendMode?: string | null | undefined;
                     providerId?: string | null | undefined;
                     providerConnectionId?: string | null | undefined;
@@ -2825,6 +2826,7 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         };
+                        eventCount?: number | undefined;
                         backendMode?: string | null | undefined;
                         providerId?: string | null | undefined;
                         providerConnectionId?: string | null | undefined;
@@ -2898,6 +2900,7 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         };
+                        eventCount?: number | undefined;
                         backendMode?: string | null | undefined;
                         providerId?: string | null | undefined;
                         providerConnectionId?: string | null | undefined;
@@ -3093,6 +3096,7 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         };
+                        eventCount?: number | undefined;
                         backendMode?: string | null | undefined;
                         providerId?: string | null | undefined;
                         providerConnectionId?: string | null | undefined;
