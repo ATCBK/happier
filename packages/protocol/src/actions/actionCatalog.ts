@@ -440,11 +440,11 @@ export function searchSerializedActionSpecsForSurface(params: Readonly<{
 }>): readonly SerializedActionSpec[] {
   const query = normalizeActionSearchQuery(params.query ?? '');
   const hostDefinitions = listActionSpecsForCatalogSurface(params)
-    // Search raw canonical metadata before projecting JSON Schema. Besides
-    // avoiding unrelated projection work, this prevents a non-matching
-    // Action's optional output metadata from influencing this query.
-    .filter((spec) => !query.text || actionSearchScore(spec, query) > 0)
-    .map((spec) => getHostActionSearchSummary(spec, params));
+    .map((spec) => getHostActionSearchSummary(spec, params))
+    // Search the immutable cached summary so repeated request-current filters
+    // do not rebuild the same host projection or its normalized search text.
+    .filter((summary) => !query.text
+      || actionSearchScore(summary.definition, query, summary.searchText) > 0);
   const hostIds = new Set(hostDefinitions.map((summary) => summary.definition.id));
   const additionalDefinitions = (params.additionalDefinitions ?? [])
     .filter((definition) => (
