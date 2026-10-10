@@ -66,8 +66,8 @@ async function readManagedMachineNativeReview(input: ManagedMachineNativeReadInp
         if (!current()) return { kind: 'failed', code: 'action_account_scope_changed' };
         if (!schemas.supported) return { kind: 'failed', code: schemas.reason };
         if (!schemas.result.ok) return { kind: 'failed', code: schemas.result.code };
-        // The same current options input projection used for a saved recipe: query fields only,
-        // while the returned native variant must still equal the complete retained launch.
+        // The same current options input projection used for a saved recipe: query fields only.
+        // Reset's selected variant must still equal the complete retained launch.
         const querySchema = createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(schemas.result.inputSchema));
         const selectors = querySchema.safeParse(machine.launch.choices);
         if (!selectors.success) return { kind: 'failed', code: 'managed_parent_unavailable' };
