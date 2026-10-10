@@ -27,6 +27,47 @@ function connectedAccountServiceConfigurationsV1Entry(
 }
 
 describe('AccountSettingMutationV1', () => {
+  it.each([
+    ['sessionAgentSpawnPolicyV1', { allowCrossMachine: 'yes' }],
+    ['sessionAgentSpawnPolicyV1', { allowCrossMachine: false, futureField: true }],
+    ['sessionAgentStartAllowListsV1', { allowedRoleIds: 'builder' }],
+    ['sessionAgentStartAllowListsV1', { allowedRoleIds: ['builder'], futureField: true }],
+  ] as const)('rejects malformed incoming %s without applying neighboring preferences', (key, value) => {
+    const raw = {
+      sessionAgentSpawnPolicyV1: { allowCrossMachine: false, allowCustomDirectory: false },
+      sessionAgentStartAllowListsV1: { allowedRoleIds: ['builder'], allowedAgentTargetKeys: [] },
+      showLineNumbers: true,
+      futureSetting: { keep: true },
+    };
+    const before = structuredClone(raw);
+    const mutation = { operations: [
+      { op: 'set', key: 'showLineNumbers', value: false },
+      { op: 'set', key, value },
+    ] };
+    expect(AccountSettingMutationV1Schema.safeParse(mutation).success).toBe(false);
+    expect(applyAccountSettingMutationV1(raw, mutation)).toEqual({ status: 'invalid', reason: 'invalidValue' });
+    expect(raw).toEqual(before);
+  });
+
+  it('admits valid policy writes and explicit resets without changing neighboring restrictions', () => {
+    const raw = {
+      sessionAgentSpawnPolicyV1: { allowCrossMachine: false, allowCustomDirectory: false },
+      sessionAgentStartAllowListsV1: { allowedRoleIds: ['builder'], allowedAgentTargetKeys: [] },
+      futureSetting: { keep: true },
+    };
+    const validPolicy = accountSettingsParse(raw).sessionAgentSpawnPolicyV1;
+    expect(applyAccountSettingMutationV1(raw, { operations: [
+      { op: 'set', key: 'sessionAgentSpawnPolicyV1', value: { ...validPolicy, allowEnvironmentVariables: false } },
+    ] })).toEqual({ status: 'applied', raw: { ...raw, sessionAgentSpawnPolicyV1: { ...validPolicy, allowEnvironmentVariables: false } } });
+    expect(applyAccountSettingMutationV1(raw, { operations: [
+      { op: 'set', key: 'sessionAgentStartAllowListsV1', value: { v: 1, allowedRoleIds: [], allowedAgentTargetKeys: null } },
+    ] })).toEqual({ status: 'applied', raw: { ...raw, sessionAgentStartAllowListsV1: { v: 1, allowedRoleIds: [], allowedAgentTargetKeys: null } } });
+    const { sessionAgentStartAllowListsV1: _, ...withoutAllowLists } = raw;
+    expect(applyAccountSettingMutationV1(raw, { operations: [
+      { op: 'reset', key: 'sessionAgentStartAllowListsV1' },
+    ] })).toEqual({ status: 'applied', raw: withoutAllowLists });
+  });
+
   it('keeps transferred entity carriers read-only while preserving their raw provenance during preference mutation', () => {
     const sources = { profiles: [], secretBindingsByProfileId: {}, promptStacksV1: { v: 1, surfaces: {
       coding: [], voice: [], profilesById: {} } }, rolesV1: { overrides: {} }, promptFoldersV1: { v: 1, folders: [] },
@@ -158,139 +199,24 @@ describe('AccountSettingMutationV1', () => {
     })).toEqual({ status: 'invalid', reason: 'invalidValue' });
   });
 
-  it('admits the bounded legacy Connected Account service-configuration root through the sole catalog', () => {
-    const definition = ACCOUNT_SETTING_DEFINITIONS.connectedAccountServiceConfigurationsV1;
-    expect(ACCOUNT_SETTING_KEYS).toContain('connectedAccountServiceConfigurationsV1');
-    expect(definition.classification).toBe('legacy');
-    expect(definition.default).toEqual({ v: 1, entries: [] });
-    expect(definition.maximumSerializedValueBytes).toBe(256 * 1024);
-
-    const value = {
-      v: 1,
-      entries: [connectedAccountServiceConfigurationsV1Entry()],
-    };
-    expect(definition.parseMutationValue(value)).toMatchObject({ success: true });
-    expect(applyAccountSettingMutationV1({}, {
-      operations: [{
-        op: 'set',
-        key: 'connectedAccountServiceConfigurationsV1',
-        value,
-      }],
-    })).toEqual({
-      status: 'applied',
-      raw: { connectedAccountServiceConfigurationsV1: value },
-    });
-  });
-
   it.each([
-    ['extra root key', {
-      v: 1,
-      entries: [connectedAccountServiceConfigurationsV1Entry()],
-      future: true,
-    }],
-    ['extra entry key', {
-      v: 1,
-      entries: [connectedAccountServiceConfigurationsV1Entry({ future: true })],
-    }],
-    ['more than 256 entries', {
-      v: 1,
-      entries: Array.from({ length: 257 }, (_, index) => (
-        connectedAccountServiceConfigurationsV1Entry({
-          service: { pluginId: 'acme.accounts', localId: `work-${index}` },
-        })
-      )),
-    }],
-    ['duplicate service and mode target', {
-      v: 1,
-      entries: [
-        connectedAccountServiceConfigurationsV1Entry(),
-        connectedAccountServiceConfigurationsV1Entry({ revision: 'configuration-2' }),
-      ],
-    }],
-    ['empty service plugin id', {
-      v: 1,
-      entries: [connectedAccountServiceConfigurationsV1Entry({
-        service: { pluginId: '', localId: 'work' },
-      })],
-    }],
-    ['oversized service local id', {
-      v: 1,
-      entries: [connectedAccountServiceConfigurationsV1Entry({
-        service: { pluginId: 'acme.accounts', localId: 'x'.repeat(257) },
-      })],
-    }],
-    ['extra service identity key', {
-      v: 1,
-      entries: [connectedAccountServiceConfigurationsV1Entry({
-        service: { pluginId: 'acme.accounts', localId: 'work', future: true },
-      })],
-    }],
-    ['empty mode id', {
-      v: 1,
-      entries: [connectedAccountServiceConfigurationsV1Entry({ modeId: '' })],
-    }],
-    ['oversized revision', {
-      v: 1,
-      entries: [connectedAccountServiceConfigurationsV1Entry({ revision: 'x'.repeat(257) })],
-    }],
-    ['non-string SavedSecret reference', {
-      v: 1,
-      entries: [connectedAccountServiceConfigurationsV1Entry({
-        secretRefs: { clientSecret: 7 },
-      })],
-    }],
-    ['empty SavedSecret reference', {
-      v: 1,
-      entries: [connectedAccountServiceConfigurationsV1Entry({
-        secretRefs: { clientSecret: '' },
-      })],
-    }],
-    ['oversized SavedSecret reference', {
-      v: 1,
-      entries: [connectedAccountServiceConfigurationsV1Entry({
-        secretRefs: { clientSecret: 'x'.repeat(513) },
-      })],
-    }],
-  ])('rejects invalid persisted Connected Account configuration shape: %s', (_label, value) => {
-    const definition = ACCOUNT_SETTING_DEFINITIONS.connectedAccountServiceConfigurationsV1;
-
-    expect(definition.parseMutationValue(value)).toMatchObject({ success: false });
-    expect(applyAccountSettingMutationV1({}, {
-      operations: [{
-        op: 'set',
-        key: 'connectedAccountServiceConfigurationsV1',
-        value,
-      }],
-    })).toMatchObject({ status: 'invalid' });
-  });
-
-  it('admits Connected Account configuration members above the former private count ceiling', () => {
-    const definition = ACCOUNT_SETTING_DEFINITIONS.connectedAccountServiceConfigurationsV1;
-    const value = {
-      v: 1,
-      entries: [connectedAccountServiceConfigurationsV1Entry({
-        values: Object.fromEntries(
-          Array.from({ length: 65 }, (_, index) => [`field-${index}`, index]),
-        ),
-        secretRefs: Object.fromEntries(
-          Array.from({ length: 65 }, (_, index) => [`secret-field-${index}`, `secret-${index}`]),
-        ),
-      })],
-    };
-
-    expect(new TextEncoder().encode(JSON.stringify(value)).byteLength)
-      .toBeLessThan(definition.maximumSerializedValueBytes);
-    expect(definition.parseMutationValue(value)).toMatchObject({ success: true });
-    expect(applyAccountSettingMutationV1({}, {
-      operations: [{
-        op: 'set',
-        key: 'connectedAccountServiceConfigurationsV1',
-        value,
-      }],
-    })).toEqual({
-      status: 'applied',
-      raw: { connectedAccountServiceConfigurationsV1: value },
-    });
+    ['connectedAccountServiceConfigurationsV1', { v: 1, entries: [connectedAccountServiceConfigurationsV1Entry()] }],
+    ['providerSettingsV1', { futureProviderState: { keep: true } }],
+  ] as const)('refuses retired %s writes while preserving captured raw provenance during a preference mutation', (key, value) => {
+    expect(ACCOUNT_SETTING_KEYS).not.toContain(key);
+    const raw = { [key]: value, showLineNumbers: true, futureSetting: { keep: true } };
+    const before = structuredClone(raw);
+    for (const operation of [{ op: 'set', key, value }, { op: 'reset', key }]) {
+      expect(applyAccountSettingMutationV1(raw, { operations: [
+        { op: 'set', key: 'showLineNumbers', value: false }, operation,
+      ] })).toEqual({ status: 'invalid', reason: 'unknownKey' });
+      expect(raw).toEqual(before);
+    }
+    expect(applyAccountSettingMutationV1(raw, { operations: [
+      { op: 'set', key: 'showLineNumbers', value: false },
+    ] })).toEqual({ status: 'applied', raw: { ...raw, showLineNumbers: false } });
+    expect(accountSettingsParse(raw)).not.toHaveProperty(key);
+    expect(raw).toEqual(before);
   });
 
   it('accepts one to 64 unique operations and rejects empty or oversized lists', () => {
@@ -337,7 +263,7 @@ describe('AccountSettingMutationV1', () => {
     expect(applyAccountSettingMutationV1({}, {
       operations: [{
         op: 'set',
-        key: 'inferenceOpenAIKey',
+        key: 'voiceDiagnosticsV1',
         value: 'x'.repeat((64 * 1024) + 1),
       }],
     })).toEqual({ status: 'invalid', reason: 'tooLarge' });
@@ -353,33 +279,29 @@ describe('AccountSettingMutationV1', () => {
     })).toEqual({ status: 'invalid', reason: 'tooDeep' });
   });
 
-  it('leaves Provider-owned subtree cardinality and nesting to the Provider schemas', () => {
-    // The Provider settings root is the Provider owner's document. Applying the Account
-    // document's generic node policy to it discards configurations Provider validation
-    // accepts, so only the Account byte ceiling may refuse this root.
-    let deeperThanAccountGeneric: unknown = 'leaf';
-    for (let depth = 0; depth < 14; depth += 1) {
-      deeperThanAccountGeneric = { child: deeperThanAccountGeneric };
-    }
-    const wideRecord = Object.fromEntries(
-      Array.from({ length: 300 }, (_, index) => [`entry-${index}`, index]),
+  it('leaves current Provider default cardinality to the domain while enforcing its Account byte ceiling', () => {
+    const key = 'providerDefaultModelSelectionsByAgentTargetKeyV1';
+    const defaults = (count: number, modelId = 'base-model') => Object.fromEntries(
+      Array.from({ length: count }, (_, index) => {
+        const agentTargetKey = `agent:acme.agents/coding-${index}`;
+        return [agentTargetKey, { v: 1, ref: { agentTargetKey, providerConnectionId: null, modelId }, updatedAt: 1 }];
+      }),
     );
-
-    for (const value of [deeperThanAccountGeneric, wideRecord]) {
-      const applied = applyAccountSettingMutationV1({}, {
-        operations: [{ op: 'set', key: 'providerSettingsV1', value }],
-      });
-      expect(applied.status).toBe('applied');
-      expect(applied.status === 'applied' ? applied.raw.providerSettingsV1 : null).toEqual(value);
-    }
-
-    expect(applyAccountSettingMutationV1({}, {
-      operations: [{
-        op: 'set',
-        key: 'providerSettingsV1',
-        value: { oversized: 'x'.repeat((256 * 1024) + 1) },
-      }],
-    })).toEqual({ status: 'invalid', reason: 'tooLarge' });
+    // The current Provider admits this population above the generic Account width.
+    const wide = defaults(300);
+    const raw = { futureSetting: { keep: true } };
+    expect(ACCOUNT_SETTING_DEFINITIONS[key].parseMutationValue(wide).success).toBe(true);
+    expect(applyAccountSettingMutationV1(raw, { operations: [{ op: 'set', key, value: wide }] }))
+      .toEqual({ status: 'applied', raw: { ...raw, [key]: wide } });
+    const oversized = defaults(1500, 'm'.repeat(150));
+    expect(new TextEncoder().encode(JSON.stringify(oversized)).byteLength)
+      .toBeGreaterThan(ACCOUNT_SETTING_DEFINITIONS[key].maximumSerializedValueBytes);
+    expect(applyAccountSettingMutationV1(raw, { operations: [{ op: 'set', key, value: oversized }] }))
+      .toEqual({ status: 'invalid', reason: 'tooLarge' });
+    expect(applyAccountSettingMutationV1(raw, { operations: [{ op: 'set', key, value: {
+      'agent:acme.agents/coding': { v: 1, ref: { agentTargetKey: 'agent:acme.agents/other', providerConnectionId: null, modelId: 'base-model' }, updatedAt: 1 },
+    } }] })).toEqual({ status: 'invalid', reason: 'invalidValue' });
+    expect(raw).toEqual({ futureSetting: { keep: true } });
   });
 
   it('resets a retained machine host without reviving its development alias or dropping neighbors', () => {
@@ -445,20 +367,20 @@ describe('AccountSettingMutationV1', () => {
   });
 
   it('does not overwrite a malformed present value but permits an explicit reset to recover it', () => {
-    const raw = { promptExternalLinksV1: 'malformed-present-root' };
+    const raw = { sessionPendingQueueDeliveryTiming: 'malformed-present-root', futureSetting: { keep: true } };
     expect(applyAccountSettingMutationV1(raw, {
       operations: [{
         op: 'set',
-        key: 'promptExternalLinksV1',
-        value: { v: 1, links: [] },
+        key: 'sessionPendingQueueDeliveryTiming',
+        value: 'after_runtime_idle',
       }],
     })).toEqual({ status: 'invalid', reason: 'invalidValue' });
-    expect(raw).toEqual({ promptExternalLinksV1: 'malformed-present-root' });
+    expect(raw).toEqual({ sessionPendingQueueDeliveryTiming: 'malformed-present-root', futureSetting: { keep: true } });
 
     expect(applyAccountSettingMutationV1(raw, {
-      operations: [{ op: 'reset', key: 'promptExternalLinksV1' }],
-    })).toEqual({ status: 'applied', raw: {} });
-    expect(raw).toEqual({ promptExternalLinksV1: 'malformed-present-root' });
+      operations: [{ op: 'reset', key: 'sessionPendingQueueDeliveryTiming' }],
+    })).toEqual({ status: 'applied', raw: { futureSetting: { keep: true } } });
+    expect(raw).toEqual({ sessionPendingQueueDeliveryTiming: 'malformed-present-root', futureSetting: { keep: true } });
   });
 
   it('reports exact no-ops without materializing defaults', () => {

@@ -21,6 +21,10 @@ const newRef = formatSharedSavedSecretRefV1('secret-new');
 const configuration: ConnectedAccountCatalogRecordV1 = { key: 'configurations', value: { v: 1, entries: [
   { service, modeId: 'native-api', revision: 'revision-1', values: { adapter: { arbitraryField: 'retained' } }, secretRefs: { token: oldRef } },
 ] } };
+function configurationEntry(overrides: Readonly<Record<string, unknown>> = {}) {
+  if (configuration.key !== 'configurations') throw new Error('Wrong fixture catalog');
+  return { ...configuration.value.entries[0]!, ...overrides };
+}
 const purpose: ConnectedAccountCatalogRecordV1 = { key: 'purposes', value: { v: 1, bindings: [
   { purpose: { consumer, purpose: 'native-api' }, target: { kind: 'group', service, groupId: 'pool' } },
 ], teamResourceSelections: [
@@ -28,6 +32,23 @@ const purpose: ConnectedAccountCatalogRecordV1 = { key: 'purposes', value: { v: 
 ] } };
 
 describe('Connected Account private catalogs', () => {
+  it.each([
+    ['extra root key', { v: 1, entries: [configurationEntry()], future: true }],
+    ['extra entry key', { v: 1, entries: [configurationEntry({ future: true })] }],
+    ['duplicate service and mode target', { v: 1, entries: [configurationEntry(), configurationEntry({ revision: 'configuration-2' })] }],
+    ['empty service plugin id', { v: 1, entries: [configurationEntry({ service: { pluginId: '', localId: 'work' } })] }],
+    ['oversized service local id', { v: 1, entries: [configurationEntry({ service: { pluginId: 'acme.accounts', localId: 'x'.repeat(257) } })] }],
+    ['extra service identity key', { v: 1, entries: [configurationEntry({ service: { pluginId: 'acme.accounts', localId: 'work', future: true } })] }],
+    ['empty mode id', { v: 1, entries: [configurationEntry({ modeId: '' })] }],
+    ['oversized revision', { v: 1, entries: [configurationEntry({ revision: 'x'.repeat(257) })] }],
+    ['non-string SavedSecret reference', { v: 1, entries: [configurationEntry({ secretRefs: { clientSecret: 7 } })] }],
+    ['empty SavedSecret reference', { v: 1, entries: [configurationEntry({ secretRefs: { clientSecret: '' } })] }],
+    ['oversized SavedSecret reference', { v: 1, entries: [configurationEntry({ secretRefs: { clientSecret: 'x'.repeat(513) } })] }],
+  ])('refuses malformed incoming configuration rows at current write admission: %s', (_label, value) => {
+    expect(ConnectedAccountCatalogRowMutationV1Schema.safeParse({ expectedRevision: 2,
+      content: { t: 'plain', v: { key: 'configurations', value } },
+    }).success).toBe(false);
+  });
   it.each([configuration, purpose])('retains complete original JSON for %s conversion without authoring permissive new rows', record => {
     const payload = { ...record, retainedWrapper: { color: 'blue' }, value: record.key === 'configurations'
       ? { ...record.value, retainedCatalog: { color: 'green' }, entries: record.value.entries.map(entry => ({ ...entry, retainedEntry: { color: 'red' } })) }
@@ -221,8 +242,13 @@ describe('Connected Account private catalogs', () => {
     expect(effects).toBe(0);
   });
   it('retains full qualified configuration populations and adapter dictionaries while stripping only unknown stored fields', () => {
+    const values = Object.fromEntries(Array.from({ length: 65 }, (_, index) => [`field-${index}`, index]));
+    const secretRefs = Object.fromEntries(Array.from({ length: 65 }, (_, index) => [
+      `secret-field-${index}`, formatSharedSavedSecretRefV1(`secret-${index}`),
+    ]));
     const record = { ...configuration, extra: true, value: { ...configuration.value, extra: true,
       entries: Array.from({ length: 257 }, (_, index) => ({ ...configuration.value.entries[0], modeId: `mode-${index}`, extra: true,
+        ...(index === 0 ? { values, secretRefs } : {}),
         service: { ...service, extra: true } })) } };
     expect(ConnectedAccountCatalogRecordV1Schema.safeParse(record).success).toBe(false);
     const parsed = StoredConnectedAccountCatalogRecordV1Schema.parse(record);
@@ -230,7 +256,11 @@ describe('Connected Account private catalogs', () => {
     if (parsed.key !== 'configurations') throw new Error('Wrong fixture catalog');
     expect(parsed.value.entries).toHaveLength(257);
     expect(parsed.value.entries[256]).toEqual({ ...configuration.value.entries[0], modeId: 'mode-256' });
+    expect(parsed.value.entries[0]).toMatchObject({ values, secretRefs });
     expect(ConnectedAccountCatalogRecordV1Schema.parse(parsed)).toEqual(parsed);
+    expect(ConnectedAccountCatalogRowMutationV1Schema.safeParse({ expectedRevision: 2,
+      content: { t: 'plain', v: parsed },
+    }).success).toBe(true);
     const refs = listConnectedConfigurationCatalogSavedSecretRefsV1(configuration.value);
     expect(refs).toEqual([{ path: 'entries[0].secretRefs.token', secretId: oldRef }]);
     expect(rewriteConnectedConfigurationCatalogSavedSecretRefsV1(configuration.value, oldRef, newRef))
