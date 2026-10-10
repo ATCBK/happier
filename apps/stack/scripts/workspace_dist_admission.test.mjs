@@ -45,6 +45,7 @@ test('workspace dist builder acquires heavyweight admission before its real dist
   await symlink(join(sourceRoot, 'node_modules'), join(checkout, 'node_modules'), 'dir');
   await mkdir(join(checkout, 'apps/stack/scripts'), { recursive: true });
   await cp(join(sourceRoot, 'apps/stack/scripts/utils'), join(checkout, 'apps/stack/scripts/utils'), { recursive: true });
+  await cp(join(sourceRoot, 'apps/stack/scripts/provision'), join(checkout, 'apps/stack/scripts/provision'), { recursive: true });
   const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
 
   const packageDir = fixture.path('package');

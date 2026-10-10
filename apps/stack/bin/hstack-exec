@@ -620,10 +620,8 @@ run_heavyweight_admission() {
   heavyweight_identity="$heavyweight_pid-$heavyweight_token"
   heavyweight_waiter_path="$heavyweight_waiters_dir/$heavyweight_identity"
   heavyweight_owner_path="$heavyweight_owners_dir/$heavyweight_identity"
-  # A failed acquisition can start `ln`, a /proc token `awk`, and `sleep`.
-  # POSIX has no portable shell-builtin delay, so use a PID-jittered two-to-
-  # three-second backoff: even 100 contending waiters stay at or below roughly
-  # 150 external starts/sec while a live lock is held.
+  # This cadence is for a completed queue/capacity decision, not mutex
+  # contention. A busy decision lock waits through the existing kernel flock.
   heavyweight_fast_retry_seconds=$((2 + heavyweight_pid % 2))
   heavyweight_registered_at=$(date +%s 2>/dev/null || printf 0)
   case "$heavyweight_registered_at" in ''|*[!0-9]*) heavyweight_registered_at=0 ;; esac
@@ -658,14 +656,19 @@ run_heavyweight_admission() {
   }
 
   heavyweight_acquire_lock() {
-    while :; do
-      if flock -n 9 2>/dev/null; then
-        heavyweight_lock_held=1
-        return 0
-      fi
-      [ "${heavyweight_no_wait-0}" != 1 ] || heavyweight_decline_before_dispatch
-      sleep "$heavyweight_fast_retry_seconds"
-    done
+    if [ "${heavyweight_no_wait-0}" = 1 ]; then
+      flock -n 9 2>/dev/null || heavyweight_decline_before_dispatch
+    else
+      # Reuse payload custody while waiting: cancellation must terminate this
+      # foreground operation without waiting for another decision to release.
+      flock 9 &
+      heavyweight_child_pid=$!
+      wait "$heavyweight_child_pid"
+      heavyweight_lock_status=$?
+      heavyweight_child_pid=
+      [ "$heavyweight_lock_status" -eq 0 ] || return "$heavyweight_lock_status"
+    fi
+    heavyweight_lock_held=1
   }
 
   heavyweight_child_pid=
@@ -767,6 +770,10 @@ check_heavyweight_admission() {
   exec 9>>"$heavyweight_admission_root/lock" || return 1
   if ! flock -n 9; then
     printf '[preferred-execution] heavyweight admission unavailable on %s (admission decision in progress)\n' "$heavyweight_admission_machine" >&2
+    return 1
+  fi
+  if ! heavyweight_queue_is_eligible before-resource-observation; then
+    printf '[preferred-execution] heavyweight admission unavailable on %s (%s)\n' "$heavyweight_admission_machine" "$heavyweight_queue_reason" >&2
     return 1
   fi
   if ! heavyweight_resource_is_ready; then
