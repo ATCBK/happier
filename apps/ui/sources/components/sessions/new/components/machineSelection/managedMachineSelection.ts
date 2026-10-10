@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { ManagedCreationSelectionV1 } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
 import type { ManagedMachinePresetV1 } from '@happier-dev/protocol/machines/managed/managedMachinePresetV1';
 
@@ -22,6 +23,8 @@ export type ManagedMachineSelectionOffer = Readonly<{
     title: string;
     /** Controller/Keep facts only; prices belong to the shared reviewed receipt. */
     subtitle?: string;
+    /** A preset's provider mark; the one-off entry has none. */
+    mark?: ReactNode;
     draft?: ManagedMachineSelectionDraft;
     disabled?: boolean;
     unavailableText?: string;
@@ -84,6 +87,7 @@ export function buildManagedMachineSelectionOffers(params: Readonly<{
     oneOffTitle: string;
     oneOffSubtitle?: string;
     describeController?: (preset: ManagedMachinePresetV1) => string | undefined;
+    markFor?: (preset: ManagedMachinePresetV1) => ReactNode;
     onConfigure: (preset: ManagedMachinePresetV1 | null) => void;
 }>): readonly ManagedMachineSelectionOffer[] {
     return [...params.presets.filter(preset => preset.homeId === params.homeId && preset.archivedAt === undefined).map(preset => ({
@@ -92,6 +96,7 @@ export function buildManagedMachineSelectionOffers(params: Readonly<{
         kind: 'preset' as const,
         title: preset.name,
         subtitle: params.describeController?.(preset),
+        ...(params.markFor ? { mark: params.markFor(preset) } : {}),
         onSelect: () => params.onConfigure(preset),
     })), {
         id: `managed-machine:${params.homeId}:one-off`, homeId: params.homeId, kind: 'one-off' as const,

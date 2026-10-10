@@ -21,7 +21,8 @@ export type ManagedProvisionerCard = Readonly<{
   /** What it creates ("Server", "Droplet"); cloud cards only, where there is room. */
   kind?: string;
   description: string;
-  mark: React.ReactNode;
+  /** The provisioner's mark at the size its slot draws it (a tile's, a row's). */
+  mark: (size: number) => React.ReactNode;
   location: 'local' | 'cloud';
   status: Readonly<{ tone: ManagedStatusTone; label: string }>;
   /** `choose` opens the configurator; `repair` runs the provisioner's own prerequisite or account step. */

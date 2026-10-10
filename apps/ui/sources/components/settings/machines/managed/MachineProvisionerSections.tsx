@@ -17,6 +17,7 @@ import type {
   ManagedProvisionerCard,
   ManagedStatusTone,
 } from './managedMachineDisplay';
+import { MANAGED_PROVISIONER_MARK_SIZE } from './useManagedProvisionerPresentation';
 
 /**
  * Add a machine → Create one (lab `m-add`): the provisioners, grouped by the first question people
@@ -105,7 +106,7 @@ function ProvisionerGroup(
                 <StatusDot color={toneColor(theme, card.status.tone)} />
               )
             }
-            icon={card.mark}
+            icon={card.mark(MANAGED_PROVISIONER_MARK_SIZE.row)}
             onPress={card.action.onPress}
           />
         ))}
@@ -129,7 +130,7 @@ function ProvisionerGroup(
           id: card.id,
           title: card.title,
           subtitle: card.description,
-          mark: card.mark,
+          mark: card.mark(MANAGED_PROVISIONER_MARK_SIZE.tile),
           // Four local cards across leave no room for a kind badge (lab note); cloud cards name theirs.
           ...(card.location === 'cloud' && card.kind ? { badge: card.kind } : {}),
         }))}

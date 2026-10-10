@@ -29,7 +29,7 @@ import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { getPreferredLanguage, t } from '@/text';
 import { useManagedProvisioners } from './useManagedProvisioners';
 import { useManagedMachineAccountSettings } from './useManagedMachineAccountSettings';
-import { useManagedProvisionerPresentation } from './useManagedProvisionerPresentation';
+import { MANAGED_PROVISIONER_MARK_SIZE, useManagedProvisionerPresentation } from './useManagedProvisionerPresentation';
 import { useManagedProvisionerOptionsInput } from './useManagedProvisionerOptionsInput';
 import { ActionInputFields } from '@/components/sessions/actions/ActionInputFields';
 import { buildSessionActionFieldOptionsResolver } from '@/components/sessions/actions/sessionActionFieldOptions';
@@ -146,6 +146,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const fieldOptions = useInputFieldOptions({ requests: fieldRequests, enabled: !!draft && credentialsReady && optionsInput.kind === 'ready',
         serverId: catalog.binding?.serverId ?? props.serverId, machineId: controller?.machineId, accountLifetime: catalog.binding });
     const { localized, mark } = presentation;
+    const receiptMark = presentation.markAt(MANAGED_PROVISIONER_MARK_SIZE.receipt);
     const title = presentation.title ?? '';
     const homeName = resolveHomeDisplayLabel(getServerProfileById(props.serverId), props.serverId);
     const teams = useTeamsDirectory({ serverIds: [props.serverId], enabled: !!draft });
@@ -393,9 +394,9 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         : provisioner?.descriptor.billing.location === 'cloud' && billedAccount
             ? t('managedMachines.receipt.cloudFootnote', { provider: title, account: billedAccount }) : null;
     const receipt: ManagedReceiptModel = {
-        ...(receiptFacts ? buildManagedConfigurationReceipt({ launch: receiptFacts.launch, reviewedFacts: receiptFacts, providerTitle: title, controllerName, homeName, mark, localized,
+        ...(receiptFacts ? buildManagedConfigurationReceipt({ launch: receiptFacts.launch, reviewedFacts: receiptFacts, providerTitle: title, controllerName, homeName, mark: receiptMark, localized,
             credentialPresentations: credentialAccounts.presentationsByKey, keepEditedBelow: Boolean(keepPolicy && defaultPolicy) })
-            : { caption: t('managedMachines.receipt.yourNewMachine'), mark, name: draft?.name ?? title, spec: title, facts: [], cost: { kind: 'unpriced' as const, provider: title } }),
+            : { caption: t('managedMachines.receipt.yourNewMachine'), mark: receiptMark, name: draft?.name ?? title, spec: title, facts: [], cost: { kind: 'unpriced' as const, provider: title } }),
         onRename: !preset || props.presetOnly ? () => { void rename(); } : undefined,
         keep: keepPolicy && defaultPolicy ? { policy: keepPolicy, defaultPolicy, inherited: !draft?.override && (!props.presetOnly || !draft?.preset?.retention && draft?.preset?.wakeOnAcceptedMessage === undefined), categoryLabel: retentionCategoryTitle(defaultPolicy.category),
             finiteOnly, deadline: !props.presetOnly,

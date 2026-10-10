@@ -7,6 +7,7 @@ import { useMachineListForServer } from '@/sync/domains/state/storage';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { useManagedMachineAccountSettings } from '@/components/settings/machines/managed/useManagedMachineAccountSettings';
 import { useMachinePresets } from '@/components/settings/machines/managed/useMachinePresets';
+import { MANAGED_PROVISIONER_MARK_SIZE, ManagedPresetMark } from '@/components/settings/machines/managed/useManagedProvisionerPresentation';
 import { MachineProvisionerPicker, type ManagedProvisionerSelection } from '@/components/settings/machines/managed/MachineProvisionerPicker';
 import { ManagedMachineConfigurationView } from '@/components/settings/machines/managed/ManagedMachineConfigurationView';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
@@ -68,6 +69,7 @@ function CurrentManagedMachineSelectionOffers(props: OffersProps & Readonly<{ bi
         homeId, presets: presets.presetsByServerId[props.serverId] ?? [],
         oneOffTitle: t('managedMachines.picker.oneOff'), oneOffSubtitle: t('managedMachines.picker.oneOffHelp'),
         describeController: preset => getMachineDisplayName(machines?.find(machine => machine.id === preset.controller.machineId)) ?? preset.controller.machineId,
+        markFor: preset => <ManagedPresetMark serverId={props.serverId} preset={preset} size={MANAGED_PROVISIONER_MARK_SIZE.rail} />,
         onConfigure: configure,
     }) : [], [homeId, binding, presets.presetsByServerId, props.serverId, machines, configure]);
     React.useEffect(() => { props.onOffers(props.serverId, offers, {

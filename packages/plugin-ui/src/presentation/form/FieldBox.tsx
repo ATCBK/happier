@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
+import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 import { HappierChevron } from '../collection/DisclosureChevron.js';
 import { happierFocusRingStyle } from '../interaction/focusVisible.js';
 import { happierRaisedEdgeStyle, type HappierRaisedEdge } from '../layout/raisedEdge.js';
@@ -53,7 +54,7 @@ export const HAPPIER_FIELD_BOX_METRICS = Object.freeze({
   fontSizePx: 13.5,
   lineHeightPx: 18,
   /** Narrowest width beside a label; stacked under the label a field spans the row instead. */
-  inlineMinWidthPx: 240,
+  inlineMinWidthPx: HAPPIER_PAGE_METRICS.fieldInlineMinWidthPx,
   /** A select trigger's box: wide enough for a short choice, never wider than a long one needs. */
   triggerMinWidthPx: 132,
   triggerMaxWidthPx: 280,

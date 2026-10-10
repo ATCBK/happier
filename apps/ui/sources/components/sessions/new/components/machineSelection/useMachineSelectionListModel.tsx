@@ -623,8 +623,8 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
                     subtitle: offer.unavailableText ?? (purpose === 'finite'
                         ? [offer.subtitle, t('managedMachines.picker.createdOnRun')].filter(Boolean).join(' · ')
                         : offer.subtitle),
-                    // A preset reads as a saved recipe; "One-off machine…" as making a new one.
-                    icon: <Icon name={offer.kind === 'one-off' ? 'plus' : 'stack'} size={24} color={theme.colors.text.secondary} />,
+                    // A preset carries its provider's mark; "One-off machine…" reads as making a new one.
+                    icon: offer.mark ?? <Icon name={offer.kind === 'one-off' ? 'plus' : 'stack'} size={24} color={theme.colors.text.secondary} />,
                     disabled: offer.disabled === true || (offer.draft
                         ? !hasSelectManagedMachine
                         : !offer.onSelect),

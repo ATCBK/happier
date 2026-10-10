@@ -55,10 +55,12 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
   compactRowPaddingVerticalPx: 9,
   compactRowMinHeightPx: 40,
   /**
-   * Below this measured width a row's wide control (segmented choice, visual
-   * tiles, a field) — and a section's adaptive action — moves under the label. It is the
-   * width at which a ~200px label column and a ~280px control column still fit
-   * side by side with their gutters; narrower, the label would wrap word by word.
+   * Below this measured width a two-column composition that is not a row (a
+   * banner's actions, a compact pane's centered header, a wide meter)
+   * recomposes: a ~200px text column and a ~280px control column still fit side
+   * by side with their gutters. A row's own control follows
+   * `isHappierPageRowNarrow`, which sizes the control column by a field's
+   * inline minimum instead.
    */
   rowStackBelowWidthPx: 520,
   /**
@@ -67,6 +69,11 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
    * that leaves more than this on a phone stays on the title's line.
    */
   sectionTextMinWidthPx: 200,
+  /**
+   * The narrowest a field box gets beside its label; stacked under the label a
+   * field spans the row instead (the field box's `inlineMinWidthPx`).
+   */
+  fieldInlineMinWidthPx: 240,
   /** Between the back arrow in the gutter and the content's left edge. */
   backGutterGapPx: 12,
   /**
@@ -120,11 +127,17 @@ export function isHappierSectionActionStacked(input: Readonly<{
 }
 
 /**
- * Whether a measured row or section header is too narrow for its label and its
- * wide control side by side (see `rowStackBelowWidthPx`). `false` before the
- * first measurement, so a wide layout is the first paint.
+ * Whether a measured row or section header is too narrow for its label and a
+ * control side by side: narrower than the label's column
+ * (`sectionTextMinWidthPx`), the gap, a field at its inline minimum
+ * (`fieldInlineMinWidthPx`) and the row's two insets (484 px). Every phone
+ * sheet is; a pane or dialog column that fits all four keeps a select trailing,
+ * as on a page. A control wider than its share of a wide row still moves
+ * beneath through the row's own measure. `false` before the first
+ * measurement, so a wide layout is the first paint.
  */
 export function isHappierPageRowNarrow(widthPx: number | null | undefined): boolean {
   return typeof widthPx === 'number' && Number.isFinite(widthPx) && widthPx > 0
-    && widthPx < HAPPIER_PAGE_METRICS.rowStackBelowWidthPx;
+    && widthPx < HAPPIER_PAGE_METRICS.sectionTextMinWidthPx + HAPPIER_PAGE_METRICS.rowLeadingGapPx
+      + HAPPIER_PAGE_METRICS.fieldInlineMinWidthPx + 2 * HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx;
 }

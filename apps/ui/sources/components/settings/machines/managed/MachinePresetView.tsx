@@ -24,7 +24,7 @@ import { buildManagedConfigurationReceipt, managedCredentialReceiptTargets } fro
 import { useQualifiedConnectedAccountTargetPresentations } from '@/hooks/server/connectedServices/useQualifiedConnectedAccountTargetPresentations';
 import { useMachinePresetDetail, useMachinePresetConfiguration } from './useMachinePresets';
 import { useManagedProvisioners } from './useManagedProvisioners';
-import { useManagedProvisionerPresentation } from './useManagedProvisionerPresentation';
+import { MANAGED_PROVISIONER_MARK_SIZE, useManagedProvisionerPresentation } from './useManagedProvisionerPresentation';
 import { useManagedProvisionerOptionsInput } from './useManagedProvisionerOptionsInput';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { isAuthoritativeScopedSnapshotRefusal } from '@/sync/domains/scope/scopedSnapshotFacts';
@@ -84,6 +84,7 @@ function MachinePresetViewBody(props: Readonly<{ serverId: string; presetId: str
         ? visiblePreset.owner.accountId === detail.accountId
         : Boolean(teamState?.team.capabilities.viewTeam);
     const mark = presentation.mark;
+    const rowMark = presentation.markAt(MANAGED_PROVISIONER_MARK_SIZE.row);
     const homeName = resolveHomeDisplayLabel(getServerProfileById(props.serverId), props.serverId);
     const navigate = (href: string) => {
         const result = runGuardedNavigation(() => router.push(href as never));
@@ -127,7 +128,8 @@ function MachinePresetViewBody(props: Readonly<{ serverId: string; presetId: str
         preset: { id: visiblePreset.id, revision: visiblePreset.revision, name: visiblePreset.name },
         presetPolicy: { ...(visiblePreset.retention ? { retention: visiblePreset.retention } : {}),
             ...(visiblePreset.wakeOnAcceptedMessage !== undefined ? { wakeOnAcceptedMessage: visiblePreset.wakeOnAcceptedMessage } : {}) },
-        caption: t('managedMachines.receipt.eachOne', { revision: visiblePreset.revision }), mark });
+        caption: t('managedMachines.receipt.eachOne', { revision: visiblePreset.revision }),
+        mark: presentation.markAt(MANAGED_PROVISIONER_MARK_SIZE.receipt) });
     const ownerTitle = visiblePreset.owner.kind === 'account' ? t('machinePresets.onlyYou')
         : teamState?.team.name ?? t('common.loading');
     const conflict = detail.mutationResult?.kind === 'conflict';
@@ -182,7 +184,7 @@ function MachinePresetViewBody(props: Readonly<{ serverId: string; presetId: str
             } : { title: controllerName } },
         machines: detail.history.map(row => ({ id: row.managedId, title: row.title,
             subtitle: `${t('machinePresets.fromRevision', { name: visiblePreset.name, revision: row.presetRevision })} · ${row.subtitle}`,
-            mark, onPress: () => navigate(row.href) })),
+            mark: rowMark, onPress: () => navigate(row.href) })),
         receipt: { ...receipt,
             ...(canManage ? { secondary: [{ label: t('machinePresets.editChoices'), testID: 'machine-preset.edit', onPress: () => openConfiguration(true), disabled: busy }],
                 secondaryNote: t('machinePresets.futureOnly') } : {}) },

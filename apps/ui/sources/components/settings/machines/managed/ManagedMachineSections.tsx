@@ -62,7 +62,7 @@ import { useDeviceType } from '@/utils/platform/responsive';
 import { Modal } from '@/modal';
 import type { CustomModalInjectedProps } from '@/modal/types';
 import { buildReviewedManagedMachineDeleteInput, qualifyManagedMachineDeleteReview, type ManagedMachineDeleteReview } from './managedMachineDeleteReview';
-import { useManagedProvisionerPresentation } from './useManagedProvisionerPresentation';
+import { MANAGED_PROVISIONER_MARK_SIZE, useManagedProvisionerPresentation } from './useManagedProvisionerPresentation';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 
 const execute = createFrontDoorActionExecute();
@@ -102,7 +102,6 @@ export function ManagedMachineSections(props: SectionProps) {
     const requiredController = controller?.installationId === machine.controller.installationId ? controller : null;
     const provisionerPresentation = useManagedProvisionerPresentation({ serverId: props.serverId, controller: machine.controller,
         provider: machine.launch.provider, schemaVersion: machine.launch.schemaVersion });
-    const mark = provisionerPresentation.mark;
     // The controller is a machine of yours: it keeps the device glyph, never the provider's mark.
     const machineMark = <Icon name="desktop" />;
     const [pending, setPending] = React.useState<ManagedMachineActionIdV1 | null>(null);
@@ -443,7 +442,7 @@ export function ManagedMachineSections(props: SectionProps) {
             if (binding.isCurrent() && !interest.signal.aborted) { pendingRef.current = false; setPending(null); }
         }
     })(), { tag: 'ManagedMachineSections.rebuildReview' });
-    // Stop and Delete sit at the receipt's foot, where its cost and recipe state the consequence.
+    // Native controls sit at the receipt's foot, where its cost and recipe state the consequence.
     const receiptActions: NonNullable<ManagedReceiptModel['secondary']> = bound && machine.creationState === 'active' && machine.archivedAt === undefined ? [
         // An observed power state leaves only the operations that change it (lab: "Stop server" while it runs).
         ...powerIntents.filter(intent => !(intent === 'stop' ? observedPower === 'stopped' : intent === 'suspend'
@@ -463,7 +462,8 @@ export function ManagedMachineSections(props: SectionProps) {
     ] : [];
     const receipt: ManagedReceiptModel = { ...buildManagedConfigurationReceipt({ launch: machine.launch,
         environment: machine.environmentSetup?.environment, reviewedFacts: machine.reviewedFacts,
-        providerTitle: provisionerPresentation.title ?? policyParent?.providerTitle ?? t('common.machine'), mark,
+        providerTitle: provisionerPresentation.title ?? policyParent?.providerTitle ?? t('common.machine'),
+        mark: provisionerPresentation.markAt(MANAGED_PROVISIONER_MARK_SIZE.receipt),
         localized: provisionerPresentation.localized,
         homeName: resolveHomeDisplayLabel(getServerProfileById(props.serverId), props.serverId), preset: machine.preset, created: true,
         nativeLifetimePresented: policyParent?.capabilities.finiteOnly === true,
@@ -522,7 +522,7 @@ export function ManagedMachineSections(props: SectionProps) {
                 `/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(props.serverId)}` as never) }} /> : null}
         <ManagedCreationProgress machine={machine} operation={operation} setupRecovery={setupRecovery} provider={providerName}
             providerAvailable={creationContext.providerAvailable}
-            mark={mark} controller={creationContext.controller} handlers={{ checkNow: inspect,
+            mark={provisionerPresentation.markAt(MANAGED_PROVISIONER_MARK_SIZE.row)} controller={creationContext.controller} handlers={{ checkNow: inspect,
             ...(canCancelCreation && canMutate ? { cancel: cancelCreation } : {}),
             ...(recoveryConsoleUrl ? { openProvider: () => {
                 if (!props.binding?.isCurrent()) return;

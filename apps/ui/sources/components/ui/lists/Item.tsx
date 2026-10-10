@@ -54,6 +54,7 @@ import {
     HAPPIER_META_COLUMN_STYLE,
     resolveHappierItemBehavior,
     HappierDivider,
+    isHappierPageRowNarrow,
     useHappierItemGroupItemBehavior,
     useHappierPageSection,
     useHappierMaterialColorResolver,
@@ -63,6 +64,8 @@ function resizeItemIconForDensity(icon: React.ReactNode, iconSize: number, color
     if (!React.isValidElement(icon) || icon.type === React.Fragment) {
         return icon;
     }
+    // Semantic marks own their named size; density only resizes numeric glyphs.
+    if (typeof (icon.props as { size?: unknown }).size === 'string') return icon;
 
     return React.cloneElement(icon, {
         size: iconSize,
@@ -809,7 +812,8 @@ export const Item = React.memo<ItemProps>((props) => {
     const handleRowLayout = React.useCallback((event: LayoutChangeEvent) => {
         const widthPx = event.nativeEvent.layout.width;
         if (!Number.isFinite(widthPx) || widthPx <= 0) return;
-        const next = widthPx < PAGE_LIST_METRICS.rowStackBelowWidthPx;
+        // The shared row rule: narrower than the label's column beside an inline field (a phone sheet).
+        const next = isHappierPageRowNarrow(widthPx);
         setIsNarrowRow((current) => (current === next ? current : next));
         setRowWidthPx((current) => (current === widthPx ? current : widthPx));
     }, []);

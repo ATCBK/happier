@@ -44,7 +44,7 @@ const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 // Transform the real owners after the transport/platform boundaries, outside the case budget.
 const { MachinePresetView } = await import('./MachinePresetView');
-const { MachinesSettingsView } = await import('../MachinesSettingsView');
+const { AllMachinesIndex: MachinesSettingsView } = await import('@/components/machines/index/AllMachinesIndex');
 const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
 const { MachineProvisionerPicker } = await import('./MachineProvisionerPicker');
 const { Item } = await import('@/components/ui/lists/Item');
@@ -638,6 +638,28 @@ describe('reachable preset detail', () => {
         const screen = await renderSettingsView(<MachinePresetView serverId={serverId} presetId="preset" />);
         await waitForHomeGovernance(() => expect(screen.findAllByType(InstalledPluginBrandMark)
             .some(node => node.props.brand.bytes?.byteLength === bytes.byteLength)).toBe(true));
+    });
+
+    it('draws a preset row with its provider’s brand mark at the row’s size (the rail and the machine picker)', async () => {
+        const serverId = await seed();
+        await seedConfiguration(serverId);
+        const resource = { pluginId: preset.recipe.provider.pluginId, localId: 'brand-icon' };
+        const digest = `sha256:${'d'.repeat(64)}`;
+        const bytes = readFileSync(join(resolve(process.cwd(), '../..'), 'packages/plugins/machine-hetzner/assets/brand.png'));
+        seedOptionsDeclaration(provisioner, PluginJsonSchemaV2Schema.parse({ type: 'object', properties: {}, additionalProperties: false }), true,
+            { source: { kind: 'localPath', locator: '/plugins/custom-compute' }, occurrenceId: 'package-occurrence',
+                brand: { state: 'available', resource, digest, width: 256, height: 256 } });
+        const projected = boundary.rpc.getMockImplementation()!;
+        // Daemon Resource transport only: the recipe's provider resolves through the real projection and brand owners.
+        boundary.rpc.mockImplementation(async (request: { machineId: string; method: string; payload: unknown }) =>
+            request.method === RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ
+                ? { ok: true, resource, kind: 'asset', contentType: 'image/png', digest, bytesBase64: bytes.toString('base64') }
+                : projected(request));
+        const { ManagedPresetMark, MANAGED_PROVISIONER_MARK_SIZE } = await import('./useManagedProvisionerPresentation');
+        const screen = await renderSettingsView(<ManagedPresetMark serverId={serverId} preset={preset} size={MANAGED_PROVISIONER_MARK_SIZE.rail} />);
+        await waitForHomeGovernance(() => expect(screen.findAllByType(InstalledPluginBrandMark)
+            .some(node => node.props.pixelSize === MANAGED_PROVISIONER_MARK_SIZE.rail
+                && node.props.brand.bytes?.byteLength === bytes.byteLength)).toBe(true));
     });
 
     it('withdraws recipe and history after the credential lifetime retires', async () => {

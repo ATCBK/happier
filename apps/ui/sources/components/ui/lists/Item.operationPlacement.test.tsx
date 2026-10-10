@@ -116,6 +116,24 @@ describe('Item page operation placement', () => {
     await layout({ row: 400, operation: 84 });
     expect(direction()).toBe('column');
   });
+
+  it('keeps a field select beside its label in a pane column where a label and an inline field both fit', async () => {
+    const { act } = await import('react-test-renderer');
+    const { direction, layout } = measuredRow(
+      await renderOperationRow('adaptive'),
+      act,
+    );
+
+    // A 500px pane column holds the label column, the gap, an inline field (240) and both row insets,
+    // so the select stays trailing, as on a desktop page.
+    await layout({ row: 500, operation: 240 });
+    expect(direction()).not.toBe('column');
+    // Four pixels short of that, and on every phone sheet, it moves beneath rather than overflow the inset.
+    await layout({ row: 480, operation: 240 });
+    expect(direction()).toBe('column');
+    await layout({ row: 398, operation: 132 });
+    expect(direction()).toBe('column');
+  });
     it('starts a control placed under its label at the label\'s edge, after the section\'s mark column', async () => {
         const { act } = await import('react-test-renderer');
         const { Item } = await import('./Item');

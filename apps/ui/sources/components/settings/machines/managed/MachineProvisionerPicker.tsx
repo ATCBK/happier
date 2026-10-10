@@ -113,7 +113,7 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
         return [{ id, title: localized(provisioner.contribution.pluginId, provisioner.descriptor.title),
             kind: provisioner.descriptor.kindTitle ? localized(provisioner.contribution.pluginId, provisioner.descriptor.kindTitle) : undefined,
             description: provisioner.descriptor.description ? localized(provisioner.contribution.pluginId, provisioner.descriptor.description) : '',
-            location: location === 'local' ? 'local' : 'cloud', mark: markFor(provisioner),
+            location: location === 'local' ? 'local' : 'cloud', mark: (size: number) => markFor(provisioner, size),
             status: { tone: check ? check.available && location !== 'unknown' ? 'ready' : 'attention' : 'none',
                 label: [statusLabel, location === 'unknown' ? t('managedMachines.add.status.billingUnknown') : null].filter(Boolean).join(' · ') },
             action: repairAction ? { kind: 'repair', label: t(noAccount ? 'managedMachines.add.action.connect'
