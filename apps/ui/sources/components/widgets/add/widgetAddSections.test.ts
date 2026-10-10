@@ -2,7 +2,7 @@ import type * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createSessionSurfaceNoteDocumentV1, type SessionSurfaceItemV1 } from '@happier-dev/protocol/sessions/board';
-import { USAGE_BUILTIN_WIDGET_IDS_V1 } from '@happier-dev/protocol/widgets';
+import { SESSION_COMPANION_BUILTIN_ITEM_IDS, USAGE_BUILTIN_WIDGET_IDS_V1 } from '@happier-dev/protocol/widgets';
 
 import { selectBuiltinWidgetCandidates, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { projectSessionBoard } from '@/sync/domains/session/board';
@@ -20,7 +20,7 @@ vi.mock('@/text', async () => {
  * producer, already-added entries in place, and every pick handed to the placement's existing add
  * path exactly once.
  */
-function candidate(localId: string, title: string): WidgetCandidate {
+function candidate(localId: string, title: string): Extract<WidgetCandidate, { surface: unknown }> {
     return {
         surface: { pluginId: 'happier.channels', localId },
         key: `happier.channels/${localId}`,
@@ -133,7 +133,8 @@ describe('buildCompanionWidgetAddSections', () => {
             inputs: { fields: [{ path: 'period', title: 'Period', widget: 'text', required: true }] } };
         const sections = buildCompanionWidgetAddSections({ refs: [{ kind: 'widget', widgetId: 'note' }], snapshot: BOARD,
             glanceCandidates: [candidate('pr', 'PR'), yours], pluginProjection: null, addItem });
-        expect(sections.find(section => section.id === 'glances')!.entries.map(entry => entry.title)).toEqual(['PR']);
+        expect(sections.map(section => section.id)).toEqual(['builtins', 'plugin:happier.channels', 'yours', 'board', 'panes']);
+        expect(sections.find(section => section.id === 'plugin:happier.channels')!.entries.map(entry => entry.title)).toEqual(['PR']);
         const entry = sections.find(section => section.id === 'yours')!.entries[0]!;
         await expect(entry.setup!().submit({ bindings: { period: { kind: 'value', value: '7d' } } })).resolves.toEqual({ ok: true });
         expect(addItem.mock.calls[0]?.[0]).toMatchObject({ kind: 'instance', instance: { definition: { kind: 'artifact', artifactId: 'signups' },
@@ -147,7 +148,7 @@ describe('buildCompanionWidgetAddSections', () => {
             definition: { kind: 'builtin' as const, id: 'changes' }, bindings: { session: { kind: 'value' as const, value: { serverId: 'home', sessionId } } } } }));
         const sections = buildCompanionWidgetAddSections({ refs, snapshot: BOARD, glanceCandidates: [native],
             pluginProjection: null, addItem, context: { session: { ref: { serverId: 'home', sessionId: 'C' }, label: 'C' } } });
-        const entry = sections.find(row => row.id === 'glances')!.entries[0]!;
+        const entry = sections.find(row => row.id === 'builtins')!.entries[0]!;
         expect(entry.count).toBe('widgetAdd.countInCompanion(count=2)');
         expect(entry.added).not.toBe(true);
         const setup = entry.setup!();
@@ -157,7 +158,7 @@ describe('buildCompanionWidgetAddSections', () => {
         expect(refs.some(ref => ref.instance.id === result.instance.id)).toBe(false);
         expect(refs.map(ref => ref.instance.bindings.session.value.sessionId)).toEqual(['A', 'B']);
     });
-    it('lists glances, board items and pane links, each kept in place when already added', () => {
+    it('groups widgets by provenance, then lists Board items and pane links with their existing references', () => {
         const addItem = vi.fn();
         const sections = buildCompanionWidgetAddSections({
             refs: [
@@ -166,22 +167,30 @@ describe('buildCompanionWidgetAddSections', () => {
                 { kind: 'pane', paneId: 'terminal' },
             ],
             snapshot: BOARD,
-            glanceCandidates: [...selectBuiltinWidgetCandidates(), candidate('pr', 'This branch’s PR')],
+            glanceCandidates: [...selectBuiltinWidgetCandidates(),
+                { ...candidate('pr', 'This branch’s PR'), sharedPluginName: true },
+                { ...candidate('checks', 'Checks'), surface: { pluginId: 'happier.checks', localId: 'checks' },
+                    key: 'happier.checks/checks', sharedPluginName: true },
+            ],
             pluginProjection: null,
             addItem,
         });
         const byId = new Map(sections.map((section) => [section.id, section.entries]));
-        const glances = byId.get('glances')!;
-        expect(ids(glances)).toEqual([
-            'plugin-builtin:session_summary',
-            'plugin-builtin:agent_plan',
-            'plugin-builtin:changes',
-            'plugin-builtin:local_services',
-            ...USAGE_BUILTIN_WIDGET_IDS_V1.map(id => `plugin-builtin:${id}`),
-            'plugin-happier.channels/pr',
+        expect(sections.map(section => [section.id, section.title, section.pluginId])).toEqual([
+            ['builtins', 'widgetAdd.builtIn', undefined],
+            ['plugin:happier.channels', 'Channels (happier.channels)', 'happier.channels'],
+            ['plugin:happier.checks', 'Channels (happier.checks)', 'happier.checks'],
+            ['board', 'widgetAdd.onBoard', undefined],
+            ['panes', 'widgetAdd.panes', undefined],
         ]);
-        expect(glances.find((entry) => entry.id === 'plugin-builtin:changes')?.setup).toBeDefined();
-        expect(glances.find((entry) => entry.id === 'plugin-builtin:changes')?.added).not.toBe(true);
+        const builtins = byId.get('builtins')!;
+        expect(ids(builtins)).toEqual([
+            ...[...SESSION_COMPANION_BUILTIN_ITEM_IDS, ...USAGE_BUILTIN_WIDGET_IDS_V1].map(id => `plugin-builtin:${id}`),
+        ]);
+        expect(ids(byId.get('plugin:happier.channels')!)).toEqual(['plugin-happier.channels/pr']);
+        expect(ids(byId.get('plugin:happier.checks')!)).toEqual(['plugin-happier.checks/checks']);
+        expect(builtins.find((entry) => entry.id === 'plugin-builtin:changes')?.setup).toBeDefined();
+        expect(builtins.find((entry) => entry.id === 'plugin-builtin:changes')?.added).not.toBe(true);
         expect(byId.get('board')!.find((entry) => entry.id === 'board-note')?.added).toBe(true);
         const panes = byId.get('panes')!;
         expect(ids(panes)).not.toContain('pane-board');
@@ -190,7 +199,7 @@ describe('buildCompanionWidgetAddSections', () => {
         expect(panes.find((entry) => entry.id === 'pane-terminal')?.added).toBe(true);
 
         // A compact plugin glance is a Companion reference; nothing is created on the Board.
-        glances.find((entry) => entry.id === 'plugin-happier.channels/pr')!.onPick!();
+        byId.get('plugin:happier.channels')![0]!.onPick!();
         panes.find((entry) => entry.id === 'pane-files')?.onPick?.();
         expect(addItem.mock.calls).toMatchObject([
             [{ kind: 'instance', instance: { v: 1, definition: { kind: 'installed', surface: { pluginId: 'happier.channels', localId: 'pr' } }, bindings: {} } }],
@@ -318,8 +327,7 @@ describe('configurable widgets in the Add popovers', () => {
             openPlugins: vi.fn(),
         });
         expect(ids(content.sections.find((section) => section.id === 'builtins')!.entries)).toEqual([
-            'plugin-builtin:session_summary', 'plugin-builtin:agent_plan', 'plugin-builtin:changes', 'plugin-builtin:local_services',
-            ...USAGE_BUILTIN_WIDGET_IDS_V1.map(id => `plugin-builtin:${id}`),
+            ...[...SESSION_COMPANION_BUILTIN_ITEM_IDS, ...USAGE_BUILTIN_WIDGET_IDS_V1].map(id => `plugin-builtin:${id}`),
         ]);
         expect(ids(content.sections.find((section) => section.id === 'plugin:happier.channels')!.entries)).toEqual(['plugin-happier.channels/summary']);
     });
@@ -338,7 +346,7 @@ describe('configurable widgets in the Add popovers', () => {
             addItem,
             context: SESSION_A,
         });
-        const entry = sections.find((section) => section.id === 'glances')!.entries.find((candidate) => candidate.id === 'plugin-happier.channels/summary')!;
+        const entry = sections.find((section) => section.id === 'plugin:happier.channels')!.entries.find((candidate) => candidate.id === 'plugin-happier.channels/summary')!;
         expect(entry.count).toBe('widgetAdd.countInCompanion(count=1)');
         const setup = entry.setup!();
         const pinnedB = { bindings: { session: { kind: 'value' as const, value: { serverId: 'home', sessionId: 'B' } }, period: { kind: 'value' as const, value: '30d' } } };

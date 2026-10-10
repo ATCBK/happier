@@ -207,7 +207,6 @@ export function buildCompanionWidgetAddSections(input: Readonly<{
     const glanceCandidates = selectHostableWidgetCandidates(input.glanceCandidates, 'companion');
     const model = resolveSessionCompanionPickerSections({ refs, snapshot: input.snapshot, candidates: glanceCandidates });
     const candidatesBySource = partitionWidgetCandidatesBySource(glanceCandidates);
-    const yourKeys = new Set(candidatesBySource.yours.map(candidate => `plugin-${candidate.key}`));
     const glances: WidgetAddEntry[] = [
         ...model.plugins.map((row): WidgetAddEntry => {
             const candidate = row.candidate;
@@ -247,6 +246,11 @@ export function buildCompanionWidgetAddSections(input: Readonly<{
             };
         }),
     ];
+    const entriesById = new Map(glances.map(entry => [entry.id, entry]));
+    const entriesFor = (candidates: readonly WidgetCandidate[]): WidgetAddEntry[] => candidates.flatMap(candidate => {
+        const entry = entriesById.get(`plugin-${candidate.key}`);
+        return entry ? [entry] : [];
+    });
     const board: WidgetAddEntry[] = model.board.map((row): WidgetAddEntry => {
         const source = row.source;
         const notePreview = renderNotePreview && source.kind === 'declarative'
@@ -272,9 +276,12 @@ export function buildCompanionWidgetAddSections(input: Readonly<{
             onPick: () => runWidgetSetupCommand(() => addItem({ kind: 'pane', paneId: tab.id }), t('widgetAdd.addFailed')),
         }));
     return [
-        { id: 'glances', title: t('widgetAdd.glances'), hint: t('widgetAdd.glancesHint'), entries: glances.filter(entry => !yourKeys.has(entry.id)) },
+        { id: 'builtins', title: t('widgetAdd.builtIn'), entries: entriesFor(candidatesBySource.builtIn) },
+        ...groupWidgetCandidatesByPlugin(candidatesBySource.fromPlugins).map(group => ({
+            id: `plugin:${group.id}`, title: group.title, hint: t('widgetAdd.pluginTag'), pluginId: group.id, entries: entriesFor(group.candidates),
+        })),
         ...(candidatesBySource.yours.length ? [{ id: 'yours', title: t('widgetDefinition.yourWidgets'), hint: t('widgetDefinition.yourWidgetsHint'),
-            entries: glances.filter(entry => yourKeys.has(entry.id)) }] : []),
+            entries: entriesFor(candidatesBySource.yours) }] : []),
         { id: 'board', title: t('widgetAdd.onBoard'), hint: t('widgetAdd.onBoardHint'), entries: board },
         { id: 'panes', title: t('widgetAdd.panes'), hint: t('widgetAdd.panesHint'), entries: panes },
     ];

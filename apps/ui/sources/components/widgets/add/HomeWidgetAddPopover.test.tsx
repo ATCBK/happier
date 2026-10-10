@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { WIDGET_SIZE_POLICY_V1, widgetCandidateDefinitionV1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
+import { SESSION_COMPANION_BUILTIN_ITEM_IDS, USAGE_BUILTIN_WIDGET_IDS_V1, WIDGET_SIZE_POLICY_V1, widgetCandidateDefinitionV1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 
 import { describeAuthoredWidgetDefinitionV1, selectBuiltinWidgetCandidates, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 
@@ -133,7 +133,7 @@ describe('Add to Home', () => {
         expect(sections.map((section) => [section.id, section.title])).toEqual([['builtins', 'widgetAdd.builtIn'], ['plugin:happier.triage', 'PRs & Issues']]);
         const builtIn = sections[0]!.entries;
         expect(builtIn.map((entry) => entry.id)).toEqual([
-            'plugin-builtin:session_summary', 'plugin-builtin:agent_plan', 'plugin-builtin:changes', 'plugin-builtin:local_services',
+            ...[...SESSION_COMPANION_BUILTIN_ITEM_IDS, ...USAGE_BUILTIN_WIDGET_IDS_V1].map(id => `plugin-builtin:${id}`),
         ]);
         expect(sections[1]!.entries.map((entry) => entry.id)).toEqual(['plugin-happier.triage/latest']);
         const setup = builtIn[0]!.setup!();
