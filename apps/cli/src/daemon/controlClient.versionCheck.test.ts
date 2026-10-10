@@ -1,16 +1,30 @@
 import http from 'node:http';
+import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/projectPath', () => ({
-  projectPath: () => '/missing-bunfs-root',
-}));
+const nativeFiles = vi.hoisted(() => ({ unavailablePath: null as string | null }));
+// The package root and version resolver stay real; only the OS read fails.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    readFileSync: (...args: Parameters<typeof actual.readFileSync>) => {
+      if (String(args[0]) === nativeFiles.unavailablePath) {
+        throw Object.assign(new Error('fixture package file unavailable'), { code: 'ENOENT' });
+      }
+      return actual.readFileSync(...args);
+    },
+  };
+});
 
 import { configuration, reloadConfiguration } from '@/configuration';
 import { clearDaemonStateForTestTeardown, writeDaemonState } from '@/persistence';
 import { isDaemonRunningCurrentlyInstalledHappyVersion } from '@/daemon/controlClient';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { spawnSleepyDetachedProcess } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+import { projectPath } from '@/projectPath';
 
 function listen(server: http.Server): Promise<{ port: number }> {
   return new Promise((resolve, reject) => {
@@ -30,6 +44,7 @@ describe('daemon control client version check', () => {
   const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
 
   afterEach(async () => {
+    nativeFiles.unavailablePath = null;
     await clearDaemonStateForTestTeardown();
     envScope.restore();
     reloadConfiguration();
@@ -37,6 +52,7 @@ describe('daemon control client version check', () => {
   });
 
   it('uses the resolved current CLI version when packaged runtime package.json is unavailable', async () => {
+    nativeFiles.unavailablePath = join(projectPath(), 'package.json');
     const server = http.createServer((req, res) => {
       if (req.method === 'POST' && req.url === '/ping') {
         res.statusCode = 200;
@@ -106,6 +122,7 @@ describe('daemon control client version check', () => {
 
   it('treats a recent startup-grace daemon as compatible when version and machine id already match', async () => {
     const realFetch = globalThis.fetch;
+    const owner = spawnSleepyDetachedProcess(['/opt/happier/package-dist/index.mjs', 'daemon', 'start-sync']);
 
     try {
       await withTempDir('happier-daemon-version-check-', async (tmpHomeDir) => {
@@ -122,7 +139,7 @@ describe('daemon control client version check', () => {
         });
 
         writeDaemonState({
-          pid: process.pid,
+          pid: owner.pid,
           httpPort: daemonPort,
           startedAt: Date.now(),
           startedWithCliVersion: configuration.currentCliVersion,
@@ -135,6 +152,7 @@ describe('daemon control client version check', () => {
         ).resolves.toBe(true);
       });
     } finally {
+      await owner.kill();
       vi.unstubAllGlobals();
     }
   });

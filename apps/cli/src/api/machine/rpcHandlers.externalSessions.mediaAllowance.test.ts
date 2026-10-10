@@ -1,7 +1,6 @@
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
@@ -42,24 +41,64 @@ function createDirectSessionMediaItem(providerMediaPath: string) {
 }
 
 describe('external session transcript media read allowance', () => {
-  it('grants only referenced direct-session media files to daemon file reads without durable adoption', async () => {
-    const workingDirectory = await mkdtemp(join(tmpdir(), 'happier-direct-media-workspace-'));
-    const providerDirectory = await mkdtemp(join(tmpdir(), 'happier-direct-media-provider-'));
-    const outsideDirectory = await mkdtemp(join(tmpdir(), 'happier-direct-media-outside-'));
+  it('limits an owner-granted media read to its exact file and retires a replaced file before filesystem or transfer disclosure', async () => {
+    const workingDirectory = await mkdtemp(join(tmpdir(), 'happier-media-grant-workspace-'));
+    const providerDirectory = await mkdtemp(join(tmpdir(), 'happier-media-grant-provider-'));
     const providerMediaPath = join(providerDirectory, 'provider-owned.png');
     const siblingMediaPath = join(providerDirectory, 'sibling-secret.png');
-    const sensitiveAbsolutePath = join(outsideDirectory, 'sensitive-absolute.png');
-    const sensitiveFileUriPath = join(outsideDirectory, 'sensitive-file-uri.png');
-    const symlinkEscapePath = join(providerDirectory, 'linked-sensitive.png');
     const providerMediaBytes = Buffer.from('media');
-    const siblingMediaBytes = Buffer.from('secret');
-    await mkdir(providerDirectory, { recursive: true });
-    await mkdir(outsideDirectory, { recursive: true });
     await writeFile(providerMediaPath, providerMediaBytes);
-    await writeFile(siblingMediaPath, siblingMediaBytes);
-    await writeFile(sensitiveAbsolutePath, Buffer.from('absolute-secret'));
-    await writeFile(sensitiveFileUriPath, Buffer.from('file-uri-secret'));
-    await symlink(sensitiveAbsolutePath, symlinkEscapePath);
+    await writeFile(siblingMediaPath, Buffer.from('secret'));
+    const allowance = createTransientSessionMediaReadAllowance();
+    const rpc = createRpcHandlerManager();
+    const handlers = registerFileSystemHandlers(rpc, workingDirectory, {
+      accessPolicy: { kind: 'restrictedRoots', roots: [workingDirectory] },
+      getAdditionalAllowedReadFiles: () => allowance.readAllowedReadFiles(),
+    });
+    const recipient = createTransferRecipientKeyPair();
+    const download = (path: string) => rpc.invokeLocal(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT, {
+      t: 'session_file_download_v1', path, recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
+    });
+    try {
+      await expect(rpc.invokeLocal(RPC_METHODS.READ_FILE, { path: providerMediaPath })).resolves.toMatchObject({ success: false });
+      // Exercise the actual allowance owner independently of transcript schema
+      // admission; an arbitrary Agent raw.meta carrier is refused below.
+      allowance.grantReadFiles([providerMediaPath]);
+      await expect(rpc.invokeLocal(RPC_METHODS.READ_FILE, { path: providerMediaPath })).resolves.toEqual({
+        success: true, content: providerMediaBytes.toString('base64'),
+      });
+      const init = await download(providerMediaPath);
+      expect(init).toMatchObject({ success: true, downloadId: expect.any(String) });
+      const { downloadId } = init as { downloadId: string };
+      const chunk = await rpc.invokeLocal(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK, { downloadId, index: 0 });
+      expect(chunk).toMatchObject({ success: true, isLast: true });
+      const encrypted = chunk as { payloadBase64: string; encryptedDataKeyEnvelopeBase64: string };
+      expect(decryptEncryptedTransferChunkEnvelope({
+        transferId: downloadId, sequence: 0, payloadBase64: encrypted.payloadBase64,
+        encryptedDataKeyEnvelopeBase64: encrypted.encryptedDataKeyEnvelopeBase64,
+        recipientSecretKeySeed: recipient.recipientSecretKeySeed,
+      })).toEqual(providerMediaBytes);
+      await rpc.invokeLocal(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_FINALIZE, { downloadId });
+      await expect(rpc.invokeLocal(RPC_METHODS.READ_FILE, { path: siblingMediaPath })).resolves.toMatchObject({ success: false });
+      await expect(download(siblingMediaPath)).resolves.toMatchObject({ success: false });
+      await rm(providerMediaPath);
+      await symlink(siblingMediaPath, providerMediaPath);
+      await expect(rpc.invokeLocal(RPC_METHODS.READ_FILE, { path: providerMediaPath })).resolves.toMatchObject({ success: false });
+      await expect(download(providerMediaPath)).resolves.toMatchObject({ success: false });
+      await expect(stat(join(workingDirectory, '.happier', 'uploads'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await handlers.dispose();
+      await rm(workingDirectory, { recursive: true, force: true });
+      await rm(providerDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses undeclared Agent transcript metadata without granting filesystem or transfer reads', async () => {
+    const workingDirectory = await mkdtemp(join(tmpdir(), 'happier-direct-media-workspace-'));
+    const providerDirectory = await mkdtemp(join(tmpdir(), 'happier-direct-media-provider-'));
+    const providerMediaPath = join(providerDirectory, 'provider-owned.png');
+    const providerMediaBytes = Buffer.from('media');
+    await writeFile(providerMediaPath, providerMediaBytes);
 
     const transientMediaReadAllowance = createTransientSessionMediaReadAllowance();
     const rpcHandlerManager = createRpcHandlerManager();
@@ -82,9 +121,6 @@ describe('external session transcript media read allowance', () => {
                   payload: {
                     media: [
                       createDirectSessionMediaItem(providerMediaPath),
-                      createDirectSessionMediaItem(symlinkEscapePath),
-                      createDirectSessionMediaItem(sensitiveAbsolutePath),
-                      createDirectSessionMediaItem(pathToFileURL(sensitiveFileUriPath).href),
                     ],
                   },
                 },
@@ -95,6 +131,13 @@ describe('external session transcript media read allowance', () => {
           tailCursor: null,
           hasMore: false,
           truncated: false,
+    };
+    const declaredTranscript = {
+      ...transcript,
+      items: transcript.items.map(({ raw, ...item }) => ({
+        ...item,
+        raw: { role: raw.role, content: raw.content },
+      })),
     };
     const runtime = await createAuthoredAdmittedPluginRuntimeFixture({
       controller: pluginReloadController,
@@ -136,7 +179,8 @@ describe('external session transcript media read allowance', () => {
             listCandidates: async () => ({ok:true,value:{candidates:[],nextCursor:null}}),
             resolveLinkIdentity: async ({source,remoteSessionId}) => ({ok:true,value:{source,remoteSessionId,linkData:{}}}),
             resolveLinkedIdentity: async ({source,remoteSessionId,linkData}) => ({ok:true,value:{source,remoteSessionId,linkData,transcriptMediaReadRoots:roots}}),
-            pageTranscript: async () => ({ok:true,value:${JSON.stringify(transcript)}}),
+            pageTranscript: async ({remoteSessionId}) => ({ok:true,value:remoteSessionId === 'declared-row'
+              ? ${JSON.stringify(declaredTranscript)} : ${JSON.stringify(transcript)}}),
             readAfterTranscript: async () => ({ok:true,value:{outcome:'already_current'}}),
           };
           export function activate(api) { api.agents.registerExternalSessions('media',externalSessions); }
@@ -159,6 +203,16 @@ describe('external session transcript media read allowance', () => {
       const deniedBeforeGrant = await rpcHandlerManager.invokeLocal(RPC_METHODS.READ_FILE, { path: providerMediaPath });
       expect(deniedBeforeGrant).toMatchObject({ success: false });
 
+      const declaredPage = await rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_EXTERNAL_SESSION_TRANSCRIPT_PAGE, {
+        machineId: 'machine-1',
+        agentId,
+        remoteSessionId: 'declared-row',
+        source: { kind: 'opencodeServer', baseUrl: 'http://127.0.0.1:4096', directory: providerDirectory },
+        direction: 'older',
+      });
+      expect(declaredPage).toMatchObject({ ok: true });
+      expect(transientMediaReadAllowance.readAllowedReadFiles()).toEqual([]);
+
       const pageResponse = await rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_EXTERNAL_SESSION_TRANSCRIPT_PAGE, {
         machineId: 'machine-1',
         agentId,
@@ -166,66 +220,30 @@ describe('external session transcript media read allowance', () => {
         source: { kind: 'opencodeServer', baseUrl: 'http://127.0.0.1:4096', directory: providerDirectory },
         direction: 'older',
       });
-      expect(pageResponse).toMatchObject({ ok: true });
-      expect((pageResponse as { transientMediaReadFiles?: readonly string[] }).transientMediaReadFiles).toEqual([
-        providerMediaPath,
-      ]);
+      // Current Agent rows admit role/content only. A declared source root does
+      // not authorize an arbitrary raw.meta carrier to grant filesystem access.
+      expect(pageResponse, JSON.stringify(pageResponse)).toMatchObject({ ok: false, errorCode: 'agent_error' });
+      expect(transientMediaReadAllowance.readAllowedReadFiles()).toEqual([]);
 
-      const allowedAfterGrant = await rpcHandlerManager.invokeLocal(RPC_METHODS.READ_FILE, { path: providerMediaPath });
-      expect(allowedAfterGrant).toEqual({
-        success: true,
-        content: providerMediaBytes.toString('base64'),
-      });
+      const deniedReferencedAfterRefusal = await rpcHandlerManager.invokeLocal(RPC_METHODS.READ_FILE, { path: providerMediaPath });
+      expect(deniedReferencedAfterRefusal).toMatchObject({ success: false });
       const recipient = createTransferRecipientKeyPair();
       const transferInit = await rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT, {
         t: 'session_file_download_v1',
         path: providerMediaPath,
         recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
       });
-      expect(transferInit).toMatchObject({ success: true, downloadId: expect.any(String) });
-      const downloadId = (transferInit as { downloadId: string }).downloadId;
-      const transferChunk = await rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK, {
-        downloadId,
-        index: 0,
-      });
-      expect(transferChunk).toMatchObject({ success: true, isLast: true });
-      expect(decryptEncryptedTransferChunkEnvelope({
-        transferId: downloadId,
-        sequence: 0,
-        payloadBase64: (transferChunk as { payloadBase64: string }).payloadBase64,
-        encryptedDataKeyEnvelopeBase64: (transferChunk as { encryptedDataKeyEnvelopeBase64: string }).encryptedDataKeyEnvelopeBase64,
-        recipientSecretKeySeed: recipient.recipientSecretKeySeed,
-      })).toEqual(providerMediaBytes);
-      await rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_FINALIZE, { downloadId });
-      const deniedSiblingTransfer = await rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT, {
-        t: 'session_file_download_v1',
-        path: siblingMediaPath,
-        recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
-      });
-      expect(deniedSiblingTransfer).toMatchObject({ success: false });
-      const deniedSiblingAfterGrant = await rpcHandlerManager.invokeLocal(RPC_METHODS.READ_FILE, { path: siblingMediaPath });
-      expect(deniedSiblingAfterGrant).toMatchObject({ success: false });
-      const deniedSymlinkEscapeAfterGrant = await rpcHandlerManager.invokeLocal(RPC_METHODS.READ_FILE, { path: symlinkEscapePath });
-      expect(deniedSymlinkEscapeAfterGrant).toMatchObject({ success: false });
-      const deniedSensitiveAbsoluteAfterGrant = await rpcHandlerManager.invokeLocal(RPC_METHODS.READ_FILE, { path: sensitiveAbsolutePath });
-      expect(deniedSensitiveAbsoluteAfterGrant).toMatchObject({ success: false });
-      const deniedSensitiveFileUriAfterGrant = await rpcHandlerManager.invokeLocal(RPC_METHODS.READ_FILE, { path: sensitiveFileUriPath });
-      expect(deniedSensitiveFileUriAfterGrant).toMatchObject({ success: false });
+      expect(transferInit).toMatchObject({ success: false });
       await expect(readFile(providerMediaPath)).resolves.toEqual(providerMediaBytes);
-      await expect(readFile(siblingMediaPath)).resolves.toEqual(siblingMediaBytes);
 
-      await rm(providerMediaPath, { force: true });
-      await symlink(sensitiveAbsolutePath, providerMediaPath);
-      const deniedReplacedGrantAfterGrant = await rpcHandlerManager.invokeLocal(RPC_METHODS.READ_FILE, { path: providerMediaPath });
-      expect(deniedReplacedGrantAfterGrant).toMatchObject({ success: false });
-
+      // Historical metadata/root filtering remains covered by referencedPaths;
+      // this current-ABI refusal must neither expose bytes nor adopt media.
       await expect(stat(join(workingDirectory, '.happier', 'uploads'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await runtime.dispose();
       await fileSystemHandlers.dispose();
       await rm(workingDirectory, { recursive: true, force: true });
       await rm(providerDirectory, { recursive: true, force: true });
-      await rm(outsideDirectory, { recursive: true, force: true });
     }
   });
 });
