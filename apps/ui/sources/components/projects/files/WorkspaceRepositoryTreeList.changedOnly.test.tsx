@@ -6,6 +6,7 @@ import { renderScreen } from '@/dev/testkit';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import { selectScmChangedFiles } from '@/scm/scmStatusFiles';
+import { HappierTreeRow } from '@happier-dev/plugin-ui/presentation';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -130,10 +131,7 @@ describe('WorkspaceRepositoryTreeList · Changed only', () => {
         const screen = await render();
 
         // One entry per tree row: the row owner is the element that carries the tree node.
-        const titles = screen.findAll((node) => typeof node.props?.testID === 'string'
-            && node.props.testID.startsWith('repository-tree-row-')
-            && node.props.node !== undefined
-            && typeof node.props.title === 'string')
+        const titles = screen.findAllByType(HappierTreeRow)
             .map((node) => node.props.title);
         expect(titles).toEqual([
             'apps/ui/sources',

@@ -156,10 +156,7 @@ describe('GitChangesTree', () => {
 
     it('puts the Git letter in the icon slot after the checkbox', async () => {
         const { screen } = await render();
-        // The row primitive hands its leading slot (disclosure · checkbox · mark) to the list row as `icon`.
-        const row = screen.findAll((node) => node.props?.testID === rowId('AGENTS.md') && node.props.leftElement !== undefined && node.props.node === undefined)[0];
-        const leading = await renderScreen(<>{row?.props.leftElement}</>);
-        expect(textOf(leading.findHostByTestId(`${rowId('AGENTS.md')}-change`))).toBe('M');
+        expect(textOf(screen.findHostByTestId(`${rowId('AGENTS.md')}-change`))).toBe('M');
     });
 
     it('shows only the files of the current scope, with folder counts of that scope', async () => {
