@@ -3,6 +3,7 @@ import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/ca
 import { LocalServiceManagedServiceActionTargetV1Schema, type LocalServiceActionTargetV1 } from '@happier-dev/protocol/local/services/actions/v1';
 import type { WorkspaceSyncPrepareBetweenRequestV1, WorkspaceSyncPrepareBetweenResultV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import type { ProjectServiceRelocateInputV1 } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
+import type { ProjectServicePlacementMutationResultV1 } from '@happier-dev/protocol/workspaces/projectServicePlacementV1';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type { ManagedServiceSnapshot } from '@happier-dev/plugin-sdk/managed-services';
 
@@ -26,6 +27,7 @@ export interface ProjectServiceRelocationPorts {
   resolveDestination(input: ProjectServiceRelocateInputV1, signal?: AbortSignal): Promise<Refusal | Readonly<{
     status: 'resolved'; workspace: WorkspaceRefV1;
   }>>;
+  saveDesiredPlacement(input: ProjectServiceRelocateInputV1['desiredPlacement'], signal?: AbortSignal): Promise<ProjectServicePlacementMutationResultV1>;
   stopService(target: ManagedTarget, signal?: AbortSignal): Promise<ManagedServiceProcessStopResult>;
   revalidateDestination(input: ProjectServiceRelocateInputV1, destination: WorkspaceRefV1, signal?: AbortSignal): Promise<Refusal | Readonly<{ status: 'admitted' }>>;
   /** Must be production handoffPrepareBetween: it routes to the real Sync controller. */
@@ -66,7 +68,19 @@ export function createProjectServiceRelocation(ports: ProjectServiceRelocationPo
     const destination = await ports.resolveDestination(input, signal);
     if (destination.status === 'refused') return failure(destination.reasonCode);
     const selected = destination.workspace;
+    if (selected.machineId !== input.selectedTarget.machineId) {
+      return failure('selected_target_changed');
+    }
     if (selected.serverId !== input.workspace.serverId) return failure('wrong_home');
+    // This compound producer owns set+Move. The desired placement must settle before
+    // any native Stop, and an unknown/conflicting write cannot lend effect authority.
+    const placement = await ports.saveDesiredPlacement(input.desiredPlacement, signal);
+    if (placement.status === 'conflict') return failure('placement_conflict');
+    if (placement.status === 'outcomeUnknown') return failure('placement_outcome_unknown');
+    if (placement.status === 'cancelled') return failure('cancelled');
+    if (placement.status === 'locked' || placement.status === 'invalid' || placement.status === 'unavailable') {
+      return failure(`placement_${placement.status}`);
+    }
     if (selected.machineId === current.currentTarget.machineId && selected.id === current.currentTarget.workspaceId) {
       return { ok: true, result: { status: 'unchanged', currentTarget: current.currentTarget } };
     }

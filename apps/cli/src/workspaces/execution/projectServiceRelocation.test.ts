@@ -11,9 +11,13 @@ const declaration = { workspaceRefId: 'old-ref', selection: { kind: 'manifest' a
 const oldTarget = { kind: 'managed_service' as const, managedServiceId: 'old-native', machineId: 'old', workspaceId: 'old-ref', cwd: '/old', declaration };
 const newTarget = { kind: 'managed_service' as const, managedServiceId: 'new-native', machineId: 'new', workspaceId: 'new-ref', cwd: '/new',
   declaration: { ...declaration, workspaceRefId: 'new-ref' } };
-const request = { workspace: { serverId: 'home', refId: 'primary' }, serviceName: 'worker', requestId: 'move-1',
-  currentTarget: oldTarget, destination: { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: 'new' } } };
 const destination = { id: 'new-ref', serverId: 'home', machineId: 'new', rootPath: '/new', createdAtMs: 1 };
+const request = { workspace: { serverId: 'home', refId: 'primary' }, serviceName: 'worker', requestId: 'move-1',
+  currentTarget: oldTarget, destination: { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: 'new' } },
+  desiredPlacement: { workspace: { serverId: 'home', refId: 'primary' }, serviceName: 'worker', expectedRevision: 'absent' as const,
+    expected: { kind: 'absent' as const }, value: { runsOn: { kind: 'workers' as const,
+      destination: { kind: 'machine' as const, machineId: 'new' } }, unavailable: 'fail' as const } },
+  selectedTarget: { machineId: destination.machineId } };
 const oldWorkspace = { id: 'old-ref', serverId: 'home', machineId: 'old', rootPath: '/old', createdAtMs: 1 };
 const cleanExit: PluginProcessResult = { termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
   stdout: new Uint8Array(), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false };
@@ -50,6 +54,8 @@ async function harness(stopStatus: 'stopped' | 'accepted' | 'unsupported' | 'ter
     readService: async () => ({ status: 'resolved', execution: 'portable', currentTarget, workspace: oldWorkspace,
       instanceId: handle.snapshot().instanceId, snapshot: handle.snapshot() }),
     resolveDestination: async () => ({ status: 'resolved', workspace: destination }),
+    saveDesiredPlacement: async () => ({ status: 'applied', placement: request.desiredPlacement.value,
+      revision: 1, provenance: 'saved' }),
     stopService: async (_target, signal) => await handle.stop({ signal }),
     revalidateDestination: async () => ({ status: 'admitted' }),
     handoffPrepareBetween: async () => { effects.push('prepare'); return { ok: true, traversed: [] }; },
@@ -199,6 +205,23 @@ describe('confirmed service relocation', () => {
       status: 'moved', currentTarget: newTarget } });
     expect(effects).toEqual(['stop', 'controller-routed-prepare', 'start']);
   });
+  it('settles the desired-placement CAS before Stop and binds the reviewed exact target', async () => {
+    const { effects, ports, request, newTarget } = await harness();
+    ports.saveDesiredPlacement = async input => {
+      expect(input).toEqual(request.desiredPlacement);
+      effects.push('save-placement');
+      return { status: 'applied', placement: input.value, revision: 1, provenance: 'saved' };
+    };
+    await expect(createProjectServiceRelocation(ports)(request)).resolves.toEqual({ ok: true,
+      result: { status: 'moved', currentTarget: newTarget } });
+    expect(effects).toEqual(['save-placement', 'stop', 'prepare', 'start']);
+
+    const changed = await harness();
+    changed.ports.resolveDestination = async () => ({ status: 'resolved', workspace: { ...destination, machineId: 'other' } });
+    await expect(createProjectServiceRelocation(changed.ports)(changed.request))
+      .resolves.toMatchObject({ ok: false, errorCode: 'selected_target_changed' });
+    expect(changed.effects).toEqual([]);
+  });
   it('refuses primary-only, stale instance and unavailable destination before native effects', async () => {
     const { effects, ports, handle, oldTarget, request } = await harness();
     ports.readService = async () => ({ status: 'resolved', execution: 'primary', currentTarget: oldTarget,
@@ -221,7 +244,10 @@ describe('confirmed service relocation', () => {
   it('makes the same exact destination a no-op', async () => {
     const { effects, ports, request } = await harness();
     ports.resolveDestination = async () => ({ status: 'resolved', workspace: { ...destination, id: 'old-ref', machineId: 'old' } });
-    await expect(createProjectServiceRelocation(ports)(request)).resolves.toMatchObject({ ok: true, result: { status: 'unchanged' } });
+    const destinationChoice = { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: 'old' } };
+    const sameRequest = { ...request, destination: destinationChoice, selectedTarget: { machineId: 'old' },
+      desiredPlacement: { ...request.desiredPlacement, value: { ...request.desiredPlacement.value, runsOn: destinationChoice } } };
+    await expect(createProjectServiceRelocation(ports)(sameRequest)).resolves.toMatchObject({ ok: true, result: { status: 'unchanged' } });
     expect(effects).toEqual([]);
   });
   it('refuses a stale supplied initial occurrence before destination admission or native Stop', async () => {

@@ -5,9 +5,31 @@ import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { CurrentUiContextVoiceToolPort } from './currentUiContextVoiceToolPort';
 import type { PluginSurfaceActionInvocationSurface, PluginSurfaceHostActionBinding } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
+import { CurrentUiContextSnapshotV1Schema } from '@happier-dev/protocol/plugins/ui';
+import type { CurrentUiContextReader } from './CurrentUiContextProvider';
+import type { CurrentUiContextMountedCommand } from './currentUiContextModel';
 
 type PortFactory = (surface: PluginSurfaceActionInvocationSurface, hostAction?: PluginSurfaceHostActionBinding) => CurrentUiContextVoiceToolPort | null;
 let mountedPortFactory: PortFactory | null = null;
+
+/** UI intents resolve their exact published command, then use the ordinary admitted dispatcher. */
+export async function executeMountedCurrentUiContextCommand(input: Readonly<{
+    reader: CurrentUiContextReader | null;
+    command: CurrentUiContextMountedCommand | undefined;
+    execute(actionId: 'ui.current_context.read' | 'ui.current_context.command.invoke', input: unknown): Promise<ActionExecuteResult>;
+}>): Promise<ActionExecuteResult> {
+    const unavailable = (): ActionExecuteResult => ({ ok: false, errorCode: 'unsupported_action', error: 'current_ui_command_unavailable' });
+    if (!input.reader || !input.command) return unavailable();
+    const read = await input.execute('ui.current_context.read', {});
+    if (!read.ok) return read;
+    const snapshot = CurrentUiContextSnapshotV1Schema.safeParse(read.result);
+    if (!snapshot.success) return unavailable();
+    const descriptor = snapshot.data.commands.find(candidate => {
+        const resolved = input.reader?.resolveCurrentUiCommand(candidate.id);
+        return resolved != null && resolved.command === input.command && !resolved.retirementSignal.aborted;
+    });
+    return descriptor ? input.execute('ui.current_context.command.invoke', { commandId: descriptor.id }) : unavailable();
+}
 
 /** Borrows the provider's reader/dispatcher for this AppShell lifetime, without copying its context. */
 export function registerCurrentUiContextActionPort(createPort: PortFactory): () => void {
@@ -39,8 +61,8 @@ export async function executeCurrentUiContextAction(
     const input = request.input as Readonly<{ commandId: string }>;
     const outcome = await port.invokeCurrentUiCommand?.({ commandId: input.commandId, signal: request.context.signal });
     const errorCode = outcome?.code === 'outcome_unknown' ? PLUGIN_ACTION_OUTCOME_UNKNOWN_CODE
-        : outcome?.code === 'denied' ? 'permission_denied'
-        : 'unsupported_action';
+        : outcome?.errorCode ?? (outcome?.code === 'denied' ? 'permission_denied'
+        : 'unsupported_action');
     return outcome?.ok
         ? { ok: true, result: outcome.result ?? null }
         : { ok: false, errorCode, error: outcome?.code ?? 'current_ui_command_unavailable' };

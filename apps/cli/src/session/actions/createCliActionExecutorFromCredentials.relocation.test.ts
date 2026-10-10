@@ -7,9 +7,13 @@ import { createLocalServiceActionConfirmationNonceV1 } from '@happier-dev/protoc
 const token = 'hap_v1_11111111-1111-4111-8111-111111111111_' + 'A'.repeat(43);
 const credentials = { token, encryption: null, credentialProvenance: 'api_token' as const };
 const sourceRef = { id: 'source-ref', serverId: 'source-home', machineId: 'source-coordinator', rootPath: '/source', createdAtMs: 1 };
+const selectedTarget = { machineId: 'new-worker' };
 const input = { workspace: { serverId: 'source-home', refId: sourceRef.id }, serviceName: 'worker', requestId: 'move',
   currentTarget: { kind: 'managed_service', managedServiceId: 'native-instance', machineId: 'old-worker' },
-  destination: { kind: 'workers', destination: { kind: 'machine', machineId: 'new-worker' } } };
+  destination: { kind: 'workers', destination: { kind: 'machine', machineId: 'new-worker' } },
+  desiredPlacement: { workspace: { serverId: 'source-home', refId: sourceRef.id }, serviceName: 'worker', expectedRevision: 'absent',
+    expected: { kind: 'absent' }, value: { runsOn: { kind: 'workers', destination: { kind: 'machine', machineId: 'new-worker' } }, unavailable: 'fail' } },
+  selectedTarget };
 const servers: Server[] = [];
 afterEach(async () => { for (const server of servers.splice(0)) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); });
 

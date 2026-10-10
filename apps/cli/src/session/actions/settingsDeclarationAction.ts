@@ -81,7 +81,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     }
     if (storage.scope === 'team' && !target) return { ...refuse('setting_target_required'), details: { targetKinds: [...declaration.targetKinds] } };
     if (declaration.sensitive || storage.access === 'sensitive') return refuse('setting_sensitive');
-    if (actionId === 'settings.set' && storage.access === 'read_only') return refuse('setting_read_only');
+    if ((actionId === 'settings.set' || actionId === 'settings.reset') && storage.access === 'read_only') return refuse('setting_read_only');
     if (storage.prerequisite === 'ui_platform') return { ...refuse('setting_value_unavailable'), details: { prerequisite: storage.prerequisite } };
     const resetValue = actionId === 'settings.reset'
       ? readBuiltInAccountSettingValueV1(declaration, accountSettingsParse({}))
