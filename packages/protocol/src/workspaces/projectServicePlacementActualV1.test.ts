@@ -40,6 +40,22 @@ describe('actual service placement through admitted Sync endpoints', () => {
         machineId: request.machineId, updatedAt: 1, targets: request.machineId === actual.machineId ? [target] : [] } }),
     };
     expect(await observeProjectServicePlacementActualV1(input)).toEqual({ status: 'present', target });
+    const unrelated = { ...child, id: 'unrelated', machineId: 'unrelated-machine', rootPath: '/unrelated' };
+    const unrelatedFact = { ...childMachines[0], machineId: unrelated.machineId,
+      projection: { ...childMachines[0].projection, observation: { ...observation, workspaceFolder: unrelated.rootPath,
+        storage: { kind: 'bind' as const, hostPath: '/unrelated-host', childPath: unrelated.rootPath } } },
+      managedMachine: { ...childMachines[0].managedMachine, enrolledMachineId: 'retired-neighbour' } };
+    expect(await observeProjectServicePlacementActualV1({ ...input, workspaceRefs: [...input.workspaceRefs, unrelated],
+      childMachines: [...childMachines, unrelatedFact],
+    })).toEqual({ status: 'present', target });
+    const { childMachines: _facts, ...passiveInput } = input;
+    const scopedInput = { ...passiveInput, workspaceRefs: [...input.workspaceRefs, unrelated],
+      childMachineProjections: [...childMachines, unrelatedFact],
+      readChildMachines: async (machineIds: readonly string[]) => {
+        if (machineIds.includes(unrelated.machineId)) throw new Error('Unrelated retired Machine must not be acquired');
+        return childMachines.filter(fact => machineIds.includes(fact.machineId));
+      } };
+    expect(await observeProjectServicePlacementActualV1(scopedInput)).toEqual({ status: 'present', target });
     expect(await observeProjectServicePlacementActualV1({ ...input,
       childMachines: [{ ...childMachines[0], managedMachine: { ...childMachines[0].managedMachine, enrolledMachineId: 'replaced-child' } }],
     })).toEqual({ status: 'unavailable' });

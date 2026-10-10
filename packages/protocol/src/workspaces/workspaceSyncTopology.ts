@@ -15,6 +15,26 @@ export type WorkspaceSyncChildMachineFacts = Readonly<{
   controller: Readonly<{ machineId: string; installationId: string; available: boolean }>;
 }>;
 
+export type WorkspaceSyncChildMachineProjection = Pick<WorkspaceSyncChildMachineFacts, 'serverId' | 'machineId' | 'projection'>;
+
+/** Scope acquisition before validating aliases. A disconnected retired child is
+ * not authority for this component; a candidate alias is still validated below. */
+export function selectWorkspaceSyncEndpointAliases(input: Readonly<{
+  workspaceRefs: readonly WorkspaceRefV1[];
+  physicalWorkspaceRefIds: ReadonlySet<string>;
+  childMachines: readonly WorkspaceSyncChildMachineProjection[];
+  context?: WorkspaceRefResolutionContextV1;
+}>): readonly WorkspaceRefV1[] {
+  const physical = input.workspaceRefs.filter(ref => input.physicalWorkspaceRefIds.has(ref.id));
+  return input.workspaceRefs.filter(ref => input.physicalWorkspaceRefIds.has(ref.id)
+    || input.childMachines.some(fact => {
+      if (fact.serverId !== ref.serverId || fact.machineId !== ref.machineId || fact.projection.observation.storage.kind !== 'bind') return false;
+      const parent = resolveWorkspaceRefV1(physical, { serverId: ref.serverId,
+        machineId: fact.projection.relation.parentMachineId, rootPath: fact.projection.observation.storage.hostPath }, input.context);
+      return parent.kind === 'resolved' || parent.kind === 'ambiguous';
+    }));
+}
+
 type WorkspaceSyncEndpointContext = Readonly<{
   workspaceRefs: readonly WorkspaceRefV1[];
   childMachines?: readonly WorkspaceSyncChildMachineFacts[];
