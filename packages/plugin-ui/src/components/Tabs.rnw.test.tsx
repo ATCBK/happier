@@ -1,4 +1,5 @@
 import { act, useState } from 'react';
+import { Text as NativeText } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 
 import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
@@ -35,7 +36,7 @@ describe('controlled Tabs', () => {
     const theme = createSurfaceContext().theme;
     function TabDescriptor(_props: HappierTabDescriptor) { return null; }
     const mount = mountThroughReactNativeWeb(<HappierTabs theme={theme} value="overview" onValueChange={() => {}} ariaLabel="Views" testID="views"
-      sharedPanel={null} trailing={<Text testID="views-create">+</Text>}>
+      sharedPanel={null} trailing={<NativeText testID="views-create">+</NativeText>}>
       <TabDescriptor value="overview" title="Overview" />
       <TabDescriptor value="costs" title="Costs" />
     </HappierTabs>);

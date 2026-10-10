@@ -15,10 +15,16 @@ describe('HappierEmptySlot', () => {
       <HappierEmptySlot testID="slot" colors={{ border: 'rgb(1, 2, 3)' }} label={<Text>Drop a widget here</Text>} />,
     );
     const slot = byId(container, 'slot')!;
-    expect(slot.style.borderStyle).toBe('dashed');
-    expect(slot.style.borderRadius).toBe(`${HAPPIER_EMPTY_STATE_FRAME.add.borderRadius}px`);
-    expect(slot.style.borderColor).toBe('rgb(1, 2, 3)');
-    expect(slot.style.flexGrow).toBe('1');
+    const style = getComputedStyle(slot);
+    // RNW expands border shorthands; jsdom retains base shorthand values separately.
+    for (const side of ['Top', 'Right', 'Bottom', 'Left'] as const) {
+      expect(style[`border${side}Style`]).toBe('dashed');
+      expect(style[`border${side}Color`]).toBe('rgb(1, 2, 3)');
+    }
+    for (const corner of ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft'] as const) {
+      expect(style[`border${corner}Radius`]).toBe(`${HAPPIER_EMPTY_STATE_FRAME.add.borderRadius}px`);
+    }
+    expect(style.flexGrow).toBe('1');
     expect(slot.getAttribute('role')).not.toBe('button');
   });
 
