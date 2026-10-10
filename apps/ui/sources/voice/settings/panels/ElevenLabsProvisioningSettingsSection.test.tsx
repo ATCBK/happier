@@ -263,10 +263,9 @@ describe('ElevenLabs settings provisioning composed path', () => {
       await act(async () => root.unmount());
       host.remove();
     });
-    const setVoice = vi.fn();
     await act(async () => {
       root.render(
-        <BundledConversationSettingsSection voice={voice} setVoice={setVoice} />,
+        <BundledConversationSettingsSection voice={voice} />,
       );
     });
     const createRow = host.querySelector<HTMLButtonElement>(
@@ -303,7 +302,7 @@ describe('ElevenLabs settings provisioning composed path', () => {
     });
     expect(account.writes).toHaveLength(1);
     await act(async () => root.render(
-      <BundledConversationSettingsSection voice={account.settings.voice} setVoice={setVoice} />,
+      <BundledConversationSettingsSection voice={account.settings.voice} />,
     ));
     expect(host.querySelector('[data-testid="voice-settings-action-create-agent"]')).toBeNull();
     expect(host.querySelector<HTMLButtonElement>('[data-testid="voice-settings-action-update-agent"]')?.disabled).toBe(false);

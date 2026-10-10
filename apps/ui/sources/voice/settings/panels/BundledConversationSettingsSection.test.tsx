@@ -8,6 +8,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { Modal } from '@/modal';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { voiceSettingsParse, type VoiceSettings } from '@/sync/domains/settings/voiceSettings';
+import { resolveVoiceWelcomeSelection } from '@/voice/settings/welcome';
 import { storage } from '@/sync/domains/state/storage';
 import { upsertAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
 import { VoiceCredentialItem } from '@/voice/credentials/CredentialItem';
@@ -43,6 +44,11 @@ vi.mock('@/modal', async () => {
   return createModalModuleMock({ confirmResult: true }).module;
 });
 vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: vi.fn() } }));
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+  const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
+  return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
+});
 await loadSyncSingletonForTests();
 
 const providerId = 'happier.voice.elevenlabs/realtime-elevenlabs';
@@ -80,8 +86,8 @@ describe('BundledConversationSettingsSection', () => {
       expectedSecretId: null, expectedSecretUpdatedAt: null,
     }).settings);
   }
-  async function render(voice = account.settings.voice, setVoice = vi.fn()) {
-    return await renderScreen(<BundledConversationSettingsSection voice={voice} setVoice={setVoice} />);
+  async function render(voice = account.settings.voice) {
+    return await renderScreen(<BundledConversationSettingsSection voice={voice} />);
   }
   function config() { return account.settings.voice.providers[providerId]?.config; }
 
@@ -185,13 +191,22 @@ describe('BundledConversationSettingsSection', () => {
     expect(account.settings.voice.providers[providerId]?.config).not.toHaveProperty('apiKey');
     expect(account.persistedSettings.voice.providers[providerId]?.config).not.toHaveProperty('apiKey');
   });
-  it('wires welcome message selection into settings', async () => {
-    const setVoice = vi.fn();
-    const screen = await render(account.settings.voice, setVoice);
+  it.each([false, true])('keeps the rendered Greeting under declared Action admission (disabled=%s)', async (disabled) => {
+    if (disabled) account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: {
+      v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } },
+    } }));
+    const screen = await render();
     const greeting = screen.tree.findAll((node) => node.props.testIDPrefix === 'settings.voice.greeting' && Array.isArray(node.props.options))[0];
     expect(greeting).toBeTruthy();
-    await act(async () => greeting?.props.onChange('off'));
-    expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({ welcome: expect.objectContaining({ enabled: false }) }));
+    act(() => account.replaceVoice({ ...account.settings.voice, assistantLanguage: 'fr' }));
+    await act(async () => greeting?.props.onChange('on_first_turn'));
+    if (disabled) {
+      expect(resolveVoiceWelcomeSelection(account.settings.voice.welcome)).toBe('off');
+      expect(account.writes).toEqual([]);
+    } else {
+      await vi.waitFor(() => expect(resolveVoiceWelcomeSelection(account.persistedSettings.voice.welcome)).toBe('on_first_turn'));
+      expect(account.persistedSettings.voice.assistantLanguage).toBe('fr');
+    }
   });
   it('reports a bounded provisioning failure stage without persisting an unverified agent id', async () => {
     saveCredential();
@@ -216,7 +231,7 @@ describe('BundledConversationSettingsSection', () => {
     await vi.waitFor(() => expect(provider.request.mock.calls.some(([input]) => input.operationId === 'agents')).toBe(true));
     const next = voiceSettingsParse({ ...account.settings.voice, executionMachine: { kind: 'machine', machineId: 'machine-b' } });
     account.replaceVoice(next);
-    await screen.update(<BundledConversationSettingsSection voice={next} setVoice={vi.fn()} />);
+    await screen.update(<BundledConversationSettingsSection voice={next} />);
     await act(async () => existing.resolve(provider.response({ agents: [], has_more: false, next_cursor: null })));
     await vi.waitFor(() => expect(config()).toMatchObject({ agentId: 'agent_created' }));
     expect(account.persistedSettings.voice.providers[providerId]?.config).toMatchObject({ agentId: 'agent_created' });
@@ -236,23 +251,21 @@ describe('BundledConversationSettingsSection', () => {
     await vi.waitFor(() => expect(signal).toBeDefined());
     const next = voiceSettingsParse({ ...account.settings.voice, providerId: null });
     account.replaceVoice(next);
-    await screen.update(<BundledConversationSettingsSection voice={next} setVoice={vi.fn()} />);
+    await screen.update(<BundledConversationSettingsSection voice={next} />);
     expect(signal?.aborted).toBe(true);
     await act(async () => existing.resolve(provider.response({ agents: [], has_more: false, next_cursor: null })));
     expect(provider.request.mock.calls.some(([input]) => input.operationId === 'create-agent')).toBe(false);
     expect(account.writes).toHaveLength(0);
   });
   it('does not let a stale legacy-secret scrub overwrite newer canonical provider settings', async () => {
-    const setVoice = vi.fn();
     const legacy = voiceSettingsParse({ providerId, providers: { [providerId]: { schemaVersion: 1, config: {
       billingMode: 'byo', byo: { agentId: 'agent-1', apiKey: { _isSecretValue: true, value: 'legacy-key' } },
       tts: ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
     } } } });
-    const screen = await render(legacy, setVoice);
+    const screen = await render(legacy);
     const latest = voiceWith({ agentId: 'agent-new' });
     account.replaceVoice(latest);
-    await screen.update(<BundledConversationSettingsSection voice={latest} setVoice={setVoice} />);
-    expect(setVoice).not.toHaveBeenCalled();
+    await screen.update(<BundledConversationSettingsSection voice={latest} />);
     expect(account.writes).toHaveLength(0);
     expect(config()).toMatchObject({ agentId: 'agent-new' });
   });

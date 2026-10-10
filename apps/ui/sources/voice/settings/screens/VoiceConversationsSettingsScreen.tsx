@@ -100,7 +100,6 @@ export function VoiceConversationsSettingsScreen() {
               renderServiceSettings={(accountLead) => (
                 <BundledConversationSettingsSection
                   voice={voice}
-                  setVoice={setVoice}
                   popoverBoundaryRef={popoverBoundaryRef}
                   accountLead={accountLead}
                 />

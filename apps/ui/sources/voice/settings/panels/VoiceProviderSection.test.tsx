@@ -1318,7 +1318,6 @@ describe('VoiceProviderSection', () => {
             }),
             React.createElement(BundledConversationSettingsSection, {
                 voice: selected.settings.voice,
-                setVoice: vi.fn(),
             }),
         ));
 
@@ -1510,7 +1509,6 @@ describe('VoiceProviderSection', () => {
             }),
             React.createElement(BundledConversationSettingsSection, {
                 voice: selectedVoice,
-                setVoice: vi.fn(),
             }),
         ));
         const sourceField = findTestInstanceByTypeWithProps(selected.tree, 'DropdownMenu' as any, {
