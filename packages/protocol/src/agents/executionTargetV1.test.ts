@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
 import * as protocol from '../index.js';
-import { AgentExecutionTargetV1Schema } from './executionTargetV1.js';
+import { AgentExecutionTargetV1Schema, CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, listAgentExecutionTargetsV1 } from './executionTargetV1.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 describe('AgentExecutionTargetV1', () => {
+  it('enumerates ordinary contributions once and Custom ACP only as concrete definitions', () => {
+    const customIdentity = CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1;
+    expect(listAgentExecutionTargetsV1(customIdentity)).toEqual([]);
+    expect(listAgentExecutionTargetsV1(customIdentity, ['review-a', 'review-b'])).toEqual([
+      { kind: 'agent', identity: customIdentity, definitionId: 'review-a' },
+      { kind: 'agent', identity: customIdentity, definitionId: 'review-b' },
+    ]);
+    const nativeIdentity = { pluginId: 'acme.review', localId: 'reviewer' };
+    expect(listAgentExecutionTargetsV1(nativeIdentity, ['review-a', 'review-b'])).toEqual([{ kind: 'agent', identity: nativeIdentity }]);
+  });
   it('reads genuine predecessor configured targets through its stored projection only', () => {
     const legacy = { kind: 'configuredAcpBackend', backendId: 'review-a', future: true };
     expect(createStoredReadSchema(AgentExecutionTargetV1Schema).safeParse(legacy)).toMatchObject({

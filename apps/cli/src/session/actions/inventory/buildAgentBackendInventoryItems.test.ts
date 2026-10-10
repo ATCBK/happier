@@ -31,6 +31,12 @@ describe('buildAgentBackendInventoryItems', () => {
           richDefinition: { definition: { title: 'Acme Agent' } },
           runtimeSpec: null,
         }],
+        ['custom-acp', {
+          id: 'custom-acp',
+          identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+          richDefinition: { definition: { title: 'Custom ACP Agent' } },
+          runtimeSpec: null,
+        }],
       ]),
       catalogEntriesById: {
         codex: {
@@ -43,6 +49,7 @@ describe('buildAgentBackendInventoryItems', () => {
           cliSubcommand: 'acme-agent',
           vendorResumeSupport: 'supported',
         },
+        'custom-acp': { id: 'custom-acp', cliSubcommand: 'custom-acp', vendorResumeSupport: 'supported' },
       },
     });
   });
@@ -71,7 +78,7 @@ describe('buildAgentBackendInventoryItems', () => {
     });
   });
 
-  it('keeps configured ACP backends selectable without manufacturing an Agent identity', async () => {
+  it('keeps configured ACP definitions selectable under their declared Agent identity', async () => {
     const acpCatalogSnapshot = { status: 'ready', revision: 2, record: { v: 1, definitions: [{
       id: 'review-bot', name: 'review-bot', title: 'Review Bot', description: 'Configured ACP backend', command: 'review-bot',
       args: [], env: {}, capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown',
@@ -90,7 +97,9 @@ describe('buildAgentBackendInventoryItems', () => {
       description: 'Configured ACP backend',
       enabled: true,
       backendId: 'review-bot',
+      agentId: 'custom-acp',
+      identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
     });
-    expect(items.find((item) => item.backendId === 'review-bot')).not.toHaveProperty('identity');
+    expect(items.filter((item) => item.agentId === 'custom-acp')).toHaveLength(1);
   });
 });

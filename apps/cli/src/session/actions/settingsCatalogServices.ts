@@ -20,7 +20,7 @@ import type { VoiceSettingsMutationServicesV1 } from '@happier-dev/protocol/voic
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveMachineIdForServerFromSettings } from '@/daemon/resolveMachineIdForServerFromSettings';
-import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, isCustomAcpAgentContributionIdentityV1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, isCustomAcpAgentContributionIdentityV1, listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import type { VoiceAgentCatalogEntryV1 } from '@happier-dev/protocol/voice/settings/voiceAgentSelection';
 import type { PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { getAgentCore, isBundledAgentId } from '@happier-dev/agents';
@@ -134,20 +134,24 @@ export function createCliSettingsCatalogServices(params: Readonly<{
             }
             const generation = projection?.generation ?? pluginReloadController.getState().generation;
             const entries: VoiceAgentCatalogEntryV1[] = projection ? Object.values(projection.agentsById).flatMap(entry => {
-                if (!entry.identity || isCustomAcpAgentContributionIdentityV1(entry.identity)) return [];
-                const backendTargetKey = buildBackendTargetKeyV2({ kind: 'agent', identity: entry.identity });
+                if (!entry.identity) return [];
                 const isBuiltIn = entry.isBuiltIn === true;
-                return [{ agentId: entry.id, backendTargetKey, identity: entry.identity,
-                    projectionGeneration: isBuiltIn ? null : generation, isBuiltIn,
-                    enabled: !isBackendTargetDisabledByAccountSettings(settings, backendTargetKey) }];
+                return listAgentExecutionTargetsV1(entry.identity).map(target => {
+                    const backendTargetKey = buildBackendTargetKeyV2(target);
+                    return { agentId: entry.id, backendTargetKey, identity: target.identity,
+                        projectionGeneration: isBuiltIn ? null : generation, isBuiltIn,
+                        enabled: !isBackendTargetDisabledByAccountSettings(settings, backendTargetKey) };
+                });
             }) : [...registry!.agentDefinitionsById.values()].flatMap(entry => {
-                if (!entry.identity || isCustomAcpAgentContributionIdentityV1(entry.identity) || !registry!.catalogEntriesById[entry.id]) return [];
+                if (!entry.identity || !registry!.catalogEntriesById[entry.id]) return [];
                 const isBuiltIn = entry.provenance === 'first_party';
-                const backendTargetKey = buildBackendTargetKeyV2({ kind: 'agent', identity: entry.identity });
-                return [{ agentId: entry.id, backendTargetKey,
-                    identity: entry.identity, projectionGeneration: isBuiltIn ? null : generation, isBuiltIn,
-                    enabled: !isBackendTargetDisabledByAccountSettings(settings, backendTargetKey),
-                }];
+                return listAgentExecutionTargetsV1(entry.identity).map(target => {
+                    const backendTargetKey = buildBackendTargetKeyV2(target);
+                    return { agentId: entry.id, backendTargetKey,
+                        identity: target.identity, projectionGeneration: isBuiltIn ? null : generation, isBuiltIn,
+                        enabled: !isBackendTargetDisabledByAccountSettings(settings, backendTargetKey),
+                    };
+                });
             });
             const configuredAgent = projection
                 ? Object.values(projection.agentsById).find(entry => isCustomAcpAgentContributionIdentityV1(entry.identity))
@@ -155,11 +159,12 @@ export function createCliSettingsCatalogServices(params: Readonly<{
             const catalog = configuredAgent ? await refreshActiveAcpCatalog({ credentials: params.credentials, signal: params.signal }) : null;
             if (configuredAgent && catalog?.status !== 'ready') return null;
             if (configuredAgent && catalog?.status === 'ready') for (const definition of catalog.record.definitions) {
-                const target = { kind: 'backend' as const, backendId: definition.id, configuredBackendId: definition.id, sourceKind: 'configured' as const };
-                entries.push({ agentId: configuredAgent.id, backendTargetKey: buildBackendTargetKeyV2(target),
-                    identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, projectionGeneration: generation, isBuiltIn: false,
-                    enabled: !isBackendTargetDisabledByAccountSettings(settings, target),
-                });
+                for (const target of listAgentExecutionTargetsV1(CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, [definition.id])) {
+                    entries.push({ agentId: configuredAgent.id, backendTargetKey: buildBackendTargetKeyV2(target),
+                        identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, projectionGeneration: generation, isBuiltIn: false,
+                        enabled: !isBackendTargetDisabledByAccountSettings(settings, target),
+                    });
+                }
             }
             if (projection) remoteProof = { machineId: voice.executionMachine.machineId, generation };
             return { entries, isCurrent: latest => !params.signal?.aborted
@@ -180,7 +185,8 @@ export function createCliSettingsCatalogServices(params: Readonly<{
             const registry = readCurrentContributionRegistry();
             const parsedKey = selector.backendTargetKey.startsWith('agent:')
                 ? [...registry.agentDefinitionsById.values()].find(entry => entry.identity
-                    && buildBackendTargetKeyV2({ kind: 'agent', identity: entry.identity }) === selector.backendTargetKey)
+                    && listAgentExecutionTargetsV1(entry.identity, target.configuredBackendId ? [target.configuredBackendId] : [])
+                        .some(candidate => buildBackendTargetKeyV2(candidate) === selector.backendTargetKey))
                 : registry.agentDefinitionsById.get(target.backendId);
             const configured = target.sourceKind === 'configured' || Boolean(target.configuredBackendId);
             const configuredAgent = configured ? [...registry.agentDefinitionsById.values()].find(entry => isCustomAcpAgentContributionIdentityV1(entry.identity)) : undefined;

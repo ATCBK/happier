@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 
-import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { PluginContributionIdentityV1Schema, type PluginContributionIdentityV1 } from '../plugins/contributionIdentity.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 
@@ -41,6 +41,16 @@ export const AgentExecutionTargetV1Schema = defineStoredReadProjection(
   () => AgentExecutionTargetV1StoredSchema,
 );
 export type AgentExecutionTargetV1 = z.infer<typeof AgentExecutionTargetV1Schema>;
+
+/** Executable catalog choices: Custom ACP declares a container for configured definitions. */
+export function listAgentExecutionTargetsV1(
+  identity: PluginContributionIdentityV1,
+  definitionIds: readonly string[] = [],
+): AgentExecutionTargetV1[] {
+  return isCustomAcpAgentContributionIdentityV1(identity)
+    ? definitionIds.map((definitionId) => ({ kind: 'agent', identity, definitionId }))
+    : [{ kind: 'agent', identity }];
+}
 
 /** Genuine 0.2 stored selection ingress, never request/write admission. */
 export const AgentExecutionTargetV1StoredSchema = lazyZodSchema(() => z.preprocess((value) => {

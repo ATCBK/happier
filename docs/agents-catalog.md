@@ -63,6 +63,14 @@ target reader maps the 0.2 `{ kind: 'configuredAcpBackend', backendId }` selecti
 to this contribution and the same definition id; new requests and writes use the
 strict current target.
 
+Executable inventories expand contributions through
+`packages/protocol/src/agents/executionTargetV1.ts#listAgentExecutionTargetsV1`.
+An ordinary Agent contributes one target; Custom ACP contributes one qualified
+target per configured definition, or none without definitions. The declaration
+catalog can retain the container for administration, but selection, allow-list,
+review and Voice inventories use concrete targets. Target schemas and key
+formatting remain strict and require the definition id.
+
 The definition id survives picker selection and draft persistence/reopening,
 then the daemon admits the installed contribution and the exact catalog row.
 The host's existing runtime descriptor carries the selected definition into the

@@ -1,6 +1,7 @@
 import { isBackendTargetDisabledByAccountSettings } from '@happier-dev/protocol/account/settings/accountSettings';
 import type { AccountSettings, ReviewEngineCapabilities } from '@happier-dev/protocol';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 
 import { readAgentContributionDisplayTitle } from '@/agent/catalog/agentDisplayTitle';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
@@ -89,6 +90,7 @@ export function selectReviewEngineAgentIds(
   }
   const reviewAgentIds = new Set<string>();
   for (const agent of registry.agentDefinitionsById.values()) {
+    if (agent.identity && listAgentExecutionTargetsV1(agent.identity).length === 0) continue;
     const definition = agent.richDefinition?.definition;
     if (
       readAgentExecutionRunCapabilities(definition)?.open.includes('create')

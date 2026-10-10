@@ -7,8 +7,16 @@ import { createResolvedContributionRegistry } from '@/plugins/projection/registr
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import { getAgentCore, isBundledAgentId } from '@happier-dev/agents';
 import { readProviderStateSharingRiskAgentIdsV1 } from '@happier-dev/protocol/actions/settings/providerStateSharingMutations';
+import { encodeScmDiffSummaryModelOverride } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 
 describe('exact remote Voice Agent catalog admission', () => {
+    it('refuses an unknown model target without treating the Custom ACP declaration as executable', async () => {
+        expect([...readCurrentContributionRegistry().agentDefinitionsById.values()].some(entry => entry.id === 'custom-acp')).toBe(true);
+        const services = createCliSettingsCatalogServices({});
+        await expect(services.readScmDiffSummaryCatalog!(accountSettingsParse({}), encodeScmDiffSummaryModelOverride({
+            backendTargetKey: 'agent:missing.agent/missing', modelId: 'model',
+        }))).resolves.toBeNull();
+    });
     it('distinguishes an unactivated empty snapshot from a proven activated empty native catalog', () => {
         const empty = createResolvedContributionRegistry({});
         expect(projectCliProviderStateSharingRiskAgentIdsV1(empty, { activated: false, unavailable: false })).toBeNull();

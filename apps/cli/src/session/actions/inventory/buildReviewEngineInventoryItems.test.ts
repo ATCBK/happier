@@ -149,8 +149,15 @@ describe('buildReviewEngineInventoryItems', () => {
   });
 
   it('lists an enabled configured ACP backend using its concrete target identity', async () => {
+    const contribution = projectManifestAgentContribution({
+      pluginId: 'happier.agent.custom-acp', provenance: 'first_party', source: { kind: 'bundled' },
+      definition: PluginAgentContributionV2Schema.parse({ id: 'custom-acp', title: 'Custom ACP Agent',
+        primary: 'sessions', runtime: { kind: 'custom' }, capabilities: { sessions: {
+          open: ['create'], delivery: ['newTurn'], cancel: true,
+        } } }),
+    });
     registryMocks.getResolvedContributionRegistry.mockReturnValue({
-      agentDefinitionsById: new Map(),
+      agentDefinitionsById: new Map([[contribution.id, contribution]]),
       catalogEntriesById: {},
       executionRunProfiles: [],
     });
