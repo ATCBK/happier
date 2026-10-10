@@ -16,8 +16,14 @@ afterEach(() => { home?.dispose(); home = undefined; remote.mockReset(); storage
 describe('UI service placement Get through the Action front door', () => {
   it('observes a linked native declaration using source identity and refuses failed or withdrawn owner reads', async () => {
     home = await createPlainArtifactHomeFixture('https://service-placement.test', {
-      handleRequest: async path => path === '/v1/projects/execution/config/read'
-        ? new Response(JSON.stringify({ status: 'absent' })) : null,
+      handleRequest: async path => {
+        if (path === '/v1/projects/execution/config/read') return new Response(JSON.stringify({ status: 'absent' }));
+        if (path === '/v1/machines') return new Response(JSON.stringify([
+          { id: 'source-machine', revokedAt: null, replacedByMachineId: null },
+          { id: 'worker-machine', revokedAt: null, replacedByMachineId: null },
+        ]));
+        return null;
+      },
     });
     const serverId = home.home.id;
     const scope = { serverId, accountId: 'artifact-account' };

@@ -6,7 +6,12 @@ import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForId
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { getLocalServiceLauncherState, invalidateLocalServiceLauncherStore, subscribeLocalServiceLauncherStore,
     type LocalServiceLauncherStoreKeyInput } from '@/sync/domains/local/services/launch/sharedStore';
-import { getLocalServiceInventoryState, invalidateLocalServiceInventoryStore, subscribeLocalServiceInventoryStore } from '@/sync/domains/local/services/inventory/sharedStore';
+import { getLocalServiceInventoryState, subscribeLocalServiceInventoryStore } from '@/sync/domains/local/services/inventory/sharedStore';
+import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { readUiWorkspaceSyncChildMachineFacts } from '@/sync/ops/workspaceSyncChildMachineFacts';
+import { createFrontDoorRuntimeActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { t } from '@/text';
+import { presentLocalServiceActionFailure, readLocalServiceActionOutcome } from './localServiceActionOutcome';
 import { applyLocalServiceLauncherSnapshot, selectLocalServiceLaunchTargets, snapshotFromLocalServiceLauncherState } from '@/sync/domains/local/services/launch';
 
 import {
@@ -44,7 +49,7 @@ export type LocalServiceLiveFeeds = Readonly<{
     inventoryState: LocalServiceInventoryState;
     launcherState: LocalServiceLauncherState | null;
     /** Undefined when the inventory is supplied rather than live. */
-    refresh: (() => void) | undefined;
+    refresh: (() => Promise<void>) | undefined;
     applyLauncherSnapshot: ReturnType<typeof useLocalServiceLauncherStateController>['applySnapshot'] | undefined;
 }>;
 
@@ -90,31 +95,42 @@ export function useLocalServiceLiveFeeds(input: LocalServiceLiveFeedsInput): Loc
         }
     }, [inventoryGeneratedAt, inventorySupplied, refreshLauncher]);
 
-    // An explicit refresh re-reads both halves directly rather than relying on the derived chain:
-    // an unchanged inventory would otherwise leave the launcher feed untouched, and a user who
-    // pressed refresh is entitled to a real re-read of what they can see.
-    const refreshInventory = liveInventory.refresh;
-    const refresh = React.useMemo(() => {
-        if (inventorySupplied || !refreshInventory) {
-            return undefined;
-        }
-        return () => {
-            refreshInventory();
-            refreshLauncher?.();
-        };
-    }, [inventorySupplied, refreshInventory, refreshLauncher]);
-
     const inventoryState = input.inventoryState ?? liveInventory.state;
     const sourceLauncherState = input.launcherState !== undefined ? input.launcherState : liveLauncher.state;
     const bindings = useProjectServiceBindings(input, sourceLauncherState);
     const launcherState = bindings.state;
     const applyLauncherSnapshot = input.launcherState === undefined ? liveLauncher.applySnapshot : undefined;
+    const refresh = React.useMemo(() => inventorySupplied || !liveInventory.refresh || !input.machineId || !input.serverId
+        ? undefined : async () => {
+            if (!bindings.binding?.isCurrent()) return;
+            const refreshed = await refreshLocalServiceMachine({ machineId: input.machineId!, serverId: input.serverId!, sessionId: input.sessionId,
+                accountId: bindings.binding.accountId, isCurrent: bindings.binding.isCurrent });
+            if (refreshed) refreshLauncher?.();
+            await bindings.refresh(input.machineId!, refreshed);
+        }, [inventorySupplied, liveInventory.refresh, input.machineId, input.serverId, input.sessionId, refreshLauncher, bindings.binding, bindings.refresh]);
     return React.useMemo(() => ({
         inventoryState,
         launcherState,
-        refresh: refresh ? () => { refresh(); bindings.refresh(); } : undefined,
+        refresh,
         applyLauncherSnapshot,
     }), [applyLauncherSnapshot, bindings.refresh, inventoryState, launcherState, refresh]);
+}
+
+/** User Refresh uses the Action owner; successful inventory publication drives
+ * observation. Launcher invalidation below is only its derived read. */
+async function refreshLocalServiceMachine(input: Readonly<{ serverId: string; machineId: string; sessionId?: string | null; accountId: string; isCurrent(): boolean }>) {
+    try {
+        const result = await createFrontDoorRuntimeActionExecutor()({ actionId: 'localServices.inventory.refresh',
+            input: { machineId: input.machineId, ...(input.sessionId ? { sessionId: input.sessionId } : {}) },
+            context: { surface: 'ui', serverId: input.serverId, ...(input.accountId ? { expectedAccountId: input.accountId } : {}) } });
+        if (!input.isCurrent()) return false;
+        const outcome = readLocalServiceActionOutcome(result);
+        if (outcome.kind === 'succeeded') return true;
+        if (outcome.kind === 'failed') presentLocalServiceActionFailure({ title: t('common.refresh'), reasonCode: outcome.reasonCode });
+    } catch {
+        if (input.isCurrent()) presentLocalServiceActionFailure({ title: t('common.refresh'), reasonCode: null });
+    }
+    return false;
 }
 
 type ServiceActual = Extract<ProjectServicePlacementGetResultV1, { status: 'ready' }>['actual'];
@@ -123,7 +139,7 @@ type ServiceActual = Extract<ProjectServicePlacementGetResultV1, { status: 'read
  * The protocol observation owner selects accepted endpoints and proves native provenance. */
 function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceState: LocalServiceLauncherState | null) {
     const enabled = input.launcherState === undefined && input.scope === 'workspace' && Boolean(input.workspaceRefId && input.serverId);
-    const { binding } = useServerCredentialAccountScopeBinding(enabled ? input.serverId ?? '' : '');
+    const { binding } = useServerCredentialAccountScopeBinding(input.serverId ?? '');
     const rows = storage(state => enabled ? readCurrentProjectAccountRows(state) : null);
     const sourceTargets = React.useMemo(() => sourceState ? selectLocalServiceLaunchTargets(sourceState) : [], [sourceState?.targetsById]);
     const declarations = React.useMemo(() => sourceTargets.filter(target => target.declaration && target.declaration.workspaceRefId === input.workspaceRefId
@@ -138,11 +154,18 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
         if (!enabled || !binding?.isCurrent() || !rows || rows.status !== 'ready' || rows.coverage !== 'complete'
             || rows.scope.accountId !== binding.accountId || !areServerProfileIdentifiersEquivalent(rows.scope.serverId, input.serverId ?? '')) return;
         const isCurrent = () => current && binding.isCurrent() && readCurrentProjectAccountRows(storage.getState()) === rows;
-        void Promise.all(declarations.map(async target => {
+        const abort = new AbortController();
+        void (async () => {
+          if (!declarations.length) return [];
+          const account = await captureLazyActionAccountContext(input.serverId!, abort.signal);
+          try {
+            if (account.accountId !== binding.accountId) throw new Error('Project Account changed');
+            const facts = await readUiWorkspaceSyncChildMachineFacts(account, abort.signal);
+            return await Promise.all(declarations.map(async target => {
             const selection = target.declaration!.selection;
             const serviceName = selection.kind === 'manifest' ? selection.name : target.id;
             const actual = await observeProjectServicePlacementActualV1({ workspace: { serverId: input.serverId!, refId: input.workspaceRefId! }, serviceName,
-                workspaceRefs: rows.workspaceRefs, relationships: rows.relationships,
+                workspaceRefs: rows.workspaceRefs, relationships: rows.relationships, ...facts,
                 context: { normalizeServerId: resolveServerProfileScopeIdForIdentifier }, isCurrent,
                 readSnapshot: async request => {
                     const key: LocalServiceLauncherStoreKeyInput = { machineId: request.machineId, serverId: input.serverId,
@@ -169,8 +192,12 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
                 },
             });
             return [target.id, actual] as const;
-        })).then(values => { if (isCurrent()) setObservation({ subscriptions, declarations, values: new Map(values) }); });
-        return () => { current = false; };
+            }));
+          } finally { account.dispose(); }
+        })().then(values => { if (isCurrent()) setObservation({ subscriptions, declarations, values: new Map(values) }); })
+            .catch(() => { if (isCurrent()) setObservation({ subscriptions, declarations,
+                values: new Map(declarations.map(target => [target.id, { status: 'unavailable' as const }])) }); });
+        return () => { current = false; abort.abort(); };
     }, [binding, change, declarations, enabled, input.serverId, input.workspaceRefId, input.launcherSnapshotClient, input.inventorySnapshotClient, rows, subscriptions]);
     const state = React.useMemo(() => {
         if (!enabled || !sourceState || !declarations.length) return sourceState;
@@ -187,9 +214,14 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
         return applyLocalServiceLauncherSnapshot(sourceState, { v: 1, machineId: sourceState.machineId!,
             ...(sourceState.sessionId ? { sessionId: sourceState.sessionId } : {}), updatedAt: sourceState.updatedAt!, targets });
     }, [declarations, enabled, observation, sourceState, sourceTargets, subscriptions]);
-    const refresh = React.useCallback(() => { for (const { key } of subscriptions.values()) {
-        invalidateLocalServiceLauncherStore(key);
-        invalidateLocalServiceInventoryStore({ serverId: key.serverId, machineId: key.machineId });
-    } }, [subscriptions]);
-    return { state, refresh };
+    const refresh = React.useCallback(async (sourceMachineId: string, sourceRefreshed: boolean) => {
+        const refreshed = new Map<string, boolean>([[sourceMachineId, sourceRefreshed]]);
+        for (const { key } of subscriptions.values()) {
+            if (!key.serverId || !binding?.isCurrent()) return;
+            if (!refreshed.has(key.machineId)) refreshed.set(key.machineId,
+                await refreshLocalServiceMachine({ ...key, serverId: key.serverId, accountId: binding.accountId, isCurrent: binding.isCurrent }));
+            if (binding.isCurrent() && refreshed.get(key.machineId)) invalidateLocalServiceLauncherStore(key);
+        }
+    }, [binding, subscriptions]);
+    return { state, refresh, binding };
 }

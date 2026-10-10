@@ -15,6 +15,7 @@ import { fetchLocalServiceLauncherSnapshotViaMachineRpc } from '@/sync/domains/l
 import { machineWorkerPolicyGet, machineWorkerPolicySet } from '@/sync/ops/machineFinitePolicy';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import type { LazyActionAccountContext } from './actionAccountContext';
+import { readUiWorkspaceSyncChildMachineFacts } from '../workspaceSyncChildMachineFacts';
 
 /** Account Action port; row content is never published into a consumer-owned settings cache. */
 export function createUiProjectWorkerActionV1(account: LazyActionAccountContext): NonNullable<ActionExecutorDeps['projectWorkerAction']> {
@@ -106,7 +107,10 @@ export function createUiProjectWorkerActionV1(account: LazyActionAccountContext)
                 || !areServerProfileIdentifiersEquivalent(rows.scope.serverId, account.serverId)) return unavailable;
             const isCurrent = () => account.accountLifetime.isCurrent()
                 && readCurrentProjectAccountRows(storage.getState()) === rows;
-            const actual = await observeProjectServicePlacementActualV1({ ...request,
+            let facts;
+            try { facts = await readUiWorkspaceSyncChildMachineFacts(account, signal); }
+            catch { return unavailable; }
+            const actual = await observeProjectServicePlacementActualV1({ ...request, ...facts,
                 workspaceRefs: rows.workspaceRefs, relationships: rows.relationships, isCurrent,
                 context: { normalizeServerId: resolveServerProfileScopeIdForIdentifier },
                 readSnapshot: async snapshot => {
