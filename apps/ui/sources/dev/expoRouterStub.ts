@@ -1,44 +1,29 @@
 // Vitest/node stub for `expo-router`.
 // The real package imports React Native internals (`react-native/Libraries/...`) in its native entrypoints.
 
-import * as React from 'react';
-import { createExpoRouterRuntime } from './testkit/runtime/routerRuntime';
+import { createExpoRouterMock } from './testkit/mocks/router';
 
-const runtime = createExpoRouterRuntime();
+// Early imports and suite-specific router mocks share the canonical boundary.
+const { module: routerModule } = createExpoRouterMock();
 
-export const Redirect = runtime.module.Redirect;
-
-export const Link = 'Link' as any;
-
-export function Stack(props: { children?: React.ReactNode }) {
-    return React.createElement(React.Fragment, null, props.children ?? null);
-}
-
-Stack.Screen = 'StackScreen' as any;
-
-export function useRouter() {
-    return runtime.module.useRouter();
-}
-
-export function useSegments(): string[] {
-    return [];
-}
-
-export function usePathname(): string {
-    return '/';
-}
+export const Redirect = routerModule.Redirect;
+export const Link = routerModule.Link;
+export const Stack = routerModule.Stack;
+export const useRouter = routerModule.useRouter;
+export const useNavigation = routerModule.useNavigation;
+export const useSegments = routerModule.useSegments;
+export const usePathname = routerModule.usePathname;
 
 export function useLocalSearchParams<
     TParams extends Record<string, string | string[] | undefined> = Record<string, string | string[] | undefined>,
 >(): TParams {
-    // Test-only stub; route-param-heavy specs should use the canonical expo-router mock factory instead.
-    return {} as unknown as TParams;
+    return routerModule.useLocalSearchParams() as TParams;
 }
 
 export function useGlobalSearchParams<
     TParams extends Record<string, string | string[] | undefined> = Record<string, string | string[] | undefined>,
 >(): TParams {
-    return useLocalSearchParams<TParams>();
+    return routerModule.useGlobalSearchParams() as TParams;
 }
 
-export const router = runtime.module.router;
+export const router = routerModule.router;

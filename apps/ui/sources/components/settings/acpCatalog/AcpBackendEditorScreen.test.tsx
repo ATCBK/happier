@@ -22,8 +22,6 @@ import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStore
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
-import { installAcpCatalogSettingsCommonModuleMocks } from './acpCatalogSettingsTestHelpers';
-
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const shared = vi.hoisted(() => ({
@@ -56,27 +54,30 @@ let revision = 1;
 let artifacts: ReturnType<typeof createArtifactStoreBoundary>;
 let interleaveBeforeTerminalArtifact: (() => Promise<void>) | null = null;
 
-installAcpCatalogSettingsCommonModuleMocks({
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({ confirmResult: true, spies: { alert: shared.modalAlertSpy } }).module;
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({ translate: (key) => key });
-    },
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        return createExpoRouterMock({
-            pathname: '/settings/agents/custom',
-            router: {
-                push: shared.routerPushSpy,
-                replace: shared.routerReplaceSpy,
-                back: shared.routerBackSpy,
-            },
-        }).module;
-    },
-    storage: async (importOriginal) => importOriginal(),
+await vi.hoisted(async () => {
+    const { installAcpCatalogSettingsCommonModuleMocks } = await import('./acpCatalogSettingsTestHelpers');
+    installAcpCatalogSettingsCommonModuleMocks({
+        modal: async () => {
+            const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+            return createModalModuleMock({ confirmResult: true, spies: { alert: shared.modalAlertSpy } }).module;
+        },
+        text: async () => {
+            const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+            return createTextModuleMock({ translate: (key) => key });
+        },
+        router: async () => {
+            const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+            return createExpoRouterMock({
+                pathname: '/settings/agents/custom',
+                router: {
+                    push: shared.routerPushSpy,
+                    replace: shared.routerReplaceSpy,
+                    back: shared.routerBackSpy,
+                },
+            }).module;
+        },
+        storage: async (importOriginal) => importOriginal(),
+    });
 });
 
 const EDITOR = 'settings.acpCatalog.backendEditor';

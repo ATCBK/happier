@@ -17,7 +17,6 @@ import { getStorage } from '@/sync/domains/state/storage';
 import { applyAcpCatalogSnapshot, resetAcpCatalogSnapshotsForTests } from '@/sync/store/settings/acpCatalogSnapshot';
 import { refreshAcpCatalog, resetAcpCatalogEngineForTests } from '@/sync/engine/settings/acpCatalogEngine';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { installAcpCatalogSettingsCommonModuleMocks } from './acpCatalogSettingsTestHelpers';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -33,20 +32,23 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOrigin
     const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
     return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
 });
-installAcpCatalogSettingsCommonModuleMocks({
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({ spies: { alert: shared.modalAlertSpy, confirm: shared.modalConfirmSpy } }).module;
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({ translate: (key) => key });
-    },
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        return createExpoRouterMock({ pathname: '/settings/acp-catalog', router: { push: shared.routerPushSpy } }).module;
-    },
-    storage: async (importOriginal) => importOriginal(),
+await vi.hoisted(async () => {
+    const { installAcpCatalogSettingsCommonModuleMocks } = await import('./acpCatalogSettingsTestHelpers');
+    installAcpCatalogSettingsCommonModuleMocks({
+        modal: async () => {
+            const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+            return createModalModuleMock({ spies: { alert: shared.modalAlertSpy, confirm: shared.modalConfirmSpy } }).module;
+        },
+        text: async () => {
+            const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+            return createTextModuleMock({ translate: (key) => key });
+        },
+        router: async () => {
+            const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+            return createExpoRouterMock({ pathname: '/settings/acp-catalog', router: { push: shared.routerPushSpy } }).module;
+        },
+        storage: async (importOriginal) => importOriginal(),
+    });
 });
 beforeAll(loadSyncSingletonForTests);
 

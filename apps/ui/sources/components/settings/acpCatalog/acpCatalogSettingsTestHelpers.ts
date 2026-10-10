@@ -28,6 +28,7 @@ const acpCatalogSettingsModuleState = vi.hoisted(() => ({
     },
 }));
 
+/** Install inside an awaited `vi.hoisted` callback, before imports can capture boundary defaults. */
 export function installAcpCatalogSettingsCommonModuleMocks(
     options: InstallAcpCatalogSettingsCommonModuleMocksOptions = {},
 ) {
