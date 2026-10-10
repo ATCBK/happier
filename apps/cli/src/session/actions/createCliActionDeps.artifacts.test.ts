@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createActionExecutor, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent, ARTIFACT_PLAIN_DATA_KEY_MARKER, ArtifactBlobWriteV1Schema, readLegacyRolesV1, type ArtifactPublicLinkIssuedV1 } from '@happier-dev/protocol';
 import { buildHomeHubArtifactIdV1, HOME_HUB_ARTIFACT_KIND_V1, HomeHubLayoutV1Schema } from '@happier-dev/protocol/home';
-import { buildWidgetDefinitionArtifactHeaderV1, type WidgetDefinitionV1 } from '@happier-dev/protocol/widgets';
+import { BUILTIN_WIDGET_DESCRIPTORS_V1, buildWidgetDefinitionArtifactHeaderV1, type WidgetDefinitionV1 } from '@happier-dev/protocol/widgets';
 import * as persistence from '@/persistence';
 import { configuration } from '@/configuration';
 import { V2SessionByIdResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
@@ -258,9 +258,7 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
     const context = { surface: 'cli', serverId, bypassApprovals: true } as const;
     const described = await executor.execute('home.hub.layout.get', {}, context);
     expect(described, JSON.stringify(described)).toMatchObject({ ok: true, result: {
-      availableWidgetIds: ['builtin:session_summary', 'builtin:agent_plan', 'builtin:changes', 'builtin:local_services',
-        'builtin:project_about', 'builtin:project_code', 'builtin:project_readme', 'builtin:project_checkouts',
-        'builtin:project_scripts', 'builtin:project_sessions', 'builtin:project_changes'],
+      availableWidgetIds: BUILTIN_WIDGET_DESCRIPTORS_V1.map(widget => widget.key),
       layout: { items: [{ instance: copy('one', 'A') }, { instance: copy('two', 'B') }] },
     } });
     expect(http.post).not.toHaveBeenCalled();
