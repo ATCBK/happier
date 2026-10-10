@@ -2018,7 +2018,7 @@ describe('getSessionCarriedLine', () => {
         expect(line).toContain('MacBook Pro');
         expect(line).not.toContain('/projects/');
         // An idle, reachable Session's state is not news; any other state leads the line.
-        if (status.quiet) expect(line).not.toContain(status.statusText);
+        if (!status.shouldShowStatus) expect(line).not.toContain(status.statusText);
         else expect(line?.startsWith(`${status.statusText} · `)).toBe(true);
     });
 });

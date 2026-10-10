@@ -643,7 +643,7 @@ export function getSessionAvatarId(session: SessionDisplayNameSource, serverId?:
  */
 export function getSessionCarriedLine(session: SessionStatusSource, serverId?: string | null): string | null {
     const status = getSessionStatus(session);
-    return [status.quiet ? null : status.statusText, getSessionWorkContext(session, serverId)].filter(Boolean).join(' · ') || null;
+    return [status.shouldShowStatus ? status.statusText : null, getSessionWorkContext(session, serverId)].filter(Boolean).join(' · ') || null;
 }
 
 /** Compact Work identity: Agent · named machine, otherwise the workspace owner's display name. */
