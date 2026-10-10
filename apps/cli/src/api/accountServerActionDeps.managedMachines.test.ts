@@ -8,21 +8,29 @@ import { createCliActionExecutor } from '@/session/actions/createCliActionExecut
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { socketRpcCodec } from '@happier-dev/sync-client';
 import type { MachineWorkSummaryV1 } from '@happier-dev/protocol/machines/machineWorkSummaryV1';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
-const socketBoundary = vi.hoisted(() => ({ respond: undefined as ((event: string, payload: unknown) => Promise<unknown>) | undefined }));
+const socketBoundary = vi.hoisted(() => ({
+  connections: [] as Array<{ serverUrl: string; token?: string }>,
+  respond: undefined as ((event: string, payload: unknown) => Promise<unknown>) | undefined,
+}));
 vi.mock('socket.io-client', async () => {
   const { createApiSessionSocketStub } = await import('@/testkit/backends/apiSessionSocketHarness');
-  return { io: () => createApiSessionSocketStub({ emitWithAck: (event, payload) => {
-    if (!socketBoundary.respond) throw new Error(`Unexpected Socket.IO request: ${event}`);
-    return socketBoundary.respond(event, payload);
-  } }) };
+  return { io: (serverUrl: string, options?: { auth?: { token?: string } }) => {
+    socketBoundary.connections.push({ serverUrl, token: options?.auth?.token });
+    return createApiSessionSocketStub({ emitWithAck: (event, payload) => {
+      if (!socketBoundary.respond) throw new Error(`Unexpected Socket.IO request: ${event}`);
+      return socketBoundary.respond(event, payload);
+    } });
+  } };
 });
 
 describe('managed inventory CLI Home adapter', () => {
@@ -33,6 +41,7 @@ describe('managed inventory CLI Home adapter', () => {
     setActiveAccountSettingsSnapshot({ source: 'network', settings: AccountSettingsSchema.parse({ actionsSettingsV1: policy }),
       settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKeyForToken('bound') });
     socketBoundary.respond = undefined;
+    socketBoundary.connections.length = 0;
     app = fastify();
     app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
     restore = installAxiosFastifyAdapter({ app, origin: 'http://home.test' });
@@ -51,13 +60,16 @@ describe('managed inventory CLI Home adapter', () => {
     'machines.presets.update': ['cli', 'agent', 'mcp'],
     'machines.access.grant.remove': ['cli', 'agent', 'mcp'],
     'machines.environment.apply': ['cli', 'agent', 'mcp'],
+    'session.stop': ['cli', 'agent', 'mcp'],
+    'execution.run.stop': ['cli', 'agent', 'mcp'],
   } });
 
-  function invoke(cli: ReturnType<typeof createCliActionExecutor>, surface: 'cli' | 'agent' | 'mcp', actionId: ActionId, input: unknown) {
+  function invoke(cli: ReturnType<typeof createCliActionExecutor>, surface: 'cli' | 'agent' | 'mcp', actionId: ActionId, input: unknown,
+    defaultSessionId = 'cli-global') {
     if (surface === 'cli') return cli.execute(actionId, input, { ...context, actionsSettings: policy });
     return createActionToolExecutorBridge({ executor: cli, surface, actionsSettings: policy })
       .executeActionByToolName(surface === 'agent' ? 'action_execute' : actionId.replaceAll('.', '_'),
-        surface === 'agent' ? { actionId, input } : input, 'cli-global', { actionRequestId: `parity-${surface}-${actionId}` });
+        surface === 'agent' ? { actionId, input } : input, defaultSessionId, { actionRequestId: `parity-${surface}-${actionId}` });
   }
 
   function executor(overrides: Partial<Pick<Parameters<typeof createAccountServerActionDeps>[0],
@@ -184,6 +196,58 @@ describe('managed inventory CLI Home adapter', () => {
     expect(seen).toEqual([{ method: 'machines.environment.apply', request: environment },
       { method: RPC_METHODS.DAEMON_TERMINAL_LIST, request: {} },
       { method: RPC_METHODS.MACHINES_WORK_SUMMARY_GET, request: { serverId: 'route-home', machineId: 'controller-1' } }]);
+  });
+
+  it.each(['cli', 'agent', 'mcp'] as const)('invokes Session and Run Stop through the real %s control owners on the captured Home', async surface => {
+    const sessionId = 'c111111111111111111111111';
+    const runId = 'stop-run';
+    const seenHttp: Array<{ url: string; authorization?: string }> = [];
+    const seenRpc: Array<{ method: string; request: unknown }> = [];
+    app.get('/v2/sessions/:sessionId', async request => {
+      seenHttp.push({ url: request.url, authorization: request.headers.authorization });
+      return { session: createSessionRecordFixture({ id: sessionId, active: true, encryptionMode: 'plain',
+        metadata: JSON.stringify(createTestMetadata({ machineId: 'controller-1' })) }) };
+    });
+    app.get('/v1/account/encryption/currentness', async request => {
+      expect(request.headers.authorization).toBe('Bearer bound');
+      return createAccountEncryptionCurrentnessFixture();
+    });
+    app.get('/v1/machines/controller-1', async request => {
+      expect(request.headers.authorization).toBe('Bearer bound');
+      return { machine: { id: 'controller-1', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } };
+    });
+    // Only physical Home HTTP and Socket.IO acknowledgements are substituted.
+    // Session resolution, metadata opening, stop policy and Run control remain real.
+    socketBoundary.respond = async (event, payload) => {
+      expect(event).toBe(SOCKET_RPC_EVENTS.CALL);
+      if (!payload || typeof payload !== 'object') throw new Error('Missing Stop RPC request');
+      const method: unknown = Reflect.get(payload, 'method');
+      if (typeof method !== 'string') throw new Error('Missing Stop RPC method');
+      const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, Reflect.get(payload, 'params'), method);
+      seenRpc.push({ method, request: decoded.params });
+      const response = method === `controller-1:${RPC_METHODS.STOP_SESSION}` ? { status: 'requested' }
+        : method === `${sessionId}:${SESSION_RPC_METHODS.EXECUTION_RUN_STOP}` ? { ok: true }
+        : undefined;
+      if (!response) throw new Error(`Unexpected Stop RPC target: ${method}`);
+      return { ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, response, decoded.callId) };
+    };
+    const cli = createCliActionExecutor({ token: 'bound', credentials: { token: 'bound', encryption: null },
+      sessionId, serverId: 'route-home', serverHttpBaseUrl: 'http://home.test', mode: 'plain', ctx: null });
+    await expect(invoke(cli, surface, 'session.stop', { sessionId }, sessionId)).resolves.toEqual({ ok: true,
+      result: { ok: true, sessionId, stopped: false,
+        stopOutcome: { status: 'physical_stop_unconfirmed', reason: 'daemon_stop_requested' } } });
+    await expect(invoke(cli, surface, 'execution.run.stop', { sessionId, runId }, sessionId))
+      .resolves.toEqual({ ok: true, result: surface === 'cli' ? { ok: true } : {} });
+    expect(seenRpc).toEqual([
+      { method: `controller-1:${RPC_METHODS.STOP_SESSION}`, request: { sessionId } },
+      { method: `${sessionId}:${SESSION_RPC_METHODS.EXECUTION_RUN_STOP}`, request: { runId } },
+    ]);
+    expect(seenHttp.length).toBeGreaterThan(0);
+    expect(seenHttp.every(request => request.url.startsWith(`/v2/sessions/${sessionId}`)
+      && request.authorization === 'Bearer bound')).toBe(true);
+    expect(socketBoundary.connections.length).toBeGreaterThan(0);
+    expect(socketBoundary.connections.every(connection => connection.serverUrl === 'http://home.test'
+      && connection.token === 'bound')).toBe(true);
   });
 
   it('binds reads to the authenticated Home and withholds retired Account output', async () => {

@@ -181,6 +181,11 @@ export function createCliActionExecutorHarness(
       } : {}),
     };
   };
+  // Every finite Action phase retains the executor's captured Home, including
+  // Session resolution/currentness reads and the subsequent RPC transport.
+  const runOnCapturedHome = <T>(run: () => T): T => params.serverHttpBaseUrl
+    ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, run)
+    : run();
 
   return {
     deps,
@@ -218,10 +223,10 @@ export function createCliActionExecutorHarness(
       }
     },
     executor: {
-      prepare: (actionId, input, context) => executor.prepare(actionId, input, resolveContext(context)),
-      execute: (actionId, input, context) => executor.execute(actionId, input, resolveContext(context)),
-      continueConfidentialApprovalRequest: (input, context) => executor.continueConfidentialApprovalRequest(input, resolveContext(context)),
-      replayApprovedApprovalRequest: (args) => executor.replayApprovedApprovalRequest(args),
+      prepare: (actionId, input, context) => runOnCapturedHome(() => executor.prepare(actionId, input, resolveContext(context))),
+      execute: (actionId, input, context) => runOnCapturedHome(() => executor.execute(actionId, input, resolveContext(context))),
+      continueConfidentialApprovalRequest: (input, context) => runOnCapturedHome(() => executor.continueConfidentialApprovalRequest(input, resolveContext(context))),
+      replayApprovedApprovalRequest: (args) => runOnCapturedHome(() => executor.replayApprovedApprovalRequest(args)),
     },
   };
 }
