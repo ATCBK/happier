@@ -1,4 +1,5 @@
 /** @moduleRealm daemon */
+export { canPublishSessionResumeIdentity } from './sessionIdentity.js';
 import {
   createAcpToolNameInferencePreset as canonicalCreateAcpToolNameInferencePreset,
   normalizeAcpPermissionIntent as canonicalNormalizeAcpPermissionIntent,

@@ -62,6 +62,7 @@ export type ClaudeUnifiedProviderTranscriptPublisherParams = Readonly<{
     row: RawJSONLines,
     observation: Readonly<{
       providerSessionId: string;
+      transcriptPath: string;
       historicalReplay: boolean;
       phase?: 'initial_replay';
       projectedTaskResult?: RawJSONLines;
@@ -438,6 +439,7 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
     try {
       await params.onObserveRow(row, {
         providerSessionId: activeBinding.providerSessionId,
+        transcriptPath: activeBinding.transcriptPath,
         historicalReplay: initialFileReplayBindings.has(activeBinding),
       });
     } catch (error) {
@@ -521,7 +523,8 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
       if (row) {
         activeBinding.taskNotificationProjector.project(row);
         await params.onObserveRow?.(row, {
-          providerSessionId: activeBinding.providerSessionId, historicalReplay: true, phase: 'initial_replay',
+          providerSessionId: activeBinding.providerSessionId, transcriptPath: activeBinding.transcriptPath,
+          historicalReplay: true, phase: 'initial_replay',
         });
       }
       activeBinding.observedSourceIds.add(input.sourceId);
@@ -546,7 +549,8 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
     if (fact) {
       const projectedTaskResult = activeBinding.taskNotificationProjector.project(row);
       await params.onObserveRow?.(row, {
-        providerSessionId: activeBinding.providerSessionId, historicalReplay: false,
+        providerSessionId: activeBinding.providerSessionId, transcriptPath: activeBinding.transcriptPath,
+        historicalReplay: false,
         ...(projectedTaskResult ? { projectedTaskResult } : {}),
       });
       if (fact.subtype === 'task_notification' || projectedTaskResult) {

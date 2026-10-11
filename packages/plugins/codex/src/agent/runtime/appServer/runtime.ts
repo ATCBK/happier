@@ -13,6 +13,7 @@ import type {
 import type { SessionAuthService } from '@happier-dev/plugin-sdk/sessions';
 import {
   AgentRuntimeJsonValueSchema,
+  canPublishSessionResumeIdentity,
   buildAgentAccountUsageRecordId,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
@@ -1361,10 +1362,14 @@ export function createCodexAppServerRuntime(
     };
   };
 
-  const publishThreadIdentity = (nextThreadId: string): void => {
+  const publishThreadIdentity = (nextThreadId: string, isExistingResume = false): void => {
     const exactThreadId = readExactCodexProviderSessionId(nextThreadId);
     if (!exactThreadId) return;
     threadId = exactThreadId;
+    if (!canPublishSessionResumeIdentity({
+      isExistingResume,
+      hasResumeEvidence: nativeReadyThreadId === exactThreadId,
+    })) return;
     if (publishedThreadId === exactThreadId) return;
     publishedThreadId = exactThreadId;
     publishRuntimeEvent({
@@ -2344,7 +2349,7 @@ export function createCodexAppServerRuntime(
       ? requestedThreadId
       : null;
     if (requestedThreadId && !preserveRequestedThreadId && !strictRequestedThreadId) {
-      publishThreadIdentity(requestedThreadId);
+      publishThreadIdentity(requestedThreadId, true);
     }
     const policy = resolveCurrentPolicy();
     const policyKey = serializeCodexAppServerPolicy(policy);

@@ -2876,7 +2876,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       updateWhileAttached: { permissionMode: 'safe-yolo' },
       updateAfterStop: { permissionMode: 'yolo' },
     },
-  ])('retains the published empty thread across $label config changes after realtime stops', async ({
+  ])('retains the materialized empty thread across $label config changes after realtime stops', async ({
     initialUpdate,
     updateWhileAttached,
     updateAfterStop,
@@ -2884,6 +2884,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     const runtime = createRuntime();
     if (initialUpdate) await runtime.updateConfig?.(initialUpdate);
     await startCodexAppServerRuntime(runtime);
+    await expect(runtime.prepareProviderCliAttach()).resolves.toBe('thread-1');
     const realtimeHandle = await startActiveRealtimeAttachment(runtime);
 
     await runtime.updateConfig?.(updateWhileAttached);

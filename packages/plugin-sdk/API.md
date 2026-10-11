@@ -323,6 +323,8 @@
 | `./actions` | `LaunchProfilesActionResultById` | type | any |
 | `./actions` | `ListReorderActionInputById` | type | any |
 | `./actions` | `ListReorderActionResultById` | type | any |
+| `./actions` | `LocalDaemonServicesActionInputById` | type | any |
+| `./actions` | `LocalDaemonServicesActionResultById` | type | any |
 | `./actions` | `LocalServicesActionsActionInputById` | type | any |
 | `./actions` | `LocalServicesActionsActionResultById` | type | any |
 | `./actions` | `LocalServicesInventoryActionInputById` | type | any |
@@ -441,6 +443,8 @@
 | `./actions` | `ScopeActionResultById` | type | any |
 | `./actions` | `SessionAccessActionInputById` | type | any |
 | `./actions` | `SessionAccessActionResultById` | type | any |
+| `./actions` | `SessionAgentTransitionActionInputById` | type | any |
+| `./actions` | `SessionAgentTransitionActionResultById` | type | any |
 | `./actions` | `SessionAttentionActionInputById` | type | any |
 | `./actions` | `SessionAttentionActionResultById` | type | any |
 | `./actions` | `SessionAudienceSelectionV1` | type | any |
@@ -983,6 +987,7 @@
 | `./agents/runtime` | `buildAgentAccountUsageRecordId` | value | any |
 | `./agents/runtime` | `buildShellCommand` | value | daemon |
 | `./agents/runtime` | `buildUsageObservationEffect` | value | daemon |
+| `./agents/runtime` | `canPublishSessionResumeIdentity` | value | daemon |
 | `./agents/runtime` | `createAcpToolNameInferencePreset` | value | daemon |
 | `./agents/runtime` | `createAgentSessionPreAdmissionBuffer` | value | daemon |
 | `./agents/runtime` | `createExecutionRunHostBackendFromConversationRuntime` | value | daemon |

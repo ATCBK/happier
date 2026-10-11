@@ -632,6 +632,7 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
         row: queuedCommandOperation,
         observation: {
           providerSessionId: 'claude-session-1',
+          transcriptPath: '/tmp/claude-session-1.jsonl',
           historicalReplay: false,
         },
       },
@@ -639,6 +640,7 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
         row: queuedCommandAttachment,
         observation: {
           providerSessionId: 'claude-session-1',
+          transcriptPath: '/tmp/claude-session-1.jsonl',
           historicalReplay: false,
         },
       },
@@ -720,6 +722,7 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
       row,
       observation: {
         providerSessionId: 'claude-session-1',
+        transcriptPath: '/tmp/claude-session-1.jsonl',
         historicalReplay: true,
       },
     })));

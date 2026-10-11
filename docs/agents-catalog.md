@@ -681,6 +681,20 @@ conversation id and nothing else. There is no continuity proof (`AM-24`): resumi
 whether a recorded id is usable, and both Agents that support native resume fail loudly rather than
 silently starting fresh. The released bare-string form is accepted as the same identity.
 
+Fresh native identity publication in development source uses the shared
+`canPublishSessionResumeIdentity` policy in
+`packages/plugin-sdk/src/agentRuntime/sessionIdentity.ts`, exposed through the existing
+`agents/runtime` SDK seam. A Claude `SessionStart` or Codex thread allocation can identify a
+live runner before it has a resumable conversation. That provisional id remains runner-local
+for hook and event correlation; it is not yet written as the Session's native resume identity.
+Claude publishes after matching native transcript evidence (the SDK resumability path also
+requires its submitted-prompt acceptance evidence); Codex publishes after accepted-turn or
+native-attachment materialization evidence. Already requested resume identities remain intact.
+This initial-publication rule adds no persisted continuity proof or new identity shape and
+does not weaken strict native resume: an established id whose native state is unavailable still
+fails closed without silently starting fresh or consuming its queued prompt. Loaded-runtime
+release validation is separate from these development-source contracts.
+
 ### Where the id lives, for an Agent with no flat vendor key
 
 The flat `<vendor>SessionId` keys are **generated for bundled Agents only**. A contributed Agent

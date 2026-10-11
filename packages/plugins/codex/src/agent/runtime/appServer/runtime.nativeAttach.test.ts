@@ -71,16 +71,17 @@ describe('native Codex attachment preparation', () => {
     });
   });
 
-  it('materializes a realtime-published zero-turn thread before native resume without replacing its identity', async () => {
+  it('keeps a realtime zero-turn identity provisional until native rollout materialization', async () => {
     await withFixture(async ({ runtime, requests, resume }) => {
       await startCodexAppServerRuntime(runtime);
       const started = await runtime.realtimeConversation.start({ transport: { kind: 'webrtc', offerSdp: 'offer' } });
       expect(started.status).toBe('started');
       if (started.status !== 'started') throw new Error('Realtime fixture failed to start');
-      expect(runtime.identity.read()).toEqual({ providerSessionId: 'fresh-thread' });
+      expect(runtime.identity.read()).toEqual({ providerSessionId: null });
       await expect(resume()).rejects.toThrow('no rollout found');
 
       await expect(runtime.prepareProviderCliAttach()).resolves.toBe('fresh-thread');
+      expect(runtime.identity.read()).toEqual({ providerSessionId: 'fresh-thread' });
       await expect(resume()).resolves.toMatchObject({ thread: { id: 'fresh-thread', turns: [] } });
       await expect(runtime.prepareProviderCliAttach()).resolves.toBe('fresh-thread');
       await expect(resume()).resolves.toMatchObject({ thread: { id: 'fresh-thread', turns: [] } });

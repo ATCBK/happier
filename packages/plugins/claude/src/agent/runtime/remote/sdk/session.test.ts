@@ -43,6 +43,33 @@ type SessionParamsWithCredentials =
   }>;
 
 describe('bindClaudeAgentSdkFallbackSession', () => {
+  it('keeps an idle SDK SessionStart identity provisional without consuming a prompt', async () => {
+    const sessionHooks = createSessionHooksFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      sessionHooks: sessionHooks.service,
+    });
+    const operations = createClaudeAgentSdkTurnOperations({
+      nativeOperationsOnly: true, ctx, directory: '/tmp/claude-project', launchEnv: {},
+      permissionMode: 'default', happierSessionId: 'idle-native-session', enableSessionResumability: true,
+    });
+    const runtimeEvents: Array<{ kind: string }> = [];
+    operations.subscribeRuntimeEvents(event => runtimeEvents.push(event));
+    try {
+      await operations.prepareTerminalPresentation();
+      const hook = sessionHooks.service.startServer.mock.calls[0]?.[0].onSessionHook;
+      if (!hook) throw new Error('native session hook server did not start');
+      await hook('idle-claude-id', {
+        hook_event_name: 'SessionStart', session_id: 'idle-claude-id', source: 'startup',
+      });
+      expect(operations.readSessionIdentity()).toEqual({ sessionId: 'idle-claude-id' });
+      expect(runtimeEvents.filter(event => event.kind === 'session-id-publish')).toEqual([]);
+      const presentation = await operations.prepareTerminalPresentation();
+      expect(presentation.plan.argv).not.toContain('--resume');
+    } finally {
+      await operations.resetOrDisposeRuntime();
+    }
+  });
+
   it('witnesses native MCP inventory and deduplicated calls through successful SDK completion', async () => {
     const exec = createSdkExecFixture();
     const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
@@ -1334,9 +1361,10 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();
     const exec = createSdkExecFixture();
+    const sessionHooks = createSessionHooksFixture();
     const ctx = createPluginContextFixture(terminalHost.service, events.service, {
       exec: exec.service,
-      sessionHooks: createSessionHooksFixture().service,
+      sessionHooks: sessionHooks.service,
     });
     const operations = createClaudeAgentSdkTurnOperations({
       nativeOperationsOnly: true,
@@ -1352,6 +1380,13 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     operations.subscribeEffectiveModel((evidence) => effectiveModels.push(evidence));
 
     try {
+      await operations.prepareTerminalPresentation();
+      const hook = sessionHooks.service.startServer.mock.calls[0]?.[0].onSessionHook;
+      if (!hook) throw new Error('missing native session hook request');
+      await hook('idle-sdk-id', {
+        hook_event_name: 'SessionStart', session_id: 'idle-sdk-id',
+      });
+      expect(runtimeEvents.filter(event => event.kind === 'session-id-publish')).toEqual([]);
       await operations.sendTurnPrompt('hello');
       await exec.emit({
         type: 'system',
@@ -1425,6 +1460,8 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       happierSessionId: 'happy-native-resume',
       enableSessionResumability: true,
     });
+    const identityEvents: Array<{ kind: string }> = [];
+    operations.subscribeRuntimeEvents((event) => identityEvents.push(event));
     try {
       await operations.sendTurnPrompt('native exact prompt');
       await vi.waitFor(() => expect(sessionHooks.service.startServer).toHaveBeenCalledTimes(1));
@@ -1438,6 +1475,8 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         session_id: 'claude-native-session',
         transcript_path: '/tmp/claude-project/claude-native-session.jsonl',
       });
+      expect(operations.readSessionIdentity()).toEqual({ sessionId: 'claude-native-session' });
+      expect(identityEvents.filter(event => event.kind === 'session-id-publish')).toEqual([]);
       await hookRequest.onSessionHook('claude-native-session', {
         hook_event_name: 'UserPromptSubmit',
         session_id: 'claude-native-session',
@@ -1456,6 +1495,10 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         sourcePath: proofFollow.path,
         sequence: 1,
       });
+      expect(identityEvents).toContainEqual(expect.objectContaining({
+        kind: 'session-id-publish', publishedSessionId: 'claude-native-session',
+        nativeSessionLogPath: '/tmp/claude-project/claude-native-session.jsonl',
+      }));
       await operations.cancelTurn();
 
       await operations.sendTurnPrompt('native follow-up');

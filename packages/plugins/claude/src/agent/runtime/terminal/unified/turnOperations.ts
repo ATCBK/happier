@@ -11,6 +11,7 @@ import type {
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import {
   AgentRuntimeJsonValueSchema,
+  canPublishSessionResumeIdentity,
   type AgentSessionHookServerHandle,
   type AgentSessionHooksService,
   type AgentSessionHostServices,
@@ -873,6 +874,20 @@ export function createClaudeUnifiedTerminalTurnOperations(
       if (observation) await nativeRuntime.observeTerminalLifecycle(observation);
     },
     onObserveRow: async (row, observation) => {
+      const rowSessionId = readClaudeProviderIdentityValue(row.session_id)
+        ?? readClaudeProviderIdentityValue(row.sessionId);
+      if (
+        rowSessionId === observation.providerSessionId
+        && row.isSidechain !== true
+        && !isSidechainSessionHook(row)
+      ) {
+        adoptProviderSessionId({
+          providerSessionId: observation.providerSessionId,
+          transcriptPath: observation.transcriptPath,
+          transcriptPathProven: true,
+          reason: 'claude-unified-native-transcript',
+        });
+      }
       if (observation.projectedTaskResult) {
         for (const result of extractToolResultBlocksFromSdkMessage(observation.projectedTaskResult)) {
           publishClaudeUnifiedRuntimeEvent({
@@ -1014,9 +1029,9 @@ export function createClaudeUnifiedTerminalTurnOperations(
   let hookSecret: string | null = null;
   let statuslineOverlaySettings: ClaudeStatuslineOverlaySettings | null = null;
   let statuslineTranscriptPath: string | null = null;
-  // Transcript path this terminal ATTACHED to for the current provider session
-  // id. Distinct from `statuslineTranscriptPath`, which only needs a plausible
-  // path for the overlay; only an attached binding is continuity proof.
+  // Transcript path containing a matching primary native row for this id.
+  // `statuslineTranscriptPath` only needs a plausible path for the overlay;
+  // attaching an empty transcript alone is not resume evidence.
   let provenTranscriptPath: string | null = null;
   // Matched-pair dedupe key: "<providerSessionId> <proven transcriptPath or empty>".
   let publishedProviderSessionId: string | null = null;
@@ -1087,7 +1102,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
 
   /**
    * Publishes the resume id together with the transcript path that holds its
-   * conversation, when this terminal has an attached transcript binding for that
+   * conversation, when this terminal observed a matching native row for that
    * exact id.
    *
    * Dedupe is keyed on the matched pair rather than the id: the terminal learns
@@ -1096,6 +1111,11 @@ export function createClaudeUnifiedTerminalTurnOperations(
    */
   function publishProviderSessionId(nextSessionId: string, reason: string): void {
     const nativeSessionLogPath = provenTranscriptPath?.trim() || null;
+    if (!canPublishSessionResumeIdentity({
+      isExistingResume: requestedResumeProviderSessionId === nextSessionId
+        || params.knownProviderSession?.providerSessionId === nextSessionId,
+      hasResumeEvidence: Boolean(nativeSessionLogPath),
+    })) return;
     const publishedIdentity = `${nextSessionId} ${nativeSessionLogPath ?? ''}`;
     if (publishedProviderSessionId === publishedIdentity) return;
     publishedProviderSessionId = publishedIdentity;
@@ -1117,10 +1137,9 @@ export function createClaudeUnifiedTerminalTurnOperations(
     providerSessionId: string;
     transcriptPath?: string | null;
     /**
-     * True only when the transcript publisher ATTACHED to this path for this id
-     * (`bound`/`unchanged`). A `deferred` bind means the file could not be
-     * followed, and an unvalidated hook payload path was never checked at all —
-     * neither is proof, so both degrade to a fresh target (`REQ-STATE-03`).
+     * True only after the transcript publisher observed a matching primary
+     * native row at this path for this id. Attachment and hook paths alone
+     * are not proof that a newly allocated conversation can be resumed.
      */
     transcriptPathProven?: boolean;
     reason: string;
@@ -1171,7 +1190,6 @@ export function createClaudeUnifiedTerminalTurnOperations(
       adoptProviderSessionId({
         providerSessionId: bindResult.binding.providerSessionId,
         transcriptPath: bindResult.binding.transcriptPath,
-        transcriptPathProven: bindResult.status !== 'deferred',
         reason: 'claude-unified-known-resume-transcript',
       });
     }
@@ -2032,7 +2050,6 @@ export function createClaudeUnifiedTerminalTurnOperations(
             adoptProviderSessionId({
               providerSessionId: bindResult.binding.providerSessionId,
               transcriptPath: bindResult.binding.transcriptPath,
-              transcriptPathProven: bindResult.status !== 'deferred',
               reason: 'claude-unified-session-start',
             });
           } else if (hookEventName === 'SessionStart' && !state.providerSessionId) {
@@ -2115,7 +2132,6 @@ export function createClaudeUnifiedTerminalTurnOperations(
                 adoptProviderSessionId({
                   providerSessionId: bindResult.binding.providerSessionId,
                   transcriptPath: bindResult.binding.transcriptPath,
-                  transcriptPathProven: bindResult.status !== 'deferred',
                   reason: 'claude-unified-statusline-transcript',
                 });
               }

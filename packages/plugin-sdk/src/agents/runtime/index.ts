@@ -419,6 +419,7 @@ export { assertAgentSessionRealtimeRuntime } from '../../agentRuntime/projection
 export { buildAgentAccountUsageRecordId } from '../../agentRuntime/projections.js';
 export { buildShellCommand } from '../../agentRuntime/projections.js';
 export { buildUsageObservationEffect } from '../../agentRuntime/projections.js';
+export { canPublishSessionResumeIdentity } from '../../agentRuntime/projections.js';
 export { createAcpToolNameInferencePreset } from '../../agentRuntime/projections.js';
 export { createAgentSessionPreAdmissionBuffer } from '../../agentRuntime/projections.js';
 export { createExecutionRunHostBackendFromConversationRuntime } from '../../agentRuntime/projections.js';

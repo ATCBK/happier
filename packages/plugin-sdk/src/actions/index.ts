@@ -124,6 +124,8 @@ export type { LaunchProfilesActionInputById } from './dtos/launchProfilesActionD
 export type { LaunchProfilesActionResultById } from './dtos/launchProfilesActionDtos.generated.js';
 export type { ListReorderActionInputById } from './dtos/listReorderActionDtos.generated.js';
 export type { ListReorderActionResultById } from './dtos/listReorderActionDtos.generated.js';
+export type { LocalDaemonServicesActionInputById } from './dtos/localDaemonServicesActionDtos.generated.js';
+export type { LocalDaemonServicesActionResultById } from './dtos/localDaemonServicesActionDtos.generated.js';
 export type { LocalServicesActionsActionInputById } from './dtos/localServicesActionsActionDtos.generated.js';
 export type { LocalServicesActionsActionResultById } from './dtos/localServicesActionsActionDtos.generated.js';
 export type { LocalServicesInventoryActionInputById } from './dtos/localServicesInventoryActionDtos.generated.js';
@@ -242,6 +244,8 @@ export type { ScopeActionInputById } from './dtos/scopeActionDtos.generated.js';
 export type { ScopeActionResultById } from './dtos/scopeActionDtos.generated.js';
 export type { SessionAccessActionInputById } from './dtos/sessionAccessActionDtos.generated.js';
 export type { SessionAccessActionResultById } from './dtos/sessionAccessActionDtos.generated.js';
+export type { SessionAgentTransitionActionInputById } from './dtos/sessionAgentTransitionActionDtos.generated.js';
+export type { SessionAgentTransitionActionResultById } from './dtos/sessionAgentTransitionActionDtos.generated.js';
 export type { SessionAttentionActionInputById } from './dtos/sessionAttentionActionDtos.generated.js';
 export type { SessionAttentionActionResultById } from './dtos/sessionAttentionActionDtos.generated.js';
 export type { SessionAudienceSelectionV1 } from './dtos/pluginActionDtoSupport.generated.js';
