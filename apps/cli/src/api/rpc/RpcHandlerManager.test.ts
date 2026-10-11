@@ -497,6 +497,10 @@ it.each(['plain', 'e2ee'] as const)('admits arbitrary %s requester custody throu
     expect(await retired?.()).toBe(false);
     expect(await run(seal(), { homeId: 'other' })).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
     expect(await run({ ...seal(), token: 'swapped-root' })).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
+    get.mockClear();
+    expect(await run(seal({ ...authorization, binding: { ...authorization.binding, serverIdentityId: 'another-home' } })))
+      .toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
+    expect(get).not.toHaveBeenCalled();
     current = false;
     expect(await run()).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
   } finally { get.mockRestore(); post.mockRestore(); }

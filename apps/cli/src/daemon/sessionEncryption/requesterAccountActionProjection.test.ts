@@ -33,6 +33,44 @@ function bootstrap(credentials: StoredCredentials, isCurrent = async () => true)
 }
 
 describe('admitted requester Action projection', () => {
+  it.each(['plain', 'e2ee'] as const)('binds scoped Project Open ports to the observed Home before private HTTP effects (%s)', async mode => {
+    const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'requester-open', binding: {
+      accountId: 'bob', custodianAccountId: 'alice', authentication: { kind: 'terminal', tokenEpoch: 0 },
+      serverIdentityId: 'stable-home', machineId: 'machine', installationId: 'installation', accountEncryptionMode: mode,
+      actionId: 'projects.open', requestId: 'open', requestEnvelopeDigest: 'a'.repeat(43),
+      target: { kind: 'machine', machineId: 'machine' },
+    } });
+    const credentials: StoredCredentials = { token: 'bob', encryption: mode === 'plain' ? null
+      : { type: 'legacy', secret: new Uint8Array(32).fill(8) } };
+    // Account mode and Home root verification are HTTP boundaries; both projection owners stay real.
+    const reads = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {
+      mode, version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+    } });
+    const posts = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { ok: true } });
+    const accountInput = { authorization: root, serverIdentityId: 'stable-home', bootstrap: bootstrap(credentials) };
+    const account = await projectRequesterAccountActionAuthorization(accountInput);
+    expect(account?.requesterAccountProjection).toMatchObject({ accountId: 'bob', accountEncryptionMode: mode });
+    if (!account) throw new Error('Expected admitted Project Open Account custody');
+    const httpInput = { authorization: account, serverId: 'home-profile', serverIdentityId: 'stable-home',
+      serverHttpBaseUrl: 'https://requester-home.test', target: root.binding.target, installationId: 'installation',
+      privateKey: nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31)).secretKey };
+    const carrier = await projectExternalActionRequesterHttpAuthorization(httpInput);
+    expect(carrier?.requesterHttpProjection).toMatchObject({ accountId: 'bob', serverIdentityId: 'stable-home',
+      accountEncryptionMode: mode });
+    expect(ExternalActionExecutionAuthorizationV1Schema.parse(carrier)).toEqual(root);
+    expect(Object.isFrozen(carrier?.requesterHttpProjection)).toBe(true);
+    reads.mockClear(); posts.mockClear();
+    expect(await projectRequesterAccountActionAuthorization({ ...accountInput, serverIdentityId: 'another-home' })).toBeNull();
+    expect(await requesterAccountOwner.admitRequesterAccountActionContext({ authorization: root, credentials,
+      serverId: 'home-profile', serverIdentityId: 'another-home', serverHttpBaseUrl: 'https://requester-home.test',
+      isCurrent: async () => true })).toBeNull();
+    expect(await projectExternalActionRequesterHttpAuthorization({ ...httpInput, serverIdentityId: 'another-home' })).toBeNull();
+    expect(reads).not.toHaveBeenCalled();
+    expect(posts).not.toHaveBeenCalled();
+    expect(ExternalActionExecutionAuthorizationV1Schema.safeParse({ ...root,
+      requesterHttpProjection: { ...carrier?.requesterHttpProjection, serverIdentityId: 'another-home' } }).success).toBe(false);
+  });
+
   it('keeps private custody current across unrelated Account sequence updates but retires it on encryption transitions', async () => {
     let version = 1;
     let updatedAt = 1;

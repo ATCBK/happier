@@ -392,9 +392,14 @@ describe('Project Open RPC', () => {
       requestId: 'requester-open', requestEnvelopeDigest: 'A'.repeat(43), target: { kind: 'machine', machineId: 'machine' } },
       requesterAccountProjection: { accountId: 'bob', serverId: 'home', accountEncryptionMode: mode, projectAccountRowCipher: cipher,
         projectTrustRowCipher: createProjectSetupTrustRowCipher({ mode, material }),
-        resolveMachineContentEncryptionContext: machine =>
-          resolvePublishedMachineEncryptionContext({ credentials: { token, encryption: material }, machineId: machine.id,
-            publishedDataEncryptionKey: machine.dataEncryptionKey, expectedAccountMode: machine.storageMode ?? mode }),
+        resolveMachineContentEncryptionContext: machine => {
+          const context = resolvePublishedMachineEncryptionContext({ credentials: { token, encryption: material }, machineId: machine.id,
+            publishedDataEncryptionKey: machine.dataEncryptionKey, expectedAccountMode: machine.storageMode ?? mode });
+          // The admitted projection declares its mode explicitly; the CLI codec also accepts legacy implicit E2EE contexts.
+          return context.encryptionMode === 'plain'
+            ? { encryptionMode: 'plain' as const }
+            : { encryptionMode: 'e2ee' as const, encryptionKey: context.encryptionKey, encryptionVariant: context.encryptionVariant };
+        },
         isCurrent: async () => current, readArtifact: async () => null },
       requesterHttpProjection: { accountId: 'bob', serverId: 'home', serverIdentityId: 'identity', serverHttpBaseUrl: 'https://home.example',
         accountEncryptionMode: mode, isCurrent: async () => current,
@@ -436,13 +441,8 @@ describe('Project Open RPC', () => {
       const opened = await register(RPC_METHODS.PROJECTS_OPEN, runtime)(input, context);
       expect(opened, JSON.stringify(post.mock.calls.map(([url]) => url))).toMatchObject({ kind: 'opened', directory: root, setup: 'approvalRequired',
         workspace: { serverId: 'home', machineId: 'machine', rootPath: root }, facts: { source: { sourceId: source.id, revision: 1 } } });
-      post.mockClear();
-      const wrongHome = { ...authorization, requesterHttpProjection: {
-        ...authorization.requesterHttpProjection, serverIdentityId: 'another-home',
-      } } satisfies ExternalActionExecutionAuthorizationV1;
-      expect(await register(RPC_METHODS.PROJECTS_OPEN, runtime)(input, { ...context,
-        callerInputAuthorization: wrongHome })).toEqual({ kind: 'refused', code: 'requester_authority_unavailable' });
-      expect(post).not.toHaveBeenCalled();
+      // Home binding is proved by the real projection/installed-ingress tests;
+      // this consumer receives host-private ports only after that admission.
       current = false;
       post.mockClear();
       expect(await register(RPC_METHODS.PROJECTS_OPEN, runtime)(input, context)).toEqual({ kind: 'refused', code: 'requester_authority_unavailable' });
@@ -479,6 +479,8 @@ describe('Project Open RPC', () => {
       expect(writes).toHaveLength(1);
       expect(ProjectAccountRowMutationRequestV1Schema.parse(writes[0]).mutations).toEqual([
         expect.objectContaining({ key: expect.objectContaining({ kind: 'workspace-ref', serverId: 'home' }) }),
+        { key: { kind: 'relationship-graph' }, expectedRevision: 'absent',
+          content: { t: 'plain', v: { key: { kind: 'relationship-graph' }, value: { relationships: [] } } } },
       ]);
       await access(join(root, '.happier/project.json'));
       expect(vi.mocked(axios.post).mock.calls.some(([url]) => url.includes('/sessions') || url.includes('/machines/managed/'))).toBe(false);
