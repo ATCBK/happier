@@ -5,9 +5,11 @@ import {
   mkdtempSync,
   readdirSync,
   realpathSync,
+  writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { exitWithCommandResult, runCommand } from '../../stack/scripts/utils/proc/proc.mjs';
 import { resolveWorkspaceBuildMode } from '../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
 
@@ -104,6 +106,28 @@ function createImmutableBuildSource({ packageRoot, outputDir, reuseCompilerCache
       const sourcePath = join(packageRoot, relativePath);
       if (!existsSync(sourcePath)) continue;
       cpSync(sourcePath, join(snapshotRoot, relativePath), { recursive: true });
+    }
+    const snapshotConfigPath = join(snapshotRoot, 'tsconfig.json');
+    if (existsSync(snapshotConfigPath)) {
+      // Parse the captured bytes with the retained compiler API. Compilation
+      // still belongs to the native TypeScript invocation below.
+      const parsed = ts.readConfigFile(snapshotConfigPath, ts.sys.readFile);
+      if (parsed.error) throw new Error(ts.flattenDiagnosticMessageText(parsed.error.messageText, '\n'));
+      const options = parsed.config.compilerOptions;
+      if (options?.paths) {
+        const pathsBase = resolve(packageRoot, options.baseUrl ?? '.');
+        options.paths = Object.fromEntries(Object.entries(options.paths).map(([name, targets]) => [name,
+          targets.map(target => {
+            const originalTarget = resolve(pathsBase, target);
+            const localTarget = relative(packageRoot, originalTarget);
+            // Internal aliases use admitted snapshot bytes; external declaration
+            // aliases keep the prepared dependency identity they originally named.
+            return localTarget === '..' || localTarget.startsWith(`..${sep}`) || isAbsolute(localTarget)
+              ? originalTarget : resolve(snapshotRoot, localTarget);
+          }),
+        ]));
+        writeFileSync(snapshotConfigPath, `${JSON.stringify(parsed.config, null, 2)}\n`);
+      }
     }
   } catch (error) {
     try {

@@ -38,6 +38,42 @@ function runShellStep(step, workspace, runnerTemp, env = {}) {
   });
 }
 
+test('dependency cache inputs retain installation sources without test-only churn', (t) => {
+  const { workspace } = fixture(t);
+  const action = yaml.load(fs.readFileSync(installActionPath, 'utf8'));
+  const cache = action.runs.steps.find((step) => step.name === 'Restore third-party dependencies');
+  const argumentsText = cache.with.key.match(/hashFiles\(([^)]*)\)/u)?.[1];
+  assert.equal(typeof argumentsText, 'string', 'cache key must select its actual file inputs');
+  const patterns = yaml.load(`[${argumentsText}]`);
+  assert.ok(Array.isArray(patterns) && patterns.every((pattern) => typeof pattern === 'string'));
+  const installationInputs = [
+    'yarn.lock', 'apps/cli/package.json', '.yarnrc',
+    'patches/runtime.patch', 'scripts/ci/yarn-install-with-retry.sh',
+    '.github/actions/install-yarn-dependencies/action.yml',
+    'scripts/workspaces/ensureWorkspacePackagesBuilt.mjs',
+    'apps/ui/tools/postinstall.mjs', 'apps/ui/scripts/installFreshnessInputs.mjs',
+    'apps/cli/scripts/unpack-tools.cjs',
+    'apps/ui/tools/postinstall/verifyNativePatchCompilation.mjs',
+    'packages/iroh-native/scripts/build.mjs', 'packages/plugins/example/scripts/build.mjs',
+    'apps/stack/scripts/provision/.bun-version',
+  ];
+  const testInputs = [
+    'scripts/workspaces/ensureWorkspacePackagesBuiltCli.test.mjs',
+    'apps/ui/tools/postinstall.spec.mjs',
+    'apps/ui/tools/postinstall/verifyNativePatchCompilation.test.mjs',
+    'packages/iroh-native/scripts/__tests__/build-fixture.mjs',
+  ];
+  for (const input of [...installationInputs, ...testInputs]) write(workspace, input, 'fixture input');
+  // Native filesystem globbing checks these simple inclusion/exclusion patterns;
+  // GitHub owns hashFiles hashing and actual hosted cache-hit behavior.
+  const selected = new Set(fs.globSync(patterns.filter((pattern) => !pattern.startsWith('!')), {
+    cwd: workspace,
+    exclude: patterns.filter((pattern) => pattern.startsWith('!')).map((pattern) => pattern.slice(1)),
+  }));
+  for (const input of installationInputs) assert.ok(selected.has(input), `installation input must invalidate cache: ${input}`);
+  for (const input of testInputs) assert.equal(selected.has(input), false, `test-only input must not invalidate cache: ${input}`);
+});
+
 test('the current-run preparation archive restores prepared outputs and readiness without collecting source changes', (t) => {
   const { root, workspace, runnerTemp } = fixture(t);
   const workflow = yaml.load(fs.readFileSync(path.join(workflowsDir, 'tests.yml'), 'utf8'));

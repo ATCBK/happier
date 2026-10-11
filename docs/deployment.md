@@ -1,12 +1,12 @@
 # Deployment
 
-This document describes how to deploy the Happier backend (`apps/server`) and the infrastructure it expects.
+This document records the server implementation behind deployment. Operator recipes and configuration are owned by the published [self-hosting guide](../apps/docs/content/docs/self-hosting/index.mdx), including [Docker and Kubernetes](../apps/docs/content/docs/self-hosting/docker.mdx#kubernetes).
 
 ## Runtime overview
-- **App server:** Node.js running `tsx ./sources/main.ts` (Fastify + Socket.IO).
-- **Database:** Postgres via Prisma.
-- **Cache:** Redis (currently used for connectivity and future expansion).
-- **Object storage:** S3-compatible storage for user-uploaded assets (MinIO works).
+- **App server:** Fastify + Socket.IO. Published `relay-server` images run the packaged server binary and embed the web UI; source-based `server` images use the repository start script.
+- **Database:** selected independently by `HAPPIER_DB_PROVIDER`; prebuilt images include SQLite and Postgres.
+- **Socket fanout:** in-memory by default; optional Redis Streams for multiple API replicas and split workers.
+- **Files:** S3-compatible storage or local disk, selected by `HAPPIER_FILES_BACKEND`.
 - **Metrics:** Optional Prometheus `/metrics` server on a separate port.
 
 ## SQLite read snapshots (0.3 development)
@@ -89,24 +89,23 @@ console plan §3.5):
   Holding a code proves the same deployment-level access as the command, so this is not a public
   bootstrap route: nothing is claimable until an operator prints a code.
 
-## Required services
+## Services for the full Postgres/S3 recipe
 1. **Postgres**
-   - Required for all persisted data.
+   - Owns persisted data in this recipe; light SQLite deployments use persistent local storage instead.
    - Configure via `DATABASE_URL`.
 
 2. **Redis**
-   - Required by startup (`redis.ping()` is called).
-   - Configure via `REDIS_URL`.
+   - Optional for one `SERVER_ROLE=all` process. Startup pings Redis only when the Redis socket adapter is enabled.
+   - Multi-replica API and split-worker deployments need `REDIS_URL` and `HAPPIER_SOCKET_ADAPTER=redis-streams`, plus load-balancer affinity for HTTP polling.
 
 3. **S3-compatible storage**
    - Used for avatars and other uploaded assets.
    - Configure via `S3_HOST`, `S3_PORT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_PUBLIC_URL`, `S3_USE_SSL`.
 
 ## Environment variables
-**Required**
+**Required for the full Postgres/S3 recipe**
 - `DATABASE_URL`: Postgres connection string.
 - `HANDY_MASTER_SECRET`: master key for auth tokens and server-side encryption.
-- `REDIS_URL`: Redis connection string.
 - `S3_HOST`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_PUBLIC_URL`: object storage config.
 
 **Common**
@@ -286,6 +285,7 @@ Key notes:
 - The server defaults to port `3005` (set `PORT` explicitly in container environments).
 - The image includes FFmpeg and Python for media processing.
 - The server entrypoint (`apps/server/scripts/run-server.sh`) runs `prisma migrate deploy` on startup by default (set `RUN_MIGRATIONS=0` to disable). On Postgres, it retries on advisory-lock contention.
+- Health-managed Postgres deployments use one pre-deploy Job running the prebuilt image's `/opt/happier/server/happier-server-migrate`, then start API and worker replicas with `RUN_MIGRATIONS=0`. The Job is independent of API probe deadlines. Source-built images use their provider migration script. Development 0.3 irreversible-migration admission remains owned by `apps/server/sources/app/runtime/updaterMigrationAdmission.ts`; a Kubernetes Job must not fabricate its updater capability or bypass refusal.
 - Before a MySQL deployment first applies
   `20260729102000_add_voice_conversation_grant_provenance`, follow the
   maintenance-window, old-writer drain, trigger-authority/configuration, and
@@ -469,21 +469,16 @@ check. The adapter upgrade changes neither client handshake/events nor SQL state
 no client capability gate, persistence migration or dual-generation adapter is added.
 
 ## Kubernetes manifests
-Example manifests live in `apps/server/deploy`:
-- `handy.yaml`: Deployment + Service + ExternalSecrets for the server.
-- `happy-redis.yaml`: Redis StatefulSet + Service + ConfigMap.
+The canonical [Kubernetes recipe](../apps/docs/content/docs/self-hosting/docker.mdx#kubernetes) explains the examples in `apps/server/deploy`:
 
-The Redis-backed two-replica API Deployment in `handy.yaml` uses Kubernetes
-`Recreate`, intentionally stopping the old API pods before starting the new
-generation. Do not change it to `RollingUpdate` while adapter `0.2` and `0.3`
-remain incompatible for cross-node discovery. The worker Deployment keeps its
-ordinary rollout strategy because it publishes the compatible Stream event
-envelope and is not a Socket.IO discovery peer.
+- `config.yaml`: explicit full/Postgres/S3, memory-adapter, single-process configuration; 0.3 canonical server identity is separate from ingress.
+- `migrate.yaml`: one pre-deploy Job using the packaged migrator; create and await it before rollout. Migration admission can refuse an unsupported 0.3 upgrade.
+- `server.yaml`: one `Recreate` Deployment and a Service on `3005`; numeric UID/GID 1000, startup/liveness `/health`, database readiness `/ready`.
+- `happy-redis.yaml`: optional private-network Redis example for multi-replica deployments; not a default dependency.
 
-The deployment config expects:
-- Prometheus scraping annotations on port `9090`.
-- A secret named `handy-secrets` populated by ExternalSecrets.
-- A service mapping port `3000` to container port `3005`.
+Both migrator and server consume `happier-server-config` and `happier-server-env`; no External Secrets CRD is required. Pin the same validated image digest in both manifests. The metrics listener on `9090` supplies worker probes but is not exposed through the API Service. Database and S3 data are external; the pod's `/data` is temporary in this recipe and must be replaced by retained storage for SQLite or local files. Development 0.3 private Artifacts require a separate private S3 bucket, as documented above.
+
+Keep `Recreate` for a multi-replica Redis API transition across adapter `0.2` and `0.3`: stop all old API pods before starting the new generation, including on rollback. The worker publishes the compatible Stream envelope and is not a Socket.IO discovery peer; its ordinary rollout strategy can remain. See the Redis cluster transport contract above. These examples and schema checks do not certify an unreleased 0.3 image or irreversible-data upgrade.
 
 ## Local dev helpers
 The server package includes scripts for local infrastructure:

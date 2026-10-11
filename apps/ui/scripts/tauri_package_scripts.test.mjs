@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import plist from 'plist';
+import { tmpdir } from 'node:os';
+import { prepareTauriEntitlements } from './prepareTauriEntitlements.mjs';
 
 test('native tray, menu-bar and quit contracts pass through the real Rust owners', async () => {
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -98,7 +100,7 @@ test('apps/ui Tauri channel configs leave HTML5 file drag-and-drop available to 
   }
 });
 
-test('apps/ui macOS Tauri bundles declare microphone privacy and hardened-runtime access', async () => {
+test('apps/ui macOS Tauri bundles declare microphone privacy and hardened-runtime access', async (t) => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);
   const srcTauriDir = join(packageRoot, 'src-tauri');
@@ -106,6 +108,17 @@ test('apps/ui macOS Tauri bundles declare microphone privacy and hardened-runtim
   const config = JSON.parse(await readFile(join(srcTauriDir, 'tauri.conf.json'), 'utf-8'));
   const infoPlist = plist.parse(await readFile(join(srcTauriDir, 'Info.plist'), 'utf-8'));
   const entitlements = plist.parse(await readFile(join(srcTauriDir, 'Entitlements.plist'), 'utf-8'));
+  const scratch = await mkdtemp(join(tmpdir(), 'tauri-entitlements-'));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const generatedPath = join(scratch, 'Entitlements.plist');
+  await prepareTauriEntitlements({ outputPath: generatedPath });
+  const generated = await readFile(generatedPath, 'utf8');
+  assert.equal(await readFile(join(srcTauriDir, 'Entitlements.plist'), 'utf8'), generated);
+  const runtime = plist.parse(await readFile(
+    new URL('../../../scripts/pipeline/release/bun-standalone.entitlements.plist', import.meta.url),
+    'utf8',
+  ));
+  assert.deepEqual(entitlements, { ...runtime, 'com.apple.security.device.audio-input': true });
 
   assert.equal(config?.bundle?.macOS?.hardenedRuntime, true);
   assert.equal(config?.bundle?.macOS?.entitlements, './Entitlements.plist');
