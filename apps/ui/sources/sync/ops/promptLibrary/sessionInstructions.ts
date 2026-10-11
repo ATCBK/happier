@@ -2,6 +2,9 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { UiActionExecutorContext } from '@/sync/ops/actions/defaultActionExecutor';
+import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
+import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import { PromptDocArtifactRefV1Schema, type PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 
 export type SessionInstructionsTarget = Readonly<{
@@ -27,12 +30,22 @@ export function readSessionInstructionsAuthoringDraft(value: unknown): SessionIn
     return typeof title === 'string' && typeof markdown === 'string' ? { title, markdown } : undefined;
 }
 
+function execute(
+    actionId: ActionId,
+    input: unknown,
+    context: UiActionExecutorContext,
+    executeAction?: MountedAuthoringActionExecute,
+): Promise<ActionExecuteResult> {
+    return executeAction ? executeAction(actionId, input, { signal: context.signal })
+        : createFrontDoorActionExecute()(actionId, input, context);
+}
+
 async function createWithExecutor(
-    executor: ReturnType<typeof import('@/sync/ops/actions/defaultActionExecutor')['createDefaultActionExecutor']>,
     context: UiActionExecutorContext & Readonly<{ serverId: string }>,
     draft: SessionInstructionsAuthoringDraft,
+    executeAction?: MountedAuthoringActionExecute,
 ): Promise<SessionInstructionsAuthoringResult> {
-    const created = await executor.execute('prompt_doc.create', draft, context);
+    const created = await execute('prompt_doc.create', draft, context, executeAction);
     if (!created.ok || ActionApprovalRequestCreatedResultSchema.safeParse(created.result).success)
         return { result: created, createdRef: null, draft };
     const output: unknown = getActionSpec('prompt_doc.create').outputSchema?.parse(created.result);
@@ -42,33 +55,31 @@ async function createWithExecutor(
 }
 
 async function create(serverId: string, draft: SessionInstructionsAuthoringDraft,
-    signal?: AbortSignal, expectedAccountId?: string): Promise<SessionInstructionsAuthoringResult> {
-    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-    return createWithExecutor(createDefaultActionExecutor(), {
+    signal?: AbortSignal, expectedAccountId?: string,
+    executeAction?: MountedAuthoringActionExecute): Promise<SessionInstructionsAuthoringResult> {
+    return createWithExecutor({
         serverId, surface: 'ui', authority: 'present_user', ...(signal ? { signal } : {}),
         ...(expectedAccountId !== undefined ? { expectedAccountId } : {}),
-    }, draft);
+    }, draft, executeAction);
 }
 
-async function set(target: SessionInstructionsTarget, ref: PromptDocArtifactRefV1 | null, signal?: AbortSignal): Promise<ActionExecuteResult> {
-    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-    return createDefaultActionExecutor().execute('session.instructions.set', { ...target, ref }, {
+async function set(target: SessionInstructionsTarget, ref: PromptDocArtifactRefV1 | null, signal?: AbortSignal,
+    executeAction?: MountedAuthoringActionExecute): Promise<ActionExecuteResult> {
+    return execute('session.instructions.set', { ...target, ref }, {
         serverId: target.serverId, surface: 'ui', authority: 'present_user', ...(signal ? { signal } : {}),
-    });
+    }, executeAction);
 }
 
 async function createAndAttach(target: SessionInstructionsTarget, draft: SessionInstructionsAuthoringDraft,
-    signal?: AbortSignal): Promise<SessionInstructionsAuthoringResult> {
+    signal?: AbortSignal, executeAction?: MountedAuthoringActionExecute): Promise<SessionInstructionsAuthoringResult> {
     // Validate the exact reviewed Session target before creating a reusable document.
     getActionSpec('session.instructions.set').inputSchema.parse({ ...target, ref: null });
-    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-    const executor = createDefaultActionExecutor();
     const context = { serverId: target.serverId, surface: 'ui', authority: 'present_user', ...(signal ? { signal } : {}) } as const;
-    const created = await createWithExecutor(executor, context, draft);
+    const created = await createWithExecutor(context, draft, executeAction);
     if (!created.createdRef) return created;
     const ref = created.createdRef;
     // A conflict or an unknown attachment outcome keeps the created document reusable.
-    const result = await executor.execute('session.instructions.set', { ...target, ref }, context);
+    const result = await execute('session.instructions.set', { ...target, ref }, context, executeAction);
     return { result, createdRef: ref, draft };
 }
 
