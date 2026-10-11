@@ -88,21 +88,20 @@ export function registerDaemonLocalServicePreviewSnapshotHandler(
                 ...(request.target.workspaceId !== undefined ? { workspaceId: handle.workspace.id } : {}) },
             starterAccountId: handle.requester.accountId, endpoint });
     });
-    rpc.registerHandler(
-        RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_SNAPSHOT,
-        async (raw: unknown, context): Promise<DaemonLocalServicePreviewSnapshotResponseV1> => {
-            DaemonLocalServicePreviewSnapshotRequestV1Schema.parse(raw);
-            if (!options.localServicesPreview) {
-                throw new Error('Local service preview runtime is unavailable');
-            }
-            return DaemonLocalServicePreviewSnapshotResponseV1Schema.parse({
-                protocolVersion: 1,
-                snapshot: await options.localServicesPreview.getSnapshot(context),
-            });
-        },
-    );
-
     const routes = options.localServicesPreview;
+    if (routes) {
+        rpc.registerHandler(
+            RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_SNAPSHOT,
+            async (raw: unknown, context): Promise<DaemonLocalServicePreviewSnapshotResponseV1> => {
+                DaemonLocalServicePreviewSnapshotRequestV1Schema.parse(raw);
+                return DaemonLocalServicePreviewSnapshotResponseV1Schema.parse({
+                    protocolVersion: 1,
+                    snapshot: await routes.getSnapshot(context),
+                });
+            },
+        );
+    }
+
     if (routes?.openOrCreate) {
         const openOrCreate = routes.openOrCreate;
         rpc.registerHandler(

@@ -91,6 +91,20 @@ function createLifecycleRoutes() {
 }
 
 describe('daemon local service preview snapshot rpc handler', () => {
+    it('preserves the installed preview snapshot when another registration has no preview owner', async () => {
+        const { handlers, registrar } = createRegistrar();
+        const routes = createLifecycleRoutes();
+        registerDaemonLocalServicePreviewSnapshotHandler(registrar, { localServicesPreview: routes });
+
+        // Project admission can be registered separately from the preview owner.
+        // A registration without that owner must not replace its snapshot reader.
+        registerDaemonLocalServicePreviewSnapshotHandler(registrar, {});
+
+        await expect(handlers.get(RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_SNAPSHOT)?.({
+            machineId: LIFECYCLE_MACHINE_ID,
+        })).resolves.toEqual({ protocolVersion: 1, snapshot: await routes.getSnapshot() });
+    });
+
     it('serves the daemon-owned local preview snapshot over machine rpc', async () => {
         const module = await import('./daemonLocalServicePreviewSnapshot').catch(() => null);
 
