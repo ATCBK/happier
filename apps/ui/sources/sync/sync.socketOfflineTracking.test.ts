@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { encodePlainMachineStoredContent, FeaturesResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, projectLegacySessionAccessCapabilitiesV1, SessionCurrentProjectionRecordV1Schema, type SessionOrganizationSnapshot } from '@happier-dev/protocol';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import type { Socket } from 'socket.io-client';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -115,6 +116,7 @@ vi.mock('@/log', () => ({
 
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { disconnectActiveServerConnection, switchConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
+import { invalidateServerReachabilitySupervisor } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 await loadSyncSingletonForTests();
 const { sync } = await import('./sync');
 import { storage } from './domains/state/storage';
@@ -142,6 +144,9 @@ import { resolveSessionLiveConsumption } from '@/sync/runtime/sessionLiveConsump
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization';
 import { normalizeRawMessages } from "@happier-dev/session-core/raw";
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
+import type { InvalidateSync } from '@/utils/sessions/sync';
 
 class MemoryWebStorage implements Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
   readonly values = new Map<string, string>();
@@ -300,7 +305,7 @@ function cursorResponse(page: { status: 'ok'; cursor: string } | { status: 'erro
   return page.status === 'ok' ? Response.json({ cursor: Number(page.cursor), changesFloor: 0 }) : Response.json({}, { status: 503 });
 }
 
-function defaultHomeResponse(path: string): Response {
+function defaultHomeResponse(path: string, init?: RequestInit): Response {
   if (path === '/health') return Response.json({});
   if (path === '/v1/auth/ping') return Response.json({});
   if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
@@ -325,8 +330,11 @@ function defaultHomeResponse(path: string): Response {
   if (path === '/v1/friends') return Response.json({ friends: [] });
   if (path === '/v1/feed') return Response.json({ items: [], hasMore: false });
   if (path === '/v1/kv') return Response.json({ items: [] });
-  if (path === '/v1/plugins/availability/intents/list') return Response.json({ availabilityCursor: 0, pluginIds: [] });
-  if (path === '/v1/plugins/availability/materializations/read') return Response.json({ availabilityCursor: 0, snapshots: [] });
+  if (path === '/v1/plugins/availability/intents/list'
+    || path === '/v1/plugins/availability/materializations/read') {
+    const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(path, init);
+    if (bootstrapResponse) return bootstrapResponse;
+  }
   if (path === '/v3/automations') return Response.json({ automations: [], nextCursor: null });
   if (path.includes('/messages')) return Response.json({ messages: [], nextAfterSeq: null, nextBeforeSeq: null, hasMore: false });
   return Response.json({ error: 'not_found' }, { status: 404 });
@@ -369,7 +377,7 @@ async function restoreTestHome(serverUrl = 'http://localhost:53288', serverIdent
       if (requestUrl.pathname.startsWith('/v1/account/encryption')
         || requestUrl.pathname === '/v1/features' || requestUrl.pathname === '/v1/features/authenticated'
         || requestUrl.pathname.startsWith('/v1/plugins/availability/')
-        || requestUrl.pathname === '/v1/account/authoring-memory') return defaultHomeResponse(requestUrl.pathname);
+        || requestUrl.pathname === '/v1/account/authoring-memory') return defaultHomeResponse(requestUrl.pathname, init);
       if (requestUrl.pathname === '/v2/changes') return (await fetchChangesMock(path, init)).clone();
       if (requestUrl.pathname === '/v2/cursor') return (await fetchCurrentChangesCursorMock(path, init)).clone();
       return (await apiSocketRequestMock(path, init)).clone();
@@ -418,7 +426,7 @@ describe('sync socket offline tracking', () => {
       truncated: false,
     });
     apiSocketRequestMock.mockReset();
-    apiSocketRequestMock.mockImplementation(async path => defaultHomeResponse(new URL(path, 'http://localhost').pathname));
+    apiSocketRequestMock.mockImplementation(async (path, init) => defaultHomeResponse(new URL(path, 'http://localhost').pathname, init));
     await restoreTestHome();
     apiSocketRequestMock.mockClear();
     fetchChangesMock.mockClear();
@@ -437,6 +445,16 @@ describe('sync socket offline tracking', () => {
   });
 
   it('clears lastSocketDisconnectedAtMs when socket becomes connected again', async () => {
+    expect(storage.getState().isDataReady).toBe(true);
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime) throw new Error('The real fixture Account was not admitted');
+    expect(readPluginAccountAvailability(lifetime.scope).readMaterializations()).toMatchObject({
+      kind: 'available', availabilityCursor: 0,
+    });
+    // Ready must represent a completed critical bootstrap, not an expired queue wait.
+    const availabilityQueue = Reflect.get(sync, 'pluginAvailabilitySync') as InvalidateSync;
+    expect(await availabilityQueue.awaitQueue({ timeoutMs: loadSyncTuning().invalidateSyncAwaitTimeoutMs }))
+      .toEqual({ status: 'completed' });
     expect((sync as any).lastSocketDisconnectedAtMs ?? null).toBeNull();
 
     // subscribeToUpdates installs the socket listeners and should set the timestamp on disconnected.
@@ -611,13 +629,6 @@ describe('sync socket offline tracking', () => {
   }, 60_000);
 
   it('does not reuse captured offline duration for the same loaded transcript after catch-up succeeds', async () => {
-    (sync as any).subscribeToUpdates();
-
-
-    emitSocketStatus('disconnected');
-    (sync as any).lastSocketDisconnectedAtMs = Date.now() - 1000;
-    emitSocketStatus('connected');
-
     storage.setState((state) => ({
       ...state,
       sessions: {
@@ -631,25 +642,46 @@ describe('sync socket offline tracking', () => {
         } as any,
       },
     }), true);
+    const sessionRow = currentOwnerSessionWireRow({ ...hostedSessionRows()[0], archivedAt: null });
+    const responder = apiSocketRequestMock.getMockImplementation()!;
+    apiSocketRequestMock.mockImplementation(async (path, init) => {
+      const pathname = new URL(path, 'http://localhost').pathname;
+      if (pathname === '/v2/sessions') return Response.json({ sessions: [sessionRow], nextCursor: null, hasNext: false });
+      if (pathname === '/v2/sessions/s_reconnect_consumed') return Response.json({ session: sessionRow });
+      return responder(path, init);
+    });
+    onTestFinished(() => apiSocketRequestMock.mockImplementation(responder));
     await materializeLoadedTranscript('s_reconnect_consumed', 20);
     markSessionSurfaceVisible('s_reconnect_consumed');
     (sync as any).sessionMaterializedMaxSeqById = { s_reconnect_consumed: 20 };
     (sync as any).isForeground = true;
 
-    await (sync as any).fetchMessages('s_reconnect_consumed');
-    await (sync as any).fetchMessages('s_reconnect_consumed');
+    // Admission can replace the transport. Reconnect its current Socket only
+    // after the accepted Session, transcript and visible interest exist.
+    emitSocketStatus('connected');
+    const disconnectedAt = Date.now() - 1000;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(disconnectedAt);
+    try {
+      emitSocketStatus('disconnected');
+    } finally {
+      clock.mockRestore();
+    }
+    // Join the recovery already started by the real transport-close listener;
+    // its stop/start must settle before the external Socket reconnects.
+    await invalidateServerReachabilitySupervisor({
+      serverUrl: getActiveServerSnapshot().serverUrl,
+      token: TEST_TOKEN,
+    });
+    emitSocketStatus('connected');
+    expect(Reflect.get(sync, 'lastSocketDisconnectedAtMs')).toBeNull();
+
+    await sync.refreshSessionMessages('s_reconnect_consumed');
+    await sync.refreshSessionMessages('s_reconnect_consumed');
 
     expect(apiSocketRequestMock.mock.calls.filter(([path]) => path.startsWith('/v1/sessions/s_reconnect_consumed/messages?'))).toHaveLength(1);
   }, 60_000);
 
   it('does not reopen consumed transcript catch-up on duplicate connected statuses without a new disconnect', async () => {
-    (sync as any).subscribeToUpdates();
-
-
-    emitSocketStatus('disconnected');
-    (sync as any).lastSocketDisconnectedAtMs = Date.now() - 1000;
-    emitSocketStatus('connected');
-
     storage.setState((state) => ({
       ...state,
       sessions: {
@@ -663,17 +695,38 @@ describe('sync socket offline tracking', () => {
         } as any,
       },
     }), true);
+    const sessionRow = currentOwnerSessionWireRow({ ...hostedSessionRows()[0], archivedAt: null });
+    const responder = apiSocketRequestMock.getMockImplementation()!;
+    apiSocketRequestMock.mockImplementation(async (path, init) => {
+      const pathname = new URL(path, 'http://localhost').pathname;
+      if (pathname === '/v2/sessions') return Response.json({ sessions: [sessionRow], nextCursor: null, hasNext: false });
+      if (pathname === '/v2/sessions/s_reconnect_duplicate_connected') return Response.json({ session: sessionRow });
+      return responder(path, init);
+    });
+    onTestFinished(() => apiSocketRequestMock.mockImplementation(responder));
     await materializeLoadedTranscript('s_reconnect_duplicate_connected', 20);
     markSessionSurfaceVisible('s_reconnect_duplicate_connected');
     (sync as any).sessionMaterializedMaxSeqById = { s_reconnect_duplicate_connected: 20 };
     (sync as any).isForeground = true;
 
-    await (sync as any).fetchMessages('s_reconnect_duplicate_connected');
-
-
     emitSocketStatus('connected');
+    const disconnectedAt = Date.now() - 1000;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(disconnectedAt);
+    try {
+      emitSocketStatus('disconnected');
+    } finally {
+      clock.mockRestore();
+    }
+    await invalidateServerReachabilitySupervisor({
+      serverUrl: getActiveServerSnapshot().serverUrl,
+      token: TEST_TOKEN,
+    });
+    emitSocketStatus('connected');
+    expect(Reflect.get(sync, 'lastSocketDisconnectedAtMs')).toBeNull();
 
-    await (sync as any).fetchMessages('s_reconnect_duplicate_connected');
+    await sync.refreshSessionMessages('s_reconnect_duplicate_connected');
+    emitSocketStatus('connected');
+    await sync.refreshSessionMessages('s_reconnect_duplicate_connected');
 
     expect(apiSocketRequestMock.mock.calls.filter(([path]) => path.startsWith('/v1/sessions/s_reconnect_duplicate_connected/messages?'))).toHaveLength(1);
   }, 60_000);
@@ -1405,10 +1458,7 @@ describe('sync socket offline tracking', () => {
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
       }
-      return new Response(JSON.stringify({ assignments: [] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      return defaultHomeResponse(new URL(url, 'http://localhost').pathname);
     });
     routeApiSocketRequestsThroughFetch(fetchMock);
 
@@ -1652,9 +1702,9 @@ describe('sync socket offline tracking', () => {
       schemaVersion: 1,
       version: 1,
       pins: [
-        { sessionId: 's_organization_pin', sortKey: '0001', pinnedAt: 1 },
-        { sessionId: 's_identity_pin', sortKey: '0002', pinnedAt: 2 },
-        { sessionId: 's_unscoped_pin', sortKey: '0003', pinnedAt: 3 },
+        { sessionId: 's_organization_pin', sortKey: '0001', pinnedAt: 1, listPinned: true, railPinned: false },
+        { sessionId: 's_identity_pin', sortKey: '0002', pinnedAt: 2, listPinned: true, railPinned: false },
+        { sessionId: 's_unscoped_pin', sortKey: '0003', pinnedAt: 3, listPinned: true, railPinned: false },
       ],
       folders: [],
       folderAssignments: [],
@@ -1665,7 +1715,7 @@ describe('sync socket offline tracking', () => {
     };
     storage.getState().applySessionOrganizationSnapshot('other-server', {
       ...organizationSnapshot,
-      pins: [{ sessionId: 's_other_pin', sortKey: '0001', pinnedAt: 1 }],
+      pins: [{ sessionId: 's_other_pin', sortKey: '0001', pinnedAt: 1, listPinned: true, railPinned: false }],
     });
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -1732,7 +1782,7 @@ describe('sync socket offline tracking', () => {
     storage.getState().applySessionOrganizationSnapshot(activeServerId, {
       schemaVersion: 1,
       version: 7,
-      pins: [{ sessionId: 'server-pinned-session', sortKey: 'rank-a', pinnedAt: 1 }],
+      pins: [{ sessionId: 'server-pinned-session', sortKey: 'rank-a', pinnedAt: 1, listPinned: true, railPinned: false }],
       folders: [],
       folderAssignments: [],
       tags: [],
@@ -1755,7 +1805,7 @@ describe('sync socket offline tracking', () => {
             snapshot: {
               schemaVersion: 1,
               version: 7,
-              pins: [{ sessionId: 'server-pinned-session', sortKey: 'rank-a', pinnedAt: 1 }],
+              pins: [{ sessionId: 'server-pinned-session', sortKey: 'rank-a', pinnedAt: 1, listPinned: true, railPinned: false }],
               folders: [],
               folderAssignments: [],
               tags: [{
@@ -1848,7 +1898,7 @@ describe('sync socket offline tracking', () => {
             ? String(input.url)
             : input.toString();
       if (url.includes('/v2/session-organization')) {
-        return new Response(JSON.stringify({ error: 'preview_not_found', reasonCode: 'preview_not_found' }), {
+        return new Response(JSON.stringify({ error: 'Not found', path: '/v2/session-organization' }), {
           status: 404,
           headers: { 'Content-Type': 'application/json' },
         });
@@ -1881,23 +1931,17 @@ describe('sync socket offline tracking', () => {
   });
 
   it('reports a failed Machine refresh to its retry owner and accepts the next authoritative inventory', async () => {
-    upsertAndActivateServer({ serverUrl: 'http://localhost:53288', scope: 'tab' });
-    // Configure the same immutable target that the real socket preparation supplies.
-    Reflect.set(sync, 'appliedServerTarget', getActiveServerSnapshot());
-    apiSocketPreparedRequestMock.mockReturnValue(apiSocketRequestMock);
     const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
     const failure = new Error('Machine inventory temporarily unavailable');
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify([]), {
-      status: 200, headers: { 'Content-Type': 'application/json' },
-    }));
-    routeApiSocketRequestsThroughFetch(fetchMock);
-    apiSocketRequestMock.mockRejectedValueOnce(failure);
-    const { Encryption } = await import('@/sync/encryption/encryption');
-    const { encodeBase64 } = await import('@/encryption/base64');
-    const secret = new Uint8Array(32).fill(17);
-    const runtime = sync as unknown as { credentials: import('@/auth/storage/tokenStorage').AuthCredentials; encryption: import('@/sync/encryption/encryption').Encryption };
-    runtime.credentials = { token: 'hdr.eyJzdWIiOiJhY2NvdW50LWMifQ.sig', secret: encodeBase64(secret, 'base64url') };
-    runtime.encryption = await Encryption.create(secret);
+    let failed = false;
+    apiSocketRequestMock.mockImplementation(async (path, init) => {
+      const pathname = new URL(path, 'http://localhost').pathname;
+      if (pathname === '/v1/machines' && !failed) {
+        failed = true;
+        throw failure;
+      }
+      return defaultHomeResponse(pathname, init);
+    });
 
     await expect(sync.refreshMachines()).rejects.toBe(failure);
     expect(storage.getState().machineListStatusByServerId[activeServerId]).toBe('error');
@@ -1929,9 +1973,6 @@ describe('sync socket offline tracking', () => {
   }, 60_000);
 
   it.each([false, true])('reports a failed organization snapshot to the Session retry owner (cached=%s)', async (cached) => {
-    upsertAndActivateServer({ serverUrl: 'http://localhost:53288', scope: 'tab' });
-    Reflect.set(sync, 'appliedServerTarget', getActiveServerSnapshot());
-    apiSocketPreparedRequestMock.mockReturnValue(apiSocketRequestMock);
     const serverId = getActiveServerSnapshot().serverId;
     const fetchMock = stubSnapshotRefreshFetch();
     const failure = new TypeError('Failed to fetch');
@@ -1943,19 +1984,11 @@ describe('sync socket offline tracking', () => {
       }
       return fetchMock(path, init);
     });
-    const runtime = sync as unknown as {
-      credentials: import('@/auth/storage/tokenStorage').AuthCredentials;
-      encryption: import('@/sync/encryption/encryption').Encryption | null;
-      fetchSessions: () => Promise<unknown>;
-    };
-    runtime.credentials = { token: 'hdr.eyJzdWIiOiJhY2NvdW50LWMifQ.sig', secret: 'secret' };
-    const { Encryption } = await import('@/sync/encryption/encryption');
-    runtime.encryption = await Encryption.create(new Uint8Array(32).fill(17));
     if (cached) storage.setState({ sessionOrganizationSnapshotVersionByServerId: { [serverId]: 0 } });
 
-    await expect(runtime.fetchSessions()).rejects.toBe(failure);
+    await expect(sync.fetchSessions()).rejects.toBe(failure);
     expect(storage.getState().sessionOrganizationErrorByServerId[serverId]).toBeTruthy();
-    await expect(runtime.fetchSessions()).resolves.toBeDefined();
+    await expect(sync.fetchSessions()).resolves.toBeDefined();
     expect(storage.getState().sessionOrganizationErrorByServerId[serverId]).toBeNull();
   }, 60_000);
 

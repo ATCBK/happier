@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ensureWorkspacePackagesBuiltForComponent as ensureWorkspacePackagesBuiltForComponentDefault } from '../../stack/scripts/utils/proc/pm.mjs';
 import { ensureUiWorkspacePackagesBuilt as ensureUiWorkspacePackagesBuiltDefault } from './ensureWorkspacePackagesBuilt.mjs';
+import { prepareTauriEntitlements } from './prepareTauriEntitlements.mjs';
 
 function normalizeTargetTriple(rawValue) {
   const value = String(rawValue ?? '').trim().toLowerCase();
@@ -179,6 +180,7 @@ export async function prepareTauriSidecar({
   ensureTauriSidecarRuntimeFilesImpl = ensureTauriSidecarRuntimeFiles,
   spawnSyncImpl = spawnSync,
 } = {}) {
+  await prepareTauriEntitlements();
   await ensureUiWorkspacePackagesBuilt({ uiPackageDir: uiDir, env, publicationMode: 'artifact' });
   await ensureWorkspacePackagesBuiltForComponent(bootstrapDir, { quiet: false, env });
   await ensureTauriWatcherIgnoreFile();
