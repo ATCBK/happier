@@ -2993,6 +2993,7 @@ export function createCliActionDeps(params: Readonly<{
         )
         : await callMachineAction({
             machineId: input.executionTarget.machineId,
+            exactMachine: true,
             method: RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE,
             request: {
               directory: input.directory,

@@ -38,7 +38,8 @@ import {
   lookupSessionsByTags,
 } from '@/session/transport/http/sessionsHttp';
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
-import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
+import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
+import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { updateSessionMetadataWithRetry } from '@/session/metadata/updateSessionMetadataWithRetry';
 import { summarizeSessionRecord, type SessionSummary } from '@/cli/output/session/sessionSummary';
 import { openSessionEventSource } from '@/session/transport/socket/sessionSocketAgentState';
@@ -1187,7 +1188,7 @@ export async function createSpawnedSession(
             request,
             params.signal ? { signal: params.signal } : undefined,
           )
-          : await callMachineRpc({
+          : await callExactMachineRpc({
           credentials: params.credentials,
           machineId: exactMachineId,
           method: isProviderBound
@@ -1213,7 +1214,7 @@ export async function createSpawnedSession(
           { spawnNonce },
         );
       }
-      if (error && typeof error === 'object' && (error as { code?: unknown }).code === 'MACHINE_RPC_TIMEOUT') {
+      if (readRpcRequestDisposition(error) === 'outcomeUnknown' && error && typeof error === 'object') {
         (error as { details?: unknown }).details = { spawnNonce };
       }
       throw error;
@@ -1256,7 +1257,7 @@ export async function createSpawnedSession(
           { spawnNonce: nonce, ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
           signal ? { signal } : undefined,
         )
-        : await callMachineRpc({
+        : await callExactMachineRpc({
           credentials: params.credentials,
           machineId: exactMachineId,
           method: RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE,

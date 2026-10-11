@@ -50,6 +50,26 @@ graph TB
 
 Executable Agents and model Providers are different domains. `happier agents ...` manages Agent runtimes; `happier providers ...` manages configured model-source connections. Provider contributions, connections, grants, settings, and structured model selections are protocol-owned. See [Providers](./providers.md) for the complete ownership and safety contract.
 
+### Exact Session creation targets (0.3 development)
+
+CLI Action Machine discovery reads the authenticated Account inventory through
+`listCurrentAccountMachines`; saved local server profiles remain the inventory
+for `servers.list`. Fresh Session creation, directory preparation and spawn-nonce
+observation address the selected Machine through `callExactMachineRpc`. A missing
+or unreachable target returns an error rather than spawning on its replacement
+or the caller's Machine. Historical Session control retains replacement-following
+RPC because those Sessions still refer to their predecessor Machine ids.
+
+After a submitted spawn loses its acknowledgement, the creator retains the nonce
+when the shared RPC disposition is `outcomeUnknown`. Retry observes that nonce on
+the same target without submitting another spawn. A disconnect before submission
+does not claim nonce custody.
+
+The common CLI argument partitioner consumes `--auto` as `--permission-mode auto`.
+The canonical permission policy allows reads and edits; other tools can still
+require approval. `--yolo` requests full access. This is current development
+behavior, not a claim of released or live OpenCode validation.
+
 ### Checkout directory mapping (0.3 development)
 
 `workspaces/activation/resolveDirectoryInCheckout.ts` owns mapping a selected
