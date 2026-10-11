@@ -149,6 +149,13 @@ sequenceDiagram
 same dependency defaults, exposed interactively for streamed prompts and through the registry for
 callers that supply prompt resolutions up front. No other kind appears in both.
 
+In current development source, CLI and desktop SSH bootstrap share the command builder and
+JSON-result normalization in `packages/cli-common/src/systemTasks`. Only `auth.status` may
+admit exit 1 with a version-1 `auth_status` envelope whose error is `not_authenticated`;
+that result continues through server selection and pairing. Transport failures, malformed
+auth envelopes, and other auth errors fail closed. Released daemon/service commands may
+still return raw JSON objects rather than CLI envelopes.
+
 Registry handlers can emit live callback progress through their execution context while awaiting
 work; these callbacks use the same event validation, redaction, task identity, and timestamps as
 yielded events. In current development source, desktop status inspection and explicit setup share
@@ -318,7 +325,11 @@ probe failures as inconclusive, preserving live ownership. For a PID hidden by a
 the existing authenticated control probe establishes publication presence. Its transport failures
 remain unverified. After observing a hidden owner through authenticated ping or an accepted
 authenticated stop, confirmed stop requires the matching lifecycle lock to release after control ceases, because control closes before final cleanup; without an
-observed lock confirmation remains incomplete. Ordinary dead publications remain absent. Status
+observed lock confirmation remains incomplete. Ordinary dead publications remain absent, and stop
+reclaims their unchanged state and matching lifecycle lock through persistence's exact-owner file
+primitive. Cleanup requires proven process absence and the captured lock bytes; a replacement
+state or lock cancels reclamation. Live, inaccessible, unverified, and hidden owners are not
+reclaimed by the stop observer. Status
 projections and service-update readers share the same presence owner; full daemon health inspection
 also validates process identity. An unverified publication remains explicit in status output and
 blocks service-update planning until authenticated presence can be observed. Initial startup-only
@@ -331,8 +342,9 @@ locks. It attempts siblings after a failed target and returns a confirmed stoppe
 `not_running`. It re-enumerates the same inventory after shutdown to detect a live successor
 publication or startup-only lock before `auth logout --all` can delete the home.
 After an observed hidden owner stops, namespace uncertainty remains scoped to its exact
-publication and lock path; unrelated stale release-ring siblings retain ordinary absence. State and lock
-cleanup remain owned by the daemon lifecycle holder; these observers do not delete publications.
+publication and lock path; unrelated stale release-ring siblings retain ordinary absence and may
+be reclaimed with the same proven-dead ownership checks. Normal shutdown cleanup remains owned
+by the daemon lifecycle holder; persistence owns narrowly scoped departed-publication reclamation.
 Stop commands and authentication report the returned outcome, and logout-all preserves the
 home on incomplete stop. Restart remains best effort for its stop phase, logs incomplete stop
 through the default file logger, and requires its existing distinct running identity proof.

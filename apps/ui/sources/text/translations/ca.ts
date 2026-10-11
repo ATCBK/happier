@@ -2575,6 +2575,7 @@ export const ca: TranslationStructure = {
             },
         },
         quota: {
+            refreshing: 'Actualitzant l’ús…',
             loading: 'Carregant…',
             error: ({ message }: { message: string }) => `Error: ${message}`,
             lastUpdated: ({ time }: { time: string }) => `Última actualització: ${time}`,

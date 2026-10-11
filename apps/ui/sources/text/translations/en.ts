@@ -2499,6 +2499,7 @@ export const en = {
             },
         },
         quota: {
+            refreshing: 'Refreshing usage…',
             loading: 'Loading…',
             error: ({ message }: { message: string }) => `Error: ${message}`,
             lastUpdated: ({ time }: { time: string }) => `Last updated: ${time}`,
