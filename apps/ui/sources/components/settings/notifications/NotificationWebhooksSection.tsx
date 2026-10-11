@@ -5,6 +5,7 @@ import { useUnistyles } from 'react-native-unistyles';
 
 import { Switch } from '@/components/ui/forms/Switch';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
+import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
@@ -159,12 +160,11 @@ function AccountNotificationWebhooksSection({
                 />
             ) : null}
             {webhookChannels.length === 0 && !addingWebhook ? (
-                <Item
+                <EmptyState
+                    testID="settings-notifications-webhooks-empty"
+                    layout="line"
                     title={t('settingsNotifications.webhooks.emptyTitle')}
                     subtitle={t('settingsNotifications.webhooks.emptySubtitle')}
-                    subtitleLines={0}
-                    mode="info"
-                    showChevron={false}
                 />
             ) : (
                 webhookChannels.map((channel) => {

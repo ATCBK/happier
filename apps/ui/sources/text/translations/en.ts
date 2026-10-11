@@ -3786,8 +3786,9 @@ const enSettings = {
   github: 'GitHub',
   machines: 'Machines',
   remoteHostsTitle: 'Remote hosts',
-  remoteHostsDesktopOnlyTitle: 'Remote hosts are desktop-only',
-  remoteHostsDesktopOnlySubtitle: 'Manage saved SSH hosts on desktop.',
+  remoteHostsDesktopOnlyTitle: 'Remote hosts need the desktop app',
+  remoteHostsDesktopOnlySubtitle:
+    'Open Happier on your computer to save SSH hosts, then set them up as machines or relays.',
   remoteHostsManagementDisabledTitle: 'Remote host management is disabled',
   remoteHostsManagementDisabledSubtitle:
     'This build does not allow managing remote hosts.',
@@ -6364,9 +6365,9 @@ const enSettingsNotifications = {
       'Send remote activity notifications to additional webhook endpoints on this account.',
     addTitle: 'Add webhook',
     addSubtitle: 'Deliver notifications to another endpoint',
-    emptyTitle: 'No webhook channels',
+    emptyTitle: 'No webhooks yet',
     emptySubtitle:
-      'Add a webhook to deliver remote activity events outside Expo push.',
+      'Add a webhook to send these alerts to your own endpoint, such as a chat channel or a script.',
     enabledTitle: 'Enable webhook',
     enabledSubtitle: 'Webhook notifications are enabled',
     disabledSubtitle: 'Webhook notifications are disabled',

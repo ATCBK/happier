@@ -24,6 +24,7 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { SavedSecretReferenceResolution } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import type { ScopedSnapshotStatus } from '@/sync/domains/scope/scopedSnapshotFacts';
+import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { t } from '@/text';
@@ -238,13 +239,11 @@ export const SecretsSettingsPage = React.memo(function SecretsSettingsPage(props
                     </SectionContentRow>
                 ) : null}
                 {yoursEmpty && !adding && props.sharedCatalogStatus === 'ready' ? (
-                    <Item
+                    <EmptyState
                         testID="saved-secret:empty"
+                        layout="line"
                         title={t('secretsSettings.emptyTitle')}
                         subtitle={t('secretsSettings.emptyDescription')}
-                        subtitleLines={0}
-                        mode="info"
-                        showChevron={false}
                     />
                 ) : null}
                 {props.personalSecrets.map((secret) => (

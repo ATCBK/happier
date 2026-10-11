@@ -4,6 +4,7 @@ import { Redirect, usePathname, useRouter } from '@/components/appShell/workspac
 import { useUnistyles } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -71,22 +72,17 @@ const RemoteHostsUnavailablePage = React.memo(function RemoteHostsUnavailablePag
     availability: 'desktopOnly' | 'managementDisabled';
 }>) {
     const desktopOnly = props.availability === 'desktopOnly';
+    // The whole page is the state: what remote hosts are for stays in the header, the reason takes the page.
     return (
         <ItemList>
             <SettingsPageHeader description={t('settingsRemoteHostsPage.pageDescription')} />
-            <ItemGroup
-                title={t('settingsRemoteHostsPage.savedHostsSection')}
-                description={t('settingsRemoteHostsPage.unavailableDescription')}
-            >
-                <Item
-                    testID={desktopOnly ? 'settings.remoteHosts.desktopOnly' : 'settings.remoteHosts.managementDisabled'}
-                    title={t(desktopOnly ? 'settings.remoteHostsDesktopOnlyTitle' : 'settings.remoteHostsManagementDisabledTitle')}
-                    subtitle={t(desktopOnly ? 'settings.remoteHostsDesktopOnlySubtitle' : 'settings.remoteHostsManagementDisabledSubtitle')}
-                    subtitleLines={0}
-                    mode="info"
-                    showChevron={false}
-                />
-            </ItemGroup>
+            <EmptyState
+                testID={desktopOnly ? 'settings.remoteHosts.desktopOnly' : 'settings.remoteHosts.managementDisabled'}
+                layout="page"
+                iconName={desktopOnly ? 'laptop' : 'lock'}
+                title={t(desktopOnly ? 'settings.remoteHostsDesktopOnlyTitle' : 'settings.remoteHostsManagementDisabledTitle')}
+                subtitle={t(desktopOnly ? 'settings.remoteHostsDesktopOnlySubtitle' : 'settings.remoteHostsManagementDisabledSubtitle')}
+            />
         </ItemList>
     );
 });
