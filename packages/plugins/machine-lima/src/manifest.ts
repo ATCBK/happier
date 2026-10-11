@@ -61,7 +61,10 @@ export const LIMA_PLUGIN = definePlugin({
   entrypoints: { daemon: './.happier-plugin/daemon.js' },
   hostAccess: { required: [{ id: processAccess, capability: 'process',
     reason: 'Operate the exact reviewed native Lima resource.',
-    scope: { executables: [{ kind: 'managedDependency', id: LIMA_DEPENDENCY_ID }] },
+    scope: { executables: [{ kind: 'managedDependency', id: LIMA_DEPENDENCY_ID }],
+      // Lima initializes its native home even for --version; guest operations
+      // also discover native tools on PATH and select their reviewed store.
+      envKeys: ['HOME', 'PATH', 'LIMA_HOME'] },
   }], optional: [] },
   managedDependencies: { [LIMA_DEPENDENCY_ID]: {
     id: LIMA_DEPENDENCY_ID, title: 'Lima', description: 'Native Lima 2.x executable.', executable: 'limactl',
