@@ -264,6 +264,7 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
           : copy.agentTitle;
     const mayHaveLanded = unconfirmed || (recovery && request.status === 'unknown')
       || (presence.kind === 'human' && presence.interruptedCompletion === 'unknown');
+    const observationRecovery = unconfirmed || (human && mayHaveLanded && Boolean(props.onCheckAgain));
     const detail = human
       ? mayHaveLanded
         ? copy.lastActionMayHaveLanded
@@ -279,7 +280,7 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
     const row = (
       <View
         // On a phone the unconfirmed stop needs its line whole and two buttons: they move beneath.
-        style={[strip ? styles.strip : styles.capsule, compact && unconfirmed ? styles.capsuleStacked : null]}
+        style={[strip ? styles.strip : styles.capsule, compact && observationRecovery ? styles.capsuleStacked : null]}
         accessibilityRole="summary"
         accessibilityLiveRegion="polite"
         aria-live="polite"
@@ -294,7 +295,7 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
                 ? props.renderAgentMark(MARK_GLYPH_SIZE)
                 : host.renderGlyph('sparkle', colors.secondaryText, MARK_GLYPH_SIZE)}
         </View>
-        {strip && !(compact && unconfirmed) ? (
+        {strip && !(compact && observationRecovery) ? (
           // One line: what, then where or what it is doing.
           <host.Text numberOfLines={1} style={STRIP_TEXT_STYLE}>
             <host.Text role="title" color={colors.text}>{title}</host.Text>
@@ -312,9 +313,9 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
         {props.onWatch && !(compact && (unconfirmed || strip)) ? (
           <host.Button emphasis="plain" title={copy.watch} onPress={props.onWatch} testID={`${testID}-watch`} />
         ) : null}
-        {human && props.onHandBack ? (
+        {human && !observationRecovery && props.onHandBack ? (
           <host.Button emphasis="primary" title={copy.handBack} onPress={props.onHandBack} testID={`${testID}-hand-back`} />
-        ) : unconfirmed ? (
+        ) : observationRecovery ? (
           // A fresh look by the person confirms the release; handing back is also safe, because the
           // owner makes the agent look again before its next action.
           <View style={[styles.actions, compact ? styles.actionsStacked : null]}>

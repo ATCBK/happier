@@ -131,21 +131,7 @@ type TimelineEntry = Readonly<{
     requesterKind: string;
     actionKind: string;
     controlEpochAfter: number;
-    status?: string;
-    resultSummary?: unknown;
 }>;
-
-/**
- * Whether the takeover that opened this control epoch interrupted an agent action whose effect its
- * owner could not confirm. Only the owner's own settled entry decides; a missing fact is not unknown.
- */
-function readInterruptedCompletion(timeline: readonly TimelineEntry[] | undefined, controlEpoch: number): 'unknown' | null {
-    const last = timeline?.[timeline.length - 1];
-    if (!last || last.status !== 'interrupted' || last.requesterKind === 'user' || last.controlEpochAfter !== controlEpoch) return null;
-    const summary = last.resultSummary;
-    const completion = summary && typeof summary === 'object' ? (summary as Readonly<{ completion?: unknown }>).completion : undefined;
-    return completion === 'stopped' ? null : 'unknown';
-}
 
 function readControllerRecord(snapshot: unknown, key: string): ControllerRecord | null {
     if (!snapshot || typeof snapshot !== 'object') return null;
@@ -183,9 +169,7 @@ export function selectBrowserCopresence(input: Readonly<{
         return {
             kind: 'human',
             controlEpoch,
-            interruptedCompletion: typeof record?.uncertain === 'boolean'
-                ? record.uncertain ? 'unknown' : null
-                : readInterruptedCompletion(input.timeline, controlEpoch),
+            interruptedCompletion: record?.uncertain === true ? 'unknown' : null,
         };
     }
     if (controller === 'agent') {

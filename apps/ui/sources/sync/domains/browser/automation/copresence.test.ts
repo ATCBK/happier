@@ -1,14 +1,14 @@
 import { browserViewKey } from '@happier-dev/protocol';
 import { describe, expect, it } from 'vitest';
 
-import { createBrowserAutomationControlService } from './controlService';
+import { createBrowserAutomationControlService, type BrowserAutomationResult } from './controlService';
 import { selectBrowserCopresence } from './copresence';
 
 const view = { browserSessionId: 'browser_session_1', viewId: 'browser_view_1' } as const;
 
-function setup() {
-    const service = createBrowserAutomationControlService({ nowMs: () => 1_000 });
-    let resolve: (result: { status: 'succeeded' }) => void = () => undefined;
+function setup(maxTimelineEntries?: number) {
+    const service = createBrowserAutomationControlService({ nowMs: () => 1_000, maxTimelineEntries });
+    let resolve: (result: BrowserAutomationResult) => void = () => undefined;
     service.registerOwner({
         ownerId: 'owner_1',
         authority: 'uiLocal',
@@ -36,10 +36,39 @@ function setup() {
         agentTurnActive,
         timeline: service.getActionTimeline(view),
     });
-    return { service, click, presence, finish: () => resolve({ status: 'succeeded' }) };
+    return { service, click, presence, finish: (result: BrowserAutomationResult = { status: 'succeeded' }) => resolve(result) };
 }
 
 describe('selectBrowserCopresence', () => {
+    it('keeps unknown completion after a failed fresh look and clears it only after the owner observes successfully', async () => {
+        const { service, click, presence, finish } = setup(1);
+        const pending = click('uncertain-click');
+        await Promise.resolve();
+        service.recordHumanInput({ ...view, inputKind: 'takeover', occurredAtMs: 1000 });
+        finish();
+        await pending;
+        expect(presence()).toMatchObject({ kind: 'human', interruptedCompletion: 'unknown' });
+        let navigationGeneration = 0;
+        const observe = (id: string) => service.executeAction({ v: 1, ...view, automationRequestId: id,
+            navigationGeneration, requestedBy: 'user', requesterRef: { kind: 'session', id: 'session_1' },
+            actionKind: 'snapshot', timeoutMs: 10_000 });
+        const failed = observe('failed-look');
+        await Promise.resolve();
+        finish({ status: 'failed', errorCode: 'runtime_unavailable' });
+        await failed;
+        expect(presence()).toMatchObject({ kind: 'human', interruptedCompletion: 'unknown' });
+        const stale = observe('old-page-look');
+        service.updateNavigationGeneration({ ...view, navigationGeneration: 1 });
+        finish();
+        expect(await stale).toMatchObject({ status: 'stale' });
+        expect(presence()).toMatchObject({ kind: 'human', interruptedCompletion: 'unknown' });
+        navigationGeneration = 1;
+        const succeeded = observe('fresh-look');
+        await Promise.resolve();
+        finish();
+        await succeeded;
+        expect(presence()).toMatchObject({ kind: 'human', interruptedCompletion: null });
+    });
     it('follows the controller: agent while it acts, human after a takeover, idle after hand back', async () => {
         const { service, click, presence, finish } = setup();
         expect(presence()).toMatchObject({ kind: 'idle' });

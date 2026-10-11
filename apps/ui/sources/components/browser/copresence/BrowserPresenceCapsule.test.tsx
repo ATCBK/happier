@@ -68,11 +68,14 @@ describe('BrowserPresenceCapsule', () => {
 
     it('says the interrupted action may have landed and still offers Hand back (it is never a refusal)', async () => {
         const onHandBack = vi.fn();
+        const onCheckAgain = vi.fn();
         const screen = await renderScreen(
-            <BrowserPresenceCapsule testID="p" presence={{ kind: 'human', controlEpoch: 2, interruptedCompletion: 'unknown' }} agent={agent} onTakeControl={vi.fn()} onHandBack={onHandBack} />,
+            <BrowserPresenceCapsule testID="p" presence={{ kind: 'human', controlEpoch: 2, interruptedCompletion: 'unknown' }} agent={agent} onTakeControl={vi.fn()} onHandBack={onHandBack} onCheckAgain={onCheckAgain} />,
         );
         expect(screen.findHostByTestId('p-human')).toBeTruthy();
         expect(screen.getTextContent()).toContain('browserPresence.lastActionMayHaveLanded');
+        await screen.pressByTestIdAsync('p-check-again');
+        expect(onCheckAgain).toHaveBeenCalledTimes(1);
         await screen.pressByTestIdAsync('p-hand-back');
         expect(onHandBack).toHaveBeenCalledTimes(1);
     });

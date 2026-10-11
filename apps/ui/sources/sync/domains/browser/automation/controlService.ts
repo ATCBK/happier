@@ -97,7 +97,8 @@ type BrowserAutomationControllerState = {
     activeActionKind: string | null;
     activeTarget: BrowserActiveTargetV1 | null;
     humanHeld: boolean;
-    requiresObservation: boolean;
+    /** One admission fact: a changed page needs a look; an interrupted effect also remains uncertain. */
+    requiresObservation: false | 'required' | 'uncertain';
 };
 
 type ActiveAction = {
@@ -290,6 +291,7 @@ export function createBrowserAutomationControlService(
         }
         const viewKey = browserViewKey(active.request);
         const controller = controllerFor(viewKey);
+        if ((active.interruption || result.completion === 'unknown') && isMutatingAction(active.request.actionKind)) controller.requiresObservation = 'uncertain';
         if (controller.activeAutomationRequestId === active.request.automationRequestId) {
             controller.activeAutomationRequestId = null;
             controller.activeRequesterRef = null;
@@ -321,6 +323,7 @@ export function createBrowserAutomationControlService(
     function interruptActiveAction(active: ActiveAction, result: BrowserAutomationResult): void {
         if (active.settled || active.interruption) return;
         active.interruption = { ...result, resultSummary: { ...result.resultSummary, completion: 'uncertain' } };
+        if (isMutatingAction(active.request.actionKind)) controllerFor(browserViewKey(active.request)).requiresObservation = 'uncertain';
         if (active.timeoutId) { clearTimeout(active.timeoutId); active.timeoutId = null; }
         active.abortController.abort(result.errorCode ?? result.status);
         // The engine boundary must settle before admission is released. UI injected-page aborts
@@ -389,7 +392,7 @@ export function createBrowserAutomationControlService(
         if (!controller.humanHeld) controller.controlEpoch += 1;
         controller.humanHeld = true;
         controller.activeTarget = null;
-        controller.requiresObservation = true;
+        controller.requiresObservation ||= 'required';
         controller.controller = 'human';
         cancelActiveActionsForView(viewKey, 'interrupted', 'human_interrupted', (active) => (
             isMutatingAction(active.request.actionKind)
@@ -450,7 +453,7 @@ export function createBrowserAutomationControlService(
             const viewKey = browserViewKey(inputValue);
             const owner = ownersByViewKey.get(viewKey);
             if (owner) {
-                if (owner.navigationGeneration !== inputValue.navigationGeneration) controllerFor(viewKey).requiresObservation = true;
+                if (owner.navigationGeneration !== inputValue.navigationGeneration) controllerFor(viewKey).requiresObservation ||= 'required';
                 ownersByViewKey.set(viewKey, {
                     ...owner,
                     navigationGeneration: inputValue.navigationGeneration,
@@ -579,7 +582,7 @@ export function createBrowserAutomationControlService(
             if (controller.humanHeld) controller.controlEpoch += 1;
             controller.humanHeld = false;
             controller.controller = 'none';
-            controller.requiresObservation = true;
+            controller.requiresObservation ||= 'required';
             emitChange();
             return true;
         },
@@ -648,6 +651,7 @@ export function createBrowserAutomationControlService(
                 activeAutomationRequestId: controller.activeAutomationRequestId,
                 activeActionKind: controller.activeActionKind,
                 activeTarget: controller.activeTarget,
+                uncertain: controller.requiresObservation === 'uncertain',
                 // An interrupted action keeps admission until its engine work settles; until then a
                 // takeover has been asked for but has not landed.
                 interruptionSettling: controller.activeAutomationRequestId !== null

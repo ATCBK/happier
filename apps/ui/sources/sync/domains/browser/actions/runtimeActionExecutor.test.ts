@@ -141,6 +141,28 @@ function openViewState(input: Readonly<{
 }
 
 describe('browser runtime action executor', () => {
+    it('observes daemon-owned views through their admitted machine Action without using the in-app owner', async () => {
+        const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+        const state = openViewState({ adapterKind: 'chromiumSidecar', engineKind: 'desktopWebView',
+            target: externalTarget, capabilities: sidecarCapabilities, currentUrl: externalTarget.url });
+        const controlService = createBrowserAutomationControlService({ nowMs: () => 1000 });
+        const engine = vi.fn(async () => ({ status: 'succeeded' as const }));
+        controlService.registerOwner({ ownerId: 'local', authority: 'uiLocal', browserSessionId: 'browser_session_1',
+            viewId: 'view_1', navigationGeneration: 4, adapterKind: 'localPreview', fidelity: 'webIframe',
+            trustedInput: false, supportedActions: ['snapshot'], executeAction: engine });
+        // The machine Action transport is a network boundary. The runtime's routing stays real.
+        const executeOnMachine = vi.fn(async () => ({ status: 'succeeded', automationRequestId: 'fresh' }));
+        const execute = createBrowserRuntimeActionExecutor({ control: { readState: () => state, applyDispatchResult: () => {} },
+            automation: { controlService }, executeOnMachine });
+        const request = { v: 1, automationRequestId: 'fresh', browserSessionId: 'browser_session_1', viewId: 'view_1',
+            navigationGeneration: 4, requestedBy: 'user', requesterRef: { kind: 'session', id: 'session_1' },
+            actionKind: 'snapshot', payload: {}, timeoutMs: 1000 };
+        const context = { authority: 'present_user' as const, defaultMachineId: 'machine_1', defaultSessionId: 'session_1' };
+        expect(await execute(runtimeArgs({ actionId: 'browser.automation.snapshot', input: request, context })))
+            .toMatchObject({ status: 'succeeded', automationRequestId: 'fresh' });
+        expect(executeOnMachine).toHaveBeenCalledWith(expect.objectContaining({ actionId: 'browser.automation.snapshot', input: request, context }));
+        expect(engine).not.toHaveBeenCalled();
+    });
     it('opens the exact mounted page in the system browser without navigating or replacing it', async () => {
         const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
         const state = openViewState({ adapterKind: 'localPreview', engineKind: 'webIframe', target: localPreviewTarget,

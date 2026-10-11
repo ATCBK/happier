@@ -12,6 +12,7 @@ import { readRegisteredBrowserRuntimeWorkspaceOpeningAdapter } from './runtimeCo
 
 import {
     dispatchBrowserControlCommand,
+    isDaemonAuthoritativeBrowserView,
     type BrowserControlCommandDispatchResult,
     type BrowserControlCommandEffect,
     type BrowserControlCommandDispatchOptions,
@@ -83,6 +84,8 @@ export type CreateBrowserRuntimeActionExecutorInput = Readonly<{
         input: Readonly<{ browserSessionId: string; viewId: string }>,
     ) => BrowserContextAnnotationAdapter | null | undefined;
     fallback?: RuntimeActionExecute;
+    /** Existing captured-Account machine Action transport, for daemon-owned views only. */
+    executeOnMachine?: RuntimeActionExecute;
 }>;
 
 type RuntimeBrowserViewInput = Readonly<{
@@ -304,10 +307,24 @@ async function executeBrowserControlAction(
 
 async function executeBrowserAutomationAction(
     args: RuntimeActionExecuteArgs,
-    input: Pick<CreateBrowserRuntimeActionExecutorInput, 'automation' | 'resolveAutomation'>,
+    input: Pick<CreateBrowserRuntimeActionExecutorInput, 'automation' | 'resolveAutomation' | 'control' | 'resolveControl' | 'executeOnMachine'>,
 ): Promise<unknown> {
     const parsed = parseRuntimeActionInput(args);
     if (!parsed.ok) return parsed.result;
+
+    const target = readBrowserViewInput(parsed.input);
+    const control = target ? input.control ?? input.resolveControl?.(target) : null;
+    const state = control?.readState();
+    const view = target ? state?.viewsById[target.viewId] : null;
+    if (control && (!view || view.browserSessionId !== target?.browserSessionId)) {
+        return browserRuntimeActionDisabledResult('browser_view_unavailable');
+    }
+    if (view && isDaemonAuthoritativeBrowserView(view)) {
+        if (!input.executeOnMachine || !args.context.defaultMachineId) {
+            return browserRuntimeActionDisabledResult('browser_automation_unavailable');
+        }
+        return await input.executeOnMachine(args);
+    }
 
     if (args.actionId === 'browser.automation.timeline.get') {
         const viewInput = readBrowserViewInput(parsed.input);

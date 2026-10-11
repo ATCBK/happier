@@ -51,6 +51,38 @@ function request(
 }
 
 describe('browser automation daemon service', () => {
+  it('publishes uncertainty recovery only after a successful fresh observation without replaying the interrupted input', async () => {
+    let finishClick: () => void = () => undefined;
+    const click = new Promise<void>(resolve => { finishClick = resolve; });
+    let snapshotSucceeds = false;
+    const physicalActions: string[] = [];
+    const service = createBrowserAutomationDaemonService({ adapter: {
+      adapterKind: 'chromiumSidecar',
+      execute: async input => {
+        physicalActions.push(input.actionKind);
+        if (input.actionKind === 'click') await click;
+        return { status: input.actionKind === 'click' || snapshotSucceeds ? 'succeeded' : 'failed',
+          fidelity: 'cdp', trustedInput: true,
+          ...(input.actionKind === 'snapshot' && !snapshotSucceeds ? { errorCode: 'runtime_unavailable' as const } : {}) };
+      },
+    } });
+    const events: unknown[] = [];
+    service.subscribeBrowserEvents(event => events.push(event));
+    try {
+      const pending = service.execute(request({ actionKind: 'click' }));
+      const takeover = service.recordHumanInput({ ...view, authority: 'present_user' });
+      finishClick();
+      await pending;
+      await takeover;
+      expect(service.getStatus(view)).toMatchObject({ controller: 'human', uncertain: true });
+      expect(await service.execute(request({ requestedBy: 'user' }))).toMatchObject({ status: 'failed' });
+      expect(service.getStatus(view)).toMatchObject({ controller: 'human', uncertain: true });
+      snapshotSucceeds = true;
+      expect(await service.execute(request({ requestedBy: 'user' }))).toMatchObject({ status: 'succeeded' });
+      expect(events.at(-1)).toMatchObject({ kind: 'controllerChanged', state: { controller: 'human', uncertain: false } });
+      expect(physicalActions).toEqual(['click', 'snapshot', 'snapshot']);
+    } finally { service.dispose(); }
+  });
   it('preserves the physical producer native observation qualification on a prepared target', async () => {
     const service = createBrowserAutomationDaemonService({ adapter: createBrowserAutomationCdpAdapter({ transport: {
       ownsView: () => true,

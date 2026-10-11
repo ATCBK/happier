@@ -11,6 +11,8 @@ import type { BrowserControlViewState } from '@/sync/domains/browser/control';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createBrowserRuntimeActionExecutor } from '@/sync/domains/browser/actions/runtimeActionExecutor';
 import { browserControlActionId } from '@/sync/domains/browser/actions/controlActionId';
+import { SessionViewerBodyPresentation, useOptionalSessionViewerController, type SessionViewerPresenceStore } from '@/components/sessions/viewer/SessionViewerController';
+import { SessionViewerControllerProvider } from '@/components/sessions/viewer/SessionViewerControllerProvider';
 
 import { BrowserShellPresence } from './BrowserShellPresence';
 
@@ -39,13 +41,17 @@ function Surface({ currentView, enabled = true }: Readonly<{ currentView: Browse
     const sendDaemonCommand = useBrowserDaemonControlTransport({ machineId: 'machine_1', serverId: 'server_1' });
     const execute = createActionExecutor(createActionExecutorBoundaryFixture({
         isActionEnabled: () => enabled,
-        runtimeActionExecute: createBrowserRuntimeActionExecutor({ control: {
+        runtimeActionExecute: createBrowserRuntimeActionExecutor({ executeOnMachine: async args => rpc(args), control: {
             readState: () => ({ ...createBrowserControlState(), viewsById: { [currentView.viewId]: currentView } }),
             applyDispatchResult: () => {},
             sendDaemonCommand,
         } }),
     }));
     return <BrowserShellPresence view={currentView} controlService={null} agent={null}
+        onCheckAgain={target => execute.execute('browser.automation.snapshot', {
+            v: 1, ...target, navigationGeneration: currentView.navigationGeneration, automationRequestId: 'fresh',
+            requestedBy: 'user', requesterRef: { kind: 'session', id: 'session_1' }, actionKind: 'snapshot', timeoutMs: 1000,
+        }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, defaultMachineId: 'machine_1' })}
         onCommand={command => execute.execute(browserControlActionId(command), command, {
             surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
         })} testID="p" />;
@@ -54,6 +60,41 @@ function Surface({ currentView, enabled = true }: Readonly<{ currentView: Browse
 describe('BrowserShellPresence daemon takeover', () => {
     beforeEach(() => { vi.useFakeTimers(); });
     afterEach(() => { vi.useRealTimers(); });
+    it('offers fresh observation after unknown completion and refuses it without Action dispatch', async () => {
+        rpc.mockReset();
+        const original = view('human', 5);
+        const currentView = { ...original, automationController: { ...original.automationController!, uncertain: true } };
+        const screen = await renderScreen(<Surface currentView={currentView} enabled={false} />);
+        await screen.pressByTestIdAsync('p-check-again');
+        expect(rpc).not.toHaveBeenCalled();
+        expect(screen.getTextContent()).toContain('browserPresence.lastActionMayHaveLanded');
+        rpc.mockResolvedValue({ v: 1, automationRequestId: 'fresh', status: 'failed', durationMs: 0,
+            adapterKind: 'chromiumSidecar', fidelity: 'cdp', trustedInput: true, navigationGenerationBefore: 0,
+            navigationGenerationAfter: 0, controlEpochBefore: 5, controlEpochAfter: 5, errorCode: 'runtime_unavailable' });
+        await screen.update(<Surface currentView={currentView} />);
+        await screen.pressByTestIdAsync('p-check-again');
+        expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ actionId: 'browser.automation.snapshot',
+            input: expect.objectContaining({ browserSessionId: 'browser_1', viewId: 'view_1',
+                navigationGeneration: currentView.navigationGeneration, actionKind: 'snapshot' }) }));
+        expect(screen.getTextContent()).toContain('browserPresence.lastActionMayHaveLanded');
+    });
+    it('publishes the same observation recovery to the Session viewer without a pane capsule', async () => {
+        rpc.mockReset();
+        let store: SessionViewerPresenceStore | undefined;
+        function ReadPresence() { store = useOptionalSessionViewerController()?.presence; return null; }
+        const original = view('human', 5);
+        const currentView = { ...original, automationController: { ...original.automationController!, uncertain: true } };
+        const screen = await renderScreen(<SessionViewerControllerProvider sessionId="session_1" serverId="server_1"
+            phone={false} canPresentSource={() => true} openDocked={() => {}}>
+            <ReadPresence />
+            <SessionViewerBodyPresentation presentation="viewer"><Surface currentView={currentView} enabled={false} /></SessionViewerBodyPresentation>
+        </SessionViewerControllerProvider>);
+        expect(screen.findHostByTestId('p-human')).toBeNull();
+        expect(store?.get('browser')?.presence).toMatchObject({ kind: 'human', interruptedCompletion: 'unknown' });
+        expect(store?.get('browser')?.onCheckAgain).toBeTypeOf('function');
+        await act(async () => store?.get('browser')?.onCheckAgain?.());
+        expect(rpc).not.toHaveBeenCalled();
+    });
     it('does not take control or hand back when the existing Action policy refuses UI admission', async () => {
         rpc.mockReset();
         const screen = await renderScreen(<Surface currentView={view('agent', 4)} enabled={false} />);
