@@ -18,6 +18,8 @@ Canonical lanes:
 
 Use the smallest relevant subset during RED/GREEN loops. Before handoff, run the touched package typecheck/build-enforcing lane and at least one broader relevant lane when shared contracts are touched.
 
+Cross-component composition tests that import another app's source use the existing `.composed.` filename segment. Preserve the lane suffix around that segment: for example, `feature.composed.test.ts` remains in a unit lane, while `feature.composed.integration.spec.ts` remains in an integration lane. Composition-only support modules use the same segment. Package TypeScript projects exclude `**/*.composed.*` so a package compile does not absorb another app's source graph; Vitest configs continue to select the files by their unit, integration, or database-contract suffix. Shared non-test contracts belong in a shared package instead of using the composition-test exclusion.
+
 In 0.3 development, `yarn workspace @happier-dev/cli test:unit src/api/artifacts/accountArtifactStore.test.ts` forwards the file selection through the routed script chain and runs it once. Explicit runner arguments, including file and test-name filters, bypass automatic sharding and the unit lane's unrelated native checks. An unfiltered unit run retains its shard/CI-part selection, native script tests and import-cycle guard. Known CLI unit aliases use source-test preparation and the validation class; actual compiler and runtime preparation keeps its own class.
 
 ## Choose checks by the changed contract
