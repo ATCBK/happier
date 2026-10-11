@@ -102,12 +102,17 @@ export function useApiTokenGrantModelGroups(granted: readonly ProviderBoundModel
  * The computer whose provider-model projection lists the choosable models: the grant's creation
  * computer when it has one (chats this key creates run there), else the Provider settings target.
  */
-export function useApiTokenGrantModelMachine(createMachineId: string | null): Readonly<{ machineId: string | null; serverId: string | null }> {
+export function useApiTokenGrantModelMachine(createMachineId: string | null): Readonly<{
+    machineId: string | null;
+    serverId: string | null;
+    accountAddressAvailable: boolean;
+}> {
     const target = useProviderSettingsTarget();
     if (createMachineId) {
-        return { machineId: createMachineId, serverId: target.machineId === createMachineId ? target.serverId : null };
+        return { machineId: createMachineId, serverId: target.machineId === createMachineId ? target.accountServerId : null,
+            accountAddressAvailable: target.machineId !== createMachineId || target.accountAddressAvailable };
     }
-    return { machineId: target.machineId, serverId: target.serverId };
+    return { machineId: target.machineId, serverId: target.accountServerId, accountAddressAvailable: target.accountAddressAvailable };
 }
 
 /** One Agent's provider-connected models, from the canonical provider-model projection. */
@@ -115,10 +120,11 @@ export function useApiTokenGrantProviderModelGroups(input: Readonly<{
     agentTargetKey: string;
     machineId: string | null;
     serverId: string | null;
+    accountAddressAvailable: boolean;
 }>): readonly ApiTokenGrantProviderModelGroup[] {
     const enabled = useFeatureEnabled('providers');
     const projection = useProviderModelProjection({
-        enabled,
+        enabled: enabled && input.accountAddressAvailable,
         machineId: input.machineId,
         serverId: input.serverId,
         agentTargetKey: input.agentTargetKey,

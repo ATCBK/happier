@@ -621,6 +621,7 @@ export const ApiTokenGrantModelsPicker = React.memo(function ApiTokenGrantModels
                         agent={agent}
                         machineId={machine.machineId}
                         serverId={machine.serverId}
+                        accountAddressAvailable={machine.accountAddressAvailable}
                         selected={selected}
                         {...props}
                     />
@@ -639,6 +640,7 @@ function ApiTokenGrantAgentModels(props: GrantPartProps & Readonly<{
     agent: ApiTokenGrantModelAgent;
     machineId: string | null;
     serverId: string | null;
+    accountAddressAvailable: boolean;
     selected: ReadonlySet<string>;
 }>) {
     const { theme } = useUnistyles();
@@ -646,6 +648,7 @@ function ApiTokenGrantAgentModels(props: GrantPartProps & Readonly<{
         agentTargetKey: props.agent.agentTargetKey,
         machineId: props.agent.entry ? props.machineId : null,
         serverId: props.serverId,
+        accountAddressAvailable: props.accountAddressAvailable,
     });
     const options = React.useMemo(() => buildApiTokenGrantModelOptions({
         agentTargetKey: props.agent.agentTargetKey,

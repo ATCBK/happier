@@ -1,24 +1,31 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
 import { ProviderSettingsMigrationPendingConflictV1Schema } from '@happier-dev/protocol/providers/settings/v1';
 import { DaemonProviderProfileMigrationPreviewResponseV1Schema, RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { t } from '@/text';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
+const rpc = createProviderSettingsHarness();
+installProviderSettingsRpcBoundary(rpc);
 const account = createProviderSettingsAccountHarness();
 const machineRpc = vi.fn(async (input: Readonly<{ method: string }>) => input.method === RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_PREVIEW
     ? DaemonProviderProfileMigrationPreviewResponseV1Schema.parse({ status: 'success', sourceProfileId: 'deepseek',
         sourceFingerprint: `legacy-profile-migration-source:v1:${'a'.repeat(43)}` })
     : { status: 'success', sourceProfileId: 'deepseek', connectionId: 'pc_existing', settingsVersion: 1 });
-// Only the Machine transport is replaced; Account admission, bindings and retirement stay real.
-vi.doMock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
+beforeEach(() => {
+    rpc.reset();
+    rpc.intercept(RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_PREVIEW, request => machineRpc(request));
+    rpc.intercept(RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_CONFIRM, request => machineRpc(request));
+    rpc.intercept(RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_CONFLICT_CONFIRM, request => machineRpc(request));
+});
 const { LegacyProfileMigrationReview } = await import('./LegacyProfileMigrationReview');
 const { LegacyProfileMigrationConflictReview } = await import('./LegacyProfileMigrationConflictReview');
 const { Modal, ModalProvider, useVisibleModalKind } = await import('@/modal');
@@ -28,12 +35,14 @@ afterEach(async () => {
     standardCleanup();
     machineRpc.mockClear();
     await account.reset();
+    rpc.reset();
 });
 
 describe('Provider legacy review captured Account', () => {
     it('does not publish a late acknowledged Account A migration into the replacement Account dialog', async () => {
         const waivedActions = ['launch_profiles.legacy.convert'] as const;
-        const { serverId } = await account.restore({ accountId: 'account-a', waivedActions });
+        const machines = [createMachineFixture({ id: 'machine-shared' })];
+        const { serverId } = await account.restore({ accountId: 'account-a', waivedActions, machines });
         let modalId: string | null = null;
         const onConfirmed = vi.fn(async () => {});
         const onClose = vi.fn(() => { if (modalId) Modal.hide(modalId); });
@@ -63,7 +72,7 @@ describe('Provider legacy review captured Account', () => {
             await press(t('settingsProviders.migration.confirm'));
             await waitForHomeGovernance(() => expect(machineRpc).toHaveBeenCalledOnce());
             expect(machineRpc.mock.calls[0]?.[0]).toMatchObject({ accountId: 'account-a' });
-            await act(async () => { await account.restore({ accountId: 'account-b', waivedActions }); });
+            await act(async () => { await account.restore({ accountId: 'account-b', waivedActions, machines }); });
             await act(async () => { releaseResponse(); });
             await waitForHomeGovernance(() => expect(screen.find(node => node.props.title === t('settingsProviders.migration.confirm')).props.loading).toBe(false));
             expect(machineRpc).toHaveBeenCalledOnce();
@@ -75,7 +84,8 @@ describe('Provider legacy review captured Account', () => {
     });
     it.each(['review', 'conflict'] as const)('never admits the original %s mapping to another Account with equal source ids', async kind => {
         const waivedActions = ['launch_profiles.legacy.convert', 'launch_profiles.legacy.resolve_conflict'] as const;
-        const { serverId } = await account.restore({ accountId: 'account-a', waivedActions });
+        const machines = [createMachineFixture({ id: 'machine-shared' })];
+        const { serverId } = await account.restore({ accountId: 'account-a', waivedActions, machines });
         let modalId: string | null = null;
         let modalKind: ReturnType<typeof useVisibleModalKind> = null;
         function HostStatus() {
@@ -111,7 +121,7 @@ describe('Provider legacy review captured Account', () => {
         }
         machineRpc.mockClear();
         // The same Home and source ids cannot turn Account A's authored mapping into Account B's intent.
-        await act(async () => { await account.restore({ accountId: 'account-b', waivedActions }); });
+        await act(async () => { await account.restore({ accountId: 'account-b', waivedActions, machines }); });
         if (modalKind !== null) {
             await press(t(kind === 'review' ? 'settingsProviders.migration.confirm' : 'settingsProviders.migration.keepExisting'));
             await waitForHomeGovernance(() => {

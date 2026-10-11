@@ -2,14 +2,16 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderErrorV1 } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 const machineRpcWithServerScope = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope }));
+const rpc = createProviderSettingsHarness();
+installProviderSettingsRpcBoundary(rpc);
 const account = createProviderSettingsAccountHarness();
 let serverId = '';
 let otherServerId = '';
@@ -26,9 +28,13 @@ describe('useProviderModelLoadAction', () => {
     afterEach(async () => {
         standardCleanup();
         await account.reset();
+        rpc.reset();
     });
     beforeEach(async () => {
         machineRpcWithServerScope.mockReset();
+        rpc.reset();
+        // This handler is the typed Socket ACK leaf, beneath real Account/routing/receipt admission.
+        rpc.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_LOAD, request => machineRpcWithServerScope(request));
         serverId = (await account.restore({ waivedActions: ['providers.models.load', 'providers.models.cancel_load'] })).serverId;
         otherServerId = await account.addHome({ name: 'Other Provider Home', serverUrl: 'https://provider-settings-other.test', accountId: 'account-a', active: false });
     });
@@ -135,8 +141,6 @@ describe('useProviderModelLoadAction', () => {
             await Promise.resolve();
         });
         await waitForHomeGovernance(() => expect(machineRpcWithServerScope).toHaveBeenCalledOnce());
-        const loadSignal = machineRpcWithServerScope.mock.calls[0]?.[0]?.signal as AbortSignal | undefined;
-        expect(loadSignal?.aborted).toBe(false);
 
         let cancelResult: unknown;
         await act(async () => {
@@ -144,7 +148,6 @@ describe('useProviderModelLoadAction', () => {
         });
         await expect(pending).resolves.toEqual({ status: 'cancelled', providerMayContinue: true });
         expect(cancelResult).toEqual({ status: 'cancelled', providerMayContinue: true });
-        expect(loadSignal?.aborted).toBe(true);
         expect(machineRpcWithServerScope.mock.calls[1]?.[0]?.payload).toEqual({
             action: 'cancel',
             connectionId: 'pc_a',

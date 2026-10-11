@@ -16,14 +16,17 @@ const NO_CHOICES: readonly PoolGatewayChoice[] = Object.freeze([]);
 export function usePoolGatewayChoices(input: Readonly<{
     target: Extract<QualifiedConnectedAccountPurposeBindingTargetV1, { kind: 'group' }>;
     enabled: boolean;
+    accountServerId: string | null;
+    accountAddressAvailable: boolean;
     resolveTarget: () => Readonly<{ machineId: string; serverId: string }> | null;
 }>) {
     const scope = useAccountSettingsScope();
     const target = input.resolveTarget();
-    const accountMatchesTarget = Boolean(scope && target && areServerProfileIdentifiersEquivalent(scope.serverId, target.serverId));
+    const accountMatchesTarget = Boolean(scope && input.accountAddressAvailable && input.accountServerId
+        && areServerProfileIdentifiersEquivalent(scope.serverId, input.accountServerId));
     const catalog = useProviderCatalog(input.enabled ? scope : null);
     const query = useProviderConnections({ enabled: input.enabled && accountMatchesTarget,
-        machineId: target?.machineId ?? null, serverId: target?.serverId ?? scope?.serverId ?? null });
+        machineId: target?.machineId ?? null, serverId: input.accountServerId });
     const choices = React.useMemo(() => catalog?.data && query.data
         ? buildPoolGatewayChoices({ connections: catalog.data.connections, views: query.data.connections, target: input.target })
         : NO_CHOICES, [catalog?.data, query.data, input.target]);
@@ -33,19 +36,20 @@ export function usePoolGatewayChoices(input: Readonly<{
     const refresh = React.useCallback(async () => {
         await Promise.all([query.refresh(), scope ? refreshProviderCatalog(scope) : Promise.resolve()]);
     }, [query.refresh, scope]);
-    const mutation = useProviderConnectionMutation({ resolveTarget: input.resolveTarget, refresh });
+    const mutation = useProviderConnectionMutation({ resolveTarget: input.resolveTarget, serverId: input.accountServerId,
+        initiatingLifetime: accountMatchesTarget ? undefined : null, refresh });
     const setEnabled = React.useCallback(async (connectionId: string, enabled: boolean): Promise<boolean> => {
         const choice = choices.find(candidate => candidate.connectionId === connectionId);
-        if (!input.enabled || !target || !accountMatchesTarget || catalog?.status !== 'ready' || catalog.stale || !choice) {
+        if (!input.enabled || !accountMatchesTarget || catalog?.status !== 'ready' || catalog.stale || !choice) {
             throw createProviderErrorV1('provider_authorization_changed', { connectionId });
         }
-        const request = buildPoolGatewayMutation({ choice, target: input.target, enabled, machineId: target.machineId });
+        const request = buildPoolGatewayMutation({ choice, target: input.target, enabled, machineId: target?.machineId ?? null });
         if (!request) return true;
         const result = await mutation.run(request, `gateway:pool:${connectionId}`);
         return result?.status === 'success';
     }, [accountMatchesTarget, catalog?.stale, catalog?.status, choices, input.enabled, input.target, mutation.run, target]);
     return { choices, setEnabled, refresh, loading: query.loading || catalog?.status === 'loading',
-        ready: input.enabled && (!target || accountMatchesTarget) && catalog?.status === 'ready' && !catalog.stale && declarationsKnown,
+        ready: input.enabled && accountMatchesTarget && catalog?.status === 'ready' && !catalog.stale && declarationsKnown,
         error: mutation.error ?? query.error,
         pending: choices.some(choice => mutation.isPending(`gateway:pool:${choice.connectionId}`)) };
 }

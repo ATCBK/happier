@@ -144,17 +144,20 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         machineId,
         resolveCurrentTarget,
         selectedTargetServerMatchesActiveAccount,
-        serverId,
+        accountServerId: serverId,
+        accountAddressAvailable,
     } = providerTarget;
-    const { describeProviderConnections, probeProviderDraft } = useProviderActionClient(serverId);
+    const { describeProviderConnections, probeProviderDraft, accountScope: { resolution } } = useProviderActionClient(serverId, accountAddressAvailable ? undefined : null);
+    const addressedScope = accountAddressAvailable && resolution.kind === 'bound' ? resolution.scope : null;
     const focused = useIsFocused();
-    const query = useProviderConnections({ enabled, active: focused, machineId, serverId });
+    const query = useProviderConnections({ enabled: enabled && accountAddressAvailable, active: focused, machineId, serverId });
     const refreshConnections = React.useCallback(async (): Promise<void> => {
         await query.refresh();
     }, [query.refresh]);
     const mutation = useProviderConnectionMutation({
         resolveTarget: resolveCurrentTarget,
         serverId,
+        initiatingLifetime: accountAddressAvailable ? undefined : null,
         refresh: refreshConnections,
     });
     const connectionId = React.useRef(`pc_${randomUUID()}`).current;
@@ -323,9 +326,9 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         candidateContextRef.current = { machineId, serverId, candidateId: null, displayName: null };
         discardAuthoringDraft();
     }, [discardAuthoringDraft, machineId, serverId]);
-    // One incumbent lifetime owns both synchronous form retirement and every
-    // callback fence; there is no Provider-local Account epoch.
-    const accountLifetime = useRetireProviderStateOnAccountChange(discardAccountScopedAuthoringState);
+    // The existing retirement owner clears addressed-Account buffers separately
+    // from active UI interest. The Action client owns exact peer currentness.
+    const accountLifetime = useRetireProviderStateOnAccountChange(discardAccountScopedAuthoringState, addressedScope);
     const accountStillCurrent = React.useCallback(
         () => accountLifetime?.isCurrent() ?? true, [accountLifetime]);
 

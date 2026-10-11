@@ -167,13 +167,17 @@ export type ProviderGatewayCollectionRow = Readonly<{
 }>;
 
 /** Immutable vendor declarations distinguish a gateway from other managed sources such as Ollama. */
+function matchesProviderGatewayDeclaration(saved: ProviderConnectionV1, view: DaemonProviderConnectionViewV1): boolean {
+    return saved.id === view.connectionId && saved.deployment.kind === 'managedLocal'
+        && view.deployment.kind === 'managedLocal' && saved.source.kind === 'contribution'
+        && Boolean(view.contributionKey && areProviderContributionKeysEqualV1(saved.source.contributionKey, view.contributionKey));
+}
+
 export function readProviderGatewayPurposeDeclarations(
     saved: ProviderConnectionV1,
     view: DaemonProviderConnectionViewV1,
 ): NonNullable<DaemonProviderConnectionViewV1['managedLocalOption']>['connectedAccountPurposes'] | null {
-    if (saved.id !== view.connectionId || saved.deployment.kind !== 'managedLocal' || saved.source.kind !== 'contribution'
-        || !view.contributionKey
-        || !areProviderContributionKeysEqualV1(saved.source.contributionKey, view.contributionKey)) return null;
+    if (!matchesProviderGatewayDeclaration(saved, view)) return null;
     return readProviderGatewayViewDeclarations(view);
 }
 
@@ -186,13 +190,14 @@ export function readProviderGatewayViewDeclarations(
     return view.managedLocalOption.connectedAccountPurposes;
 }
 
-/** No managed candidates is authoritative empty; otherwise every immutable declaration must be admitted. */
+/** An admitted unavailable contribution is known-ineligible, not a missing declaration. */
 export function areProviderGatewayDeclarationsKnown(input: Readonly<{
     connections: readonly ProviderConnectionV1[];
     views: readonly DaemonProviderConnectionViewV1[] | null;
 }>): boolean {
     return input.connections.every(connection => connection.deployment.kind !== 'managedLocal'
-        || Boolean(input.views?.some(view => readProviderGatewayPurposeDeclarations(connection, view) !== null)));
+        || Boolean(input.views?.some(view => matchesProviderGatewayDeclaration(connection, view)
+            && (view.sourceStatus === 'unavailable' || readProviderGatewayViewDeclarations(view) !== null))));
 }
 
 /** Saved identity comes from the Account; eligibility comes from its admitted contribution projection. */

@@ -52,7 +52,7 @@ export function buildPoolGatewayMutation(input: Readonly<{
     choice: PoolGatewayChoice;
     target: PoolTarget;
     enabled: boolean;
-    machineId: string;
+    machineId?: string | null;
 }>): Extract<DaemonProviderConnectionMutationRequestV1, { action: 'update' }> | null {
     const { choice, target } = input;
     if (buildQualifiedPluginContributionKey(choice.service) !== buildQualifiedPluginContributionKey(target.service)) return null;

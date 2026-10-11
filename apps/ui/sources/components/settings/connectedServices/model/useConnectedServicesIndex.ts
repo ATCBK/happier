@@ -59,10 +59,10 @@ export function useConnectedServicesIndex(options: Readonly<{ agents: 'load' | '
     // cached agents, so the Gateways group does not depend on which detail is open beside it.
     const gatewayMachineId = options.gateways ? projectionMachineId : null;
     const gatewayDeclarations = useProviderConnections({
-        enabled: Boolean(options.gateways && gatewayMachineId && gatewayCatalog?.status === 'ready' && !gatewayCatalog.stale
+        enabled: Boolean(options.gateways && scope && gatewayCatalog?.status === 'ready' && !gatewayCatalog.stale
             && gatewayCatalog.data?.connections.some(connection => connection.deployment.kind === 'managedLocal')),
         machineId: gatewayMachineId,
-        serverId: appShellProjection.serverId,
+        serverId: scope?.serverId ?? null,
     });
     const gateways = React.useMemo(() => {
         if (!gatewayCatalog?.data || gatewayCatalog.status !== 'ready' || gatewayCatalog.stale) return null;

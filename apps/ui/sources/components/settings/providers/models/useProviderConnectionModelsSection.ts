@@ -21,6 +21,7 @@ import {
     providerRetryRecoveryForError,
 } from '@/providers/connection/recovery';
 import { t } from '@/text';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 type ProviderSettingsExecutionTarget = Readonly<{ machineId: string; serverId: string }>;
 
@@ -44,11 +45,13 @@ export function useProviderConnectionModelsSection(input: Readonly<{
     active?: boolean;
     machineId: string | null;
     serverId: string | null;
+    initiatingLifetime?: ServerAccountScopeLifetime | null;
     resolveCurrentTarget: () => ProviderSettingsExecutionTarget | null;
     startAdding?: boolean;
 }>) {
     const { connectionId, connection, enabled, machineId, serverId, resolveCurrentTarget } = input;
-    const { mutateProviderModelSettings, probeProviderConnection } = useProviderActionClient(serverId);
+    const { mutateProviderModelSettings, probeProviderConnection, accountScope: { resolution } } = useProviderActionClient(serverId, input.initiatingLifetime);
+    const addressedScope = input.initiatingLifetime !== null && resolution.kind === 'bound' ? resolution.scope : null;
     const catalog = useProviderConnectionModels({ enabled, active: input.active, machineId, serverId, connectionId });
     const [showHidden, setShowHidden] = React.useState(false);
     const [editorOpen, setEditorOpen] = React.useState(input.startAdding === true);
@@ -81,9 +84,9 @@ export function useProviderConnectionModelsSection(input: Readonly<{
         setOperationError(null);
         modelSettingsQueue.current = Promise.resolve();
     }, [discardManualModelDraft]);
-    // One incumbent lifetime owns both the local form retirement and all queued
-    // write/modal/async callback fencing.
-    const accountLifetime = useRetireProviderStateOnAccountChange(discardAccountScopedManualModelState);
+    // Local buffers retire with both active UI interest and their addressed
+    // Account. The Action client retains exact peer callback/currentness custody.
+    const accountLifetime = useRetireProviderStateOnAccountChange(discardAccountScopedManualModelState, addressedScope);
     const accountStillCurrent = React.useCallback(
         () => accountLifetime?.isCurrent() ?? true, [accountLifetime]);
 

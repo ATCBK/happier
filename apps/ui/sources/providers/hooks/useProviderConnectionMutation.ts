@@ -9,6 +9,7 @@ import { useProviderActionClient } from '@/providers/actions/useProviderActionCl
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { CustomProviderTemplateV1 } from '@happier-dev/protocol/providers/connections/customTemplateV1';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 type ProviderConnectionMutationResult = Awaited<ReturnType<typeof MutateProviderConnection>> | null;
 type ProviderConnectionExecutionTarget = Readonly<{ machineId: string; serverId: string }>;
@@ -35,11 +36,12 @@ type PendingMutationState = Readonly<{
 export function useProviderConnectionMutation(input: Readonly<{
     resolveTarget: () => ProviderConnectionExecutionTarget | null;
     serverId?: string | null;
+    initiatingLifetime?: ServerAccountScopeLifetime | null;
     refresh: () => Promise<void>;
 }>) {
     const capturedServerId = React.useMemo(() => input.serverId ?? input.resolveTarget()?.serverId ?? null, [input.resolveTarget, input.serverId]);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
-    const { mutateProviderConnection } = useProviderActionClient(capturedServerId);
+    const { mutateProviderConnection } = useProviderActionClient(capturedServerId, input.initiatingLifetime);
     const [failure, setFailure] = React.useState<Readonly<{
         error: ProviderErrorV1;
         retry?: () => Promise<void>;

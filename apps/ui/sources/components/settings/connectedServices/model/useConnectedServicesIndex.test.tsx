@@ -23,9 +23,8 @@ import { useConnectedServicesIndex } from './useConnectedServicesIndex';
 installConnectedServicesCommonModuleMocks();
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
-// Machine RPC is a genuine boundary; selection, projections and row activation stay real.
+// This handler runs at the existing Session-pane Socket ACK leaf; orchestration stays real.
 const machineRpc = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 
 const consumer = { pluginId: 'happier.agent.codex', localId: 'codex' } as const;
 const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' } as const;
@@ -40,6 +39,7 @@ const gateway = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway',
     gatewayPlacement: { kind: 'machine', machineId: 'hub-a' }, claudeHelperModels: { fast: 'haiku' },
     revision: 3, createdAt: 1, updatedAt: 1 });
 const mutations: ConnectedAccountCatalogRowMutationV1[] = [];
+const providerRowHomes: string[] = [];
 let savedConnections: readonly ProviderConnectionV1[] = [gateway];
 let rowStatus: 'absent' | 'present' | 'deleted' = 'absent';
 let content: ConnectedAccountCatalogRowMutationV1['content'] | null = null;
@@ -49,6 +49,7 @@ beforeEach(() => {
     savedConnections = [gateway];
     rowStatus = 'absent'; content = null; mutations.length = 0; machineRpc.mockReset();
     beforeNextPurposeRead = undefined;
+    providerRowHomes.length = 0;
     resetConnectedAccountCatalogEngineForTests(); resetConnectedAccountCatalogSnapshotsForTests();
     resetProviderCatalogEngineForTests(); resetProviderCatalogSnapshotsForTests();
     clearDaemonMergedProjectionCacheForTests();
@@ -60,6 +61,7 @@ beforeEach(() => {
         ? { protocolVersion: 1, projection } : { error: 'RPC method not found', errorCode: 'METHOD_NOT_FOUND' });
 });
 const runtime = installSessionPaneRuntimeTestHarness({
+    rpc: async (method, input, targetId) => machineRpc({ method, input, targetId }),
     accountCurrentness: () => createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 7 }),
     request: async (url, init) => {
         const path = new URL(String(url)).pathname;
@@ -67,8 +69,11 @@ const runtime = installSessionPaneRuntimeTestHarness({
         if (path === '/v1/account/saved-secrets/resources/materials') return Response.json({ resources: [] });
         if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });
         if (path === '/v2/account/settings/history') return Response.json({ snapshots: [] });
-        if (path === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1,
-            content: { t: 'plain', v: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: savedConnections } } });
+        if (path === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) {
+            providerRowHomes.push(new URL(String(url)).origin);
+            return Response.json({ status: 'present', revision: 1,
+                content: { t: 'plain', v: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: savedConnections } } });
+        }
         if (path === '/v1/account/entity-rows/connected-accounts/purposes') {
             if (init?.method === 'POST') {
                 const mutation = ConnectedAccountCatalogRowMutationV1Schema.parse(JSON.parse(String(init.body)));
@@ -86,7 +91,8 @@ const runtime = installSessionPaneRuntimeTestHarness({
     },
 });
 
-async function mount(mode: 'load' | 'cached', machineId: string | null, retiredProjectionLifetime = false, gateways = false) {
+async function mount(mode: 'load' | 'cached', machineId: string | null, retiredProjectionLifetime = false, gateways = false,
+    projectionServerId = runtime.serverId) {
     const scope = { serverId: runtime.serverId, accountId: 'account-a' };
     storage.setState({ profileScope: scope, settingsScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId }) });
     storage.getState().applyMachines([createMachineFixture({ id: 'm1', activeAt: Date.now() })], true, { sourceServerId: scope.serverId });
@@ -102,7 +108,7 @@ async function mount(mode: 'load' | 'cached', machineId: string | null, retiredP
         expect(lifetime.isCurrent()).toBe(false);
     }
     const value: AppShellPluginUiProjectionValue = { pluginUiProjection: null, pluginBrowserProjection: null,
-        phase: 'unavailable', interactionEnabled: false, machineId, serverId: scope.serverId, platform: 'web',
+        phase: 'unavailable', interactionEnabled: false, machineId, serverId: projectionServerId, platform: 'web',
         accountLifetime: lifetime, reloadConnectedAccountProjection() {}, clientExecutableActivation: { status: 'ready' }, reloadClientExecutables() {} };
     const Wrapper = ({ children }: { children: React.ReactNode }) => <runtime.Wrapper>
         <AppShellPluginUiProjectionValueProvider value={value}>{children}</AppShellPluginUiProjectionValueProvider>
@@ -111,6 +117,21 @@ async function mount(mode: 'load' | 'cached', machineId: string | null, retiredP
 }
 
 describe('Connected Services index purpose source admission', () => {
+    it('reads active Account gateways rather than a stale foreign app-shell Machine projection', async () => {
+        const { upsertServerProfileOnly } = await import('@/sync/domains/server/serverRuntime');
+        const foreign = await upsertServerProfileOnly({ serverUrl: 'https://foreign-index.test', name: 'Foreign index Home' });
+        const hook = await mount('cached', 'm1', false, true, foreign.id);
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().gateways).toEqual([
+                expect.objectContaining({ connectionId: gateway.id, title: gateway.displayName }),
+            ]));
+            expect(hook.getCurrent().gatewayCatalog?.scope?.serverId).toBe(runtime.serverId);
+            expect(providerRowHomes.length).toBeGreaterThan(0);
+            expect(providerRowHomes.every(origin => origin === 'https://session-pane.test')).toBe(true);
+            expect(machineRpc).not.toHaveBeenCalled();
+            expect(mutations).toEqual([]);
+        } finally { await hook.unmount(); }
+    });
     it('admits the selected Machine when its consumer joins a pending generic purpose read', async () => {
         let releaseRead!: () => void;
         let markReadStarted!: () => void;

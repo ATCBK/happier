@@ -13,6 +13,9 @@ import {
     DaemonProviderModelSettingsMutationResponseV1Schema,
     DaemonProviderModelsResponseV1Schema,
     DaemonProviderProbeResponseV1Schema,
+    DaemonProviderProfileMigrationPreviewResponseV1Schema,
+    DaemonProviderProfileMigrationConfirmResponseV1Schema,
+    DaemonProviderProfileMigrationConflictConfirmResponseV1Schema,
     RPC_METHODS,
     type DaemonProviderConnectionMutationResponseV1,
     type DaemonProviderBindingStatusResponseV1,
@@ -24,6 +27,9 @@ import {
     type DaemonProviderModelSettingsMutationResponseV1,
     type DaemonProviderModelsResponseV1,
     type DaemonProviderProbeResponseV1,
+    type DaemonProviderProfileMigrationPreviewResponseV1,
+    type DaemonProviderProfileMigrationConfirmResponseV1,
+    type DaemonProviderProfileMigrationConflictConfirmResponseV1,
 } from '@happier-dev/protocol/rpc';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { vi } from 'vitest';
@@ -59,7 +65,10 @@ type ProviderRpcResponse =
     | DaemonProviderModelsResponseV1
     | DaemonProviderModelProjectionResponseV1
     | DaemonProviderModelSettingsMutationResponseV1
-    | DaemonProviderModelLoadResponseV1;
+    | DaemonProviderModelLoadResponseV1
+    | DaemonProviderProfileMigrationPreviewResponseV1
+    | DaemonProviderProfileMigrationConfirmResponseV1
+    | DaemonProviderProfileMigrationConflictConfirmResponseV1;
 
 export type ProviderRpcRequest = Readonly<{
     machineId: string;
@@ -265,6 +274,12 @@ function parseResponse(method: string, response: unknown): ProviderRpcResponse {
             return DaemonProviderModelSettingsMutationResponseV1Schema.parse(response);
         case RPC_METHODS.DAEMON_PROVIDERS_MODEL_LOAD:
             return DaemonProviderModelLoadResponseV1Schema.parse(response);
+        case RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_PREVIEW:
+            return DaemonProviderProfileMigrationPreviewResponseV1Schema.parse(response);
+        case RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_CONFIRM:
+            return DaemonProviderProfileMigrationConfirmResponseV1Schema.parse(response);
+        case RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_CONFLICT_CONFIRM:
+            return DaemonProviderProfileMigrationConflictConfirmResponseV1Schema.parse(response);
         default:
             throw new Error(`Unexpected Provider RPC method: ${method}`);
     }

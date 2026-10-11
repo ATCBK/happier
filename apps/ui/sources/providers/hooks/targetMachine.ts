@@ -15,6 +15,7 @@ import {
 import {
     captureActiveServerAccountScopeLifetime,
 } from '@/sync/domains/scope/activeServerAccountScope';
+import { resolveServerProfileForPortableIdentity } from '@/sync/domains/server/serverProfiles';
 
 /**
  * One machine a Provider route may address, carrying the full Administration
@@ -36,6 +37,10 @@ export type ProviderSettingsTargetV1 = Readonly<{
     /** Exact machine the user selected, once it currently resolves. */
     machineId: string | null;
     serverId: string | null;
+    /** The selected Home's Account address, independent of Machine availability. */
+    accountServerId: string | null;
+    /** Explicit missing or ambiguous selected Homes must never adopt the active Account. */
+    accountAddressAvailable: boolean;
     /** Canonical permission to compose active-Account settings with this target. */
     selectedTargetServerMatchesActiveAccount: boolean;
     /**
@@ -110,6 +115,13 @@ export function useProviderSettingsTarget(): ProviderSettingsTargetV1 {
     // stable while one Account is mounted, so binding the resolver to it does
     // not restart an in-flight mutation scope.
     const accountLifetime = captureActiveServerAccountScopeLifetime();
+    const accountProfile = selection.selectedTarget
+        ? resolveServerProfileForPortableIdentity(selection.selectedTarget.serverIdentityId)
+        : null;
+    const accountServerId = accountProfile
+        ? accountProfile.kind === 'resolved' ? accountProfile.profile.id : null
+        : accountLifetime?.isCurrent() ? accountLifetime.scope.serverId : null;
+    const accountAddressAvailable = accountServerId !== null;
     const resolveCurrentTarget = React.useCallback(() => {
         if (accountLifetime && !accountLifetime.isCurrent()) return null;
         const resolvedTarget = resolveExecutionTarget();
@@ -132,10 +144,12 @@ export function useProviderSettingsTarget(): ProviderSettingsTargetV1 {
         selection,
         machineId: executionTarget?.machine.id ?? null,
         serverId: executionTarget?.serverId ?? null,
+        accountServerId,
+        accountAddressAvailable,
         selectedTargetServerMatchesActiveAccount: selection.selectedTarget === null
             ? accountLifetime?.isCurrent() === true
             : selection.selectedTargetServerMatchesActiveAccount,
         machineRows,
         resolveCurrentTarget,
-    }), [accountLifetime, executionTarget, machineRows, resolveCurrentTarget, selection]);
+    }), [accountAddressAvailable, accountLifetime, accountServerId, executionTarget, machineRows, resolveCurrentTarget, selection]);
 }

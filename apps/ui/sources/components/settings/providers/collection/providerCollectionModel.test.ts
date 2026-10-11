@@ -6,7 +6,7 @@ import {
 } from '@/dev/testkit';
 
 import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
-import { buildProviderCollection, buildProviderGatewayCollection, providerConnectionDetailRoute, resolveProviderCollectionLandingId } from './providerCollectionModel';
+import { areProviderGatewayDeclarationsKnown, buildProviderCollection, buildProviderGatewayCollection, providerConnectionDetailRoute, resolveProviderCollectionLandingId } from './providerCollectionModel';
 
 function candidate(overrides: Record<string, unknown>) {
     return {
@@ -21,6 +21,26 @@ function candidate(overrides: Record<string, unknown>) {
 }
 
 describe('buildProviderCollection', () => {
+    it('knows an admitted unavailable contribution is ineligible without accepting missing or mismatched declarations', () => {
+        const saved = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_unavailable',
+            source: { kind: 'contribution', contributionKey: 'example.unavailable/source' },
+            role: 'named', displayName: 'Unavailable', displayNameMode: 'custom',
+            deployment: { kind: 'managedLocal' }, revision: 3, createdAt: 1, updatedAt: 1 });
+        const unavailable = createProviderConnectionViewFixture({ connectionId: saved.id,
+            contributionKey: saved.source.kind === 'contribution' ? saved.source.contributionKey : null,
+            deployment: { kind: 'managedLocal', targetMachineId: null, effects: null },
+            sourceStatus: 'unavailable', managedLocalOption: null });
+        expect(areProviderGatewayDeclarationsKnown({ connections: [saved], views: [unavailable] })).toBe(true);
+        expect(buildProviderGatewayCollection({ connections: [saved], views: [unavailable] })).toEqual([]);
+        for (const views of [null, [],
+            [{ ...unavailable, connectionId: 'pc_other' }],
+            [{ ...unavailable, contributionKey: 'example.other/source' }],
+            [{ ...unavailable, deployment: { kind: 'external' as const } }],
+            [{ ...unavailable, sourceStatus: 'available' as const }],
+        ]) {
+            expect(areProviderGatewayDeclarationsKnown({ connections: [saved], views })).toBe(false);
+        }
+    });
     it('marks a gateway row from the machine view alone, and not another managed or an external connection', () => {
         const purposes = [{ purpose: 'openai-upstream', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, required: false }];
         const data = createProviderConnectionsDescribeFixture({ connections: [

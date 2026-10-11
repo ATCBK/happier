@@ -1,10 +1,11 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderSettingsMigrationPendingConflictV1Schema } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { renderScreen, type RenderScreenResult } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
@@ -15,12 +16,8 @@ const confirm = vi.hoisted(() => vi.fn());
 
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (request: Readonly<{ method: string }>) => {
-        if (request.method === 'daemon.providers.profileMigration.conflict.confirm') return confirm(request);
-        throw new Error(`Unexpected Provider RPC method: ${request.method}`);
-    },
-}));
+const rpc = createProviderSettingsHarness();
+installProviderSettingsRpcBoundary(rpc);
 const account = createProviderSettingsAccountHarness();
 await loadSyncSingletonForTests();
 const [{ Item }, { MachineSetupTextField }, { ProviderErrorItems }] = await Promise.all([
@@ -70,9 +67,11 @@ const conflict = ProviderSettingsMigrationPendingConflictV1Schema.parse({
 });
 
 describe('LegacyProfileMigrationConflictReview', () => {
-    afterEach(async () => { standardCleanup(); await account.reset(); });
+    afterEach(async () => { standardCleanup(); await account.reset(); rpc.reset(); });
     beforeEach(async () => {
         confirm.mockReset();
+        rpc.reset();
+        rpc.intercept(RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_CONFLICT_CONFIRM, request => confirm(request));
         serverId = (await account.restore({ waivedActions: ['launch_profiles.legacy.resolve_conflict'] })).serverId;
     });
 
