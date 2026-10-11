@@ -38,6 +38,9 @@ function sessionAdmissionHost(machineId: string, readHostActionContract?: Workfl
         protocolVersion: 1, projection: { v: 2, generation: 1, agentsById: { installed: {
           id: 'installed', identity: { pluginId: 'test.agent', localId: 'agent' },
           capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+        }, 'custom-acp': {
+          id: 'custom-acp', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1,
+          capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
         } } },
       };
       if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
@@ -174,11 +177,14 @@ describe('exact-machine workflow materialization effects', () => {
     });
     await expect(resolve({ machineId: 'run-machine', directory: '/repo' })).rejects.toMatchObject({ code: 'source_unavailable' });
   });
-  it.each([true, false])('uses the run machine readiness and detached capability: %s', async (detachedAvailable) => {
+  it.each([true, false])('uses native run machine readiness despite unavailable optional ACP authority: %s', async (detachedAvailable) => {
     const calls: string[] = [];
     const resolve = createWorkflowMaterializationHostV1({
       credentials,
       readRoleSelection: async () => ({}), readLaunchProfile: async () => null, readWorkflowDefinition: async () => null,
+      // The real catalog refresh returns an unavailable snapshot on a failed
+      // resource read, rather than rejecting or returning no reader at all.
+      readAcpCatalog: async () => ({ status: 'unavailable', reason: 'unreachable' }),
       callMachineAction: async ({ machineId, method }) => {
         expect(machineId).toBe('run-machine');
         calls.push(method);
@@ -204,7 +210,7 @@ describe('exact-machine workflow materialization effects', () => {
       },
     });
     const context = await resolve({ machineId: 'run-machine', directory: '/repo', roleSelection: {
-      defaultEngine: { agentTargetKey: 'agent:caller.agent/agent' },
+      defaultEngine: { agentTargetKey: 'agent:native.agent/agent' },
     } });
     // Catalog effects occur in the materializer's availability phase, after policy.
     const secondOpinion = resolveRoleSelectionV1({ ...context.roleSelection, roleId: 'second_opinion' });
@@ -215,6 +221,11 @@ describe('exact-machine workflow materialization effects', () => {
     const nativeLeaf = { ...leaf, selection: { agentTarget: { kind: 'agent' as const, identity: { pluginId: 'native.agent', localId: 'agent' } } } };
     await expect(context.effects.resolveTargetAvailability({ ...nativeLeaf, executionTarget: { kind: 'session' } }, { sessionIds: [] })).resolves.toBe(false);
     await expect(context.effects.resolveTargetAvailability({ ...nativeLeaf, executionTarget: { kind: 'detached_run' } }, { sessionIds: [] })).resolves.toBe(detachedAvailable);
+    for (const kind of ['session', 'detached_run'] as const) {
+      await expect(context.effects.resolveTargetAvailability({ blockId: 'configured', executionTarget: { kind },
+        selection: { agentTarget: { kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: 'selected' } },
+      }, { sessionIds: [] })).rejects.toMatchObject({ code: 'ACP_CATALOG_UNAVAILABLE' });
+    }
     await expect(context.effects.resolveTargetAvailability({ ...leaf, selection: { agentTarget: { kind: 'agent', identity: { pluginId: 'relay.agent', localId: 'agent' } } }, executionTarget: { kind: 'session' } }, { sessionIds: [] })).resolves.toBe(false);
     // Projected Action starts are not retained-Session steps, even when their
     // ambient selection names a Session already checked by the materializer.
@@ -266,6 +277,22 @@ describe('exact-machine workflow materialization effects', () => {
       selection: { agentTarget: { kind: 'agent', identity: { pluginId: 'test.agent', localId: 'agent' } } },
     }, { sessionIds: [] })).resolves.toBe(true);
   });
+
+  it.each(['source_retired', 'reader_aborted', 'snapshot_aborted'] as const)
+    ('preserves contextual ACP admission failure: %s', async (failure) => {
+      const controller = new AbortController();
+      const retired = Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
+      const aborted = new Error('workflow_catalog_aborted');
+      const host = sessionAdmissionHost('run-machine', undefined, async () => {
+        if (failure === 'source_retired') throw retired;
+        controller.abort(aborted);
+        if (failure === 'reader_aborted') throw aborted;
+        return { status: 'unavailable', reason: 'cancelled' };
+      });
+      await expect(host({ machineId: 'run-machine', directory: '/repo', signal: controller.signal,
+        roleSelection: { defaultEngine: { agentTargetKey: 'agent:test.agent/agent' } },
+      })).rejects.toBe(failure === 'source_retired' ? retired : aborted);
+    });
 
   it('fails unavailable machine observations closed at the leaf boundary', async () => {
     const resolve = createWorkflowMaterializationHostV1({

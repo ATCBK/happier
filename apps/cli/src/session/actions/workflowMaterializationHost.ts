@@ -91,7 +91,10 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
       catalogObservation ??= deps.readAcpCatalog
         ? deps.readAcpCatalog(target.signal) : Promise.resolve(deps.acpCatalogSnapshot);
       const catalog = await catalogObservation;
-      return catalog === undefined && !required ? [] : requireReadyAcpCatalog(catalog).record.definitions.map((definition) => definition.id);
+      target.signal?.throwIfAborted();
+      // Optional contextual choices cannot make native admission depend on the
+      // configured catalog. Explicit selections still require ready membership.
+      return !required && catalog?.status !== 'ready' ? [] : requireReadyAcpCatalog(catalog).record.definitions.map((definition) => definition.id);
     };
     if (roleSelection.defaultEngine) {
       // Contextual second-opinion selection can choose another Agent family.
