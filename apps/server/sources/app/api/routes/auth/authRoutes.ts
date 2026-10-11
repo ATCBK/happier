@@ -6,7 +6,7 @@ import { registerApiTokenIntrospectionRoute } from "./registerApiTokenIntrospect
 import { registerAccountApiTokenManagementRoutes } from "./registerAccountApiTokenManagementRoutes";
 import { registerAccountSessionsSignOutEverywhereRoute } from "./registerAccountSessionsSignOutEverywhereRoute";
 import { registerAccountErasureRoute } from "./registerAccountErasureRoute";
-import { resolveTerminalAuthRequestPolicyFromEnv } from "./terminalAuthRequestPolicy";
+import { resolveTerminalAuthRequestPolicyFromEnv, terminalAuthRequestExpiresAt } from "./terminalAuthRequestPolicy";
 import { resolveEffectiveHomeAuthMethods } from "@/app/auth/methods/effectiveHomeAuthMethods";
 import { resolveAuthMethodRegistry } from "@/app/auth/methods/registry";
 import { z } from "zod";
@@ -55,8 +55,7 @@ export function authRoutes(app: Fastify, params: Readonly<{
 
     const terminalAuthPolicy = resolveTerminalAuthRequestPolicyFromEnv(process.env);
     const isTerminalAuthExpired = (createdAt: Date): boolean => {
-        const ageMs = Date.now() - createdAt.getTime();
-        return ageMs > terminalAuthPolicy.ttlMs;
+        return Date.now() > terminalAuthRequestExpiresAt(createdAt, terminalAuthPolicy);
     };
 
     app.addHook("onReady", async () => {

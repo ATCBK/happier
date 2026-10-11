@@ -99,6 +99,7 @@ type AxiosLike = {
 };
 
 let capturedPublicKeyBase64: string | null = null;
+let requestExpiresAt: number | null = null;
 let claimServerIdentityId = 'srv_interactive_auth_home';
 let beforeStatusResponse: (() => Promise<void>) | null = null;
 
@@ -143,7 +144,7 @@ vi.mock('axios', async () => {
       if (url.endsWith('/v1/auth/request')) {
         const publicKey = (body as { publicKey?: unknown } | undefined)?.publicKey;
         capturedPublicKeyBase64 = typeof publicKey === 'string' ? publicKey : '';
-        return { data: { state: 'requested' } };
+        return { data: { state: 'requested', ...(requestExpiresAt === null ? {} : { expiresAt: requestExpiresAt }) } };
       }
       if (url.endsWith('/v1/auth/request/claim')) {
         const claimBody = body as { publicKey?: unknown } | undefined;
@@ -186,6 +187,7 @@ describe.sequential('doAuth (non-interactive)', () => {
   beforeEach(() => {
     claimServerIdentityId = 'srv_interactive_auth_home';
     capturedPublicKeyBase64 = null;
+    requestExpiresAt = null;
     beforeStatusResponse = null;
     displayQRCodeMock.mockClear();
     fetchServerFeaturesSnapshotMock.mockClear();
@@ -321,7 +323,8 @@ describe.sequential('doAuth (non-interactive)', () => {
     vi.restoreAllMocks();
   });
 
-  it('prints both web + mobile instructions when method is not specified', async () => {
+  it.each([240_000, null])('prints both web + mobile instructions with server expiry %s when method is not specified', async (remainingMs) => {
+    requestExpiresAt = remainingMs === null ? null : Date.now() + remainingMs;
     const home = await createTempDir('happier-cli-auth-noninteractive-');
     const envScope = createEnvKeyScope(envKeys);
     const restoreTty = setStdioTtyForTest({ stdin: false, stdout: false });
@@ -349,6 +352,13 @@ describe.sequential('doAuth (non-interactive)', () => {
       expect(out.toLowerCase()).toContain('terminal is connected to: https://server.example.test');
       expect(out).toContain('Web app URL: https://webapp.example.test');
       expect(out.toLowerCase()).toContain('recommended: use the mobile app first');
+      if (requestExpiresAt === null) {
+        expect(out).toMatch(/link expires soon/i);
+        expect(out).toMatch(/rerun.*approval fails/i);
+      } else {
+        expect(out).toContain(new Date(requestExpiresAt).toISOString());
+        expect(out).toContain(`expiresAt=${requestExpiresAt}`);
+      }
       expect(out).toContain('Authenticated pairing v3 is required.');
       expect(out.toLowerCase()).toContain('already have a happier account on another device');
       expect(out).toContain('webapp.example.test/terminal/connect#key=');

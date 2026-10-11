@@ -27,6 +27,8 @@ import { buildServerUrlReachabilityHintLines } from '@/server/reachability/serve
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import {
     createTerminalPairingAuthentication,
+    applyTerminalAuthRequestExpiry,
+    formatTerminalPairingExpiryNotice,
     openTerminalProvisioningResponse,
     type TerminalPairingAuthentication,
 } from '@/auth/terminalProvisioningResponse';
@@ -283,7 +285,7 @@ export async function doAuth(options: Readonly<{
     const claimSecret = new Uint8Array(randomBytes(32));
     const claimSecretB64Url = Buffer.from(claimSecret).toString('base64url');
     const claimSecretHash = createHash('sha256').update(Buffer.from(claimSecret)).digest('base64url');
-    const pairing = createTerminalPairingAuthentication({
+    let pairing = createTerminalPairingAuthentication({
         nowMs: Date.now(),
         randomBytes: (length) => new Uint8Array(randomBytes(length)),
     });
@@ -295,7 +297,7 @@ export async function doAuth(options: Readonly<{
             console.log(`[AUTH DEBUG] Sending auth request to: ${authRuntimeOrigin}/v1/auth/request`);
             console.log(`[AUTH DEBUG] Public key: ${publicKey.substring(0, 20)}...`);
         }
-        await createTerminalAuthRequest({
+        const response = await createTerminalAuthRequest({
             runtime: acquiredRuntime.runtime,
             publicKey,
             supportsV2: true,
@@ -303,6 +305,7 @@ export async function doAuth(options: Readonly<{
             headers: buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
             ...(options.signal ? { signal: options.signal } : {}),
         });
+        pairing = applyTerminalAuthRequestExpiry(pairing, response);
         if (debugEnabled) {
             console.log(`[AUTH DEBUG] Auth request sent successfully`);
         }
@@ -313,6 +316,8 @@ export async function doAuth(options: Readonly<{
         console.log('Failed to create authentication request, please try again later.');
         return null;
     }
+
+    console.log(formatTerminalPairingExpiryNotice(pairing));
 
     // Handle authentication based on selected method
     const authenticatedExactDescriptorObservation: {
