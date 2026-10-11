@@ -3,6 +3,27 @@ import { describe, expect, it } from 'vitest';
 import { isProfileCompatibleWithBackendTarget } from './profileCompatibility';
 
 describe('isProfileCompatibleWithBackendTarget', () => {
+    it('keeps a configured Agent definition when resolving default and legacy profile compatibility', () => {
+        const target = {
+            kind: 'agent',
+            identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+            definitionId: 'review-agent',
+        } as const;
+
+        expect(isProfileCompatibleWithBackendTarget(
+            { compatibility: {}, isBuiltIn: false },
+            target,
+        )).toBe(true);
+        expect(isProfileCompatibleWithBackendTarget(
+            { compatibility: {}, isBuiltIn: true },
+            target,
+        )).toBe(false);
+        expect(isProfileCompatibleWithBackendTarget(
+            { compatibility: {}, compatibilityByTargetKey: { 'acpBackend:review-agent': true }, isBuiltIn: true },
+            target,
+        )).toBe(true);
+    });
+
     it('honors a released flat Agent key for its qualified persisted Agent identity', () => {
         expect(isProfileCompatibleWithBackendTarget(
             {
