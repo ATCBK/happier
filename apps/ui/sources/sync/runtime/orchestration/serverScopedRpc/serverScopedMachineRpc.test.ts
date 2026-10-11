@@ -18,6 +18,10 @@ import { SecretBoxEncryption } from '@/sync/encryption/encryptor';
 import { EncryptionCache } from '@/sync/encryption/encryptionCache';
 import { Encryption } from '@/sync/encryption/encryption';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import {
+    clearMachineRequestReachabilityForTest,
+    readMachineRequestReachabilityObservation,
+} from '@/sync/domains/machines/reachability/machineReachability';
 
 let machineContextOwner: Encryption;
 const machineContextAuthority = {
@@ -252,6 +256,7 @@ describe('machineRpcWithServerScope', () => {
         resetScopedMachineTransportCacheForTests();
         syncPerformanceTelemetry.configure({ enabled: false });
         syncPerformanceTelemetry.reset();
+        clearMachineRequestReachabilityForTest();
     });
 
     it('attempts the peer mediation direct route before server RPC for direct-eligible same-machine methods', async () => {
@@ -282,6 +287,8 @@ describe('machineRpcWithServerScope', () => {
         }));
         expect(machineRpcSpy).not.toHaveBeenCalled();
         expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
+        expect(readMachineRequestReachabilityObservation('server-a', 'machine-1'))
+            .toMatchObject({ outcome: 'succeeded' });
     });
 
     it('binds an omitted peer-mediated RPC to the applied Home while another Home is staged', async () => {
@@ -1533,6 +1540,7 @@ describe('machineRpcWithServerScope', () => {
 
         await assertion;
         expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
+        expect(readMachineRequestReachabilityObservation('server-a', 'machine-1')).toBeNull();
         vi.useRealTimers();
     });
 
@@ -1632,6 +1640,8 @@ describe('machineRpcWithServerScope', () => {
         });
         expect(fakeSocket.timeout).toHaveBeenCalledWith(1);
         expect(fakeSocket.disconnect).toHaveBeenCalledTimes(1);
+        expect(readMachineRequestReachabilityObservation('server-a', 'machine-1'))
+            .toMatchObject({ outcome: 'failed' });
         vi.useRealTimers();
     });
 

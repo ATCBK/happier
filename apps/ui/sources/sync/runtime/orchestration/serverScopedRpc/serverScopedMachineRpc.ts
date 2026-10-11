@@ -41,6 +41,11 @@ import {
 import { resolveMachineRpcTargetServerId } from './resolveMachineRpcTargetServerId';
 import { resolveRunnerMachineContentKeyTrustV1 } from '@/sync/domains/machines/runnerMachineContentKeyTrust';
 import { readMachineInstallationPublicKey } from '@/sync/domains/machines/machineInstallationPublicKey';
+import {
+    isMachineRequestReachabilityFailure,
+    recordMachineRequestFailed,
+    recordMachineRequestSucceeded,
+} from '@/sync/domains/machines/reachability/machineReachability';
 
 const SCOPED_MACHINE_RPC_SESSION_WRITE_METHODS = new Set<string>([
     RPC_METHODS.SPAWN_HAPPY_SESSION,
@@ -524,57 +529,79 @@ export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachin
     // may already describe the next staged Home while the applied runtime
     // still serves the incumbent.
     const effectiveServerId = resolveMachineRpcTargetServerId(params.serverId);
+    let requestDispatched = false;
     const effectiveParams: ServerScopedMachineRpcParams<A> = {
         ...params,
         serverId: effectiveServerId || undefined,
+        onDispatched: () => {
+            requestDispatched = true;
+            params.onDispatched?.();
+        },
     };
     const socketRpcAbortScope = { issued: false };
 
-    if (effectiveParams.onIssued || effectiveParams.requireEncryptedPayload) {
-        return await machineRpcWithServerTransport<R, A>(effectiveParams, socketRpcAbortScope);
-    }
-    return await withMachineRpcAbort(
-        effectiveParams.method,
-        effectiveParams.signal,
-        async () => await machineRpcWithPeerMediationRoute<R, A>({
-            serverId: effectiveParams.serverId,
-            accountId: effectiveParams.accountId,
-            machineId: effectiveParams.machineId,
-            method: effectiveParams.method,
-            payload: effectiveParams.payload,
-            timeoutMs: effectiveParams.timeoutMs,
-            operationTimeoutMs: effectiveParams.operationTimeoutMs,
-            authorization: effectiveParams.authorization,
-            signal: effectiveParams.signal,
-            onDispatched: effectiveParams.onDispatched,
-            resolveDirectRoute: async (input) => await resolveProductionMachineRpcDirectRoute({
-                ...input,
-                serverId: effectiveParams.serverId,
-                timeoutMs: effectiveParams.timeoutMs,
-            }),
-            postDirect: async (directInput) => await withMachineRpcAbort(
+    try {
+        const result = effectiveParams.onIssued || effectiveParams.requireEncryptedPayload
+            ? await machineRpcWithServerTransport<R, A>(effectiveParams, socketRpcAbortScope)
+            : await withMachineRpcAbort(
                 effectiveParams.method,
                 effectiveParams.signal,
-                () => postProductionMachineRpcDirect(directInput),
-            ),
-            recordReceipt: recordMachineRpcPeerMediationReceipt,
-            resolveRelayFallback: async (input) => await resolveProductionMachineRpcRelayFallbackForServer({
-                policy: input.policy,
+                async () => await machineRpcWithPeerMediationRoute<R, A>({
+                    serverId: effectiveParams.serverId,
+                    accountId: effectiveParams.accountId,
+                    machineId: effectiveParams.machineId,
+                    method: effectiveParams.method,
+                    payload: effectiveParams.payload,
+                    timeoutMs: effectiveParams.timeoutMs,
+                    operationTimeoutMs: effectiveParams.operationTimeoutMs,
+                    authorization: effectiveParams.authorization,
+                    signal: effectiveParams.signal,
+                    onDispatched: effectiveParams.onDispatched,
+                    resolveDirectRoute: async (input) => await resolveProductionMachineRpcDirectRoute({
+                        ...input,
+                        serverId: effectiveParams.serverId,
+                        timeoutMs: effectiveParams.timeoutMs,
+                    }),
+                    postDirect: async (directInput) => await withMachineRpcAbort(
+                        effectiveParams.method,
+                        effectiveParams.signal,
+                        () => postProductionMachineRpcDirect(directInput),
+                    ),
+                    recordReceipt: recordMachineRpcPeerMediationReceipt,
+                    resolveRelayFallback: async (input) => await resolveProductionMachineRpcRelayFallbackForServer({
+                        policy: input.policy,
+                        serverId: effectiveParams.serverId,
+                        timeoutMs: effectiveParams.timeoutMs,
+                    }),
+                    serverFallback: async (fallbackInput) => await machineRpcWithServerTransport<R, A>({
+                        ...effectiveParams,
+                        machineId: fallbackInput.machineId,
+                        method: fallbackInput.method,
+                        payload: fallbackInput.payload,
+                        accountId: fallbackInput.accountId,
+                        timeoutMs: fallbackInput.timeoutMs,
+                        authorization: fallbackInput.authorization,
+                    }, socketRpcAbortScope),
+                }),
+                socketRpcAbortScope,
+            );
+        if (effectiveParams.serverId) {
+            recordMachineRequestSucceeded({
                 serverId: effectiveParams.serverId,
-                timeoutMs: effectiveParams.timeoutMs,
-            }),
-            serverFallback: async (fallbackInput) => await machineRpcWithServerTransport<R, A>({
-                ...effectiveParams,
-                machineId: fallbackInput.machineId,
-                method: fallbackInput.method,
-                payload: fallbackInput.payload,
-                accountId: fallbackInput.accountId,
-                timeoutMs: fallbackInput.timeoutMs,
-                authorization: fallbackInput.authorization,
-            }, socketRpcAbortScope),
-        }),
-        socketRpcAbortScope,
-    );
+                machineId: effectiveParams.machineId,
+            });
+        }
+        return result;
+    } catch (error) {
+        if (effectiveParams.serverId && isMachineRequestReachabilityFailure(error)
+            && (!isMachineRpcTimeoutError(error) || requestDispatched)) {
+            recordMachineRequestFailed({
+                serverId: effectiveParams.serverId,
+                machineId: effectiveParams.machineId,
+            });
+        }
+        throw error;
+    }
 }
 
 /** Order asynchronous preparation through actual dispatch, never through RPC replies. */
