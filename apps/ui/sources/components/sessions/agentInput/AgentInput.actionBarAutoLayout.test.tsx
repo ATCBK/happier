@@ -809,6 +809,35 @@ describe('AgentInput (action bar auto layout)', () => {
         expect(railOf('agent-input-path-chip')).toBe(1);
     });
 
+    it('lets an armed continuation shrink and ellipsize instead of crowding the chip rail out of a phone session', async () => {
+        // Unistyles creates platform styles at module load; the web owner is the one the QA
+        // export showed overlaying the rail at 390px.
+        layoutMockState.platform = 'web';
+        layoutMockState.width = 390;
+        const { AgentInput } = await import('./AgentInput');
+        const screen = await renderAgentInput(<AgentInput
+            sessionId="s1" value="" placeholder="Type" onChangeText={() => {}} onSend={() => {}}
+            onPermissionClick={() => {}} agentType="claude" permissionMode="default"
+            armedContinuationTarget={{ agentId: 'claude', label: 'Claude with a very long machine-qualified name' }}
+            autocompleteKinds={[]} autocompleteSuggestions={async () => []}
+        />);
+        const submit = findAllHostTestInstances(screen.tree.root, node => node.props.testID === 'session-composer-send')[0];
+        if (!submit) throw new Error('Expected the armed submit target');
+        expect(flattenStyle(submit.props.style)).toMatchObject({ flexShrink: 1, minWidth: 0 });
+        // The shape that clips the button and the cluster that holds it both give way, and the
+        // cluster's share is capped so the rail keeps a share of the card whatever the label says.
+        let shape = findNearestHostParent(submit);
+        while (shape && flattenStyle(shape.props.style).overflow !== 'hidden') shape = findNearestHostParent(shape);
+        if (!shape) throw new Error('Expected the submit shape');
+        expect(flattenStyle(shape.props.style)).toMatchObject({ flexShrink: 1, minWidth: 0 });
+        const cluster = findNearestHostParent(shape);
+        expect(flattenStyle(cluster?.props.style)).toMatchObject({ flexShrink: 1, minWidth: 0, maxWidth: '60%' });
+        // The rail is still mounted beside it, scrolling.
+        const rail = screen.tree.root.findAll((node) => node.type === 'ScrollView' && node.props.horizontal === true);
+        expect(rail.length).toBeGreaterThan(0);
+        expect(findAllHostTestInstances(rail[0]!, node => node.props.testID === 'agent-input-permission-chip').length).toBeGreaterThan(0);
+    });
+
     it('keeps the path chip label visible even when chip density is icons', async () => {
         storageSettings = { ...storageSettings, agentInputChipDensity: 'icons' };
         const { AgentInput } = await import('./AgentInput');

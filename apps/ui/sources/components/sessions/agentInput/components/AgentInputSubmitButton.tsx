@@ -29,13 +29,19 @@ import {
  */
 const SUBMIT_HIT_SLOP = { top: 5, bottom: 10, left: 0, right: 0 } as const;
 
+/** The armed button's own box gives way to its clip so the label truncates (RoundButton's pressable is flexShrink 0). */
+const ARMED_SUBMIT_SHRINKABLE_STYLE = { flexShrink: 1, minWidth: 0 } as const;
+
 const stylesheet = StyleSheet.create(() => ({
     shapeClip: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-start',
         overflow: 'hidden',
-        flexShrink: 0,
+        // Gives way with the cluster so an armed label ellipsizes instead of overflowing
+        // onto the chip rail; the circular send is fixed-width and never shrinks.
+        flexShrink: 1,
+        minWidth: 0,
         marginLeft: 8,
         marginRight: 8,
         paddingTop: SUBMIT_HIT_SLOP.top,
@@ -244,6 +250,7 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
                     // same control, so it says the same thing rather than leaving a
                     // screen reader with a disabled button and no reason.
                     accessibilityHint={props.hasSendableContent ? undefined : t('session.inputPlaceholder')}
+                    style={ARMED_SUBMIT_SHRINKABLE_STYLE}
                     leading={armedContinuation.markPlacement === 'leading' ? mark : undefined}
                     trailing={armedContinuation.markPlacement === 'trailing' ? mark : undefined}
                     loading={props.isSending}

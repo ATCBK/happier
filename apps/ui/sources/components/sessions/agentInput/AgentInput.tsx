@@ -1029,7 +1029,14 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
      */
     trailingAccessoryInline: {
         flexDirection: 'row',
-        flexShrink: 0,
+        // An armed continuation names its destination in words and can be wider than
+        // the card. The cluster gives way beyond a share of the row, and the label
+        // inside ellipsizes, so the chip rail keeps its share and its scroll rather
+        // than being covered. Every other occupant of the cluster is fixed-width and
+        // never reaches the cap.
+        flexShrink: 1,
+        minWidth: 0,
+        maxWidth: '60%',
         alignItems: 'center',
         gap: 8,
     },
