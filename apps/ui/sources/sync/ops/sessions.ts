@@ -131,10 +131,12 @@ function resolveSessionPermissionTurnId(
     const owningServerId = typeof session?.serverId === 'string' && session.serverId.trim().length > 0
         ? session.serverId
         : getActiveServerSnapshot().serverId;
-    const candidate = explicitTurnId
-        ?? (serverId === undefined || areServerProfileIdentifiersEquivalent(serverId, owningServerId)
-            ? session
-            : undefined)?.agentState?.requests?.[requestId]?.turnId;
+    const loadedRequestTurnId = (serverId === undefined || areServerProfileIdentifiersEquivalent(serverId, owningServerId)
+        ? session
+        : undefined)?.agentState?.requests?.[requestId]?.turnId;
+    // The live pending-request projection owns turn custody. Transcript rows can
+    // survive rebinding and therefore supply an older turn for the same request.
+    const candidate = loadedRequestTurnId ?? explicitTurnId;
     return typeof candidate === 'string' && candidate.trim().length > 0
         ? candidate.trim()
         : undefined;
