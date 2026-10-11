@@ -488,12 +488,12 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
               placeholder={t('promptLibrary.titlePlaceholder')}
               autoCapitalize="sentences"
               autoFocus={isNew}
-              editable={!isLoading}
+              editable={!isLoading && (!isNew || !saving)}
             />
           )}
         />
-        <PromptFolderFieldRow value={folderName} onChange={setFolderName} testID="skillBundle.folderName" editable={!isLoading && organizationWritable} />
-        <PromptTagsFieldRow value={tagsText} onChange={setTagsText} testID="skillBundle.tags" editable={!isLoading && organizationWritable} />
+        <PromptFolderFieldRow value={folderName} onChange={setFolderName} testID="skillBundle.folderName" editable={!isLoading && (!isNew || !saving) && organizationWritable} />
+        <PromptTagsFieldRow value={tagsText} onChange={setTagsText} testID="skillBundle.tags" editable={!isLoading && (!isNew || !saving) && organizationWritable} />
       </ItemGroup>
 
       <ItemGroup title={t('promptLibrary.skillContent')} description={t('promptLibrary.surface.skillContentDescription')}>
@@ -505,7 +505,7 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
               value={skillMarkdown}
               filePath="SKILL.md"
               onChange={setSkillMarkdown}
-              readOnly={isLoading}
+              readOnly={isLoading || (isNew && saving)}
               editorRef={editorRef}
               wrapLines={wrapLinesInDiffs !== false}
             />

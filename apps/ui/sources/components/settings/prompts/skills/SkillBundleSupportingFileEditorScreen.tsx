@@ -162,7 +162,7 @@ export const SkillBundleSupportingFileEditorScreen = React.memo(function SkillBu
                             autoCapitalize="none"
                             autoFocus={!props.path}
                             monospace
-                            editable={artifactState !== null}
+                            editable={artifactState !== null && !saving}
                         />
                     )}
                 />
@@ -177,7 +177,7 @@ export const SkillBundleSupportingFileEditorScreen = React.memo(function SkillBu
                             value={content}
                             filePath={path}
                             onChange={setContent}
-                            readOnly={artifactState === null}
+                            readOnly={artifactState === null || saving}
                             editorRef={editorRef}
                             wrapLines={wrapLinesInDiffs !== false}
                         />
