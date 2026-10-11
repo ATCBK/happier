@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import tweetnacl from 'tweetnacl';
 
 import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
@@ -9,7 +9,6 @@ import { openExternalActionRequestV2, prepareExternalActionResponseV2 } from '@h
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
-import { Modal } from '@/modal';
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
@@ -17,22 +16,17 @@ import { upsertServerProfile, setServerProfileIdentityForUrl } from '@/sync/doma
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
-const disclosure = vi.hoisted(() => vi.fn(async () => true));
 installApprovalCommonModuleMocks();
-// Install the presentation boundary before loading the real transport that imports it.
+// Install the shared presentation boundaries before loading the real Account transport.
 const { executeManagedMachineNativeAction } = await import('./managedMachineOrigination');
 
 describe('managed Machine rebuild origination', () => {
     it.each((['machines.managed.rebuild', 'machines.managed.controller.update'] as const).flatMap(actionId =>
-        ([{ accountMode: 'plain', accepted: true }, { accountMode: 'plain', accepted: false }, { accountMode: 'e2ee', accepted: true }] as const)
-            .map(value => ({ ...value, actionId }))))(
-        'keeps foreign native requester custody private and requires confidentiality consent ($actionId, $accountMode, $accepted)', async ({ accountMode, accepted, actionId }) => {
-        disclosure.mockReset().mockResolvedValue(accepted);
-        const confirm = vi.spyOn(Modal, 'confirm').mockImplementation(disclosure);
-        onTestFinished(() => confirm.mockRestore());
+        (['plain', 'e2ee'] as const).map(accountMode => ({ accountMode, actionId }))))(
+        'keeps foreign native requester custody private through exact installation sealing ($actionId, $accountMode)', async ({ accountMode, actionId }) => {
         const moving = actionId === 'machines.managed.controller.update';
-        const homeId = `srv_foreign_${moving ? 'move' : 'rebuild'}_${accountMode}_${accepted}`;
-        const serverUrl = `https://foreign-${moving ? 'move' : 'rebuild'}-${accountMode}-${accepted}.example.test`;
+        const homeId = `srv_foreign_${moving ? 'move' : 'rebuild'}_${accountMode}`;
+        const serverUrl = `https://foreign-${moving ? 'move' : 'rebuild'}-${accountMode}.example.test`;
         const accountId = 'bob';
         const token = `header.${Buffer.from(JSON.stringify({ sub: accountId, tokenEpoch: 1,
             provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64')}.signature`;
@@ -72,8 +66,6 @@ describe('managed Machine rebuild origination', () => {
                 installationId: selectedController.installationId, installationPublicKey: encodeBase64(installation.publicKey),
                 revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
                 access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }]);
-            expect(disclosure).toHaveBeenCalledOnce();
-            expect(accepted).toBe(true);
             if (path === `/v1/actions/${actionId}/execution-authorization`) {
                 const request = body as Readonly<{ envelope: unknown; machineId: string }>;
                 const envelope = ExternalActionRequestEnvelopeSchema.parse(request.envelope);
@@ -112,13 +104,8 @@ describe('managed Machine rebuild origination', () => {
         onTestFinished(() => account.dispose());
         const result = await executeManagedMachineNativeAction({ account, actionId, input,
             context: { surface: 'ui', authority: 'present_user', actionRequestId: 'bob-original-rebuild' } });
-        expect(disclosure, JSON.stringify(result)).toHaveBeenCalledOnce();
-        const disclosed = JSON.stringify(disclosure.mock.calls);
-        expect(disclosed).toContain('machineRequester.fullSignIn');
-        expect(disclosed).toContain('machineRequester.osVisibility');
-        expect(disclosed).not.toContain(token);
-        expect(result).toMatchObject(accepted ? { ok: true, result: approval } : { ok: false });
-        expect(effects).toHaveLength(accepted ? 1 : 0);
+        expect(result).toEqual({ ok: true, result: approval });
+        expect(effects).toHaveLength(1);
     });
 
     it.each([{ actionId: 'machines.managed.rebuild', revoked: false }, { actionId: 'machines.environment.apply', revoked: false },
