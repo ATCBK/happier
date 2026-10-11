@@ -28,6 +28,16 @@ const FACTS: AccountDetailUsageFacts = {
 };
 
 describe('AccountDetailUsageSectionView', () => {
+    it('keeps the usage and timestamp visible beside its pending refresh status', async () => {
+        const screen = await renderScreen(<ItemList><AccountDetailUsageSectionView
+            facts={{ ...FACTS, refreshing: true, refresh: vi.fn() }} signedOut={false} now={2_000}
+        /></ItemList>);
+        expect(screen.findByTestId('account-detail-usage:refresh-status')).toBeTruthy();
+        expect(screen.findByTestId('account-detail-usage:as-of')).toBeTruthy();
+        expect(screen.findByTestId('account-detail-usage:meter:five_hour')).toBeTruthy();
+        expect(screen.findByTestId('account-detail-usage:refresh')?.props.disabled).toBe(true);
+    });
+
     it('shows the quota failure reason beside retained usage and offers retry', async () => {
         const retry = vi.fn();
         const error = 'Couldn’t refresh usage. (HTTP 429) Try again after 12:30.';

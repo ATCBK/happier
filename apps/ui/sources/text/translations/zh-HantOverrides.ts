@@ -2639,6 +2639,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             },
         },
         quota: {
+            refreshing: '正在重新整理用量…',
             loading: '載入中…',
             error: ({ message }: { message: string }) => `錯誤：${message}`,
             attemptTitle: '嘗試',

@@ -4831,6 +4831,7 @@ localTailscale: {
       },
     },
     quota: {
+      refreshing: "使用量を更新中…",
       loading: "読み込み中…",
       error: ({ message }: { message: string }) => `エラー: ${message}`,
       lastUpdated: ({ time }: { time: string }) => `最終更新: ${time}`,

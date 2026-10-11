@@ -17,6 +17,9 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
+import { SurfaceAsOfLabel } from '@/components/ui/surfaces/SurfaceAsOfLabel';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { Typography } from '@/constants/Typography';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useConnectedServiceQuotaSnapshot } from '@/hooks/server/connectedServices/useConnectedServiceQuotaSnapshot';
@@ -50,7 +53,7 @@ export type ConnectedAccountIndexMeter = Readonly<{
 
 /** What the account shows beside its identity: its limits, a quiet state, or nothing. */
 export type ConnectedAccountIndexUsage =
-    | Readonly<{ kind: 'meters'; meters: readonly ConnectedAccountIndexMeter[] }>
+    | Readonly<{ kind: 'meters'; meters: readonly ConnectedAccountIndexMeter[]; error?: string | null }>
     /** Only the meters wait; the row is already there. Two placeholder windows hold the space. */
     | Readonly<{ kind: 'loading' }>
     | Readonly<{ kind: 'error'; retry: () => void }>
@@ -185,9 +188,18 @@ export const ConnectedAccountIndexStatusLines = React.memo(function ConnectedAcc
 }>) {
     const { theme } = useUnistyles();
     const { facts } = props;
-    if (!facts.subscription && facts.staleSince === null) return null;
+    if (!facts.subscription && facts.staleSince === null && facts.fetchedAt === null && !facts.refreshing) return null;
     return (
         <View style={styles.statusLines}>
+            {facts.refreshing ? (
+                <SurfaceStateCard testID={`${props.testID}:refresh-status`} size="line" kind="loading" title={t('connectedServices.quota.refreshing')} />
+            ) : null}
+            {facts.usage.kind === 'meters' && facts.usage.error ? (
+                <SurfaceFreshnessLine testID={`${props.testID}:refresh-error`} reason={t('connectedServicesSettings.usageReadFailed')} tone="warning" />
+            ) : null}
+            {facts.fetchedAt !== null && facts.staleSince === null ? (
+                <SurfaceAsOfLabel at={facts.fetchedAt} testID={`${props.testID}:as-of`} />
+            ) : null}
             <AccountSubscriptionLine testID={`${props.testID}:subscription`} subscription={facts.subscription} now={props.now} />
             {facts.staleSince !== null ? (
                 <View style={styles.statusLine}>
@@ -373,7 +385,7 @@ function useQualifiedFacts(account: QualifiedConnectedAccountRef, billedPerUse: 
     const now = Date.now();
     const meters = snapshot ? projectIndexMeters(snapshot.meters, now, pinnedMeterIds) : [];
     const usage: ConnectedAccountIndexUsage = meters.length > 0
-        ? { kind: 'meters', meters }
+        ? { kind: 'meters', meters, error: quota.error }
         : quota.loading ? { kind: 'loading' }
             : quota.error ? { kind: 'error', retry }
                 : billedPerUse && snapshot?.meters.length === 0 ? { kind: 'noLimits' } : { kind: 'none' };
@@ -399,7 +411,7 @@ function useLegacyFacts(serviceId: ConnectedServiceId, profileId: string, status
     const retry = React.useCallback(() => { void refresh(); }, [refresh]);
     const meters = snapshot ? projectIndexMeters(snapshot.meters, quota.nowMs, pinnedMeterIds) : [];
     const usage: ConnectedAccountIndexUsage = meters.length > 0
-        ? { kind: 'meters', meters }
+        ? { kind: 'meters', meters, error: quota.error }
         : quota.loading ? { kind: 'loading' }
             : quota.error ? { kind: 'error', retry }
                 : billedPerUse && snapshot?.meters.length === 0 ? { kind: 'noLimits' } : { kind: 'none' };
@@ -410,7 +422,7 @@ function useLegacyFacts(serviceId: ConnectedServiceId, profileId: string, status
         recoveryCredits: snapshot?.recoveryCredits ?? null,
         fetchedAt: snapshot?.fetchedAt ?? null,
         staleSince: snapshot && quota.nowMs - snapshot.fetchedAt > snapshot.staleAfterMs ? snapshot.fetchedAt : null,
-        refreshing: false,
+        refreshing: quota.isRefreshing,
         refresh: retry,
     };
 }

@@ -4125,6 +4125,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             },
         },
         quota: {
+            refreshing: 'Nutzung wird aktualisiert…',
             loading: 'Wird geladen…',
             error: ({ message }: { message: string }) => `Fehler: ${message}`,
             lastUpdated: ({ time }: { time: string }) => `Zuletzt aktualisiert: ${time}`,

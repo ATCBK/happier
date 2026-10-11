@@ -50,6 +50,7 @@ type InternalEntry = {
     loadPromise:
         Promise<QualifiedConnectedAccountQuotaSnapshotV4 | null> | null;
     refreshPromise: Promise<void> | null;
+    refreshSinceFetchedAt: number | null;
     nextFetchAtMs: number;
     consecutiveErrors: number;
     retainCount: number;
@@ -83,7 +84,7 @@ function ensureRuntimeActivityWatcher(): void {
         wasActive = active;
         for (const [key, entry] of entries) {
             clearPollTimer(entry);
-            if (!active || entry.retainCount <= 0 || !entry.pollContext) continue;
+            if (!active || !hasPollingDemand(key, entry) || !entry.pollContext) continue;
             // Returning to the surface invalidates freshness even before its cadence expires.
             entry.nextFetchAtMs = 0;
             entry.loadAttempted = true;
@@ -122,6 +123,7 @@ function getOrCreateEntry(key: string): InternalEntry {
         loadAttempted: false,
         loadPromise: null,
         refreshPromise: null,
+        refreshSinceFetchedAt: null,
         nextFetchAtMs: 0,
         consecutiveErrors: 0,
         retainCount: 0,
@@ -154,6 +156,11 @@ function clearPollTimer(entry: InternalEntry): void {
     entry.pollTimer = null;
 }
 
+function hasPollingDemand(key: string, entry: InternalEntry): boolean {
+    // Cached surfaces do not poll normally; an explicit refresh stays live while observed.
+    return entry.retainCount > 0 || (entry.refreshing && (listenersByKey.get(key)?.size ?? 0) > 0);
+}
+
 /**
  * Drops cached entries that belong to a superseded credential scope.
  *
@@ -167,7 +174,7 @@ function evictEntriesOutsideCredentialScope(
     activeCredentialScope: string,
 ): void {
     for (const [key, entry] of entries) {
-        if (entry.retainCount > 0) continue;
+        if (hasPollingDemand(key, entry)) continue;
         if (entry.credentialScope === activeCredentialScope) continue;
         clearPollTimer(entry);
         entries.delete(key);
@@ -179,7 +186,7 @@ function schedulePolling(key: string): void {
     if (entry) clearPollTimer(entry);
     if (
         !entry
-        || entry.retainCount <= 0
+        || !hasPollingDemand(key, entry)
         || entry.loadPromise
         || entry.refreshPromise
         || !entry.pollContext
@@ -188,7 +195,7 @@ function schedulePolling(key: string): void {
     entry.pollTimer = setTimeout(() => {
         entry.pollTimer = null;
         if (
-            entry.retainCount <= 0
+            !hasPollingDemand(key, entry)
             || entry.loadPromise
             || entry.refreshPromise
             || !entry.pollContext
@@ -214,8 +221,8 @@ async function runLoad(
             const read =
                 await readQualifiedConnectedAccountQuota(context);
             const snapshot = read?.snapshot ?? null;
-            entry.snapshot = snapshot;
-            entry.usageRecordId = read?.recordId ?? null;
+            entry.snapshot = snapshot ?? (entry.refreshing ? entry.snapshot : null);
+            entry.usageRecordId = read?.recordId ?? (entry.refreshing ? entry.usageRecordId : null);
             // An absent producer observation says nothing about quota capability.
             // Manual refresh still goes through the canonical runtime admission.
             if (snapshot) entry.supported = true;
@@ -261,6 +268,14 @@ async function runLoad(
             return null;
         } finally {
             entry.loading = false;
+            if (entry.refreshSinceFetchedAt !== null) {
+                if (entry.error || (entry.snapshot && entry.snapshot.fetchedAt > entry.refreshSinceFetchedAt)) {
+                    entry.refreshing = false;
+                    entry.refreshSinceFetchedAt = null;
+                } else {
+                    entry.nextFetchAtMs = Date.now() + QUOTA_SNAPSHOT_POLL_MS;
+                }
+            }
             entry.loadPromise = null;
             publish(key, entry);
             schedulePolling(key);
@@ -291,6 +306,13 @@ export function subscribeQualifiedQuotaSnapshotEntry(
     return () => {
         listeners?.delete(listener);
         if (listeners?.size === 0) listenersByKey.delete(key);
+        const entry = entries.get(key);
+        if (entry && !hasPollingDemand(key, entry)) {
+            clearPollTimer(entry);
+            entry.refreshSinceFetchedAt = null;
+            entry.refreshing = false;
+            publish(key, entry);
+        }
     };
 }
 
@@ -356,10 +378,13 @@ export function retainQualifiedQuotaSnapshotPolling(
         released = true;
         if (entries.get(key) !== entry) return;
         entry.retainCount = Math.max(0, entry.retainCount - 1);
-        if (entry.retainCount === 0) {
+        if (!hasPollingDemand(key, entry)) {
             clearPollTimer(entry);
+            entry.refreshSinceFetchedAt = null;
+            entry.refreshing = false;
+            publish(key, entry);
         }
-        if (![...entries.values()].some((retained) => retained.retainCount > 0)) {
+        if (![...entries].some(([retainedKey, retained]) => hasPollingDemand(retainedKey, retained))) {
             detachRuntimeActivity?.();
             detachRuntimeActivity = null;
         }
@@ -371,7 +396,12 @@ export async function refreshQualifiedQuotaSnapshot(
     context: QualifiedQuotaSnapshotStoreContext,
 ): Promise<void> {
     const entry = getOrCreateEntry(key);
-    if (entry.refreshPromise) return entry.refreshPromise;
+    const previousRefresh = entry.refreshPromise;
+    if (previousRefresh && entry.refreshing) return previousRefresh;
+    if (entry.refreshing) return;
+    entry.pollContext = context;
+    entry.credentialScope = context.credentialScope;
+    ensureRuntimeActivityWatcher();
     clearPollTimer(entry);
     // The last-known-good snapshot stays visible for the whole refresh:
     // `refreshing` is the in-flight signal, and blanking here would flash an
@@ -380,23 +410,36 @@ export async function refreshQualifiedQuotaSnapshot(
     entry.error = null;
     publish(key, entry);
 
-    const promise = (async () => {
+    const promise = Promise.resolve(previousRefresh).then(async () => {
         try {
+            // Cancelled admission cannot complete a later explicit intent.
+            if (entry.refreshPromise !== promise || !entry.refreshing) return;
             await entry.loadPromise;
+            if (entry.refreshPromise !== promise || !entry.refreshing) return;
+            entry.refreshSinceFetchedAt = entry.snapshot?.fetchedAt ?? 0;
             await refreshQualifiedConnectedAccountQuota(context);
+            if (entry.refreshPromise !== promise || !entry.refreshing) return;
             await runLoad(key, context);
         } catch (error) {
+            if (entry.refreshPromise !== promise || !entry.refreshing) return;
             if (readConnectedServiceSettingsErrorCode(error) === 'connected_account_v4_operation_unsupported') {
                 entry.supported = false;
             }
             entry.error = resolveConnectedServiceSettingsErrorMessage(error);
-        } finally {
-            entry.refreshPromise = null;
+            entry.refreshSinceFetchedAt = null;
             entry.refreshing = false;
-            publish(key, entry);
-            schedulePolling(key);
+        } finally {
+            if (entry.refreshPromise === promise) {
+                entry.refreshPromise = null;
+                if (!hasPollingDemand(key, entry)) {
+                    entry.refreshSinceFetchedAt = null;
+                    entry.refreshing = false;
+                }
+                publish(key, entry);
+                schedulePolling(key);
+            }
         }
-    })();
+    });
     entry.refreshPromise = promise;
     return promise;
 }
