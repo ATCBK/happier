@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import { projectManagedRetentionProviders } from './managedRetentionProviders';
+import { PLUGIN_MANIFEST as cuaManifest } from '../../../../../../../packages/plugins/machine-cua/src/manifest';
 
 describe('Defaults provisioner names', () => {
     it('names each category from real declared billing, never a provider id or a guessed billing model', () => {
@@ -12,6 +13,14 @@ describe('Defaults provisioner names', () => {
             { contribution: { pluginId: 'custom.compute', localId: 'd' }, descriptor: { title: 'Unknown service', billing: { location: 'cloud' as const, stoppedBilling: 'unknown' as const } } },
         ];
         // The same declared service may be installed on more than one controller.
-        expect(projectManagedRetentionProviders([...rows, rows[0]!], localized)).toEqual({ local: ['Local compute VM'], 'running-only': ['Running service'], 'stopped-billed': ['Fixed service'], unknown: ['Unknown service'] });
+        expect(projectManagedRetentionProviders([...rows, rows[0]!], localized)).toEqual({ local: ['Local compute'], 'running-only': ['Running service'], 'stopped-billed': ['Fixed service'], unknown: ['Unknown service'] });
+    });
+
+    it('lists Cua once for its declared local kinds without native discovery', () => {
+        const localized = createPluginLocalizedTextResolver({ projection: null });
+        const provisioners = cuaManifest.contributes.machineProvisioners!.map(descriptor => ({
+            contribution: { pluginId: cuaManifest.id, localId: descriptor.id }, descriptor,
+        }));
+        expect(projectManagedRetentionProviders(provisioners, localized).local).toEqual(['Cua']);
     });
 });
