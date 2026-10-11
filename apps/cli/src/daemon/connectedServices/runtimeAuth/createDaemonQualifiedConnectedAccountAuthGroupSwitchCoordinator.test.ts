@@ -134,6 +134,38 @@ function accountScopedUsageFailure() {
 }
 
 describe('createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator', () => {
+    it.each(['usage_limit', 'manual'])('selects recovered priority quota from the persisted %s selection provenance', async lastSwitchReason => {
+        const base = group({ activeConnectedAccountId: 'backup', generation: 7, runtimeStateRevision: 3 });
+        const currentGroup = QualifiedConnectedAccountGroupV4Schema.parse({
+            ...base,
+            policy: { ...base.policy, strategy: 'priority', autoRestorePrimaryWhenReset: true, softSwitchRemainingPercent: 0 },
+            state: { lastSwitchReason, lastSwitchAt: 400, activeSince: { accountId: 'backup', atMs: 400 } },
+        });
+        const accountUsageStore = createProviderAccountUsageStore();
+        for (const [profileId, remainingPct] of [['primary', 37], ['backup', 9]] as const) {
+            const recordKey = { providerId: 'example', accountSubjectId: profileId, subjectKind: 'subscription' as const, quotaScope: 'account' as const };
+            accountUsageStore.recordSnapshot({
+                v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey, providerId: 'example',
+                accountSubject: { kind: 'providerSubject', id: profileId },
+                observedAtMs: 900, fetchedAtMs: 900, staleAfterMs: 60_000, source: 'runtimeSignal',
+                confidence: 'confirmed', state: 'loaded_data',
+                meters: [{ meterId: 'weekly', label: 'Weekly', used: 100 - remainingPct, limit: 100,
+                    unit: 'credits', utilizationPct: 100 - remainingPct, remainingPct, resetsAt: null,
+                    status: 'ok', details: { limitCategory: 'usage_limit' } }],
+            }, { sources: [{ serviceId: buildQualifiedPluginContributionKey(service), profileId,
+                bindingKind: 'group_member', groupId: 'fallbacks', groupGeneration: 7 }] });
+        }
+        const forbiddenEffect = async () => { throw new Error('selection read must not mutate'); };
+        const coordinator = createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator({
+            token: 'read-token', quotaFreshnessMs: 60_000, nowMs: () => 1_000, accountUsageStore,
+            api: { readGroup: async () => currentGroup, listAccounts: async () => accounts(),
+                setActiveAccount: forbiddenEffect, updateRuntimeState: forbiddenEffect },
+            applyGeneration: forbiddenEffect,
+        });
+        const result = await coordinator.readSelection({ serviceId: service, groupId: 'fallbacks' });
+        expect(result.selection.selected?.profileId).toBe(lastSwitchReason === 'usage_limit' ? 'primary' : 'backup');
+    });
+
     it('reads selection from the live group and stored quota without preparing or switching', async () => {
         const activeSince = { accountId: 'primary', atMs: 100 };
         const currentGroup = QualifiedConnectedAccountGroupV4Schema.parse({
@@ -438,6 +470,7 @@ describe('createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator', () =
                     configurationRevision: 'configuration-primary',
                 },
                 overrideRuntimeCooldown: true,
+                switchReason: 'usage_limit',
             },
         });
         expect(applyGeneration).toHaveBeenCalledWith({

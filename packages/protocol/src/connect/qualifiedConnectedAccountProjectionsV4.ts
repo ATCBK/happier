@@ -293,6 +293,7 @@ export const QualifiedConnectedAccountGroupActiveAccountV4Schema = lazyZodSchema
     configurationRevision: QualifiedConnectedAccountConfigurationRevisionV4Schema.nullable(),
   }).strict().optional(),
   overrideRuntimeCooldown: z.boolean().optional(),
+  switchReason: z.string().trim().min(1).optional(),
 }).strict());
 
 export const QualifiedConnectedAccountGroupDeleteV4Schema = lazyZodSchema(() => z.object({

@@ -657,6 +657,21 @@ and fallback after disabling or removing a member. Re-selecting the same member
 keeps its time; runtime status writes cannot replace it. Clearing the active
 member clears both timestamp fields.
 
+The same selection transaction records the existing `state.lastSwitchReason`.
+The closed V4 active-account mutation accepts an optional `switchReason`, using
+the stored cause's string shape; omission means `manual`, including re-selecting
+the same account. Runtime-state writes preserve recorded provenance. Disabling
+or removing an active member records a manual replacement through this same
+owner. No V3 switch header or legacy group transport is added on this line.
+
+With priority strategy and `autoRestorePrimaryWhenReset` enabled, the canonical
+candidate selector can restore an eligible primary from fresh healthy quota
+observed after an automatic limit fallback, without requiring a provider reset
+time or surviving member failure marker. Manual provenance prevents the override.
+Older rows without provenance retain the landed-reset proof; unknown history is
+not treated as an automatic fallback. Existing quota freshness and member
+eligibility policies are unchanged.
+
 `useQualifiedConnectedAccountGroups` exposes that identity-bound `activeSince`.
 An older row without a matching identity-bound clock remains readable, but its
 selection time is unknown: historical `lastSwitchAt` alone cannot label the

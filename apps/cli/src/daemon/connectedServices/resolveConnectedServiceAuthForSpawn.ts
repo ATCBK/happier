@@ -474,6 +474,7 @@ async function maybeSelectGroupActiveProfileForSpawn(params: Readonly<{
   if (modelBlocked && params.modelId) {
     const candidates = selectConnectedServiceAuthGroupCandidate({
       activeProfileId: state.activeProfileId, policy: state.policy, members: state.members,
+      lastSwitchReason: state.lastSwitchReason, lastSwitchAt: state.lastSwitchAt,
       memberStatesByProfileId: state.memberStatesByProfileId, nowMs: params.nowMs,
       quotaFreshnessMs: params.quotaFreshnessMs, allowCurrentProfileRetry: true, providerLimitId: params.modelId,
     });

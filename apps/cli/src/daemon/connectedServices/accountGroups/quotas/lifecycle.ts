@@ -155,6 +155,8 @@ export function evaluateConnectedServiceAuthGroupQuotaLifecycle(input: Readonly<
     quotaFreshnessMs: input.quotaFreshnessMs,
     activeProfileId: input.group.activeProfileId,
     policy,
+    lastSwitchReason: input.group.lastSwitchReason,
+    lastSwitchAt: input.group.lastSwitchAt,
     members: buildMembers(input.group),
     memberStatesByProfileId: evidence.memberStatesByProfileId,
     allowCurrentProfileRetry: true,

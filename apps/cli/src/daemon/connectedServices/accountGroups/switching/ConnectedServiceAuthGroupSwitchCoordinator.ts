@@ -92,6 +92,8 @@ export type ConnectedServiceAuthGroupSwitchState<
     groupId: string;
     activeProfileId: string | null;
     activeSince?: ConnectedServiceAuthGroupStateV1['activeSince'];
+    lastSwitchReason?: string | null;
+    lastSwitchAt?: number | null;
     incarnation?: string;
     generation: number;
     runtimeStateRevision?: number;
@@ -842,6 +844,8 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
                 quotaFreshnessMs: this.deps.quotaFreshnessMs,
                 activeProfileId: loaded.activeProfileId,
                 policy: loaded.policy,
+                lastSwitchReason: loaded.lastSwitchReason,
+                lastSwitchAt: loaded.lastSwitchAt,
                 members: loaded.members,
                 memberStatesByProfileId: loaded.memberStatesByProfileId,
                 allowCurrentProfileRetry: true,
@@ -868,6 +872,8 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
                 quotaFreshnessMs: this.deps.quotaFreshnessMs,
                 activeProfileId: input.activeProfileId ?? null,
                 policy: input.state.policy,
+                lastSwitchReason: input.state.lastSwitchReason,
+                lastSwitchAt: input.state.lastSwitchAt,
                 members: input.state.members,
                 memberStatesByProfileId,
                 unavailableProfileIds,
@@ -972,6 +978,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
         const unavailableProfileIds = new Set(selected.excluded.filter((entry) => entry.reason === 'credential_unavailable').map((entry) => entry.profileId));
         const selectionInput = () => ({ nowMs: this.deps.nowMs(), quotaFreshnessMs: this.deps.quotaFreshnessMs,
             activeProfileId: loaded.activeProfileId, policy: loaded.policy, members: loaded.members,
+            lastSwitchReason: loaded.lastSwitchReason, lastSwitchAt: loaded.lastSwitchAt,
             memberStatesByProfileId: loaded.memberStatesByProfileId, unavailableProfileIds });
         const reconsider = async (receipt?: ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1) => {
             loaded = applyMemberStateOverrides({ loaded: await this.deps.loadState(input.request), overrides: input.overrides });
@@ -1377,6 +1384,8 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
             quotaFreshnessMs: this.deps.quotaFreshnessMs,
             activeProfileId: failedProfileId,
             policy: observed.policy,
+            lastSwitchReason: observed.lastSwitchReason,
+            lastSwitchAt: observed.lastSwitchAt,
             members: observed.members,
             memberStatesByProfileId: observed.memberStatesByProfileId,
             providerLimitId: input.providerLimitId,
@@ -1790,6 +1799,8 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
                     quotaFreshnessMs: this.deps.quotaFreshnessMs,
                     activeProfileId: selectionActiveProfileId,
                     policy: loaded.policy,
+                    lastSwitchReason: loaded.lastSwitchReason,
+                    lastSwitchAt: loaded.lastSwitchAt,
                     members: loaded.members,
                     memberStatesByProfileId: loaded.memberStatesByProfileId,
                     providerLimitId: input.providerLimitId,
@@ -2344,6 +2355,8 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
                     quotaFreshnessMs: this.deps.quotaFreshnessMs,
                     activeProfileId: observedProfileId,
                     policy: loaded.policy,
+                    lastSwitchReason: loaded.lastSwitchReason,
+                    lastSwitchAt: loaded.lastSwitchAt,
                     members: loaded.members,
                     memberStatesByProfileId: loaded.memberStatesByProfileId,
                     allowCurrentProfileRetry,

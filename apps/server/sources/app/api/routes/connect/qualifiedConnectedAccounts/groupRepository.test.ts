@@ -230,6 +230,29 @@ describe("qualified Connected Account group repository", () => {
         expect(cleared.lastSwitchAt).toBeUndefined();
     });
 
+    it("preserves switch provenance through runtime writes and clears it for manual selection", () => {
+        const switched = encodeQualifiedGroupStateForActiveAccount({
+            currentStateJson: "{}", previousActiveAccountId: "primary", nextActiveAccountId: "backup",
+            nowMs: 400, switchReason: "usage_limit",
+        });
+        expect(JSON.parse(switched).lastSwitchReason).toBe("usage_limit");
+        const refreshed = encodeQualifiedGroupStateForActiveAccount({
+            currentStateJson: switched, nextState: { status: "ready" },
+            previousActiveAccountId: "backup", nextActiveAccountId: "backup", nowMs: 500,
+        });
+        expect(JSON.parse(refreshed).lastSwitchReason).toBe("usage_limit");
+        const manual = encodeQualifiedGroupStateForActiveAccount({
+            currentStateJson: refreshed, previousActiveAccountId: "backup", nextActiveAccountId: "backup",
+            nowMs: 600, switchReason: "manual",
+        });
+        expect(JSON.parse(manual).lastSwitchReason).toBe("manual");
+        const replacement = encodeQualifiedGroupStateForActiveAccount({
+            currentStateJson: switched, previousActiveAccountId: "backup", nextActiveAccountId: "primary",
+            nowMs: 700,
+        });
+        expect(JSON.parse(replacement).lastSwitchReason).toBe("manual");
+    });
+
     it("rejects a member linked across services even if local ids match", () => {
         const divergentService = {
             pluginId: "other.connected-accounts",
