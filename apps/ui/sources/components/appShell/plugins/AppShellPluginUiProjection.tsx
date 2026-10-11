@@ -983,6 +983,7 @@ function AppShellPluginExecutionOriginSelection(props: Readonly<{
         [props.pluginId, props.projection]);
     const selection = usePluginMachineExecutionOriginSelection({
         pluginId: props.pluginId,
+        includeMachineCandidates: false,
         classifyRelease: props.classifyRelease,
         ...facts,
         readSourceCandidates: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId }).sourceCandidates,

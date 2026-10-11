@@ -5,7 +5,9 @@ import type { MachineDisplayCacheEntryV1 } from '@/sync/domains/state/warmCacheP
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
 import { areServerProfileIdentifiersEquivalent, type ServerProfile } from '@/sync/domains/server/serverProfiles';
-import { resolveServerScopedMachines } from './resolveServerScopedMachines';
+import { readLiveMachineInventoryRows, resolveServerScopedMachines } from './resolveServerScopedMachines';
+import { resolveMachinePickerPresence } from './identity/resolveMachinePickerPresence';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 
 import {
     buildMachineDisplayRenderableFromMachine,
@@ -29,6 +31,8 @@ export type ServerMachineInventorySnapshotV1 =
         settled?: true;
         /** Current inventory read state; absence is an unobserved, still pending read. */
         inventoryStatus?: MachineInventoryStatus;
+        /** Ephemeral fresh-admission facts, not authority for a later invocation. */
+        executionEligibleMachineIds?: readonly string[];
         machines: readonly MachineDisplayRenderable[];
     }>
     | Readonly<{
@@ -175,7 +179,7 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
 
     const snapshots: ServerMachineInventorySnapshotV1[] = [];
     for (const profile of params.profiles) {
-        const serverName = profile.name || profile.serverUrl || profile.id;
+        const serverName = resolveHomeDisplayLabel(profile, profile.id);
         const serverIdentityId = normalizePortableIdentity(profile.serverIdentityId);
         if (!serverIdentityId) {
             snapshots.push(Object.freeze({
@@ -214,6 +218,15 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
             ? 'idle'
             : inventoryStatuses.find((status) => status !== undefined) ?? 'loading';
         if (raw) {
+            const liveRows = readLiveMachineInventoryRows({
+                activeServerId: params.activeServerId,
+                isDataReady: params.activeInventoryLoaded,
+                activeMachines: params.activeMachines,
+                machineListByServerId: params.machineListByServerId,
+                machineListStatusByServerId: params.machineListStatusByServerId,
+                profile,
+                serverIdentityId,
+            });
             snapshots.push(Object.freeze({
                 kind: 'resolved',
                 profileId: profile.id,
@@ -222,6 +235,11 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
                 observation: raw.observation,
                 inventoryStatus,
                 ...(raw.settled ? { settled: true as const } : {}),
+                executionEligibleMachineIds: Object.freeze(raw.machines.filter((machine) => (
+                    machine.availability?.kind !== 'locked'
+                    && resolveMachinePickerPresence(machine).status === 'online'
+                    && liveRows.has(machine)
+                )).map((machine) => machine.id)),
                 machines: Object.freeze(raw.machines
                     .filter(isPersistentMachine)
                     .map(buildMachineDisplayRenderableFromMachine)

@@ -46,6 +46,25 @@ export type PluginMachineSourceExecutionOriginCandidateV1 = PluginMachineRelease
 }>;
 export type PluginExecutionOriginCandidateV1 = PluginMachineExecutionOriginCandidateV1 | PluginMachineSourceExecutionOriginCandidateV1;
 
+/**
+ * A machine-local installation census is not a second executable origin when
+ * its real source is present. Keep portable installations and exact source
+ * alternatives distinct; the Account Availability inventory stays unmodified.
+ */
+export function combinePluginMachineExecutionOriginCandidates(
+    materializations: readonly PluginMachineExecutionOriginCandidateV1[],
+    sources: readonly PluginMachineSourceExecutionOriginCandidateV1[],
+): readonly PluginExecutionOriginCandidateV1[] {
+    return Object.freeze([
+        ...materializations.filter(({ materialization }) => materialization.portableRelease || !sources.some(({ source }) => (
+            source.origin.serverIdentityId === materialization.serverIdentityId
+            && source.origin.sourceRef.machineId === materialization.machineId
+            && source.origin.sourceRef.pluginId === materialization.pluginId
+        ))),
+        ...sources,
+    ]);
+}
+
 export function getPluginExecutionOriginCandidateOrigin(candidate: PluginExecutionOriginCandidateV1): PluginMachineExecutionOriginV1 {
     return 'source' in candidate ? candidate.source.origin : composePluginMachineExecutionOriginV1(candidate.materialization);
 }
@@ -70,6 +89,26 @@ function resolveMachineMaterializationRejection(params: Readonly<{
     if (machine.availability?.kind === 'locked') return 'unknown';
     const presence = resolveMachinePickerPresence(machine);
     return presence.status === 'online' ? null : presence.status;
+}
+
+/** Selection consumes eligibility, not heartbeat timestamps or machine display metadata. */
+export function serializePluginMachineExecutionOriginMachineFacts(params: Readonly<{
+    pluginId: string;
+    materializations: readonly PluginMachineMaterializationV1[];
+    sources: readonly PluginMachineSourceExecutionOriginCandidateV1[];
+    machineSnapshots: readonly ServerMachineInventorySnapshotV1[];
+}>): string {
+    const targets = [
+        ...params.materializations.filter((entry) => entry.pluginId === params.pluginId),
+        ...params.sources.filter((entry) => entry.source.origin.sourceRef.pluginId === params.pluginId)
+            .map((entry) => ({ serverIdentityId: entry.source.origin.serverIdentityId, machineId: entry.source.origin.sourceRef.machineId })),
+    ];
+    return JSON.stringify(targets.map((target) => {
+        const snapshot = params.machineSnapshots.find((entry) => entry.kind === 'resolved' && entry.serverIdentityId === target.serverIdentityId);
+        return [target.serverIdentityId, target.machineId,
+            resolveMachineMaterializationRejection({ materialization: target, machineSnapshots: params.machineSnapshots }),
+            snapshot?.kind === 'resolved' && snapshot.executionEligibleMachineIds?.includes(target.machineId) === true];
+    }));
 }
 
 export function buildPluginMachineSourceExecutionOriginCandidates(params: Readonly<{

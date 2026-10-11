@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
     buildPluginMachineExecutionOriginCandidates,
+    combinePluginMachineExecutionOriginCandidates,
     resolvePluginMachineExecutionOriginState,
     type PluginMachineExecutionOriginCandidateV1,
 } from './pluginExecutionOrigin';
@@ -36,6 +37,20 @@ function candidate(input: Readonly<{
 }
 
 describe('resolvePluginMachineExecutionOriginState', () => {
+    it('coalesces only a machine-local census with its supplying source, not other Homes or exact sources', () => {
+        const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'machine-a', pluginId: 'acme.plugin',
+            sourceCustody: { kind: 'development', registeredRootId: 'source-a' } } } as const;
+        const source = { source: { origin, version: '1.0.0', occurrenceId: 'source-a', serverId: 'local-one', generation: 1 },
+            releaseContent: 'matched', validation: { kind: 'rejected', reason: 'offline' } } as const;
+        const alternate = { ...source, source: { ...source.source, origin: { ...origin,
+            sourceRef: { ...origin.sourceRef, sourceCustody: { kind: 'development', registeredRootId: 'source-b' } } } } } as const;
+        const census = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a', materializationId: 'local-a', sourceClass: 'localPath' });
+        const otherHome = candidate({ serverIdentityId: 'srv_two', machineId: 'machine-a', materializationId: 'local-a', sourceClass: 'localPath' });
+        const portable = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a', materializationId: 'portable-a' });
+        expect(combinePluginMachineExecutionOriginCandidates([census, otherHome, portable], [source, alternate]))
+            .toEqual([otherHome, portable, source, alternate]);
+        expect(combinePluginMachineExecutionOriginCandidates([census], [])).toEqual([census]);
+    });
     it('selects an exact admitted source and preserves an unavailable saved source', () => {
         const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'machine-a', pluginId: 'acme.plugin',
             sourceCustody: { kind: 'development', registeredRootId: 'registered-source-a' } } } as const;

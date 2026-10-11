@@ -4,6 +4,8 @@ import type { MachineDisplayCacheEntryV1 } from '@/sync/domains/state/warmCacheP
 import type { Machine } from '@/sync/domains/state/storageTypes';
 
 import { isMachineInventorySettled, readMachineInventoryStatus, resolveAllProfileMachineInventorySnapshots } from './machineInventorySnapshots';
+import { primeServerFeaturesSnapshot, deleteServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 
 function machine(input: Readonly<{
     id: string;
@@ -52,6 +54,41 @@ const profiles = [
 ] as const;
 
 describe('resolveAllProfileMachineInventorySnapshots', () => {
+    it('carries the published Home name instead of a host into machine selectors', () => {
+        const profile = { ...profiles[0], name: 'localhost:52753' };
+        primeServerFeaturesSnapshot({ serverId: 'srv_server_a', snapshot: {
+            status: 'ready', features: { ...createRootLayoutFeaturesResponse(), homePresentation: { v: 1, displayName: 'Studio Home' } },
+        } });
+        try {
+            expect(resolveAllProfileMachineInventorySnapshots({
+                profiles: [profile], activeServerId: profile.id, activeInventoryLoaded: true,
+                activeMachines: [], machineListByServerId: {}, machineListStatusByServerId: {},
+                accountId: 'account-1', loadWarmEntries: () => ({}),
+            })[0]).toMatchObject({ serverName: 'Studio Home' });
+        } finally {
+            deleteServerFeaturesSnapshot({ serverId: 'srv_server_a' });
+        }
+    });
+    it('projects execution eligibility only from exact live raw membership, never presentation presence alone', () => {
+        const row = { ...machine({ id: 'live-row', active: true }), activeAt: Date.now() };
+        const base = { profiles: [profiles[0]], activeServerId: 'local-a', activeInventoryLoaded: true,
+            activeMachines: [row], machineListByServerId: { 'local-a': [row] },
+            machineListStatusByServerId: { 'local-a': 'idle' as const }, accountId: 'account-1', loadWarmEntries: () => ({}) };
+        expect(resolveAllProfileMachineInventorySnapshots(base)[0]).toMatchObject({ executionEligibleMachineIds: [row.id] });
+        // An equal-looking scoped row is not the raw active row admitted by the invocation owner.
+        expect(resolveAllProfileMachineInventorySnapshots({ ...base, machineListByServerId: { 'local-a': [{ ...row }] } })[0])
+            .toMatchObject({ machines: [expect.objectContaining({ id: row.id })], executionEligibleMachineIds: [] });
+        expect(resolveAllProfileMachineInventorySnapshots({ ...base, activeInventoryLoaded: false })[0])
+            .toMatchObject({ executionEligibleMachineIds: [] });
+        expect(resolveAllProfileMachineInventorySnapshots({ ...base, activeServerId: 'other',
+            machineListStatusByServerId: { 'local-a': 'loading' } })[0]).toMatchObject({ executionEligibleMachineIds: [] });
+        expect(resolveAllProfileMachineInventorySnapshots({ ...base, activeServerId: 'other' })[0])
+            .toMatchObject({ executionEligibleMachineIds: [row.id] });
+        const locked = { ...row, availability: { kind: 'locked' as const, reason: 'encryption_material_unavailable' as const } };
+        expect(resolveAllProfileMachineInventorySnapshots({ ...base, activeMachines: [locked],
+            machineListByServerId: { 'local-a': [locked] } })[0]).toMatchObject({ executionEligibleMachineIds: [] });
+    });
+
     it.each([true, false])('uses canonical settled rows even when an active or alias list disagrees, contains machine = %s', (containsMachine) => {
         const row = machine({ id: 'machine-conflict', active: true });
         const snapshots = resolveAllProfileMachineInventorySnapshots({
