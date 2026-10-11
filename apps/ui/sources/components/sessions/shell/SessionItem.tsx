@@ -1407,13 +1407,17 @@ const SessionItemContent = React.memo(
         const statusAttentionIndicator = rowPresentation.attentionIndicator;
         // Content this viewer cannot read always explains itself, even behind a ready/external
         // label: a row that reports an outcome nobody can open is a lie the person cannot check.
-        const statusAvailabilityNeedsExplanation = !isSessionAwarenessContentReadableV1(sessionStatus.awareness.encryption)
-            || (sessionStatus.state === 'unknown'
-                || sessionStatus.state === 'stale'
-                || sessionStatus.state === 'disconnected');
+        // Unknown stays quiet (lab `b-rail`): a state nobody has decided yet — an unsettled content key
+        // included, which its copy owner gives no words — is never a word-and-dot headline. The row
+        // keeps its context line where it has one, and otherwise just its name.
+        const statusUnknownIsQuiet = sessionStatus.state === 'unknown';
+        const statusAvailabilityNeedsExplanation = !statusUnknownIsQuiet && (
+            !isSessionAwarenessContentReadableV1(sessionStatus.awareness.encryption)
+            || sessionStatus.state === 'stale'
+            || sessionStatus.state === 'disconnected');
         const effectiveSecondaryLineMode: SessionListSecondaryLineMode = statusAvailabilityNeedsExplanation
             ? 'status'
-            : rowPresentation.secondaryLine === 'path'
+            : rowPresentation.secondaryLine === 'path' || (statusUnknownIsQuiet && Boolean(rowContextSubtitle))
                 ? 'path'
                 : 'status';
         // The row's word and tone come from the shared work-status owner, fed by the Session facts owner
@@ -1425,7 +1429,9 @@ const SessionItemContent = React.memo(
         });
         const canonicalStatusSummaryText = statusAvailabilityNeedsExplanation
             ? workStatus.word
-            : rowPresentation.statusTextKey
+            : statusUnknownIsQuiet
+                ? ''
+                : rowPresentation.statusTextKey
                     ? t(rowPresentation.statusTextKey)
                     : workStatus.word;
         const externalIdentityText = externalSessionIdentity?.rowMetadataLabel ?? '';

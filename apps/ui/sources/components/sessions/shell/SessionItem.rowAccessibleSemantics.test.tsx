@@ -298,4 +298,33 @@ describe('SessionItem outer row accessible semantics', () => {
             standardCleanup();
         }
     });
+
+    it('keeps an unknown status quiet: never a status-word headline, in either secondary-line mode', async () => {
+        const { getSessionStatus } = await import('@/utils/sessions/sessionUtils');
+        for (const secondaryLineMode of ['status', 'path'] as const) {
+            const id = `row-unknown-${secondaryLineMode}`;
+            // An offline Bot's row before any decryption owner has settled its content key.
+            const session = createRowSession({
+                active: false, encryptionMode: 'e2ee', encryptedContentAvailability: undefined,
+            }, id);
+            const sessionStatus = getSessionStatus(session, NOW_MS, { workingTextMode: 'static' });
+            expect(sessionStatus.state).toBe('unknown');
+            const rowViewModel = createSessionItemRowViewModel({
+                session,
+                overrides: {
+                    sessionStatus,
+                    secondaryLineMode,
+                    subtitleOverride: secondaryLineMode === 'path' ? '~/project' : null,
+                },
+            });
+            const screen = await renderScreen(<SessionItem session={session} rowViewModel={rowViewModel} />);
+            const words = screen.findAll((node) => (
+                typeof node.props?.testID === 'string'
+                && node.props.testID.startsWith(`session-list-status-subtitle-text-${id}-`)
+            ));
+            expect([secondaryLineMode, words.length]).toEqual([secondaryLineMode, 0]);
+            expect(readOuterRow(screen, id).props.accessibilityLabel ?? '').not.toContain('unknown');
+            standardCleanup();
+        }
+    });
 });
