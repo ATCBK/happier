@@ -30,7 +30,7 @@ import { admitUsageCoachRemedies, applyUsageCoachPreferences } from '@happier-de
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { readAccountSettingsForScope } from '@/sync/domains/state/accountSettingsPersistence';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
-import type { DecryptedMessage } from '@/sync/domains/state/storageTypes';
+import type { DecryptedMessage, Machine } from '@/sync/domains/state/storageTypes';
 import { isSessionContentReadable, readSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
 import { ConnectedServiceQuotaGetInputV1Schema, ConnectedServiceQuotaGetResultV1Schema, projectProviderAccountUsageQuotaReadV1, type ConnectedServiceQuotaGetInputV1, type ConnectedServiceQuotaGetResultV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -44,6 +44,7 @@ import { resolveRuntimeFeatureDecisionFromSnapshot } from '@/sync/domains/featur
 import type { McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import { UsageModelPriceCatalogSchema, type UsageModelPriceCatalog } from '@happier-dev/protocol/usage/usageModelPriceCatalog';
 import { HappyError } from '@/utils/errors/errors';
+import { readMachineName } from '@/utils/sessions/machineDisplayNames';
 
 function readOpenedQuotaScope(context: UsageQueryAccountContext) {
     const state = readRegisteredStorageState();
@@ -60,6 +61,12 @@ function readOpenedQuotaScope(context: UsageQueryAccountContext) {
             key: buildQualifiedQuotaSnapshotScopeKey({ credentialScope, ref: account.ref,
                 serverBasis: { serverId: scope.serverId, generation: serverBasis.generation } }),
         })) };
+}
+
+export function getUsageQueryMachineInvalidationKey(machines: Readonly<Record<string, Machine>>, nowMs = Date.now()): string {
+    return JSON.stringify(Object.values(machines)
+        .map(machine => [machine.id, readMachineName(machine), isMachineReplaced(machine), isMachineOnline(machine, nowMs)] as const)
+        .sort(([left], [right]) => left.localeCompare(right)));
 }
 
 /** Observe already-admitted B; this path never probes, decrypts or refreshes a provider. */
@@ -701,7 +708,8 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
     });
     const readStateInvalidationInputs = () => {
         const state = readRegisteredStorageState();
-        return [state?.profileScope, state?.profile.connectedAccountsV4, state?.profile.connectedAccountGroupsV4, state?.machines, state?.settingsScope,
+        return [state?.profileScope, state?.profile.connectedAccountsV4, state?.profile.connectedAccountGroupsV4,
+            getUsageQueryMachineInvalidationKey(state?.machines ?? {}), state?.settingsScope,
             state?.settings.experiments, state?.settings.featureToggles, state?.settings.usagePacingTargetsV1,
             state?.settings.usageCoachPreferencesV1, state?.settings.usageNightHoursV1, state?.settings.usageModelPriceOverridesV1];
     };

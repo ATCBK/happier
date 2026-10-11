@@ -5,7 +5,8 @@ import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getUsageQueryKey, normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageAnalyticsQueryRequestSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
-import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore } from './usageQueryResource';
+import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryMachineInvalidationKey, getUsageQueryResourceStore } from './usageQueryResource';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 afterEach(() => {
@@ -14,6 +15,20 @@ afterEach(() => {
     home?.dispose();
     home = undefined;
     vi.restoreAllMocks();
+});
+
+it('keeps presence heartbeats from changing the usage Resource machine invalidation key', () => {
+    const machine = createMachineFixture({ id: 'machine', activeAt: 1_900_000_000_000, updatedAt: 1_900_000_000_000 });
+    const key = getUsageQueryMachineInvalidationKey({ [machine.id]: machine }, machine.activeAt!);
+    expect(getUsageQueryMachineInvalidationKey({
+        [machine.id]: { ...machine, activeAt: machine.activeAt! + 1, updatedAt: machine.updatedAt + 1 },
+    }, machine.activeAt!)).toBe(key);
+    expect(getUsageQueryMachineInvalidationKey({
+        [machine.id]: { ...machine, metadata: { ...machine.metadata!, displayName: 'Renamed' } },
+    }, machine.activeAt!)).not.toBe(key);
+    expect(getUsageQueryMachineInvalidationKey({
+        [machine.id]: { ...machine, revokedAt: machine.activeAt },
+    }, machine.activeAt!)).not.toBe(key);
 });
 
 it('preserves an unchanged batched slice across Resource revisions without sharing it across retired authority', async () => {
