@@ -1,35 +1,45 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, expect, it, vi } from 'vitest';
-import { installWorkspaceFileDetailsCommonModuleMocks } from './workspaceFileDetailsTestHelpers';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import {
+    cleanupWorkspaceFileDetailsActionBoundary,
+    installWorkspaceFileDetailsActionBoundary,
+    installWorkspaceFileDetailsCommonModuleMocks,
+    prepareWorkspaceFileDetailsActionBoundary,
+    getWorkspaceFileDetailsActionBoundary,
+} from './workspaceFileDetailsTestHelpers';
 import { useWorkspaceFileDetailsLoading } from './useWorkspaceFileDetailsLoading';
 installWorkspaceFileDetailsCommonModuleMocks();
-const transport = vi.hoisted(() => ({ diff: vi.fn(), stat: vi.fn(), read: vi.fn() }));
+installWorkspaceFileDetailsActionBoundary();
+const transport = vi.hoisted(() => ({ diff: vi.fn(), stat: vi.fn() }));
 // Remote filesystem/SCM and platform digest boundaries; the loader stays real.
 vi.mock('@/sync/ops/scm/machineScm', () => ({ machineScmDiffFile: transport.diff }));
-vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({ callDaemonWorkspaceStatFileRpc: transport.stat, downloadDaemonWorkspaceFileToBase64: transport.read }));
+vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({ callDaemonWorkspaceStatFileRpc: transport.stat }));
 vi.mock('@/config', () => ({ config: { filesPreviewMaxBytes: 1000000 } }));
 vi.mock('@/platform/digest', () => ({ digest: async () => new Uint8Array(32) }));
 const patch = (text: string) => `diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+${text}\n`;
 const input = { scope: { serverId: 'server', machineId: 'machine', rootPath: '/repo' }, filePath: 'file.txt', diffMode: 'pending' as const, fileEntryKind: 'modified' as const, isActive: true, refreshFingerprint: '1' };
+const workspaceFileDetailsActionBoundary = getWorkspaceFileDetailsActionBoundary();
 let current: ReturnType<typeof useWorkspaceFileDetailsLoading>;
 function Harness(props: Parameters<typeof useWorkspaceFileDetailsLoading>[0]) { current = useWorkspaceFileDetailsLoading(props); return null; }
-beforeEach(() => {
+beforeEach(async () => {
+    input.scope.serverId = await prepareWorkspaceFileDetailsActionBoundary();
     transport.diff.mockReset().mockResolvedValue({ success: true, diff: patch('new') });
     transport.stat.mockReset().mockResolvedValue({ success: true, exists: true, sizeBytes: 4 });
-    transport.read.mockReset().mockResolvedValue({ ok: true, contentBase64: 'bmV3Cg==' });
+    workspaceFileDetailsActionBoundary.read.mockReset().mockResolvedValue({ success: true, content: 'bmV3Cg==' });
 });
+afterEach(cleanupWorkspaceFileDetailsActionBoundary);
 it('shows progressive diff and ignores an obsolete mode result', async () => {
     let finishOld!: (value: { success: true; diff: string }) => void;
     transport.diff.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));
-    let finishRead!: (value: { ok: true; contentBase64: string }) => void;
-    transport.read.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    let finishRead!: (value: { success: true; content: string }) => void;
+    workspaceFileDetailsActionBoundary.read.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
     let tree!: renderer.ReactTestRenderer;
     await act(async () => { tree = renderer.create(<Harness {...input} />); });
     await act(async () => { tree.update(<Harness {...input} diffMode="included" />); });
     expect(current.diffContent).toBe(patch('new'));
     expect(current.isLoading).toBe(false);
-    await act(async () => { finishOld({ success: true, diff: patch('obsolete') }); finishRead({ ok: true, contentBase64: 'b2xkCg==' }); });
+    await act(async () => { finishOld({ success: true, diff: patch('obsolete') }); finishRead({ success: true, content: 'b2xkCg==' }); });
     expect(current.diffContent).toBe(patch('new'));
     expect(current.fileContent?.content).toBe('new\n');
     await act(async () => { tree.unmount(); });
@@ -39,28 +49,28 @@ it('defers hidden refresh and preserves equal content references', async () => {
     await act(async () => { tree = renderer.create(<Harness {...input} />); });
     const content = current.fileContent;
     await act(async () => { tree.update(<Harness {...input} isActive={false} refreshFingerprint="2" />); });
-    expect(transport.read).toHaveBeenCalledTimes(1);
+    expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalledTimes(1);
     await act(async () => { tree.update(<Harness {...input} refreshFingerprint="2" />); });
-    expect(transport.read).toHaveBeenCalledTimes(2);
+    expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalledTimes(2);
     expect(current.fileContent).toBe(content);
     expect(current.isLoading).toBe(false);
     await act(async () => { tree.unmount(); });
 });
 it('shows a useful patch while full content is pending', async () => {
-    let finishRead!: (value: { ok: true; contentBase64: string }) => void;
-    transport.read.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    let finishRead!: (value: { success: true; content: string }) => void;
+    workspaceFileDetailsActionBoundary.read.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
     let tree!: renderer.ReactTestRenderer;
     await act(async () => { tree = renderer.create(<Harness {...input} />); });
     expect(current.diffContent).toBe(patch('new'));
     expect(current.isLoading).toBe(false);
     expect(current.fileContent).toBe(null);
-    await act(async () => { finishRead({ ok: true, contentBase64: 'bmV3Cg==' }); tree.unmount(); });
+    await act(async () => { finishRead({ success: true, content: 'bmV3Cg==' }); tree.unmount(); });
 });
 it('aborts a preview transfer on hide, superseding refresh, and unmount without publishing stale content', async () => {
     const signals: AbortSignal[] = [];
-    const finishReads: Array<(value: { ok: true; contentBase64: string }) => void> = [];
-    transport.read.mockImplementation((options: { signal?: AbortSignal }) => {
-        if (options.signal) signals.push(options.signal);
+    const finishReads: Array<(value: { success: true; content: string }) => void> = [];
+    workspaceFileDetailsActionBoundary.read.mockImplementation((request: { signal?: AbortSignal }) => {
+        if (request.signal) signals.push(request.signal);
         return new Promise(resolve => { finishReads.push(resolve); });
     });
     let tree!: renderer.ReactTestRenderer;
@@ -69,7 +79,7 @@ it('aborts a preview transfer on hide, superseding refresh, and unmount without 
     expect(signals[0].aborted).toBe(false);
     await act(async () => { tree.update(<Harness {...input} isActive={false} />); });
     expect(signals[0].aborted).toBe(true);
-    await act(async () => { finishReads[0]({ ok: true, contentBase64: 'b2xkCg==' }); });
+    await act(async () => { finishReads[0]({ success: true, content: 'b2xkCg==' }); });
     expect(current.fileContent).toBe(null);
     await act(async () => { tree.update(<Harness {...input} />); });
     expect(signals).toHaveLength(2);
@@ -80,7 +90,7 @@ it('aborts a preview transfer on hide, superseding refresh, and unmount without 
     await act(async () => { tree.unmount(); });
     expect(signals[2].aborted).toBe(true);
     await act(async () => {
-        for (const finish of finishReads.slice(1)) finish({ ok: true, contentBase64: 'bmV3Cg==' });
+        for (const finish of finishReads.slice(1)) finish({ success: true, content: 'bmV3Cg==' });
         await refresh;
     });
 });
@@ -91,7 +101,7 @@ it('does not start a transfer when the preview hides during stat', async () => {
     await act(async () => { tree = renderer.create(<Harness {...input} />); });
     await act(async () => { tree.update(<Harness {...input} isActive={false} />); });
     await act(async () => { finishStat({ success: true, exists: true, sizeBytes: 4 }); });
-    expect(transport.read).not.toHaveBeenCalled();
+    expect(workspaceFileDetailsActionBoundary.read).not.toHaveBeenCalled();
     expect(current.fileContent).toBe(null);
     await act(async () => { tree.unmount(); });
 });
@@ -100,10 +110,10 @@ it('reuses full content for a mode-only switch but rereads on explicit refresh',
     await act(async () => { tree = renderer.create(<Harness {...input} />); });
     const content = current.fileContent;
     await act(async () => { tree.update(<Harness {...input} diffMode="included" />); });
-    expect(transport.read).toHaveBeenCalledTimes(1);
+    expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalledTimes(1);
     expect(current.fileContent).toBe(content);
     await act(async () => { await current.refreshAll(); });
-    expect(transport.read).toHaveBeenCalledTimes(2);
+    expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalledTimes(2);
     await act(async () => { tree.unmount(); });
 });
 it('retains useful content on refresh failure but never carries it into another file', async () => {
@@ -111,7 +121,7 @@ it('retains useful content on refresh failure but never carries it into another 
     await act(async () => { tree = renderer.create(<Harness {...input} />); });
     const content = current.fileContent;
     transport.diff.mockRejectedValue(new Error('offline'));
-    transport.read.mockResolvedValue({ ok: false, error: 'offline' });
+    workspaceFileDetailsActionBoundary.read.mockResolvedValue({ success: false, error: 'offline' });
     await act(async () => { await current.refreshAll(); });
     expect(current.fileContent).toBe(content);
     expect(current.diffContent).toBe(patch('new'));

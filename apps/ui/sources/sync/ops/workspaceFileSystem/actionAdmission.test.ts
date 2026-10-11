@@ -33,7 +33,7 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/actionSettings');
 const { workspaceCreateDirectory } = await import('./directoryBrowsing');
 const { workspaceListDirectory, workspaceGetDirectoryTree } = await import('./directoryBrowsing');
-const { workspaceWriteFile } = await import('./fileReadWrite');
+const { workspaceReadFile, workspaceWriteFile } = await import('./fileReadWrite');
 const { workspaceRenamePath, workspaceDeletePath } = await import('./pathMetadataMutations');
 type Target = Parameters<typeof workspaceCreateDirectory>[0];
 const operations = [
@@ -60,6 +60,34 @@ afterEach(async () => {
 });
 
 describe('shared workspace filesystem Action admission', () => {
+    it('opens a bounded file through the Action RPC when the machine is relay-only', async () => {
+        filesystem.response = { success: true, content: 'IyBSRUFETUU=' };
+        const controller = new AbortController();
+
+        expect(await workspaceReadFile(target, 'README.md', { maxBytes: 12, signal: controller.signal })).toEqual({
+            success: true,
+            content: 'IyBSRUFETUU=',
+        });
+        expect(filesystem.calls).toEqual([expect.objectContaining({
+            method: 'daemon.filesystem.readFile',
+            payload: { rootPath: '/repo', path: '/repo/README.md' },
+            signal: controller.signal,
+        })]);
+    });
+
+    it('keeps the caller bound on a relay Action read', async () => {
+        filesystem.response = { success: true, content: 'YWJj' };
+
+        expect(await workspaceReadFile(target, 'README.md', { maxBytes: 2 })).toEqual({
+            success: false,
+            error: 'File exceeds the inline file read size limit',
+        });
+        expect(filesystem.calls).toEqual([expect.objectContaining({
+            method: 'daemon.filesystem.readFile',
+            payload: { rootPath: '/repo', path: '/repo/README.md' },
+        })]);
+    });
+
     it('routes bounded directory reads through the same Action policy choke point', async () => {
         filesystem.response = { success: true, entries: [] };
         expect(await workspaceListDirectory(target, 'src')).toEqual({ success: true, entries: [] });

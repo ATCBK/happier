@@ -1,6 +1,7 @@
 import { t } from '@/text';
 import { config } from '@/config';
-import { callDaemonWorkspaceStatFileRpc, downloadDaemonWorkspaceFileToBase64 } from '@/sync/domains/transfers/runtime/transferRuntime';
+import { callDaemonWorkspaceStatFileRpc } from '@/sync/domains/transfers/runtime/transferRuntime';
+import { workspaceReadFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
 import { getImageMimeTypeFromPath, getVideoMimeTypeFromPath, isBinaryContent, isKnownBinaryPath } from '@/scm/utils/filePresentation';
 import type { ScmDiffArea } from '@happier-dev/protocol';
 import type { FileDiffMode } from '@/components/workspaces/files/file/FileActionToolbar';
@@ -207,21 +208,17 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
                 }
 
                 const readResponse = await withFileReadTimeout(
-                    downloadDaemonWorkspaceFileToBase64({
-                        machineId: input.scope.machineId,
-                        serverId: input.scope.serverId,
-                        rootPath: input.scope.rootPath,
-                        path: input.filePath,
+                    workspaceReadFile(input.scope, input.filePath, {
                         maxBytes: maxPreviewBytes ?? 256 * 1024,
                         signal: input.signal,
                     }),
                     resolveFileReadTimeoutMs(),
                     () => ({
-                        ok: false as const,
+                        success: false as const,
                         error: t('files.fileReadFailed'),
                     }),
                 );
-                if (!readResponse.ok) {
+                if (!readResponse.success) {
                     failedReadError = readResponse.error || t('files.fileReadFailed');
                     error = failedReadError;
                     fileContent = null;
@@ -234,7 +231,7 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
                     };
                 }
 
-                const encodedContent = readResponse.contentBase64 || '';
+                const encodedContent = readResponse.content || '';
 
                 const decodedContent = decodeUtf8Base64(encodedContent);
                 if (isBinaryContent(decodedContent)) {

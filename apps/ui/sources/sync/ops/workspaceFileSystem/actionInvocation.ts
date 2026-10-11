@@ -15,6 +15,7 @@ export async function invokeWorkspaceFileSystemAction(
     target: WorkspaceFileSystemTarget,
     actionId: FilesystemActionId,
     input: unknown,
+    options?: Readonly<{ signal?: AbortSignal | null }>,
 ): Promise<ActionExecuteResult> {
     const lifetime = captureActiveServerAccountScopeLifetime();
     const serverId = target.serverId || lifetime?.scope.serverId;
@@ -27,6 +28,7 @@ export async function invokeWorkspaceFileSystemAction(
     return await createFrontDoorActionExecute(createDefaultActionExecutor())(actionId, input, {
         surface: 'ui', authority: 'present_user', serverId,
         ...(activeTarget ? { expectedAccountId: lifetime.scope.accountId } : {}),
+        ...(options?.signal ? { signal: options.signal } : {}),
         externalActionTarget: { kind: 'machine', machineId: target.machineId },
     });
 }

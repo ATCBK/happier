@@ -1,4 +1,5 @@
 import { HARD_OPENABLE_CONTENT_MAX_BYTES_V1 } from '@happier-dev/protocol/plugins/openableContent';
+import { readCanonicalPaddedBase64DecodedLength } from '@happier-dev/protocol/crypto/base64';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
 import { encodeBase64 } from '@/encryption/base64';
@@ -6,7 +7,6 @@ import { digest } from '@/platform/digest';
 import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
 import {
     callDaemonWorkspaceStatFileRpc,
-    downloadDaemonWorkspaceFileToBase64,
     uploadDaemonWorkspaceFileFromReader,
 } from '@/sync/domains/transfers/runtime/transferRuntime';
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
@@ -17,7 +17,10 @@ import { t } from '@/text';
 import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferFinalizeRecovery';
 import type { WorkspaceFileUploadFinalizeResponse } from '@/sync/domains/transfers/runtime/transferRuntime/families/workspaceFileTransfers';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { FilesystemWriteFileOutputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import {
+    FilesystemReadFileOutputSchema,
+    FilesystemWriteFileOutputSchema,
+} from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { invokeWorkspaceFileSystemAction } from './actionInvocation';
 
 const WORKSPACE_FILE_INLINE_MAX_BYTES_ENV_KEY = 'EXPO_PUBLIC_HAPPIER_SESSION_FILE_INLINE_MAX_BYTES';
@@ -100,25 +103,39 @@ export async function workspaceReadFile(
         typeof options?.maxBytes === 'number' && Number.isFinite(options.maxBytes)
             ? Math.min(Math.max(0, Math.floor(options.maxBytes)), HARD_OPENABLE_CONTENT_MAX_BYTES_V1)
             : inlineMaxBytes;
-    const download = await downloadDaemonWorkspaceFileToBase64({
-        machineId: target.machineId,
-        serverId: target.serverId,
+    const result = await invokeWorkspaceFileSystemAction(target, 'daemon.filesystem.readFile', {
         rootPath: target.rootPath,
-        agentRootPath: target.agentRootPath,
-        path,
-        maxBytes,
-        ...(options?.signal ? { signal: options.signal } : {}),
-    });
-    if (!download.ok) {
+        path: resolveMachineAbsolutePath({
+            rootPath: target.rootPath,
+            agentRootPath: target.agentRootPath,
+            requestPath: path,
+            pathKind: 'workspace_entry',
+        }),
+    }, { signal: options?.signal });
+    if (!result.ok) {
         return {
             success: false,
-            error: download.error,
+            error: result.error,
         };
+    }
+
+    const response = FilesystemReadFileOutputSchema.safeParse(result.result);
+    if (!response.success) {
+        return { success: false, error: 'The filesystem Action response could not be validated.' };
+    }
+    if (!response.data.success) return response.data;
+
+    const decodedLength = readCanonicalPaddedBase64DecodedLength(response.data.content);
+    if (decodedLength === null) {
+        return { success: false, error: 'The filesystem Action returned invalid file content.' };
+    }
+    if (decodedLength > maxBytes) {
+        return { success: false, error: 'File exceeds the inline file read size limit' };
     }
 
     return {
         success: true,
-        content: download.contentBase64,
+        content: response.data.content,
     };
 }
 

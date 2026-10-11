@@ -1,6 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { installWorkspaceFileDetailsCommonModuleMocks } from './workspaceFileDetailsTestHelpers';
+import {
+    cleanupWorkspaceFileDetailsActionBoundary,
+    installWorkspaceFileDetailsActionBoundary,
+    installWorkspaceFileDetailsCommonModuleMocks,
+    prepareWorkspaceFileDetailsActionBoundary,
+    getWorkspaceFileDetailsActionBoundary,
+} from './workspaceFileDetailsTestHelpers';
 
 const machineScmDiffFileSpy = vi.fn(async (..._args: any[]) => ({
     success: true,
@@ -14,18 +20,12 @@ const workspaceStatFileSpy = vi.fn(async (..._args: any[]) => ({
     sizeBytes: 10,
 }));
 
-const workspaceReadFileSpy = vi.fn(async (..._args: any[]) => ({
-    ok: true,
-    contentBase64: Buffer.from('hello\n').toString('base64'),
-}));
-
 vi.mock('@/sync/ops/scm/machineScm', () => ({
     machineScmDiffFile: (...args: any[]) => machineScmDiffFileSpy(...args),
 }));
 
 vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({
     callDaemonWorkspaceStatFileRpc: (...args: any[]) => workspaceStatFileSpy(...args),
-    downloadDaemonWorkspaceFileToBase64: (...args: any[]) => workspaceReadFileSpy(...args),
 }));
 
 vi.mock('@/config', () => ({
@@ -33,16 +33,28 @@ vi.mock('@/config', () => ({
 }));
 
 installWorkspaceFileDetailsCommonModuleMocks();
+installWorkspaceFileDetailsActionBoundary();
+const workspaceFileDetailsActionBoundary = getWorkspaceFileDetailsActionBoundary();
 
 vi.mock('@/scm/diff/looksLikeUnifiedDiff', () => ({
     looksLikeUnifiedDiff: () => true,
 }));
 
 describe('refreshWorkspaceFileDetails (multi-file diff)', () => {
+    let serverId: string;
+    beforeEach(async () => {
+        serverId = await prepareWorkspaceFileDetailsActionBoundary();
+        workspaceFileDetailsActionBoundary.read.mockReset().mockResolvedValue({
+            success: true,
+            content: Buffer.from('hello\n').toString('base64'),
+        });
+    });
+    afterEach(cleanupWorkspaceFileDetailsActionBoundary);
+
     it('extracts the unified diff for a single file when backend returns a multi-file patch', async () => {
         const { refreshWorkspaceFileDetails } = await import('./refreshWorkspaceFileDetails');
         const result = await refreshWorkspaceFileDetails({
-            scope: { serverId: 'srv1', machineId: 'm1', rootPath: '/repo' },
+            scope: { serverId, machineId: 'm1', rootPath: '/repo' },
             filePath: 'b.txt',
             diffMode: 'pending',
             fileEntryKind: 'modified',

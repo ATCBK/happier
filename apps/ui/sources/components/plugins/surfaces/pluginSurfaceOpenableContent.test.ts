@@ -1,17 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { OpenableContentStatResultV1Schema } from '@happier-dev/protocol';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
+import {
+    cleanupWorkspaceFileDetailsActionBoundary,
+    getWorkspaceFileDetailsActionBoundary,
+    installWorkspaceFileDetailsActionBoundary,
+    prepareWorkspaceFileDetailsActionBoundary,
+} from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileDetailsTestHelpers';
 
 const workspaceStatFileMock = vi.hoisted(() => vi.fn());
-const workspaceReadFileMock = vi.hoisted(() => vi.fn());
 const randomUUIDMock = vi.hoisted(() => vi.fn(() => 'a4a01e88-0000-4000-8000-000000000001'));
 
 vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({
     callDaemonWorkspaceStatFileRpc: (...args: unknown[]) => workspaceStatFileMock(...args),
-    downloadDaemonWorkspaceFileToBase64: (...args: unknown[]) => workspaceReadFileMock(...args),
 }));
+installWorkspaceFileDetailsActionBoundary();
+const workspaceReadFileMock = getWorkspaceFileDetailsActionBoundary().read;
 
 vi.mock('@/platform/randomUUID', () => ({
     randomUUID: () => randomUUIDMock(),
@@ -26,7 +32,7 @@ const TARGET = {
     machineId: 'machine-1',
     serverId: 'server-1',
     rootPath: '/private/repository',
-} as const;
+};
 const HELLO_HASH = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
 const WORLD_HASH = '486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7';
 const BINARY_HASH = 'aa5cd9acfab25f643fb1cedb67f8770417ac9ce0b02cfe72a62fa1ec20e9f60a';
@@ -51,7 +57,8 @@ function request(method: string, payload: unknown) {
 }
 
 describe('plugin surface openable content', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        TARGET.serverId = await prepareWorkspaceFileDetailsActionBoundary();
         workspaceStatFileMock.mockReset();
         workspaceReadFileMock.mockReset();
         randomUUIDMock.mockClear();
@@ -64,8 +71,9 @@ describe('plugin surface openable content', () => {
             changedMs: 100,
             contentHash: HELLO_HASH,
         });
-        workspaceReadFileMock.mockResolvedValue({ ok: true, contentBase64: 'aGVsbG8=' });
+        workspaceReadFileMock.mockResolvedValue({ success: true, content: 'aGVsbG8=' });
     });
+    afterEach(cleanupWorkspaceFileDetailsActionBoundary);
 
     it('changes the revision for an equal-size edit that preserved the modification time', async () => {
         // The failure this pins: a tool that rewrites a file in place and restores
@@ -93,7 +101,7 @@ describe('plugin surface openable content', () => {
         const first = await binding.stat();
 
         workspaceStatFileMock.mockResolvedValue(afterEqualSizeEdit);
-        workspaceReadFileMock.mockResolvedValue({ ok: true, contentBase64: 'd29ybGQ=' });
+        workspaceReadFileMock.mockResolvedValue({ success: true, content: 'd29ybGQ=' });
         const second = await binding.stat();
 
         expect(first.status).toBe('ready');
@@ -149,7 +157,7 @@ describe('plugin surface openable content', () => {
             contentHash: HELLO_HASH,
         } as const;
         workspaceStatFileMock.mockResolvedValue(sameRevision);
-        workspaceReadFileMock.mockResolvedValue({ ok: true, contentBase64: 'd29ybGQ=' });
+        workspaceReadFileMock.mockResolvedValue({ success: true, content: 'd29ybGQ=' });
         const binding = createWorkspaceFileOpenableContentBinding({ target: TARGET, filePath: 'notes/README.md' });
 
         await expect(binding.read({
@@ -160,7 +168,7 @@ describe('plugin surface openable content', () => {
     });
 
     it('does not memoize unknown-extension classification for probe bytes that disagree with the stat digest', async () => {
-        workspaceReadFileMock.mockResolvedValue({ ok: true, contentBase64: 'd29ybGQ=' });
+        workspaceReadFileMock.mockResolvedValue({ success: true, content: 'd29ybGQ=' });
         const binding = createWorkspaceFileOpenableContentBinding({ target: TARGET, filePath: 'notes/README.qtz' });
         const handlers = createPluginSurfaceOpenableContentHandlers({ binding });
 
@@ -244,9 +252,7 @@ describe('plugin surface openable content', () => {
         expect(workspaceReadFileMock).toHaveBeenCalledWith(expect.objectContaining({
             machineId: TARGET.machineId,
             serverId: TARGET.serverId,
-            rootPath: TARGET.rootPath,
-            path: 'notes/README.MD',
-            maxBytes: 5,
+            payload: { rootPath: TARGET.rootPath, path: '/private/repository/notes/README.MD' },
         }));
     });
 
@@ -271,7 +277,9 @@ describe('plugin surface openable content', () => {
             expectedRevision: `workspace-file:5:${HELLO_HASH}`,
             maxBytes: 5,
         }))).resolves.toMatchObject({ status: 'ready' });
-        expect(workspaceReadFileMock).toHaveBeenCalledWith(expect.objectContaining({ path: filePath }));
+        expect(workspaceReadFileMock).toHaveBeenCalledWith(expect.objectContaining({
+            payload: { rootPath: TARGET.rootPath, path: `/private/repository/${filePath}` },
+        }));
     });
 
     it('does not disclose a read that is too large or changed while the host reads it', async () => {
@@ -413,7 +421,7 @@ describe('plugin surface openable content', () => {
         expect(workspaceReadFileMock).not.toHaveBeenCalled();
 
         const contentBase64 = 'AAAA'.repeat(sizeBytes / 3);
-        workspaceReadFileMock.mockResolvedValue({ ok: true, contentBase64 });
+        workspaceReadFileMock.mockResolvedValue({ success: true, content: contentBase64 });
         await expect(handlers.readOpenableContent!(request('readOpenableContent', {
             ref: binding.ref,
             expectedRevision: `workspace-file:${sizeBytes}:${largeContentHash}`,
@@ -424,8 +432,7 @@ describe('plugin surface openable content', () => {
             content: { kind: 'base64', base64: contentBase64 },
         });
         expect(workspaceReadFileMock).toHaveBeenCalledWith(expect.objectContaining({
-            path: 'notes/preview.png',
-            maxBytes: sizeBytes,
+            payload: { rootPath: TARGET.rootPath, path: '/private/repository/notes/preview.png' },
         }));
     });
 
@@ -474,7 +481,7 @@ describe('plugin surface openable content', () => {
             changedMs: 100,
             contentHash: BINARY_HASH,
         });
-        workspaceReadFileMock.mockResolvedValue({ ok: true, contentBase64: 'AAEC//4=' });
+        workspaceReadFileMock.mockResolvedValue({ success: true, content: 'AAEC//4=' });
         const binding = createWorkspaceFileOpenableContentBinding({
             target: TARGET,
             filePath: 'artifacts/model.qtz',
@@ -530,7 +537,7 @@ describe('plugin surface openable content', () => {
             changedMs: 101,
             contentHash: BINARY_HASH,
         });
-        workspaceReadFileMock.mockResolvedValue({ ok: true, contentBase64: 'AAEC//4=' });
+        workspaceReadFileMock.mockResolvedValue({ success: true, content: 'AAEC//4=' });
         await expect(handlers.statOpenableContent!(request('statOpenableContent', { ref: binding.ref }))).resolves.toMatchObject({
             contentClass: 'binary',
             revision: `workspace-file:5:${BINARY_HASH}`,
