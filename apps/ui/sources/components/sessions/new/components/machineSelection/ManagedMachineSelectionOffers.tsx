@@ -27,7 +27,35 @@ type OffersProps = Readonly<{
     initialConfiguration?: ManagedMachineConfigurationContinuation;
     onOffers: (serverId: string, offers: readonly ManagedMachineSelectionOffer[], projection: ManagedMachineDestinationProjection) => void;
     onUse: (draft: ManagedMachineSelectionDraft) => void;
+    /**
+     * Called as the configurator opens. A popover host closes itself here: the configurator is its
+     * own modal and outlives the picker that opened it (lab m-pick: the configurator stands alone).
+     */
+    onConfigure?: () => void;
 }>;
+
+/**
+ * Opens the "New machine" configurator for a preset or a one-off. The modal owns its own lifetime:
+ * it closes on use, on its own close button, or when the Account binding retires, never because the
+ * picker that opened it went away, so the host can close first and the configurator then stands alone.
+ */
+export function useManagedMachineConfigurator(input: Readonly<{
+    serverId: string;
+    binding: ServerCredentialAccountScopeBinding | null;
+    initialConfiguration?: ManagedMachineConfigurationContinuation;
+    onUse: (draft: ManagedMachineSelectionDraft) => void;
+    onConfigure?: () => void;
+}>): (preset: ManagedMachinePresetV1 | null) => void {
+    const { binding, serverId, initialConfiguration, onUse, onConfigure } = input;
+    return React.useCallback((preset: ManagedMachinePresetV1 | null) => {
+        if (!binding?.isCurrent()) return;
+        onConfigure?.();
+        Modal.show({ component: ManagedMachineSelectionConfigurationModal,
+            props: { serverId, preset, initialConfiguration, binding, onUse: (draft: ManagedMachineSelectionDraft) => {
+                if (binding.isCurrent()) onUse(draft);
+            } } });
+    }, [binding, serverId, initialConfiguration, onUse, onConfigure]);
+}
 
 /** Mounted only by an open creation-capable picker; Account opt-out precedes every preset read. */
 export function ManagedMachineSelectionOffers(props: OffersProps) {
@@ -51,20 +79,8 @@ function CurrentManagedMachineSelectionOffers(props: OffersProps & Readonly<{ bi
     const homeId = getServerProfileById(props.serverId)?.serverIdentityId;
     const machines = useMachineListForServer(props.serverId);
     const router = useRouter();
-    const modalId = React.useRef<string | null>(null);
-    const configure = React.useCallback((preset: ManagedMachinePresetV1 | null) => {
-        if (!binding?.isCurrent()) return;
-        if (modalId.current) Modal.hide(modalId.current);
-        modalId.current = Modal.show({ component: ManagedMachineSelectionConfigurationModal,
-            props: { serverId: props.serverId, preset, initialConfiguration: props.initialConfiguration, onUse: draft => {
-                if (binding.isCurrent()) props.onUse(draft);
-            } } });
-    }, [binding, props.serverId, props.initialConfiguration, props.onUse]);
-    React.useEffect(() => {
-        const close = () => { if (modalId.current) Modal.hide(modalId.current); modalId.current = null; };
-        const retirement = binding?.onRetire(close);
-        return () => { close(); retirement?.dispose(); };
-    }, [binding]);
+    const configure = useManagedMachineConfigurator({ serverId: props.serverId, binding,
+        initialConfiguration: props.initialConfiguration, onUse: props.onUse, onConfigure: props.onConfigure });
     const offers = React.useMemo(() => homeId && binding?.isCurrent() ? buildManagedMachineSelectionOffers({
         homeId, presets: presets.presetsByServerId[props.serverId] ?? [],
         oneOffTitle: t('managedMachines.picker.oneOff'), oneOffSubtitle: t('managedMachines.picker.oneOffHelp'),
@@ -85,8 +101,15 @@ function CurrentManagedMachineSelectionOffers(props: OffersProps & Readonly<{ bi
 
 function ManagedMachineSelectionConfigurationModal(props: CustomModalInjectedProps & Readonly<{
     serverId: string; preset: ManagedMachinePresetV1 | null; initialConfiguration?: ManagedMachineConfigurationContinuation;
+    binding: ServerCredentialAccountScopeBinding;
     onUse: (draft: ManagedMachineSelectionDraft) => void;
 }>) {
+    // A configurator for an Account that is no longer current closes itself.
+    const { binding, onClose } = props;
+    React.useEffect(() => {
+        const retirement = binding.onRetire(onClose);
+        return () => retirement.dispose();
+    }, [binding, onClose]);
     const [selected, setSelected] = React.useState<ManagedProvisionerSelection | null>(() => props.preset ? {
         serverId: props.serverId, provisioner: buildQualifiedPluginContributionKey(props.preset.recipe.provider), controller: props.preset.controller,
     } : props.initialConfiguration?.serverId === props.serverId ? props.initialConfiguration : null);
