@@ -80,9 +80,8 @@ export function createCodexAppServerAssistantReasoningProjector(params: Readonly
     ): void => {
         const accumulated = values.get(itemKey) ?? '';
         values.delete(itemKey);
-        if (!text) return;
         if (!accumulated) {
-            append(text);
+            if (text) append(text);
             return;
         }
         if (text.startsWith(accumulated)) {
@@ -131,9 +130,14 @@ export function createCodexAppServerAssistantReasoningProjector(params: Readonly
         );
     };
 
-    const commitPendingRawAssistantFinals = (options?: Readonly<{ includeFallbackRawFinals?: boolean }>): void => {
+    const commitPendingRawAssistantFinals = (options?: Readonly<{
+        includeFallbackRawFinals?: boolean;
+        beforeItem?: Readonly<{ streamScopeId: string; itemId: string }>;
+    }>): void => {
         const includeFallbackRawFinals = options?.includeFallbackRawFinals !== false;
         for (const [itemKey, pendingRaw] of rawAssistantFinalByItemKey.entries()) {
+            if (options?.beforeItem && (pendingRaw.streamScopeId !== options.beforeItem.streamScopeId
+                || pendingRaw.itemId === options.beforeItem.itemId)) continue;
             if (pendingRaw.itemId) {
                 if (!normalizedAssistantFinalItemKeys.has(itemKey)) {
                     commitRawAssistantFinal(pendingRaw);
@@ -163,6 +167,8 @@ export function createCodexAppServerAssistantReasoningProjector(params: Readonly
                 const itemId = readString(update.itemId);
                 const text = readString(update.text);
                 if (itemId === null || text === null) return false;
+                commitPendingRawAssistantFinals({ includeFallbackRawFinals: false,
+                    beforeItem: { streamScopeId: context.streamScopeId, itemId } });
                 latestAssistantItemIdByStreamScope.set(context.streamScopeId, itemId);
                 appendStreamDelta(buildItemStateKey(context.streamScopeId, itemId), text, assistantTextByItemId, (deltaText) => {
                     params.bridge.appendAssistantDelta({
@@ -178,6 +184,8 @@ export function createCodexAppServerAssistantReasoningProjector(params: Readonly
                 const itemId = readString(update.itemId);
                 const text = readString(update.text);
                 if (itemId === null || text === null) return false;
+                commitPendingRawAssistantFinals({ includeFallbackRawFinals: false,
+                    beforeItem: { streamScopeId: context.streamScopeId, itemId } });
                 latestAssistantItemIdByStreamScope.set(context.streamScopeId, itemId);
                 const itemKey = buildItemStateKey(context.streamScopeId, itemId);
                 normalizedAssistantFinalItemKeys.add(itemKey);

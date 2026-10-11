@@ -4,6 +4,7 @@ import type { ExecutionRunBackendController } from '@/agent/executionRuns/contro
 import { failureSignal } from '@/agent/executionRuns/controllers/failureSignal';
 import { EXECUTION_RUN_TASK_RESULT_MAX_CODE_UNITS } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 import { createExactTurnUsageAccumulator } from '@/usage/exactTurnUsage';
+import { createStreamedTranscriptWriter } from '@/api/session/streamedTranscriptWriter';
 import type { ExecutionRunState } from '../executionRunTypes';
 import { createExecutionRunControllerMessageHandler, createExecutionRunTranscriptProjection } from './sessionStateEmission';
 
@@ -91,6 +92,51 @@ function createRunningRun(): ExecutionRunState {
 }
 
 describe('createExecutionRunControllerMessageHandler', () => {
+  it('replaces a draft in its own streamed row and retains earlier message artifacts in the run buffer', async () => {
+    const ctrl = createController();
+    const rows = new Map<string, string>();
+    let rowOrdinal = 0;
+    ctrl.streamWriter = createStreamedTranscriptWriter({
+      provider: 'codex',
+      makeLocalId: () => `row-${++rowOrdinal}`,
+      session: {
+        async enqueueAgentMessageCommitted(_provider, body, options) {
+          if (body.type === 'message') rows.set(options.localId, body.message);
+          return { persisted: true, delivered: false };
+        },
+      },
+    });
+    const handler = createExecutionRunControllerMessageHandler({
+      ctrl, runId: 'run_1', sidechainId: 'sidechain_1', ioMode: 'streaming',
+      computeSidechainStreamText: (text) => text, sendAcp: async () => {}, parentProvider: 'codex',
+      runs: new Map([['run_1', createRunningRun()]]), backendSupportsResume: true,
+      writeActivityMarker: async () => {}, getNowMs: () => 123,
+    });
+    const earlier = { type: 'model-output', messageId: 'message-1', textDelta: 'Retained artifact. ' } as const;
+    handler(earlier);
+    handler({ type: 'tool-call', toolName: 'Read', callId: 'tool-1', args: {} });
+    await ctrl.streamWriter.flushAll({ reason: 'tool-call-boundary' });
+    const draft = { type: 'model-output', messageId: 'message-2', textDelta: 'Draft' } as const;
+    const corrected = { type: 'model-output', messageId: 'message-2', fullText: 'Corrected' } as const;
+    handler(draft);
+    handler(corrected);
+    const acknowledgment = { type: 'model-output', messageId: 'message-3', fullText: ' Artifact delivered.' } as const;
+    handler(acknowledgment);
+    const removedDraft = { type: 'model-output', messageId: 'message-4', textDelta: 'Removed draft' } as const;
+    const emptyFinal = { type: 'model-output', messageId: 'message-4', fullText: '' } as const;
+    handler(removedDraft);
+    handler(emptyFinal);
+    await ctrl.streamWriter.flushAll({ reason: 'turn-end' });
+    expect(ctrl.buffer).toBe('Retained artifact. Corrected Artifact delivered.');
+    expect([...rows.values()]).toEqual(['Retained artifact. ', 'Corrected', ' Artifact delivered.', '']);
+    ctrl.turnEpoch += 1;
+    ctrl.buffer = '';
+    const nextTurn = { type: 'model-output', messageId: 'message-1', fullText: 'Next turn' } as const;
+    handler(nextTurn);
+    expect(ctrl.buffer).toBe('Next turn');
+    ctrl.streamWriter.discard();
+  });
+
   it('binds native durable facts to the exact sidechain and accepted anchor, then refuses retired custody', async () => {
     let accept!: (value: 'accepted') => void;
     const ctrl = createController();

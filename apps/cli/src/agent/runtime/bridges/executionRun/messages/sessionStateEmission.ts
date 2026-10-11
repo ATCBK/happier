@@ -165,6 +165,10 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
     makeId: () => randomUUID(),
   });
   let permissionCapability: ExecutionRunPermissionCapability = args.ctrl.backend.permissionCapability ?? 'static';
+  let outputTurnEpoch = args.ctrl.turnEpoch;
+  let currentMessageId: string | null = null;
+  let completedAssistantPrefix = '';
+  let completedStreamPrefix = '';
 
   function createFailClosedPermissionRequestError(
     reason: FailClosedPermissionReason,
@@ -200,16 +204,10 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
     }
   }
 
-  function exceedsExecutionResultOutputLimit(
-    msg: Extract<Parameters<AgentMessageHandler>[0], { type: 'model-output' }>,
-  ): boolean {
+  function exceedsExecutionResultOutputLimit(nextText: string): boolean {
     const intent = args.runs.get(args.runId)?.intent;
     if (intent !== 'task' && intent !== 'agent') return false;
-    if (typeof msg.fullText === 'string') {
-      return msg.fullText.length > EXECUTION_RUN_TASK_RESULT_MAX_CODE_UNITS;
-    }
-    if (typeof msg.textDelta !== 'string') return false;
-    return args.ctrl.buffer.length + msg.textDelta.length > EXECUTION_RUN_TASK_RESULT_MAX_CODE_UNITS;
+    return nextText.length > EXECUTION_RUN_TASK_RESULT_MAX_CODE_UNITS;
   }
 
   function readEffectivePermissionCapability(): ExecutionRunPermissionCapability {
@@ -422,23 +420,39 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
       )
     ) {
       args.ctrl.streamWriter.flushAll({ reason: 'tool-call-boundary' });
+      completedStreamPrefix = args.ctrl.sidechainStreamBuffer;
     }
 
     if (msg.type !== 'model-output') {
       forwarder.forward(msg);
       return;
     }
-    if (exceedsExecutionResultOutputLimit(msg)) {
+    if (outputTurnEpoch !== args.ctrl.turnEpoch) {
+      outputTurnEpoch = args.ctrl.turnEpoch;
+      currentMessageId = null;
+      completedAssistantPrefix = '';
+      completedStreamPrefix = '';
+    }
+    const startsMessage = Boolean(msg.messageId && msg.messageId !== currentMessageId);
+    const prefix = startsMessage ? args.ctrl.buffer : completedAssistantPrefix;
+    const nextFullText = typeof msg.fullText === 'string'
+      ? (msg.messageId ? prefix + msg.fullText : msg.fullText)
+      : args.ctrl.buffer + (msg.textDelta ?? '');
+    if (exceedsExecutionResultOutputLimit(nextFullText)) {
       terminalizeExecutionResultOutputLimit();
       return;
     }
     forwarder.forward(msg);
-    const prevFullText = args.ctrl.buffer;
-    if (typeof msg.fullText === 'string') {
-      args.ctrl.buffer = msg.fullText;
-    } else if (typeof msg.textDelta === 'string') {
-      args.ctrl.buffer += msg.textDelta;
+    if (startsMessage) {
+      args.ctrl.streamWriter?.flushAll({ reason: 'tool-call-boundary' });
+      completedStreamPrefix = args.ctrl.sidechainStreamBuffer;
+      completedAssistantPrefix = prefix;
+      currentMessageId = msg.messageId ?? null;
+    } else if (!msg.messageId && typeof msg.fullText === 'string') {
+      currentMessageId = null;
+      completedAssistantPrefix = '';
     }
+    args.ctrl.buffer = nextFullText;
 
     // Streaming: emit best-effort sidechain transcript updates.
     const streamWriter = args.ctrl.streamWriter;
@@ -447,27 +461,20 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
       if (!args.ctrl.sidechainStreamKey || args.ctrl.sidechainStreamKey !== streamKey) {
         args.ctrl.sidechainStreamKey = streamKey;
         args.ctrl.sidechainStreamBuffer = '';
+        completedStreamPrefix = '';
       }
 
       const nextStreamText = args.computeSidechainStreamText(args.ctrl.buffer);
       if (typeof nextStreamText === 'string') {
         const prevStreamText = args.ctrl.sidechainStreamBuffer;
 
-        const delta = (() => {
-          if (nextStreamText.startsWith(prevStreamText)) {
-            return nextStreamText.slice(prevStreamText.length);
-          }
-
-          // Fallback: if the backend reports cumulative fullText but it diverges (vendor bug/restarts),
-          // emit the delta between previous and current fullText as best-effort.
-          if (args.ctrl.buffer === prevFullText) return '';
-          return nextStreamText;
-        })();
-
-        if (delta && delta.length > 0) {
-          args.ctrl.sidechainStreamBuffer = nextStreamText;
-          streamWriter.appendAssistantDelta(delta, { sidechainId: args.sidechainId });
+        if (nextStreamText.startsWith(prevStreamText)) {
+          const delta = nextStreamText.slice(prevStreamText.length);
+          if (delta.length > 0) streamWriter.appendAssistantDelta(delta, { sidechainId: args.sidechainId });
+        } else {
+          streamWriter.overrideAssistantText(nextStreamText.slice(completedStreamPrefix.length), { sidechainId: args.sidechainId });
         }
+        args.ctrl.sidechainStreamBuffer = nextStreamText;
       }
     }
 

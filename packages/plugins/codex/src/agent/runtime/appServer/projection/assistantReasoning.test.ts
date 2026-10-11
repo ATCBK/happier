@@ -64,10 +64,25 @@ describe('createCodexAppServerAssistantReasoningProjector', () => {
         projector.observeStreamUpdate({ type: 'assistant-text-final', itemId: 'msg_2', text: 'Normalized final' }, context);
         await projector.flush('turn-end');
 
-        expect(recording.assistantDeltas).toEqual(expect.arrayContaining([
+        expect(recording.assistantDeltas).toEqual([
+            { deltaText: 'Raw final', streamKey: 'turn_1:assistant:raw_msg_1', sidechainId: null },
             { deltaText: 'Normalized', streamKey: 'turn_1:assistant:msg_2', sidechainId: null },
             { deltaText: ' final', streamKey: 'turn_1:assistant:msg_2', sidechainId: null },
-            { deltaText: 'Raw final', streamKey: 'turn_1:assistant:raw_msg_1', sidechainId: null },
-        ]));
+        ]);
+    });
+
+    it('prefers the normalized final for the current item over its pending raw snapshot', async () => {
+        const recording = createRecordingBridge();
+        const projector = createCodexAppServerAssistantReasoningProjector({ bridge: recording.bridge });
+        const context = { sidechainId: null, streamScopeId: 'turn_1' };
+        projector.observeStreamUpdate({ type: 'assistant-text-delta', itemId: 'msg_1', text: 'Draft' }, context);
+        projector.observeStreamUpdate({ type: 'assistant-raw-final', itemId: 'msg_1', text: 'Raw candidate' }, context);
+        projector.observeStreamUpdate({ type: 'assistant-text-final', itemId: 'msg_1', text: 'Normalized final' }, context);
+        projector.observeStreamUpdate({ type: 'assistant-text-delta', itemId: 'msg_2', text: 'Acknowledgment' }, context);
+        await projector.flush('turn-end');
+        expect(recording.assistantDeltas.map((event) => event.deltaText)).toEqual(['Draft', 'Acknowledgment']);
+        expect(recording.assistantOverrides).toEqual([
+            { text: 'Normalized final', streamKey: 'turn_1:assistant:msg_1', sidechainId: null },
+        ]);
     });
 });

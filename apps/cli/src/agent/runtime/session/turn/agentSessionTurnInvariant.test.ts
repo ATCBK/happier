@@ -216,7 +216,7 @@ describe('createAgentSessionTurnInvariant', () => {
         expect(invariant.read()).toMatchObject({ activeTurnId: null, knownTurnCount: 0 });
     });
 
-    it('accepts one exact rollback boundary for the most recently completed turn', () => {
+    it.each(['turn-complete', 'turn-cancelled'] as const)('accepts one exact rollback boundary after %s', (terminalKind) => {
         const invariant = createAgentSessionTurnInvariant({ sessionId: 'session-1' });
 
         expect(invariant.observe({
@@ -240,7 +240,8 @@ describe('createAgentSessionTurnInvariant', () => {
             sequence: 3,
             sessionId: 'session-1',
             emittedAtMs: 3,
-            kind: 'turn-complete',
+            kind: terminalKind,
+            ...(terminalKind === 'turn-cancelled' ? { cause: 'user' as const } : {}),
             turnId: 'turn-1',
             agentTurnId: 'agent-turn-1',
         })).toMatchObject({ status: 'accepted' });
@@ -250,18 +251,18 @@ describe('createAgentSessionTurnInvariant', () => {
             emittedAtMs: 4,
             kind: 'turn-rollback-boundary',
             turnId: 'turn-1',
-            agentTurnId: 'other-agent-turn',
-            providerCheckpoint: 'other-agent-turn',
-        })).toMatchObject({ status: 'rejected', diagnostic: { code: 'agent_runtime_agent_turn_conflict' } });
+            agentTurnId: 'agent-turn-1',
+            providerCheckpoint: 'agent-turn-1',
+        })).toMatchObject({ status: 'accepted' });
         expect(invariant.observe({
             sequence: 5,
             sessionId: 'session-1',
             emittedAtMs: 5,
             kind: 'turn-rollback-boundary',
             turnId: 'turn-1',
-            agentTurnId: 'agent-turn-1',
-            providerCheckpoint: 'agent-turn-1',
-        })).toMatchObject({ status: 'accepted' });
+            agentTurnId: 'other-agent-turn',
+            providerCheckpoint: 'other-agent-turn',
+        })).toMatchObject({ status: 'rejected', diagnostic: { code: 'agent_runtime_agent_turn_conflict' } });
         expect(invariant.observe({
             sequence: 6,
             sessionId: 'session-1',

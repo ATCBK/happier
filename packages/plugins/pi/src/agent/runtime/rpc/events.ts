@@ -109,13 +109,17 @@ function extractAssistantText(message: unknown): string | null {
   const record = isRecord(message) ? message : null;
   if (!record || record.role !== 'assistant' || !Array.isArray(record.content)) return null;
   let text = '';
+  let hasText = false;
   for (const item of record.content) {
     const entry = isRecord(item) ? item : null;
     if (!entry || entry.type !== 'text') continue;
     const chunk = readRawString(entry.text);
-    if (chunk !== null) text += chunk;
+    if (chunk !== null) {
+      hasText = true;
+      text += chunk;
+    }
   }
-  return text.length > 0 ? text : null;
+  return hasText ? text : null;
 }
 
 function extractAssistantThinking(message: unknown): string | null {
@@ -353,21 +357,25 @@ export function createPiRuntimeEventProjector(): Readonly<{
   let accumulatedThinkingText = '';
   const assistantTextByContentIndex = new Map<number, string>();
   let activeAssistantContentIndex = 0;
+  let assistantMessageOrdinal = 0;
+  let activeAssistantMessageId: string | null = null;
 
   const clearAssistantSnapshotState = () => {
     assistantTextByContentIndex.clear();
     activeAssistantContentIndex = 0;
+    activeAssistantMessageId = null;
+  };
+  const assistantMessageId = (context: PiRuntimeEventProjectionContext): string => {
+    if (!activeAssistantMessageId) {
+      assistantMessageOrdinal += 1;
+      activeAssistantMessageId = `pi:${context.agentSessionId ?? 'session'}:${context.turnId ?? 'turn'}:assistant:${assistantMessageOrdinal}`;
+    }
+    return activeAssistantMessageId;
   };
   const readAssistantContentIndex = (value: unknown): number => {
     const index = readNonNegativeNumber(value);
     return index !== null && Number.isInteger(index) ? index : activeAssistantContentIndex;
   };
-  const readProjectedAssistantText = (): string => (
-    [...assistantTextByContentIndex.entries()]
-      .sort(([left], [right]) => left - right)
-      .map(([, text]) => text)
-      .join('')
-  );
   const projectSnapshotDelta = (
     channel: 'assistant' | 'reasoning',
     text: string,
@@ -380,6 +388,7 @@ export function createPiRuntimeEventProjector(): Readonly<{
       kind: 'message-delta',
       channel,
       text,
+      ...(channel === 'assistant' ? { messageId: assistantMessageId(context) } : {}),
     }];
   };
 
@@ -387,6 +396,12 @@ export function createPiRuntimeEventProjector(): Readonly<{
     project(record, context) {
       const raw = isRecord(record) ? record : null;
       const type = readString(raw?.type);
+      if (raw && type === 'message_start' && isRecord(raw.message) && raw.message.role === 'assistant') {
+        clearAssistantSnapshotState();
+        accumulatedThinkingText = '';
+        assistantMessageId(context);
+        return [];
+      }
       if (raw && type === 'message_update') {
         const assistantMessageEvent = isRecord(raw.assistantMessageEvent)
           ? raw.assistantMessageEvent
@@ -405,10 +420,11 @@ export function createPiRuntimeEventProjector(): Readonly<{
           const authoritativeText = readRawString(assistantMessageEvent?.content)
             ?? extractAssistantText(raw.message);
           if (authoritativeText === null) return [];
-          const text = reconcileAuthoritativeText(
-            authoritativeText,
-            assistantTextByContentIndex.get(contentIndex) ?? '',
-          );
+          const projectedText = assistantTextByContentIndex.get(contentIndex) ?? '';
+          // Pi's final message is authoritative. A divergent block is not an appended delta.
+          const text = authoritativeText.startsWith(projectedText)
+            ? authoritativeText.slice(projectedText.length)
+            : '';
           assistantTextByContentIndex.set(contentIndex, authoritativeText);
           return projectSnapshotDelta('assistant', text, context);
         }
@@ -427,24 +443,28 @@ export function createPiRuntimeEventProjector(): Readonly<{
             (assistantTextByContentIndex.get(contentIndex) ?? '') + event.text,
           );
         }
-        return events;
+        return events.map((event) => event.kind === 'message-delta' && event.channel === 'assistant'
+          ? { ...event, messageId: assistantMessageId(context) }
+          : event);
       }
       if (raw && type === 'message_end') {
+        if (!isRecord(raw.message) || raw.message.role !== 'assistant') return [];
         const fullAssistantText = extractAssistantText(raw.message);
-        const projectedAssistantText = readProjectedAssistantText();
+        const hadAssistantText = assistantTextByContentIndex.size > 0;
         const fullThinkingText = extractAssistantThinking(raw.message);
         const projectedThinkingText = accumulatedThinkingText;
-        clearAssistantSnapshotState();
-        accumulatedThinkingText = '';
-
-        const assistantText = fullAssistantText === null
-          ? ''
-          : reconcileAuthoritativeText(fullAssistantText, projectedAssistantText);
+        const base = turnEventBase(context);
+        const committed: PiRuntimeEvent[] = base && (fullAssistantText !== null || hadAssistantText)
+          ? [{ ...base, kind: 'transcript-message-committed', role: 'assistant',
+              messageId: assistantMessageId(context), text: fullAssistantText ?? '' }]
+          : [];
         const thinkingText = fullThinkingText === null
           ? ''
           : reconcileAuthoritativeText(fullThinkingText, projectedThinkingText);
+        clearAssistantSnapshotState();
+        accumulatedThinkingText = '';
         return [
-          ...projectSnapshotDelta('assistant', assistantText, context),
+          ...committed,
           ...projectSnapshotDelta('reasoning', thinkingText, context),
         ];
       }
@@ -486,6 +506,7 @@ export function createPiRuntimeEventProjector(): Readonly<{
       activeCompaction = null;
       expectedHostCompaction = null;
       accumulatedThinkingText = '';
+      assistantMessageOrdinal = 0;
       clearAssistantSnapshotState();
     },
   };

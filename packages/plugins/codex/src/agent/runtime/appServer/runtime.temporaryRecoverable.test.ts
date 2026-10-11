@@ -2331,7 +2331,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     expect(runtime.isTurnInFlight()).toBe(false);
   });
 
-  it('publishes the provider turn checkpoint without requiring a host transcript sequence', async () => {
+  it.each(['completed', 'interrupted'] as const)('publishes the settled %s provider turn checkpoint without requiring a host transcript sequence', async (status) => {
     const runtime = createRuntime({
       processEnv: { HAPPIER_CODEX_APP_SERVER_TURN_COMPLETION_SETTLE_MS: '0' },
     });
@@ -2345,7 +2345,10 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       { turnId: 'host-turn-checkpoint' },
     );
     const completion = waitForCodexAppServerRuntimeTurnCompletion(runtime);
-    emitNotification('turn/completed', completedTurn('turn-1'));
+    emitNotification('turn/completed', {
+      threadId: 'thread-1',
+      turn: { id: 'turn-1', status },
+    });
     await completion;
 
     expect(events).toContainEqual(expect.objectContaining({

@@ -117,10 +117,31 @@ describe('typesRaw.normalizeRawMessage (task-notification)', () => {
   it.each([
     { origin: undefined, content: [{ type: 'tool_result', tool_use_id: 'known', content: 'copied outcome' }] },
     { origin: { kind: 'task-notification' }, content: [{ type: 'text', text: 'metadata note' }] },
+    { origin: { kind: 'task-notification' }, content: [{ type: 'tool_result', tool_use_id: 'known', content: 'unidentified outcome' }] },
+    { origin: { kind: 'task-notification', toolUseId: 'other' }, content: [{ type: 'tool_result', tool_use_id: 'known', content: 'mismatched outcome' }] },
+    { origin: { kind: 'task-notification', toolUseId: 'known' }, content: [{ type: 'tool_result', tool_use_id: 'known', content: 'mixed outcome' }, { type: 'text', text: 'unrelated metadata' }] },
   ])('keeps unrelated metadata out of tool results', ({ origin, content }) => {
     const row = { role: 'agent', content: { type: 'output', data: { type: 'user', uuid: 'meta', isMeta: true,
       ...(origin ? { origin } : {}), message: { role: 'user', content } } }, meta: { source: 'cli' } };
     expect(normalizeRawMessage('meta', null, 1, row as never)).toBeNull();
+  });
+
+  it.each(['failed', 'stopped'] as const)('preserves released scanner metadata %s despite its false error bit', status => {
+    const state = createReducer();
+    // cli-v0.2.13@a3d0574d88 wrote is_error:false even when the parsed native status failed/stopped.
+    const rows = [
+      { type: 'assistant', uuid: 'launch', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'legacy-tool', name: 'Agent', input: {} }] } },
+      { type: 'user', uuid: 'ack', toolUseResult: { status: 'async_launched', agentId: 'legacy-task' }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'legacy-tool', content: 'Async agent launched successfully.' }] } },
+      { type: 'user', uuid: 'done', isMeta: true, origin: { kind: 'task-notification', taskId: 'legacy-task', toolUseId: 'legacy-tool', status }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'legacy-tool', content: [{ type: 'text', text: 'Native findings' }], is_error: false }] } },
+    ];
+    rows.forEach((data, index) => {
+      const normalized = normalizeRawMessage(`legacy-${index}`, null, index + 1, { role: 'agent', content: { type: 'output', data }, meta: { source: 'cli' } } as never);
+      if (normalized) reducer(state, [normalized]);
+    });
+    const id = state.toolIdToMessageId.get('legacy-tool');
+    const tool = id ? state.messages.get(id)?.tool : null;
+    expect(isAsyncSubAgentLaunchToolResult(tool?.result)).toBe(false);
+    expect(tool?.state).toBe('error');
   });
 
   it('drops Claude Code <task-notification> user-text messages from the main transcript', () => {

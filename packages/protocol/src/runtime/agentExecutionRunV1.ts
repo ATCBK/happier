@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
+import { NonBlankOpaqueIdentifierSchema } from '../strings/opaqueIdentifier.js';
 
 import { AGENT_SESSION_RUNTIME_LIMITS_CANDIDATE_V1 as LIMITS } from './agentSessionLimitsV1.js';
 import {
@@ -8,6 +9,7 @@ import {
 } from './agentRuntimeDiagnosticV1.js';
 
 const SafeIntegerSchema = lazyZodSchema(() => z.number().int().nonnegative().max(LIMITS.safeIntegerMax));
+const MessageIdSchema = lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.max(LIMITS.providerIdMaxCodeUnits));
 const RunIdSchema = lazyZodSchema(() => z.string()
   .min(1)
   .refine((value) => value === value.trim(), 'Identifiers must not contain leading or trailing whitespace'));
@@ -34,6 +36,16 @@ export type AgentExecutionRunEventV1 =
       emittedAtMs: number;
       kind: 'output-delta';
       channel: 'assistant' | 'reasoning';
+      text: string;
+      messageId?: string;
+    }>
+  | Readonly<{
+      sequence: number;
+      runId: string;
+      emittedAtMs: number;
+      kind: 'output-message-committed';
+      channel: 'assistant';
+      messageId: string;
       text: string;
     }>
   | Readonly<{
@@ -64,6 +76,14 @@ const AgentExecutionRunEventCoreV1Schema: z.ZodType<AgentExecutionRunEventV1> = 
     ...BaseShape,
     kind: z.literal('output-delta'),
     channel: z.enum(['assistant', 'reasoning']),
+    text: z.string(),
+    messageId: MessageIdSchema.optional(),
+  }).strict(),
+  z.object({
+    ...BaseShape,
+    kind: z.literal('output-message-committed'),
+    channel: z.literal('assistant'),
+    messageId: MessageIdSchema,
     text: z.string(),
   }).strict(),
   z.object({

@@ -29,6 +29,19 @@ describe('Claude JSONL projection', () => {
         })).toEqual([]);
     });
 
+    it.each(['completed', 'failed', 'stopped'] as const)('projects native queued %s into the existing direct-history tool result contract', status => {
+        const notification = { type: 'attachment', uuid: 'native-terminal', attachment: {
+            type: 'queued_command', commandMode: 'task-notification', prompt:
+                `<task-notification><task-id>native-task</task-id><tool-use-id>original-tool</tool-use-id><status>${status}</status><result>Native findings</result></task-notification>`,
+        } };
+        const [projected] = projectClaudeJsonlLineToDirectMessages({ fileRelPath: 'session.jsonl', lineStartOffsetBytes: 42, lineValue: notification });
+        expect(projected?.raw).toMatchObject({ role: 'agent', content: { type: 'acp', agentId: 'claude',
+            data: { type: 'tool-result', callId: 'original-tool', isError: status !== 'completed' } } });
+        expect(JSON.stringify(projected?.raw)).toContain('Native findings');
+        expect(JSON.stringify(projected?.raw)).not.toContain('queued_command');
+        expect(projected?.userProjection).toBeUndefined();
+    });
+
     it('normalizes Claude team tool names while projecting raw messages', () => {
         const projected = projectClaudeJsonlLineToRawMessage({
             type: 'assistant',

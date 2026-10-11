@@ -30,8 +30,10 @@ export interface ModelOutputMessage {
   type: 'model-output';
   /** Incremental text delta (streaming) */
   textDelta?: string;
-  /** Full text (when not streaming) */
+  /** Authoritative text: the identified message, or the whole turn when unkeyed. */
   fullText?: string;
+  /** Stable identity shared by a message's streamed deltas and final snapshot. */
+  messageId?: string;
 }
 
 /**

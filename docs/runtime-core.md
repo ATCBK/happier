@@ -173,6 +173,28 @@ authority and the remaining composed-validation boundary.
 
 The lifecycle owner consumes validated `AgentSessionRuntimeEvent` evidence, projects turn/transcript facts and supplies the prompt loop's thinking setter. The strict event union is owned by [`runtime/agentSessionV1.ts`](../packages/protocol/src/runtime/agentSessionV1.ts); [`plugins/events/hostV1.ts`](../packages/protocol/src/plugins/events/hostV1.ts) validates Host Event payloads through that same schema. Native callbacks do not become a second host state machine. Historical replay/follow and external-session discovery remain distinct from live input and transcript publication; they must not start another prompt loop or durable transcript writer.
 
+In 0.3 development source, assistant deltas and authoritative committed snapshots
+share an exact message identity and host turn. The Session-owned Run adapter
+projects those snapshots into the strict Run event union; foreground Run results
+exclude history and child-sidechain commits. The execution controller replaces
+the current message's draft, including an empty final snapshot, while retaining
+earlier assistant messages. Its streamed transcript uses the existing writer's
+replacement operation on that same active row. Agent producers publish a final
+correction before beginning a later assistant message.
+
+A settled cancelled turn can publish its real native rollback checkpoint through
+the same host boundary as a completed turn. Exact provider identity and duplicate
+checks remain enforced. A delayed committed user-message sequence can join that
+retained checkpoint after cancellation; reset or disposal retires the join. A
+turn without native checkpoint evidence remains unavailable for rollback.
+
+Claude native task completions use the plugin's existing task-notification
+projector across SDK, terminal and transcript readers. Historical 0.2 metadata
+results are accepted only as one tool result matching the origin's tool-use id;
+their recorded failed/stopped status corrects the released false error bit.
+Ordinary metadata retains its visibility filtering. These are development-source
+contracts, not claims of released availability or loaded-provider validation.
+
 The [input consumer](../apps/cli/src/agent/runtime/session/input/sessionProviderInputConsumer.ts) owns provider-input dispatch custody and admission quiescence. Ordinary dispatch and model-transition admission transfer use the same async custody scope. A runtime replacement initiated within an active dispatch retains that custody and drains other dispatches plus pending materialization; it does not wait for itself. External replacements drain all dispatches. Settled dispatch scopes cannot lend custody to later asynchronous continuations. This is a 0.3 development-source contract; native reply verification is separate evidence.
 
 In 0.3 development, a missing launchable Agent CLI carries `agent_cli_missing` from both the command/terminal launch owner and the native plugin system-tool binding. Startup sanitization preserves that code; the primary Session issue classifier projects `dependency_failure` with static installation/path remediation. It does not expose raw startup error text or infer acceptance from a failed prerequisite.
