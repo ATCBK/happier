@@ -532,8 +532,18 @@ export function normalizeRawMessage(
         };
 
 			        if (raw.content.type === 'output') {
-            // Skip Meta messages
-            if (raw.content.data.isMeta) {
+            const outputData: unknown = raw.content.data;
+            const outputOrigin = isPlainRecord(outputData) ? outputData.origin : null;
+            const nativeTaskNotification = isPlainRecord(outputOrigin) && outputOrigin.kind === 'task-notification';
+            // Older scanners persisted settled native task results with isMeta. Admit only the
+            // original tool result, never unrelated metadata or copied notification text.
+            const nativeTaskResult = nativeTaskNotification && isOutputUserData(raw.content.data)
+                && Array.isArray(raw.content.data.message.content)
+                && raw.content.data.message.content.length === 1
+                && raw.content.data.message.content.every(block => isPlainRecord(block)
+                    && block.type === 'tool_result' && typeof block.tool_use_id === 'string'
+                    && typeof outputOrigin.toolUseId === 'string' && outputOrigin.toolUseId === block.tool_use_id);
+            if (raw.content.data.isMeta && !nativeTaskResult) {
                 return null;
             }
 
@@ -696,7 +706,7 @@ export function normalizeRawMessage(
 
                 // Handle regular user messages
                 if (raw.content.data.message && typeof raw.content.data.message.content === 'string') {
-                    if (isClaudeTaskNotificationText(raw.content.data.message.content)) {
+                    if (nativeTaskNotification && isClaudeTaskNotificationText(raw.content.data.message.content)) {
                         return null;
                     }
                     const normalized = {
