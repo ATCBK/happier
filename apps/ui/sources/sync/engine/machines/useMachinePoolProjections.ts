@@ -74,7 +74,6 @@ function buildMachineLifecycleRevisionKey(scope: MachinePoolProjectionScope): st
             machine.id,
             machine.kind ?? '',
             machine.active === true ? '1' : '0',
-            machine.activeAt ?? '',
             machine.revokedAt ?? '',
             machine.replacedByMachineId ?? '',
         ].join(':')).join('|');
@@ -140,7 +139,11 @@ export function useMachinePoolProjections(
             // projection. A stale other-Account status is likewise not this Account's answer.
             ? featureKnownDisabled
                 ? 'idle'
-                : cachedAccountIsCurrent ? storedStatus : 'loading'
+                : cachedAccountIsCurrent
+                    // A background read retains even an empty hydrated answer.
+                    // Cold loads and terminal failures keep their existing states.
+                    ? currentRowsAvailable && storedStatus === 'loading' ? 'idle' : storedStatus
+                    : 'loading'
             : accountScope?.kind === 'signed_out' || accountScope?.kind === 'unknown_home'
                 ? 'signedOut'
                 : 'loading';

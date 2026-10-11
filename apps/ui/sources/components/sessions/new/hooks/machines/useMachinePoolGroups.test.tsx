@@ -250,6 +250,9 @@ describe('useMachinePoolGroups', () => {
                 signedOut: false,
             }],
             poolGroups: hook.getCurrent(),
+            // The shortcut also requires the managed-destination owner to have
+            // settled; this Home contributes no managed offers in this scenario.
+            managedMachineProjection: { state: 'unavailable', rowCount: 0 },
         }).soleSelectableDestination).toEqual({
             serverId: boundary.serverId,
             machine: expect.objectContaining({ id: 'machine-a' }),

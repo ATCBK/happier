@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { renderHook } from '@/dev/testkit';
+import { createDeferred, renderHook } from '@/dev/testkit';
 import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUtils';
 import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -13,11 +13,13 @@ import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccou
 
 import { useMachinePoolProjections, type MachinePoolProjectionScope } from './useMachinePoolProjections';
 import { resetMachinePoolSyncRuntimeForTests } from './machinePoolSyncRuntime';
+import { invalidateMachinePoolProjection } from './machinePoolProjection';
 
 const boundary = {
     serverId: '',
     requests: [] as string[],
     poolFeatureEnabled: true,
+    poolFetchOverride: null as null | (() => Promise<Response>),
 };
 const initialStorageState = getStorage().getState();
 
@@ -57,6 +59,7 @@ describe('useMachinePoolProjections', () => {
         })).id;
         boundary.requests.length = 0;
         boundary.poolFeatureEnabled = true;
+        boundary.poolFetchOverride = null;
         const token = `header.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64')}.signature`;
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
         await publishPoolsFeature(true);
@@ -77,6 +80,7 @@ describe('useMachinePoolProjections', () => {
             if (String(url).endsWith('/v1/account/encryption')) return Response.json({ mode: 'plain', updatedAt: 1 });
             if (String(url).endsWith('/v2/account/settings')) return Response.json({ content: { t: 'plain', v: {} }, version: 0 });
             boundary.requests.push(String(url));
+            if (boundary.poolFetchOverride) return await boundary.poolFetchOverride();
             return Response.json({ pools: [pool] });
         });
         retireActiveServerAccountScopeLifetime();
@@ -178,6 +182,49 @@ describe('useMachinePoolProjections', () => {
             });
         });
 
+        await hook.unmount();
+    });
+
+    it('settles cold Home discovery failure and recovers without a controller', async () => {
+        resetServerFeaturesClientForTests();
+        let homeReachable = false;
+        const readHome = async (url: RequestInfo | URL): Promise<Response> => {
+            if (String(url).endsWith('/v1/features')) {
+                if (!homeReachable) throw new Error('network_unreachable');
+                const features = buildServerFeaturesResponse();
+                return Response.json({
+                    ...features,
+                    features: {
+                        ...features.features,
+                        machines: { ...features.features.machines, pools: { enabled: true } },
+                    },
+                });
+            }
+            if (String(url).endsWith('/v1/account/encryption')) return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (String(url).endsWith('/v2/account/settings')) return Response.json({ content: { t: 'plain', v: {} }, version: 0 });
+            boundary.requests.push(String(url));
+            return Response.json({ pools: [pool] });
+        };
+        vi.stubGlobal('fetch', vi.fn(readHome));
+        setRuntimeFetch(readHome);
+        const scopes: MachinePoolProjectionScope[] = [{ serverId: boundary.serverId, machines: [] }];
+        const hook = await renderHook(() => useMachinePoolProjections(scopes));
+
+        await vi.waitFor(() => expect(hook.getCurrent()[0]).toMatchObject({
+            featureStatus: 'error', featureEnabled: false, pools: [], ready: false,
+        }));
+        expect(boundary.requests).toEqual([]);
+
+        homeReachable = true;
+        await act(async () => {
+            await invalidateMachinePoolProjection(boundary.serverId, { forceFeatures: true });
+        });
+        await vi.waitFor(() => expect(hook.getCurrent()[0]).toMatchObject({
+            featureStatus: 'enabled', featureEnabled: true, pools: [pool], status: 'idle', ready: true,
+        }));
+        expect(new Set(boundary.requests)).toEqual(new Set([
+            'https://machine-pool-projections.test/v1/machines/pools/list',
+        ]));
         await hook.unmount();
     });
 
@@ -392,6 +439,30 @@ describe('useMachinePoolProjections', () => {
             ready: true,
         }));
         expect(boundary.requests).toEqual(['https://machine-pool-projections.test/v1/machines/pools/list']);
+        await hook.unmount();
+    });
+
+    it.each([true, false])('retains a hydrated Pool answer through heartbeats and refresh (has Pools: %s)', async hasPools => {
+        const rows = hasPools ? [pool] : [];
+        boundary.poolFetchOverride = async () => Response.json({ pools: rows });
+        let scopes: MachinePoolProjectionScope[] = [{ serverId: boundary.serverId,
+            machines: [{ id: 'machine-a', active: true, activeAt: 1 }] }];
+        const hook = await renderHook(() => useMachinePoolProjections(scopes));
+        await vi.waitFor(() => expect(hook.getCurrent()[0]).toMatchObject({ pools: rows, status: 'idle', ready: true }));
+        const response = createDeferred<Response>();
+        boundary.poolFetchOverride = () => response.promise;
+        // A heartbeat renews the same connection, not the Pool membership/availability lifecycle.
+        scopes = [{ serverId: boundary.serverId, machines: [{ id: 'machine-a', active: true, activeAt: 2 }] }];
+        await hook.rerender();
+        expect(boundary.requests).toHaveLength(1);
+        expect(hook.getCurrent()[0]).toMatchObject({ pools: rows, status: 'idle', ready: true });
+        let refreshing!: Promise<void>;
+        await act(async () => { refreshing = invalidateMachinePoolProjection(boundary.serverId); });
+        await vi.waitFor(() => expect(boundary.requests).toHaveLength(2));
+        // Even an empty list is a known answer; a background refresh must not resurrect its cold spinner.
+        expect(hook.getCurrent()[0]).toMatchObject({ pools: rows, status: 'idle', ready: true });
+        await act(async () => { response.resolve(Response.json({ pools: rows })); await refreshing; });
+        expect(hook.getCurrent()[0]).toMatchObject({ pools: rows, status: 'idle', ready: true });
         await hook.unmount();
     });
 

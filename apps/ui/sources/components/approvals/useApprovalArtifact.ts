@@ -132,7 +132,21 @@ export function useApprovalArtifact(input: Readonly<{ artifactId: string | null;
         requestedServerIdentityId,
         requestedByPortableIdentity,
     ) ? local : null;
-    const artifact = !scopeMatches ? null : compatibleFetched && localMatches && compatibleLocal && compatibleLocal.updatedAt > compatibleFetched.updatedAt
+    // HTTP acknowledgements carry storage revisions but use the device clock
+    // for updatedAt. Equal/skewed clocks must not conceal a terminal revision.
+    // Header and body advance independently; never prefer a crossed/older pair.
+    const localRevisionIsNewer = compatibleLocal && compatibleFetched
+        && compatibleLocal.headerVersion >= compatibleFetched.headerVersion
+        && typeof compatibleLocal.bodyVersion === 'number'
+        && typeof compatibleFetched.bodyVersion === 'number'
+        && compatibleLocal.bodyVersion >= compatibleFetched.bodyVersion
+        && (compatibleLocal.headerVersion > compatibleFetched.headerVersion
+            || compatibleLocal.bodyVersion > compatibleFetched.bodyVersion);
+    const localTimestampIsNewer = compatibleLocal && compatibleFetched
+        && compatibleLocal.headerVersion === compatibleFetched.headerVersion
+        && compatibleLocal.bodyVersion === compatibleFetched.bodyVersion
+        && compatibleLocal.updatedAt > compatibleFetched.updatedAt;
+    const artifact = !scopeMatches ? null : compatibleFetched && localMatches && compatibleLocal && (localRevisionIsNewer || localTimestampIsNewer)
         ? compatibleLocal
         : compatibleFetched ?? (localMatches ? compatibleLocal : null);
     // A store row may legitimately be header-only while the encrypted body is

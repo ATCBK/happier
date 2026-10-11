@@ -10,7 +10,8 @@ import {
 // the harness installs its network boundaries with `vi.doMock`, which only
 // reaches modules imported afterwards (see `installHomeGovernanceBoundaries`).
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createUiApprovalRequest } from '@/dev/testkit/harness/approvalInbox';
+import { createUiApprovalRequest, decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import {
     createHomeGovernanceHarness,
     installHomeGovernanceBoundaries,
@@ -158,6 +159,22 @@ describe('useApprovalArtifact', () => {
     });
 
     afterEach(() => standardCleanup());
+
+    it('observes a newer approval revision even when the local acknowledgement timestamp does not advance', async () => {
+        // The OS clock is a boundary, not an Artifact revision. Fast acknowledgements
+        // can share a millisecond and a server clock can run ahead of this device.
+        const serverId = await addHome(HOME_IDENTITY);
+        const artifactId = await openPresentUserApproval(serverId);
+        const hook = await renderReader(artifactId, serverId);
+        await settle(hook, artifactId, state => expect(state.artifact?.header?.approvalStatus).toBe('open'));
+        vi.spyOn(Date, 'now').mockReturnValue(hook.getCurrent().artifact!.updatedAt);
+        harness.answer(serverId, '/v1/teams/update', { body: teamSummaryFixture({ name: 'Renamed' }) });
+        await expect(decideApprovalAsInbox(serverId, artifactId, 'approve')).resolves.toMatchObject({ ok: true });
+        expect(hook.getCurrent().artifact?.header?.approvalStatus).toBe('executed');
+        expect(ApprovalRequestV2Schema.parse(JSON.parse(hook.getCurrent().artifact!.body as string)))
+            .toMatchObject({ status: 'executed', execution: { ok: true } });
+        await hook.unmount();
+    });
 
     it('keeps an exact-Home present-user approval readable when its origin declares no portable identity', async () => {
         // A Settings form opens its own deferred approval on one exact Home. Only a
