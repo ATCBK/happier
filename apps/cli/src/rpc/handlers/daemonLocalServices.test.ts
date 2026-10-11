@@ -39,6 +39,10 @@ import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { SOCKET_RPC_EVENTS, type SocketRpcMachineAdmissionContextV1 } from '@happier-dev/protocol/socketRpc';
 import { createLocalServicesDaemonRuntime } from '@/daemon/local/services/runtime';
 import { DEFAULT_LOCAL_SERVICE_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/localServiceCapabilities';
+import {
+    DaemonLocalServiceInventorySnapshotResponseV1Schema,
+    DaemonLocalServiceInventoryWatchResponseV1Schema,
+} from '@happier-dev/protocol/local/services/inventory/v1';
 
 function createRegistrar(): { handlers: Map<string, (payload: unknown) => Promise<unknown>>; registrar: RpcHandlerRegistrar } {
     const handlers = new Map<string, (payload: unknown) => Promise<unknown>>();
@@ -173,7 +177,18 @@ describe('daemon local services machine rpc handlers', () => {
             const visible = { protocolVersion: 1, snapshot: { entries: [expect.objectContaining({
                 provenance: expect.objectContaining({ workspace: { id: workspace.id, path: workspace.rootPath, association: 'cwd_containment' } }),
             })] } };
-            expect(await rpc.handleRequest(request)).toMatchObject(visible);
+            const admittedResponse = await rpc.handleRequest(request);
+            expect(admittedResponse).toMatchObject(visible);
+            const admittedSnapshot = (() => {
+                if (method !== RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) {
+                    return DaemonLocalServiceInventorySnapshotResponseV1Schema.parse(admittedResponse).snapshot;
+                }
+                const watchResponse = DaemonLocalServiceInventoryWatchResponseV1Schema.parse(admittedResponse);
+                expect(watchResponse.changed).toBe(true);
+                if (!watchResponse.changed) throw new Error('Expected the inventory watch to return its newer snapshot');
+                return watchResponse.snapshot;
+            })();
+            expect(admittedSnapshot.entries[0]).not.toHaveProperty('establishedConnections');
             expect(await rpc.invokeLocal(method, params)).toMatchObject(visible);
             expect(await rpc.handleRequest({ method: request.method, params })).toMatchObject(visible);
             expect(await rpc.handleRequest({ ...request, machineAdmission: { ...machineAdmission,
