@@ -13,7 +13,7 @@ import {
 afterEach(() => clearMachineRequestReachabilityForTest());
 
 describe('machine reachability', () => {
-    it('lets only the newest request observation override an older heartbeat', () => {
+    it('keeps a request failure unreachable across newer heartbeats until a request succeeds', () => {
         const listener = vi.fn();
         const unsubscribe = subscribeMachineRequestReachability(listener);
         recordMachineRequestFailed({ serverId: 'home', machineId: 'machine', observedAtMs: 20 });
@@ -27,7 +27,7 @@ describe('machine reachability', () => {
             presenceReachable: true,
             presenceObservedAtMs: 21,
             requestObservation: failure,
-        })).toBe(true);
+        })).toBe(false);
 
         recordMachineRequestSucceeded({ serverId: 'home', machineId: 'machine', observedAtMs: 22 });
         expect(resolveMachineReachable({

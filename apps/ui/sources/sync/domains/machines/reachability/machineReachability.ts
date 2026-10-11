@@ -66,8 +66,8 @@ export function readMachineRequestReachabilityRevision(): number {
 }
 
 /**
- * Pushed presence and observed request outcomes are two observations of the same fact. A request
- * failure wins only until the machine answers a later request or publishes a newer heartbeat.
+ * Pushed presence proves that the daemon is alive on its server socket. A failed request proves
+ * that this client cannot reach it, so only a later successful request may clear that failure.
  */
 export function resolveMachineReachable(input: Readonly<{
     presenceReachable: boolean;
@@ -77,7 +77,7 @@ export function resolveMachineReachable(input: Readonly<{
     if (!input.presenceReachable) return false;
     const request = input.requestObservation;
     if (!request || request.outcome === 'succeeded') return true;
-    return input.presenceObservedAtMs !== null && input.presenceObservedAtMs > request.observedAtMs;
+    return false;
 }
 
 /** The one server-scoped reachability decision for UI and action readers. */
