@@ -15,6 +15,22 @@ export function resetModelOutputSegment(state: ModelOutputReconciliationState): 
   state.segmentText = '';
 }
 
+export function isModelOutputSegmentBoundary(msg: AgentMessage): boolean {
+  switch (msg.type) {
+    case 'tool-call':
+    case 'tool-result':
+    case 'fs-edit':
+    case 'terminal-output':
+    case 'patch-apply-begin':
+    case 'patch-apply-end':
+      return true;
+    case 'status':
+      return msg.status === 'starting' || msg.status === 'running';
+    default:
+      return false;
+  }
+}
+
 /**
  * Reconcile a provider output message into one turn buffer and return its text operation.
  * Segment-scoped fullText is authoritative only for the current assistant segment; turn-scoped

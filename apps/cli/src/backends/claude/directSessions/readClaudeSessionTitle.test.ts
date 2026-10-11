@@ -17,7 +17,7 @@ describe('readClaudeSessionTitle', () => {
     await writeFile(filePath, [
       jsonlLine({ type: 'custom-title', customTitle: 'Old rename' }),
       jsonlLine({ type: 'custom-title', customTitle: 'Manual title' }),
-      ...Array.from({ length: 520 }, () => jsonlLine({ type: 'progress' })),
+      ...Array.from({ length: 520 }, () => jsonlLine({ type: 'progress', data: 'x'.repeat(4_096) })),
       jsonlLine({ type: 'ai-title', aiTitle: 'Older AI title' }),
       jsonlLine({ type: 'ai-title', aiTitle: 'Newest AI title' }),
     ].join(''), 'utf8');

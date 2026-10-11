@@ -4,7 +4,7 @@
  */
 
 import { logger } from '@/ui/logger';
-import { readDaemonState } from '@/persistence';
+import { readDaemonState, reclaimDeadDaemonPublication } from '@/persistence';
 import { Metadata } from '@/api/types';
 import { projectPath } from '@/projectPath';
 import { existsSync, readFileSync, statSync } from 'fs';
@@ -1098,6 +1098,11 @@ async function forceKillKnownDaemonPid(pid: number, observation?: PublishedDaemo
     if (observation && await observation.isPresent()) {
       throw new DaemonStopIncompleteError({ reason: 'process_identity_unverified', pid });
     }
+    if (observation) await observation.reclaimIfDead();
+    else {
+      const state = await readDaemonState();
+      if (!state || state.pid === pid) await reclaimDeadDaemonPublication({ expectedState: state });
+    }
     return { status: 'not_running' };
   }
   const ownerProcess = await classifyDaemonLifecycleProcessByPid(pid)
@@ -1118,6 +1123,11 @@ async function forceKillKnownDaemonPid(pid: number, observation?: PublishedDaemo
   }
   if (isPidAliveBySignal(pid)) {
     throw new DaemonStopIncompleteError({ reason: 'force_kill_unconfirmed', pid });
+  }
+  if (observation) await observation.reclaimIfDead();
+  else {
+    const state = await readDaemonState();
+    if (!state || state.pid === pid) await reclaimDeadDaemonPublication({ expectedState: state });
   }
   return { status: 'stopped', method: 'force' };
 }
@@ -1141,12 +1151,16 @@ export async function stopDaemon(params: { stopSessions?: boolean } = {}): Promi
       return lockPid ? await forceKillKnownDaemonPid(lockPid) : { status: 'not_running' };
     }
     const observation = observePublishedDaemonOwner(state);
-    if (!await observation.isPresent()) return { status: 'not_running' };
+    if (!await observation.isPresent()) {
+      await observation.reclaimIfDead();
+      return { status: 'not_running' };
+    }
 
     try {
       await stopDaemonHttp({ stopSessions: params.stopSessions === true });
       observation.acknowledgeStop();
       await waitForProcessDeath(state.pid, resolveDaemonStopWaitForDeathTimeoutMs(), observation);
+      await observation.reclaimIfDead();
       return { status: 'stopped', method: 'graceful' };
     } catch (error) {
       logger.debug('[CONTROL CLIENT] HTTP stop failed; checking verified force stop', error);
@@ -1169,25 +1183,40 @@ export type PublishedDaemonOwnerObservation = Readonly<{
   isPresent: () => Promise<boolean>;
   hasHiddenPid: () => boolean;
   acknowledgeStop: () => void;
+  reclaimIfDead: () => Promise<void>;
 }>;
 
-/** Stop observes the existing lock before requesting shutdown; it never owns cleanup. */
+/** Stop captures exact publication ownership before requesting shutdown. */
 export function observePublishedDaemonOwner(
-  state: Readonly<{ pid: number; httpPort: number; controlToken?: string }>,
+  state: Readonly<{ pid: number; httpPort: number; startedAt?: number; controlToken?: string }>,
   lockFile = configuration.daemonLockFile,
   options: Readonly<{ unobservablePidIsUnverified?: boolean }> = {},
 ): PublishedDaemonOwnerObservation {
   let observedLock = false;
+  let observedLockRaw: string | null | undefined;
   let hiddenPid = false;
   let unobservablePid = false;
   try {
-    observedLock = readDaemonLockPid(lockFile, true) === state.pid;
+    try { observedLockRaw = readFileSync(lockFile, 'utf8'); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      observedLockRaw = null;
+    }
+    observedLock = observedLockRaw !== null && Number(observedLockRaw.trim()) === state.pid;
   } catch {
     // No readable matching lifecycle lock means hidden-process exit cannot be confirmed.
   }
   return {
     hasHiddenPid: () => hiddenPid,
     acknowledgeStop: () => { if (unobservablePid) hiddenPid = true; },
+    async reclaimIfDead() {
+      if (hiddenPid || observedLockRaw === undefined || options.unobservablePidIsUnverified) return;
+      await reclaimDeadDaemonPublication({
+        stateFile: lockFile.slice(0, -'.lock'.length),
+        expectedState: state,
+        expectedLockRaw: observedLockRaw,
+      });
+    },
     async isPresent() {
       const inspection = await inspectPublishedDaemonPresence(state);
       if (inspection.status === 'running') {

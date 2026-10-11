@@ -4,7 +4,7 @@ import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 import { createAcpAgentMessageForwarder } from '@/agent/acp/bridge/createAcpAgentMessageForwarder';
 import type { AcpSendFn } from '@/agent/acp/bridge/acpSessionForwarding';
 import type { AgentMessage, AgentMessageHandler, SessionId } from '@/agent/core/AgentBackend';
-import { reconcileModelOutput, resetModelOutputSegment } from '@/agent/core/reconcileModelOutput';
+import { isModelOutputSegmentBoundary, reconcileModelOutput, resetModelOutputSegment } from '@/agent/core/reconcileModelOutput';
 import type { ExecutionRunBackendController } from '@/agent/executionRuns/controllers/types';
 import type { ExecutionRunState } from '@/agent/executionRuns/runtime/executionRunTypes';
 import { computeSidechainStreamText } from '@/agent/executionRuns/runtime/sidechainStreamText';
@@ -25,22 +25,6 @@ function isExecutionRunActivityMessage(msg: AgentMessage): boolean {
       return true;
     case 'event':
       return msg.name === 'thinking';
-    default:
-      return false;
-  }
-}
-
-function isModelOutputSegmentBoundary(msg: AgentMessage): boolean {
-  switch (msg.type) {
-    case 'tool-call':
-    case 'tool-result':
-    case 'fs-edit':
-    case 'terminal-output':
-    case 'patch-apply-begin':
-    case 'patch-apply-end':
-      return true;
-    case 'status':
-      return msg.status === 'starting' || msg.status === 'running';
     default:
       return false;
   }
