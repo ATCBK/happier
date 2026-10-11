@@ -43,6 +43,8 @@ import type { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../conn
 import type { StablePluginConnectedAccountsOwner } from '@/plugins/runtime/invocation/services/connectedAccounts';
 import type { DaemonConnectedAccountPurposeBindingRuntime } from '../connectedServices/purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
 import type { ProviderAccountUsagePersistenceScheduler } from '../connectedServices/accountUsage/persistence';
+import type { createProviderAccountUsageStore } from '../connectedServices/accountUsage/store';
+import type { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
 
 /** Exact live Session Account ports; owned by ordinary daemon Session lifecycle, never serialized. */
 export type RequesterSessionRuntimeContext = Readonly<{
@@ -65,10 +67,11 @@ export type RequesterSessionRuntimeContext = Readonly<{
   connectedServicesMaterializationBaseDir: string;
   connectedServiceRuntimeQuotaSnapshots: ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore;
   providerAccountUsagePersistence: ProviderAccountUsagePersistenceScheduler;
+  providerAccountUsageStore: ReturnType<typeof createProviderAccountUsageStore>;
+  connectedServiceRuntimeRegistry: ReturnType<ConnectedServiceRuntimeRegistry['scopeToRequester']>;
   dispose(): Promise<void>;
 }> & Pick<ExecuteSpawnSessionRequestParams,
   'connectedServiceRefreshCoordinator' | 'connectedServiceQuotasCoordinator'
-  | 'connectedServiceRuntimeRegistry' | 'providerAccountUsageStore'
   | 'authGroupSwitchCoordinator' | 'predictiveSwitchGuard' | 'resolveManagedPurposeBindingIntent'
   | 'activateSessionPurposeBindings' | 'activatePurposeBindings'>;
 

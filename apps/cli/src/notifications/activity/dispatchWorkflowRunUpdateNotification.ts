@@ -49,7 +49,7 @@ export function createWorkflowRunCommittedNotificationHandler(params: Readonly<{
   expoPushSender?: ExpoPushActivityNotificationSender | null;
   dispatch?: typeof dispatchActivityNotificationAsync;
 }> = {}): (transition: CommittedWorkflowTransition) => Promise<void> {
-  const getSettingsSnapshot = params.getSettingsSnapshot ?? getActiveAccountSettingsSnapshot;
+  const getSettingsSnapshot: () => SettingsSnapshot | null = params.getSettingsSnapshot ?? getActiveAccountSettingsSnapshot;
   const dispatch = params.dispatch ?? dispatchActivityNotificationAsync;
   return async ({ run, result, reviewEntry }) => {
     const updateKind = reviewEntry === true ? 'review_required' : updateKindForResult(result);

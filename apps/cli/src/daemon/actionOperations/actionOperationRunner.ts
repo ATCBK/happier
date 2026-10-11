@@ -203,7 +203,7 @@ export function createActionOperationRunner(deps: Readonly<{
         const progress = parseActionOperationProgressUpdate(update);
         if (progress) {
           deps.store.updateProgress(operationId, progress);
-          if (action.actionId === 'projects.service.relocate' && progress.phase === 'stopping') {
+          if (action.actionId === 'projects.service.relocate' && progress.kind === 'phase' && progress.phase === 'stopping') {
             const operation = deps.store.get(request.scope, operationId);
             if (operation) accept({ ok: true, result: { status: 'accepted', operation } });
           }
@@ -379,7 +379,7 @@ export function createActionOperationRunner(deps: Readonly<{
     let onAbort: (() => void) | undefined;
     let unsubscribe = () => {};
     try {
-      const completion = new Promise<typeof snapshot>(resolve => {
+      const completion = new Promise<ReturnType<typeof deps.store.get>>(resolve => {
           const inspect = () => {
             const current = deps.store.get(scope, operationId);
             if (current && (terminalResult(current) || !requireSettlement && current.observation || includeSetupReview && current.setupReview)) resolve(current);

@@ -519,7 +519,7 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
     }, {
         readCurrentManagedRow: async () => {
             params.options.signal?.throwIfAborted();
-            if (params.input.runtimeRegistry.readPluginOccurrenceId(contribution.pluginId) !== occurrenceId) {
+            if (params.input.runtimeRegistry.readPluginOccurrenceId?.(contribution.pluginId) !== occurrenceId) {
                 throw new ManagedMachineControllerError('provider_unavailable');
             }
             return await params.client.row('current', correlation);

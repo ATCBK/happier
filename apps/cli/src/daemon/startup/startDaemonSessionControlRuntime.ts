@@ -11685,7 +11685,7 @@ export async function startDaemonSessionControlRuntime(
     actionRoutes: localServicesRuntime.actionRoutes,
     publicPreviewRoutes: createLocalServicePublicPreviewServerRoutes({
       token: params.credentials.token,
-      accountId: readPreviewAccountIdFromToken(params.credentials.token),
+      accountId: readPreviewAccountIdFromToken(params.credentials.token) ?? undefined,
       serverBaseUrl: params.serverBaseUrl,
     }),
   };
@@ -12035,6 +12035,8 @@ export async function startDaemonSessionControlRuntime(
               context.target.sessionId,
               requesterContext,
             );
+          const expectedCredentialRevision = request.expectedCredentialRevision;
+          const refreshAttemptId = request.refreshAttemptId;
           return await withSessionAccountHome(requesterContext, async () => {
             const result =
               await refreshCoordinator.refreshConnectedServiceCredentialForRuntimeAuthBridge(
@@ -12048,9 +12050,8 @@ export async function startDaemonSessionControlRuntime(
                     selection.kind === 'profile'
                       ? selection.profileId
                       : selection.activeProfileId,
-                  expectedCredentialRevision:
-                    request.expectedCredentialRevision,
-                  refreshAttemptId: request.refreshAttemptId,
+                  expectedCredentialRevision,
+                  refreshAttemptId,
                   authority: request.runId
                     ? context.authority
                     : (params.pidToTrackedSession.get(context.target.pid) ??
@@ -12177,6 +12178,7 @@ export async function startDaemonSessionControlRuntime(
           });
         if (!coordinator || !isCurrent())
           return { status: 'stale_context', generation: selection.generation };
+        const credentialRevision = selection.credentialRevision;
         // Pool truth changes here; this Run's host releases and rematerializes its own
         // activation. The request-auth coordinator's applyGeneration does no Session work.
         await assertSessionAccountCurrent(parentSessionId, context);
@@ -12193,7 +12195,7 @@ export async function startDaemonSessionControlRuntime(
             expectedFailureSource: {
               profileId: selection.activeProfileId,
               groupGeneration: selection.generation,
-              credentialRevision: selection.credentialRevision,
+              credentialRevision,
               isCurrent,
             },
           }),
@@ -14353,7 +14355,11 @@ export async function startDaemonSessionControlRuntime(
         ...(executionContext?.callerInputConstraints ? { callerInputConstraints: executionContext.callerInputConstraints } : {}),
         ...(executionContext?.authority ? { callerAuthority: executionContext.authority } : {}),
         ...(executionContext?.sessionActionOrigin ? { sessionActionOrigin: executionContext.sessionActionOrigin } : {}),
-        ...(executionContext ? { localActionContext: executionContext } : {}),
+        ...(executionContext ? { localActionContext: {
+          ...executionContext,
+          executionRunTargetMachineId: executionContext.executionRunTargetMachineId ?? undefined,
+          executionRunWorkflowRunId: executionContext.executionRunWorkflowRunId ?? undefined,
+        } } : {}),
       } : undefined;
       const projectAction: ActionExecutorDeps['projectAction'] = capturedProjectIngress && apiMachineForSessions
         ? async request => {
@@ -17912,7 +17918,7 @@ export async function startDaemonSessionControlRuntime(
           }
           await assertSessionAccountCurrent(input.sessionId, accountContext);
           if (params.pidToTrackedSession.get(input.runnerPid) !== tracked) return { status: 'unavailable' };
-          return await withSessionAccountHome(accountContext, () => {
+          return await withSessionAccountHome(accountContext, async () => {
             // The runner invokes this only once, after its accepted open proves
             // there are no applied CS accounts or selection environment. Later
             // reads never recreate a target invalidated by a partial hot apply.

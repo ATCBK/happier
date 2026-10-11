@@ -49,9 +49,10 @@ export function projectCliProviderStateSharingRiskAgentIdsV1(
 /** Catalog declarations come from the actual current native projection, never a UI-only fallback. */
 export function createCliVoiceSettingsBindingContext(): PortableVoiceSettingsBindingContextV1 {
     const current = readCurrentContributionRegistry();
+    const voiceProviders = current.voiceProviders ?? [];
     const generation = pluginReloadController.getState().generation;
     const entries = new Map<string, VoiceSettingsRegistryEntry>(BUILT_IN_VOICE_SETTINGS_REGISTRY_ENTRIES.map(entry => [entry.providerId, entry]));
-    const contributions = current.voiceProviders.map(contribution => {
+    const contributions = voiceProviders.map(contribution => {
         const providerId = buildQualifiedPluginContributionKey(contribution.identity);
         const declaration = contribution.definition;
         const providerSettings = declaration.settings ? createExternalVoiceProviderSettingsDescriptor(declaration.settings) : null;
@@ -69,7 +70,7 @@ export function createCliVoiceSettingsBindingContext(): PortableVoiceSettingsBin
         list: () => readCurrentContributionRegistry() === current ? [...entries.values()] : BUILT_IN_VOICE_SETTINGS_REGISTRY_ENTRIES,
     };
     const owner = createVoiceSettingsOwner({ bundledContributions: contributions.filter(contribution =>
-        current.voiceProviders.some(entry => entry.provenance === 'first_party' && entry.pluginId === contribution.pluginId)),
+        voiceProviders.some(entry => entry.provenance === 'first_party' && entry.pluginId === contribution.pluginId)),
         resolveExternalProviderSettingsOwner: providerId => createExternalVoiceProviderSettingsOwner(providerId, registry.get(providerId)?.providerSettings),
     });
     return { owner, registry, isCurrent: () => readCurrentContributionRegistry() === current && pluginReloadController.getState().generation === generation,

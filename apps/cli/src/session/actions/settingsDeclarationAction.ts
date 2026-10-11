@@ -81,15 +81,18 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     }
     if (storage.scope === 'team' && !target) return { ...refuse('setting_target_required'), details: { targetKinds: [...declaration.targetKinds] } };
     if (declaration.sensitive || storage.access === 'sensitive') return refuse('setting_sensitive');
-    if (actionId === 'settings.set' && storage.access === 'read_only') return refuse('setting_read_only');
+    if ((actionId === 'settings.set' || actionId === 'settings.reset') && storage.access === 'read_only') return refuse('setting_read_only');
     if (storage.prerequisite === 'ui_platform') return { ...refuse('setting_value_unavailable'), details: { prerequisite: storage.prerequisite } };
     const resetValue = actionId === 'settings.reset'
       ? readBuiltInAccountSettingValueV1(declaration, accountSettingsParse({}))
       : undefined;
     if (actionId === 'settings.reset' && resetValue === undefined) return refuse('setting_reset_unsupported');
     const requested = actionId === 'settings.set' ? SettingsDeclarationActionInputSchemasV1[actionId].parse(input)
-      : actionId === 'settings.reset' ? { ...SettingsDeclarationActionInputSchemasV1[actionId].parse(input), value: resetValue! }
+      : actionId === 'settings.reset' ? SettingsDeclarationActionInputSchemasV1['settings.set'].parse({
+        ...SettingsDeclarationActionInputSchemasV1[actionId].parse(input), value: resetValue,
+      })
       : undefined;
+    const ownerActionId = actionId === 'settings.reset' ? 'settings.set' : actionId;
     if (storage.scope === 'home' || storage.scope === 'team') {
       if (requested?.expectedSettingsVersion !== undefined || requested?.reversal || 'includeVersion' in parsed && parsed.includeVersion) return refuse('setting_conditional_mutation_unsupported');
       const binding = readPortableDomainSettingBindingV1(declaration);
@@ -100,7 +103,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
         if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
         return executeOwnerAction(request);
       };
-      const request = { actionId, anchor: declaration.anchor, value: requested?.value, execute: executeScopedOwner, context, isCurrent };
+      const request = { actionId: ownerActionId, anchor: declaration.anchor, value: requested?.value, execute: executeScopedOwner, context, isCurrent };
       if (binding.scope === 'team') {
         if (!target || target.kind === 'home') return refuse('setting_target_mismatch');
         return await executeTeamSettingDeclaration({ ...request, binding, target });
@@ -119,7 +122,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       if (storage.field !== 'maxActiveRunsPerMachine' && storage.field !== 'runRetention') return refuse('setting_not_bound');
       return await createCliAutomationSettingsDeclarationAction({ credentials, serverId: params.serverId,
         serverHttpBaseUrl: params.serverHttpBaseUrl, isCredentialCurrent: params.isCredentialCurrent })({
-        actionId, anchor: declaration.anchor, field: storage.field, value: requested?.value, signal: context.signal,
+        actionId: ownerActionId, anchor: declaration.anchor, field: storage.field, value: requested?.value, signal: context.signal,
       });
     }
     const ordinaryBinding = hasBuiltInAccountSettingBindingV1(declaration);
@@ -147,7 +150,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       const value = catalogBinding ? catalogBinding.parse(requested.value) : parseBuiltInAccountSettingValueV1(declaration, requested.value);
       if (!value.success) return refuse('invalid_setting_value');
       const initial = catalogBinding?.prepare || preparedBinding ? await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' }) : undefined;
-      if (initial && !initial.rawSettings) return refuse('account_settings_content_unavailable');
+      if (initial && (initial.source === 'none' || !initial.rawSettings)) return refuse('account_settings_content_unavailable');
       const catalogServices = createCliSettingsCatalogServices({ credentials, signal: context.signal, serverId: params.serverId,
         expectedAccountId: readAccountIdFromToken(credentials.token) ?? undefined, voiceOwner: voiceContext?.owner,
         ...(readMachineAgentProjection ? { readMachineAgentProjection: (machineId, signal) =>
@@ -206,7 +209,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
     if (!isCatalogCurrent()) return refuse('setting_value_unavailable');
     const raw = 'raw' in current ? current.raw : current.rawSettings;
-    if (!raw) return refuse('account_settings_content_unavailable');
+    if (('source' in current && current.source === 'none') || !raw) return refuse('account_settings_content_unavailable');
     const value = readValue(raw);
     if (value === PORTABLE_SETTING_VALUE_UNAVAILABLE) return refuse('setting_value_unavailable');
     return { anchor: declaration.anchor, ...(value === undefined ? { unset: true as const } : { value: SettingsDeclarationValueV1Schema.parse(value) }),

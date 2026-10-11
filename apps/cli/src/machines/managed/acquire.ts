@@ -390,7 +390,7 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                 const signal = options.signal ?? new AbortController().signal;
                 for (const provider of input.runtimeRegistry.contributes.machineProvisioners ?? []) {
                     signal.throwIfAborted();
-                    const occurrenceId = input.runtimeRegistry.readPluginOccurrenceId(provider.pluginId);
+                    const occurrenceId = input.runtimeRegistry.readPluginOccurrenceId?.(provider.pluginId);
                     if (!occurrenceId) continue;
                     // Save/acquire admits exactly this Action's purposes. Other
                     // roles recheck captured selections when invoked; their
@@ -401,7 +401,7 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                         resolveOptionalAccess: input.runtimeRegistry.resolveOptionalAccess,
                     });
                     const authorizations = readAuthorizations();
-                    const isCurrent = () => input.runtimeRegistry.readPluginOccurrenceId(provider.pluginId) === occurrenceId
+                    const isCurrent = () => input.runtimeRegistry.readPluginOccurrenceId?.(provider.pluginId) === occurrenceId
                         && isDeepStrictEqual(authorizations, readAuthorizations());
                     currentChecks.push(isCurrent);
                     if (!authorizations) {
@@ -429,7 +429,7 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
             if (action === 'machines.provisioners.check' || action === 'machines.provisioners.options') {
                 const probe = ManagedMachineActionInputSchemasV1[action].parse(parsed);
                 const provider = (input.runtimeRegistry.contributes.machineProvisioners ?? []).find((candidate) => candidate.identity.pluginId === probe.contribution.pluginId && candidate.identity.localId === probe.contribution.localId);
-                const occurrenceId = provider ? input.runtimeRegistry.readPluginOccurrenceId(provider.pluginId) : null;
+                const occurrenceId = provider ? input.runtimeRegistry.readPluginOccurrenceId?.(provider.pluginId) : null;
                 if (!provider || !occurrenceId) throw new ManagedMachineControllerError('provider_unavailable');
                 const role = action === 'machines.provisioners.check' ? 'check' : 'options';
                 const localId = provider.definition.actions[role];
@@ -437,7 +437,7 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                 const authorizations = await resolveManagedRoleCredentialAuthorizations(input, provider.pluginId, localId, probe.credentials,
                     { descriptor: provider.definition, launch: 'selectors' in probe ? probe.selectors : undefined });
                 let current = true;
-                const isCurrent = () => current && !options.signal?.aborted && input.runtimeRegistry.readPluginOccurrenceId(provider.pluginId) === occurrenceId;
+                const isCurrent = () => current && !options.signal?.aborted && input.runtimeRegistry.readPluginOccurrenceId?.(provider.pluginId) === occurrenceId;
                 const activation = await input.managedProviderOperationAuthority.activate({
                     identity: { pluginId: provider.pluginId, localId }, operationId: options.requestId,
                     purposes: authorizations.map(authorization => authorization.purpose),
@@ -463,7 +463,7 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                             const repair = prerequisite.repairAction;
                             if (!repair) continue;
                             const target = input.runtimeRegistry.contributes.actionsById?.get(buildQualifiedPluginContributionKey(repair.action));
-                            if (!target || !input.runtimeRegistry.readPluginOccurrenceId(repair.action.pluginId)) {
+                            if (!target || !input.runtimeRegistry.readPluginOccurrenceId?.(repair.action.pluginId)) {
                                 throw new ManagedMachineControllerError('provider_unavailable');
                             }
                             let valid = false;
