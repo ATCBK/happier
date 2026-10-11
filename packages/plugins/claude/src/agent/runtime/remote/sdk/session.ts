@@ -1697,6 +1697,9 @@ export function createClaudeAgentSdkTurnOperations(
                             return false;
                         })
                         : null;
+                    // Native persistence can settle after SessionStart without another hook.
+                    // Publish the existing candidate's durable proof before completing this turn.
+                    await resumeIdentityOwner?.settleCurrentCandidate();
                     completeSuccessfulTurn(resultTurn, publishTerminal);
                     foregroundCompleted = true;
                     if (shouldContinueForBackgroundTasks) {

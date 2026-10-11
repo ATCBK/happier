@@ -128,7 +128,8 @@ describe('typesRaw.normalizeRawMessage (task-notification)', () => {
 
   it.each(['failed', 'stopped'] as const)('preserves released scanner metadata %s despite its false error bit', status => {
     const state = createReducer();
-    // cli-v0.2.13@a3d0574d88 wrote is_error:false even when the parsed native status failed/stopped.
+    // cli-v0.2.16@b8d1c449c46ab4dfa8637db36b66f643d149e66d, sessionScanner.ts:472,
+    // wrote is_error:false even when the parsed native origin status failed/stopped.
     const rows = [
       { type: 'assistant', uuid: 'launch', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'legacy-tool', name: 'Agent', input: {} }] } },
       { type: 'user', uuid: 'ack', toolUseResult: { status: 'async_launched', agentId: 'legacy-task' }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'legacy-tool', content: 'Async agent launched successfully.' }] } },

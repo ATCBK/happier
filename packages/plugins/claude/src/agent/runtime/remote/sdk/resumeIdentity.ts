@@ -74,7 +74,7 @@ function readHookEventName(payload: Readonly<Record<string, unknown>>): string |
 }
 
 function readProviderSessionId(
-    reportedProviderSessionId: string,
+    reportedProviderSessionId: unknown,
     payload: Readonly<Record<string, unknown>>,
 ): string | null {
     const values = [
@@ -253,8 +253,7 @@ export function createClaudeAgentSdkResumeIdentityOwner(params: Readonly<{
         if (disposed || activeCandidate !== candidate || candidate.invalidated || candidate.promoted) return;
         const row = parseJsonRecord(line.endsWith('\r') ? line.slice(0, -1) : line);
         if (!row) return;
-        const rowProviderSessionId = readClaudeProviderIdentityValue(row.sessionId)
-            ?? readClaudeProviderIdentityValue(row.session_id);
+        const rowProviderSessionId = readProviderSessionId(undefined, row);
         if (rowProviderSessionId !== candidate.providerSessionId) return;
         const text = readUserPromptText(row);
         const timestampMs = readRowTimestampMs(row);
