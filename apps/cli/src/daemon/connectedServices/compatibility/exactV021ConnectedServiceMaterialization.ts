@@ -4,7 +4,7 @@ import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID } from '@h
 import { parseQualifiedConnectedAccountCredentialPlaintextV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
 import { qualifiedPurposeKey } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
 import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
-import type { BuiltInLegacyConnectedServiceId, ConnectedServiceCredentialRecordV1, ConnectedServiceId, QualifiedConnectedAccountPurposeBindingV1, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
+import type { ConnectedServiceCredentialRecordV1, ConnectedServiceId, QualifiedConnectedAccountPurposeBindingV1, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 import type {
   ConnectedAccountMaterialization,
   ConnectedAccountMaterializationRequest,
@@ -105,7 +105,7 @@ function sameService(
 
 function requireExactV021ServiceId(
   service: QualifiedConnectedAccountRef['service'],
-): BuiltInLegacyConnectedServiceId {
+): ConnectedServiceId {
   const serviceId =
     resolveFirstPartyLegacyAgentConnectedAccountServiceId(service);
   if (
@@ -119,7 +119,7 @@ function requireExactV021ServiceId(
       'Exact v0.2.1 Connected Service identity is unsupported',
     );
   }
-  return serviceId as BuiltInLegacyConnectedServiceId;
+  return serviceId;
 }
 
 /**
@@ -139,7 +139,7 @@ export async function materializeExactV021ConnectedServiceCredential(input: Read
     ResolvedExecutablePluginRuntimeRegistry,
     'connectedAccountRuntimeInvoker' | 'resolveConnectedAccountRuntime'
   >;
-  serviceId: BuiltInLegacyConnectedServiceId;
+  serviceId: ConnectedServiceId;
   account: QualifiedConnectedAccountRef;
   record: ConnectedServiceCredentialRecordV1;
   request: ConnectedAccountMaterializationRequest;
@@ -368,7 +368,7 @@ export async function materializeExactV021AgentLaunchProjection(input: Readonly<
   signal?: AbortSignal;
 }>): Promise<Readonly<{ env: Readonly<Record<string, string>> }> | null> {
   input.signal?.throwIfAborted();
-  const record = (serviceId: BuiltInLegacyConnectedServiceId) => {
+  const record = (serviceId: ConnectedServiceId) => {
     const candidate = input.recordsByServiceId.get(serviceId) ?? null;
     const compatibility =
       BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID[serviceId];

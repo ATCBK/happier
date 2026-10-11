@@ -1151,7 +1151,7 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
       return { ok: true as const };
     });
     const sessionStateFieldSet = vi.fn(async () => ({ updated: true }));
-    const observeActionExecution = vi.fn(async () => undefined);
+    const observeActionExecution = vi.fn<NonNullable<ActionExecutorDeps['observeActionExecution']>>(async () => undefined);
     const executor = createActionExecutor({
       approvalsGet,
       approvalsUpdate,
@@ -1175,7 +1175,8 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
       execution: { ok: false, errorCode: 'approval_stale' },
     });
     expect(sessionStateFieldSet).not.toHaveBeenCalled();
-    expect(observeActionExecution).not.toHaveBeenCalled();
+    expect(observeActionExecution.mock.calls.map(([observation]) => observation.actionId)).toEqual(['approval.request.decide']);
+    expect(observeActionExecution).not.toHaveBeenCalledWith(expect.objectContaining({ actionId: 'session.title.set' }));
   });
 
   it.each([

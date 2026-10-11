@@ -1,6 +1,8 @@
-import { mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { ChildProcess } from 'node:child_process';
+import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createServer } from 'node:net';
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
@@ -11,8 +13,90 @@ import { createDirectTransferServerLifecycle } from './directTransferServerLifec
 import { createPreparedFilesystemTransferActionExecutor, projectPreparedFilesystemActionResult } from './createPreparedFilesystemTransferActionExecutor';
 import { createPreparedFilesystemTransferClient } from './preparedFilesystemTransferClient';
 import { FilesystemUploadOutputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import { prepareWorkspaceEntryExport } from './prepareWorkspaceFileExport';
+import { observeWorkspaceSyncEntryAtRoot } from '@/workspaces/sync/workspaceSyncFileRead';
+
+const nativeProcessBoundary = vi.hoisted(() => ({ spawn: vi.fn() }));
+vi.mock('node:child_process', async importOriginal => {
+  const original = await importOriginal<typeof import('node:child_process')>();
+  nativeProcessBoundary.spawn.mockImplementation(original.spawn);
+  return { ...original, spawn: nativeProcessBoundary.spawn };
+});
 
 describe('headless prepared filesystem client', () => {
+  it('retains the original operation identity through native entry capture and binary export', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-native-entry-export-'));
+    const sourcePath = join(directory, 'source.bin');
+    const bytes = Buffer.from([0, 255, 128, 42]);
+    await writeFile(sourcePath, bytes);
+    const expectation = await observeWorkspaceSyncEntryAtRoot({ rootPath: directory, relativePath: 'source.bin' });
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    if (!platformDescriptor) throw new Error('Expected the OS platform boundary');
+    const originalSpawn = nativeProcessBoundary.spawn.getMockImplementation();
+    const operationId = 'original-entry-export';
+    let capturedPath: string | undefined;
+    const lifecycle = createDirectTransferServerLifecycle({ bindPort: 0, listenerClasses: ['loopback_http'] });
+    // Replace only the packaged native process/OS boundaries. The decoder requires
+    // operationId (workspaceconfined.go); capture, schemas, export and publication stay real.
+    nativeProcessBoundary.spawn.mockImplementation((_executable: string, args: readonly string[]) => {
+      const child = new ChildProcess();
+      const stdin = child.stdin = new PassThrough();
+      const stdout = child.stdout = new PassThrough();
+      const stderr = child.stderr = new PassThrough();
+      vi.spyOn(child, 'kill').mockReturnValue(true);
+      let buffered = '';
+      let request: Record<string, unknown> | undefined;
+      const finish = (result: Record<string, unknown>) => {
+        stdout.end(`${JSON.stringify({ v: 1, t: 'workspace-confined-result', ...result })}\n`);
+        stderr.end();
+        queueMicrotask(() => child.emit('close', 0, null));
+      };
+      stdin.on('data', (chunk: Buffer) => {
+        buffered += chunk.toString('utf8');
+        while (buffered.includes('\n')) {
+          const newline = buffered.indexOf('\n');
+          const record = JSON.parse(buffered.slice(0, newline)) as Record<string, unknown>;
+          buffered = buffered.slice(newline + 1);
+          if (!request) {
+            request = record;
+            if (args[0] === 'workspace-confined-capture'
+              && (typeof record.operationId !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(record.operationId))) {
+              finish({ status: 'error', code: 'workspace_root_unsafe', message: 'invalid operationId' });
+            } else stdout.write('{"v":1,"t":"workspace-confined-prepared"}\n');
+          } else if (record.decision === 'commit') {
+            if (args[0] === 'workspace-confined-observe') finish({ status: 'observed', expectation });
+            else if (args[0] === 'workspace-confined-capture') {
+              if (typeof request.captureDirectory !== 'string' || typeof request.operationId !== 'string'
+                || typeof request.rootPath !== 'string' || typeof request.relativePath !== 'string') {
+                child.emit('error', new Error('Invalid native capture request')); return;
+              }
+              capturedPath = join(request.captureDirectory, request.operationId);
+              void copyFile(join(request.rootPath, request.relativePath), capturedPath).then(() => finish({ status: 'captured', expectation,
+                materialPath: capturedPath }), error => child.emit('error', error));
+            } else child.emit('error', new Error(`Unexpected native command: ${args[0]}`));
+          }
+        }
+      });
+      return child;
+    });
+    Object.defineProperty(process, 'platform', { ...platformDescriptor,
+      value: platformDescriptor.value === 'linux' ? 'darwin' : platformDescriptor.value });
+    try {
+      const exported = await prepareWorkspaceEntryExport({ lifecycle, rootPath: directory, path: sourcePath, operationId,
+        accessPolicy: { kind: 'restrictedRoots', roots: [directory] },
+        filesystemScope: { rootPath: directory, requesterAccountId: 'account-one' }, assertCurrentAuthority: async () => {} });
+      expect(exported.entryTree).toMatchObject({ operationId, expectation });
+      expect(exported.prepared.transferId).toBe(operationId);
+      expect(capturedPath).toBeDefined();
+      expect(basename(capturedPath!)).toBe(operationId);
+      await expect(readFile(capturedPath!)).resolves.toEqual(bytes);
+    } finally {
+      Object.defineProperty(process, 'platform', platformDescriptor);
+      if (originalSpawn) nativeProcessBoundary.spawn.mockImplementation(originalSpawn);
+      await lifecycle.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   it.each(['matching', 'wrong_source', 'wrong_size', 'wrong_hash', 'cancel_after_chunk'] as const)('drives a previously admitted copy receipt exactly once and preserves %s custody', async mode => {
     const rootPath = await mkdtemp(join(tmpdir(), 'happier-admitted-copy-'));
     const reservation = createServer();

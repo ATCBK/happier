@@ -4,6 +4,8 @@ import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { createActionExecutor } from './actionExecutor.js';
 import { getActionSpec } from './actionSpecs.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from './executor/types.js';
+import { ActionsSettingsV1Schema } from './actionSettings.js';
+import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 import { markSessionListQueryResultV1 } from '../sessions/awareness/action.js';
 import { projectSessionAwarenessV1 } from '../sessions/awareness/projectV1.js';
 import { SessionAwarenessProjectionV1Schema } from '../sessions/awareness/projectionV1.js';
@@ -441,6 +443,53 @@ describe('ActionExecutor prepared invocation', () => {
       input: { limit: 2 },
       result: { ok: true, result: { sessions: [] } },
     }));
+  });
+
+  it('observes private-safe settlement without an interceptor and preserves diagnostic errors and explicit bypass', async () => {
+    const observations: Parameters<NonNullable<ActionExecutorDeps['observeActionExecution']>>[0][] = [];
+    const settings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'account.password.change': ['cli'] } });
+    let issuedInput: unknown = null;
+    let observerFails = false;
+    const executor = createExecutor({
+      isActionApprovalRequired: (actionId, context, input) =>
+        isApprovalRequiredByActionsSettings(actionId, settings, context, undefined, undefined, input),
+      // The Account HTTP writer and plugin observation receiver are boundaries;
+      // admission, preparation and confidential projections remain real.
+      accountPasswordChangeAction: async ({ input }) => {
+        issuedInput = input;
+        return { v: 1, status: 'updated' };
+      },
+      observeActionExecution: async observation => {
+        observations.push(observation);
+        if (observerFails) throw new Error('observation receiver unavailable');
+      },
+    });
+    const input = { v: 1 as const, kind: 'plain' as const, expectedCredentialRevision: 7,
+      currentPassword: 'current private password', newPassword: 'replacement private password' };
+    const approvalOrigin = { kind: 'transcript_tool_call' as const, sessionId: 'session-1', toolCallId: 'call-1', toolInput: input };
+    const context: ActionExecutorContext = { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' },
+      approvalOrigin };
+    const result = { ok: true, result: { v: 1, status: 'updated' } };
+    const prepared = await executor.prepare('account.password.change', input, context);
+    expect(prepared.kind).toBe('ready');
+    expect(issuedInput).toBeNull();
+    expect(observations).toEqual([]);
+    if (prepared.kind !== 'ready') throw new Error('Expected a ready private Account mutation');
+    await expect(prepared.invocation.run()).resolves.toEqual(result);
+    expect(issuedInput).toEqual(input);
+    expect(observations).toEqual([{ actionId: 'account.password.change',
+      input: { v: 1, kind: 'plain', expectedCredentialRevision: 7 },
+      context: { ...context, approvalOrigin: { kind: 'transcript_tool_call', sessionId: 'session-1', toolCallId: 'call-1' } },
+      caller: { kind: 'host' }, result }]);
+    expect(JSON.stringify(observations)).not.toContain('private password');
+    expect(approvalOrigin.toolInput).toEqual(input);
+
+    observerFails = true;
+    await expect(executor.execute('account.password.change', input, context)).resolves.toEqual(result);
+    expect(observations).toHaveLength(2);
+    await expect(executor.execute('account.password.change', input, { ...context, bypassActionInterception: true }))
+      .resolves.toEqual(result);
+    expect(observations).toHaveLength(2);
   });
 
   it('finishes directory preflight before ready and does not repeat it during run', async () => {

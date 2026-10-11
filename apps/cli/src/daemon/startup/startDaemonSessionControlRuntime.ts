@@ -2643,7 +2643,7 @@ export async function startDaemonSessionControlRuntime(
       applyCredentialUpdate: (
         input: Readonly<{
           sessionId: string;
-          serviceId: ConnectedServiceId;
+          serviceId: Parameters<typeof readConnectedServiceCredentialApplicationState>[0]['serviceId'];
           profileId: string;
           reason: 'account_changed' | 'auth_expired';
           executionAuthority: ConnectedServiceExecutionAuthorityV1;
@@ -7008,7 +7008,7 @@ export async function startDaemonSessionControlRuntime(
     applyCredentialUpdate: async (
       input: Readonly<{
         sessionId: string;
-        serviceId: ConnectedServiceId;
+        serviceId: Parameters<typeof readConnectedServiceCredentialApplicationState>[0]['serviceId'];
         profileId: string;
         reason: 'account_changed' | 'auth_expired';
         executionAuthority: ConnectedServiceExecutionAuthorityV1;

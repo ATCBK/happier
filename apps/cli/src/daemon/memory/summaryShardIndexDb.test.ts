@@ -18,6 +18,21 @@ function countRows(dbPath: string, table: string): number {
 }
 
 describe('summaryShardIndexDb', () => {
+  it('reads the queue status from the retained SQLite row without inferring absent Session state', async () => {
+    const directory = await mkdtemp(join(os.tmpdir(), 'happier-memory-queue-status-'));
+    const db = openSummaryShardIndexDb({ dbPath: join(directory, 'memory.sqlite') });
+    try {
+      expect(db.getMemorySessionIndexStatus('session-one')).toBeNull();
+      db.recordMemorySessionIndexState({ sessionId: 'session-one', status: 'queued', updatedAtMs: 1 });
+      expect(db.getMemorySessionIndexStatus('session-one')).toBe('queued');
+      db.recordMemorySessionIndexState({ sessionId: 'session-one', status: 'indexed', updatedAtMs: 2 });
+      expect(db.getMemorySessionIndexStatus('session-one')).toBe('indexed');
+      expect(db.getMemorySessionIndexStatus('session-two')).toBeNull();
+    } finally {
+      db.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   it('repairs typos only from postings visible to the complete search scope', async () => {
     const dir = await mkdtemp(join(os.tmpdir(), 'happier-summary-scoped-typos-'));
     try {

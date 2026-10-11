@@ -1,5 +1,5 @@
 import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID } from '@happier-dev/protocol/connect/generatedBuiltInLegacyConnectedAccountCompatibility';
-import type { BuiltInLegacyConnectedServiceId, ConnectedAccountPeerOperationTransport, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
+import type { ConnectedServiceId, ConnectedAccountPeerOperationTransport, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 
 import type {
   ConnectedServiceCredentialApi,
@@ -17,7 +17,7 @@ function sameService(
 
 function assertRevisionedLegacyTransport(
   transport: ConnectedAccountPeerOperationTransport,
-  serviceId: BuiltInLegacyConnectedServiceId,
+  serviceId: ConnectedServiceId,
 ): void {
   if (
     transport.kind !== 'legacy'
@@ -32,7 +32,7 @@ function assertRevisionedLegacyTransport(
 
 export async function revokeRevisionedLegacyConnectedAccount(input: Readonly<{
   account: QualifiedConnectedAccountRef;
-  serviceId: BuiltInLegacyConnectedServiceId;
+  serviceId: ConnectedServiceId;
   cleanupGroupReferences: boolean;
   api: Pick<
     ConnectedServiceCredentialApi,

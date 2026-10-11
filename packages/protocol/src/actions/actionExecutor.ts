@@ -9397,7 +9397,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         error: 'plugin_action_caller_required',
       }));
     }
-    if (ctx.bypassActionInterception || !deps.interceptActionExecution) {
+    if (ctx.bypassActionInterception || (!deps.interceptActionExecution && !deps.observeActionExecution)) {
       return settlePrepareResult(actionId, await executeCore(
         actionId,
         input,
@@ -9439,49 +9439,53 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     }
 
     const caller = ctx.actionCaller ?? { kind: 'host' as const };
-    let intercepted;
-    try {
-      intercepted = await deps.interceptActionExecution({
-        actionId,
-        input: parsedInitialInput.data,
-        context: ctx,
-        caller,
-        ...(ctx.signal ? { signal: ctx.signal } : {}),
-      });
-    } catch {
-      return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(actionId, {
-        ok: false,
-        errorCode: 'action_interception_failed',
-        error: 'action_interception_failed',
-        details: { code: 'plugin_hook_handler_failed' },
-      }));
+    let transformedInput: unknown = parsedInitialInput.data;
+    if (deps.interceptActionExecution) {
+      let intercepted;
+      try {
+        intercepted = await deps.interceptActionExecution({
+          actionId,
+          input: parsedInitialInput.data,
+          context: ctx,
+          caller,
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        });
+      } catch {
+        return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(actionId, {
+          ok: false,
+          errorCode: 'action_interception_failed',
+          error: 'action_interception_failed',
+          details: { code: 'plugin_hook_handler_failed' },
+        }));
+      }
+
+      if (intercepted.status === 'rejected') {
+        return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(actionId, {
+          ok: false,
+          errorCode: 'action_interception_rejected',
+          error: 'action_interception_rejected',
+          ...(intercepted.code || intercepted.message
+            ? {
+                details: {
+                  ...(intercepted.code ? { code: intercepted.code } : {}),
+                  ...(intercepted.message ? { message: intercepted.message } : {}),
+                },
+              }
+            : {}),
+        }));
+      }
+      if (intercepted.status === 'failed') {
+        return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(actionId, {
+          ok: false,
+          errorCode: 'action_interception_failed',
+          error: 'action_interception_failed',
+          details: { code: intercepted.code },
+        }));
+      }
+      transformedInput = intercepted.input;
     }
 
-    if (intercepted.status === 'rejected') {
-      return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(actionId, {
-        ok: false,
-        errorCode: 'action_interception_rejected',
-        error: 'action_interception_rejected',
-        ...(intercepted.code || intercepted.message
-          ? {
-              details: {
-                ...(intercepted.code ? { code: intercepted.code } : {}),
-                ...(intercepted.message ? { message: intercepted.message } : {}),
-              },
-            }
-          : {}),
-      }));
-    }
-    if (intercepted.status === 'failed') {
-      return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(actionId, {
-        ok: false,
-        errorCode: 'action_interception_failed',
-        error: 'action_interception_failed',
-        details: { code: intercepted.code },
-      }));
-    }
-
-    const parsedTransformedInput = inputSchema.safeParse(intercepted.input);
+    const parsedTransformedInput = inputSchema.safeParse(transformedInput);
     if (!parsedTransformedInput.success) {
       return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(
         actionId,

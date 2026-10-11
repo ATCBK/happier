@@ -3,8 +3,9 @@ import axios from 'axios';
 import nacl from 'tweetnacl';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { API_TOKEN_FULL_GRANT_V1, AccountSettingsV2UpdateRequestSchema, accountSettingsParse, buildRecoveryCreditConsumeIdempotencyKey, createActionExecutor, type ActionExecutorContext, type ActionExecutorDeps, type ApprovalRequest } from '@happier-dev/protocol';
+import { API_TOKEN_FULL_GRANT_V1, AccountSettingsV2UpdateRequestSchema, ConnectedServiceCredentialRevisionV1Schema, accountSettingsParse, buildRecoveryCreditConsumeIdempotencyKey, createActionExecutor, type ActionExecutorContext, type ActionExecutorDeps, type ApprovalRequest } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonContributionRegistryProjectionDescribeRequestSchema, DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD, ConnectedAccountAuthenticationCommandRequestSchema, ConnectedAccountControlCommandRequestSchema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowMutationV1Schema, type ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
@@ -468,7 +469,10 @@ describe('native connected-service Action adapter', () => {
     const args = { actionId: 'connectedServices.quota.refresh' as const, input: { account, machineId: 'work-machine' }, context: { surface: 'cli' as const, authority: 'account_automation' as const, actionCaller: { kind: 'host' as const } } };
     expect(await action(args)).toEqual({ applied: true });
     expect(machineRequests).toEqual([{ machineId: 'work-machine', serverId: 'work-home', method: 'daemon.connectedAccounts.control.command',
-      request: { v: 1, machineId: 'work-machine', command: { operation: 'describeService', service, requiredOperation: 'quota_refresh' } } }]);
+      request: { v: 1, machineId: 'work-machine', command: { operation: 'describeService', service, requiredOperation: 'quota_refresh' } },
+      authority: 'account_automation', authorization: undefined,
+      context: { surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' } },
+      effectActionId: 'connectedServices.quota.refresh', exactMachine: true }]);
     expect(http).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://work.invalid/v4/connect/qualified/quotas/refresh', method: 'POST', data: { ref: account } }));
     http.mockResolvedValue({ status: 404, data: { error: 'quota_refresh_unavailable' } });
     await expect(action(args)).rejects.toMatchObject({ code: 'quota_refresh_unavailable' });
@@ -538,6 +542,8 @@ describe('native connected-service Action adapter', () => {
     let enabled = true;
     let current = true;
     let writes = 0;
+    let revisionSemantics: 'revisioned' | 'legacy_unfenced' = 'revisioned';
+    const credentialRevision = ConnectedServiceCredentialRevisionV1Schema.parse('csr_abcdefghijklmnopqrstuv');
     const operationContext = createInvocationSavedSecretOperationContextV1({ credentials, serverHttpBaseUrl: 'https://resource-home.test',
       snapshot: { source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1,
         loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) }, isCurrent: async () => current });
@@ -546,7 +552,7 @@ describe('native connected-service Action adapter', () => {
       expect(request.url).toBe('https://resource-home.test/v1/account/profile');
       expect(request.headers).toMatchObject({ Authorization: 'Bearer resource-purpose' });
       return { status: 200, data: { id: 'account', connectedAccountsV4: [{ ref: target.account, status: 'connected',
-        authenticationModeId: 'manual', revisionSemantics: 'legacy_unfenced', credentialRevision: null,
+        authenticationModeId: 'manual', revisionSemantics, credentialRevision: revisionSemantics === 'revisioned' ? credentialRevision : null,
         configurationReady: true, configurationRevision: null, scopes: [] }], connectedAccountGroupsV4: [] } };
     });
     vi.spyOn(axios, 'get').mockImplementation(async url => {
@@ -567,23 +573,32 @@ describe('native connected-service Action adapter', () => {
       writes += 1;
       return { status: 200, data: { status: 'updated', revision: 2, cursor: 2 } };
     });
+    const readProjection = () => DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1, projection: { v: 2, generation: 1, familiesById: {},
+      installedPackagesById: { 'example.resource': { id: 'example.resource', displayName: 'Resource', enabled,
+        source: { kind: 'builtin', locator: 'example.resource' } } },
+      resourcesById: { models: { id: 'models', pluginId: 'example.resource', resourceKind: 'config', path: 'models.json',
+        connectedAccountPurposes: [{ purpose: 'model', serviceRefs: [service] }] } },
+    } });
+    readProjection();
     const action = createCliConnectedServiceAction({ credentials, operationContext, serverId: 'resource-home',
       resolveHeaders: () => ({ Authorization: 'Bearer resource-purpose' }),
       callMachineAction: async request => {
         expect(request).toMatchObject({ machineId: 'resource-machine', serverId: 'resource-home',
-          method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE });
-        return { protocolVersion: 1, projection: { v: 2, generation: 1, familiesById: {},
-          installedPackagesById: { 'example.resource': { id: 'example.resource', displayName: 'Resource', enabled,
-            source: { kind: 'builtin', locator: 'example.resource' } } },
-          resourcesById: { models: { id: 'models', pluginId: 'example.resource', resourceKind: 'config', path: 'models.json',
-            connectedAccountPurposes: [{ purpose: 'model', serviceRefs: [service] }] } },
-        } };
+          method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+          authority: 'present_user', context: { surface: 'cli', authority: 'present_user' },
+          effectActionId: 'connectedServices.purposes.default.set', exactMachine: true });
+        expect(DaemonContributionRegistryProjectionDescribeRequestSchema.parse(request.request)).toEqual({ machineId: 'resource-machine' });
+        return readProjection();
       },
     });
     const execute = () => action({ actionId: ActionIdSchema.parse('connectedServices.purposes.default.set'),
       input: { machineId: 'resource-machine', purpose, target }, context: { surface: 'cli', authority: 'present_user' } });
     expect(await execute()).toEqual({ applied: true });
     expect(writes).toBe(1);
+    revisionSemantics = 'legacy_unfenced';
+    expect(await execute()).toMatchObject({ ok: false, errorCode: 'connected_account_purpose_unavailable' });
+    expect(writes).toBe(1);
+    revisionSemantics = 'revisioned';
     enabled = false;
     expect(await execute()).toMatchObject({ ok: false, errorCode: 'connected_account_purpose_unavailable' });
     expect(writes).toBe(1);
@@ -733,7 +748,9 @@ describe('native connected-service Action adapter', () => {
     } });
     expect(reviewedInput).toEqual({ ...input, expectedCredentialRevision: presentedRevision });
     expect(requests).toEqual([{ machineId: 'work-machine', serverId: 'work-home', method: 'daemon.connectedAccounts.control.command',
-      request: { v: 1, machineId: 'work-machine', command: { operation: 'describeService', service, requiredOperation: 'credential_delete' } } }]);
+      request: { v: 1, machineId: 'work-machine', command: { operation: 'describeService', service, requiredOperation: 'credential_delete' } },
+      authority: 'present_user', authorization: undefined, context,
+      effectActionId: 'connectedServices.accounts.revoke', exactMachine: true }]);
     expect(nativeEffectIssued).toBe(false);
     currentRevision = 'csr_zyxwvutsrqponmlkjihgfe';
     expect(await executor.execute('approval.request.decide', { artifactId: 'credential-revoke-review', decision: 'approve' }, {

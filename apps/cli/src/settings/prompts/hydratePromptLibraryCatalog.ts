@@ -87,7 +87,7 @@ function refresh(input: RefreshInput, captured?: CapturedPromptAccount, afterCha
   }
   beginActivePromptLibraryCatalogRefresh({ scopeKey, lifetimeToken });
   let work!: Promise<PromptLibraryCatalogSnapshotV1>;
-  work = (async () => {
+  work = (async (): Promise<PromptLibraryCatalogSnapshotV1> => {
     let requestInput: RefreshInput = afterChange ? { credentials: input.credentials } : input;
     while (true) {
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };

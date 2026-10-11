@@ -323,7 +323,7 @@ export async function resolveBackendEngineAdapterResolution(
     if (!backendId && !params?.agentTarget) {
         return null;
     }
-    const registry = await resolveCliEngineRegistry({ ...params, backendId });
+    const registry = await resolveCliEngineRegistry({ ...params, backendId: backendId ?? undefined });
     if (backendId) return await registry.resolveForBackendId(backendId);
     return params?.agentTarget ? await registry.resolveForAgentTarget(params.agentTarget) : null;
 }

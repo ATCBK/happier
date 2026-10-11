@@ -966,7 +966,7 @@ export type ResolvedContributionRegistry = Readonly<{
     systemToolsById?: ReadonlyMap<string, ResolvedSystemToolContribution>;
     scmHostingProvidersById?: ReadonlyMap<string, ResolvedScmHostingProviderContribution>;
     scmBackendsById?: ReadonlyMap<string, ResolvedScmBackendContribution>;
-    connectedAccountDescriptorsById?: ReadonlyMap<string, ResolvedConnectedAccountDescriptorContribution>;
+    connectedAccountDescriptorsById: ReadonlyMap<string, ResolvedConnectedAccountDescriptorContribution>;
     catalogEntriesById: Readonly<Record<string, ResolvedCatalogEntry>>;
     agentDefinitionsById: ReadonlyMap<string, ResolvedAgentContribution>;
     providersByContributionKey?: ReadonlyMap<string, ResolvedProviderContribution>;

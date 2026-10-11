@@ -159,8 +159,7 @@ export function createPreparedFilesystemTransferClient(params: Readonly<{
           return { success: false, status: input.preparedAdmission ? 'unknown' : 'failed', error: 'Prepared copy source identity does not match the admitted bytes',
             errorCode: input.preparedAdmission ? 'indeterminate' : 'source_identity_mismatch' };
         }
-        const source = 'sourceId' in input.source ? input.source : { ...input.source, kind: 'file' as const,
-          sourceId: downloaded.transferId, sizeBytes: downloaded.sizeBytes, sha256: downloaded.sha256 };
+        const source = input.source;
         return await client.upload({ targetMachineId: input.destination.machineId, serverId: input.destination.serverId,
           rootPath: input.destination.rootPath, path: input.destination.path, sourcePath,
           source, overwrite: input.overwrite,
@@ -280,7 +279,7 @@ async function uploadPreparedFile(input: Readonly<{ file: Awaited<ReturnType<typ
   return await uploadInChunks({ totalBytes: input.prepared.expectedSizeBytes, signal: input.signal,
     init: async () => ({ success: true, ...input.prepared }),
     readBytes: async (offset, length) => { const bytes = Buffer.alloc(length); const { bytesRead } = await input.file.read(bytes, 0, length, offset); return bytes.subarray(0, bytesRead); },
-    prepareChunk: async ({ uploadId, index, bytes }) => ({ index, ...createEncryptedTransferChunkEnvelope({ transferId: uploadId, sequence: index, payload: bytes, recipientPublicKeyBase64: input.prepared.recipientPublicKeyBase64 }) }),
+    prepareChunk: async ({ uploadId, index, bytes }) => ({ index, ...createEncryptedTransferChunkEnvelope({ transferId: uploadId, sequence: index, payload: Buffer.from(bytes), recipientPublicKeyBase64: input.prepared.recipientPublicKeyBase64 }) }),
     sendChunk: async (chunk, signal) => ChunkSchema.parse(await postJson(appendEndpoint(input.endpoint, `chunks/${chunk.index}`), { payloadBase64: chunk.payloadBase64, encryptedDataKeyEnvelopeBase64: chunk.encryptedDataKeyEnvelopeBase64 }, signal ?? undefined, 'PUT')),
     finalize: async (_, signal) => {
       try { return FinalizeSchema.parse(await postJson(appendEndpoint(input.endpoint, 'finalize'), undefined, signal ?? undefined)); }

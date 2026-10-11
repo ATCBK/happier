@@ -59,7 +59,7 @@ export async function prepareWorkspaceEntryExport(params: Readonly<{
   const captureDirectory = await mkdtemp(join(tmpdir(), 'happier-filesystem-copy-source-'));
   try {
     const captured = await captureWorkspaceSyncEntryAtRoot({ rootPath: params.rootPath, relativePath,
-      expected: expectation, captureDirectory, assertCurrentAuthority: params.assertCurrentAuthority });
+      expected: expectation, captureDirectory, operationId: params.operationId, assertCurrentAuthority: params.assertCurrentAuthority });
     const exported = await createWorkspaceSyncEntryExport({ operationId: params.operationId,
       expectation, materialPath: captured.materialPath,
       assertEntryAllowed: entry => {

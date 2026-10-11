@@ -15,6 +15,10 @@ import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol';
 import { VOICE_CONVERSATION_SYSTEM_SESSION_KEY } from '@happier-dev/protocol/voice/sessionBinding';
 import { BUILT_IN_ROLES_V1 } from '@happier-dev/protocol/prompts/roles/builtInRolesV1';
 import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { reloadConfiguration } from '@/configuration';
+import { readSettings, writeSettings, writeStoredCredentialsForServerId } from '@/persistence';
 
 function entry(id: string): PromptStackEntryV1 {
   return {
@@ -75,6 +79,57 @@ describe('resolveCliVoicePromptStackBlocks', () => {
     expect([...new Set(sessionReads)]).toEqual(['history-session', 'exact-target']);
     retireOnBody = true;
     await expect(resolveCliVoicePromptStackBlocks(args)).rejects.toMatchObject({ reason: 'unavailable', admittedEntries: [] });
+  });
+  it('reads a cross-Home Voice target through its saved application endpoint and exact credential', async () => {
+    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
+    try {
+      await withTempDir('happier-voice-target-home-', async homeDir => {
+        envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: undefined,
+          HAPPIER_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined });
+        reloadConfiguration();
+        const settings = await readSettings();
+        await writeSettings({ ...settings, servers: { ...settings.servers, target: {
+          id: 'target', name: 'Target', serverUrl: 'https://target-auth.example.test',
+          localServerUrl: 'http://127.0.0.1:43127', webappUrl: 'https://target-app.example.test',
+          createdAt: 1, updatedAt: 1, lastUsedAt: 1,
+        } } });
+        await writeStoredCredentialsForServerId('target', { token: 'target-home-reader', encryption: null });
+        const hidden = buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true });
+        const targetReads: string[] = [];
+        vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
+          const parsed = new URL(String(url));
+          const target = options?.headers?.Authorization === 'Bearer target-home-reader';
+          if (target) targetReads.push(String(url));
+          expect(parsed.origin).toBe(target ? 'http://127.0.0.1:43127' : 'https://control.example.test');
+          if (parsed.pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+            mode: 'plain', version: 0, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0,
+          } };
+          const id = target ? 'exact-target' : 'history-session';
+          expect(parsed.pathname).toBe(`/v2/sessions/${id}`);
+          const metadata = target ? { work: { promptStack: [entry('target-doc')] } } : { ...hidden,
+            voiceConversationBindingV1: { v: 1, adapterId: 'local', controlSessionId: 'voice-global',
+              transcriptMode: 'synthetic', targetSessionId: 'exact-target', targetServerId: 'target', updatedAt: 1 } };
+          return { status: 200, data: { session: { id, seq: 1, createdAt: 1, updatedAt: 1,
+            active: true, activeAt: 1, archivedAt: null, encryptionMode: 'plain', metadataVersion: 0,
+            agentState: null, agentStateVersion: 0, pendingCount: 0, pendingVersion: 0,
+            share: null, metadata: JSON.stringify(metadata), dataEncryptionKey: null } } };
+        });
+        const outcome = await resolveCliVoicePromptStackBlocks({
+          credentials: { token: 'control-home-reader', encryption: null }, serverId: 'control',
+          serverUrl: 'https://control.example.test', sessionId: 'history-session',
+          accountEntries: [], profileEntries: [],
+          readArtifactHeader: async () => ({ header: { v: 1, kind: 'prompt_doc.v2', title: 'Instructions' } }),
+          readArtifact: async ref => doc(ref.artifactId, 'EXACT_TARGET_HOME'),
+        }).catch(error => error);
+        expect(targetReads).toEqual(['http://127.0.0.1:43127/v1/account/encryption/currentness',
+          'http://127.0.0.1:43127/v2/sessions/exact-target']);
+        expect(outcome).toEqual(['EXACT_TARGET_HOME']);
+        expect((await readSettings()).activeServerId).toBe(settings.activeServerId);
+      });
+    } finally {
+      envScope.restore();
+      reloadConfiguration();
+    }
   });
   it('uses real target Account Profile Project Session and conversational Role owners in canonical order', async () => {
     const serverId = configuration.activeServerId;

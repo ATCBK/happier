@@ -47,8 +47,9 @@ export async function createCredentialedFilesystemTransferClient(input: Readonly
           const endpoint = readMachineIrohEndpointAuthorityV1({ capabilities: machine.operationProtocolCapabilities,
             revision: machine.operationProtocolCapabilitiesRevision });
           if (!endpoint) return null;
-          const { revision: _revision, ...descriptor } = endpoint;
-          return descriptor;
+          return { endpointId: endpoint.endpointId,
+            ...(endpoint.relayUrls ? { relayUrls: [...endpoint.relayUrls] } : {}),
+            ...(endpoint.directAddresses ? { directAddresses: [...endpoint.directAddresses] } : {}) };
         },
         requestGrant: async grantRequest => await runWithServerHttpBaseUrl(input.serverApiUrl, () => api.mintPeerMediationRouteGrant(grantRequest,
           request.signal ? { signal: request.signal } : undefined)),
