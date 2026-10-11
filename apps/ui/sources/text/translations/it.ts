@@ -10728,6 +10728,7 @@ settingsSession: {
     blockedTitle: 'Configurazione interrotta',
     blockedStatusFallback: 'La configurazione non è riuscita a completarsi. Il tuo account e le tue sessioni sono intatti.',
     blockedServiceConflictStatus: 'Prima bisogna risolvere un altro servizio in background su questo computer. È rimasto com’era: apri Dettagli per vedere quale.',
+    blockedServiceManagerUnavailableStatus: 'Happier non può configurare il servizio in background su questo computer. Apri Dettagli per ricevere aiuto o continua con le altre macchine.',
     blockedConsentDeclinedStatus: 'La configurazione si è fermata. Il servizio in background già presente è rimasto esattamente com’era.',
     blockedAccountKeptStatus: 'La configurazione si è interrotta. Questo computer resta collegato all’account con cui ha effettuato l’accesso.',
     blockedAccountChangedStatus: 'Questo computer ha effettuato l’accesso a un altro account durante la configurazione, che si è quindi interrotta prima dell’abbinamento. Riprova.',

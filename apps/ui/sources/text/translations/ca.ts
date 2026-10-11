@@ -9702,6 +9702,7 @@ settingsSession: {
         blockedTitle: 'Configuració aturada',
         blockedStatusFallback: 'La configuració no ha pogut acabar. El teu compte i les teves sessions són intactes.',
         blockedServiceConflictStatus: 'Primer cal resoldre un altre servei en segon pla d’aquest ordinador. S’ha deixat tal com estava: obre Detalls per veure quin és.',
+        blockedServiceManagerUnavailableStatus: 'Happier no pot configurar el servei en segon pla en aquest ordinador. Obre Detalls per obtenir ajuda o continua amb les altres màquines.',
         blockedConsentDeclinedStatus: 'La configuració s’ha aturat. El servei en segon pla que ja hi havia en aquest ordinador s’ha deixat tal com estava.',
         blockedAccountKeptStatus: 'La configuració s’ha aturat. Aquest ordinador continua connectat al compte amb què té la sessió iniciada.',
         blockedAccountChangedStatus: 'Aquest ordinador ha iniciat sessió amb un altre compte mentre es configurava, i la configuració s’ha aturat abans de vincular-lo. Torna-ho a provar.',

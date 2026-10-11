@@ -10632,6 +10632,7 @@ settingsSession: {
     blockedTitle: 'セットアップが停止しました',
     blockedStatusFallback: 'セットアップを完了できませんでした。アカウントとセッションはそのままです。',
     blockedServiceConflictStatus: 'このコンピュータの別のバックグラウンドサービスを先に解決する必要があります。そのサービスはそのままです。詳細を開くとどれか確認できます。',
+    blockedServiceManagerUnavailableStatus: 'このコンピュータではHappierのバックグラウンドサービスを設定できません。詳細を開いて対処方法を確認するか、他のマシンで作業を続けてください。',
     blockedConsentDeclinedStatus: 'セットアップを停止しました。すでにあったバックグラウンドサービスはそのままです。',
     blockedAccountKeptStatus: 'セットアップを停止しました。このコンピュータは、サインインしているアカウントに接続されたままです。',
     blockedAccountChangedStatus: 'セットアップ中にこのコンピュータが別のアカウントにサインインしたため、ペアリングの前にセットアップを停止しました。もう一度お試しください。',

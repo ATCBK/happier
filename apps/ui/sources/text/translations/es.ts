@@ -10412,6 +10412,7 @@ settingsSession: {
     blockedTitle: 'Configuración detenida',
     blockedStatusFallback: 'La configuración no pudo terminar. Tu cuenta y tus sesiones siguen intactas.',
     blockedServiceConflictStatus: 'Primero hay que resolver otro servicio en segundo plano de este ordenador. Se dejó tal cual: abre Detalles para ver cuál es.',
+    blockedServiceManagerUnavailableStatus: 'Happier no puede configurar el servicio en segundo plano en este ordenador. Abre Detalles para obtener ayuda o continúa con tus otras máquinas.',
     blockedConsentDeclinedStatus: 'La configuración se detuvo. El servicio en segundo plano que ya había en este ordenador se dejó tal cual.',
     blockedAccountKeptStatus: 'La configuración se detuvo. Este ordenador sigue conectado a la cuenta con la que tiene la sesión iniciada.',
     blockedAccountChangedStatus: 'Este ordenador inició sesión en otra cuenta mientras se configuraba, así que la configuración se detuvo antes de vincularlo. Inténtalo de nuevo.',

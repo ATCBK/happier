@@ -9766,6 +9766,7 @@ settingsSession: {
         blockedTitle: 'Einrichtung angehalten',
         blockedStatusFallback: 'Die Einrichtung konnte nicht abgeschlossen werden. Dein Konto und deine Sitzungen bleiben unverändert.',
         blockedServiceConflictStatus: 'Ein anderer Hintergrunddienst auf diesem Computer muss zuerst geklärt werden. Er blieb, wie er war – öffne Details, um zu sehen, welcher.',
+        blockedServiceManagerUnavailableStatus: 'Happier kann den Hintergrunddienst auf diesem Computer nicht einrichten. Öffne Details für Hilfe oder nutze deine anderen Computer weiter.',
         blockedConsentDeclinedStatus: 'Die Einrichtung wurde gestoppt. Der bereits vorhandene Hintergrunddienst blieb genau so, wie er war.',
         blockedAccountKeptStatus: 'Die Einrichtung wurde gestoppt. Dieser Computer bleibt mit dem Konto verbunden, mit dem er angemeldet ist.',
         blockedAccountChangedStatus: 'Dieser Computer hat sich während der Einrichtung bei einem anderen Konto angemeldet, daher wurde die Einrichtung vor dem Koppeln gestoppt. Versuch es noch einmal.',

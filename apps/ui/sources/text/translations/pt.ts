@@ -10517,6 +10517,7 @@ settingsSession: {
     blockedTitle: 'Configuração interrompida',
     blockedStatusFallback: 'A configuração não pôde terminar. Sua conta e suas sessões continuam intactas.',
     blockedServiceConflictStatus: 'Primeiro é preciso resolver outro serviço em segundo plano deste computador. Ele ficou como estava — abra Detalhes para ver qual.',
+    blockedServiceManagerUnavailableStatus: 'O Happier não pode configurar o serviço em segundo plano neste computador. Abra Detalhes para obter ajuda ou continue com suas outras máquinas.',
     blockedConsentDeclinedStatus: 'A configuração parou. O serviço em segundo plano que já existia ficou exatamente como estava.',
     blockedAccountKeptStatus: 'A configuração parou. Este computador continua conectado à conta em que está com sessão iniciada.',
     blockedAccountChangedStatus: 'Este computador entrou em outra conta enquanto a configuração decorria, por isso ela parou antes do emparelhamento. Tente de novo.',

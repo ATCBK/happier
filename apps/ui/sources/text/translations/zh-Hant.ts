@@ -8423,6 +8423,7 @@ settingsSession: {
         blockedTitle: '設定已停止',
         blockedStatusFallback: '設定未能完成。你的帳號與工作階段沒有受到影響。',
         blockedServiceConflictStatus: '需要先處理這台電腦上的另一個背景服務。它維持原狀——打開「詳細資料」可以看到是哪一個。',
+        blockedServiceManagerUnavailableStatus: 'Happier 無法在這台電腦上設定背景服務。打開「詳細資料」查看協助，或繼續使用其他機器。',
         blockedConsentDeclinedStatus: '設定已停止。這台電腦上原有的背景服務維持原狀。',
         blockedAccountKeptStatus: '設定已停止。這台電腦仍連線到它目前登入的帳號。',
         blockedAccountChangedStatus: '設定期間這台電腦登入了另一個帳號，因此設定在配對前已停止。請再試一次。',

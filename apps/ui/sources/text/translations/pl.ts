@@ -10405,6 +10405,7 @@ settingsSession: {
     blockedTitle: 'Konfiguracja zatrzymana',
     blockedStatusFallback: 'Konfiguracja nie mogła się zakończyć. Twoje konto i sesje pozostają nienaruszone.',
     blockedServiceConflictStatus: 'Najpierw trzeba rozwiązać sprawę innej usługi w tle na tym komputerze. Została bez zmian — otwórz Szczegóły, aby zobaczyć którą.',
+    blockedServiceManagerUnavailableStatus: 'Happier nie może skonfigurować usługi w tle na tym komputerze. Otwórz Szczegóły, aby uzyskać pomoc, lub korzystaj dalej z innych maszyn.',
     blockedConsentDeclinedStatus: 'Konfiguracja została zatrzymana. Usługa w tle, która już tu była, została dokładnie taka, jaka była.',
     blockedAccountKeptStatus: 'Konfiguracja została zatrzymana. Ten komputer pozostaje połączony z kontem, na którym jest zalogowany.',
     blockedAccountChangedStatus: 'Podczas konfiguracji ten komputer zalogował się na inne konto, więc konfiguracja zatrzymała się przed parowaniem. Spróbuj ponownie.',

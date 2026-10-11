@@ -9798,6 +9798,7 @@ settingsSession: {
         blockedTitle: 'Setup stopped',
         blockedStatusFallback: 'Setup could not finish. Your account and your sessions are untouched.',
         blockedServiceConflictStatus: 'Another background service on this computer has to be sorted out first. It was left as it is — open Details to see which one.',
+        blockedServiceManagerUnavailableStatus: 'Happier can’t set up the background service on this computer. Open Details for help, or continue with your other machines.',
         blockedConsentDeclinedStatus: 'Setup stopped. The background service already on this computer was left exactly as it was.',
         blockedAccountKeptStatus: 'Setup stopped. This computer stays connected to the account it is signed in to.',
         blockedAccountChangedStatus: 'This computer signed in to another account while setup ran, so setup stopped before pairing. Try again.',

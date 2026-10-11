@@ -9753,6 +9753,7 @@ settingsSession: {
         blockedTitle: 'Configuration interrompue',
         blockedStatusFallback: 'La configuration n’a pas pu se terminer. Votre compte et vos sessions sont intacts.',
         blockedServiceConflictStatus: 'Un autre service en arrière-plan sur cet ordinateur doit d’abord être réglé. Il est resté tel quel — ouvrez Détails pour voir lequel.',
+        blockedServiceManagerUnavailableStatus: 'Happier ne peut pas configurer le service en arrière-plan sur cet ordinateur. Ouvrez Détails pour obtenir de l’aide, ou continuez avec vos autres machines.',
         blockedConsentDeclinedStatus: 'La configuration s’est arrêtée. Le service en arrière-plan déjà présent est resté exactement tel quel.',
         blockedAccountKeptStatus: 'La configuration s’est arrêtée. Cet ordinateur reste connecté au compte avec lequel il est identifié.',
         blockedAccountChangedStatus: 'Cet ordinateur s’est connecté à un autre compte pendant la configuration, qui s’est donc arrêtée avant l’appairage. Réessaie.',

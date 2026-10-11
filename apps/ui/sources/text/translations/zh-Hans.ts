@@ -10039,6 +10039,7 @@ settingsSession: {
     blockedTitle: '设置已停止',
     blockedStatusFallback: '设置未能完成。你的账户和会话没有受到影响。',
     blockedServiceConflictStatus: '需要先处理这台电脑上的另一个后台服务。它保持原样——打开“详情”可以查看是哪一个。',
+    blockedServiceManagerUnavailableStatus: 'Happier 无法在这台电脑上设置后台服务。打开“详情”查看帮助，或继续使用其他机器。',
     blockedConsentDeclinedStatus: '设置已停止。这台电脑上原有的后台服务保持原样。',
     blockedAccountKeptStatus: '设置已停止。这台电脑仍连接到它当前登录的账号。',
     blockedAccountChangedStatus: '设置期间这台电脑登录了另一个账号，因此设置在配对前已停止。请重试。',
