@@ -6,6 +6,7 @@ import { actionInputFieldAcceptsNull } from './actionInputSchemaPath.js';
 import type { ActionId } from './actionIds.js';
 import { VoiceConversationTargetSchema } from './voiceConversationActionFamily.js';
 import type { ActionInputFieldHint } from './actionInputHintsRuntime.js';
+import { readCanonicalPaddedBase64DecodedLength } from '../crypto/base64.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -26,20 +27,57 @@ export type ApprovalStructuredAnswersProjection =
   | Readonly<{ kind: 'valid'; answers: readonly ApprovalStructuredAnswer[] }>
   | Readonly<{ kind: 'unrepresentable'; reason: ApprovalUnrepresentableReason }>;
 
+/**
+ * One line of a structured value as people read it: a humanized key and its scalar value, or a
+ * group heading (`value: null`) whose members follow one level deeper. Every leaf of the literal
+ * appears exactly once, in order, so the entries are a faithful reading of the same value.
+ */
+export type ApprovalStructuredValueEntry = Readonly<{
+  label: string; value: string | null; depth: number;
+  /** A declared reference (a Home, a session, an Account): people read it by its name. */
+  reference?: ApprovalActionReference;
+  /** A schema version or an empty value: present, but read only when asked for. */
+  technical?: true;
+}>;
+
 export type ApprovalActionFieldRow =
-  | Readonly<{ kind: 'value'; path: string; title: string; value: string; reference?: ApprovalActionReference }>
+  | Readonly<{
+    kind: 'value'; path: string; title: string; value: string; reference?: ApprovalActionReference;
+    /** A readable reading of a structured (JSON) value; `value` stays the exact literal. */
+    entries?: readonly ApprovalStructuredValueEntry[];
+    /** A schema version argument: present, but read only when asked for. */
+    technical?: true;
+  }>
   | Readonly<{ kind: 'structuredAnswers'; path: string; title: string; answers: readonly ApprovalStructuredAnswer[] }>
   | Readonly<{ kind: 'unrepresentable'; path: string; title: string; reason: ApprovalUnrepresentableReason }>;
 
 export type ApprovalActionReference =
   | Readonly<{ kind: 'session'; id: string; serverId?: string }>
-  | Readonly<{ kind: 'home'; id: string }>;
+  | Readonly<{ kind: 'home'; id: string }>
+  | Readonly<{ kind: 'account'; id: string }>;
 
 // These are declared Action field keys, not a guess from an opaque value or suffix.
 const SESSION_REFERENCE_KEYS = new Set([
   'sessionId', 'leadSessionId', 'expectedLeadSessionId', 'sourceSessionId', 'targetSessionId',
   'underSessionId', 'parentSessionId', 'originSessionId',
 ]);
+
+/** A declared reference key read by its name: a session, a Home or an Account. */
+function describeApprovalKeyReference(key: string | undefined, value: unknown): ApprovalActionReference | undefined {
+  if (typeof value !== 'string' || !value.trim() || key === undefined) return undefined;
+  if (SESSION_REFERENCE_KEYS.has(key)) return { kind: 'session', id: value.trim() };
+  if (key === 'serverId') return { kind: 'home', id: value.trim() };
+  if (key === 'accountId') return { kind: 'account', id: value.trim() };
+  return undefined;
+}
+
+/**
+ * What says nothing about the request's target: a schema version or an empty value. Target ids stay in
+ * view, so an approval always shows exactly what it acts on; only a named reference moves its raw id.
+ */
+function isTechnicalApprovalKey(key: string | undefined): boolean {
+  return key === 'v';
+}
 
 function describeApprovalReference(actionId: string, field: ActionInputFieldHint, values: readonly unknown[]): ApprovalActionReference | undefined {
   if (values.length !== 1) return undefined;
@@ -55,12 +93,10 @@ function describeApprovalReference(actionId: string, field: ActionInputFieldHint
   }
   if (typeof value !== 'string' || !value.trim()) return undefined;
   const key = field.path.split('.').at(-1);
-  if ((field.inputType && 'hostType' in field.inputType && field.inputType.hostType === 'session')
-    || (key !== undefined && SESSION_REFERENCE_KEYS.has(key))) {
+  if (field.inputType && 'hostType' in field.inputType && field.inputType.hostType === 'session') {
     return { kind: 'session', id: value.trim() };
   }
-  if (key === 'serverId') return { kind: 'home', id: value.trim() };
-  return undefined;
+  return describeApprovalKeyReference(key, value);
 }
 
 export type ApprovalActionFieldsPresentation = Readonly<{
@@ -135,6 +171,7 @@ export function formatApprovalFieldValues(values: readonly unknown[], options: R
       // empty prompt document), unlike an absent operand.
       if (typeof value === 'string') return value.trim() || JSON.stringify(value);
       if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+      if (value === null && options.preserveStructuredValues) return 'null';
       if (value && typeof value === 'object') {
         try {
           return JSON.stringify(value) ?? '';
@@ -146,6 +183,87 @@ export function formatApprovalFieldValues(values: readonly unknown[], options: R
     })
     .filter((value) => value.length > 0);
   return formatted.length > 0 ? formatted.join(', ') : null;
+}
+
+function humanizeApprovalKey(key: string): string {
+  const words = key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim().toLowerCase();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : key;
+}
+
+function formatApprovalScalar(value: unknown): string {
+  if (typeof value === 'string') return value.trim() || JSON.stringify(value);
+  if (Array.isArray(value)) return value.length === 0 ? '[]' : value.map(formatApprovalScalar).join(', ');
+  if (isRecord(value)) return '{}';
+  return String(value);
+}
+
+function formatApprovalByteSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  const kilobytes = bytes / 1024;
+  return kilobytes < 1024 ? `${kilobytes.toFixed(1)} KB` : `${(kilobytes / 1024).toFixed(1)} MB`;
+}
+
+function isApprovalScalar(value: unknown): boolean {
+  if (Array.isArray(value)) return value.every((item) => !Array.isArray(item) && !isRecord(item));
+  return !isRecord(value) || Object.keys(value).length === 0;
+}
+
+/** A discriminator (`kind: 'corePage'`) reads as words; any other value stays as it was sent. */
+function formatApprovalEntryValue(key: string | undefined, value: unknown): string {
+  if ((key === 'kind' || key === 'type') && typeof value === 'string' && /^[a-z][A-Za-z0-9_-]*$/.test(value)) {
+    return humanizeApprovalKey(value);
+  }
+  return formatApprovalScalar(value);
+}
+
+function isEmptyApprovalValue(value: unknown): boolean {
+  return (Array.isArray(value) && value.length === 0) || (isRecord(value) && Object.keys(value).length === 0);
+}
+
+function appendApprovalStructuredEntries(
+  key: string | undefined,
+  label: string,
+  value: unknown,
+  depth: number,
+  output: ApprovalStructuredValueEntry[],
+): void {
+  const encodedBytes = key === 'contentBase64' && typeof value === 'string'
+    ? readCanonicalPaddedBase64DecodedLength(value) : null;
+  if (encodedBytes !== null) {
+    // A file's encoded bytes are not something people read: its size is. The literal keeps the bytes.
+    output.push({ label: 'Size', value: formatApprovalByteSize(encodedBytes), depth });
+    return;
+  }
+  if (isApprovalScalar(value)) {
+    // Inside a JSON value only Home and Account ids name themselves: their ids are exact identities.
+    // A session-looking key there stays data, so an arbitrary value cannot borrow a session's name.
+    const keyReference = describeApprovalKeyReference(key, value);
+    const reference = keyReference?.kind === 'session' ? undefined : keyReference;
+    const technical = !reference && (isTechnicalApprovalKey(key) || isEmptyApprovalValue(value));
+    output.push({
+      label, value: formatApprovalEntryValue(key, value), depth,
+      ...(reference ? { reference } : {}),
+      ...(technical ? { technical: true as const } : {}),
+    });
+    return;
+  }
+  output.push({ label, value: null, depth });
+  appendApprovalStructuredMembers(value, depth + 1, output);
+}
+
+function appendApprovalStructuredMembers(value: unknown, depth: number, output: ApprovalStructuredValueEntry[]): void {
+  const members: [string | undefined, string, unknown][] = Array.isArray(value)
+    ? value.map((item, index) => [undefined, String(index + 1), item])
+    : Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, humanizeApprovalKey(key), item]);
+  for (const [key, label, item] of members) appendApprovalStructuredEntries(key, label, item, depth, output);
+}
+
+/** Readable entries for one structured JSON value; scalars and flat lists read fine as they are. */
+function describeApprovalStructuredValue(values: readonly unknown[]): readonly ApprovalStructuredValueEntry[] | undefined {
+  if (values.length !== 1 || isApprovalScalar(values[0])) return undefined;
+  const output: ApprovalStructuredValueEntry[] = [];
+  appendApprovalStructuredMembers(values[0], 0, output);
+  return output;
 }
 
 export function projectApprovalStructuredAnswers(values: readonly unknown[]): ApprovalStructuredAnswersProjection {
@@ -235,7 +353,11 @@ export function describeApprovalActionFields(input: Readonly<{
       }
       continue;
     }
-    const value = formatApprovalFieldValues(values, { preserveStructuredValues: field.widget === 'json' });
+    const literal = formatApprovalFieldValues(values, { preserveStructuredValues: field.widget === 'json' });
+    // A chosen option reads by the label the form that set it shows.
+    const option = field.widget === 'select' && values.length === 1
+      ? field.options?.find((candidate) => candidate.value === values[0]) : undefined;
+    const value = option && typeof option.label === 'string' ? option.label : literal;
     if (value === null) {
       // A required field whose schema declares `null` and that carries exactly
       // that null is present context with nothing to display, not missing context.
@@ -255,7 +377,15 @@ export function describeApprovalActionFields(input: Readonly<{
       continue;
     }
     const reference = describeApprovalReference(input.actionId, field, values);
-    rows.push({ kind: 'value', path: field.path, title: field.title, value, ...(reference ? { reference } : {}) });
+    // A typed reference already reads by its name; entries are for values nothing else can read.
+    const entries = field.widget === 'json' && !reference ? describeApprovalStructuredValue(values) : undefined;
+    const technical = !reference && !entries && isTechnicalApprovalKey(field.path.split('.').at(-1));
+    rows.push({
+      kind: 'value', path: field.path, title: field.title, value,
+      ...(reference ? { reference } : {}),
+      ...(entries ? { entries } : {}),
+      ...(technical ? { technical: true as const } : {}),
+    });
   }
   return { rows, unrepresentable };
 }

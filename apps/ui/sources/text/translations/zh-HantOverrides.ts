@@ -1527,6 +1527,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
     proposedComments: ({ count }: { count: number }) => `${count} 則建議的留言`,
     generation: ({ generation }: { generation: string }) => `世代：${generation}`,
     stopWaiting: '停止等待',
+    technicalDetails: '技術詳細資料',
     unsafeDetailsTitle: '這些詳細資料無法安全顯示',
     unsafeDetailsBody: 'Happier 無法完全依照傳送的內容顯示此請求，因此無法核准。請拒絕該請求，或請對方重新傳送。',
     approveUnavailableHint: '在這些詳細資料無法安全顯示期間，無法核准。',

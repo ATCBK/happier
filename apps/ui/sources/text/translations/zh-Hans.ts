@@ -1754,6 +1754,7 @@ const zhHansValues = {
     loadError: "加载审批失败。",
     decisionError: "更新审批失败。",
     decisionAuthorityError: "此登录方式无法批准请求。请使用账户恢复密钥登录此 Home，或在已登录账户的另一台设备上批准。",
+    technicalDetails: "技术详情",
     unsafeDetailsTitle: "这些详情无法安全显示",
     unsafeDetailsBody: "Happier 无法完全按照发送的内容显示此请求，因此无法批准。请拒绝该请求，或请求方重新发送。",
     approveUnavailableHint: "在这些详情无法安全显示期间，无法批准。",

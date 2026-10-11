@@ -1753,6 +1753,7 @@ const itValues = {
     loadError: "Impossibile caricare l'approvazione.",
     decisionError: "Impossibile aggiornare l'approvazione.",
     decisionAuthorityError: "Questo accesso non consente di approvare le richieste. Accedi a questo Home con la chiave di recupero del tuo account oppure approva da un altro dispositivo con un accesso account.",
+    technicalDetails: "Dettagli tecnici",
     unsafeDetailsTitle: "Questi dettagli non possono essere mostrati in sicurezza",
     unsafeDetailsBody: "Happier non è riuscito a mostrare questa richiesta esattamente come è stata inviata, quindi non può essere approvata. Rifiutala oppure chiedi di inviarla di nuovo.",
     approveUnavailableHint: "L'approvazione non è disponibile finché questi dettagli non possono essere mostrati in sicurezza.",

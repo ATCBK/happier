@@ -1549,6 +1549,7 @@ export const de: TranslationStructure = {
         loadError: 'Freigabe konnte nicht geladen werden.',
         decisionError: 'Freigabe konnte nicht aktualisiert werden.',
         decisionAuthorityError: 'Diese Anmeldung kann Anfragen nicht genehmigen. Melde dich mit dem Wiederherstellungsschlüssel deines Kontos bei diesem Home an oder genehmige die Anfrage auf einem anderen Gerät mit einer Kontoanmeldung.',
+        technicalDetails: 'Technische Details',
         unsafeDetailsTitle: 'Diese Details können nicht sicher angezeigt werden',
         unsafeDetailsBody: 'Happier konnte diese Anfrage nicht genau so anzeigen, wie sie gesendet wurde, daher kann sie nicht freigegeben werden. Lehne sie ab oder bitte darum, sie erneut zu senden.',
         approveUnavailableHint: 'Die Freigabe ist nicht verfügbar, solange diese Details nicht sicher angezeigt werden können.',

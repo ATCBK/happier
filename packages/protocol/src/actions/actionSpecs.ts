@@ -963,6 +963,10 @@ export const ActionSpecSchema = lazyZodSchema(() => z.object({
   projectObservationInput: z.custom<(value: unknown) => unknown>(
     (value) => typeof value === 'function',
   ).optional(),
+  /** Domain-owned, value-free human description of the exact effect under review. */
+  approvalPresentation: z.object({
+    summary: z.custom<(input: unknown) => string | null>((value) => typeof value === 'function'),
+  }).strict().optional(),
   /** Host-private output projection for observers; never changes the intentional caller result. */
   projectObservationOutput: z.custom<(value: unknown) => unknown>(
     (value) => typeof value === 'function',
@@ -1244,6 +1248,7 @@ export type ActionSpecWithoutApproval = Readonly<{
   outputSchema?: ParsedActionSpec['outputSchema'];
   completion?: ParsedActionSpec['completion'];
   projectObservationInput?: ParsedActionSpec['projectObservationInput'];
+  approvalPresentation?: ParsedActionSpec['approvalPresentation'];
   projectObservationOutput?: ParsedActionSpec['projectObservationOutput'];
   approvalResultCustody?: ParsedActionSpec['approvalResultCustody'];
   approvalInputCustody?: ParsedActionSpec['approvalInputCustody'];

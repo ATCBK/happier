@@ -1,17 +1,26 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
+import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 import { useSessionListRenderableWithServerScope } from '@/sync/domains/state/storage';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import type { ApprovalActionFieldsPresentation } from './approvalFieldValues';
+
+type ApprovalFieldRow = ApprovalActionFieldsPresentation['rows'][number];
+type ApprovalValueRow = Extract<ApprovalFieldRow, { kind: 'value' }>;
+type ApprovalReference = NonNullable<ApprovalValueRow['reference']>;
 import {
     describeUnnamedApprovalSession,
     resolveApprovalHomeName,
@@ -28,14 +37,29 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
     /** The approval's Home: a value that is one of its sessions (or a Home) reads by its name. */
     serverId?: string | null;
 }>) {
-    const rows = props.presentation.rows;
-    if (rows.length === 0) return null;
+    const allRows = props.presentation.rows;
+    // People read names, choices and values; opaque ids stay present, one disclosure away.
+    const rows = React.useMemo(() => allRows.filter((row) => !(row.kind === 'value' && row.technical)), [allRows]);
+    const technical = React.useMemo(() => collectApprovalTechnicalLines(allRows), [allRows]);
+    if (allRows.length === 0) return null;
+    const serverId = props.serverId ?? null;
+    const technicalDetails = technical.length > 0 ? <ApprovalTechnicalDetails lines={technical} /> : null;
 
     if (props.anatomy === 'page') {
         return (
             <ItemGroup title={t('approvals.details')}>
-                {rows.map((row) => row.kind === 'value' ? (
+                {rows.map((row) => row.kind === 'value' && !row.entries ? (
                     <ApprovalValueItem key={row.path} row={row} serverId={props.serverId ?? null} anatomy="page" />
+                ) : row.kind === 'value' && row.entries ? (
+                    // A structured value is still one argument: the same row as its siblings, the
+                    // argument's name as the title and its entries in the description's place.
+                    <Item
+                        key={row.path}
+                        title={row.title}
+                        subtitle={<ApprovalStructuredValue entries={row.entries} serverId={serverId} anatomy="page" />}
+                        mode="info"
+                        showChevron={false}
+                    />
                 ) : (
                     // Questions and answers, or the notice that a value cannot be shown, are content
                     // rather than one value: they sit in the section under the argument's name.
@@ -46,6 +70,7 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
                         </View>
                     </SectionContentRow>
                 ))}
+                {technicalDetails}
             </ItemGroup>
         );
     }
@@ -56,11 +81,18 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
             <View style={styles.rows}>
                 {rows.map((row) => (
                     <View key={row.path} style={styles.row}>
-                        <Text style={styles.label}>{row.title}</Text>
-                        <ApprovalFieldValue row={row} serverId={props.serverId ?? null} />
+                        {row.kind === 'value' && !row.entries ? (
+                            <ApprovalValueItem row={row} serverId={serverId} />
+                        ) : (
+                            <>
+                                <Text style={styles.label}>{row.title}</Text>
+                                <ApprovalFieldValue row={row} serverId={serverId} />
+                            </>
+                        )}
                     </View>
                 ))}
             </View>
+            {technicalDetails}
         </View>
     );
 });
@@ -76,24 +108,181 @@ function ApprovalValueItem(props: Readonly<{
     anatomy?: 'page';
 }>) {
     const { row } = props;
-    const reference = row.reference;
-    const serverId = reference?.kind === 'session' ? reference.serverId ?? props.serverId : props.serverId;
-    const name = useApprovalSessionName(serverId, reference?.kind === 'session' ? reference.id : '');
-    const value = reference?.kind === 'session'
-        ? name ?? describeUnnamedApprovalSession(resolveApprovalHomeName(serverId))
-        : reference?.kind === 'home'
-            ? resolveApprovalHomeName(reference.id)
-                ?? (reference.id === props.serverId?.trim() ? t('settingsAccount.thisHomeTitle') : row.value)
-            : row.value;
-    if (props.anatomy !== 'page') return <Text style={styles.value}>{value}</Text>;
+    const reading = useApprovalReferenceReading(row.reference, row.value, props.serverId);
+    const title = nameApprovalReferenceLabel(row.title, row.reference, reading.named);
+    if (props.anatomy !== 'page') {
+        return (
+            <>
+                <Text style={styles.label}>{title}</Text>
+                <Text style={styles.value}>{reading.text}</Text>
+            </>
+        );
+    }
     return (
         <Item
-            title={row.title}
-            subtitle={value}
+            title={title}
+            subtitle={reading.text}
             subtitleLines={0}
             mode="info"
             showChevron={false}
         />
+    );
+}
+
+/**
+ * A reference reads by its name: a session by its title (or where it lives), a Home by its name, the
+ * viewer's own Account as theirs. One this device cannot name keeps its exact id in place (`named`
+ * false), and so keeps its id label.
+ */
+function useApprovalReferenceReading(reference: ApprovalReference | undefined, literal: string, approvalServerId: string | null): Readonly<{ text: string; named: boolean }> {
+    const serverId = reference?.kind === 'session' ? reference.serverId ?? approvalServerId : approvalServerId;
+    const name = useApprovalSessionName(serverId, reference?.kind === 'session' ? reference.id : '');
+    const viewer = useAccountSettingsScope();
+    if (reference?.kind === 'session') return { text: name ?? describeUnnamedApprovalSession(resolveApprovalHomeName(serverId)), named: true };
+    if (reference?.kind === 'home') {
+        const home = resolveApprovalHomeName(reference.id)
+            ?? (isSameApprovalHome(reference.id, approvalServerId) ? t('settingsAccount.thisHomeTitle') : null);
+        return home === null ? { text: literal, named: false } : { text: home, named: true };
+    }
+    if (reference?.kind === 'account') {
+        const own = viewer !== null && viewer.accountId === reference.id && isSameApprovalHome(viewer.serverId, approvalServerId);
+        return own ? { text: t('accountDisplay.yours'), named: true } : { text: literal, named: false };
+    }
+    return { text: literal, named: false };
+}
+
+/**
+ * Whether two Home ids name one Home on this device. A request may carry the Home's portable identity
+ * where this device addresses it by its own profile id; the profile owner resolves both.
+ */
+function isSameApprovalHome(left: string | null | undefined, right: string | null | undefined): boolean {
+    const a = left?.trim();
+    const b = right?.trim();
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const profile = getServerProfileById(a);
+    return profile !== null && profile.id === getServerProfileById(b)?.id;
+}
+
+/**
+ * A key over a name names the thing, not its id: "Session id" beside a Session's title reads
+ * "Session", a Home's server id reads "Home". The exact id keeps its key in Technical details.
+ */
+function nameApprovalReferenceLabel(label: string, reference: ApprovalReference | undefined, named: boolean): string {
+    if (!reference || !named || !/\sid$/i.test(label)) return label;
+    const stem = label.replace(/\s+id$/i, '');
+    return reference.kind === 'home' && /^server$/i.test(stem) ? t('common.home') : stem;
+}
+
+type ApprovalStructuredEntries = NonNullable<ApprovalValueRow['entries']>;
+type ApprovalTechnicalLine = Readonly<{ key: string; label: string; value: string }>;
+
+/**
+ * What the readable part leaves out, in the request's order, labelled by where it sits ("Widget surface ›
+ * Server id"): the exact id behind each name shown above, schema versions and empty values.
+ */
+function collectApprovalTechnicalLines(rows: readonly ApprovalFieldRow[]): readonly ApprovalTechnicalLine[] {
+    const lines: ApprovalTechnicalLine[] = [];
+    for (const row of rows) {
+        if (row.kind !== 'value') continue;
+        if (row.reference) lines.push({ key: row.path, label: row.title, value: row.value });
+        if (!row.entries) continue;
+        const trail: string[] = [];
+        row.entries.forEach((entry, index) => {
+            trail.length = entry.depth;
+            if (entry.value === null) { trail.push(entry.label); return; }
+            // Versions and empty values do not identify the effect. Exact ids behind resolved
+            // names do, so the disclosure retains only those references.
+            if (entry.reference) {
+                lines.push({ key: `${row.path}:${index}`, label: [row.title, ...trail, entry.label].join(' › '), value: entry.value });
+            }
+        });
+    }
+    return lines;
+}
+
+/** The readable part of a structured value: technical leaves leave, and so do groups left empty. */
+function readableApprovalEntries(entries: ApprovalStructuredEntries): ApprovalStructuredEntries {
+    const kept: ApprovalStructuredEntries[number][] = [];
+    entries.forEach((entry, index) => {
+        if (entry.value !== null) {
+            if (!entry.technical) kept.push(entry);
+            return;
+        }
+        // A group stays when any leaf below it (before the next sibling or shallower line) is readable.
+        for (let next = index + 1; next < entries.length && entries[next]!.depth > entry.depth; next += 1) {
+            const candidate = entries[next]!;
+            if (candidate.value !== null && !candidate.technical) { kept.push(entry); return; }
+        }
+    });
+    return kept;
+}
+
+function ApprovalTechnicalDetails(props: Readonly<{ lines: readonly ApprovalTechnicalLine[] }>) {
+    const [expanded, setExpanded] = React.useState(false);
+    return (
+        <ExpandableItem
+            testID="approvals.technical-details"
+            expanded={expanded}
+            onExpandedChange={setExpanded}
+            showDivider={false}
+            header={({ headerProps, expanded: open }) => (
+                <Item
+                    {...headerProps}
+                    title={t('approvals.technicalDetails')}
+                    showChevron={false}
+                    rightElement={<ExpandableItemCaret expanded={open} />}
+                />
+            )}
+        >
+            {/* Quiet reference lines in the entries' own type: a path, then its exact value in mono. */}
+            <SectionContentRow>
+                <View style={styles.entries}>
+                    {props.lines.map((line) => (
+                        <View key={line.key} style={styles.technicalLine}>
+                            <Text style={styles.pageEntryLabel}>{line.label}</Text>
+                            <Text selectable style={[styles.pageEntryValue, styles.technicalValue]}>{line.value}</Text>
+                        </View>
+                    ))}
+                </View>
+            </SectionContentRow>
+        </ExpandableItem>
+    );
+}
+
+function ApprovalEntryLine(props: Readonly<{ entry: ApprovalStructuredEntries[number]; serverId: string | null; labelStyle: object; valueStyle: object }>) {
+    const reading = useApprovalReferenceReading(props.entry.reference, props.entry.value ?? '', props.serverId);
+    return (
+        <>
+            <Text style={props.labelStyle}>{nameApprovalReferenceLabel(props.entry.label, props.entry.reference, reading.named)}</Text>
+            <Text style={props.valueStyle}>{reading.text}</Text>
+        </>
+    );
+}
+
+/**
+ * A structured value as Protocol reads it: one labelled line per leaf, groups indented beneath their key.
+ * On the page it sits in a row's description, so it takes the description's size, with the keys a step
+ * quieter than their values; the card keeps its own value type.
+ */
+function ApprovalStructuredValue(props: Readonly<{ entries: ApprovalStructuredEntries; serverId: string | null; anatomy?: 'page' }>) {
+    const page = props.anatomy === 'page';
+    const entries = readableApprovalEntries(props.entries);
+    if (entries.length === 0) return null;
+    return (
+        <View style={styles.entries}>
+            {entries.map((entry, index) => (
+                <View key={`${index}:${entry.label}`} style={[styles.entry, { paddingLeft: entry.depth * ENTRY_INDENT }]}>
+                    {entry.value === null ? (
+                        <Text style={page ? styles.pageEntryGroup : styles.entryGroup}>{entry.label}</Text>
+                    ) : (
+                        <ApprovalEntryLine entry={entry} serverId={props.serverId}
+                            labelStyle={page ? styles.pageEntryLabel : styles.entryLabel}
+                            valueStyle={page ? styles.pageEntryValue : styles.entryValue} />
+                    )}
+                </View>
+            ))}
+        </View>
     );
 }
 
@@ -130,12 +319,13 @@ function ApprovalFieldValue(props: Readonly<{ row: ApprovalActionFieldsPresentat
                     ))}
                 </View>
             ) : null}
-            {row.kind === 'value' ? (
-                <ApprovalValueItem row={row} serverId={props.serverId ?? null} />
-            ) : null}
+            {row.kind === 'value' && row.entries ? <ApprovalStructuredValue entries={row.entries} serverId={props.serverId ?? null} /> : null}
+
         </>
     );
 }
+
+const ENTRY_INDENT = 12;
 
 const styles = StyleSheet.create((theme) => ({
     card: {
@@ -169,6 +359,54 @@ const styles = StyleSheet.create((theme) => ({
     },
     structuredAnswers: {
         gap: 10,
+    },
+    entries: {
+        gap: 4,
+    },
+    entry: {
+        flexDirection: 'row',
+        alignItems: 'baseline',
+        gap: 8,
+    },
+    entryGroup: {
+        fontSize: 13,
+        lineHeight: 20,
+        fontWeight: '600',
+        color: theme.colors.text.secondary,
+    },
+    entryLabel: {
+        fontSize: 13,
+        lineHeight: 20,
+        color: theme.colors.text.secondary,
+    },
+    entryValue: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 14,
+        lineHeight: 20,
+        color: theme.colors.text.primary,
+    },
+    pageEntryGroup: {
+        ...happierPageTextMetrics('rowDescription'),
+        fontWeight: '500',
+        color: theme.colors.text.secondary,
+    },
+    pageEntryLabel: {
+        ...happierPageTextMetrics('rowDescription'),
+        color: theme.colors.text.tertiary,
+    },
+    pageEntryValue: {
+        ...happierPageTextMetrics('rowDescription'),
+        flex: 1,
+        minWidth: 0,
+        color: theme.colors.text.secondary,
+    },
+    technicalLine: {
+        gap: 1,
+    },
+    technicalValue: {
+        ...Typography.mono(),
+        flex: 0,
     },
     structuredAnswer: {
         gap: 2,

@@ -1152,6 +1152,22 @@ function buildApprovalSummary(spec: ActionSpec, input?: unknown): string {
   return disclosure ? `${summary}\n\n${disclosure.description}` : summary;
 }
 
+function sentenceTerminated(value: string): string {
+  return /[.!?…]$/u.test(value) ? value : `${value}.`;
+}
+
+/** One canonical summary source for every approval; domain presenters refine exact effects. */
+function buildApprovalPreviewSummary(spec: ActionSpec, input: unknown): string {
+  let domainSummary: string | null = null;
+  try {
+    domainSummary = spec.approvalPresentation?.summary(input)?.trim() || null;
+  } catch {
+    // Presentation cannot become a second effect-admission failure.
+  }
+  const fallback = String(spec.inputHints?.description ?? spec.description ?? spec.title ?? spec.id).trim();
+  return sentenceTerminated(domainSummary ?? (fallback || String(spec.id)));
+}
+
 function sameSessionCreationDirectoryApproval(
   left: SessionCreationDirectoryApprovalV1 | null | undefined,
   right: SessionCreationDirectoryApprovalV1 | null | undefined,
@@ -1210,6 +1226,7 @@ async function prepareApprovalRequest(params: Readonly<{
   const defaultPreview = {
     actionId: params.actionId,
     actionArgs: observedInput,
+    summary: buildApprovalPreviewSummary(spec, params.input),
   } as const;
   if (params.actionId === 'computer.secret.fill' || params.actionId === 'browser.automation.secret.fill') {
     return { actionArgs: observedInput, preview: defaultPreview };
@@ -1220,10 +1237,15 @@ async function prepareApprovalRequest(params: Readonly<{
     context: params.context,
     defaultPreview,
   }) ?? defaultPreview;
+  const customizedRecord = readRecord(customized);
+  const customizedSummary = typeof customizedRecord.summary === 'string'
+    ? customizedRecord.summary.trim()
+    : '';
   const preview = {
-    ...readRecord(customized),
+    ...customizedRecord,
     actionId: params.actionId,
     actionArgs: observedInput,
+    summary: customizedSummary || defaultPreview.summary,
     ...(computerApprovalDisplay ? { computerApprovalDisplay } : {}),
     ...(machineAccessApprovalDisclosure(params.actionId, params.input)
       ? { machineAccessDisclosure: machineAccessApprovalDisclosure(params.actionId, params.input) } : {}),

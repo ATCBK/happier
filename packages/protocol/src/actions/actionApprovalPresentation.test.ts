@@ -8,6 +8,86 @@ import { MANAGED_MACHINE_ACTION_IDS_V1 } from '../machines/managed/actionIdsV1.j
 import { MACHINE_POOL_ACTION_IDS_V1 } from '../machines/pools/actionsV1.js';
 
 describe('approval field presentation', () => {
+  it('lets the widget Action own a human approval summary with names instead of raw structure', () => {
+    const input = {
+      surface: {
+        serverId: 'srv_home',
+        accountId: '5e3a0581-6f3d-4e73-bf40-383db0be6c3e',
+        owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'qaf1-usage' },
+      },
+      instance: {
+        v: 1,
+        id: 'qaf1-usage-b',
+        definition: { kind: 'artifact', artifactId: 'a2881e01' },
+        bindings: {},
+        displayName: 'Qaf1 Usage b',
+      },
+      size: 'small',
+    };
+
+    expect(getActionSpec('widgets.item.add').approvalPresentation?.summary(input)).toBe(
+      'Add “Qaf1 Usage b” (small) to Usage · Main area.',
+    );
+  });
+
+  it('gives a structured JSON value readable labelled entries beside its exact literal', () => {
+    const intent = { kind: 'create', board: { title: 'Launch plan', boardId: null, tags: ['ui', 'qa'], items: [{ title: 'Ship' }] } };
+    const presentation = describeApprovalActionFields({ actionId: 'boards.apply', actionArgs: { intent } });
+    const row = presentation.rows.find((candidate) => candidate.path === 'intent');
+    // The literal stays exact (admission and copy read it); people read the entries.
+    expect(row).toMatchObject({ kind: 'value', value: JSON.stringify(intent) });
+    expect(row && row.kind === 'value' ? row.entries : undefined).toEqual([
+      { label: 'Kind', value: 'Create', depth: 0 },
+      { label: 'Board', value: null, depth: 0 },
+      { label: 'Title', value: 'Launch plan', depth: 1 },
+      { label: 'Board id', value: 'null', depth: 1 },
+      { label: 'Tags', value: 'ui, qa', depth: 1 },
+      { label: 'Items', value: null, depth: 1 },
+      { label: '1', value: null, depth: 2 },
+      { label: 'Title', value: 'Ship', depth: 3 },
+    ]);
+  });
+
+  it('names Home and Account references, reads kinds and sizes as words, and keeps versions and empty values aside', () => {
+    const surface = { serverId: 'srv_home', accountId: '5e3a0581-6f3d-4e73-bf40-383db0be6c3e',
+      owner: { kind: 'corePage', pageId: 'usage', area: 'main' }, layoutId: 'qaf1-usage' };
+    const instance = { v: 1, id: 'qaf1-usage-b', definition: { kind: 'artifact', artifactId: 'a2881e01' }, bindings: {}, displayName: 'Usage b' };
+    const presentation = describeApprovalActionFields({ actionId: 'widgets.item.add', actionArgs: { surface, instance, size: 'small' } });
+    const entries = (path: string) => {
+      const row = presentation.rows.find((candidate) => candidate.path === path);
+      return row && row.kind === 'value' ? row.entries : undefined;
+    };
+    // References read by their names; target ids stay in view; versions and empty values stay present, aside.
+    expect(entries('surface')).toEqual([
+      { label: 'Server id', value: 'srv_home', depth: 0, reference: { kind: 'home', id: 'srv_home' } },
+      { label: 'Account id', value: '5e3a0581-6f3d-4e73-bf40-383db0be6c3e', depth: 0,
+        reference: { kind: 'account', id: '5e3a0581-6f3d-4e73-bf40-383db0be6c3e' } },
+      { label: 'Owner', value: null, depth: 0 },
+      { label: 'Kind', value: 'Core page', depth: 1 },
+      { label: 'Page id', value: 'usage', depth: 1 },
+      { label: 'Area', value: 'main', depth: 1 },
+      { label: 'Layout id', value: 'qaf1-usage', depth: 0 },
+    ]);
+    expect(entries('instance')).toEqual([
+      { label: 'V', value: '1', depth: 0, technical: true },
+      { label: 'Id', value: 'qaf1-usage-b', depth: 0 },
+      { label: 'Definition', value: null, depth: 0 },
+      { label: 'Kind', value: 'Artifact', depth: 1 },
+      { label: 'Artifact id', value: 'a2881e01', depth: 1 },
+      { label: 'Bindings', value: '{}', depth: 0, technical: true },
+      { label: 'Display name', value: 'Usage b', depth: 0 },
+    ]);
+    // A chosen option reads by its label, as the form that set it.
+    expect(presentation.rows.find((candidate) => candidate.path === 'size')).toMatchObject({ value: 'Small' });
+  });
+
+  it('keeps a target id argument in view, so an approval shows exactly what it acts on', () => {
+    const presentation = describeApprovalActionFields({ actionId: 'widgets.group.create', actionArgs: {
+      surface: { serverId: 'srv_home', accountId: 'acct-1' }, groupId: 'usage-group', title: 'Usage' } });
+    const row = presentation.rows.find((candidate) => candidate.path === 'groupId');
+    expect(row).toEqual({ kind: 'value', path: 'groupId', title: 'Group id', value: 'usage-group' });
+  });
+
   it('shows custom Provider target, endpoint and proposed template without credential or header values', () => {
     const actionArgs = { action: 'createCustom', connectionId: 'pc_review', enable: true, savedSecretId: 'private-secret-reference',
       template: { v: 1, name: 'Review source', endpointTemplates: [{ id: 'messages', protocol: 'anthropic',
@@ -295,5 +375,19 @@ describe('approval field presentation', () => {
     expect(describeApprovalActionFields({ actionId: 'action.operations.cancel',
       actionArgs: { serverId: 'home', operationId: 'operation' } }).unrepresentable)
       .toMatchObject({ path: 'machineId', reason: 'missing_required_context' });
+  });
+
+  it('reads an encoded file in a visual by its size, never by its bytes', () => {
+    const contentBase64 = Buffer.from('<main>Build health</main>'.repeat(60)).toString('base64');
+    const item = { v: 1, title: 'Build health', frame: 'frameless', height: { mode: 'auto', fallback: 'regular' },
+      source: { kind: 'hostedHtml', source: { v: 1, entrypoint: 'index.html', files: { 'index.html': { mime: 'text/html', contentBase64 } } } } };
+    const presentation = describeApprovalActionFields({ actionId: 'session.board.item.upsert',
+      actionArgs: { sessionId: 'session-1', itemId: 'build-health', expectedItemRevision: null, destination: 'transcript', item } });
+    const row = presentation.rows.find((candidate) => candidate.path === 'item');
+    const entries = row && row.kind === 'value' ? row.entries ?? [] : [];
+    expect(entries.some((entry) => entry.value?.includes(contentBase64))).toBe(false);
+    expect(entries).toContainEqual({ label: 'Size', value: '1.5 KB', depth: 4 });
+    // Admission and copy still read the exact literal.
+    expect(row).toMatchObject({ kind: 'value', value: JSON.stringify(item) });
   });
 });

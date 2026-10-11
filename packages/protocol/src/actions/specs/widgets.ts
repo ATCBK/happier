@@ -95,6 +95,78 @@ const indexField = { path: 'toIndex', title: 'Insertion index', widget: 'integer
 const groupIdField = { path: 'groupId', title: 'Group id', widget: 'text',
   description: 'A group id in the selected surface, as returned by widgets.item.list.' } as const satisfies InputFieldHint;
 
+function sentenceCaseIdentifier(value: unknown, fallback: string): string {
+  if (typeof value !== 'string' || !value.trim()) return fallback;
+  const words = value.trim().replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function quote(value: string): string {
+  return `“${value}”`;
+}
+
+function widgetSurfaceApprovalLabel(surface: ReturnType<typeof readWidgetActionSurfaceV1>): string {
+  if (!surface) return 'the selected surface';
+  const owner = surface.owner;
+  if (owner.kind === 'corePage') {
+    return `${sentenceCaseIdentifier(owner.pageId, 'Page')} · ${sentenceCaseIdentifier(owner.area, 'Main')} area`;
+  }
+  if (owner.kind === 'pluginArea') {
+    return `Plugin page · ${sentenceCaseIdentifier(owner.area, 'Main')} area`;
+  }
+  if (owner.kind === 'project') return owner.layoutId ? 'Project dashboard' : 'Project · Overview';
+  if (owner.kind === 'sessionBoard') return 'Session board';
+  if (owner.kind === 'workBoard') return 'Work board';
+  if (owner.kind === 'companion') return 'Session companion';
+  return 'Home';
+}
+
+function readRecord(value: unknown): Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Readonly<Record<string, unknown>>
+    : {};
+}
+
+/** Domain-owned approval sentence for widget mutations; raw structured operands stay in Details. */
+function describeWidgetActionApprovalSummary(actionId: WidgetInstanceActionIdV1, input: unknown): string | null {
+  const value = readRecord(input);
+  const surface = readWidgetActionSurfaceV1(input);
+  const target = widgetSurfaceApprovalLabel(surface);
+  const instance = readRecord(value.instance);
+  const group = readRecord(value.group);
+  const capture = readRecord(value.capture);
+  const captureSurface = readWidgetActionSurfaceV1({ surface: capture.surface });
+  const itemName = sentenceCaseIdentifier(instance.displayName, 'selected widget');
+  const groupName = sentenceCaseIdentifier(value.title ?? group.title, 'selected group');
+  const size = typeof value.size === 'string' ? value.size : null;
+  const width = typeof value.width === 'string' ? `${value.width} width` : null;
+
+  switch (actionId) {
+    case 'widgets.item.add': return `Add ${quote(itemName)}${size ? ` (${size})` : ''} to ${target}.`;
+    case 'widgets.item.remove': return `Remove ${quote(itemName)} from ${target}.`;
+    case 'widgets.item.move': return `Move ${quote(itemName)} to ${widgetSurfaceApprovalLabel(readWidgetActionDestinationV1(input) ?? surface)}.`;
+    case 'widgets.item.rename': return `Rename ${quote(itemName)} to ${value.displayName === null ? 'its default name' : quote(sentenceCaseIdentifier(value.displayName, 'widget'))} on ${target}.`;
+    case 'widgets.item.size.set': return `Resize ${quote(itemName)} to ${size ?? width ?? 'the selected size'} on ${target}.`;
+    case 'widgets.item.frame.set': return `Show ${quote(itemName)} with ${value.frameStyle === null ? 'the surface default frame' : `${String(value.frameStyle)} framing`} on ${target}.`;
+    case 'widgets.item.network.set': return `Change network access for ${quote(itemName)} on ${target}.`;
+    case 'widgets.item.inputs.set': return `Change settings for ${quote(itemName)} on ${target}.`;
+    case 'widgets.item.inputs.reset': return `Reset settings for ${quote(itemName)} on ${target}.`;
+    case 'widgets.item.refresh': return `Refresh ${quote(itemName)} on ${target}.`;
+    case 'widgets.group.create': return `Create ${quote(groupName)} on ${target}.`;
+    case 'widgets.group.add': return `Add ${quote(groupName)} to ${target}.`;
+    case 'widgets.group.ungroup': return `Ungroup ${quote(groupName)} on ${target}.`;
+    case 'widgets.group.set': return `Change ${quote(groupName)}${width ? ` to ${width}` : ''} on ${target}.`;
+    case 'widgets.group.inputs.set': return `Change shared settings for ${quote(groupName)} on ${target}.`;
+    case 'widgets.area.layout.create': return `Create ${quote(sentenceCaseIdentifier(value.name, 'dashboard'))} on ${target}.`;
+    case 'widgets.area.layout.rename': return `Rename the dashboard to ${quote(sentenceCaseIdentifier(value.name, 'dashboard'))} on ${target}.`;
+    case 'widgets.area.layout.delete': return `Delete the selected dashboard from ${target}.`;
+    case 'widgets.area.layout.reorder': return `Reorder the selected dashboard on ${target}.`;
+    case 'widgets.area.layout.reset': return `Reset ${target} to its preset.`;
+    case 'widgets.area.layout.undo': return `Undo the dashboard reset on ${widgetSurfaceApprovalLabel(captureSurface)}.`;
+    default: return null;
+  }
+}
+
 const WIDGET_INSTANCE_ACTION_FIELDS = {
   'widgets.catalog.list': [surfaceField, { path: 'boundSession', title: 'Widget Session', widget: 'select', optionsSourceId: 'sessions',
     description: 'Optional Home-qualified Session supplying widget discovery context. Selecting it grants no access.' }],
@@ -212,6 +284,7 @@ export const WIDGET_INSTANCE_ACTION_SPECS_V1: readonly (PreNormalizedActionSpec 
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: WidgetInstanceActionInputSchemasV1[id], outputSchema: WidgetInstanceActionOutputSchemasV1[id],
+    approvalPresentation: { summary: input => describeWidgetActionApprovalSummary(id, input) },
     inputHints: { description: WIDGET_INSTANCE_ACTION_COPY[id][1], fields: WIDGET_INSTANCE_ACTION_FIELDS[id] },
     cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' }] },
   } as const satisfies PreNormalizedActionSpec;

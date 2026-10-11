@@ -1654,6 +1654,7 @@ const enApprovals = {
   decisionError: 'Failed to update approval.',
   decisionAuthorityError:
     'This sign-in cannot approve requests. Sign in to this Home with your account recovery key, or approve from another device with an account sign-in.',
+  technicalDetails: 'Technical details',
   unsafeDetailsTitle: 'These details cannot be shown safely',
   unsafeDetailsBody:
     'Happier could not display this request exactly as it was sent, so it cannot be approved. Reject it, or ask for it to be sent again.',

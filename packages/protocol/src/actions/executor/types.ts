@@ -2433,6 +2433,7 @@ export type ActionExecutorDeps = Readonly<{
     defaultPreview: Readonly<{
       actionId: ActionId;
       actionArgs: unknown;
+      summary: string;
     }>;
   }>) => Promise<unknown> | unknown;
 

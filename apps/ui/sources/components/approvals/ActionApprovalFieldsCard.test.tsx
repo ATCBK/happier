@@ -5,7 +5,7 @@ import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { storage } from '@/sync/domains/state/storage';
-import { removeServerProfile, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { ActionApprovalFieldsCard } from './ActionApprovalFieldsCard';
 import type { ApprovalActionFieldsPresentation } from './approvalFieldValues';
 import { describeUnnamedApprovalSession } from './approvalRequesterLabels';
@@ -70,4 +70,104 @@ it('the approval Details page preserves an exact remote host id when a session h
     expect(references.getTextContent()).not.toContain('Session sharing Home token');
     expect(references.getTextContent()).not.toContain('Unrelated Home');
     expect(references.getTextContent()).toContain(describeUnnamedApprovalSession('Approval Home'));
+});
+
+it('reads a structured value as labelled entries rather than raw JSON, in both anatomies', async () => {
+    const literal = JSON.stringify({ kind: 'create', board: { title: 'Launch plan' } });
+    const presentation = { rows: [{
+        kind: 'value', path: 'intent', title: 'Board intent', value: literal,
+        entries: [
+            { label: 'Kind', value: 'create', depth: 0 },
+            { label: 'Board', value: null, depth: 0 },
+            { label: 'Title', value: 'Launch plan', depth: 1 },
+        ],
+    }], unrepresentable: null } satisfies ApprovalActionFieldsPresentation;
+    for (const anatomy of ['page', 'card'] as const) {
+        const screen = await renderScreen(<ActionApprovalFieldsCard presentation={presentation} anatomy={anatomy} />);
+        const text = screen.getTextContent();
+        expect(text).toContain('Board intent');
+        expect(text).toContain('Launch plan');
+        expect(text).toContain('Kind');
+        expect(text).not.toContain(literal);
+    }
+});
+
+it('gives a structured value the same row as its sibling arguments on the approval page', async () => {
+    const { Item } = await import('@/components/ui/lists/Item');
+    const presentation = { rows: [
+        { kind: 'value', path: 'groupId', title: 'Group id', value: 'usage-group' },
+        { kind: 'value', path: 'surface', title: 'Widget surface', value: '{"area":"main"}',
+            entries: [{ label: 'Area', value: 'main', depth: 0 }] },
+    ], unrepresentable: null } satisfies ApprovalActionFieldsPresentation;
+    const screen = await renderScreen(<ActionApprovalFieldsCard presentation={presentation} anatomy="page" />);
+    // Every argument reads name-over-value through the one row owner, so a structured value cannot
+    // invert the hierarchy its siblings use (a small label over large values).
+    const titles = screen.findAllByType(Item).map((item) => item.props.title);
+    expect(titles).toEqual(['Group id', 'Widget surface']);
+    expect(screen.getTextContent()).toContain('Area');
+});
+
+it('reads references by name, keeps exact ids in Technical details, and drops meaningless internals', async () => {
+    const profile = await upsertServerProfile({ name: 'Approval Home', serverUrl: 'https://approval-technical.test' });
+    profiles.push(profile.id);
+    const accountId = '5e3a0581-6f3d-4e73-bf40-383db0be6c3e';
+    await act(async () => { storage.setState({ settingsScope: { serverId: profile.id, accountId } }); });
+    const presentation = { rows: [
+        { kind: 'value', path: 'surface', title: 'Widget surface', value: '{}', entries: [
+            { label: 'Server id', value: profile.id, depth: 0, reference: { kind: 'home', id: profile.id } },
+            { label: 'Account id', value: accountId, depth: 0, reference: { kind: 'account', id: accountId } },
+            { label: 'Owner', value: null, depth: 0 },
+            { label: 'Page id', value: 'usage', depth: 1 },
+            { label: 'V', value: '7', depth: 1, technical: true },
+            { label: 'Bindings', value: '{}', depth: 1, technical: true },
+        ] },
+        { kind: 'value', path: 'groupId', title: 'Group id', value: 'usage-group' },
+    ], unrepresentable: null } satisfies ApprovalActionFieldsPresentation;
+    for (const anatomy of ['page', 'card'] as const) {
+        const screen = await renderScreen(<ActionApprovalFieldsCard presentation={presentation} anatomy={anatomy} serverId={profile.id} />);
+        const text = screen.getTextContent();
+        expect(text).toContain('Approval Home');
+        expect(text).toContain('Your account');
+        // A target id stays in view: the approval shows exactly what it acts on.
+        expect(text).toContain('usage-group');
+        expect(text).toContain('usage');
+        expect(text).not.toContain(profile.id);
+        expect(text).not.toContain(accountId);
+        // A key over a name names the thing, not its id: "Home · Approval Home", "Account · Your account".
+        expect(text).not.toContain('Server id');
+        expect(text).not.toContain('Account id');
+        expect(text).toContain('Account');
+        const technical = screen.findAllByTestId('approvals.technical-details')
+            .find((node) => typeof node.props.onExpandedChange === 'function');
+        expect(technical).toBeTruthy();
+        await act(async () => { technical?.props.onExpandedChange(true); });
+        const opened = screen.getTextContent();
+        expect(opened).toContain(accountId);
+        expect(opened).toContain(profile.id);
+        expect(opened).not.toContain('Widget surface › Owner › V');
+        expect(opened).not.toContain('Widget surface › Owner › Bindings');
+        expect(opened).not.toContain('{}');
+        // The exact id behind a name keeps its id label in Technical details.
+        expect(opened).toContain('Widget surface › Server id');
+    }
+});
+
+it('reads the approval\u2019s own Home and Account when the request carries the Home\u2019s portable identity', async () => {
+    // An unnamed Home: the request's `serverId` is the Home's identity, this device addresses it by a profile id.
+    const url = 'https://approval-identity.test';
+    const created = await upsertServerProfile({ serverUrl: url });
+    profiles.push(created.id);
+    await setServerProfileIdentityForUrl(url, 'srv_portable_identity');
+    const accountId = 'viewer-account';
+    await act(async () => { storage.setState({ settingsScope: { serverId: 'srv_portable_identity', accountId } }); });
+    const screen = await renderScreen(<ActionApprovalFieldsCard anatomy="page" serverId={created.id} presentation={{ rows: [
+        { kind: 'value', path: 'surface', title: 'Widget surface', value: '{}', entries: [
+            { label: 'Server id', value: 'srv_portable_identity', depth: 0, reference: { kind: 'home', id: 'srv_portable_identity' } },
+            { label: 'Account id', value: accountId, depth: 0, reference: { kind: 'account', id: accountId } },
+        ] },
+    ], unrepresentable: null }} />);
+    const text = screen.getTextContent();
+    expect(text).not.toContain('srv_portable_identity');
+    expect(text).not.toContain(accountId);
+    expect(text).toContain('Your account');
 });

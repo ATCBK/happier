@@ -44,6 +44,19 @@ function readRenderedText(
   return [screen.getTextContent(), ...rowText].join(' ');
 }
 
+/**
+ * The pass-through `Item` host keeps an element subtitle as a prop instead of rendering it; a page row's
+ * structured value is such an element, so its text is read by rendering that element itself.
+ */
+async function readRenderedTextWithRowContent(screen: Awaited<ReturnType<typeof renderScreen>>): Promise<string> {
+  const nested: string[] = [];
+  for (const node of screen.findAllByType('Item' as never)) {
+    const subtitle: unknown = node.props.subtitle;
+    if (React.isValidElement(subtitle)) nested.push((await renderScreen(subtitle)).getTextContent());
+  }
+  return [readRenderedText(screen), ...nested].join(' ');
+}
+
 describe('approval field semantics shared by card and page', () => {
   it.each(['card', 'page'] as const)('preserves principal kinds, ids and arbitrary JSON in the %s', async (anatomy) => {
     const { describeApprovalActionFields } = await import('./approvalFieldValues');
@@ -54,12 +67,20 @@ describe('approval field semantics shared by card and page', () => {
         presentation={describeApprovalActionFields({ actionId: 'machines.access.grant.set', actionArgs: {
           serverId: 'ui-A', machineId: 'machine', principal, level: 'view',
         } })} />);
-      expect(readRenderedText(screen)).toContain(JSON.stringify(principal));
+      // Every key and value reads as a labelled entry; the literal is never shown raw.
+      const text = await readRenderedTextWithRowContent(screen);
+      // A discriminator reads as a word ("Kind Account"); ids stay exact.
+      expect(text).toContain(`Kind ${kind.charAt(0).toUpperCase()}${kind.slice(1)}`);
+      expect(text).toContain(`${kind.charAt(0).toUpperCase()}${kind.slice(1)} id session-1`);
+      if (kind === 'group') expect(text).toContain('Team id team-1');
+      expect(text).not.toContain(JSON.stringify(principal));
     }
     const value = { kind: 'session', sessionId: 'session-1', empty: '', absent: null };
     const screen = await renderScreen(<ActionApprovalFieldsCard anatomy={anatomy} serverId="ui-A"
       presentation={describeApprovalActionFields({ actionId: 'settings.set', actionArgs: { anchor: 'example', value } })} />);
-    expect(readRenderedText(screen)).toContain(JSON.stringify(value));
+    const text = await readRenderedTextWithRowContent(screen);
+    for (const entry of ['Kind Session', 'Session id session-1', 'Empty ""', 'Absent null']) expect(text).toContain(entry);
+    expect(text).not.toContain(JSON.stringify(value));
   });
   it.each(['card', 'page'] as const)('names only the typed Voice target on its own Home in the %s', async (anatomy) => {
     const { describeApprovalActionFields } = await import('./approvalFieldValues');
@@ -2257,7 +2278,8 @@ describe('ApprovalDetailScreen', () => {
     const text = readRenderedText(screen);
     expect(text).toContain('Set session title');
     expect(text).toContain('New title from MCP');
-    expect(text).toContain('Session id');
+    // The Session reference row is titled by what it names, never by its id.
+    expect(text).not.toContain('Session id');
     expect(text).toContain('Title');
 
     expect(screen.findByTestId('approvals.approve')?.props.disabled).toBe(true);

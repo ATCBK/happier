@@ -1775,6 +1775,7 @@ const caValues = {
         loadError: 'No s\'ha pogut carregar l\'aprovació.',
         decisionError: 'No s\'ha pogut actualitzar l\'aprovació.',
         decisionAuthorityError: 'Aquest inici de sessió no permet aprovar sol·licituds. Inicia sessió en aquest Home amb la clau de recuperació del teu compte, o aprova des d’un altre dispositiu amb una sessió de compte.',
+        technicalDetails: 'Detalls tècnics',
         unsafeDetailsTitle: 'Aquests detalls no es poden mostrar amb seguretat',
         unsafeDetailsBody: 'Happier no ha pogut mostrar aquesta sol·licitud exactament tal com es va enviar, així que no es pot aprovar. Rebutja-la o demana que la tornin a enviar.',
         approveUnavailableHint: 'L\'aprovació no està disponible mentre aquests detalls no es puguin mostrar amb seguretat.',

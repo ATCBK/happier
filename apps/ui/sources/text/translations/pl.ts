@@ -1767,6 +1767,7 @@ const plValues = {
     loadError: "Nie udało się wczytać zatwierdzenia.",
     decisionError: "Nie udało się zaktualizować zatwierdzenia.",
     decisionAuthorityError: "Ten sposób logowania nie pozwala zatwierdzać żądań. Zaloguj się do tego Home kluczem odzyskiwania konta albo zatwierdź żądanie na innym urządzeniu zalogowanym do konta.",
+    technicalDetails: "Szczegóły techniczne",
     unsafeDetailsTitle: "Tych szczegółów nie można bezpiecznie wyświetlić",
     unsafeDetailsBody: "Happier nie mógł wyświetlić tego żądania dokładnie tak, jak zostało wysłane, więc nie można go zatwierdzić. Odrzuć je lub poproś o ponowne wysłanie.",
     approveUnavailableHint: "Zatwierdzenie jest niedostępne, dopóki tych szczegółów nie można bezpiecznie wyświetlić.",

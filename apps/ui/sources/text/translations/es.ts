@@ -1941,6 +1941,7 @@ const esValues = {
     loadError: "No se pudo cargar la aprobación.",
     decisionError: "No se pudo actualizar la aprobación.",
     decisionAuthorityError: "Esta sesión no permite aprobar solicitudes. Inicia sesión en este Home con la clave de recuperación de tu cuenta, o aprueba desde otro dispositivo con una sesión de cuenta.",
+    technicalDetails: "Detalles técnicos",
     unsafeDetailsTitle: "Estos detalles no se pueden mostrar de forma segura",
     unsafeDetailsBody: "Happier no pudo mostrar esta solicitud exactamente como se envió, por lo que no se puede aprobar. Recházala o pide que se envíe de nuevo.",
     approveUnavailableHint: "La aprobación no está disponible mientras estos detalles no se puedan mostrar de forma segura.",

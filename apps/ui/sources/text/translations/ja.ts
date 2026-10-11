@@ -1923,6 +1923,7 @@ const jaValues = {
     loadError: "承認を読み込めませんでした。",
     decisionError: "承認を更新できませんでした。",
     decisionAuthorityError: "このログインではリクエストを承認できません。アカウントの復旧キーでこのHomeにログインするか、アカウントでログイン済みの別の端末から承認してください。",
+    technicalDetails: "技術的な詳細",
     unsafeDetailsTitle: "この内容は安全に表示できません",
     unsafeDetailsBody: "送信されたとおりに表示できなかったため、このリクエストは承認できません。拒否するか、再送を依頼してください。",
     approveUnavailableHint: "この内容を安全に表示できない間は承認できません。",

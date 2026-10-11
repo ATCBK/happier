@@ -1777,6 +1777,7 @@ const frValues = {
     loadError: "Échec du chargement de l’approbation.",
     decisionError: "Échec de la mise à jour de l’approbation.",
     decisionAuthorityError: "Cette connexion ne permet pas d’approuver les demandes. Connectez-vous à ce Home avec la clé de récupération de votre compte, ou approuvez depuis un autre appareil connecté à votre compte.",
+    technicalDetails: "Détails techniques",
     unsafeDetailsTitle: "Ces détails ne peuvent pas être affichés en toute sécurité",
     unsafeDetailsBody: "Happier n’a pas pu afficher cette demande exactement telle qu’elle a été envoyée ; elle ne peut donc pas être approuvée. Refusez-la ou demandez qu’elle soit renvoyée.",
     approveUnavailableHint: "L’approbation est indisponible tant que ces détails ne peuvent pas être affichés en toute sécurité.",

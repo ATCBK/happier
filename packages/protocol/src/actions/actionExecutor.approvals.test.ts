@@ -1022,10 +1022,31 @@ describe('createActionExecutor (approvals)', () => {
     expect((res as any).result?.artifactId).toBe('a1');
   });
 
+  it('puts the Action-owned human summary in the canonical approval preview', async () => {
+    const approvalsCreate = vi.fn(async () => ({ artifactId: 'a1' }));
+    const executor = createExecutor({
+      approvalsCreate,
+      isActionApprovalRequired: (actionId, ctx) => actionId === 'session.message.send' && ctx.surface === 'mcp',
+    } as any);
+
+    await executor.execute(
+      'session.message.send' as any,
+      { sessionId: 's1', message: 'hello' },
+      { surface: 'mcp' },
+    );
+
+    expect(approvalsCreate).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({
+        preview: expect.objectContaining({
+          summary: 'Send a message to the agent in a session.',
+        }),
+      }),
+    }));
+  });
+
   it('uses host-provided approval preview metadata for plugin installs', async () => {
     const approvalsCreate = vi.fn(async () => ({ artifactId: 'a1' }));
-    const buildApprovalPreview = vi.fn(async ({ actionId, input, defaultPreview }) => ({
-      ...defaultPreview,
+    const buildApprovalPreview = vi.fn(async ({ actionId, input }) => ({
       pluginInstall: {
         actionId,
         path: (input as any).path,
@@ -1060,12 +1081,17 @@ describe('createActionExecutor (approvals)', () => {
       actionId: 'plugins.install',
       input: { path: '/tmp/acme-dev-loop', dev: true },
       context: expect.objectContaining({ surface: 'agent' }),
-      defaultPreview: { actionId: 'plugins.install', actionArgs: { path: '/tmp/acme-dev-loop', dev: true } },
+      defaultPreview: {
+        actionId: 'plugins.install',
+        actionArgs: { path: '/tmp/acme-dev-loop', dev: true },
+        summary: expect.any(String),
+      },
     });
     expect(approvalsCreate).toHaveBeenCalledWith(expect.objectContaining({
       request: expect.objectContaining({
         actionId: 'plugins.install',
         preview: expect.objectContaining({
+          summary: expect.any(String),
           pluginInstall: expect.objectContaining({
             plugin: {
               id: 'acme.dev-loop',
