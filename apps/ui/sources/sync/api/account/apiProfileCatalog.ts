@@ -19,6 +19,7 @@ import { transferLegacyProfilesV1, cleanupTransferredProfileSourcesV1,
     type LegacyProfileTransferResultV1, type ProfileTransferSourceCleanupResultV1 } from '@happier-dev/protocol/profiles/transferLegacyProfilesV1';
 import { normalizeAccountSettingsHistoryAfterTransfer } from '@/sync/engine/settings/accountSettingsHistoryRestore';
 import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
+import type { ArtifactRevisionV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { readAccountSettingsBaseline } from '@/sync/engine/settings/accountSettingsBaseline';
 import { sealAccountSettingsCleanup } from '@/sync/engine/settings/sealAccountSettingsCleanup';
 import { parseSavedSecretCatalogReferenceV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
@@ -319,6 +320,7 @@ export function mutateProfileRowInContext(context: ProfileAccountContext, mutati
 }
 
 type ProfileWriteInput = Readonly<{ record: ProfileRecordV1; expectedRevision: number | 'absent'; operation: Exclude<ProfileRowMutationV1['operation'], 'remove' | 'import'>;
+    expectedArtifactRevision?: ArtifactRevisionV1;
     savedSecretRevisions?: ProfileRowMutationV1['savedSecretRevisions']; legacyCloneSource?: ProfileRowMutationV1['legacyCloneSource']; }>;
 type ProfileSealInput = Omit<ProfileWriteInput, 'operation'> & Readonly<{
     operation: Exclude<ProfileRowMutationV1['operation'], 'remove'>;
@@ -375,6 +377,10 @@ async function writeCapturedProfileRecord(context: ProfileAccountContext, mode: 
         : new Map<string, ArtifactSharingResourceV1>();
     context.assertCurrent();
     const references = readProfileMutationReferences(record, artifactsById);
+    if (input.expectedArtifactRevision && (!references.artifactRevision
+        || input.expectedArtifactRevision.headerVersion !== references.artifactRevision.headerVersion
+        || input.expectedArtifactRevision.bodyVersion !== references.artifactRevision.bodyVersion))
+        throw new ProfileRowOperationError('reference-conflict');
     const savedSecretRevisions = await resolveProfileSecretRevisions(context, [references], input.savedSecretRevisions, false, false, signal);
     return mutateWithContext(context, sealProfileMutation(mode, material, { ...input, record, settingsCleanup, savedSecretRevisions }, references), signal);
 }

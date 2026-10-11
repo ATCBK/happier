@@ -130,7 +130,7 @@ it('refuses a newer predecessor source baseline than the issued Settings capture
   await expect(store.readProfileCatalog()).resolves.toMatchObject({ status: 'ready', source: 'legacy' });
 });
 
-it.each(['ready', 'access_removed', 'stale_selection'] as const)('captures private and inherited Artifact binding proofs without caller proofs, refusing %s references before mutation', async state => {
+it.each(['ready', 'access_removed', 'stale_selection', 'stale_artifact'] as const)('captures private and inherited Artifact binding proofs without caller proofs, refusing %s references before mutation', async state => {
   const credentials = { token: 'bob-retained-binding-proof', encryption: null };
   const aliceCredentials = { token: 'alice-ambient-proof', encryption: null };
   setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 9,
@@ -208,6 +208,7 @@ it.each(['ready', 'access_removed', 'stale_selection'] as const)('captures priva
     secretBindings: { TOKEN: ref, OPTIONAL_TOKEN: null },
     definition: { kind: 'artifact', artifactId } });
   const write = createCliProfileStoreForOperation({ operationContext: context }).writeRecord({ record, operation: 'update', expectedRevision: 4,
+    expectedArtifactRevision: { headerVersion: 2, bodyVersion: state === 'stale_artifact' ? 3 : 4 },
     ...(state === 'stale_selection' ? { savedSecretRevisions: [{ resourceId, expectedRevision: 6 }] } : {}) });
   if (state === 'ready') {
     await expect(write).resolves.toMatchObject({ status: 'updated', revision: 5 });
@@ -216,7 +217,8 @@ it.each(['ready', 'access_removed', 'stale_selection'] as const)('captures priva
       artifactRevision: { artifactId, headerVersion: 2, bodyVersion: 4 },
       content: { t: 'plain', v: { secretBindings: { TOKEN: ref, OPTIONAL_TOKEN: null } } } }]);
   } else {
-    await expect(write).rejects.toBeInstanceOf(Error);
+    if (state === 'stale_artifact') await expect(write).rejects.toMatchObject({ code: 'reference-conflict' });
+    else await expect(write).rejects.toBeInstanceOf(Error);
     expect(committed).toEqual([]);
     expect(dispatched).toEqual([]);
   }

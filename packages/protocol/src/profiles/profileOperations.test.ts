@@ -677,25 +677,117 @@ describe('Profile semantic operations', () => {
     expect(captured).toMatchObject({ expectedRevision: 4, expectedArtifactRevision: artifact.revision });
     expect(writes).toBe(1);
   });
-  it('allows an Artifact body edit with unchanged effective bindings but refuses to ignore a private binding edit', async () => {
+  it('allows an Artifact body edit with unchanged effective bindings without pinning inherited defaults', async () => {
     const artifact = { artifactId: 'published-a', header: { kind: 'launch-profile.v1', profileId: 'a', name: 'Alpha' },
       body: JSON.stringify({ kind: 'launch-profile.v1', profile, secretBindings: { RESOURCE_DEFAULT: 'secret-default' } }), access: 'edit' as const,
       revision: { headerVersion: 2, bodyVersion: 3 } };
     const membership = ProfileRecordV1Schema.parse({ ...row, definition: { kind: 'artifact', artifactId: artifact.artifactId } });
     let writes = 0;
+    let privateWrites = 0;
     const owner = createProfileOperations({ readCatalog: () => ({ ...activeAuthority, status: 'ready', records: [{ record: membership, revision: 4 }], diagnostics: [], referenceGuardRevision: 5 }),
       artifactsById: () => new Map([[artifact.artifactId, artifact]]),
-      writeRecord: async input => { writes++; return { status: 'updated', id: input.record.id, revision: 5 }; },
+      writeRecord: async input => { privateWrites++; return { status: 'updated', id: input.record.id, revision: 5 }; },
       deleteRecord: async input => ({ status: 'updated', id: input.id, revision: 5 }),
       writeArtifactProfile: async input => { writes++; return { status: 'updated', id: input.record.id, revision: 4 }; } });
     expect(await owner.save({ profile: { ...profile, name: 'Edited' }, expectedRevision: 4, expectedArtifactRevision: artifact.revision,
       secretBindings: { RESOURCE_DEFAULT: 'secret-default', TOKEN: 'secret-a' } }))
       .toEqual({ status: 'updated', id: 'a', revision: 4 });
     expect(writes).toBe(1);
-    expect(await owner.save({ profile: { ...profile, name: 'Edited' }, expectedRevision: 4, expectedArtifactRevision: artifact.revision,
-      secretBindings: { RESOURCE_DEFAULT: 'secret-default', TOKEN: 'secret-next' } }))
-      .toMatchObject({ status: 'unavailable', reason: 'profile_artifact_binding_edit_unavailable' });
-    expect(writes).toBe(1);
+    expect(privateWrites).toBe(0);
+  });
+
+  it.each([null, 'happier:shared-secret:v1:secret-selected'])('saves an Artifact private binding %s without publishing or losing neighboring none masks', async selection => {
+    const artifact = { artifactId: 'published-a', header: { kind: 'launch-profile.v1', profileId: 'a', name: 'Alpha' },
+      body: JSON.stringify({ kind: 'launch-profile.v1', profile, secretBindings: { TOKEN: 'secret-default', INHERITED: 'secret-inherited' } }),
+      access: 'edit' as const, revision: { headerVersion: 2, bodyVersion: 3 } };
+    const originalBody = artifact.body;
+    let record = ProfileRecordV1Schema.parse({ ...row, definition: { kind: 'artifact', artifactId: artifact.artifactId },
+      secretBindings: { TOKEN: 'secret-a', MASKED: null } });
+    let bodyWrites = 0;
+    const owner = createProfileOperations({ readCatalog: () => ({ ...activeAuthority, status: 'ready', records: [{ record, revision: 4 }], diagnostics: [], referenceGuardRevision: 5 }),
+      artifactsById: () => new Map([[artifact.artifactId, artifact]]),
+      writeRecord: async input => {
+        expect(input).toMatchObject({ expectedRevision: 4, operation: 'update', expectedArtifactRevision: artifact.revision,
+          ...(selection ? { savedSecretRevisions: [{ resourceId: 'secret-selected', expectedRevision: 7 }] } : {}) });
+        record = ProfileRecordV1Schema.parse(input.record);
+        return { status: 'updated', id: record.id, revision: 5 };
+      },
+      deleteRecord: async input => ({ status: 'updated', id: input.id, revision: 5 }),
+      writeArtifactProfile: async input => { bodyWrites++; return { status: 'updated', id: input.record.id, revision: 4 }; } });
+    expect(await owner.save({ profile, expectedRevision: 4, expectedArtifactRevision: artifact.revision,
+      secretBindings: { TOKEN: selection }, ...(selection ? { savedSecretRevisions: [{ resourceId: 'secret-selected', expectedRevision: 7 }] } : {}) }))
+      .toEqual({ status: 'updated', id: 'a', revision: 5 });
+    expect(record).toMatchObject({ definition: { kind: 'artifact', artifactId: artifact.artifactId }, enabled: false,
+      promptStack: row.promptStack, secretBindings: { TOKEN: selection, MASKED: null } });
+    expect(record.secretBindings).not.toHaveProperty('INHERITED');
+    expect(bodyWrites).toBe(0);
+    expect(artifact.body).toBe(originalBody);
+  });
+
+  it.each(['updated', 'conflict'] as const)('reconciles combined Artifact body/private binding Save with an Artifact %s acknowledgement', async bodyOutcome => {
+    const artifact = { artifactId: 'published-a', header: { kind: 'launch-profile.v1', profileId: 'a', name: 'Alpha' },
+      body: JSON.stringify({ kind: 'launch-profile.v1', profile, secretBindings: { DEFAULT: 'secret-default' } }),
+      access: 'edit' as const, revision: { headerVersion: 2, bodyVersion: 3 } };
+    let record = ProfileRecordV1Schema.parse({ ...row, definition: { kind: 'artifact', artifactId: artifact.artifactId },
+      secretBindings: { TOKEN: 'secret-a', MASKED: null } });
+    const owner = createProfileOperations({ readCatalog: () => ({ ...activeAuthority, status: 'ready', records: [{ record, revision: 4 }], diagnostics: [], referenceGuardRevision: 5 }),
+      artifactsById: () => new Map([[artifact.artifactId, artifact]]),
+      writeRecord: async input => { record = ProfileRecordV1Schema.parse(input.record); return { status: 'updated', id: record.id, revision: 5 }; },
+      deleteRecord: async input => ({ status: 'updated', id: input.id, revision: 5 }),
+      writeArtifactProfile: async input => {
+        expect(record.secretBindings).toEqual({ TOKEN: null, MASKED: null });
+        expect(input).toMatchObject({ record, expectedRevision: 5, expectedArtifactRevision: artifact.revision });
+        expect(input.profile).not.toHaveProperty('secretBindings');
+        if (bodyOutcome === 'updated') artifact.body = JSON.stringify({ kind: 'launch-profile.v1', profile: input.profile,
+          secretBindings: { DEFAULT: 'secret-default' } });
+        return { status: bodyOutcome, id: input.record.id, revision: input.expectedRevision };
+      } });
+    expect(await owner.save({ profile: { ...profile, name: 'Edited', secretBindings: { TOKEN: 'secret-a', DEFAULT: 'secret-default' } },
+      expectedRevision: 4, expectedArtifactRevision: artifact.revision, secretBindings: { TOKEN: null } }))
+      .toEqual({ status: bodyOutcome, id: 'a', revision: 5 });
+    // A body conflict preserves the already-acknowledged private mutation and does not claim complete success.
+    expect(record.secretBindings).toEqual({ TOKEN: null, MASKED: null });
+    expect(JSON.parse(artifact.body)).toMatchObject({ profile: { name: bodyOutcome === 'updated' ? 'Edited' : 'Alpha' },
+      secretBindings: { DEFAULT: 'secret-default' } });
+  });
+
+  it('refuses stale row, Artifact and retired Home evidence before either Save mutation', async () => {
+    const artifact = { artifactId: 'published-a', header: { kind: 'launch-profile.v1', profileId: 'a', name: 'Alpha' },
+      body: JSON.stringify({ kind: 'launch-profile.v1', profile, secretBindings: {} }), access: 'edit' as const,
+      revision: { headerVersion: 2, bodyVersion: 3 } };
+    const membership = ProfileRecordV1Schema.parse({ ...row, definition: { kind: 'artifact', artifactId: artifact.artifactId } });
+    let retired = false;
+    let writes = 0;
+    const owner = createProfileOperations({ readCatalog: () => {
+      if (retired) return { status: 'unavailable', reason: 'scope-retired' };
+      return { ...activeAuthority, status: 'ready', records: [{ record: membership, revision: 4 }], diagnostics: [], referenceGuardRevision: 5 };
+    }, artifactsById: () => new Map([[artifact.artifactId, artifact]]),
+      writeRecord: async input => { writes++; return { status: 'updated', id: input.record.id, revision: 5 }; },
+      deleteRecord: async input => ({ status: 'updated', id: input.id, revision: 5 }),
+      writeArtifactProfile: async input => { writes++; return { status: 'updated', id: input.record.id, revision: 4 }; } });
+    const input = { profile: { ...profile, name: 'Edited' }, secretBindings: { TOKEN: null }, expectedRevision: 4,
+      expectedArtifactRevision: artifact.revision };
+    expect(await owner.save({ ...input, expectedRevision: 3 })).toMatchObject({ status: 'conflict' });
+    expect(await owner.save({ ...input, expectedArtifactRevision: { ...artifact.revision, bodyVersion: 2 } })).toMatchObject({ status: 'conflict' });
+    retired = true;
+    expect(await owner.save(input)).toEqual({ status: 'unavailable', reason: 'scope-retired' });
+    expect(writes).toBe(0);
+  });
+
+  it('never edits an Artifact body after the private row writer refuses its captured authority', async () => {
+    const artifact = { artifactId: 'published-a', header: { kind: 'launch-profile.v1', profileId: 'a', name: 'Alpha' },
+      body: JSON.stringify({ kind: 'launch-profile.v1', profile, secretBindings: {} }), access: 'edit' as const,
+      revision: { headerVersion: 2, bodyVersion: 3 } };
+    const membership = ProfileRecordV1Schema.parse({ ...row, definition: { kind: 'artifact', artifactId: artifact.artifactId } });
+    let bodyWrites = 0;
+    const owner = createProfileOperations({ readCatalog: () => ({ ...activeAuthority, status: 'ready', records: [{ record: membership, revision: 4 }], diagnostics: [], referenceGuardRevision: 5 }),
+      artifactsById: () => new Map([[artifact.artifactId, artifact]]),
+      writeRecord: async input => ({ status: 'conflict', id: input.record.id, revision: 6 }),
+      deleteRecord: async input => ({ status: 'updated', id: input.id, revision: 5 }),
+      writeArtifactProfile: async input => { bodyWrites++; return { status: 'updated', id: input.record.id, revision: 4 }; } });
+    expect(await owner.save({ profile: { ...profile, name: 'Edited' }, secretBindings: { TOKEN: null },
+      expectedRevision: 4, expectedArtifactRevision: artifact.revision })).toEqual({ status: 'conflict', id: 'a', revision: 6 });
+    expect(bodyWrites).toBe(0);
   });
 
   it('edits known private membership without requiring an unrelated Artifact body', async () => {

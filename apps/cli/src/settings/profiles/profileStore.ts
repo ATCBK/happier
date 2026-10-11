@@ -21,6 +21,7 @@ import { PROFILE_TRANSFER_ROUTE_V1, ProfileTransferRowReadResponseV1Schema,
   ProfileTransferMutationV1Schema, ProfileTransferMutationResponseV1Schema,
   type ProfileTransferMutationV1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
+import type { ArtifactRevisionV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { parseSavedSecretCatalogReferenceV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { readSavedSecretRevisionsFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
@@ -177,6 +178,7 @@ function createCapturedCliProfileStore(input: Readonly<{
       await request(PROFILE_PROVIDER_CONVERSION_ROUTE_V1, ProfileProviderConversionMutationV1Schema.parse(mutation))),
     readCatalog,
     writeRecord: async (value: Readonly<{ record: ProfileRecordV1; expectedRevision: number | 'absent'; operation: Exclude<ProfileRowMutationV1['operation'], 'remove'>;
+      expectedArtifactRevision?: ArtifactRevisionV1;
       savedSecretRevisions?: ProfileRowMutationV1['savedSecretRevisions']; legacyCloneSource?: ProfileRowMutationV1['legacyCloneSource'] }>) => {
       let record = parseProfileRecordForMutationV1({ operation: value.operation, record: value.record });
       if (value.operation === 'clone-legacy') {
@@ -216,6 +218,10 @@ function createCapturedCliProfileStore(input: Readonly<{
       const artifactId = record.definition.kind === 'artifact' ? record.definition.artifactId : undefined;
       const artifact = artifactId ? artifactsById.get(artifactId) : undefined;
       if (artifactId && !artifact?.revision) throw Object.assign(new Error('Profile Artifact revision is unavailable'), { code: 'invalid-reference' });
+      if (value.expectedArtifactRevision && (!artifact?.revision
+        || value.expectedArtifactRevision.headerVersion !== artifact.revision.headerVersion
+        || value.expectedArtifactRevision.bodyVersion !== artifact.revision.bodyVersion))
+        throw Object.assign(new Error('Profile Artifact changed'), { code: 'reference-conflict' });
       const referencedSavedSecretIds = [...new Set(Object.values(bindings))];
       const sharedRefs = referencedSavedSecretIds.filter(ref => parseSavedSecretCatalogReferenceV1(ref)?.kind === 'shared_resource');
       let savedSecretRevisions: ProfileRowMutationV1['savedSecretRevisions'] = [];

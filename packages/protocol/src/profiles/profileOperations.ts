@@ -14,6 +14,7 @@ import { getBuiltInBackendProfile } from './builtInBackendProfiles.js';
 import { AccountSettingsPersistedObjectSchema } from '../account/settings/accountSettingsPersistedObject.js';
 import type { ArtifactRevisionV1 } from '../artifacts/artifactActionsV1.js';
 import { applyPromptStackIntentV1, type PromptStackIntentV1 } from '../prompts/library/promptStacksV1.js';
+import { LaunchProfileArtifactV1Schema, readLaunchProfileArtifactV1 } from '../launchProfiles/launchProfileArtifactV1.js';
 
 /** Preserve the incumbent favorite order and the empty machine-environment identity. */
 export function setProfileFavoriteIdsV1(ids: readonly string[], id: string, favorite: boolean): string[] {
@@ -127,7 +128,7 @@ export function createProfileDuplicateDraftV1(input: Readonly<{
 }
 export type ProfileOperationsPorts = Readonly<{
   readCatalog: () => ProfileCatalogSnapshotV1;
-  writeRecord: (input: Readonly<{ record: ProfileRecordV1; expectedRevision: number | 'absent'; operation: Exclude<ProfileRowMutationV1['operation'], 'remove' | 'import'>; savedSecretRevisions?: ProfileRowMutationV1['savedSecretRevisions']; legacyCloneSource?: ProfileLegacyCloneSourceV1 }>) => Promise<ProfileOperationResult>;
+  writeRecord: (input: Readonly<{ record: ProfileRecordV1; expectedRevision: number | 'absent'; operation: Exclude<ProfileRowMutationV1['operation'], 'remove' | 'import'>; expectedArtifactRevision?: ArtifactRevisionV1; savedSecretRevisions?: ProfileRowMutationV1['savedSecretRevisions']; legacyCloneSource?: ProfileLegacyCloneSourceV1 }>) => Promise<ProfileOperationResult>;
   deleteRecord: (input: Readonly<{ id: string; expectedRevision: number; previousDefinition: ProfileRecordV1['definition'] }>) => Promise<ProfileOperationResult>;
   clearRememberedProfile?: (input: Readonly<{ id: string }>) => Promise<void>;
   builtinNames?: readonly string[];
@@ -327,7 +328,16 @@ export function createProfileOperations(ports: ProfileOperationsPorts) {
         if (!expectedArtifactRevision || !resource?.revision) return { status: 'unavailable', reason: 'profile_artifact_revision_unavailable' };
         if (expectedArtifactRevision.headerVersion !== resource.revision.headerVersion
           || expectedArtifactRevision.bodyVersion !== resource.revision.bodyVersion) return { status: 'conflict', id, revision: existing.revision };
-        if (!ports.writeArtifactProfile) return { status: 'unavailable', reason: 'profile_artifact_edit_unavailable' };
+        const content = readLaunchProfileArtifactV1(resource);
+        if (!content) return invalid('invalid-definition', id);
+        // Editor timestamps are not authored body edits. Compare the admitted
+        // body, never its lifted private/effective bindings or source evidence.
+        const bodyChanged = !sameStrictJsonValue(projectNativeJsonValueForTransport(content.profile),
+          projectNativeJsonValueForTransport({ ...source.data, updatedAt: content.profile.updatedAt }));
+        if (bodyChanged && !LaunchProfileArtifactV1Schema.safeParse({ ...content, profile: source.data }).success)
+          return invalid('invalid-definition', id);
+        if (bodyChanged && !ports.writeArtifactProfile) return { status: 'unavailable', reason: 'profile_artifact_edit_unavailable' };
+        let record = existing.record;
         if (input.secretBindings !== undefined) {
           const proposedBindings = input.secretBindings;
           const unchanged = (bindings: Readonly<Record<string, string | null>>) =>
@@ -335,10 +345,25 @@ export function createProfileOperations(ports: ProfileOperationsPorts) {
             && Object.entries(proposedBindings).every(([key, value]) => Object.hasOwn(bindings, key) && bindings[key] === value);
           const effective = opened.profiles.find(profile => profile.id === id)?.secretBindings;
           if (!unchanged(existing.record.secretBindings) && (!effective || !unchanged(effective))) {
-            return { status: 'unavailable', reason: 'profile_artifact_binding_edit_unavailable' };
+            const parsed = ProfileRecordV1Schema.safeParse({ ...record,
+              secretBindings: { ...record.secretBindings, ...proposedBindings } });
+            if (!parsed.success) return invalid('invalid-definition', id);
+            record = parsed.data;
           }
         }
-        return ports.writeArtifactProfile({ profile: input.profile, record: existing.record, expectedRevision: existing.revision, expectedArtifactRevision });
+        let revision = existing.revision;
+        if (record !== existing.record) {
+          const receipt = await ports.writeRecord({ record, expectedRevision: revision, operation: 'update', expectedArtifactRevision,
+            ...(input.savedSecretRevisions ? { savedSecretRevisions: input.savedSecretRevisions } : {}) });
+          if (receipt.status !== 'updated') return receipt;
+          revision = receipt.revision;
+          if (!bodyChanged) return receipt;
+        }
+        if (!bodyChanged) return { status: 'updated', id, revision };
+        // This is intentionally two acknowledgements, not an atomic body/row
+        // transaction. A body failure retains the acknowledged private row and
+        // returns failure; callers reload before reapplying their retained draft.
+        return ports.writeArtifactProfile!({ profile: source.data, record, expectedRevision: revision, expectedArtifactRevision });
       }
       const artifactId = !existing ? input.profile.artifactId : undefined;
       if (artifactId && !opened.profiles.some(profile => profile.id === id && profile.artifactId === artifactId)) return invalid('invalid-definition', id);

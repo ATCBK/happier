@@ -10,6 +10,7 @@ import { t } from '@/text';
 import { useEnvironmentVariables } from '@/hooks/server/useEnvironmentVariables';
 import { parseEnvVarTemplate } from '@/utils/profiles/envVarTemplate';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { Item } from '@/components/ui/lists/Item';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { Text, TextInput } from '@/components/ui/text/Text';
 
@@ -206,6 +207,14 @@ export function EnvironmentVariablesList({
         resetAddDraft();
     }, [environmentVariables, newVarName, newVarValue, onChange, resetAddDraft]);
 
+    // Published Profiles carry requirements without environment-value rows.
+    // Keep their private default picker reachable without manufacturing a value
+    // that would later be saved into the shared definition.
+    const representedRequirements = new Set(environmentVariables.map(variable =>
+        (parseEnvVarTemplate(variable.value)?.sourceVar ?? variable.name).trim().toUpperCase()));
+    const secretOnlyRequirements = allowSourceRequirements ? Object.entries(sourceRequirementsByName)
+        .filter(([name, requirement]) => requirement?.useSecretVault && !representedRequirements.has(name)) : [];
+
     return (
         <View style={styles.container}>
             <ItemGroup
@@ -221,6 +230,16 @@ export function EnvironmentVariablesList({
                     onPress={() => setIsAddExpanded((current) => !current)}
                 />}
             >
+                {secretOnlyRequirements.map(([name]) => (
+                    <Item
+                        key={`requirement:${name}`}
+                        testID={`profile-requirement-secret-${name}`}
+                        title={name}
+                        subtitle={t('profiles.environmentVariables.card.defaultSecretLabel')}
+                        detail={getDefaultSecretNameForSourceVar(name) ?? t('secrets.noneTitle')}
+                        onPress={() => onPickDefaultSecretForSourceVar(name)}
+                    />
+                ))}
             {environmentVariables.length > 0 && (
                 <View>
                     {environmentVariables.map((envVar, index) => {

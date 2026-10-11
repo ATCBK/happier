@@ -101,7 +101,7 @@ beforeEach(async () => {
         if (referenceCatalog) return referenceCatalog;
         // A configured HTTP payload may be reused across requests; each actual
         // response still has its own body, including canonical rereads.
-        if (path === '/v1/account/entity-rows/profiles') return (await http(url, init)).clone();
+        if (path === PROFILE_ROWS_ROUTE_V1 || path === PROFILE_RECORDS_ROUTE_V1) return (await http(url, init)).clone();
         return Response.json({ error: 'not_found' }, { status: 404 });
     });
     scope = await activateHome('a');
@@ -532,6 +532,32 @@ describe('Profile catalog captured Account transport', () => {
         ]);
         secretResources = [];
         await expect(prepare()).rejects.toMatchObject({ code: 'invalid-reference' });
+    });
+    it('does not rebase a private Profile Save onto an Artifact revision changed after editor admission', async () => {
+        const content = LaunchProfileArtifactV1Schema.parse({ kind: 'launch-profile.v1',
+            profile: { v: 2, id: 'p', name: 'Published', createdAt: 1, updatedAt: 1 }, secretBindings: {} });
+        profileArtifact = { id: 'a', ownerAccountId: scope.accountId, access: 'owner', encryptionMode: 'plain',
+            header: encodePlainArtifactStoredContent(buildLaunchProfileArtifactHeaderV1(content)),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify(content) }),
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 2, bodyVersion: 4,
+            seq: 3, createdAt: 1, updatedAt: 2 };
+        let mutation: ProfileRowMutationV1 | undefined;
+        http.mockImplementation(async (_url, init) => {
+            if (init?.method === 'POST') {
+                mutation = ProfileRowMutationV1Schema.parse(JSON.parse(String(init.body)));
+                return Response.json({ status: 'updated', revision: 3, cursor: 4, referenceGuardRevision: 4 });
+            }
+            return Response.json(page);
+        });
+        const input = { record: { ...page.rows[0].content.v, secretBindings: { TOKEN: null } },
+            expectedRevision: 2, operation: 'update' as const,
+            expectedArtifactRevision: { headerVersion: 2, bodyVersion: 3 } };
+        await expect(writeProfileRecord(scope, input)).rejects.toMatchObject({ code: 'reference-conflict' });
+        expect(mutation).toBeUndefined();
+        await expect(writeProfileRecord(scope, { ...input, expectedArtifactRevision: { headerVersion: 2, bodyVersion: 4 } }))
+            .resolves.toMatchObject({ status: 'updated', revision: 3 });
+        expect(mutation).toMatchObject({ expectedRevision: 2, artifactRevision: { artifactId: 'a', headerVersion: 2, bodyVersion: 4 },
+            content: { t: 'plain', v: { secretBindings: { TOKEN: null } } } });
     });
     it('reads SavedSecret metadata through the already captured Profile Account request', async () => {
         setRuntimeFetch(async (url) => {
