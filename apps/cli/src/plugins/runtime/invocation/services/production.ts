@@ -191,6 +191,7 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
     activePluginIds?: PluginInvocationEventsHost['activePluginIds'];
     eventsBroker?: StablePluginEventsBroker;
     exec?: Readonly<{
+        readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
         agentCli?: PluginAgentCliReadinessService;
         systemToolsForPlugin?: (pluginId: string) => ExecSystemToolServiceV1;
         resolveExecutable: ResolvePluginExecutable;
@@ -489,7 +490,13 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
                 ),
             }
             : {}),
-        ...(params?.exec ? { exec: params.exec } : {}),
+        ...(params?.exec ? { exec: {
+            ...params.exec,
+            // Ordinary daemon Actions need the host environment as the input
+            // to ExecService's declared-key filter, just like scoped operations.
+            environment: Object.freeze(Object.fromEntries(Object.entries(process.env)
+                .filter((entry): entry is [string, string] => typeof entry[1] === 'string'))),
+        } } : {}),
         ...(recordRuntimeLimitMeasurement ? { recordRuntimeLimitMeasurement } : {}),
         ...(params?.managedServices ? { managedServices: params.managedServices } : {}),
         ...(params?.providers ? { providers: params.providers } : {}),
@@ -650,6 +657,7 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
             filesystemRoots: roots,
             ...(params?.exec ? {
                 exec: {
+                    readSpawnFailureLimits: params.exec.readSpawnFailureLimits,
                     ...(params.exec.agentCli ? { agentCli: params.exec.agentCli } : {}),
                     ...(systemTools
                         ? { systemTools }
