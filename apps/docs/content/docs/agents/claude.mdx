@@ -41,7 +41,7 @@ Local control is started from the terminal. Use `happier attach <session-id>` on
 
 If you send a message from the app while Claude is locally controlled, Happier stores it in the pending queue first. When Claude is idle, Happier can switch back to remote control and process the queued message. If Claude is still working in the terminal, Happier waits until the local turn finishes or stops before switching, so the app message does not interrupt the current Claude turn.
 
-On macOS and Linux, the selected terminal host can be tmux or zellij. Current development builds also support Herdr: starting `happier claude` inside Herdr reuses the current pane. On Windows, use Happier’s Windows remote session mode (`Windows Terminal`, `Console`, or `Hidden`).
+On macOS and Linux, the selected terminal host can be tmux, zellij, or Herdr. Herdr is supported in Happier CLI 0.2.16 and later, including stable releases: starting `happier claude` inside Herdr reuses the current pane. On Windows, use Happier’s Windows remote session mode (`Windows Terminal`, `Console`, or `Hidden`).
 
 For the full workflow, see [Features → Attach to a running session](/sessions/attach-to-session).
 

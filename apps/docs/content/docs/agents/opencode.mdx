@@ -140,7 +140,7 @@ A separate `happier attach` client stays independent. Close it in its own termin
 the app's detach action does not close that client. Its exit also does not detach a
 different TUI owned by the session runner.
 
-In development builds, a client admitted inside its restored Herdr pane after a
+In Happier CLI 0.2.16 and later, a client admitted inside its restored Herdr pane after a
 server restart is managed instead: **Detach terminal** closes that native client
 while preserving the restored shell and the same running OpenCode session.
 See [Attach to a running session](/sessions/attach-to-session) for the restoration
