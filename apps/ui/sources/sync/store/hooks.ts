@@ -2283,7 +2283,6 @@ function buildLaunchSelectionMachineSignature(machine: Machine): string {
         machine.id,
         String(machine.active === true),
         String(isMachineOnline(machine)),
-        String(machine.activeAt ?? ''),
         String(machine.revokedAt ?? ''),
         String(machine.replacedByMachineId ?? ''),
         String(machine.daemonStateVersion ?? ''),

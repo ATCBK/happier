@@ -385,51 +385,61 @@ describe('useAllMachines', () => {
         }
     });
 
-    it('refreshes launch-selection machine freshness while heartbeat updates keep the machine online', async () => {
+    it('does not rerender semantic and launch-selection consumers for an online heartbeat', async () => {
         const previousState = storage.getState();
         try {
             const activeAt = Date.now();
             storage.setState((state) => ({
                 ...state,
                 isDataReady: true,
-                machines: {
-                    'm-online': {
-                        id: 'm-online',
-                        seq: 1,
-                        createdAt: activeAt,
-                        updatedAt: activeAt,
-                        active: true,
-                        activeAt,
-                        metadata: { host: 'online', platform: 'darwin', happyCliVersion: '1', happyHomeDir: '.happy', homeDir: '/home' },
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                        revokedAt: null,
-                    },
-                },
+                machines: {},
+                machineDisplayById: {},
+                machinePresenceById: {},
+                machinePresenceByServerId: {},
+                machineListByServerId: {},
             }));
 
-            const hook = await renderHook(() => useLaunchSelectionMachines(), {
+            const onlineMachine = {
+                id: 'm-online',
+                seq: 1,
+                createdAt: activeAt,
+                updatedAt: activeAt,
+                active: true,
+                activeAt,
+                metadata: { host: 'online', platform: 'darwin', happyCliVersion: '1', happyHomeDir: '.happy', homeDir: '/home' },
+                metadataVersion: 1,
+                daemonState: null,
+                daemonStateVersion: 0,
+                revokedAt: null,
+            } satisfies Machine;
+            storage.getState().applyMachines([onlineMachine], true, { sourceServerId: getActiveServerSnapshot().serverId });
+
+            let semanticRenders = 0;
+            let launchRenders = 0;
+            const hook = await renderHook(() => {
+                semanticRenders += 1;
+                const semanticMachines = useAllMachines();
+                launchRenders += 1;
+                const launchMachines = useLaunchSelectionMachines();
+                return { semanticMachines, launchMachines };
+            }, {
                 flushOptions: { cycles: 1, turns: 4 },
             });
-            const firstMachines = hook.getCurrent();
+            const first = hook.getCurrent();
+            const firstSemanticRenders = semanticRenders;
+            const firstLaunchRenders = launchRenders;
 
             await act(async () => {
-                storage.setState((state) => ({
-                    ...state,
-                    machines: {
-                        ...state.machines,
-                        'm-online': {
-                            ...state.machines['m-online']!,
-                            updatedAt: activeAt + 1000,
-                            activeAt: activeAt + 1000,
-                        },
-                    },
-                }));
+                storage.getState().applyMachines([
+                    { ...onlineMachine, updatedAt: activeAt + 1000, activeAt: activeAt + 1000 },
+                ], false, { sourceServerId: getActiveServerSnapshot().serverId });
             });
 
-            expect(hook.getCurrent()).not.toBe(firstMachines);
-            expect(hook.getCurrent()[0]?.activeAt).toBe(activeAt + 1000);
+            expect(semanticRenders).toBe(firstSemanticRenders);
+            expect(launchRenders).toBe(firstLaunchRenders);
+            expect(hook.getCurrent()).toBe(first);
+            expect(hook.getCurrent().semanticMachines[0]?.activeAt).toBe(activeAt + 1000);
+            expect(hook.getCurrent().launchMachines[0]?.activeAt).toBe(activeAt + 1000);
 
             await hook.unmount();
         } finally {

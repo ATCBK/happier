@@ -530,6 +530,7 @@ function updateConcurrentMachineListCache(input: {
     machines: Machine[] | null;
     status: 'idle' | 'loading' | 'signedOut' | 'error';
     authoritative?: boolean;
+    inventoryChangedAtOwner?: boolean;
 }): void {
     storage.setState((state) => {
         const serverId = normalizeServerId(input.serverId);
@@ -593,7 +594,7 @@ function updateConcurrentMachineListCache(input: {
             };
 
         const nextIndexByServerId = (() => {
-            if (nextMachineListByServerId === state.machineListByServerId) {
+            if (nextMachineListByServerId === state.machineListByServerId && !input.inventoryChangedAtOwner) {
                 return state.sessionListIndexByServerId;
             }
 
@@ -681,19 +682,24 @@ function clearConcurrentMachineListCache(serverIdRaw: string, options?: Readonly
     const serverId = normalizeServerId(serverIdRaw);
     if (!serverId || !options?.retireAccount && isFocusedHomeProjectionRetained(serverId)) return;
     storage.setState((state) => {
-        if (!(serverId in state.machineListByServerId) && !(serverId in state.machineListStatusByServerId)) {
+        if (!(serverId in state.machineListByServerId)
+            && !(serverId in state.machineListStatusByServerId)
+            && !(serverId in state.machinePresenceByServerId)) {
             return state;
         }
 
         const nextMachines = { ...state.machineListByServerId };
         const nextStatuses = { ...state.machineListStatusByServerId };
+        const nextPresence = { ...state.machinePresenceByServerId };
         delete nextMachines[serverId];
         delete nextStatuses[serverId];
+        delete nextPresence[serverId];
 
         return {
             ...state,
             machineListByServerId: nextMachines,
             machineListStatusByServerId: nextStatuses,
+            machinePresenceByServerId: nextPresence,
         };
     });
 }
@@ -797,11 +803,15 @@ async function refreshServerSnapshot(entry: ManagedConcurrentServer, signal: Abo
             return;
         }
 
+        const previousMachines = storage.getState().machineListByServerId[entry.id] ?? null;
+        storage.getState().applyMachines(machines, true, { sourceServerId: entry.id });
+        const ownedMachines = storage.getState().machineListByServerId[entry.id] ?? null;
         updateConcurrentMachineListCache({
             serverId: entry.id,
-            machines,
+            machines: ownedMachines,
             status: 'idle',
             authoritative: true,
+            inventoryChangedAtOwner: ownedMachines !== previousMachines,
         });
         if (!didApplySessionListRenderables) {
             const previousRows = storage.getState().sessionListRowsByServerId?.[entry.id] ?? {};

@@ -34,6 +34,30 @@ function machine(id: string, overrides: Partial<Machine> = {}): Machine {
 }
 
 describe('machine inventory reference stability through the real store', () => {
+    it('keeps semantic machine projections stable when an online heartbeat only advances timestamps', () => {
+        const store = createTestStore();
+        const serverId = getActiveServerSnapshot().serverId;
+        const options = { sourceServerId: serverId };
+        store.getState().applyMachines([machine('one')], true, options);
+        const before = store.getState();
+
+        store.getState().applyMachines([
+            machine('one', { activeAt: 2, updatedAt: 2 }),
+        ], false, options);
+
+        const after = store.getState();
+        expect(after.machines).toBe(before.machines);
+        expect(after.machines.one).toBe(before.machines.one);
+        expect(after.machineDisplayById).toBe(before.machineDisplayById);
+        expect(after.machineDisplayById.one).toBe(before.machineDisplayById.one);
+        expect(after.machineListByServerId).toBe(before.machineListByServerId);
+        expect(after.machineListByServerId[serverId]).toBe(before.machineListByServerId[serverId]);
+        expect(after.machinePresenceById.one).toEqual({ active: true, activeAt: 2, updatedAt: 2 });
+        expect(after.machinePresenceByServerId[serverId]?.one).toEqual({ active: true, activeAt: 2, updatedAt: 2 });
+        expect(after.machinePresenceById).not.toBe(before.machinePresenceById);
+        expect(after.machinePresenceByServerId[serverId]).not.toBe(before.machinePresenceByServerId[serverId]);
+    });
+
     for (const scope of ['active', 'other'] as const) {
         for (const replace of [false, true]) {
             it(`suppresses identical ${replace ? 'full' : 'incremental'} inventories for the ${scope} Home`, () => {

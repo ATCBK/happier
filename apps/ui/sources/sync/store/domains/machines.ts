@@ -2,6 +2,7 @@ import type { Machine, Session } from '../../domains/state/storageTypes';
 import { isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
 import {
     areMachineDisplayRenderablesEqual,
+    areMachineDisplaySemanticsEqual,
     buildMachineDisplayRenderableFromMachine,
     type MachineDisplayRenderable,
 } from '../../domains/machines/machineDisplayRenderable';
@@ -26,7 +27,7 @@ import {
     scheduleMachineDisplayWarmCacheSave,
     scheduleMachineListDisplayWarmCacheSave,
 } from '../../domains/state/machineDisplayWarmCacheWriter';
-import { areStoredMachinesEqual, hasMachineContributionRegistryProjectionChanged, hasMachineDaemonStateAdvanced } from './areStoredMachinesEqual';
+import { areStoredMachineSemanticsEqual, hasMachineContributionRegistryProjectionChanged, hasMachineDaemonStateAdvanced } from './areStoredMachinesEqual';
 import { applyWorkspaceSyncRuntimeEvent } from '../../domains/sessionHandoff/applyWorkspaceSyncRuntimeEvent';
 
 import type { StoreGet, StoreSet } from './_shared';
@@ -36,6 +37,8 @@ export { resolveMachineSessionListIndexImpact } from './machineSessionListIndexI
 export type MachinesDomain = {
     machines: Record<string, Machine>;
     machineDisplayById: Record<string, MachineDisplayRenderable>;
+    machinePresenceById: Record<string, MachinePresence>;
+    machinePresenceByServerId: Record<string, Record<string, MachinePresence>>;
     machineListByServerId: Record<string, Machine[] | null>;
     machineListStatusByServerId: Record<string, 'idle' | 'loading' | 'signedOut' | 'error'>;
     applyMachines: (machines: Machine[], replace?: boolean, options?: ApplyMachinesOptions) => void;
@@ -90,7 +93,7 @@ function mergeMachineListById(
     const mergedById = options.replace ? new Map<string, Machine>() : new Map(currentById);
     for (const machine of incoming) {
         const previous = currentById.get(machine.id);
-        mergedById.set(machine.id, previous && areStoredMachinesEqual(previous, machine) ? previous : machine);
+        mergedById.set(machine.id, retainMachineForPresenceOnly(previous, machine));
     }
     const merged = Array.from(mergedById.values());
     if (
@@ -107,10 +110,36 @@ function normalizeMachineServerId(serverId: string | null | undefined): string {
     return resolveServerProfileScopeIdForIdentifier(serverId);
 }
 
-type MachinePresence = Readonly<{
+export type MachinePresence = Readonly<{
     active: boolean;
     activeAt: number;
+    updatedAt: number;
 }>;
+
+function readMachinePresence(machine: MachinePresence): MachinePresence {
+    return { active: machine.active, activeAt: machine.activeAt, updatedAt: machine.updatedAt };
+}
+
+function areMachinePresencesEqual(left: MachinePresence | null | undefined, right: MachinePresence): boolean {
+    return left?.active === right.active && left.activeAt === right.activeAt && left.updatedAt === right.updatedAt;
+}
+
+function retainMachineForPresenceOnly(previous: Machine | undefined, next: Machine): Machine {
+    if (!previous || !areStoredMachineSemanticsEqual(previous, next)) return next;
+    previous.updatedAt = next.updatedAt;
+    previous.activeAt = next.activeAt;
+    return previous;
+}
+
+function retainMachineDisplayForPresenceOnly(
+    previous: MachineDisplayRenderable | undefined,
+    next: MachineDisplayRenderable,
+): MachineDisplayRenderable {
+    if (!previous || !areMachineDisplaySemanticsEqual(previous, next)) return next;
+    previous.updatedAt = next.updatedAt;
+    previous.activeAt = next.activeAt;
+    return previous;
+}
 
 function preserveNewestMachinePresence<T extends MachinePresence>(
     incoming: T,
@@ -164,6 +193,8 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
     return {
         machines: {},
         machineDisplayById: {},
+        machinePresenceById: {},
+        machinePresenceByServerId: {},
         machineListByServerId: {},
         machineListStatusByServerId: {},
         markMachineListUnavailable: (serverIdRaw) =>
@@ -200,6 +231,29 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                         : null,
                     shouldUpdateActiveProjection ? state.machines[machine.id] : null,
                 ]));
+                let machinePresenceByServerId = state.machinePresenceByServerId;
+                let machinePresenceById = state.machinePresenceById;
+                if (sourceServerId) {
+                    const previousPresence = state.machinePresenceByServerId[sourceServerId] ?? {};
+                    let nextPresence = previousPresence;
+                    if (replace) {
+                        const retainedIds = new Set(normalizedMachines.map((machine) => machine.id));
+                        for (const id of Object.keys(previousPresence)) {
+                            if (retainedIds.has(id)) continue;
+                            if (nextPresence === previousPresence) nextPresence = { ...previousPresence };
+                            delete nextPresence[id];
+                        }
+                    }
+                    for (const machine of normalizedMachines) {
+                        const presence = readMachinePresence(machine);
+                        if (areMachinePresencesEqual(previousPresence[machine.id], presence)) continue;
+                        if (nextPresence === previousPresence) nextPresence = { ...previousPresence };
+                        nextPresence[machine.id] = presence;
+                    }
+                    if (nextPresence !== previousPresence) {
+                        machinePresenceByServerId = { ...state.machinePresenceByServerId, [sourceServerId]: nextPresence };
+                    }
+                }
                 const nextScopedMachines = sourceServerId
                     ? mergeMachineListById(currentScopedMachines, normalizedMachines, { replace })
                     : currentScopedMachines;
@@ -251,12 +305,29 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
 
                 if (!shouldUpdateActiveProjection) {
                     if (machineListByServerId === state.machineListByServerId
-                        && machineListStatusByServerId === state.machineListStatusByServerId) return state;
+                        && machineListStatusByServerId === state.machineListStatusByServerId
+                        && machinePresenceByServerId === state.machinePresenceByServerId) return state;
                     return {
                         ...state,
                         machineListByServerId,
                         machineListStatusByServerId,
+                        machinePresenceByServerId,
                     };
+                }
+
+                if (replace) {
+                    const retainedIds = new Set(normalizedMachines.map((machine) => machine.id));
+                    for (const id of Object.keys(state.machinePresenceById)) {
+                        if (retainedIds.has(id)) continue;
+                        if (machinePresenceById === state.machinePresenceById) machinePresenceById = { ...state.machinePresenceById };
+                        delete machinePresenceById[id];
+                    }
+                }
+                for (const machine of normalizedMachines) {
+                    const presence = readMachinePresence(machine);
+                    if (areMachinePresencesEqual(state.machinePresenceById[machine.id], presence)) continue;
+                    if (machinePresenceById === state.machinePresenceById) machinePresenceById = { ...state.machinePresenceById };
+                    machinePresenceById[machine.id] = presence;
                 }
 
                 let mergedMachines = state.machines;
@@ -281,19 +352,21 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                     if (hasMachineDaemonStateAdvanced(previousMachine, machine)) {
                         machinesWithAdvancedDaemonState.add(machine.id);
                     }
-                    if (!areStoredMachinesEqual(previousMachine, machine)) {
+                    const retainedMachine = retainMachineForPresenceOnly(previousMachine, machine);
+                    if (retainedMachine !== previousMachine) {
                         if (mergedMachines === state.machines) {
                             mergedMachines = { ...state.machines };
                         }
-                        mergedMachines[machine.id] = machine;
+                        mergedMachines[machine.id] = retainedMachine;
                     }
                     const nextDisplay = buildMachineDisplayRenderableFromMachine(machine);
                     const previousDisplay = state.machineDisplayById[machine.id];
-                    if (!areMachineDisplayRenderablesEqual(previousDisplay, nextDisplay)) {
+                    const retainedDisplay = retainMachineDisplayForPresenceOnly(previousDisplay, nextDisplay);
+                    if (retainedDisplay !== previousDisplay) {
                         if (mergedMachineDisplays === state.machineDisplayById) {
                             mergedMachineDisplays = { ...state.machineDisplayById };
                         }
-                        mergedMachineDisplays[machine.id] = nextDisplay;
+                        mergedMachineDisplays[machine.id] = retainedDisplay;
                     }
                 });
 
@@ -302,6 +375,8 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                     && mergedMachineDisplays === state.machineDisplayById
                     && machineListByServerId === state.machineListByServerId
                     && machineListStatusByServerId === state.machineListStatusByServerId
+                    && machinePresenceById === state.machinePresenceById
+                    && machinePresenceByServerId === state.machinePresenceByServerId
                 ) {
                     return state;
                 }
@@ -376,6 +451,8 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                     sessionListIndexByServerId: nextSessionListIndexByServerId,
                     machineListByServerId,
                     machineListStatusByServerId,
+                    machinePresenceById,
+                    machinePresenceByServerId,
                 };
                 if (mergedMachineDisplays !== state.machineDisplayById) {
                     scheduleActiveWarmMachineCacheSave(nextState as MachinesDomain & MachinesDomainDependencies);

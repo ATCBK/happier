@@ -61,6 +61,22 @@ export function areMachineDisplayRenderablesEqual(
     previous: MachineDisplayRenderable | null | undefined,
     next: MachineDisplayRenderable | null | undefined,
 ): boolean {
+    return areMachineDisplayValuesEqual(previous, next, true);
+}
+
+/** Presence timestamps have a separate subscription owner and do not invalidate display inventory. */
+export function areMachineDisplaySemanticsEqual(
+    previous: MachineDisplayRenderable | null | undefined,
+    next: MachineDisplayRenderable | null | undefined,
+): boolean {
+    return areMachineDisplayValuesEqual(previous, next, false);
+}
+
+function areMachineDisplayValuesEqual(
+    previous: MachineDisplayRenderable | null | undefined,
+    next: MachineDisplayRenderable | null | undefined,
+    includeHeartbeatTimestamps: boolean,
+): boolean {
     if (previous === next) return true;
     if (!previous || !next) return previous === next;
     return previous.id === next.id
@@ -71,9 +87,9 @@ export function areMachineDisplayRenderablesEqual(
         && previous.access?.resourceMode === next.access?.resourceMode
         && previous.access?.accessState === next.access?.accessState
         && previous.kind === next.kind
-        && previous.updatedAt === next.updatedAt
+        && (!includeHeartbeatTimestamps || previous.updatedAt === next.updatedAt)
         && previous.active === next.active
-        && previous.activeAt === next.activeAt
+        && (!includeHeartbeatTimestamps || previous.activeAt === next.activeAt)
         && (previous.revokedAt ?? null) === (next.revokedAt ?? null)
         && previous.metadataVersion === next.metadataVersion
         && (previous.replacedByMachineId ?? null) === (next.replacedByMachineId ?? null)

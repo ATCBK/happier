@@ -27,7 +27,7 @@ import type { SessionListQueryMembership } from '../domains/session/listing/sess
 import type { SessionListIndexItem } from '../domains/sessionList/sessionListIndex';
 import type { MachineDisplayRenderable } from '../domains/machines/machineDisplayRenderable';
 import type { CustomerInfo } from '../domains/purchases/types';
-import type { ApplyMachinesOptions } from './domains/machines';
+import type { ApplyMachinesOptions, MachinePresence } from './domains/machines';
 import type { MachinePoolsDomain } from './domains/machinePools';
 import type { ProjectAccountRowsDomain } from './domains/projectAccountRows';
 import type { MessagesDomain, SessionMessages } from './domains/messages';
@@ -185,6 +185,8 @@ export interface SessionsDomainSlice {
 export interface MachinesDomainSlice {
     machines: Record<string, Machine>;
     machineDisplayById: Record<string, MachineDisplayRenderable>;
+    machinePresenceById: Record<string, MachinePresence>;
+    machinePresenceByServerId: Record<string, Record<string, MachinePresence>>;
     /**
      * Server-scoped machine lists used for multi-server group/picker contexts.
      * Active server machines still live in `machines` (record) for fast lookup.

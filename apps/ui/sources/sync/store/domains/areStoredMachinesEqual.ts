@@ -45,15 +45,31 @@ export function areStoredMachinesEqual(
     previous: Machine | null | undefined,
     next: Machine | null | undefined,
 ): boolean {
+    return areStoredMachineValuesEqual(previous, next, true);
+}
+
+/** Heartbeat timestamps are published through the machine-presence slice, not semantic inventory. */
+export function areStoredMachineSemanticsEqual(
+    previous: Machine | null | undefined,
+    next: Machine | null | undefined,
+): boolean {
+    return areStoredMachineValuesEqual(previous, next, false);
+}
+
+function areStoredMachineValuesEqual(
+    previous: Machine | null | undefined,
+    next: Machine | null | undefined,
+    includeHeartbeatTimestamps: boolean,
+): boolean {
     if (previous === next) return true;
     if (!previous || !next) return previous === next;
     return previous.id === next.id
         && previous.kind === next.kind
         && previous.seq === next.seq
         && previous.createdAt === next.createdAt
-        && previous.updatedAt === next.updatedAt
+        && (!includeHeartbeatTimestamps || previous.updatedAt === next.updatedAt)
         && previous.active === next.active
-        && previous.activeAt === next.activeAt
+        && (!includeHeartbeatTimestamps || previous.activeAt === next.activeAt)
         && (previous.revokedAt ?? null) === (next.revokedAt ?? null)
         && previous.metadataVersion === next.metadataVersion
         && previous.daemonStateVersion === next.daemonStateVersion
