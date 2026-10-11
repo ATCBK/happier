@@ -183,6 +183,40 @@ describe('buildMachineCollection', () => {
         expect(new Set(titles).size).toBe(2);
     });
 
+    it('opens on the machines that can work: online first, then the rest, each by name (lab R)', () => {
+        const nowMs = 1_000_000_000;
+        const collection = buildMachineCollection({
+            groups: [group('a', [
+                machine('m-a', { displayName: 'Atlas', active: false, activeAt: 1 }),
+                machine('m-z', { displayName: 'Zephyr', active: true, activeAt: nowMs }),
+                machine('m-b', { displayName: 'Birch', active: false, activeAt: 1 }),
+                machine('m-m', { displayName: 'Maple', active: true, activeAt: nowMs }),
+            ])],
+            groupedByHome: false,
+            nowMs,
+        });
+        expect(collection.sections[0]!.rows.map(row => [row.title, row.online])).toEqual([
+            ['Maple', true], ['Zephyr', true], ['Atlas', false], ['Birch', false],
+        ]);
+    });
+
+    it('keeps the part that tells two same-named machines apart separate from the name, for a one-line row', () => {
+        const collection = buildMachineCollection({
+            groups: [group('s1', [
+                machine('f98b860d-63e0', { displayName: 'lima-happier-fresh', host: 'lima-happier-fresh' }),
+                machine('0c1d2e3f-9999', { displayName: 'lima-happier-fresh', host: 'lima-happier-fresh' }),
+                machine('solo', { displayName: 'Studio' }),
+            ])],
+            groupedByHome: false,
+        });
+        const rows = collection.sections[0]!.rows;
+        expect(rows.map(row => [row.titleParts.name, row.titleParts.hint, row.title])).toEqual([
+            ['lima-happier-fresh', '0c1d', 'lima-happier-fresh · 0c1d'],
+            ['lima-happier-fresh', 'f98b', 'lima-happier-fresh · f98b'],
+            ['Studio', null, 'Studio'],
+        ]);
+    });
+
     it("reads each row's presence line from the shared presence owner", () => {
         const collection = buildMachineCollection({
             groups: [group('s1', [machine('m-1', { displayName: 'Studio', active: false, activeAt: 1 })])],

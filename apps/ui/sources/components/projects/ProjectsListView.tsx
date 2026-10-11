@@ -137,7 +137,7 @@ export const ProjectsListView = React.memo(() => {
                                 key={row.key}
                                 testID={ref ? `projects-list-item-${ref.id}` : `projects-list-project-${row.key}`}
                                 title={row.title}
-                                titleAccessory={row.titleQualifier ? <Text numberOfLines={1} style={styles.qualifier}>{row.titleQualifier}</Text> : undefined}
+                                titleQualifier={row.titleQualifier}
                                 subtitle={subtitle || undefined}
                                 subtitleLines={ref ? model.workspaceSubtitleLines(ref) : 1}
                                 subtitleStyle={row.level > 0 ? styles.mono : undefined}
@@ -200,11 +200,6 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.rowMeta(),
         ...Typography.tabular(),
         color: theme.colors.text.tertiary,
-    },
-    qualifier: {
-        ...Typography.rowMeta(),
-        color: theme.colors.text.tertiary,
-        marginLeft: 6,
     },
     mono: {
         ...Typography.mono(),

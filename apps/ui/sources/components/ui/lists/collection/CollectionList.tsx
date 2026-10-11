@@ -171,8 +171,10 @@ export const CollectionNavigationRow = React.memo(function CollectionNavigationR
     subtitle?: string;
     /** An inline mark before the subtitle: the collection's trouble dot when the row needs the person. */
     subtitleLeading?: React.ReactNode;
-    /** A quiet qualifier on the title's line, after the title (a project's Team, a folded machine). */
+    /** An inline mark on the title's line, after the title and its qualifier. */
     titleAccessory?: React.ReactNode;
+    /** A quiet qualifier on the title's line, after the title (a project's Team, a folded machine). */
+    titleQualifier?: string | null;
     /** The subtitle is a path: drawn in the mono face. */
     subtitleMono?: boolean;
     /** A row that is there but not active (an offline machine's last-known checkout, a saved source not open). */
@@ -200,6 +202,7 @@ export const CollectionNavigationRow = React.memo(function CollectionNavigationR
             subtitle={props.subtitle}
             subtitleLeading={props.subtitleLeading}
             titleAccessory={props.titleAccessory}
+            titleQualifier={props.titleQualifier}
             {...props.treeItem}
             subtitleStyle={props.subtitleMono ? styles.monoSubtitle : undefined}
             {...(props.leftElement

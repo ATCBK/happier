@@ -115,6 +115,15 @@ function uniqueIdHint(id: string, others: readonly string[]): string {
  * and a name must stay stable.
  */
 export function resolveMachineDisplayNames(machines: readonly MachineNameSource[]): ReadonlyMap<string, string> {
+    return new Map([...resolveMachineDisplayNameParts(machines)].map(([id, parts]) => [id, parts.hint ? `${parts.name} · ${parts.hint}` : parts.name]));
+}
+
+/**
+ * The same names as {@link resolveMachineDisplayNames}, kept in their two parts: the machine's own
+ * name and the suffix that tells it apart (`null` when its name is already unique). A one-line row
+ * shortens the name and keeps the suffix whole.
+ */
+export function resolveMachineDisplayNameParts(machines: readonly MachineNameSource[]): ReadonlyMap<string, Readonly<{ name: string; hint: string | null }>> {
     const baseById = new Map(machines.map((machine) => [machine.id, getMachineDisplayName(machine)]));
     const idsByName = new Map<string, string[]>();
     for (const machine of machines) {
@@ -122,12 +131,12 @@ export function resolveMachineDisplayNames(machines: readonly MachineNameSource[
         idsByName.set(key, [...(idsByName.get(key) ?? []), machine.id]);
     }
     const byId = new Map(machines.map((machine) => [machine.id, machine]));
-    const names = new Map<string, string>();
+    const names = new Map<string, Readonly<{ name: string; hint: string | null }>>();
     for (const machine of machines) {
         const base = baseById.get(machine.id)!;
         const collidingIds = idsByName.get(base.toLocaleLowerCase()) ?? [];
         if (collidingIds.length < 2) {
-            names.set(machine.id, base);
+            names.set(machine.id, { name: base, hint: null });
             continue;
         }
         const others = collidingIds.filter((id) => id !== machine.id);
@@ -135,7 +144,7 @@ export function resolveMachineDisplayNames(machines: readonly MachineNameSource[
         const hostDistinct = host.length > 0
             && host.toLocaleLowerCase() !== base.toLocaleLowerCase()
             && others.every((id) => (byId.get(id)?.metadata?.host?.trim() ?? '').toLocaleLowerCase() !== host.toLocaleLowerCase());
-        names.set(machine.id, `${base} · ${hostDistinct ? host : uniqueIdHint(machine.id, others)}`);
+        names.set(machine.id, { name: base, hint: hostDistinct ? host : uniqueIdHint(machine.id, others) });
     }
     return names;
 }

@@ -109,6 +109,11 @@ export interface ItemProps {
     bottomElement?: React.ReactNode;
     /** An inline mark after a string title, such as a "Beta" badge. */
     titleAccessory?: React.ReactNode;
+    /**
+     * A quiet qualifier on the title's line, after a string title (a project's Team, the suffix that tells two
+     * same-named machines apart). It stays whole while the title shortens.
+     */
+    titleQualifier?: string | null;
     /** An inline mark before a string subtitle, such as a status dot that flags trouble. */
     subtitleLeading?: React.ReactNode;
     /** Override the primitive title allowance; page labels grow, grouped labels keep their compact allowance. */
@@ -406,6 +411,11 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexShrink: 1,
         minWidth: 0,
     },
+    titleQualifier: {
+        ...Typography.rowMeta(),
+        color: theme.colors.text.secondary,
+        flexShrink: 0,
+    },
     subtitle: {
         ...Typography.default('regular'),
         color: theme.colors.text.secondary,
@@ -543,6 +553,7 @@ export const Item = React.memo<ItemProps>((props) => {
         subtitleAccessory,
         bottomElement,
         titleAccessory,
+        titleQualifier,
         subtitleLeading,
         titleLines,
         subtitleLines,
@@ -1003,6 +1014,12 @@ export const Item = React.memo<ItemProps>((props) => {
         );
     }, [accessoryAccessibleName, handleAccessoryLayout, isPageRow, measuresRowWidth, rightElement, fieldMaxWidthPx, stackAccessory]);
     const subtitleAccessoryNode = React.useMemo(() => normalizeNodeForView(subtitleAccessory ?? null), [subtitleAccessory]);
+    const titleTrailing = titleQualifier ? (
+        <>
+            <Text numberOfLines={1} style={styles.titleQualifier}>{titleQualifier}</Text>
+            {titleAccessory}
+        </>
+    ) : titleAccessory;
     const chevronAccessory = React.useMemo(() => {
         if (!showAccessory) return null;
         // A disclosure header's chevron shows whether the row is open; a destination's points onward.
@@ -1095,7 +1112,7 @@ export const Item = React.memo<ItemProps>((props) => {
 
             {/* Center Section */}
             <View style={styles.centerContent}>
-                {(typeof title === 'string' || typeof title === 'number') && titleAccessory ? (
+                {(typeof title === 'string' || typeof title === 'number') && titleTrailing ? (
                     <View style={styles.inlineMarkRow}>
                         <View style={styles.inlineMarkText}>
                             {renderPrimitiveText({
@@ -1105,7 +1122,7 @@ export const Item = React.memo<ItemProps>((props) => {
                                 ellipsizeMode: titleEllipsizeMode,
                             })}
                         </View>
-                        {titleAccessory}
+                        {titleTrailing}
                     </View>
                 ) : typeof title === 'string' || typeof title === 'number' ? (
                     renderPrimitiveText({

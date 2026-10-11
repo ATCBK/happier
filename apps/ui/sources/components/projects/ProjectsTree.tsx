@@ -161,7 +161,7 @@ export const ProjectsTree = React.memo(function ProjectsTree(props: Readonly<{
                         testID={`${testID}-row-${row.key}`}
                         href={row.refId ? props.hrefForRef?.(row.refId, row.workspaceAddress) ?? null : null}
                         title={row.title}
-                        titleAccessory={row.titleQualifier ? <Text numberOfLines={1} style={styles.qualifier}>{row.titleQualifier}</Text> : undefined}
+                        titleQualifier={row.titleQualifier}
                         subtitle={projectsTreeRowSubtitle(row, t('projects.identity.newFromSession')) ?? undefined}
                         subtitleMono={row.kind === 'checkout' && row.subtitle != null}
                         leftElement={leading}
@@ -244,11 +244,6 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-    },
-    qualifier: {
-        ...Typography.rowMeta(),
-        color: theme.colors.text.secondary,
-        marginLeft: 6,
     },
     count: {
         ...Typography.rowMeta(),

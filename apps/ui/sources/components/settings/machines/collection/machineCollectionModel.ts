@@ -1,6 +1,6 @@
 import type { ActiveSelectionMachineGroup } from '../hooks/useActiveSelectionMachineGroups';
 import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
-import { describeMachineLockedReason, getMachineDisplayName, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { describeMachineLockedReason, getMachineDisplayName, resolveMachineDisplayNameParts } from '@/utils/sessions/machineDisplayNames';
 import { formatOSPlatform } from '@/utils/sessions/sessionUtils';
 import { resolveHappierCollectionInitialKey } from '@happier-dev/plugin-ui/presentation';
 import { buildMachineOwnershipGroups, describeMachineSharedOwnership, describeMachineSharedGroupTitle } from '@/sync/domains/machines/machineOwnershipGroups';
@@ -29,6 +29,11 @@ type MachineCollectionRowPresentation = Readonly<{
     serverId: string;
     /** The name the user gave the machine, else its host; told apart when two share it. */
     title: string;
+    /**
+     * The title in its two parts, for a one-line row that shortens the name and keeps what tells it apart
+     * whole: `name` and the suffix `hint` (`null` when the name is already unique).
+     */
+    titleParts: Readonly<{ name: string; hint: string | null }>;
     /** The host, when the title is a different display name. */
     host: string | null;
     platformLabel: string;
@@ -99,7 +104,7 @@ export function buildMachineCollection(input: Readonly<{
     const nowMs = input.nowMs ?? Date.now();
     let count = 0;
     const sections = input.groups.flatMap((group): MachineCollectionSection[] => {
-        const names = resolveMachineDisplayNames(group.machines);
+        const names = resolveMachineDisplayNameParts(group.machines);
         const enrolledIds = new Set(group.machines.map(machine => machine.id));
         const managedByMachineId = new Map((input.managedByServerId?.[group.serverId] ?? [])
             .flatMap(machine => machine.archivedAt === undefined && machine.enrolledMachineId ? [[machine.enrolledMachineId, machine] as const] : []));
@@ -116,11 +121,13 @@ export function buildMachineCollection(input: Readonly<{
                 const host = machine.metadata?.host?.trim() || null;
                 const name = getMachineDisplayName(machine) ?? machine.id;
                 const presence = describeMachinePresenceLine(machine, nowMs, managedByMachineId.get(machine.id));
+                const titleParts = names.get(machine.id) ?? { name, hint: null };
                 return {
                     kind: 'machine',
                     machineId: machine.id,
                     serverId: group.serverId,
-                    title: names.get(machine.id) ?? name,
+                    title: titleParts.hint ? `${titleParts.name} · ${titleParts.hint}` : titleParts.name,
+                    titleParts,
                     host: host && host !== name ? host : null,
                     platformLabel: formatOSPlatform(machine.metadata?.platform),
                     online: presence.online,
@@ -132,17 +139,17 @@ export function buildMachineCollection(input: Readonly<{
                 .filter((row) => !query
                     || row.title.toLocaleLowerCase().includes(query)
                     || (row.host?.toLocaleLowerCase().includes(query) ?? false))
-                .sort((a, b) => a.title.localeCompare(b.title) || machineCollectionRowKey(a).localeCompare(machineCollectionRowKey(b)));
+                .sort(compareMachineCollectionRows);
             if (ownershipGroup.key === 'managed' || ownershipGroup.key === 'managedArchived') {
                 const managedRows = managedMachines
                     .filter(machine => (machine.archivedAt !== undefined) === (ownershipGroup.key === 'managedArchived'))
                     .map((machine): MachineCollectionRow => ({ kind: 'managed', managedId: machine.id,
-                        serverId: group.serverId, title: machine.launch.name, host: null, platformLabel: '', online: false,
+                        serverId: group.serverId, title: machine.launch.name, titleParts: { name: machine.launch.name, hint: null }, host: null, platformLabel: '', online: false,
                         presence: describeManagedCreation(machine).line, reason: null, ownership: null,
                         ...(machine.enrolledMachineId && machine.archivedAt === undefined ? { enrolledMachineId: machine.enrolledMachineId } : {}) }))
                     .filter(row => !query || row.title.toLocaleLowerCase().includes(query));
                 rows.push(...managedRows);
-                rows.sort((a, b) => a.title.localeCompare(b.title) || machineCollectionRowKey(a).localeCompare(machineCollectionRowKey(b)));
+                rows.sort(compareMachineCollectionRows);
             }
             count += rows.length;
             const ownershipTitle = ownershipGroup.key.startsWith('shared:')
@@ -175,6 +182,16 @@ export function buildMachineCollection(input: Readonly<{
             title: input.groupedByHome ? group.serverName : null, status: group.status, rows };
     });
     return { count, sections, presetSections };
+}
+
+/**
+ * Online machines first, then the ones that are not, each by the name the user sees (lab `R`): a fleet
+ * with dozens of retired or sleeping machines still opens on the ones that can work.
+ */
+function compareMachineCollectionRows(a: MachineCollectionRow, b: MachineCollectionRow): number {
+    return Number(b.online) - Number(a.online)
+        || a.title.localeCompare(b.title)
+        || machineCollectionRowKey(a).localeCompare(machineCollectionRowKey(b));
 }
 
 /** A machine's detail inside the collection, scoped to the Home it belongs to. */
