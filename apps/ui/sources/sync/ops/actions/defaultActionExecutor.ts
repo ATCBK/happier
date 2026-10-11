@@ -1828,7 +1828,7 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
         }
         const execution = await executeOriginalAccountMachineAction({ account: accountContext,
           actionId: 'approval.request.decide', requestId, machineId, foreignTargetOnly: true,
-          input: { artifactId, decision: 'approve', serverId: accountContext.serverId,
+          input: { artifactId, decision: 'approve',
             serverIdentityId: replayRoute.serverIdentityId, originServerId: replayRoute.originServerId },
           ...(signal ? { signal } : {}) });
         accountContext.assertResultCurrent(getActionSpec('approval.request.decide').sideEffectClass);
@@ -2239,10 +2239,11 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
           externalActionTarget: { kind: 'machine', machineId } },
       });
     },
-    sessionSendMessage: opts?.sessionSendMessage ?? (async ({ sessionId, message, serverId, recipient, requestedAction }) => {
+    sessionSendMessage: opts?.sessionSendMessage ?? (async ({ sessionId, message, serverId, recipient, requestedAction, localId }) => {
       const delivery = await sendSessionMessageWithServerScope({
         sessionId,
         message,
+        messageLocalId: localId,
         serverId,
         recipient,
         requestedAction,
