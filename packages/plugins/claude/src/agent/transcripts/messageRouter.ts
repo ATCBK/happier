@@ -1,5 +1,5 @@
 import type { RawJSONLines } from './rawJsonLines.js';
-import { readClaudeTaskLifecycleEnvelope } from './taskNotification.js';
+import { createClaudeTaskNotificationToolResultProjector, readClaudeTaskLifecycleEnvelope } from './taskNotification.js';
 import { isClaudeInternalTranscriptMessage } from './visibility.js';
 
 function messageKey(message: RawJSONLines): string {
@@ -39,58 +39,17 @@ export function createMessageRouter(params: Readonly<{
     reset: () => void;
 }> {
     const processedMessageKeys = new Set<string>();
-    const taskToolUseIdByAgentId = new Map<string, string>();
+    const taskNotificationProjector = createClaudeTaskNotificationToolResultProjector();
+    // Observation and emission may receive the same row separately. Preserve the canonical
+    // projector's answer so observing an ACK cannot consume an early completion before emission.
+    let observedProjections = new WeakMap<RawJSONLines, RawJSONLines | null>();
 
-    function observeTaskToolResultMapping(message: RawJSONLines): void {
-        if (message.type !== 'user') return;
-        const toolUseResult = (message as { toolUseResult?: unknown }).toolUseResult;
-        if (!toolUseResult || typeof toolUseResult !== 'object') return;
-        const agentId =
-            typeof (toolUseResult as { agentId?: unknown }).agentId === 'string'
-                ? String((toolUseResult as { agentId: string }).agentId).trim()
-                : '';
-        if (!agentId) return;
-
-        const content = (message as { message?: { content?: unknown } }).message?.content;
-        if (!Array.isArray(content)) return;
-        for (const item of content) {
-            if (!item || typeof item !== 'object') continue;
-            if ((item as { type?: unknown }).type !== 'tool_result') continue;
-            const toolUseId = typeof (item as { tool_use_id?: unknown }).tool_use_id === 'string'
-                ? String((item as { tool_use_id: string }).tool_use_id).trim()
-                : '';
-            if (!toolUseId) continue;
-            taskToolUseIdByAgentId.set(agentId, toolUseId);
-        }
-    }
-
-    function maybeRewriteTaskNotificationToToolResult(message: RawJSONLines): RawJSONLines | null | undefined {
-        if (message.type !== 'user' || (message as { isSidechain?: unknown }).isSidechain === true) return message;
-        const notification = readClaudeTaskLifecycleEnvelope(message);
-        if (notification?.subtype !== 'task_notification') return message;
-        if (!notification?.taskId || !notification.result) return null;
-
-        const toolUseId = taskToolUseIdByAgentId.get(notification.taskId) ?? null;
-        if (!toolUseId) {
-            return null;
-        }
-
-        return {
-            ...message,
-            isMeta: true,
-            type: 'user',
-            message: {
-                role: 'user',
-                content: [
-                    {
-                        type: 'tool_result',
-                        tool_use_id: toolUseId,
-                        content: [{ type: 'text', text: notification.result }],
-                        is_error: false,
-                    },
-                ],
-            },
-        } as RawJSONLines;
+    function projectSessionMessage(message: RawJSONLines): RawJSONLines | null {
+        if (observedProjections.has(message)) return observedProjections.get(message) ?? null;
+        const projected = taskNotificationProjector.project(message);
+        const nextMessage = projected ?? (readClaudeTaskLifecycleEnvelope(message)?.subtype === 'task_notification' ? null : message);
+        observedProjections.set(message, nextMessage);
+        return nextMessage;
     }
 
     function emitObservedMessage(message: RawJSONLines, eventName: string, shouldEmit: boolean): void {
@@ -104,19 +63,14 @@ export function createMessageRouter(params: Readonly<{
             return;
         }
 
-        if (isInformationalSystemMessage(message)) {
+        const nextMessage = projectSessionMessage(message);
+        if (!nextMessage || isInformationalSystemMessage(nextMessage)) {
             return;
         }
-        if (isClaudeInternalTranscriptMessage(message)) {
-            return;
-        }
-
-        const rewritten = maybeRewriteTaskNotificationToToolResult(message);
-        if (rewritten === null) {
+        if (isClaudeInternalTranscriptMessage(nextMessage)) {
             return;
         }
 
-        const nextMessage = rewritten ?? message;
         params.logEvent(eventName, nextMessage);
         params.onMessage(nextMessage);
     }
@@ -131,13 +85,14 @@ export function createMessageRouter(params: Readonly<{
     }
 
     return {
-        observeSessionMessage: observeTaskToolResultMapping,
+        observeSessionMessage: message => { projectSessionMessage(message); },
         emitImportedSidechainMessage: (message: RawJSONLines) => emitImportedMessage(message, 'emit:sidechain-import'),
         emitImportedTeamInboxMessage: (message: RawJSONLines) => emitImportedMessage(message, 'emit:team-inbox'),
         emitSessionMessage: (message: RawJSONLines, shouldEmit: boolean) => emitObservedMessage(message, `emit:${String((message as { type?: unknown })?.type ?? 'unknown')}`, shouldEmit),
         reset: () => {
             processedMessageKeys.clear();
-            taskToolUseIdByAgentId.clear();
+            taskNotificationProjector.clear();
+            observedProjections = new WeakMap();
         },
     };
 }

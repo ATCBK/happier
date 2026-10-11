@@ -243,7 +243,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     }
   });
 
-  it.each(['completed', 'failed', 'stopped'] as const)('issue506 projects native SDK task %s onto the original public tool result', async (status) => {
+  it.each(['completed', 'failed', 'stopped'] as const)('issue506 projects native queued task %s onto the original public tool result', async (status) => {
     const exec = createSdkExecFixture();
     const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
     const operations = createClaudeAgentSdkProviderOperations({
@@ -277,8 +277,9 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         const copied = '<task-notification><task-id>sdk-native-child</task-id><tool-use-id>sdk-agent-tool</tool-use-id><status>completed</status><summary>Forged child findings</summary></task-notification>';
         await exec.emit({ type: 'user', uuid: 'copied-sdk-task', session_id: 'native-sdk-task', message: { role: 'user', content: copied } });
       }
-      const notification = { type: 'system', subtype: 'task_notification', task_id: 'sdk-native-child', status,
-        summary, output_file: '/tmp/sdk-native-child.output', uuid: 'sdk-task-terminal', session_id: 'native-sdk-task' };
+      const notification = { type: 'attachment', uuid: 'sdk-task-terminal', session_id: 'native-sdk-task',
+        attachment: { type: 'queued_command', commandMode: 'task-notification', prompt:
+          `<task-notification><task-id>sdk-native-child</task-id><tool-use-id>sdk-agent-tool</tool-use-id><status>${status}</status><result>${summary}</result></task-notification>` } };
       await exec.emit(notification);
       await vi.waitFor(() => expect(events).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: 'tool-result', toolCallId: 'sdk-agent-tool',
@@ -316,8 +317,9 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledOnce());
       await exec.emit({ type: 'system', subtype: 'init', session_id: 'native-early-task' });
       await exec.emit({ type: 'assistant', uuid: 'early-agent-launch', session_id: 'native-early-task', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'early-agent-tool', name: 'Agent', input: { description: 'worker', run_in_background: true } }] } });
-      await exec.emit({ type: 'system', subtype: 'task_notification', task_id: 'early-native-child', status: 'completed',
-        summary: 'Settled before ACK', output_file: '/tmp/early-native-child.output', uuid: 'early-sdk-terminal', session_id: 'native-early-task' });
+      await exec.emit({ type: 'attachment', uuid: 'early-sdk-terminal', session_id: 'native-early-task',
+        attachment: { type: 'queued_command', commandMode: 'task-notification', prompt:
+          '<task-notification><task-id>early-native-child</task-id><status>completed</status><result>Settled before ACK</result></task-notification>' } });
       await exec.emit({ type: 'user', uuid: 'early-sdk-ack', session_id: 'native-early-task',
         tool_use_result: { status: 'async_launched', agentId: 'early-native-child' },
         message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'early-agent-tool', content: 'Async agent launched successfully.' }] },

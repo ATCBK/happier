@@ -49,7 +49,7 @@ type ProviderTranscriptModule = Readonly<{
   createClaudeUnifiedProviderTranscriptPublisher(params: Readonly<{
     ctx: TestContext;
     sessionId: string;
-    onObserveRow?: (row: unknown) => void;
+    onObserveRow?: (row: unknown, observation: Readonly<{ providerSessionId: string; historicalReplay: boolean; projectedTaskResult?: unknown }>) => void;
   }>): ProviderTranscriptPublisher;
 }>;
 
@@ -151,7 +151,7 @@ async function createBoundPublisher(options?: Readonly<{
   sessionId?: string;
   source?: string;
   replayLinesOnFollow?: readonly string[];
-  onObserveRow?: (row: unknown) => void;
+  onObserveRow?: (row: unknown, observation: Readonly<{ providerSessionId: string; historicalReplay: boolean; projectedTaskResult?: unknown }>) => void;
 }>): Promise<Readonly<{
   ctx: TestContext;
   publisher: ProviderTranscriptPublisher;
@@ -643,6 +643,29 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
         },
       },
     ]);
+  });
+
+  it.each(['completed', 'failed', 'stopped'] as const)('issue506 ordered terminal source routes native queued %s received before ACK without publishing a control row', async status => {
+    const observations: Array<Readonly<{ historicalReplay: boolean; projectedTaskResult?: unknown }>> = [];
+    const { ctx, publisher } = await createBoundPublisher({ onObserveRow: (_row, observation) => { observations.push(observation); } });
+    const terminal = { type: 'attachment', uuid: 'early-terminal', sessionId: 'claude-session-1', attachment: {
+      type: 'queued_command', commandMode: 'task-notification', prompt:
+        `<task-notification><task-id>native-task</task-id><status>${status}</status><result>Native findings</result></task-notification>`,
+    } };
+    const ack = { type: 'user', uuid: 'ack', sessionId: 'claude-session-1', toolUseResult: { status: 'async_launched', agentId: 'native-task' },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'original-tool', content: 'Async agent launched successfully.' }] } };
+    for (const row of [terminal, ack]) {
+      const input = { providerSessionId: 'claude-session-1', sourceId: `source:${row.uuid}`, row };
+      await publisher.observeSourceTranscript(input);
+      await publisher.observeSourceTranscript(input);
+    }
+    const results = observations.flatMap(observation => observation.projectedTaskResult ? [observation.projectedTaskResult] : []);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ type: 'user', uuid: 'early-terminal', origin: { toolUseId: 'original-tool' },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'original-tool', content: [{ type: 'text', text: 'Native findings' }], is_error: status !== 'completed' }] } });
+    expect(results[0]).not.toHaveProperty('isMeta');
+    if (status !== 'completed') expect(results[0]).toMatchObject({ toolUseResult: { status: status === 'stopped' ? 'cancelled' : 'failed' } });
+    expect(ctx.agentRuntime.sessionHooks.publishProviderTranscript).not.toHaveBeenCalled();
   });
 
   it('observes but never accepts queued-command history replayed during SessionStart binding', async () => {

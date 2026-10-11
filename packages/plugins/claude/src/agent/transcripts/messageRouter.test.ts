@@ -104,7 +104,7 @@ describe('createMessageRouter', () => {
         router.observeSessionMessage({
             type: 'user',
             uuid: 'tool-result-source',
-            toolUseResult: { agentId: 'task-1' },
+            toolUseResult: { status: 'async_launched', agentId: 'task-1' },
             message: {
                 content: [
                     {
@@ -116,7 +116,7 @@ describe('createMessageRouter', () => {
         } as RawJSONLines);
         const copied = {
             type: 'user', uuid: 'copied-task-notification',
-            message: { content: '<task-notification><task-id>task-1</task-id><result>done</result></task-notification>' },
+            message: { content: '<task-notification><task-id>task-1</task-id><status>completed</status><result>done</result></task-notification>' },
         } satisfies RawJSONLines;
         router.emitSessionMessage(copied, true);
         expect(emitted).toEqual([copied]);
@@ -126,10 +126,37 @@ describe('createMessageRouter', () => {
         }, true);
 
         expect(emitted).toHaveLength(1);
-        expect((emitted[0] as { isMeta?: boolean }).isMeta).toBe(true);
+        expect(emitted[0]).not.toHaveProperty('isMeta');
         expect((emitted[0] as { message: { content: Array<{ tool_use_id: string; content: Array<{ text: string }> }> } }).message.content[0]).toMatchObject({
             tool_use_id: 'toolu_1',
             content: [{ type: 'text', text: 'done' }],
         });
+    });
+
+    it.each(['completed', 'failed', 'stopped'] as const)('projects native queued %s before generic attachment suppression, including completion before ACK', (status) => {
+        const emitted: RawJSONLines[] = [];
+        const router = createMessageRouter({ onMessage: message => emitted.push(message), logEvent: () => undefined });
+        const notification = {
+            type: 'attachment', uuid: 'early-terminal',
+            attachment: { type: 'queued_command', commandMode: 'task-notification', prompt:
+                `<task-notification><task-id>task-1</task-id><status>${status}</status><result>Native findings</result></task-notification>` },
+        } satisfies RawJSONLines;
+        router.observeSessionMessage(notification);
+        router.emitSessionMessage(notification, true);
+        expect(emitted).toEqual([]);
+        const ack = {
+            type: 'user', uuid: 'ack', toolUseResult: { status: 'async_launched', agentId: 'task-1' },
+            message: { content: [{ type: 'tool_result', tool_use_id: 'original-tool', content: 'Async agent launched successfully.' }] },
+        } satisfies RawJSONLines;
+        router.observeSessionMessage(ack);
+        router.emitSessionMessage(ack, true);
+        router.emitSessionMessage(notification, true);
+        expect(emitted).toHaveLength(1);
+        expect(emitted[0]).toMatchObject({ type: 'user', uuid: 'early-terminal',
+            message: { content: [{ type: 'tool_result', tool_use_id: 'original-tool',
+                content: [{ type: 'text', text: 'Native findings' }], is_error: status !== 'completed' }] } });
+        expect(emitted[0]).not.toHaveProperty('isMeta');
+        expect(emitted[0]).not.toHaveProperty('attachment');
+        if (status !== 'completed') expect(emitted[0]).toMatchObject({ toolUseResult: { status: status === 'stopped' ? 'cancelled' : 'failed' } });
     });
 });
