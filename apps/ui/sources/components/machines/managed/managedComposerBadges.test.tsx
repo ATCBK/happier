@@ -91,7 +91,8 @@ describe('managed composer badges', () => {
       message: 'Your message waits here until mac-vm-2 joins.',
     });
     expect(running.label).toBe('Installing Happier on mac-vm-2');
-    expect(running.tone).toBe('active');
+    // Creation in progress needs nothing from the user: the quiet badge (lab `m-pick-Aprog`).
+    expect(running.tone).toBe('neutral');
     const failed = buildManagedProgressStatusBadge({
       machineName: 'mac-vm-2',
       mark: null,

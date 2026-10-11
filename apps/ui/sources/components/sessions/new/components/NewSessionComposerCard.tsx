@@ -199,9 +199,8 @@ export function NewSessionComposerCard(input: Readonly<{
                         acpConfigOptionsOverrideProbe={props.acpConfigOptionsProbe}
                         acpConfigOptionOverridesOverride={props.acpConfigOptionOverrides ?? null}
                         onAcpConfigOptionChange={props.setAcpConfigOptionOverride}
-                        // Embedded, a ready machine stays quiet (the chip already names it); a machine
-                        // that cannot start a session still says so above the card.
-                        connectionStatus={embedded && props.connectionStatus?.healthy ? undefined : props.connectionStatus}
+                        // A machine that cannot start a session says so above the card; a ready one is quiet.
+                        connectionStatus={props.connectionStatus}
                         autoActionBarLayout={embedded ? 'collapsed' : undefined}
                         barControlIds={embedded ? embeddedBarControlIds : undefined}
                         collapseEmptyStatusRow={embedded}

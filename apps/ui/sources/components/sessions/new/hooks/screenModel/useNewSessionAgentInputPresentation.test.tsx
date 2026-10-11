@@ -67,7 +67,7 @@ describe('useNewSessionAgentInputPresentation', () => {
         } as unknown as Router;
     }
 
-    it('keeps connection status online while exact spawn readiness is unknown for an online machine', async () => {
+    it('stays quiet for an online machine, even while exact spawn readiness is unknown, and speaks only when it cannot start', async () => {
         const { useNewSessionAgentInputPresentation } = await import('./useNewSessionAgentInputPresentation');
         let machine: Machine | null = {
             id: 'm1',
@@ -158,22 +158,18 @@ describe('useNewSessionAgentInputPresentation', () => {
             setWindowsRemoteSessionLaunchModeOverride: vi.fn(),
         }));
 
-        expect(hook.getCurrent().connectionStatus).toMatchObject({
-            text: 'status.online',
-            color: 'success',
-            dotColor: 'success',
-            isPulsing: true,
-        });
+        // A ready machine is named by its chip; healthy state says nothing above the card.
+        expect(hook.getCurrent().connectionStatus).toBeUndefined();
         readiness = resolveMachineSpawnReadiness({ selectedMachineId: 'm1', machine, keyAvailable: false, rpcAvailable: true });
         await hook.rerender();
         expect(hook.getCurrent().connectionStatus).toMatchObject({
-            text: 'machineRequester.keyPending(machine=host-1)', healthy: false, isPulsing: false, recovery: 'machine',
+            text: 'machineRequester.keyPending(machine=host-1)', isPulsing: false, recovery: 'machine',
         });
         expect(canAttemptMachineSpawn({ selectedMachineId: 'm1', machine, spawnReadiness: readiness })).toBe(false);
         machine = { ...machine, active: false, activeAt: 0 };
         readiness = resolveMachineSpawnReadiness({ selectedMachineId: 'm1', machine, keyAvailable: false, rpcAvailable: true });
         await hook.rerender();
-        expect(hook.getCurrent().connectionStatus).toMatchObject({ text: 'newSession.machineOfflineInlineTitle', healthy: false });
+        expect(hook.getCurrent().connectionStatus).toMatchObject({ text: 'newSession.machineOfflineInlineTitle', dotColor: 'danger' });
         machine = null;
         await hook.rerender();
         expect(hook.getCurrent().connectionStatus).toMatchObject({
@@ -214,7 +210,8 @@ describe('useNewSessionAgentInputPresentation', () => {
                 daemonState: null,
                 daemonStateVersion: 0,
             },
-            selectedMachineSpawnReadiness: { status: 'unknown', machineId: 'm1' },
+            // A line that speaks (the key is still on its way), so its identity is worth keeping.
+            selectedMachineSpawnReadiness: { status: 'keyUnavailable', machineId: 'm1' },
             automationFeatureEnabled: false,
             automationDraft: {
                 enabled: false,
@@ -280,6 +277,7 @@ describe('useNewSessionAgentInputPresentation', () => {
         activeAt += 1000;
         await hook.rerender();
 
+        expect(firstConnectionStatus).toBeDefined();
         expect(hook.getCurrent().connectionStatus).toBe(firstConnectionStatus);
     });
 

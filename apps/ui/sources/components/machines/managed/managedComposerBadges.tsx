@@ -81,11 +81,15 @@ export function buildManagedProgressStatusBadge(
         })
       : model.label,
     accessibilityHint: t('managedMachines.creation.openDetails'),
-    tone: model.tone ?? (model.failed ? 'warning' : 'active'),
+    // Creation in progress needs nothing from the user: the neutral badge, its spinner the only motion
+    // (lab `m-pick-Aprog`). Only an observed failure speaks; a settled or cached observation keeps its tone.
+    tone: model.failed
+      ? 'warning'
+      : isManagedProgressWorking(model) ? 'neutral' : model.tone,
     icon: (tint) =>
       model.failed ? (
         <Icon name="warning" size={14} color={tint} />
-      ) : model.tone && model.tone !== 'active' ? (
+      ) : !isManagedProgressWorking(model) ? (
         <Icon name="desktop" size={14} color={tint} />
       ) : (
         <ActivitySpinner
@@ -106,6 +110,11 @@ export function buildManagedProgressStatusBadge(
       />
     ),
   };
+}
+
+/** Creation the owner still observes as live work (no tone, or `active`); anything else has settled. */
+function isManagedProgressWorking(model: ManagedProgressModel): boolean {
+  return model.tone === undefined || model.tone === 'active';
 }
 
 export const ManagedProgressPopoverContent = React.memo(

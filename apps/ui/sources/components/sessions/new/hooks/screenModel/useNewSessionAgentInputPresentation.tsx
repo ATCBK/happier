@@ -135,7 +135,6 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
         color: string;
         dotColor: string;
         isPulsing: boolean;
-        healthy: boolean;
         recovery?: 'machine';
     }> | undefined;
     agentInputExtraActionChips: ReadonlyArray<AgentInputExtraActionChip>;
@@ -155,6 +154,9 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     ]);
     const selectedMachineReadinessStatus = params.selectedMachineSpawnReadiness?.status;
     const selectedMachineLabel = getMachineDisplaySubtitle(params.selectedMachine ?? undefined, params.selectedMachineId ?? '');
+    // The composer's status line speaks only when the machine cannot take the session: a ready machine
+    // is already named by its chip, and healthy state stays quiet (DESIGN "Status and badges", lab
+    // `.l12-sr`). A green "Online" beside a blocked-launch badge contradicted it.
     const connectionStatus = React.useMemo(() => {
         if (!params.selectedMachineId) return undefined;
         if (!params.selectedMachine) {
@@ -163,7 +165,6 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
                 color: params.theme.colors.state.danger.foreground,
                 dotColor: params.theme.colors.state.danger.foreground,
                 isPulsing: false,
-                healthy: false,
                 recovery: 'machine' as const,
             };
         }
@@ -177,15 +178,15 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
                 && selectedMachineOnline
             );
 
+        if (online) return undefined;
         return {
-            text: online ? t('status.online') : selectedMachineReadinessStatus === 'keyUnavailable'
+            text: selectedMachineReadinessStatus === 'keyUnavailable'
                 ? t('machineRequester.keyPending', { machine: selectedMachineLabel })
                 : t('newSession.machineOfflineInlineTitle'),
-            color: online ? params.theme.colors.state.success.foreground : params.theme.colors.state.danger.foreground,
-            dotColor: online ? params.theme.colors.state.success.foreground : params.theme.colors.state.danger.foreground,
-            isPulsing: online,
-            healthy: online,
-            ...(online ? {} : { recovery: 'machine' as const }),
+            color: params.theme.colors.state.danger.foreground,
+            dotColor: params.theme.colors.state.danger.foreground,
+            isPulsing: false,
+            recovery: 'machine' as const,
         };
     }, [
         params.selectedMachine?.id,
@@ -193,7 +194,6 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
         selectedMachineOnline,
         selectedMachineReadinessStatus,
         selectedMachineLabel,
-        params.theme.colors.state.success.foreground,
         params.theme.colors.state.danger.foreground,
     ]);
 

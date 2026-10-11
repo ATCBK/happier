@@ -1,3 +1,4 @@
+import type * as React from 'react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 // Only native styling, icon rendering and navigation are platform boundaries.
@@ -23,7 +24,11 @@ describe('buildNewSessionLaunchStatusBadges', () => {
             key: 'new-session-create-blocked',
             label: 'Selected credentials are unavailable',
             accessibilityLabel: 'Selected credentials are unavailable',
+            tone: 'warning',
         })]);
+        // A blocked launch leads with the same warning glyph as every other warning badge in the strip.
+        const blockedMark = blocked[1]!.icon!('tint') as React.ReactElement<{ name: string }>;
+        expect(blockedMark.props.name).toBe('warning');
         expect(buildNewSessionLaunchStatusBadges({
             isCreating: false, disabledReason: null, translate: (key) => key,
         })).toEqual([]);
@@ -51,21 +56,25 @@ describe('buildNewSessionLaunchStatusBadges', () => {
         })).toEqual([]);
     });
 
-    it('surfaces launch progress while a spawn request is unresolved', async () => {
+    it('surfaces launch progress while a spawn request is unresolved, quietly, with a spinner as its mark', async () => {
         const translate = vi.fn((key: string) => key);
+        const { ActivitySpinner } = await import('@/components/ui/feedback/ActivitySpinner');
 
-        expect(buildNewSessionLaunchStatusBadges({
+        const badges = buildNewSessionLaunchStatusBadges({
             isCreating: true,
             disabledReason: 'Selected credentials are unavailable',
             translate,
-        })).toEqual([{
+        });
+        expect(badges).toEqual([{
             key: 'new-session-launch-starting',
             label: 'newSession.startingSession',
             accessibilityLabel: 'newSession.startingSession',
             testID: 'new-session-launch-status',
-            tone: 'active',
+            tone: 'neutral',
             emphasis: 'prominent',
+            icon: expect.any(Function),
         }]);
+        expect((badges[0]!.icon!('tint') as React.ReactElement).type).toBe(ActivitySpinner);
         expect(translate).toHaveBeenCalledWith('newSession.startingSession');
     });
 });

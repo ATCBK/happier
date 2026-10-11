@@ -316,8 +316,14 @@ export const SessionInstrumentStrip = React.memo(function SessionInstrumentStrip
                     ))
                 )}
                 {permissionChip}
-                {props.statusTrailingActions}
             </View>
+            {/* The host's own actions are a separate item, so a narrow strip recomposes rather than
+                overflowing: they wrap beneath the status, which keeps its own row (lab `m-pick-Aprogp`). */}
+            {props.statusTrailingActions != null ? (
+                <View style={instrumentStripStyles.trailingActions}>
+                    {props.statusTrailingActions}
+                </View>
+            ) : null}
 
             {activeStatusBadge?.renderPopover?.({
                 open: true,

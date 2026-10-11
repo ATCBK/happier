@@ -469,8 +469,6 @@ interface AgentInputProps {
         color: string;
         dotColor: string;
         isPulsing?: boolean;
-        /** The target is ready: a host that keeps healthy state quiet (Home) may omit the line. */
-        healthy?: boolean;
         /** An unavailable launch target is repaired through the existing machine picker. */
         recovery?: 'machine';
     };

@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { buildRequesterDisclosureStatusBadge, type RequesterDisclosureModel } from '@/components/machines/managed/managedComposerBadges';
 
@@ -25,8 +26,9 @@ export function buildNewSessionLaunchStatusBadges(
             testID: 'new-session-create-blocked',
             tone: 'warning',
             emphasis: 'prominent',
-            // Every composer badge leads with its state mark (lab `.l12-sb`); the reason is a warning.
-            icon: (tint) => React.createElement(Icon, { name: 'warning-circle', size: 14, color: tint }),
+            // Every composer badge leads with its state mark (lab `.l12-sb`); a blocked launch takes the
+            // same warning glyph as every other warning badge in the strip (a failed machine install).
+            icon: (tint) => React.createElement(Icon, { name: 'warning', size: 14, color: tint }),
         }] : disclosure;
     }
 
@@ -36,7 +38,12 @@ export function buildNewSessionLaunchStatusBadges(
         label,
         accessibilityLabel: label,
         testID: 'new-session-launch-status',
-        tone: 'active',
+        // Work in progress needs nothing from the user, so it stays quiet: the neutral badge with a
+        // spinner as its mark (lab `m-pick-Aprog`), the same as a machine that is still being set up.
+        tone: 'neutral',
         emphasis: 'prominent',
+        icon: (tint) => React.createElement(ActivitySpinner, {
+            size: 'small', color: tint, accessibilityElementsHidden: true, importantForAccessibility: 'no',
+        }),
     }];
 }

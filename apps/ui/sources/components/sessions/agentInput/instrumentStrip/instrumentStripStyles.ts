@@ -5,13 +5,19 @@ import { Typography } from '@/constants/Typography';
 /**
  * Layout for the session instrument strip. One 28-high row: connection/working
  * status pinned left, a flexible spacer, then the right-aligned instrument
- * cluster (context gauge · quota ring · git ± · extension badges · permission).
+ * cluster (context gauge · quota ring · git ± · extension badges · permission)
+ * and the host's trailing actions. When they do not fit on one line (a phone),
+ * the row wraps instead of running past the edge: whatever no longer fits moves
+ * to its own right-aligned line, so a status badge keeps its row whole.
  */
 export const instrumentStripStyles = StyleSheet.create((theme) => ({
     root: {
         minHeight: 28,
         flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'flex-end',
         alignItems: 'center',
+        rowGap: 6,
         paddingHorizontal: 4,
     },
     rootCollapsed: {
@@ -41,8 +47,16 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
     cluster: {
         flexDirection: 'row',
         alignItems: 'center',
-        flexShrink: 0,
+        // Only shrinks when it is alone on a line narrower than itself; a long badge then wraps its words.
+        flexShrink: 1,
+        minWidth: 0,
         gap: 10,
+    },
+    trailingActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexShrink: 0,
+        marginLeft: 10,
     },
     instrumentSlot: {
         flexDirection: 'row',
