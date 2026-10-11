@@ -107,6 +107,13 @@ function shouldHighlightKeywords(language: string): boolean {
     return true;
 }
 
+// Languages whose comments start with `#`. They have no `//` or `/* */` comments, so a URL such as
+// `https://…` in a shell command stays code instead of greying out the rest of the line.
+const HASH_COMMENT_LANGUAGES: ReadonlySet<string> = new Set([
+    'python', 'py', 'bash', 'sh', 'shell', 'zsh', 'fish', 'powershell', 'ps1', 'ruby', 'rb', 'perl', 'r',
+    'yaml', 'yml', 'toml', 'dockerfile', 'makefile', 'dotenv',
+]);
+
 function pushToken(out: SimpleSyntaxToken[], token: SimpleSyntaxToken) {
     const prev = out[out.length - 1];
     if (prev && prev.type === token.type) {
@@ -127,24 +134,26 @@ export function tokenizeSimpleSyntaxLine(params: {
     const keywords = shouldHighlightKeywords(language) ? buildKeywordSet(language) : null;
     const out: SimpleSyntaxToken[] = [];
 
-    const isPython = language.toLowerCase() === 'python' || language.toLowerCase() === 'py';
+    const lang = language.toLowerCase();
+    const isPython = lang === 'python' || lang === 'py';
+    const hashComments = HASH_COMMENT_LANGUAGES.has(lang);
 
     let i = 0;
     while (i < raw.length) {
         const ch = raw[i] ?? '';
 
-        // Line comments.
-        if (ch === '/' && raw[i + 1] === '/') {
+        // Line comments. Outside Python, `#` opens a comment only at a word start (`$#`, `${#a}` stay code).
+        if (!hashComments && ch === '/' && raw[i + 1] === '/') {
             pushToken(out, { type: 'comment', text: raw.slice(i) });
             break;
         }
-        if (isPython && ch === '#') {
+        if (hashComments && ch === '#' && (isPython || i === 0 || /\s/.test(raw[i - 1] ?? ''))) {
             pushToken(out, { type: 'comment', text: raw.slice(i) });
             break;
         }
 
         // Block comment start.
-        if (ch === '/' && raw[i + 1] === '*') {
+        if (!hashComments && ch === '/' && raw[i + 1] === '*') {
             const end = raw.indexOf('*/', i + 2);
             const commentText = end === -1 ? raw.slice(i) : raw.slice(i, end + 2);
             pushToken(out, { type: 'comment', text: commentText });
