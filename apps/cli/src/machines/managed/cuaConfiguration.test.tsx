@@ -4,7 +4,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Dimensions } from 'react-native';
 import { installApprovalCommonModuleMocks } from '../../../../ui/sources/components/approvals/approvalsTestHelpers';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '../../../../ui/sources/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, loadScopedHomeActionExecutorForTests, waitForHomeGovernance } from '../../../../ui/sources/dev/testkit/harness/homeGovernanceHarness';
 import { createMachineFixture } from '../../../../ui/sources/dev/testkit/fixtures/machineFixtures';
 import { renderScreen, standardCleanup } from '../../../../ui/sources/dev/testkit';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '../../../../ui/sources/dev/testkit/fixtures/pluginProviderDaemonProjection';
@@ -33,7 +33,7 @@ installApprovalCommonModuleMocks({ text: async () => vi.importActual('../../../.
     router: async () => (await import('../../../../ui/sources/dev/testkit/mocks/router')).createExpoRouterMock().module });
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
-const { resetScopedHomeActionExecutorsForTests } = await import('../../../../ui/sources/sync/ops/actions/scopedHomeActionExecutor');
+const { resetScopedHomeActionExecutorsForTests } = await loadScopedHomeActionExecutorForTests();
 const { clearDaemonMergedProjectionCacheForTests } = await import('../../../../ui/sources/agents/backendCatalog/loadDaemonMergedProjectionInputs');
 const { resetMachineProjectionReadsForTests } = await import('../../../../ui/sources/sync/ops/machineContributionRegistryProjection');
 let restoreViewport: (() => void) | undefined;

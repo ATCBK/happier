@@ -8,7 +8,7 @@ import type {
 } from '@happier-dev/protocol/actions';
 
 import type { ActionOperationQueryScope, ActionOperationScope } from './actionOperationTypes';
-import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
+import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from '@happier-dev/protocol/machines/requesterWorkAttributionV1';
 import type { LiveWorkCategoryV1, LiveWorkItemV1, LiveWorkInventoryV1 } from '@/daemon/lifecycle/managedActivity';
 
 const SETTLED_RETENTION_LIMIT = 50;

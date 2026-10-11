@@ -277,7 +277,7 @@ async function executeGoalControl(params: Readonly<{
   if (params.context) {
     const context = buildActionExecutorContextForRpc({ ...params.context, actionId: 'session.goal.set',
       defaultSessionId: resolved.sessionId,
-      ...(params.context.authorization ? { rpcSessionAuthorization: params.context.authorization } : {}) });
+      ...(params.context.authorization?.kind === 'session.write' ? { rpcSessionAuthorization: params.context.authorization } : {}) });
     const result = await createActionExecutor(resolved.actionDeps).execute('session.goal.set', request, context);
     return result.ok ? result.result : result;
   }

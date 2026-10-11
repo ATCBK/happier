@@ -613,8 +613,6 @@
     "../../scripts/testing/vitestWorkspacePackageResolution.ts",
     "../ui/sources/components/sessions/files/commits/commitPlanAcceptance.ts",
     "../ui/sources/sync/domains/session/changes/derivation/deriveTurnChangeSetsFromMessages.ts",
-    "../ui/sources/sync/ops/actions/accountActionTransport.ts",
-    "../ui/sources/sync/ops/actions/workflowActionTransport.ts",
     "../ui/vitest.config.ts",
     "package.json",
     "scripts/build-owned/bundledPluginMembership.ts",

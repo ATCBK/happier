@@ -406,7 +406,7 @@ async function readDividerEvidence(params: Readonly<{
   sessionId: string;
   dividerLocalId: string;
   crypto: SessionStoredContentCryptoContext;
-  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionTransportContext>[0]['resolveAuthorizationHeaders'];
+  resolveAuthorizationHeaders?: Parameters<typeof sendSessionMessage>[0]['resolveAuthorizationHeaders'];
   expected: Readonly<{
     fromAgentId: string;
     toAgentId: string;
@@ -480,7 +480,7 @@ async function admitExactInput(params: Readonly<{
   machineAdmissionTransport: SessionAgentTransitionParams['machineAdmissionTransport'];
   inputAdmission: SessionAgentTransitionParams['inputAdmission'];
   callerInputAuthorization: SessionAgentTransitionParams['callerInputAuthorization'];
-  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionTransportContext>[0]['resolveAuthorizationHeaders'];
+  resolveAuthorizationHeaders?: Parameters<typeof sendSessionMessage>[0]['resolveAuthorizationHeaders'];
   timeoutMs: number;
   /** Proof that the target current view is committed; the source of every arm here. */
   committed: SessionAgentTransitionCurrentViewCommitted;
@@ -561,7 +561,7 @@ async function activateTargetAndAdmitInput(params: Readonly<{
   inputAdmission: SessionAgentTransitionParams['inputAdmission'];
   callerInputAuthorization: SessionAgentTransitionParams['callerInputAuthorization'];
   externalAction: SessionAgentTransitionParams['externalAction'];
-  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionTransportContext>[0]['resolveAuthorizationHeaders'];
+  resolveAuthorizationHeaders?: Parameters<typeof sendSessionMessage>[0]['resolveAuthorizationHeaders'];
   admissionFence: Readonly<{ serviceId: string; groupId: string; epochId: string }>;
   inputAdmissionTimeoutMs: number;
   /** Proof that the target current view is committed; the source of every arm here. */
@@ -652,7 +652,7 @@ async function reconcileAlreadyTargetedSession(params: Readonly<{
   inputAdmission: SessionAgentTransitionParams['inputAdmission'];
   callerInputAuthorization: SessionAgentTransitionParams['callerInputAuthorization'];
   externalAction: SessionAgentTransitionParams['externalAction'];
-  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionTransportContext>[0]['resolveAuthorizationHeaders'];
+  resolveAuthorizationHeaders?: Parameters<typeof sendSessionMessage>[0]['resolveAuthorizationHeaders'];
   admissionFence: Readonly<{ serviceId: string; groupId: string; epochId: string }>;
   inputAdmissionTimeoutMs: number;
   effects: SessionAgentTransitionSourceUntouched;
@@ -701,7 +701,7 @@ export async function runSessionAgentTransition(
   const externalAction = params.externalAction;
   const root = externalAction?.context.externalActionExecutionAuthorization;
   const effectTarget = externalAction?.context.externalActionTarget;
-  const resolveAuthorizationHeaders: Parameters<typeof resolveSessionTransportContext>[0]['resolveAuthorizationHeaders'] = root && effectTarget && externalAction
+  const resolveAuthorizationHeaders: Parameters<typeof sendSessionMessage>[0]['resolveAuthorizationHeaders'] = root && effectTarget && externalAction
     ? request => createExternalActionAuthorizedRequestHeaders({ authorization: root, effectActionId: externalAction.effectActionId,
       target: effectTarget, installationId: externalAction.installationId, privateKey: externalAction.privateKey, ...request })
     : undefined;

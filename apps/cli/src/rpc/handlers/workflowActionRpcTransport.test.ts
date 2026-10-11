@@ -10,6 +10,8 @@ import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/l
 import { callSocketRpc } from '@happier-dev/sync-client';
 import { Server } from 'socket.io';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { loadWorkflowActionTransportForTests } from '../../../../ui/sources/dev/testkit/harness/homeGovernanceHarness';
+import { createTargetedActionRpcRequestV1 } from '@happier-dev/protocol/actions';
 
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import type { RpcRequest } from '@/api/rpc/types';
@@ -307,7 +309,7 @@ describe('UI Workflow targeted Action RPC boundary', () => {
             }
             return await readHttp(...args);
         });
-        const { createUiWorkflowActionTransport } = await import('../../../../ui/sources/sync/ops/actions/workflowActionTransport');
+        const { createUiWorkflowActionTransport } = await loadWorkflowActionTransportForTests();
         const { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } = await import(
             '../../../../ui/sources/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes'
         );
@@ -353,7 +355,7 @@ describe('UI Workflow targeted Action RPC boundary', () => {
                             callerAuthority: 'present_user' });
                     } },
                     target: { kind: 'machine', id: request.machineId }, method: request.method,
-                    params: request.payload, content: { mode: 'plain' }, signal: request.signal,
+                    params: createTargetedActionRpcRequestV1(request.payload, request.target), content: { mode: 'plain' }, signal: request.signal,
                     timeoutMs: request.operationTimeoutMs === null ? null : DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS,
                 }),
             });
@@ -361,7 +363,7 @@ describe('UI Workflow targeted Action RPC boundary', () => {
             let settled = false;
             const attempt = action({ actionId: 'workflow.run.start', input: {
                 runId, source: { kind: 'saved', definitionId, revision: { headerVersion: 1, bodyVersion: 1 } },
-            }, context: { surface: 'ui', authority: 'present_user', serverId: 'server-1', runtimeAccountId: 'account-1',
+            }, context: { actionCaller: { kind: 'host' }, surface: 'ui', authority: 'present_user', serverId: 'server-1', runtimeAccountId: 'account-1',
                 externalActionTarget: { kind: 'machine', machineId: boundary.project.machineId, project: boundary.project } } })
                 .then((result) => { outcome = result; }, (error: unknown) => { outcome = error; })
                 .finally(() => { settled = true; });
@@ -424,15 +426,15 @@ describe('UI Workflow targeted Action RPC boundary', () => {
                 text: 'Reply exactly QA_FIN20_AGENT_READY. Do not use tools, edit files, or run commands.', references: [], attachments: [] },
                 execution: selection, input: [], result: { kind: 'text' } }] };
         const boundary = await createBoundaryHarness(undefined, definition);
-        const { createUiWorkflowActionTransport } = await import('../../../../ui/sources/sync/ops/actions/workflowActionTransport');
+        const { createUiWorkflowActionTransport } = await loadWorkflowActionTransportForTests();
         const action = createUiWorkflowActionTransport({ account: { serverId: 'server-1', accountId: 'account-1', assertCurrent: () => {} },
             resolveFallbackMachineId: () => null,
-            transport: async ({ payload }) => boundary.handlers.get('workflow.run.start')!(payload),
+            transport: async ({ payload, target }) => boundary.handlers.get('workflow.run.start')!(createTargetedActionRpcRequestV1(payload, target)),
         });
         const startedAt = performance.now();
         const response = await action({ actionId: 'workflow.run.start', input: {
             runId, source: { kind: 'saved', definitionId, revision: { headerVersion: 1, bodyVersion: 1 } }, inputs: {} },
-            context: { surface: 'ui', authority: 'present_user', serverId: 'server-1', runtimeAccountId: 'account-1',
+            context: { actionCaller: { kind: 'host' }, surface: 'ui', authority: 'present_user', serverId: 'server-1', runtimeAccountId: 'account-1',
                 externalActionTarget: { kind: 'machine', machineId: boundary.project.machineId, project: boundary.project } } });
         if (process.env.FF_ADMIT_MEASURE_ADMISSION === '1') console.info('FF-AGENTADMIT source admission', JSON.stringify({ totalMs: performance.now() - startedAt,
             outcome: WorkflowActionFailureV1Schema.safeParse(response).success ? response : 'created', phases: boundary.boundaryTimings }));
@@ -496,9 +498,7 @@ describe('UI Workflow targeted Action RPC boundary', () => {
         const handler = boundary.handlers.get('workflow.run.start')!;
         let loseFirstResponse = true;
         let firstResponse: unknown;
-        const { createUiWorkflowActionTransport } = await import(
-            '../../../../ui/sources/sync/ops/actions/workflowActionTransport'
-        );
+        const { createUiWorkflowActionTransport } = await loadWorkflowActionTransportForTests();
         const action = createUiWorkflowActionTransport({
             account: {
                 serverId: 'server-1',
@@ -506,8 +506,8 @@ describe('UI Workflow targeted Action RPC boundary', () => {
                 assertCurrent: () => undefined,
             },
             resolveFallbackMachineId: () => null,
-            transport: async ({ payload }) => {
-                const response = await handler(payload);
+            transport: async ({ payload, target }) => {
+                const response = await handler(createTargetedActionRpcRequestV1(payload, target));
                 if (loseFirstResponse) firstResponse = response;
                 // Preserve the exact canonical refusal in the outer assertion;
                 // a nested assertion would hide its typed error and details.
@@ -526,6 +526,9 @@ describe('UI Workflow targeted Action RPC boundary', () => {
             actionId: 'workflow.run.start' as const,
             input: semanticInput,
             context: {
+                actionCaller: { kind: 'host' as const },
+                surface: 'ui' as const,
+                authority: 'present_user' as const,
                 serverId: 'server-1',
                 runtimeAccountId: 'account-1',
                 externalActionTarget: {

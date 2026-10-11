@@ -12,12 +12,10 @@ import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol
 import { signAccountContentKeyBindingV1 } from '@happier-dev/protocol/crypto/accountContentKeyBindingV1';
 import { createExternalActionDaemonDispatchResponse, ExternalActionRequestEnvelopeSchema, normalizeActionsSettingsV1,
   sealExternalActionRequestV2, openExternalActionResponseV2 } from '@happier-dev/protocol/actions';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '../../../../ui/sources/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, loadManagedProvisionerCatalogForTests } from '../../../../ui/sources/dev/testkit/harness/homeGovernanceHarness';
 import { TokenStorage } from '../../../../ui/sources/auth/storage/tokenStorage';
-import { resetScopedHomeActionExecutorsForTests } from '../../../../ui/sources/sync/ops/actions/scopedHomeActionExecutor';
-import { createManagedProvisionerClient } from '../../../../ui/sources/components/settings/machines/managed/managedProvisionerClient';
 import type { FetchedMachineRow } from '../../../../ui/sources/sync/engine/machines/syncMachines';
-import { createLightSqliteHarness, type LightSqliteHarness } from '../../../../server/sources/testkit/lightSqliteHarness';
+import { createLightSqliteHarness, createAccountTokenForTests, type LightSqliteHarness } from '../../../../server/sources/testkit/lightSqliteHarness';
 import { enableAuthentication } from '../../../../server/sources/app/api/utils/enableAuthentication';
 import { enableErrorHandlers } from '../../../../server/sources/app/api/utils/enableErrorHandlers';
 import { registerAccountEncryptionRoutes } from '../../../../server/sources/app/api/routes/account/registerAccountEncryptionRoutes';
@@ -25,7 +23,6 @@ import { registerAccountSettingsRoutes } from '../../../../server/sources/app/ap
 import { registerExternalActionRoutes } from '../../../../server/sources/app/api/routes/actions/registerExternalActionRoutes';
 import { createExternalActionDaemonDispatcher } from '../../../../server/sources/app/api/socket/externalActionDispatcher';
 import { db } from '../../../../server/sources/storage/db';
-import { auth } from '../../../../server/sources/app/auth/auth';
 import { getOrCreateServerIdentityId } from '../../../../server/sources/app/serverIdentity/serverIdentity';
 import { prepareRequesterAccountActionContext, type RequesterAccountActionContext } from '../sessionEncryption/requesterAccountActionProjection';
 import { executeExternalAction } from './executeExternalAction';
@@ -45,11 +42,12 @@ import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machin
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+const provisionerCatalog = await loadManagedProvisionerCatalogForTests();
 
 describe('managed catalog original Account transport', () => {
   let database: LightSqliteHarness;
   beforeAll(async () => { database = await createLightSqliteHarness({ tempDirPrefix: 'happier-fx16-catalog-', initAuth: true, initEncrypt: true }); }, 120_000);
-  beforeEach(async () => { await home.reset(); resetScopedHomeActionExecutorsForTests(); });
+  beforeEach(async () => { await home.reset(); provisionerCatalog.reset(); });
   afterEach(() => vi.restoreAllMocks());
   afterAll(async () => { await home.reset(); await database.close(); });
 
@@ -66,7 +64,7 @@ describe('managed catalog original Account transport', () => {
     await db.machine.create({ data: { id: controller.machineId, accountId: account.id, installationId: controller.installationId,
       installationPublicKey: installation.publicKey, metadata: 'opaque', metadataVersion: 1,
       active: true, lastActiveAt: new Date(), operationProtocolCapabilities: { externalActionExecutionAuthorization: { protocolVersions: [1] } }, operationProtocolCapabilitiesRevision: 1 } });
-    const token = await auth.createToken(account.id, undefined, { kind,
+    const token = await createAccountTokenForTests(account.id, { kind,
       authority: kind === 'account' ? 'present_user' : 'account_automation' });
     const credentials: StoredCredentials = { token, encryption: { type: 'legacy', secret } };
     const serverUrl = 'https://fx16-home.example';
@@ -170,8 +168,7 @@ describe('managed catalog original Account transport', () => {
     } });
     try {
       const result = kind === 'account'
-        ? await createManagedProvisionerClient({ serverId: uiServerId, accountId: account.id }, homeId)
-          .read('machines.provisioners.list', { homeId, controller })
+        ? await provisionerCatalog.read({ serverId: uiServerId, accountId: account.id }, { homeId, controller })
         : await (async () => {
           // Paired CLI credentials use the real authorization client. UI login
           // deliberately requires an Account token rather than a terminal token.

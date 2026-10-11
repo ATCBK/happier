@@ -2462,6 +2462,7 @@ export function createCliActionDeps(params: Readonly<{
 
     const metadata = readTransportSessionOwnerMetadata(transport);
     const currentMachineIdentity = await readCurrentMachineControlIdentity();
+    const actionRequestId = options?.actionRequestId ?? options?.context?.actionRequestId;
     return await routeSessionGoalControl({
       ...transport,
       token: params.credentials.token,
@@ -2475,8 +2476,7 @@ export function createCliActionDeps(params: Readonly<{
       operation,
       ...(signal ? { signal } : {}),
       ...(authority ? { executionAuthority: authority } : {}),
-      ...(options?.actionRequestId ?? options?.context?.actionRequestId
-        ? { actionRequestId: options?.actionRequestId ?? options?.context?.actionRequestId } : {}),
+      ...(actionRequestId ? { actionRequestId } : {}),
       resumeInactiveWithInitialGoal: operation === 'set' && typeof request.objective === 'string'
         && options?.resumeInactiveWithInitialGoal !== false,
       stageWorkStateMutation: params.stageWorkStateMutation,
@@ -6047,7 +6047,9 @@ export function createCliActionDeps(params: Readonly<{
           if (!granted) return rejectUndispatchedSessionAgentTransition('forbidden');
           const narrowed = resolveEffectivePermissionMode({ currentMode: ceiling, admittedPermissionCeiling: granted });
           if (!narrowed.ok) return rejectUndispatchedSessionAgentTransition('forbidden');
-          ceiling = narrowed.effectiveMode;
+          const canonicalCeiling = parsePermissionIntentAlias(narrowed.effectiveMode);
+          if (!canonicalCeiling) return rejectUndispatchedSessionAgentTransition('forbidden');
+          ceiling = canonicalCeiling;
         }
         if (constraints.some(constraint => !isPermissionModeGrantedV1(constraint, ceiling))) {
           return rejectUndispatchedSessionAgentTransition('forbidden');

@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { vi } from 'vitest';
 import { renderPrismaCompatibleSqliteDatabaseUrl } from "@happier-dev/cli-common/firstPartyRuntime/server";
 
 import { applyLightDefaultEnv, ensureHandyMasterSecret } from "@/flavors/light/env";
@@ -10,6 +11,19 @@ import { initEncrypt } from "@/modules/encrypt";
 import { initFilesLocalFromEnv, loadFiles } from "@/storage/blob/files";
 import { db, initDbSqlite, shutdownDbClient } from "@/storage/db";
 import { applyEnvValues, restoreEnv as restoreSnapshotEnv, snapshotEnv, type EnvValues } from "./env";
+
+/** Cross-program fixtures mint genuine tokens without compiling server auth in the caller. */
+export async function createAccountTokenForTests(accountId: string, options: Readonly<{
+    kind: 'account' | 'terminal';
+    authority: 'present_user' | 'account_automation';
+}>): Promise<string> {
+    const authSource = '@/app/auth/auth';
+    // The loaded server module is the real token issuer at this testkit boundary.
+    const { auth } = await vi.importActual<{ auth: {
+        createToken(accountId: string, extras: undefined, provenance: typeof options): Promise<string>;
+    } }>(authSource);
+    return auth.createToken(accountId, undefined, options);
+}
 
 export type LightSqliteHarness = {
     readonly baseDir: string;

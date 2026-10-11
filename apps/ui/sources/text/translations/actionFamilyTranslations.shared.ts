@@ -27,6 +27,8 @@ export const surfaceFamilyLabels = {
     settings_declarations: 'Settings',
     home_hub_layout: 'Home layout',
     machine_connection: 'Machine connections',
+    local_daemon_services: 'Local daemon services',
+    session_agent_transition: 'Agent switching',
     session_organization_resources: 'Projects and tags',
     session_organization_move: 'Session organization',
     composer_ingress: 'Composer and uploads',

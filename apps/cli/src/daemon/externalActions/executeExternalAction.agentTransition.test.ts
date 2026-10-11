@@ -83,9 +83,10 @@ async function runAdmittedSwitch(variant: Variant) {
         ...(variant === 'pat-fork-inaccessible' ? { targets: { sessions: [sessionId], machines: [machineId] } } : {}),
         permissionModes: variant === 'pat-ordered-read-only' ? ['yolo', 'read-only']
           : [variant === 'pat-read-only' ? 'read-only' : 'default'] } };
-    const requestInput = { localId: `switch-${variant}`, text: 'Continue with this exact input',
-      meta: variant === 'inherited-plugin' || variant === 'constraint-only-plugin' || variant === 'pat-read-only' || variant === 'pat-ordered-read-only' ? { trace: 'authored-meta' }
-        : { trace: 'authored-meta', permissionMode: variant === 'pat-default' || variant === 'pat-fork-inaccessible' ? 'default' : 'yolo' } };
+    const inputMeta: Record<string, string> = variant === 'inherited-plugin' || variant === 'constraint-only-plugin' || variant === 'pat-read-only' || variant === 'pat-ordered-read-only'
+      ? { trace: 'authored-meta' }
+      : { trace: 'authored-meta', permissionMode: variant === 'pat-default' || variant === 'pat-fork-inaccessible' ? 'default' : 'yolo' };
+    const requestInput = { localId: `switch-${variant}`, text: 'Continue with this exact input', meta: inputMeta };
     const envelope = { v: 1 as const, requestId: `request-${variant}`, target,
       input: { sessionId, expectedCurrentAgentId: 'claude', selection: { v: 1, agentId: 'codex' }, input: requestInput } };
     const invocation: ExternalActionRequesterInvocationV1 | undefined = variant === 'missing' ? undefined

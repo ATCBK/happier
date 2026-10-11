@@ -182,6 +182,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "home.runtime.restart",
   "home.settings.set",
   "homes.connect",
+  "homes.reconnect",
   "identity.providers.test.consume",
   "identity.providers.test.start",
   "inbox.mark_all_read",
@@ -229,6 +230,12 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "machines.agents.signIn.start",
   "machines.command.run",
   "machines.environment.apply",
+  "machines.local.service.autostart.set",
+  "machines.local.service.disconnect",
+  "machines.local.service.restart",
+  "machines.local.service.start",
+  "machines.local.service.stop",
+  "machines.local.service.update",
   "machines.managed.acquire",
   "machines.managed.bootstrap.retry",
   "machines.managed.cancel",
@@ -450,6 +457,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "session.access.context.set",
   "session.access.grant.remove",
   "session.access.grant.set",
+  "session.agent.transition",
   "session.attention.set",
   "session.authoring.open",
   "session.board.item.remove",
@@ -1184,6 +1192,7 @@ export type GeneratedActions = Readonly<{
   }> ;
   readonly homes: Readonly<{
     readonly connect: (input: PublicActionInputById["homes.connect"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"homes.connect">>;
+    readonly reconnect: (input: PublicActionInputById["homes.reconnect"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"homes.reconnect">>;
   }> ;
   readonly identity: Readonly<{
     readonly githubApps: Readonly<{
@@ -1311,6 +1320,19 @@ export type GeneratedActions = Readonly<{
       readonly apply: (input: PublicActionInputById["machines.environment.apply"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"machines.environment.apply">>;
     }> ;
     readonly list: (input: PublicActionInputById["machines.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"machines.list">>;
+    readonly local: Readonly<{
+      readonly service: Readonly<{
+        readonly autostart: Readonly<{
+          readonly set: (input: PublicActionInputById["machines.local.service.autostart.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"machines.local.service.autostart.set">>;
+        }> ;
+        readonly disconnect: (input: PublicActionInputById["machines.local.service.disconnect"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"machines.local.service.disconnect">>;
+        readonly restart: (input: PublicActionInputById["machines.local.service.restart"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"machines.local.service.restart">>;
+        readonly start: (input: PublicActionInputById["machines.local.service.start"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"machines.local.service.start">>;
+        readonly status: (input: PublicActionInputById["machines.local.service.status"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"machines.local.service.status">>;
+        readonly stop: (input: PublicActionInputById["machines.local.service.stop"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"machines.local.service.stop">>;
+        readonly update: (input: PublicActionInputById["machines.local.service.update"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"machines.local.service.update">>;
+      }> ;
+    }> ;
     readonly managed: Readonly<{
       readonly acquire: (input: PublicActionInputById["machines.managed.acquire"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"machines.managed.acquire">>;
       readonly bootstrap: Readonly<{
@@ -1888,6 +1910,9 @@ export type GeneratedActions = Readonly<{
     readonly activity: Readonly<{
       readonly get: (input: PublicActionInputById["session.activity.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.activity.get">>;
     }> ;
+    readonly agent: Readonly<{
+      readonly transition: (input: PublicActionInputById["session.agent.transition"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.agent.transition">>;
+    }> ;
     readonly archive: (input: PublicActionInputById["session.archive"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.archive">>;
     readonly attention: Readonly<{
       readonly set: (input: PublicActionInputById["session.attention.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.attention.set">>;
@@ -1923,6 +1948,9 @@ export type GeneratedActions = Readonly<{
     readonly checkpointCodeRollback: (input: PublicActionInputById["session.checkpoint_code_rollback"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.checkpoint_code_rollback">>;
     readonly context: Readonly<{
       readonly update: (input: PublicActionInputById["session.context.update"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.context.update">>;
+    }> ;
+    readonly continuation: Readonly<{
+      readonly inspect: (input: PublicActionInputById["session.continuation.inspect"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.continuation.inspect">>;
     }> ;
     readonly continueWithReplay: (input: PublicActionInputById["session.continue_with_replay"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.continue_with_replay">>;
     readonly delete: (input: PublicActionInputById["session.delete"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.delete">>;
@@ -3147,6 +3175,7 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
     },
     homes: {
       connect: (input: PublicActionInputById["homes.connect"], options?: ActionExecutionOptions) => execute("homes.connect", input, options),
+      reconnect: (input: PublicActionInputById["homes.reconnect"], options?: ActionExecutionOptions) => execute("homes.reconnect", input, options),
     },
     identity: {
       githubApps: {
@@ -3274,6 +3303,19 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         apply: (input: PublicActionInputById["machines.environment.apply"], options?: ActionExecutionOptions) => execute("machines.environment.apply", input, options),
       },
       list: (input: PublicActionInputById["machines.list"], options?: ActionExecutionOptions) => execute("machines.list", input, options),
+      local: {
+        service: {
+          autostart: {
+            set: (input: PublicActionInputById["machines.local.service.autostart.set"], options?: ActionExecutionOptions) => execute("machines.local.service.autostart.set", input, options),
+          },
+          disconnect: (input: PublicActionInputById["machines.local.service.disconnect"], options?: ActionExecutionOptions) => execute("machines.local.service.disconnect", input, options),
+          restart: (input: PublicActionInputById["machines.local.service.restart"], options?: ActionExecutionOptions) => execute("machines.local.service.restart", input, options),
+          start: (input: PublicActionInputById["machines.local.service.start"], options?: ActionExecutionOptions) => execute("machines.local.service.start", input, options),
+          status: (input: PublicActionInputById["machines.local.service.status"], options?: ActionExecutionOptions) => execute("machines.local.service.status", input, options),
+          stop: (input: PublicActionInputById["machines.local.service.stop"], options?: ActionExecutionOptions) => execute("machines.local.service.stop", input, options),
+          update: (input: PublicActionInputById["machines.local.service.update"], options?: ActionExecutionOptions) => execute("machines.local.service.update", input, options),
+        },
+      },
       managed: {
         acquire: (input: PublicActionInputById["machines.managed.acquire"], options?: ActionExecutionOptions) => execute("machines.managed.acquire", input, options),
         bootstrap: {
@@ -3851,6 +3893,9 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       activity: {
         get: (input: PublicActionInputById["session.activity.get"], options?: ActionExecutionOptions) => execute("session.activity.get", input, options),
       },
+      agent: {
+        transition: (input: PublicActionInputById["session.agent.transition"], options?: ActionExecutionOptions) => execute("session.agent.transition", input, options),
+      },
       archive: (input: PublicActionInputById["session.archive"], options?: ActionExecutionOptions) => execute("session.archive", input, options),
       attention: {
         set: (input: PublicActionInputById["session.attention.set"], options?: ActionExecutionOptions) => execute("session.attention.set", input, options),
@@ -3886,6 +3931,9 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       checkpointCodeRollback: (input: PublicActionInputById["session.checkpoint_code_rollback"], options?: ActionExecutionOptions) => execute("session.checkpoint_code_rollback", input, options),
       context: {
         update: (input: PublicActionInputById["session.context.update"], options?: ActionExecutionOptions) => execute("session.context.update", input, options),
+      },
+      continuation: {
+        inspect: (input: PublicActionInputById["session.continuation.inspect"], options?: ActionExecutionOptions) => execute("session.continuation.inspect", input, options),
       },
       continueWithReplay: (input: PublicActionInputById["session.continue_with_replay"], options?: ActionExecutionOptions) => execute("session.continue_with_replay", input, options),
       delete: (input: PublicActionInputById["session.delete"], options?: ActionExecutionOptions) => execute("session.delete", input, options),

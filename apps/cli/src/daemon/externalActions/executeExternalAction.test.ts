@@ -166,9 +166,10 @@ describe('executeExternalAction', () => {
     const target = { kind: 'machine' as const, machineId: 'controller' };
     const actionId = 'session.agent.transition';
     const sessionId = 'c123456789012345678901234';
+    const inputMeta: Record<string, string> = kind === 'inherited-plugin' ? {} : { permissionMode: kind === 'bounded-plugin' ? 'read-only' : 'yolo' };
     const envelope = { v: 1 as const, requestId: `transition-${kind}`, target, input: { sessionId,
       expectedCurrentAgentId: 'claude', selection: { v: 1, agentId: 'codex' },
-      input: { localId: 'first-input', text: 'Continue', meta: kind === 'inherited-plugin' ? {} : { permissionMode: kind === 'bounded-plugin' ? 'read-only' : 'yolo' } } } };
+      input: { localId: 'first-input', text: 'Continue', meta: inputMeta } } };
     const invocation: ExternalActionRequesterInvocationV1 | undefined = kind === 'missing' ? undefined : kind.includes('plugin')
       ? { caller: { kind: 'plugin', pluginId: 'acme.switch', contributionLocalId: 'switch' }, surface: 'plugin',
         authority: 'account_automation', callerPermissionMode: 'read-only', callerInputConstraints: { models: null, permissionModes: ['read-only'] } }
@@ -248,7 +249,7 @@ describe('executeExternalAction', () => {
     });
     try {
       const settings = normalizeActionsSettingsV1({ v: 1, actions: {}, approvalWaivedSurfaces: { 'session.agent.transition': ['api'] } });
-      const executor = createCliActionExecutor({ token: 'api-credential', credentials: { token: 'api-credential', encryption: null }, sessionId: '',
+      const executor = createCliActionExecutor({ token: 'api-credential', credentials: { token: 'api-credential', encryption: null }, sessionId: '', mode: 'plain', ctx: null,
         actionsSettingsProvider: { getActionsSettings: () => settings } });
       const result = await executor.execute('session.agent.transition', {
         sessionId: 'session-1', expectedCurrentAgentId: 'claude', selection: { v: 1, agentId: 'codex' },
@@ -280,8 +281,8 @@ describe('executeExternalAction', () => {
     const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(23));
     const authorization = { v: 1 as const, token: 'unadmitted-root', binding: { accountId, custodianAccountId: accountId,
       authentication: { kind: 'account' as const, tokenEpoch: 7 }, serverIdentityId: 'srv_home', machineId: 'controller', installationId: 'installation',
-      actionId: 'session.agent.transition', requestId: 'request', target: { kind: 'machine' as const, machineId: 'controller' } } };
-    const executor = createCliActionExecutor({ token: credentials.token, credentials, sessionId: '', serverId: 'profile',
+      actionId: 'session.agent.transition', requestId: 'request', requestEnvelopeDigest: 'A'.repeat(43), target: { kind: 'machine' as const, machineId: 'controller' } } };
+    const executor = createCliActionExecutor({ token: credentials.token, credentials, sessionId: '', serverId: 'profile', mode: 'plain', ctx: null,
       serverIdentityId: 'srv_home', serverHttpBaseUrl: 'https://home.test', externalActionMachineRequestPrivateKey: key.secretKey,
       externalActionMachineInstallationId: 'installation', actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({
         v: 1, actions: {}, approvalWaivedSurfaces: { 'session.agent.transition': ['ui'] } }) } });

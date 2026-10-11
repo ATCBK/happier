@@ -26,6 +26,44 @@ import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { parseToken } from '@/utils/auth/parseToken';
 import type { Settings } from '@/sync/domains/settings/settings';
 import { waitForNetworkResponseForTests } from '../mocks/runtimeFetch';
+import type { ManagedMachineActionInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import type { ActionExecutorContext, WorkflowActionExecute } from '@happier-dev/protocol';
+
+/** Keep the real Workflow transport in its UI program during cross-program tests. */
+export async function loadWorkflowActionTransportForTests() {
+    const transportSource = '@/sync/ops/actions/workflowActionTransport';
+    return vi.importActual<{ createUiWorkflowActionTransport(params: Readonly<{
+        account: Readonly<{ serverId: string; accountId: string; assertCurrent(): void }>;
+        resolveFallbackMachineId(): string | null;
+        transport(input: Readonly<{ machineId: string; method: string; payload: unknown;
+            target: Extract<NonNullable<ActionExecutorContext['externalActionTarget']>, { kind: 'machine' }>;
+            signal?: AbortSignal; operationTimeoutMs?: null }>): Promise<unknown>;
+    }>): WorkflowActionExecute }>(transportSource);
+}
+
+/** Cross-program compositions load UI owners in Vitest, under the UI resolver. */
+export async function loadScopedHomeActionExecutorForTests() {
+    const scopedExecutorSource = '@/sync/ops/actions/scopedHomeActionExecutor';
+    return vi.importActual<{ resetScopedHomeActionExecutorsForTests(): void }>(scopedExecutorSource);
+}
+
+/** Cross-program compositions load UI owners in Vitest, under the UI resolver. */
+export async function loadManagedProvisionerCatalogForTests() {
+    // Nonliteral specifiers keep the caller's compiler from rooting UI owners
+    // in a different program. These are real modules, not substituted behavior.
+    const provisionerClientSource = '@/components/settings/machines/managed/managedProvisionerClient';
+    const [scoped, client] = await Promise.all([
+        loadScopedHomeActionExecutorForTests(),
+        vi.importActual<{ createManagedProvisionerClient(scope: Readonly<{ serverId: string; accountId: string }>, homeId: string): {
+            read(actionId: 'machines.provisioners.list', input: ManagedMachineActionInputV1<'machines.provisioners.list'>): Promise<unknown>;
+        } }>(provisionerClientSource),
+    ]);
+    return {
+        reset: scoped.resetScopedHomeActionExecutorsForTests,
+        read: (scope: Readonly<{ serverId: string; accountId: string }>, input: ManagedMachineActionInputV1<'machines.provisioners.list'>) =>
+            client.createManagedProvisionerClient(scope, input.homeId).read('machines.provisioners.list', input),
+    };
+}
 
 /**
  * One or more Homes, each answering for itself.

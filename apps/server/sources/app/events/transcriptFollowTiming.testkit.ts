@@ -4,11 +4,11 @@ import { Server, type Socket } from 'socket.io';
 import { io as connect } from 'socket.io-client';
 import tweetnacl from 'tweetnacl';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createExternalActionDaemonDispatchResponse, EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1,
     parseExternalActionResponseEnvelopeV1, getActionSpec,
-    type ExternalActionDaemonDispatchRequest } from '@happier-dev/protocol/actions';
+    type ActionExecutorDeps, type ExternalActionDaemonDispatchRequest } from '@happier-dev/protocol/actions';
 import { sealExternalActionRequestV2, openExternalActionResponseV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import { createMachineDataEncryptionKeyV1 } from '@happier-dev/protocol/machines/machineStoredContent';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
@@ -18,7 +18,6 @@ import { decodeBase64 } from 'privacy-kit';
 import { createServerBackedSessionTranscriptStore } from '../../../../cli/src/api/session/createServerBackedSessionTranscriptStore';
 import { createSessionTranscriptFollowLeaseRegistry } from '../../../../cli/src/api/session/followSessionTranscript';
 import { executeCliTranscriptAction } from '../../../../cli/src/session/actions/executeCliTranscriptAction';
-import { createCliActionDeps } from '../../../../cli/src/session/actions/createCliActionDeps';
 import { executeExternalAction } from '../../../../cli/src/daemon/externalActions/executeExternalAction';
 import { createDaemonExternalActionTargetResolver } from '../../../../cli/src/daemon/externalActions/daemonExternalActionTargetResolver';
 import { runWithServerHttpBaseUrl } from '../../../../cli/src/api/client/serverHttpBaseUrl';
@@ -156,6 +155,12 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                     stamps.waiterSignalled = performance.now();
                 }, onError),
         };
+        // Run the real CLI factory through this composition's testkit boundary;
+        // the server compiler must not own the CLI factory's source graph.
+        const cliActionDepsSource = '../../../../cli/src/session/actions/createCliActionDeps';
+        const { createCliActionDeps } = await vi.importActual<{
+            createCliActionDeps(params: Readonly<{ token: string; sessionId: string }> & SessionStoredContentCryptoContext): ActionExecutorDeps;
+        }>(cliActionDepsSource);
         const executor = createActionExecutor({ ...createCliActionDeps({ token, sessionId: session.id, ...contentContext }),
             sessionTranscriptAction: args => executeCliTranscriptAction({ ...args,
             defaultSessionId: session.id, options: { transcriptSessionId: session.id, transcriptStore: observedStore,
