@@ -480,6 +480,23 @@ describe('SessionView (data ready gating)', () => {
         await prepareSessionDraftPersistenceStorage();
     });
 
+    it('updates the mounted header when history supplies the first prompt title without a metadata change', async () => {
+        isDataReadyState = true;
+        sessionState = createSessionFixture({ id: 's1', serverId: account.home.id,
+            metadata: { path: '/tmp', homeDir: '/home/test', host: 'devbox', machineId: 'm1', version: '1' },
+        });
+        const { SessionView } = await sessionViewModulePromise;
+        const screen = await renderScreen(<AppPaneProvider><SessionView id="s1" routeServerId={account.home.id} /></AppPaneProvider>);
+        expect(screen.findByTestId('session-header-title')?.props.children).toBe('tmp');
+        const sessionBeforeHistory = canonicalStorage.getState().sessions.s1;
+        await act(async () => canonicalStorage.getState().applyMessages('s1', [{
+            id: 'first-prompt', role: 'user', localId: null, createdAt: 1, isSidechain: false,
+            content: { type: 'text', text: 'Plan the release' },
+        }]));
+        expect(canonicalStorage.getState().sessions.s1).toBe(sessionBeforeHistory);
+        expect(screen.findByTestId('session-header-title')?.props.children).toBe('Plan the release');
+    });
+
     it.each([
         'encrypted_access_pending',
         'recipient_encryption_setup_required',

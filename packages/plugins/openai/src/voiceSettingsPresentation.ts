@@ -25,6 +25,20 @@ export const OPENAI_REALTIME_SETTINGS_SECTION = Object.freeze({
       kind: 'voice_catalog', path: 'voice', valueShape: 'string', customIdAllowed: true,
       titleKey: 'settingsVoice.realtimeProviders.fields.voice.title',
       subtitleKey: 'settingsVoice.realtimeProviders.fields.voice.subtitle',
+      // OpenAI's Realtime voice options (2026-10-11):
+      // https://developers.openai.com/api/docs/guides/realtime-conversations#voice-options
+      options: [
+        { id: 'alloy', title: 'Alloy' },
+        { id: 'ash', title: 'Ash' },
+        { id: 'ballad', title: 'Ballad' },
+        { id: 'coral', title: 'Coral' },
+        { id: 'echo', title: 'Echo' },
+        { id: 'sage', title: 'Sage' },
+        { id: 'shimmer', title: 'Shimmer' },
+        { id: 'verse', title: 'Verse' },
+        { id: 'marin', title: 'Marin' },
+        { id: 'cedar', title: 'Cedar' },
+      ],
     },
     {
       kind: 'instructions', path: 'instructions', maxLength: 10_000,

@@ -1,9 +1,24 @@
 import type { BundledConversationProviderClient } from '@/voice/credentials/bundledConversationClient';
+import { readSessionVoiceSettingFieldV1, type SessionVoiceDeclarationV1 } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
+import { tLoose } from '@/text';
 
 export type VoiceCatalogRow = Readonly<{ id: string; name: string; subtitle?: string; previewUrl?: string | null }>;
 export type VoiceCatalogClient = Pick<BundledConversationProviderClient, 'fetchVoiceCatalog'>;
 function record(value: unknown): Readonly<Record<string, unknown>> | null {
     return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Readonly<Record<string, unknown>> : null;
+}
+
+/** Static voice names come from the provider declaration, through the same catalog owner as fetched rows. */
+export function readDeclaredVoiceSettingsCatalog(declaration: SessionVoiceDeclarationV1): readonly VoiceCatalogRow[] | null {
+    const voiceField = readSessionVoiceSettingFieldV1(declaration);
+    const field = declaration.settings?.presentation?.fields.find(candidate => candidate.path === voiceField?.path);
+    if (!field?.options) return null;
+    return field.options.map(option => {
+        if (typeof option === 'string') return { id: option, name: option };
+        const title = option.titleKey ?? option.title;
+        const name = typeof title === 'string' ? tLoose(title) : title?.fallback ?? option.id;
+        return { id: option.id, name };
+    });
 }
 
 /** Settings UI and Actions resolve preview IDs from the same provider catalog, never caller URLs. */

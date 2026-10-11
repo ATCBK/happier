@@ -489,6 +489,45 @@ describe('buildSessionViewShellSessionSignature', () => {
 });
 
 describe('useSessionViewShellSession', () => {
+    it('publishes a hydrated title while ignoring other-Home titles and later transcript-only changes', async () => {
+        const previousState = storage.getState();
+        const home = 'title-home';
+        const base = createSessionFixture({ id: 'title-session', serverId: home,
+            metadata: { path: '/tmp', host: 'devbox', version: '1' } });
+        const row = createSessionListRenderableSessionFixture({ id: base.id,
+            metadata: { path: '/tmp', host: 'devbox', summaryText: null } });
+        const render = vi.fn(() => {
+            const session = useSessionViewShellSession(base.id, home);
+            return session ? getSessionName(session, home) : null;
+        });
+        let hook: Awaited<ReturnType<typeof renderHook>> | null = null;
+        try {
+            storage.setState({ sessions: { [base.id]: base }, sessionListRowsByServerId: { [home]: { [base.id]: row } } });
+            hook = await renderHook(render);
+            expect(hook.getCurrent()).toBe('tmp');
+            render.mockClear();
+            await act(async () => storage.setState({ sessionListRowsByServerId: {
+                ...storage.getState().sessionListRowsByServerId,
+                'other-title-home': { [base.id]: { ...row, metadata: { ...row.metadata!, summaryText: 'Foreign title' } } },
+            } }));
+            expect(render).not.toHaveBeenCalled();
+            await act(async () => storage.setState({ sessionListRowsByServerId: {
+                ...storage.getState().sessionListRowsByServerId,
+                [home]: { [base.id]: { ...row, metadata: { ...row.metadata!, summaryText: 'Plan the release' } } },
+            } }));
+            expect(hook.getCurrent()).toBe('Plan the release');
+            render.mockClear();
+            await act(async () => storage.setState({ sessionListRowsByServerId: {
+                ...storage.getState().sessionListRowsByServerId,
+                [home]: { [base.id]: { ...storage.getState().sessionListRowsByServerId[home][base.id], seq: 26 } },
+            } }));
+            expect(render).not.toHaveBeenCalled();
+        } finally {
+            await hook?.unmount();
+            storage.setState(previousState);
+        }
+    });
+
     it.each([
         ['ready', 'encrypted_content_unavailable', 'content_blocked'],
         ['encrypted_content_unavailable', 'ready', null],

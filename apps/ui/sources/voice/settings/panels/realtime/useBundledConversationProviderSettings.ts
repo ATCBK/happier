@@ -5,7 +5,7 @@ import { createBundledConversationUi } from '@/voice/credentials/bundledConversa
 import { BundledSpeechDaemonClient } from '@/voice/credentials/bundledSpeechClient';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
 import { resolveSelectedVoiceProviderTitleKey } from '@/voice/registry/providerSelection';
-import { BUILT_IN_LOCAL_NEURAL_VOICE_DECLARATION, BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID, type SessionVoiceDeclarationV1 } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
+import { BUILT_IN_LOCAL_NEURAL_VOICE_DECLARATION, BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID, readSessionVoiceSettingFieldV1, type SessionVoiceDeclarationV1 } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
 import { VoiceProviderSettingsJsonValueV1Schema, type VoiceProviderSettingsJsonValueV1 } from '@happier-dev/protocol/voice/realtime/providerSettings';
 import { readLocalNeuralVoiceCatalog } from '@/voice/kokoro/assets/readLocalNeuralVoiceCatalog';
 import { resolveVoiceExecutionMachineIdFromState } from '@/voice/settings/executionMachine';
@@ -24,6 +24,8 @@ import { readBundledSpeechSettingsDescriptorFromEntry } from '../bundledSpeech/d
 import {
   parseRealtimeSettingsDescriptor,
   resolveRealtimeProviderConfig,
+  readRealtimeProviderConfigPath,
+  updateRealtimeProviderConfig,
   type RealtimeProviderSettingsOwner,
   type RealtimeSettingsDescriptor,
   type ResolvedRealtimeProviderConfig,
@@ -46,6 +48,31 @@ function createUiSafely(providerId: string) {
   } catch {
     return null;
   }
+}
+
+function readCatalogCredentialBindings(voice: VoiceSettings, providerId: string) {
+  const entry = registry.get(providerId);
+  return entry?.declaration ? voice.credentialBindings.filter(binding =>
+    binding.contribution.pluginId === entry.pluginId && binding.contribution.localId === entry.declaration?.id) : [];
+}
+
+function readCatalogConfig(providerId: string, config: Readonly<Record<string, unknown>>) {
+  const entry = registry.get(providerId);
+  const owner = entry?.providerSettings;
+  const field = entry?.declaration ? readSessionVoiceSettingFieldV1(entry.declaration) : null;
+  if (!owner || !field) return config;
+  // Selecting a voice does not change the catalog that names it. Preserve every other
+  // provider-owned input, and normalize only its declared voice field through its parser.
+  const catalogOwner: RealtimeProviderSettingsOwner = {
+    schemaVersion: owner.schemaVersion,
+    defaultConfig: owner.defaultConfig,
+    parseConfig(value) {
+      const parsed = owner.parseConfig(value);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    },
+  };
+  return updateRealtimeProviderConfig(catalogOwner, config, field.path,
+    readRealtimeProviderConfigPath(owner.defaultConfig, field.path.split('.'))) ?? config;
 }
 
 /**
@@ -114,16 +141,21 @@ export function useBundledConversationProviderSettings(voice: VoiceSettings): Re
         } },
       };
       const declaration = entry?.kind === 'voice.speech-engine.v1' ? entry.declaration ?? null : null;
+      const speechConfig = readVoiceProviderSettingsConfig(voice, tts.provider) ?? {};
       return { providerId: tts.provider, providerTitleKey, declaration,
-        config: VoiceProviderSettingsJsonValueV1Schema.parse(readVoiceProviderSettingsConfig(voice, tts.provider) ?? {}),
-        targetKey: JSON.stringify([tts.provider, voice.providers[tts.provider], machineId, scope, registrationsRevision]),
+        config: VoiceProviderSettingsJsonValueV1Schema.parse(speechConfig),
+        targetKey: JSON.stringify([tts.provider, entry?.providerSettings?.schemaVersion ?? voice.providers[tts.provider]?.schemaVersion,
+          readCatalogConfig(tts.provider, speechConfig), readCatalogCredentialBindings(voice, tts.provider),
+          machineId, scope, registrationsRevision]),
         client: entry && declaration ? { fetchVoiceCatalog: signal =>
           new BundledSpeechDaemonClient().fetchCatalog(entry, 'voices', signal, machineId) } : null };
     }
     const declaration = registry.get(providerId)?.declaration ?? null;
     return { providerId, providerTitleKey: resolveSelectedVoiceProviderTitleKey(voice, registry),
       declaration, config: VoiceProviderSettingsJsonValueV1Schema.parse(config ?? {}),
-      client: bundledUi?.client ?? null, targetKey: JSON.stringify([providerId, envelope, machineId, scope, registrationsRevision]) };
-  }, [bundledUi, config, envelope, machineId, providerId, registrationsRevision, scope, voice]);
+      client: bundledUi?.client ?? null, targetKey: JSON.stringify([providerId, owner?.schemaVersion ?? envelope?.schemaVersion,
+        config ? readCatalogConfig(providerId, config) : envelope, readCatalogCredentialBindings(voice, providerId),
+        machineId, scope, registrationsRevision]) };
+  }, [bundledUi, config, envelope, machineId, owner, providerId, registrationsRevision, scope, voice]);
   return { providerId, bundledUi, descriptor, owner, resolved, config, sessionChoice };
 }

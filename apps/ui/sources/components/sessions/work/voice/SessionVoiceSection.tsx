@@ -39,6 +39,7 @@ import {
   useRealtimeVoiceCatalog,
 } from '@/voice/settings/panels/realtime/realtimeVoiceCatalogMenu';
 import { useBundledConversationProviderSettings } from '@/voice/settings/panels/realtime/useBundledConversationProviderSettings';
+import { readDeclaredVoiceSettingsCatalog } from '@/voice/settings/panels/realtime/voiceCatalog';
 import type { VoiceCatalogPreviewSynthesizer } from '@/voice/settings/panels/realtime/catalogPreview';
 import { resolveSessionVoicePreference } from '@/voice/settings/resolveSessionVoicePreference';
 
@@ -153,10 +154,12 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
   const [customOpen, setCustomOpen] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState(false);
-  const { catalog, requestCatalog } = useRealtimeVoiceCatalog({
+  const declaredRows = React.useMemo(() => readDeclaredVoiceSettingsCatalog(declaration), [declaration]);
+  const { catalog, lastKnownRows, requestCatalog } = useRealtimeVoiceCatalog({
     client: props.client,
     credentialUsable: true,
     targetKey: props.catalogTargetKey,
+    declaredRows,
   });
   const { previewingId, playPreview, stopPreview } =
     useRealtimeCatalogPreview(providerId, { targetKey: props.catalogTargetKey, synthesize: props.preview });
@@ -185,9 +188,12 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
   const nameOf = React.useCallback(
     (id: string | null) => {
       if (!id) return null;
-      return catalogRows?.find((row) => row.id === id)?.name ?? id;
+      const savedName = preference?.providerContributionId === providerId
+        && preference.settingFieldPath === field.path && readVoiceId(preference.value) === id
+        ? preference.displayName : undefined;
+      return lastKnownRows?.find((row) => row.id === id)?.name ?? savedName ?? id;
     },
-    [catalogRows],
+    [field.path, lastKnownRows, preference, providerId],
   );
   const accountVoiceId = readVoiceId(
     readSessionVoiceSettingValueV1(config, field),
@@ -251,11 +257,13 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
     [serverId, session.id, session.metadataVersion],
   );
   const select = React.useCallback(
-    (value: VoiceProviderSettingsJsonValueV1) => {
+    (value: VoiceProviderSettingsJsonValueV1, displayName?: string) => {
+      const chosenName = displayName?.trim();
       write({
         providerContributionId: providerId,
         settingFieldPath: field.path,
         value,
+        ...(chosenName ? { displayName: chosenName } : {}),
       });
     },
     [field.path, providerId, write],
@@ -384,7 +392,8 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
             setCustomOpen(true);
             return;
           }
-          select(field.valueShape === 'string' ? id : { kind: 'catalog', id });
+          select(field.valueShape === 'string' ? id : { kind: 'catalog', id },
+            catalogRows?.find((row) => row.id === id)?.name);
         }}
       />
       {customOpen ? (

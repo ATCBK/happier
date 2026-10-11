@@ -15,7 +15,7 @@ import { resolveSessionReadStateAction } from '../readState/sessionReadState';
 import { buildSessionListRenderableMetadataComparison } from './sessionListRenderableMetadataComparison';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from './sessionListRenderable';
-import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 const canonicalExternalSessionLink = {
     v: 1 as const,
@@ -125,19 +125,19 @@ describe('derivePendingRequestFlagsFromAgentState', () => {
 
 describe('preserveSessionListRenderableStaleFields', () => {
     it('does not reuse a renderable when only the responsible Account summary changes', () => {
-        const previous = buildRenderable({
+        const previous = buildSessionListRenderableFromSession(createSessionFixture({
             id: 's_responsible_summary',
             responsibleAccountId: 'account-alice',
             responsibleAccount: {
                 kind: 'account', accountId: 'account-alice', firstName: 'Alice', lastName: null, username: 'alice', avatarUrl: null,
             },
-        });
-        const next = buildRenderable({
+        }));
+        const next = {
             ...previous,
             responsibleAccount: {
                 kind: 'account', accountId: 'account-alice', firstName: 'Alicia', lastName: null, username: 'alice', avatarUrl: null,
             },
-        });
+        } satisfies SessionListRenderableSession;
 
         expect(areSessionListRenderablesEqual(previous, next)).toBe(false);
         expect(preserveSessionListRenderableStaleFields(previous, next)).toBe(next);

@@ -25,6 +25,14 @@ const PREVIEW_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
 
 export type RealtimeCatalogState = VoiceRemoteCatalogState<VoiceCatalogRow>;
 
+const retainedCatalogRows = new Map<string, readonly VoiceCatalogRow[]>();
+const retainedCatalogListeners = new Map<string, Set<() => void>>();
+
+function retainCatalogRows(targetKey: string, rows: readonly VoiceCatalogRow[]) {
+  retainedCatalogRows.set(targetKey, rows);
+  retainedCatalogListeners.get(targetKey)?.forEach((listener) => listener());
+}
+
 /** The one catalog preview player per provider, shared by Settings and a Session's Work voice picker. */
 export function useRealtimeCatalogPreview(providerId: string, options?: Readonly<{
   targetKey?: string;
@@ -200,29 +208,57 @@ export function useRealtimeVoiceCatalog(params: Readonly<{
   client: Pick<BundledConversationProviderClient, 'fetchVoiceCatalog'> | null;
   credentialUsable: boolean;
   targetKey: string;
-}>): Readonly<{ catalog: RealtimeCatalogState; requestCatalog: () => void; resetCatalog: () => void }> {
-  const { client, credentialUsable, targetKey } = params;
+  declaredRows?: readonly VoiceCatalogRow[] | null;
+}>): Readonly<{
+  catalog: RealtimeCatalogState;
+  lastKnownRows: readonly VoiceCatalogRow[] | null;
+  requestCatalog: () => void;
+  resetCatalog: () => void;
+}> {
+  const { client, credentialUsable, targetKey, declaredRows } = params;
+  const subscribeRetainedRows = React.useCallback((listener: () => void) => {
+    const listeners = retainedCatalogListeners.get(targetKey) ?? new Set<() => void>();
+    retainedCatalogListeners.set(targetKey, listeners);
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) retainedCatalogListeners.delete(targetKey);
+    };
+  }, [targetKey]);
+  const readRetainedRows = React.useCallback(() => retainedCatalogRows.get(targetKey) ?? null, [targetKey]);
+  const retainedRows = React.useSyncExternalStore(subscribeRetainedRows, readRetainedRows, readRetainedRows);
+  const lastKnownRows = declaredRows ?? retainedRows;
   const [state, setState] = React.useState<Readonly<{ targetKey: string; value: RealtimeCatalogState }> | null>(null);
-  const catalog: RealtimeCatalogState = state?.targetKey === targetKey ? state.value : { phase: 'idle' };
+  const catalog: RealtimeCatalogState = declaredRows ? { phase: 'ready', rows: declaredRows }
+    : state?.targetKey === targetKey ? state.value : { phase: 'idle' };
   const requestRef = React.useRef<{ generation: number; controller: AbortController | null }>({ generation: 0, controller: null });
   const requestCatalog = React.useCallback(() => {
-    if (!client || !credentialUsable || catalog.phase === 'loading') return;
+    if (declaredRows || !client || !credentialUsable || catalog.phase === 'loading') return;
     requestRef.current.controller?.abort();
     const controller = new AbortController();
     const generation = requestRef.current.generation + 1;
     requestRef.current = { generation, controller };
     setState({ targetKey, value: { phase: 'loading' } });
     void fetchVoiceSettingsCatalog(client, controller.signal).then((rows) => {
-      if (requestRef.current.generation === generation && !controller.signal.aborted) setState({ targetKey, value: { phase: 'ready', rows } });
+      if (requestRef.current.generation === generation && !controller.signal.aborted) {
+        retainCatalogRows(targetKey, rows);
+        setState({ targetKey, value: { phase: 'ready', rows } });
+      }
     }).catch(() => {
       if (requestRef.current.generation === generation && !controller.signal.aborted) setState({ targetKey, value: { phase: 'error' } });
     });
-  }, [catalog.phase, client, credentialUsable, targetKey]);
-  const resetCatalog = React.useCallback(() => setState({ targetKey, value: { phase: 'idle' } }), [targetKey]);
+  }, [catalog.phase, client, credentialUsable, declaredRows, targetKey]);
+  const resetCatalog = React.useCallback(() => {
+    requestRef.current.controller?.abort();
+    requestRef.current = { generation: requestRef.current.generation + 1, controller: null };
+    retainedCatalogRows.delete(targetKey);
+    retainedCatalogListeners.get(targetKey)?.forEach(listener => listener());
+    setState({ targetKey, value: { phase: 'idle' } });
+  }, [targetKey]);
   React.useEffect(() => {
     requestRef.current.controller?.abort();
     requestRef.current = { generation: requestRef.current.generation + 1, controller: null };
   }, [targetKey]);
   React.useEffect(() => () => requestRef.current.controller?.abort(), []);
-  return { catalog, requestCatalog, resetCatalog };
+  return { catalog, lastKnownRows, requestCatalog, resetCatalog };
 }

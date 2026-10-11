@@ -26,6 +26,8 @@ export const SessionVoicePreferenceV1Schema = lazyZodSchema(() => z.object({
   providerContributionId: VoiceProviderIdSchema,
   settingFieldPath: VoiceProviderSettingsPresentationPathSchema,
   value: VoiceProviderSettingsJsonValueV1Schema,
+  /** Last selected catalog label; presentation only, never provider config or voice admission. */
+  displayName: z.string().trim().min(1).optional(),
 }).strict());
 export type SessionVoicePreferenceV1 = Readonly<z.infer<typeof SessionVoicePreferenceV1Schema>>;
 function isVoiceSettingsRecord(value: VoiceProviderSettingsJsonValueV1 | undefined): value is Readonly<{ [key: string]: VoiceProviderSettingsJsonValueV1 }> {

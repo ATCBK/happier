@@ -1,4 +1,5 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
+import type { Message } from '@happier-dev/session-core/messages';
 
 type SessionMetadataCarrier = Readonly<{
     metadata?: unknown;
@@ -11,7 +12,25 @@ function asRecord(value: unknown): Record<string, unknown> | null {
         : null;
 }
 
-export function readSessionDisplayTitleField(session: SessionMetadataCarrier | null | undefined): Readonly<{
+function normalizeTransientTitleText(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().replace(/\s+/g, ' ');
+    return normalized.length > 0 ? normalized : null;
+}
+
+function readFirstUserMessageTitle(messages: ReadonlyArray<Message> | undefined): string | null {
+    if (!messages) return null;
+    for (const message of messages) {
+        if (message.kind !== 'user-text') continue;
+        return normalizeTransientTitleText(message.displayText) ?? normalizeTransientTitleText(message.text);
+    }
+    return null;
+}
+
+export function readSessionDisplayTitleField(
+    session: SessionMetadataCarrier | null | undefined,
+    transient?: Readonly<{ messages?: ReadonlyArray<Message>; fallbackTitle?: string | null }>,
+): Readonly<{
     value: string | null;
     updatedAt: number | null;
 }> {
@@ -26,7 +45,10 @@ export function readSessionDisplayTitleField(session: SessionMetadataCarrier | n
                 ? session.lockedDisplayTitle.trim()
                 : '';
     return {
-        value: rawRenderableValue || null,
+        // A transient prompt title never replaces an explicit name or revives unreadable metadata.
+        value: rawRenderableValue || (metadata && !normalizeTransientTitleText(metadata.name)
+            ? readFirstUserMessageTitle(transient?.messages) ?? (transient?.fallbackTitle?.trim() || null)
+            : null),
         updatedAt: typeof summary?.updatedAt === 'number' && Number.isFinite(summary.updatedAt)
             ? summary.updatedAt
             : null,

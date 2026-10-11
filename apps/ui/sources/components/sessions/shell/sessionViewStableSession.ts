@@ -4,12 +4,13 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import { storage } from '@/sync/domains/state/storage';
 import { buildSessionMetadataStabilitySignatureValue } from '@/sync/domains/session/metadata/sessionMetadataStability';
 import { resolveServerIdForSessionIdFromLocalState } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, getActiveServerId } from '@/sync/domains/server/serverProfiles';
 import type { StorageState } from '@/sync/store/types';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readRollbackEligibleTurnStarts } from '@/sync/domains/session/rollback/rollbackEligibleTurnStarts';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { buildSessionFromListRenderable } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
+import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 
 type ShellVisibleAgentStateRequestSignature = ReadonlyArray<readonly [
     string,
@@ -179,16 +180,25 @@ export function useSessionViewShellSession(sessionId: string, expectedServerId?:
         let previousSession: Session | null = null;
         let previousSignature = 'null';
         let previousSource: Session | null = null;
+        let previousTitle: string | null = null;
         return (state: StorageState): Session | null => {
             const session = selectSessionViewShellSessionForRouteState(state, sessionId, expectedServerId);
-            if (session === previousSource) return previousSession;
+            const row = session ? readSessionListRowForServerId(state.sessionListRowsByServerId,
+                expectedServerId || session.serverId || getActiveServerId(), sessionId) : null;
+            const title = readSessionDisplayTitleField(session, {
+                fallbackTitle: readSessionDisplayTitleField(row).value,
+            }).value;
+            if (session === previousSource && title === previousTitle) return previousSession;
             previousSource = session;
-            const signature = session ? buildSessionViewShellSessionSignature(session) : 'null';
+            previousTitle = title;
+            const signature = session ? JSON.stringify([buildSessionViewShellSessionSignature(session), title]) : 'null';
             // Apply the existing shell projection before Zustand notifies React. Transcript-only
             // fields have their own leaf subscriptions and must not invalidate the shell.
             if (signature !== previousSignature) {
                 previousSignature = signature;
-                previousSession = session;
+                // A row-only title hydration must notify memoized header consumers even when
+                // the full Session is unchanged. Other transcript changes retain its identity.
+                previousSession = session && session === previousSession ? { ...session } : session;
             }
             return previousSession;
         };

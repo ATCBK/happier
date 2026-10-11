@@ -3,6 +3,19 @@ import { SessionVoicePreferenceV1Schema, readSessionVoicePreferenceV1, writeSess
 import * as voicePreferences from './sessionVoicePreferenceV1.js';
 
 describe('stored Session voice preference', () => {
+  it('retains a chosen catalog display name without changing the provider-owned value grammar', () => {
+    const preference = { providerContributionId: 'happier.voice.builtin/local-neural', settingFieldPath: 'voiceId', value: 'am_adam', displayName: 'Adam' };
+    expect(readSessionVoicePreferenceV1(preference)).toEqual(preference);
+    const declaration = voicePreferences.BUILT_IN_LOCAL_NEURAL_VOICE_DECLARATION;
+    const admitted = voicePreferences.admitDeclaredSessionVoicePreferenceV1({
+      providerContributionId: preference.providerContributionId, declaration,
+      providerConfig: { voiceId: 'af_heart' }, preference,
+    });
+    expect(admitted.kind).toBe('selected');
+    if (admitted.kind !== 'selected') throw new Error('Voice preference rejected');
+    expect(admitted.providerConfig).toEqual({ voiceId: 'am_adam' });
+  });
+
   it('admits only the built-in local model voice field, without exposing model or speed overrides', () => {
     const declaration = voicePreferences.BUILT_IN_LOCAL_NEURAL_VOICE_DECLARATION;
     expect(voicePreferences.readBuiltInSessionVoiceDeclarationV1('happier.voice.builtin/local-neural')).toBe(declaration);
