@@ -476,12 +476,12 @@ export function snapshotScmHostingProviderRuntime(
 
 const SCM_BACKEND_HANDLER_METHODS = Object.freeze({
     detection: ['detectRepo', 'describeBackend'],
-    read: ['statusSnapshot', 'worktreesEnrichment', 'diffFile', 'diffCommit', 'logList', 'historyEntries', 'stashList'],
+    read: ['ignoredPaths', 'statusSnapshot', 'worktreesEnrichment', 'diffFile', 'diffCommit', 'logList', 'historyEntries', 'stashList'],
     changeSet: ['include', 'exclude', 'discard'],
     commit: ['captureTarget', 'create', 'backout', 'resolveOutcome', 'undoLast'],
     remote: ['add', 'setUrl', 'remove', 'fetch', 'pull', 'push', 'publish'],
     branch: ['list', 'create', 'checkout', 'merge', 'rebase', 'operationContinue', 'operationSkip', 'operationAbort', 'conflictAcceptSide', 'conflictMarkResolved'],
-    worktree: ['create', 'remove', 'prune'],
+    worktree: ['create', 'remove', 'prune', 'retire', 'reinstate'],
     lifecycle: ['init', 'clone', 'removeIndexLock'],
     hosting: [
         'repositoryDescribePublishTargets',
@@ -496,6 +496,7 @@ const SCM_BACKEND_HANDLER_METHODS = Object.freeze({
     ],
     stash: ['create', 'drop', 'pop', 'apply', 'show'],
     workspaceIntegration: [
+        'classifyDirectoryIgnores',
         'inspectWorkspaceLocation',
         'reconcilePostMaterialization',
         'prepareReviewWorkspace',

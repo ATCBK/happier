@@ -15,10 +15,12 @@ import type {
 } from '@happier-dev/plugin-sdk/scm/backend';
 import { readCurrentBackendRuntimeServices as readCurrentScmBackendRuntimeServices } from '@happier-dev/plugin-sdk/scm/backend';
 import { readCurrentHostingProviderRuntimeServices as readCurrentScmHostingProviderRuntimeServices } from '@happier-dev/plugin-sdk/scm/hosting';
+import { createPluginRegistrationScope } from '@happier-dev/plugin-sdk/host/registration';
 
 import { createRegisteredScmBackendRegistry } from './registeredScmBackendRegistry';
 import { createRegisteredScmBackendAdapter } from './registeredScmBackendAdapter';
 import { createGitBackend, createGitScmBackendRuntimeRegistration } from '../../../../../packages/plugins/scm-git/src/backend';
+import { GIT_PLUGIN, GIT_SCM_BACKEND_CONTRIBUTION } from '../../../../../packages/plugins/scm-git/src/manifest';
 import type { ScmBackend } from '../types';
 
 const TEST_LAST_ACTIVITY_AT_MS = Date.UTC(2026, 4, 13, 4, 0, 0);
@@ -164,6 +166,40 @@ function createDefinition(input?: Readonly<{
 }
 
 describe('registered SCM backend registry', () => {
+    it('admits the real committed Git plugin for clone, worktree and workspace transfer', async () => {
+        const pluginId = 'happier.scm.backend.git';
+        const scope = createPluginRegistrationScope({
+            pluginId,
+            target: { realm: 'daemon' },
+            rights: [{ family: 'scmBackends', localId: 'git', target: { realm: 'daemon' } }],
+        });
+        try {
+            await GIT_PLUGIN.activate(scope.api);
+            const [captured] = scope.commit();
+            if (captured?.family !== 'scmBackends') throw new Error('Git did not register its backend');
+            const resolved = createRegisteredScmBackendRegistry({
+                definitions: [{ pluginId, contributionId: 'git', definition: GIT_SCM_BACKEND_CONTRIBUTION }],
+                registrations: [{ pluginId, registration: { id: captured.localId, ...captured.value } }],
+            });
+            expect(resolved.diagnostics).toEqual([]);
+            expect(resolved.backends).toHaveLength(1);
+            const [backend] = resolved.backends;
+            expect(backend?.repositoryClone).toBeTypeOf('function');
+            expect(backend?.worktreeRetire).toBeTypeOf('function');
+            expect(backend?.worktreeReinstate).toBeTypeOf('function');
+            expect(backend?.workspaceIntegration?.realizeWorkspaceCheckout).toBeTypeOf('function');
+            expect(backend?.workspaceIntegration?.resolveWorkspaceTransfer).toBeTypeOf('function');
+            // Optional directory classification does not participate in capability
+            // admission, so backend admission alone cannot detect its loss.
+            expect(await backend?.workspaceIntegration?.classifyDirectoryIgnores?.({
+                cwd: '/workspace',
+                entries: [{ name: '.git', type: 'directory' }],
+            })).toEqual(new Set(['.git']));
+        } finally {
+            await scope.dispose();
+        }
+    });
+
     it('rejects advertised entry history when its typed batch producer is missing', () => {
         const capabilities = createCapabilities();
         capabilities.read.historyEntries = { support: 'supported' };
