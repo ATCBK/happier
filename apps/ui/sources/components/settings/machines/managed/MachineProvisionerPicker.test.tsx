@@ -12,8 +12,10 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 
+const navigation = vi.hoisted(() => ({ push: vi.fn() }));
 installApprovalCommonModuleMocks({
   text: async () => vi.importActual<typeof import('@/text')>('@/text'),
+  router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: navigation }).module,
 });
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -46,9 +48,13 @@ describe('provisioner picker demand', () => {
       .some(node => node.props.children === t('machinePresets.newPreset'))).toBe(true);
     expect(screen.findByTestId(`managed-picker.home:${homeId}`)).not.toBeNull();
   });
-  it.each(['cloud', 'unknown'] as const)(
-    'retains native presentation and check vocabulary without acquiring (%s billing)',
-    async (location) => {
+  it.each([
+    { location: 'cloud', credentialFailure: false },
+    { location: 'unknown', credentialFailure: false },
+    { location: 'cloud', credentialFailure: true },
+  ] as const)(
+    'retains completed provider status without acquiring ($location, credential failure=$credentialFailure)',
+    async ({ location, credentialFailure }) => {
       const serverId = await harness.addHome({
         name: 'Build',
         serverUrl: 'https://build.example',
@@ -74,6 +80,7 @@ describe('provisioner picker demand', () => {
       const provisioner = {
         contribution,
         occurrenceId: 'occurrence',
+        ...(credentialFailure ? { credentialPurposes: [{ purpose: { consumer: contribution, purpose: 'compute' }, options: [] }] } : {}),
         descriptor: {
           id: 'native',
           title: 'Custom compute',
@@ -112,10 +119,11 @@ describe('provisioner picker demand', () => {
       const { MachineProvisionersListResultV1Schema } =
         await import('@happier-dev/protocol/plugins/contributions/machineProvisioners');
       MachineProvisionersListResultV1Schema.parse({
+        controller: { machineId: 'controller', installationId: 'installation' },
         provisioners: [provisioner],
       });
       for (const [actionId, result] of [
-        ['machines.provisioners.list', { provisioners: [provisioner] }],
+        ['machines.provisioners.list', { controller: { machineId: 'controller', installationId: 'installation' }, provisioners: [provisioner] }],
         [
           'machines.provisioners.check',
           {
@@ -133,7 +141,9 @@ describe('provisioner picker demand', () => {
                 v: 1,
                 actionId,
                 requestId: request.requestId,
-                execution: { ok: true, result },
+                execution: credentialFailure && actionId === 'machines.provisioners.check'
+                  ? { ok: false, errorCode: 'credential_unavailable', error: 'credential_unavailable' }
+                  : { ok: true, result },
               },
             };
           },
@@ -142,6 +152,7 @@ describe('provisioner picker demand', () => {
       const onSelectProvisioner = vi.fn();
       const { MachineProvisionerPicker } =
         await import('./MachineProvisionerPicker');
+      const { t } = await import('@/text');
       const { buildQualifiedPluginContributionKey } =
         await import('@happier-dev/protocol/plugins/contribution-identity');
       const screen = await renderPicker(
@@ -158,13 +169,11 @@ describe('provisioner picker demand', () => {
             screen.findByTestId('managed-picker.unavailable'),
         ).not.toBeNull(),
       );
-      expect(
-        screen.findByTestId('managed-picker.unavailable')?.props.diagnosticCode,
-      ).toBeUndefined();
       await waitForHomeGovernance(() => {
         const cards = screen.tree
           .findAll((node) => Array.isArray(node.props.cards))
           .flatMap((node) => node.props.cards);
+        if (credentialFailure && screen.findByTestId('managed-picker.unavailable')) return;
         expect(cards).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -172,7 +181,7 @@ describe('provisioner picker demand', () => {
               description: 'A custom native guest.',
               status: expect.objectContaining({
                 label:
-                  location === 'unknown'
+                  credentialFailure ? t('managedMachines.add.status.noAccount') : location === 'unknown'
                     ? 'License required · Billing unknown'
                     : 'License required',
               }),
@@ -180,12 +189,24 @@ describe('provisioner picker demand', () => {
           ]),
         );
       });
+      if (credentialFailure) {
+        const cards = screen.tree.findAll(node => Array.isArray(node.props.cards)).flatMap(node => node.props.cards);
+        expect(cards[0].status.label).toBe(t('managedMachines.add.status.noAccount'));
+        expect(cards[0].action.label).toBe(t('managedMachines.add.action.connect'));
+      }
+      expect(screen.findByTestId('managed-picker.unavailable')?.props.diagnosticCode).toBeUndefined();
       await act(async () =>
         screen.pressByTestId(
           screen.findByTestId(`${row}.action`) ? `${row}.action` : row,
         ),
       );
-      expect(onSelectProvisioner).toHaveBeenCalledWith({
+      if (credentialFailure) {
+        const { buildConnectedAccountPurposeSetupRoute } = await import('@/sync/domains/connectedServices/connectedAccountPurposeSetup');
+        expect(navigation.push).toHaveBeenCalledWith(buildConnectedAccountPurposeSetupRoute({
+          purpose: { consumer: contribution, purpose: 'compute' }, scope: { serverId: 'srv_build', accountId: 'owner' }, machineId: 'controller',
+        }));
+        expect(onSelectProvisioner).not.toHaveBeenCalled();
+      } else expect(onSelectProvisioner).toHaveBeenCalledWith({
         serverId,
         provisioner: buildQualifiedPluginContributionKey(contribution),
         controller: { machineId: 'controller', installationId: 'installation' },

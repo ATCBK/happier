@@ -11,7 +11,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { listServerProfiles } from '@/sync/domains/server/serverProfiles';
 import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
-import { formatByteCapacity } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
@@ -23,6 +23,8 @@ import { useManagedProvisionerPresentation } from './useManagedProvisionerPresen
 import { MachineProvisionerSections } from './MachineProvisionerSections';
 import type { ManagedProvisionerCard } from './managedMachineDisplay';
 import { useManagedControllerScope, type ManagedControllerScope } from './useManagedControllerScope';
+import type { MachinePresetCollectionSettledResult } from './machinePresetCollectionClient';
+import { buildConnectedAccountPurposeSetupRoute } from '@/sync/domains/connectedServices/connectedAccountPurposeSetup';
 
 export type ManagedProvisionerSelection = Readonly<{ serverId: string; provisioner: string; controller: ManagedControllerV1 }>;
 type MachineProvisionerPickerProps = Readonly<{
@@ -60,7 +62,7 @@ function MachineProvisionerOwnScopeCatalog(props: Omit<MachineProvisionerPickerP
 function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 'scope'> & Readonly<{ scope: ManagedControllerScope; pageOwnsChip: boolean }>) {
     const handler = React.useRef<(registration: ActionApprovalRegistration) => void>(() => {});
     const onApprovalPending = React.useCallback((registration: ActionApprovalRegistration) => handler.current(registration), []);
-    const [checks, setChecks] = React.useState<Readonly<Record<string, MachineProvisionerCheckResultV1>>>({});
+    const [checks, setChecks] = React.useState<Readonly<Record<string, MachinePresetCollectionSettledResult<MachineProvisionerCheckResultV1>>>>({});
     const scope = props.scope;
     const controller = scope.controller;
     const catalog = useManagedProvisioners(props.serverId, onApprovalPending, controller);
@@ -84,8 +86,8 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
             result: await catalog.client!.read('machines.provisioners.check', { homeId: catalog.homeId!, controller, contribution: provisioner.contribution }, { signal: abort.signal, onApprovalPending }),
         }))).then(results => {
             if (abort.signal.aborted || !binding.isCurrent()) return;
-            setChecks(Object.fromEntries(results.flatMap(({ id, result }) => result.kind === 'succeeded' ? [[id, result.value]] : [])));
-            setError(results.find(({ result }) => result.kind === 'failed')?.result.kind === 'failed' ? 'unavailable' : null);
+            setChecks(Object.fromEntries(results.map(({ id, result }) => [id, result])));
+            setError(results.some(({ result }) => result.kind === 'failed' && result.code !== 'credential_unavailable') ? 'unavailable' : null);
         }).catch(() => { if (!abort.signal.aborted && binding.isCurrent()) setError('unavailable'); });
         return () => { abort.abort(); retirement.dispose(); };
     }, [catalog.binding, catalog.homeId, catalog.client, catalog.provisioners, controller, onApprovalPending]);
@@ -102,19 +104,23 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
     const cards: ManagedProvisionerCard[] = catalog.provisioners.flatMap(provisioner => {
         const location = provisioner.descriptor.billing.location;
         const id = buildQualifiedPluginContributionKey(provisioner.contribution);
-        const check = checks[id];
+        const outcome = checks[id];
+        const check = outcome?.kind === 'succeeded' ? outcome.value : undefined;
         const repairAction = check?.prerequisites?.find(prerequisite => prerequisite.status !== 'available' && prerequisite.repairAction)?.repairAction;
         const missingExecutable = check?.prerequisites?.some(prerequisite => prerequisite.status !== 'available');
-        const noAccount = check?.code === 'credential_unavailable';
+        const noAccount = check?.code === 'credential_unavailable' || outcome?.kind === 'failed' && outcome.code === 'credential_unavailable';
+        const credentialPurpose = noAccount ? provisioner.credentialPurposes?.[0]?.purpose : undefined;
         const statusLabel = check?.status ? localized(provisioner.contribution.pluginId, check.status)
-            : check ? t(check.available ? 'managedMachines.add.status.ready' : noAccount ? 'managedMachines.add.status.noAccount'
+            : noAccount ? t('managedMachines.add.status.noAccount')
+            : check ? t(check.available ? 'managedMachines.add.status.ready'
                 : missingExecutable ? 'managedMachines.add.status.notInstalled' : 'managedMachines.add.status.needsSetup')
+                : outcome ? t('managedMachines.providers.unavailable')
                 : t('managedMachines.providers.loading');
         return [{ id, title: localized(provisioner.contribution.pluginId, provisioner.descriptor.title),
             kind: provisioner.descriptor.kindTitle ? localized(provisioner.contribution.pluginId, provisioner.descriptor.kindTitle) : undefined,
             description: provisioner.descriptor.description ? localized(provisioner.contribution.pluginId, provisioner.descriptor.description) : '',
             location: location === 'local' ? 'local' : 'cloud', mark: (size: number) => markFor(provisioner, size),
-            status: { tone: check ? check.available && location !== 'unknown' ? 'ready' : 'attention' : 'none',
+            status: { tone: outcome ? check?.available && location !== 'unknown' ? 'ready' : 'attention' : 'none',
                 label: [statusLabel, location === 'unknown' ? t('managedMachines.add.status.billingUnknown') : null].filter(Boolean).join(' · ') },
             action: repairAction ? { kind: 'repair', label: t(noAccount ? 'managedMachines.add.action.connect'
                 : missingExecutable ? 'managedMachines.add.action.getApp' : 'managedMachines.add.action.setUp'), onPress: () => {
@@ -126,6 +132,10 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
                     if (abort.signal.aborted || !binding.isCurrent()) return;
                     if (outcome.ok) catalog.refresh(); else setError(outcome.reason);
                 }).catch(() => { if (!abort.signal.aborted && binding.isCurrent()) setError('unavailable'); });
+            } } : credentialPurpose ? { kind: 'repair', label: t('managedMachines.add.action.connect'), onPress: () => {
+                const binding = catalog.binding;
+                if (!binding?.isCurrent() || !controller) return;
+                router.push(buildConnectedAccountPurposeSetupRoute({ scope: binding.scope, machineId: controller.machineId, purpose: credentialPurpose }));
             } } : { kind: 'choose', label: t('managedMachines.add.action.choose'), onPress: () => open(id) } }];
     });
     const controllerName = scope.machine ? getMachineDisplayName(scope.machine) ?? scope.machine.id : '';
@@ -141,11 +151,12 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
         : catalog.loading && cards.length === 0 ? <SurfaceStateCard kind="loading" size="line" title={t('managedMachines.providers.loading')} />
         : !catalog.loading && cards.length === 0 ? <SurfaceStateCard kind="empty" size="line" title={t('managedMachines.providers.empty')} />
         : null;
-    const localResources = Object.values(checks).find(check => check.localResources)?.localResources;
+    const localResources = Object.values(checks).flatMap(result => result.kind === 'succeeded' && result.value.localResources
+        ? [result.value.localResources] : [])[0];
     const localDescription = !compact && localResources?.availableCpuCores !== undefined && localResources.availableMemoryBytes !== undefined
         && localResources.availableDiskBytes !== undefined
         ? t('managedMachines.add.localDescription', { computer: controllerName, cores: String(localResources.availableCpuCores),
-            memory: formatByteCapacity(localResources.availableMemoryBytes), disk: formatByteCapacity(localResources.availableDiskBytes) })
+            memory: formatHappierDataBytes(localResources.availableMemoryBytes, { kind: 'memory' }), disk: formatHappierDataBytes(localResources.availableDiskBytes, { kind: 'storage' }) })
         : t('managedMachines.add.localDescriptionShort', { computer: controllerName });
     // A page sets the chip on its first section's header; a grouped surface (the composer's modal) has no
     // section header actions, so the same chip leads the picker as its own "Managed from" row.
