@@ -134,6 +134,19 @@ type ActionSettingsDetailContentProps = Readonly<{
     actionId: ActionSettingsActionId;
 }>;
 
+const ActionSettingsMachineChip = React.memo(function ActionSettingsMachineChip() {
+    const selection = useMachineAdministrationTargetSelection(
+        MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.actions,
+    );
+    return (
+        <MachineAdministrationTargetSelector
+            selection={selection}
+            testIDPrefix="settings.actions.administration.target"
+            presentation="chip"
+        />
+    );
+});
+
 export const ActionSettingsDetailContent = React.memo(function ActionSettingsDetailContent(props: ActionSettingsDetailContentProps) {
     const styles = stylesheet;
     const compactLayout = useActionSettingsNarrowLayout();
@@ -148,8 +161,11 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
     const voiceEnabled = useFeatureEnabled('voice');
     const sessionHandoffEnabled = useFeatureEnabled('sessions.handoff');
     const mcpServersEnabled = useFeatureEnabled('mcp.servers');
+    const needsMachineProjection = props.actionId === 'capture.view'
+        || parseQualifiedPluginActionId(props.actionId) !== null;
     const administrationTargetSelection = useMachineAdministrationTargetSelection(
         MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.actions,
+        { enabled: needsMachineProjection },
     );
     const executionTarget = React.useMemo(() => {
         const selectedTarget = administrationTargetSelection.selectedTarget;
@@ -264,15 +280,9 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
         }));
     }, [commitSettings, entry, settings]);
 
-    // The machine chip scopes contributed actions only; it stays in the header in every state
-    // because it is how a contributed action that is not declared here becomes reachable.
-    const machineChip = (
-        <MachineAdministrationTargetSelector
-            selection={administrationTargetSelection}
-            testIDPrefix="settings.actions.administration.target"
-            presentation="chip"
-        />
-    );
+    // The machine chip stays live in the header, while ordinary built-in action content does not
+    // subscribe to the high-frequency inventory projection it does not consume.
+    const machineChip = <ActionSettingsMachineChip />;
 
     if (!entry) {
         return (

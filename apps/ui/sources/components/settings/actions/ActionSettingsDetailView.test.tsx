@@ -5,6 +5,7 @@ import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks, resetSettingsViewCommonModuleMockState } from '../settingsViewTestHelpers';
 import { createUseSettingMock, createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
 import {
+    createMachineAdministrationTargetSelectionFixture,
     createMachineAdministrationTargetSelectionMock,
     installMachineAdministrationTargetSelectionBoundary,
 } from '@/dev/testkit/mocks/machineAdministrationTargetSelection';
@@ -53,6 +54,9 @@ const capture = vi.hoisted(() => ({
 const administrationTargetSelection = createMachineAdministrationTargetSelectionMock({
     selectedMachineId: null,
 });
+const disabledAdministrationTargetSelection = createMachineAdministrationTargetSelectionFixture({
+    selectedMachineId: null,
+});
 installMachineAdministrationTargetSelectionBoundary(administrationTargetSelection);
 const administrationSelectionCalls: Array<Readonly<{
     selectionKey: string;
@@ -60,8 +64,11 @@ const administrationSelectionCalls: Array<Readonly<{
 }>> = [];
 vi.doMock('@/sync/domains/machines/administration/useTargetSelection', () => ({
     ...administrationTargetSelection.module,
-    useMachineAdministrationTargetSelection: (selectionKey: string, options: unknown) => {
+    useMachineAdministrationTargetSelection: (selectionKey: string, options: { enabled?: boolean } | undefined) => {
         administrationSelectionCalls.push({ selectionKey, options });
+        if (options?.enabled === false) {
+            return disabledAdministrationTargetSelection;
+        }
         return administrationTargetSelection.module.useMachineAdministrationTargetSelection(selectionKey);
     },
 }));
@@ -227,6 +234,24 @@ afterEach(() => {
 await import('./ActionSettingsDetailView');
 
 describe('ActionSettingsDetailView', () => {
+    it('keeps built-in action rows stable when the machine inventory refreshes', async () => {
+        const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
+        await renderScreen(<ActionSettingsDetailContent actionId="review.start" />);
+        const renderedItems = capture.items.length;
+
+        await React.act(async () => {
+            administrationTargetSelection.controller.setMachines([
+                { machineId: 'machine-a', displayName: 'Mac updated' },
+            ]);
+        });
+
+        expect(administrationSelectionCalls).toContainEqual({
+            selectionKey: 'actions.settings',
+            options: { enabled: false },
+        });
+        expect(capture.items).toHaveLength(renderedItems);
+    });
+
     it('lets the user waive host capture viewing only for the selected plugin', async () => {
         daemonProjection.byMachineId = {
             'machine-a': { phase: 'ready', inputs: { pluginProjectionById: {
