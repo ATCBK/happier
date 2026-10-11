@@ -167,6 +167,7 @@
     "@happier-dev/peer-transport": "0.0.0",
     "@happier-dev/plugin-sdk": "0.0.0",
     "@happier-dev/plugin-ui": "0.0.0",
+    "@happier-dev/plugins-antigravity": "0.0.0",
     "@happier-dev/plugins-auggie": "0.0.0",
     "@happier-dev/plugins-channels": "0.0.0",
     "@happier-dev/plugins-claude": "0.0.0",
