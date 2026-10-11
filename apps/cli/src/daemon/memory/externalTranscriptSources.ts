@@ -8,7 +8,7 @@ import { fetchAccountProfile } from '@/api/accountProfile';
 import type { StoredCredentials } from '@/persistence';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { NativeUsageSourceBoundary } from '@/usage/collector/nativeUsageSourceDiscovery';
-import type { discoverNativeUsageSourceMetadata } from '@/usage/collector/nativeUsageSourceDiscovery';
+import type { discoverNativeUsageSourceMetadata as DiscoverNativeUsageSourceMetadata } from '@/usage/collector/nativeUsageSourceDiscovery';
 import type { createExternalSessionObservationDaemonProjection } from '@/api/session/external/leases/createExternalSessionObservationDaemonProjection';
 import { EXTERNAL_SESSIONS_INVOCATION_POLICY } from '@/session/external/agentExternalSessionsInvocation';
 import { externalMemoryStorageId, type MemoryExternalSourceReader } from './externalTranscriptIndex';
@@ -73,7 +73,7 @@ export function createMemoryExternalTranscriptTraversal() {
 }
 
 /** Configured topology and executable source readiness have distinct authority. */
-export async function discoverMemoryExternalTranscriptSources(input: Parameters<typeof discoverNativeUsageSourceMetadata>[0]) {
+export async function discoverMemoryExternalTranscriptSources(input: Parameters<typeof DiscoverNativeUsageSourceMetadata>[0]) {
   const [{ discoverNativeUsageSourceMetadata }, {
     materializeConfiguredExternalSessionSourceCandidates, resolveConfiguredExternalSessionSourceAtAdmission,
   }] = await Promise.all([import('@/usage/collector/nativeUsageSourceDiscovery'), import('@/session/external/configuredSourceMaterializer')]);
