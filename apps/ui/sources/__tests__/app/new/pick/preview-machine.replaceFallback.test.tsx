@@ -2,15 +2,28 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
-import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
-import type { MachineSelectorProps } from '@/components/sessions/new/components/MachineSelector';
-import type { Machine } from '@/sync/domains/state/storageTypes';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+// Catalog owners import the Socket SDK before the runtime setup hook.
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import type { BackendTargetRefV2 } from '@happier-dev/protocol';
+import { AgentExecutionTargetV1Schema } from '@happier-dev/protocol/agents/executionTargetV1';
+import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { refreshAcpCatalog } from '@/sync/engine/settings/acpCatalogEngine';
+import { getAcpCatalogSnapshot } from '@/sync/store/settings/acpCatalogSnapshot';
+import { readCachedDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import {
     BUNDLED_AGENT_ROUTE_PARAMS,
     createConfiguredAcpBackendCatalogSettings,
     createConfiguredBackendRouteParams,
+    createConfiguredAgentRouteParams,
     createDiscoveredPluginBackendDescribeResult,
     createNavigationMock,
     createProjectionDescribeMock,
@@ -19,19 +32,17 @@ import {
     installPickerCommonModuleMocks,
     parseJsonRouteParam,
 } from './testHarness';
-import { createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
 
 enableReactActEnvironment();
 
 const routerMock = createRouterMock();
 const navigationMock = createNavigationMock();
-const machineSelectorPropsRef = { current: null as MachineSelectorProps | null };
 const routeParamsState = vi.hoisted(() => ({
     value: {
         agentType: 'claude',
         dataId: 'draft-1',
         machineId: 'machine-2',
-        spawnServerId: 'server-2',
+        spawnServerId: 'srv_picker_2',
     } as Record<string, string>,
 }));
 const settingsState = vi.hoisted(() => ({
@@ -39,30 +50,20 @@ const settingsState = vi.hoisted(() => ({
         lastUsedAgent: 'claude',
         lastUsedBackendTarget: null as BackendTargetRefV2 | null,
         backendEnabledByTargetKey: null as Record<string, boolean> | null,
-        acpCatalogSettingsV1: null as unknown,
     },
 }));
+let acpDefinitions: Array<ReturnType<typeof AcpBackendDefinitionV1Schema.parse>> = [];
 const machineContributionRegistryProjectionDescribe = createProjectionDescribeMock();
 
-const previewMachine = {
+const previewMachine = createMachineFixture({
     id: 'machine-picked',
-    seq: 1,
-    createdAt: 1,
-    updatedAt: 1,
-    active: true,
-    activeAt: 1,
-    revokedAt: null,
-    metadata: null,
-    metadataVersion: 1,
-    daemonState: null,
-    daemonStateVersion: 1,
-} satisfies Machine;
+    storageMode: 'plain',
+    activeAt: Date.now(),
+});
 
-installPickerCommonModuleMocks({
+const picker = installPickerCommonModuleMocks({
     reactNative: async () =>
-        (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
-            Platform: { OS: 'ios' },
-        }),
+        (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock({ platformOS: 'ios' }),
     reactNavigationNative: async () => ({
         ...(await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock(),
         CommonActions: {
@@ -86,49 +87,23 @@ installPickerCommonModuleMocks({
             }).module,
             useNavigation: () => navigationMock,
         }),
-    storage: async (importOriginal) =>
-        (await import('@/dev/testkit/mocks/storage')).createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useAllMachines: () => [previewMachine],
-                useSettingMutable: createUseSettingMutableMockFromReader(() => [[], vi.fn()]),
-                useSettings: () => ({
-                    ...settingsDefaults,
-                    lastUsedAgent: settingsState.current.lastUsedAgent,
-                    lastUsedBackendTarget: settingsState.current.lastUsedBackendTarget,
-                    backendEnabledByTargetKey:
-                        settingsState.current.backendEnabledByTargetKey as unknown as typeof settingsDefaults.backendEnabledByTargetKey,
-                    acpCatalogSettingsV1:
-                        settingsState.current.acpCatalogSettingsV1 as unknown as typeof settingsDefaults.acpCatalogSettingsV1,
-                }),
-            },
-        }),
     projectionSeam: { describe: machineContributionRegistryProjectionDescribe },
 });
 
-vi.mock('@/components/sessions/new/components/MachineSelector', () => ({
-    MachineSelector: (props: MachineSelectorProps) => {
-        machineSelectorPropsRef.current = props;
-        return null;
-    },
-}));
-
 describe('PreviewMachinePickerScreen replace fallback', () => {
     beforeEach(() => {
-        vi.resetModules();
         routeParamsState.value = {
             agentType: 'claude',
             dataId: 'draft-1',
             machineId: 'machine-2',
-            spawnServerId: 'server-2',
+            spawnServerId: 'srv_picker_2',
         };
         settingsState.current = {
             lastUsedAgent: 'claude',
             lastUsedBackendTarget: null,
             backendEnabledByTargetKey: null,
-            acpCatalogSettingsV1: null,
         };
-        machineSelectorPropsRef.current = null;
+        acpDefinitions = [];
         routerMock.push.mockClear();
         routerMock.back.mockClear();
         routerMock.replace.mockClear();
@@ -154,12 +129,33 @@ describe('PreviewMachinePickerScreen replace fallback', () => {
         standardCleanup();
     });
 
+    async function prepareAcpCatalog() {
+        const scope = picker.accountScope;
+        picker.homeBoundary.answer(scope.serverId, ACP_CATALOG_ROWS_ROUTE_V1, { body: AcpCatalogRowReadResponseV1Schema.parse({
+            status: 'present', revision: 3, content: { t: 'plain', v: { v: 1, definitions: acpDefinitions } },
+        }) });
+    }
+
+    async function awaitRenderedCatalog() {
+        const scope = picker.accountScope;
+        await act(async () => { await refreshAcpCatalog(scope); });
+        await waitForHomeGovernance(() => expect(getAcpCatalogSnapshot(scope)).toMatchObject({
+            scope, stale: false, catalog: { status: 'ready', revision: 3 },
+        }));
+    }
+
     it('preserves the new-session context when the preview machine picker has to replace back to /new', async () => {
+        await prepareAcpCatalog();
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        storage.getState().applySettingsLocal(settingsParse(settingsState.current));
+        storage.getState().applyMachines([previewMachine], true, { sourceServerId: 'srv_picker_2' });
         const PreviewMachinePickerScreen = (await import('@/app/(app)/new/pick/preview-machine')).default;
 
-        await renderScreen(React.createElement(PreviewMachinePickerScreen));
+        const screen = await renderScreen(React.createElement(PreviewMachinePickerScreen));
+        await awaitRenderedCatalog();
 
-        const props = machineSelectorPropsRef.current;
+        const { MachineSelector } = await import('@/components/sessions/new/components/MachineSelector');
+        const props = screen.findByType(MachineSelector).props;
         expect(typeof props?.onSelect).toBe('function');
 
         await act(async () => {
@@ -176,7 +172,7 @@ describe('PreviewMachinePickerScreen replace fallback', () => {
                 dataId: 'draft-1',
                 machineId: 'machine-2',
                 previewMachineId: 'machine-picked',
-                spawnServerId: 'server-2',
+                spawnServerId: 'srv_picker_2',
             },
         });
         expect(routerMock.setParams).not.toHaveBeenCalled();
@@ -184,18 +180,24 @@ describe('PreviewMachinePickerScreen replace fallback', () => {
     });
 
     it('preserves configured backend route params when replace fallback is needed without reserializing the legacy customAcp agentType', async () => {
+        await prepareAcpCatalog();
         routeParamsState.value = {
             agentType: 'customAcp',
             ...createConfiguredBackendRouteParams('review-bot'),
             dataId: 'draft-1',
             machineId: 'machine-2',
-            spawnServerId: 'server-2',
+            spawnServerId: 'srv_picker_2',
         };
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        storage.getState().applySettingsLocal(settingsParse(settingsState.current));
+        storage.getState().applyMachines([previewMachine], true, { sourceServerId: 'srv_picker_2' });
         const PreviewMachinePickerScreen = (await import('@/app/(app)/new/pick/preview-machine')).default;
 
-        await renderScreen(React.createElement(PreviewMachinePickerScreen));
+        const screen = await renderScreen(React.createElement(PreviewMachinePickerScreen));
+        await awaitRenderedCatalog();
 
-        const props = machineSelectorPropsRef.current;
+        const { MachineSelector } = await import('@/components/sessions/new/components/MachineSelector');
+        const props = screen.findByType(MachineSelector).props;
         expect(typeof props?.onSelect).toBe('function');
 
         await act(async () => {
@@ -204,25 +206,27 @@ describe('PreviewMachinePickerScreen replace fallback', () => {
 
         expect(routerMock.replace).toHaveBeenCalledTimes(1);
         const [call] = routerMock.replace.mock.calls;
-        const args = call?.[0] as any;
+        const args = call?.[0];
 
         expect(args).toEqual(expect.objectContaining({
             pathname: '/new',
             params: expect.objectContaining({
-                backendTargetKey: 'backend:review-bot:configured:review-bot',
+                backendTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot',
                 dataId: 'draft-1',
                 machineId: 'machine-2',
                 previewMachineId: 'machine-picked',
-                spawnServerId: 'server-2',
+                spawnServerId: 'srv_picker_2',
             }),
         }));
-        expect(args?.params?.agentType).toBeUndefined();
-
-        const backendTarget = parseJsonRouteParam(args?.params?.backendTarget) as any;
+        if (!args || typeof args !== 'object' || !('params' in args) || !args.params || typeof args.params !== 'object') {
+            throw new Error('Expected a configured Agent return route');
+        }
+        expect(args.params).not.toHaveProperty('agentType');
+        const backendTarget = AgentExecutionTargetV1Schema.parse(parseJsonRouteParam(Reflect.get(args.params, 'backendTarget')));
         expect(backendTarget).toMatchObject({
-            kind: 'backend',
-            backendId: 'review-bot',
-            configuredBackendId: 'review-bot',
+            kind: 'agent',
+            identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+            definitionId: 'review-bot',
         });
     });
 
@@ -231,19 +235,25 @@ describe('PreviewMachinePickerScreen replace fallback', () => {
             lastUsedAgent: 'customAcp',
             lastUsedBackendTarget: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured' },
             backendEnabledByTargetKey: null,
-            acpCatalogSettingsV1: null,
         };
+        acpDefinitions = createConfiguredAcpBackendCatalogSettings('review-bot').backends.map(definition => AcpBackendDefinitionV1Schema.parse(definition));
+        await prepareAcpCatalog();
         routeParamsState.value = {
             agentType: 'customAcp',
             dataId: 'draft-1',
             machineId: 'machine-2',
-            spawnServerId: 'server-2',
+            spawnServerId: 'srv_picker_2',
         };
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        storage.getState().applySettingsLocal(settingsParse(settingsState.current));
+        storage.getState().applyMachines([previewMachine], true, { sourceServerId: 'srv_picker_2' });
         const PreviewMachinePickerScreen = (await import('@/app/(app)/new/pick/preview-machine')).default;
 
-        await renderScreen(React.createElement(PreviewMachinePickerScreen));
+        const screen = await renderScreen(React.createElement(PreviewMachinePickerScreen));
+        await awaitRenderedCatalog();
 
-        const props = machineSelectorPropsRef.current;
+        const { MachineSelector } = await import('@/components/sessions/new/components/MachineSelector');
+        const props = screen.findByType(MachineSelector).props;
         expect(typeof props?.onSelect).toBe('function');
 
         await act(async () => {
@@ -253,33 +263,39 @@ describe('PreviewMachinePickerScreen replace fallback', () => {
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
             params: {
-                ...createConfiguredBackendRouteParams('review-bot'),
+                ...createConfiguredAgentRouteParams('review-bot'),
                 dataId: 'draft-1',
                 machineId: 'machine-2',
                 previewMachineId: 'machine-picked',
-                spawnServerId: 'server-2',
+                spawnServerId: 'srv_picker_2',
             },
         });
     });
 
-    it('falls back to the preferred built-in target when the stored configured backend is stale', async () => {
+    it('retains explicit configured intent for repair when its definition is missing', async () => {
         settingsState.current = {
             lastUsedAgent: 'codex',
             lastUsedBackendTarget: { kind: 'backend', backendId: 'stale-review-bot', configuredBackendId: 'stale-review-bot', sourceKind: 'configured' },
             backendEnabledByTargetKey: { 'agent:codex': true },
-            acpCatalogSettingsV1: createConfiguredAcpBackendCatalogSettings('review-bot'),
         };
+        acpDefinitions = createConfiguredAcpBackendCatalogSettings('review-bot').backends.map(definition => AcpBackendDefinitionV1Schema.parse(definition));
+        await prepareAcpCatalog();
         routeParamsState.value = {
             agentType: 'customAcp',
             dataId: 'draft-1',
             machineId: 'machine-2',
-            spawnServerId: 'server-2',
+            spawnServerId: 'srv_picker_2',
         };
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        storage.getState().applySettingsLocal(settingsParse(settingsState.current));
+        storage.getState().applyMachines([previewMachine], true, { sourceServerId: 'srv_picker_2' });
         const PreviewMachinePickerScreen = (await import('@/app/(app)/new/pick/preview-machine')).default;
 
-        await renderScreen(React.createElement(PreviewMachinePickerScreen));
+        const screen = await renderScreen(React.createElement(PreviewMachinePickerScreen));
+        await awaitRenderedCatalog();
 
-        const props = machineSelectorPropsRef.current;
+        const { MachineSelector } = await import('@/components/sessions/new/components/MachineSelector');
+        const props = screen.findByType(MachineSelector).props;
         expect(typeof props?.onSelect).toBe('function');
 
         await act(async () => {
@@ -289,11 +305,11 @@ describe('PreviewMachinePickerScreen replace fallback', () => {
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
             params: {
-                ...BUNDLED_AGENT_ROUTE_PARAMS.codex,
+                ...createConfiguredAgentRouteParams('stale-review-bot'),
                 dataId: 'draft-1',
                 machineId: 'machine-2',
                 previewMachineId: 'machine-picked',
-                spawnServerId: 'server-2',
+                spawnServerId: 'srv_picker_2',
             },
         });
     });
@@ -303,22 +319,33 @@ describe('PreviewMachinePickerScreen replace fallback', () => {
             lastUsedAgent: 'customAcp',
             lastUsedBackendTarget: null,
             backendEnabledByTargetKey: null,
-            acpCatalogSettingsV1: null,
         };
+        await prepareAcpCatalog();
         routeParamsState.value = {
             agentType: 'customAcp',
             dataId: 'draft-1',
             machineId: 'machine-2',
-            spawnServerId: 'server-2',
+            spawnServerId: 'srv_picker_2',
         };
         machineContributionRegistryProjectionDescribe.mockResolvedValue(createDiscoveredPluginBackendDescribeResult());
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        storage.getState().applySettingsLocal(settingsParse(settingsState.current));
+        storage.getState().applyMachines([previewMachine], true, { sourceServerId: 'srv_picker_2' });
         const PreviewMachinePickerScreen = (await import('@/app/(app)/new/pick/preview-machine')).default;
 
-        await renderScreen(React.createElement(PreviewMachinePickerScreen));
+        const screen = await renderScreen(React.createElement(PreviewMachinePickerScreen));
+        await awaitRenderedCatalog();
 
-        await flushHookEffects({ cycles: 1, turns: 2 });
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(readCachedDaemonMergedProjectionCacheEntry({ machineId: 'machine-2', serverId: 'srv_picker_2' }))
+                .not.toBeNull();
+        });
+        const projection = readCachedDaemonMergedProjectionCacheEntry({ machineId: 'machine-2', serverId: 'srv_picker_2' });
+        expect(projection?.kind === 'error' ? projection.reason : projection?.kind).toBe('ready');
 
-        const props = machineSelectorPropsRef.current;
+        const { MachineSelector } = await import('@/components/sessions/new/components/MachineSelector');
+        const props = screen.findByType(MachineSelector).props;
         expect(typeof props?.onSelect).toBe('function');
 
         await act(async () => {
@@ -326,8 +353,8 @@ describe('PreviewMachinePickerScreen replace fallback', () => {
         });
 
         expect(machineContributionRegistryProjectionDescribe).toHaveBeenCalledWith('machine-2', expect.objectContaining({
-            serverId: 'server-2',
-            timeoutMs: 10_000,
+            serverId: 'srv_picker_2',
+            accountId: 'account:srv_picker_2',
         }));
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
@@ -336,7 +363,7 @@ describe('PreviewMachinePickerScreen replace fallback', () => {
                 dataId: 'draft-1',
                 machineId: 'machine-2',
                 previewMachineId: 'machine-picked',
-                spawnServerId: 'server-2',
+                spawnServerId: 'srv_picker_2',
             },
         });
     });

@@ -1,6 +1,10 @@
 import React from 'react';
-import { beforeAll, beforeEach, vi } from 'vitest';
-import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { afterEach, beforeAll, beforeEach, vi } from 'vitest';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, PluginProjectionV2Schema, RPC_ERROR_CODES, RPC_METHODS, SOCKET_RPC_EVENTS } from '@happier-dev/protocol';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
+import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 
 import {
     createExpoRouterMock,
@@ -13,10 +17,12 @@ import type { ServerProfileMockProfile } from '@/dev/testkit/mocks/serverProfile
 
 type MachineContributionRegistryProjectionModule =
     typeof import('@/sync/ops/machineContributionRegistryProjection');
-export type MachineContributionRegistryProjectionDescribeFn =
-    MachineContributionRegistryProjectionModule['machineContributionRegistryProjectionDescribe'];
 export type MachineContributionRegistryProjectionDescribeResult =
-    Awaited<ReturnType<MachineContributionRegistryProjectionDescribeFn>>;
+    Awaited<ReturnType<MachineContributionRegistryProjectionModule['machineContributionRegistryProjectionDescribe']>>;
+export type MachineContributionRegistryProjectionDescribeFn = (
+    machineId: string,
+    scope: Readonly<{ serverId?: string | null; accountId?: string | null }>,
+) => Promise<MachineContributionRegistryProjectionDescribeResult>;
 type TempDataStoreModule = typeof import('@/utils/sessions/tempDataStore');
 
 type ReactActEnvironmentGlobal = typeof globalThis & {
@@ -73,16 +79,12 @@ type PickerModuleFactory = () => unknown | Promise<unknown>;
 type PickerStorageModuleFactory = (importOriginal: <T>() => Promise<T>) => unknown | Promise<unknown>;
 
 /**
- * The daemon projection seam a picker reaches through the real
- * `loadDaemonMergedProjectionInputs` graph. Only the describe transport is
- * replaced; every other real export of the projection module (Settings,
- * secret, watch, UI-resource seams) stays live so consumers such as scoped
- * plugin settings resolve their imports. The genuine transport, credential,
- * and Home-profile boundaries beneath it are the canonical testkit mocks.
+ * The daemon's answer at the Socket SDK boundary. Projection parsing,
+ * normalization, cache, Account custody and every picker resolver stay real.
  */
 export type PickerProjectionSeamOptions = Readonly<{
     describe: MachineContributionRegistryProjectionDescribeFn;
-    /** Home profiles the account-scope resolver may bind; defaults to `server-2`. */
+    /** Home profiles the account-scope resolver may bind; defaults to `srv_picker_2`. */
     serverProfiles?: readonly ServerProfileMockProfile[];
 }>;
 
@@ -109,7 +111,7 @@ const pickerCommonModuleMocksState = vi.hoisted(() => ({
 }));
 
 export const PICKER_PROJECTION_SEAM_SERVER_PROFILES = [
-    { id: 'server-2', serverUrl: 'https://server-2.example.test' },
+    { id: 'srv_picker_2', serverUrl: 'https://server-2.example.test' },
 ] as const satisfies readonly ServerProfileMockProfile[];
 
 /**
@@ -124,81 +126,124 @@ export function createProjectionDescribeMock() {
 
 export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksOptions = {}) {
     pickerCommonModuleMocksState.options = options;
+    let account: Awaited<ReturnType<typeof import('@/dev/testkit/harness/serverAccountConnectionHarness').restoreServerAccountForTest>> | undefined;
+    let homes: ReturnType<typeof import('@/dev/testkit/harness/homeGovernanceHarness').createHomeGovernanceHarness> | undefined;
+    const machineRpcRequests: Array<Readonly<{ serverId: string; accountId: string; machineId: string; method: string; params: unknown }>> = [];
+    async function restoreHome(serverId: string) {
+        const seam = pickerCommonModuleMocksState.options.projectionSeam;
+        const profile = (seam?.serverProfiles ?? PICKER_PROJECTION_SEAM_SERVER_PROFILES).find(candidate => candidate.id === serverId);
+        if (!profile || !homes) throw new Error('Picker Home boundary unavailable');
+        await account?.dispose();
+        const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+        account = await restoreServerAccountForTest({ serverUrl: profile.serverUrl,
+            serverIdentityId: normalizeServerIdentityIdCapability(profile.id) ?? undefined,
+            accountId: `account:${profile.id}`, request: async (input, init) => {
+                if (!homes) throw new Error('Picker Home boundary unavailable');
+                const url = new URL(String(input));
+                if ((init?.method ?? 'GET') === 'GET' && url.pathname.startsWith('/v1/machines/')) {
+                    const home = homes.findByServerUrl(url.origin);
+                    if (!home) throw new Error(`Unexpected Machine lookup Home: ${url.origin}`);
+                    homes.answer(home.serverId, url.pathname, { body: { machine: {
+                        id: decodeURIComponent(url.pathname.slice('/v1/machines/'.length)),
+                        dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+                    } } });
+                }
+                return homes.request(input, init);
+            } });
+    }
+    // These factories consume caller configuration, so register them after that
+    // configuration exists. Hoisting can resolve a default Web/router fixture
+    // while the caller's static testkit imports are still evaluating.
 
     if (options.projectionSeam) {
         beforeAll(async () => {
-            // The real projection/seam graph loaded by the shared harness costs
-            // more than the 60s hook timeout to evaluate once per file. Warm it
-            // here where a longer timeout applies.
-            await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
-        }, 300_000);
+            await initializeRealAppRuntimeForTests();
+        });
     }
 
     beforeEach(async () => {
         const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
         await loadSyncSingletonForTests();
+        const seam = pickerCommonModuleMocksState.options.projectionSeam;
+        if (seam) {
+            installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+                vi.mocked(socket.connect).mockImplementation(() => {
+                    socket.connected = true;
+                    for (const listener of socket.listeners('connect')) listener();
+                    return socket;
+                });
+                vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload: unknown) => {
+                    if (event !== SOCKET_RPC_EVENTS.CALL) throw new Error(`Unexpected Socket ACK event: ${event}`);
+                    if (!payload || typeof payload !== 'object' || !('method' in payload)
+                        || typeof payload.method !== 'string' || !('params' in payload)) {
+                        throw new Error('Invalid Machine RPC envelope');
+                    }
+                    const split = payload.method.indexOf(':');
+                    if (split < 1) throw new Error('Missing Machine RPC target');
+                    const machineId = payload.method.slice(0, split);
+                    const method = payload.method.slice(split + 1);
+                    const profiles = seam.serverProfiles ?? PICKER_PROJECTION_SEAM_SERVER_PROFILES;
+                    const profile = profiles.find((candidate) => candidate.serverUrl === serverUrl);
+                    if (!profile) throw new Error(`Unexpected Socket Home: ${serverUrl}`);
+                    const token = typeof socket.auth === 'object' && typeof socket.auth.token === 'string'
+                        ? socket.auth.token : null;
+                    if (!token) throw new Error('Missing Socket Account credential');
+                    const { parseToken } = await import('@/utils/auth/parseToken');
+                    const accountId = parseToken(token);
+                    machineRpcRequests.push({ serverId: profile.id, accountId, machineId, method, params: payload.params });
+                    if (method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+                        return { ok: false, error: 'Method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+                    }
+                    const answer = await seam.describe(machineId, { serverId: profile.id, accountId });
+                    if (!answer.supported) {
+                        if (answer.reason !== 'not-supported') throw new Error(answer.reason);
+                        return { ok: false, error: 'Method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+                    }
+                    return { ok: true, result: DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
+                        protocolVersion: 1, projection: answer.projection,
+                        ...(answer.composerSurfaceCatalog ? { composerSurfaceCatalog: answer.composerSurfaceCatalog } : {}),
+                        ...(answer.automationEligibleEvents ? { automationEligibleEvents: answer.automationEligibleEvents } : {}),
+                    }) };
+                });
+            });
+            const { createHomeGovernanceHarness } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+            homes = createHomeGovernanceHarness();
+            await homes.reset();
+            const profiles = seam.serverProfiles ?? PICKER_PROJECTION_SEAM_SERVER_PROFILES;
+            const profile = profiles[0];
+            if (!profile) throw new Error('Picker projection requires a real Home');
+            // Preserve retained device route ids, including pre-identity Home profiles.
+            await seedPersistedHomeProfilesForTests({ activeServerId: profile.id,
+                profiles: profiles.map(candidate => ({ id: candidate.id, name: candidate.id,
+                    serverUrl: candidate.serverUrl,
+                    serverIdentityId: normalizeServerIdentityIdCapability(candidate.id) ?? undefined,
+                    createdAt: 1, updatedAt: 1, lastUsedAt: 1, source: 'manual' })),
+            });
+            for (const profile of profiles) {
+                await homes.addHome({ name: ('name' in profile ? profile.name : undefined) ?? profile.id, serverUrl: profile.serverUrl,
+                    serverIdentityId: normalizeServerIdentityIdCapability(profile.id) ?? undefined,
+                    accountId: `account:${profile.id}`, active: false });
+            }
+            await restoreHome(profile.id);
+        }
         const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
         clearDaemonMergedProjectionCacheForTests();
+        machineRpcRequests.length = 0;
+    });
+    afterEach(async () => {
+        await account?.dispose();
+        account = undefined;
+        await homes?.reset();
+        homes = undefined;
+        const { clearBrowserRecords } = await import('@/sync/domains/state/browserRecordStorage');
+        await clearBrowserRecords();
     });
 
-    vi.mock('@/sync/ops/machineContributionRegistryProjection', async (importOriginal) => {
-        const original = await importOriginal<MachineContributionRegistryProjectionModule>();
-        const seam = pickerCommonModuleMocksState.options.projectionSeam;
-        if (!seam) {
-            return original;
-        }
-        return {
-            ...original,
-            machineContributionRegistryProjectionDescribe: (
-                ...args: Parameters<MachineContributionRegistryProjectionDescribeFn>
-            ) => seam.describe(...args),
-        };
-    });
+    // IndexedDB is the browser persistence port; the real Pending owners above it stay live.
+    vi.doMock('@/sync/domains/state/browserRecordStorage', async () =>
+        (await import('@/dev/testkit/mocks/browserRecordStorage')).createBrowserRecordStorageModuleMock());
 
-    vi.mock(
-        '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc',
-        async (importOriginal) => {
-            if (!pickerCommonModuleMocksState.options.projectionSeam) {
-                return await importOriginal();
-            }
-            const { installServerScopedMachineRpcModuleMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
-            return installServerScopedMachineRpcModuleMock({
-                // Genuine transport boundary: no machine socket exists in a picker
-                // suite. Every caller maps a failure to a typed not-supported/error result.
-                machineRpcWithServerScope: () => Promise.reject(new Error('machine RPC unavailable in test')),
-            })(importOriginal);
-        },
-    );
-
-    vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-        const seam = pickerCommonModuleMocksState.options.projectionSeam;
-        if (!seam) {
-            return await importOriginal();
-        }
-        const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
-        return createPartialServerProfilesModuleMock(importOriginal, {
-            profiles: seam.serverProfiles ?? PICKER_PROJECTION_SEAM_SERVER_PROFILES,
-        });
-    });
-
-    vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-        if (!pickerCommonModuleMocksState.options.projectionSeam) {
-            return await importOriginal();
-        }
-        const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-        return createTokenStorageModuleMock({
-            importOriginal,
-            tokenStorage: {
-                getCredentialsForServerUrl: async (_serverUrl, options) => {
-                    const accountId = `account:${options?.serverId ?? 'unknown'}`;
-                    const payload = Buffer.from(JSON.stringify({ sub: accountId })).toString('base64');
-                    return { token: `header.${payload}.signature` };
-                },
-            },
-        });
-    });
-
-    vi.mock('@/utils/sessions/tempDataStore', async (importOriginal) => {
+    vi.doMock('@/utils/sessions/tempDataStore', async (importOriginal) => {
         const original = await importOriginal<TempDataStoreModule>();
         return {
             ...original,
@@ -206,7 +251,7 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
         };
     });
 
-    vi.mock('@/text', async () => {
+    vi.doMock('@/text', async () => {
         const activeOptions = pickerCommonModuleMocksState.options;
         if (activeOptions.text) {
             return await activeOptions.text();
@@ -215,7 +260,7 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
         return createTextModuleMock();
     });
 
-    vi.mock('react-native', async () => {
+    vi.doMock('react-native', async () => {
         const activeOptions = pickerCommonModuleMocksState.options;
         if (activeOptions.reactNative) {
             return await activeOptions.reactNative();
@@ -224,7 +269,7 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
         return createReactNativeWebMock();
     });
 
-    vi.mock('expo-router', async () => {
+    vi.doMock('expo-router', async () => {
         const activeOptions = pickerCommonModuleMocksState.options;
         if (activeOptions.expoRouter) {
             return await activeOptions.expoRouter();
@@ -233,7 +278,7 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
         return createExpoRouterMock().module;
     });
 
-    vi.mock('@react-navigation/native', async () => {
+    vi.doMock('@react-navigation/native', async () => {
         const activeOptions = pickerCommonModuleMocksState.options;
         if (activeOptions.reactNavigationNative) {
             return await activeOptions.reactNavigationNative();
@@ -243,7 +288,7 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
         return createReactNavigationNativeMock();
     });
 
-    vi.mock('@expo/vector-icons', async () => {
+    vi.doMock('@expo/vector-icons', async () => {
         const activeOptions = pickerCommonModuleMocksState.options;
         if (activeOptions.vectorIcons) {
             return await activeOptions.vectorIcons();
@@ -253,12 +298,12 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
         return createExpoVectorIconsMock();
     });
 
-    vi.mock('react-native-typography', async () => {
+    vi.doMock('react-native-typography', async () => {
         const { createReactNativeTypographyMock } = await import('@/dev/testkit/mocks/reactNativeTypography');
         return createReactNativeTypographyMock();
     });
 
-    vi.mock('@/components/ui/lists/ItemList', async (importOriginal) => {
+    vi.doMock('@/components/ui/lists/ItemList', async (importOriginal) => {
         const activeOptions = pickerCommonModuleMocksState.options;
         if (activeOptions.itemList) {
             return await activeOptions.itemList();
@@ -267,7 +312,7 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
         return await importOriginal();
     });
 
-    vi.mock('react-native-unistyles', async () => {
+    vi.doMock('react-native-unistyles', async () => {
         const activeOptions = pickerCommonModuleMocksState.options;
         if (activeOptions.unistyles) {
             return await activeOptions.unistyles();
@@ -276,7 +321,7 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
         return createUnistylesMock();
     });
 
-    vi.mock('@/modal', async () => {
+    vi.doMock('@/modal', async () => {
         const activeOptions = pickerCommonModuleMocksState.options;
         if (activeOptions.modal) {
             return await activeOptions.modal();
@@ -285,13 +330,32 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
         return createModalModuleMock().module;
     });
 
-    vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-        const activeOptions = pickerCommonModuleMocksState.options;
-        if (activeOptions.storage) {
-            return await activeOptions.storage(importOriginal);
-        }
-        return await importOriginal();
-    });
+    if (options.storage) {
+        vi.doMock('@/sync/domains/state/storage', async (importOriginal) => {
+            const storageFactory = pickerCommonModuleMocksState.options.storage;
+            if (!storageFactory) throw new Error('Picker storage boundary configuration unavailable');
+            return await storageFactory(importOriginal);
+        });
+    }
+
+    return {
+        restoreHome,
+        get homeBoundary() {
+            if (!homes) throw new Error('Picker Home has not been restored');
+            return homes;
+        },
+        get accountScope() {
+            if (!account) throw new Error('Picker Account has not been restored');
+            return { serverId: account.serverId, accountId: `account:${account.serverId}` };
+        },
+        get machineRpcRequests() {
+            return machineRpcRequests;
+        },
+        get homeRequests() {
+            if (!homes) throw new Error('Picker Home has not been restored');
+            return homes.requests;
+        },
+    };
 }
 
 export const PICKER_NAV_STATE = { index: 1, routes: [{ key: 'a' }, { key: 'b' }] } as const;
@@ -378,9 +442,8 @@ export const BUNDLED_AGENT_ROUTE_PARAMS = {
 } as const;
 
 /**
- * A settings-owned configured ACP backend keeps its `backend` target kind and
- * `configuredBackendId` carrier through every picker round trip; only the
- * legacy `sourceKind` and the `customAcp` compat `agentType` are dropped.
+ * A retained configured ACP route input. Current picker writes normalize it
+ * to the Custom ACP Agent contribution plus its exact definition id.
  */
 export function createConfiguredBackendRouteParams(configuredBackendId: string) {
     return {
@@ -390,6 +453,14 @@ export function createConfiguredBackendRouteParams(configuredBackendId: string) 
             configuredBackendId,
         }),
         backendTargetKey: `backend:${configuredBackendId}:configured:${configuredBackendId}`,
+    } as const;
+}
+
+export function createConfiguredAgentRouteParams(definitionId: string) {
+    return {
+        backendTarget: JSON.stringify({ kind: 'agent',
+            identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId }),
+        backendTargetKey: `agent:happier.agent.custom-acp/custom-acp:definition:${definitionId}`,
     } as const;
 }
 

@@ -92,12 +92,11 @@ export default React.memo(function ProfilePickerScreen() {
     });
     const { snapshot: acpCatalog } = useAcpCatalogForServer(spawnServerId);
     const preferredBackendTarget = React.useMemo(() => {
-        if (!acpCatalog || acpCatalog.stale || acpCatalog.catalog.status !== 'ready') return null;
         return resolvePreferredBackendTargetFromProjection({
             lastUsedAgent: settings.lastUsedAgent,
             lastUsedBackendTarget: settings.lastUsedBackendTarget,
             backendEnabledByTargetKey: settings.backendEnabledByTargetKey ?? undefined,
-            acpCatalogSnapshot: acpCatalog.catalog,
+            acpCatalogSnapshot: acpCatalog && !acpCatalog.stale ? acpCatalog.catalog : undefined,
             daemonMergedProjectionInputs: daemonMergedProjection.inputs,
         });
     }, [

@@ -1,4 +1,4 @@
-import { convertBackendTargetRefV2ToV1, parseBackendTargetKeyV2, type BackendTargetRefV2Input } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { convertBackendTargetRefV2ToV1, parseBackendTargetKeyV2, readBackendTargetRefV2, type BackendTargetRefV2Input } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { getProfileEnvironmentVariables as getProfileEnvironmentVariablesProtocol } from '@happier-dev/protocol/profiles/backendProfileSchema';
 import { isProfileCompatibleWithBackendTarget as isProfileCompatibleWithBackendTargetProtocol, isProfileCompatibleWithAgent as isProfileCompatibleWithAgentProtocol } from '@happier-dev/protocol/profiles/profileCompatibility';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
@@ -38,6 +38,12 @@ export function isProfileCompatibleWithBackendTarget(
     // which can only represent identities the Protocol reader already knows.
     const canonicalTarget = parseBackendTargetKeyV2(canonicalTargetKey);
     if (canonicalTarget.kind === 'agent') {
+        if (canonicalTarget.definitionId !== undefined) {
+            return isProfileCompatibleWithBackendTargetProtocol(
+                normalizeCompatibilityProfile(profile),
+                convertBackendTargetRefV2ToV1(readBackendTargetRefV2(canonicalTarget)),
+            );
+        }
         const bundledAgentId = resolveBundledAgentIdFromContributionIdentity(canonicalTarget.identity);
         if (bundledAgentId !== null) {
             return isProfileCompatibleWithBackendTargetProtocol(
