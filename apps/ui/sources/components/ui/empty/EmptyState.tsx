@@ -19,6 +19,8 @@ import { CenteredInfoTile } from '@/components/ui/lists/CenteredInfoTile';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Item } from '@/components/ui/lists/Item';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
+import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
+import { useListPresentation } from '@/components/ui/lists/listPresentation';
 import { SceneArt } from '@/components/ui/surfaces/SceneArt';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -134,6 +136,8 @@ const EmptyStateLineLink = React.memo(function EmptyStateLineLink(props: Readonl
 export const EmptyState = React.memo((props: EmptyStateProps) => {
     const { theme } = useUnistyles();
     const frame = props.variant === 'add' ? stylesheet.addFrame : null;
+    // On a page the state is the page's content: it takes the column the header and sheets share.
+    const inPageColumn = useListPresentation() === 'page';
 
     if (props.layout === 'line') {
         // In a list line the ways forward are quiet inline links after the sentence ("Nothing in My
@@ -250,11 +254,12 @@ export const EmptyState = React.memo((props: EmptyStateProps) => {
         </HappierInfoState>
     );
     if (page) {
-        return (
+        const pageState = (
             <View testID={props.testID} style={[stylesheet.page, frame ? stylesheet.pageAdd : null]}>
                 {state}
             </View>
         );
+        return inPageColumn ? <PageContentColumn>{pageState}</PageContentColumn> : pageState;
     }
     return frame ? <View testID={props.testID} style={[stylesheet.centeredFrame, frame]}>{state}</View> : state;
 });

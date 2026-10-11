@@ -10,7 +10,7 @@ import {
     resolveCustomAcpAgentRoute,
 } from '@/agents/catalog/agentSettingsRoutes';
 import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
-import { formatAcpBackendCommand, useAcpCatalogBackends } from '@/components/settings/acpCatalog/AcpCatalogSettingsSections';
+import { formatAcpBackendCommand, useAcpCatalogBackends } from '@/components/settings/acpCatalog/useAcpCatalogBackends';
 import { CustomAcpAgentMark } from '@/components/settings/acpCatalog/CustomAcpAgentMark';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { IconButton } from '@/components/ui/buttons/IconButton';

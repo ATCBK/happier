@@ -137,8 +137,8 @@ const acpCatalogState = vi.hoisted(() => ({
     backends: [] as Array<{ id: string; name: string; title?: string; command: string; args: string[] }>,
 }));
 
-vi.mock('@/components/settings/acpCatalog/AcpCatalogSettingsSections', () => ({
-    useAcpCatalogBackends: () => ({ backends: acpCatalogState.backends, deleteBackend: async () => {} }),
+vi.mock('@/components/settings/acpCatalog/useAcpCatalogBackends', () => ({
+    useAcpCatalogBackends: () => ({ backends: acpCatalogState.backends }),
     formatAcpBackendCommand: (command: string, args: readonly string[]) => [command, ...args].join(' '),
 }));
 
