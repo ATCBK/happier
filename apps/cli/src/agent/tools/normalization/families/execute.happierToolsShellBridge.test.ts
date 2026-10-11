@@ -27,6 +27,7 @@ describe('normalizeBashInput (Happier tools shell bridge)', () => {
       argsJson: '{"title":"Renamed"}',
       args: { title: 'Renamed' },
       json: true,
+      agentBridge: false,
     });
   });
 
@@ -48,6 +49,7 @@ describe('normalizeBashInput (Happier tools shell bridge)', () => {
         argsJson: '{"title":"Renamed"}',
         args: { title: 'Renamed' },
         json: true,
+        agentBridge: false,
       },
     });
   });

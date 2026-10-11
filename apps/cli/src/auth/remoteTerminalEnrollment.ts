@@ -7,6 +7,7 @@ import { decodeBase64, encodeBase64 } from '@/api/encryption';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import {
   createTerminalPairingAuthentication,
+  applyTerminalAuthRequestExpiry,
   openTerminalProvisioningResponse,
 } from '@/auth/terminalProvisioningResponse';
 import {
@@ -132,13 +133,13 @@ export async function runRemoteTerminalEnrollment(params: Readonly<{
     const claimSecret = new Uint8Array(randomBytes(32));
     const claimSecretB64Url = Buffer.from(claimSecret).toString('base64url');
     const claimSecretHash = createHash('sha256').update(Buffer.from(claimSecret)).digest('base64url');
-    const pairing = createTerminalPairingAuthentication({
+    let pairing = createTerminalPairingAuthentication({
       nowMs: Date.now(),
       randomBytes: (length) => new Uint8Array(randomBytes(length)),
     });
     const publicKey = encodeBase64(keypair.publicKey);
 
-    await createTerminalAuthRequest({
+    const response = await createTerminalAuthRequest({
       runtime: acquired.runtime,
       publicKey,
       supportsV2: true,
@@ -147,6 +148,7 @@ export async function runRemoteTerminalEnrollment(params: Readonly<{
       timeoutMs: remainingMs(deadlineMs),
       signal: params.signal,
     });
+    pairing = applyTerminalAuthRequestExpiry(pairing, response);
     await params.onPairingRequest({
       publicKey,
       homeServerIdentityId: verified.homeServerIdentityId,

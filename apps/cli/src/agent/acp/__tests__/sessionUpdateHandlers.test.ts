@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { DefaultTransport } from '@/agent/transport';
+import type { AgentMessage } from '@/agent/core';
+import { normalizeToolCallV2 } from '@/agent/tools/normalization';
 import {
   handleToolCall,
   handleToolCallUpdate,
@@ -30,6 +32,39 @@ describe('legacy ACP session tool handlers', () => {
     expect(emitted.filter((message) => message.type === 'tool-result')).toHaveLength(1);
     expect(ctx.toolCalls.activeCalls()).toEqual([]);
   });
+
+  it.each([undefined, null, ''])(
+    'does not promote a user-owned deferred wrapper title when the ACP title is %s',
+    (title) => {
+      const emitted: AgentMessage[] = [];
+      const ctx = createLegacyHandlerContextFixture({ emit: (message) => emitted.push(message) });
+      const rawInput = {
+        toolName: 'Bash',
+        params: { command: 'echo user-owned-data' },
+        _acp: { title: 'DeferExecuteTool' },
+      };
+
+      handleToolCallUpdate({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'call_user_owned_title',
+        status: 'completed',
+        kind: 'other',
+        title,
+        rawInput,
+      }, ctx);
+
+      const toolCall = emitted.find((message) => message.type === 'tool-call');
+      if (toolCall?.type !== 'tool-call') throw new Error('expected tool-call');
+      const normalized = normalizeToolCallV2({
+        protocol: 'acp',
+        provider: 'codebuddy',
+        toolName: toolCall.toolName,
+        rawInput: toolCall.args,
+      });
+      expect(normalized.canonicalToolName).toBe('other');
+      expect(normalized.input).toMatchObject({ toolName: 'Bash', params: rawInput.params });
+    },
+  );
 
   it('keeps a permission-gated call pending until explicit approval', () => {
     vi.useFakeTimers();

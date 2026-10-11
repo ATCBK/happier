@@ -10,6 +10,8 @@ import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { buildConfigureServerLinks, buildTerminalConnectLinks } from '@happier-dev/cli-common/links';
 import {
   createTerminalPairingAuthentication,
+  applyTerminalAuthRequestExpiry,
+  formatTerminalPairingExpiryNotice,
 } from '@/auth/terminalProvisioningResponse';
 import {
   ensureProtectedLocalStateDirectory,
@@ -82,14 +84,14 @@ export async function handleAuthRequest(args: string[], signal?: AbortSignal, in
     const claimSecret = new Uint8Array(randomBytes(32));
     const claimSecretB64Url = Buffer.from(claimSecret).toString('base64url');
     const claimSecretHash = sha256Base64Url(claimSecret);
-    const pairing = createTerminalPairingAuthentication({
+    let pairing = createTerminalPairingAuthentication({
       nowMs: Date.now(),
       randomBytes: (length) => new Uint8Array(randomBytes(length)),
     });
     const pairingSecretB64Url = Buffer.from(pairing.secret).toString('base64url');
 
     const publicKeyB64 = encodeBase64(keypair.publicKey);
-    await createTerminalAuthRequest({
+    const response = await createTerminalAuthRequest({
       runtime: acquired.runtime,
       publicKey: publicKeyB64,
       supportsV2: true,
@@ -97,6 +99,7 @@ export async function handleAuthRequest(args: string[], signal?: AbortSignal, in
       headers: buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
       ...(signal ? { signal } : {}),
     });
+    pairing = applyTerminalAuthRequestExpiry(pairing, response);
 
     const statePath = pendingAuthStatePath(keypair.publicKey);
     await ensureProtectedLocalStateDirectory(pendingAuthStateDir(), PENDING_AUTH_STATE_PROTECTION);
@@ -185,6 +188,8 @@ export async function handleAuthRequest(args: string[], signal?: AbortSignal, in
     // approver without also granting claim authority.
     await writeJsonStdout({
       ...remotePairingContext,
+      expiresAtMs: pairing.requestExpiresAtMs ?? null,
+      expiryNotice: formatTerminalPairingExpiryNotice(pairing),
       publicKeyB64Url,
       links: {
         configureWebUrl: configureLinks.webUrl,
