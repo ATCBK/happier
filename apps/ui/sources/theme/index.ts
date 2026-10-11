@@ -71,10 +71,13 @@ const lightThemeBase = {
                 background: 'rgba(52, 199, 89, 0.12)',
                 border: '#34C759',
             },
+            // State tints are translucent in every theme, like success and info: on white they paint the
+            // lab's #FFF8F0 / #FFF0F0, and a glass plane keeps their hue instead of repainting an opaque
+            // fill as its neutral inner coat (a warning badge turned grey on the glass composer).
             warning: {
                 foreground: '#FF9500',
                 textForeground: '#945700',
-                background: '#FFF8F0',
+                background: 'rgba(255, 149, 0, 0.06)',
                 border: '#FF9500',
             },
             // "Needs you" (Next): the ink of the count pill, the phone capsule and the Next capsule's dot and
@@ -88,7 +91,7 @@ const lightThemeBase = {
             danger: {
                 foreground: '#FF3B30',
                 textForeground: '#BE2525',
-                background: '#FFF0F0',
+                background: 'rgba(255, 59, 48, 0.075)',
                 border: '#FF3B30',
             },
             info: {

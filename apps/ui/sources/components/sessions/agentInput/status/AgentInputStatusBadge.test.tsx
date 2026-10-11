@@ -67,4 +67,22 @@ describe('AgentInputStatusBadge', () => {
             consoleError.mockRestore();
         }
     });
+    it('keeps a warning badge amber on a glass composer, as it is on an opaque one', async () => {
+        const { AgentInputStatusBadge } = await import('./AgentInputStatusBadge');
+        const { HappierMaterialRoleProvider } = await import('@happier-dev/plugin-ui/presentation');
+        const { useUnistyles } = await import('react-native-unistyles');
+        const { theme } = useUnistyles();
+        const fills = [];
+        for (const glass of [false, true]) {
+            const badge = <AgentInputStatusBadge label="Connected services · Unavailable" tone="warning" />;
+            const screen = await renderScreen(glass
+                ? <HappierMaterialRoleProvider role="content" translucentColor="transparent">{badge}</HappierMaterialRoleProvider>
+                : badge);
+            fills.push(screen.findAllByType('View').map(node => flattenStyle(node.props.style).backgroundColor)
+                .find(color => typeof color === 'string' && color !== 'transparent'));
+        }
+        // The state tint is the badge's meaning, not a surface fill: a glass plane must not repaint it as
+        // its neutral inner coat (the light amber turned grey on the glass New Session composer).
+        expect(fills).toEqual([theme.colors.state.warning.background, theme.colors.state.warning.background]);
+    });
 });
