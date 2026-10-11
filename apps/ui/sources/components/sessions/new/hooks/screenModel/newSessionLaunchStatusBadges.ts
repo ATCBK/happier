@@ -1,4 +1,7 @@
+import * as React from 'react';
+
 import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
+import { Icon } from '@/components/ui/icons/Icon';
 import { buildRequesterDisclosureStatusBadge, type RequesterDisclosureModel } from '@/components/machines/managed/managedComposerBadges';
 
 type NewSessionLaunchStatusBadgeParams = Readonly<{
@@ -22,6 +25,8 @@ export function buildNewSessionLaunchStatusBadges(
             testID: 'new-session-create-blocked',
             tone: 'warning',
             emphasis: 'prominent',
+            // Every composer badge leads with its state mark (lab `.l12-sb`); the reason is a warning.
+            icon: (tint) => React.createElement(Icon, { name: 'warning-circle', size: 14, color: tint }),
         }] : disclosure;
     }
 

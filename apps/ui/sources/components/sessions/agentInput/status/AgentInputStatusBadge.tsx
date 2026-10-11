@@ -96,9 +96,12 @@ export function AgentInputStatusBadge(props: AgentInputStatusBadgeProps) {
 }
 
 const styles = StyleSheet.create(() => ({
+    // No percentage cap: the badge sits in the strip's content-sized cluster, where a percentage of
+    // that cluster is cyclic and wraps even a short reason inside a sliver of its own width. The lab
+    // `.l12-sb` is one line at its natural width; the strip's overflow collapse owns narrow rows.
     wrapper: {
-        maxWidth: '70%',
         flexShrink: 1,
+        minWidth: 0,
     },
     wrapperPressed: {
         opacity: motionTokens.press.opacity,

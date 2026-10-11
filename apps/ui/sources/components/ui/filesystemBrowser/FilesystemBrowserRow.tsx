@@ -53,6 +53,8 @@ export type FilesystemBrowserRowProps = Readonly<{
     onDisclosurePress?: (() => void) | null;
     /** The chevron target's accessible name ("Expand apps" / "Collapse apps"). */
     disclosureAccessibilityLabel?: string;
+    /** The disclosure's test id when a caller already publishes one (defaults to `${testID}-disclosure`). */
+    disclosureTestID?: string;
     /**
      * `tree` (default): the sidebar rhythm. `table`: a row of a folder page's table, at the list row
      * height with a regular-weight name, because the commit column beside it carries the scan.
@@ -200,7 +202,7 @@ export function FilesystemBrowserRow(props: FilesystemBrowserRowProps): React.Re
                             ? { onPress: props.onDisclosurePress }
                             : {}),
                         accessibilityLabel: props.disclosureAccessibilityLabel ?? props.title,
-                        testID: props.testID ? `${props.testID}-disclosure` : undefined,
+                        testID: props.disclosureTestID ?? (props.testID ? `${props.testID}-disclosure` : undefined),
                     }}
                     testID={props.testID}
                     style={[

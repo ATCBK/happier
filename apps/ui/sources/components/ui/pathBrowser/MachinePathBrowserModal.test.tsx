@@ -20,7 +20,6 @@ import {
 } from './pathBrowserTestIds';
 import { flushHookEffects, invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
 import { createCapturingLegendListMock } from '@/dev/testkit/mocks/legendList';
-import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
 import type { CustomModalChromeCardConfig, CustomModalInjectedProps } from '@/modal/types';
 
 
@@ -190,6 +189,20 @@ vi.mock('@/components/ui/text/Text', () => ({
     TextInput: 'TextInput',
 }));
 
+// Observe render passes of the shared tree row without replacing it: the real row still renders.
+vi.mock('@happier-dev/plugin-ui/presentation', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@happier-dev/plugin-ui/presentation')>();
+    return {
+        ...actual,
+        HappierTreeRow: (props: React.ComponentProps<typeof actual.HappierTreeRow>) => {
+            if (typeof props.testID === 'string') {
+                itemRenderCounts.set(props.testID, (itemRenderCounts.get(props.testID) ?? 0) + 1);
+            }
+            return React.createElement(actual.HappierTreeRow, props);
+        },
+    };
+});
+
 vi.mock('@/components/ui/lists/Item', () => ({
     // Keep interactive rows pressable in the host tree so tests can detect nested toggle controls.
     Item: (props: any) => {
@@ -214,7 +227,7 @@ vi.mock('@/components/ui/popover', () => ({
     PopoverScope: ({ children }: any) => React.createElement(React.Fragment, null, children),
 }));
 
-vi.mock('@/modal', () => createModalModuleMock({
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
     spies: {
         prompt: (...args: any[]) => modalPromptMock(...args),
         alert: (...args: any[]) => modalAlertMock(...args),
@@ -324,7 +337,7 @@ describe('MachinePathBrowserModal', () => {
 
         await waitForTestId(screen, getPathBrowserToggleTestId('/'));
         await screen.pressByTestIdAsync(getPathBrowserToggleTestId('/'));
-        expect(screen.findByTestId(getPathBrowserRowTestId('/'))?.props.accessibilityExpanded).toBe(true);
+        expect(screen.findByTestId(getPathBrowserRowTestId('/'))?.props.accessibilityState?.expanded).toBe(true);
         const pendingChildren = screen.findHostByTestId(`${getPathBrowserRowTestId('/')}-loading`);
         expect(pendingChildren).not.toBeNull();
         expect(pendingChildren?.props.accessibilityRole).toBe('progressbar');
@@ -703,7 +716,7 @@ describe('MachinePathBrowserModal', () => {
         expect(itemRenderCounts.get(getPathBrowserRowTestId('/')) ?? 0).toBe(rootRenderCountAfterRootExpand);
     });
 
-    it('stops web toggle events from bubbling to the row while expanding the directory', async () => {
+    it('discloses folders through the shared tree row: a named, expandable chevron outside the tab order', async () => {
 
         const screen = await renderInModalChrome(<MachinePathBrowserModal
                     machineId="machine-1"
@@ -712,24 +725,22 @@ describe('MachinePathBrowserModal', () => {
                 />);
 
         await waitForTestId(screen, getPathBrowserToggleTestId('/'));
+        const rootToggle = screen.findByTestId(getPathBrowserToggleTestId('/'));
+        // The tree row is the keyboard item; its chevron says what it opens and whether it is open.
+        expect(rootToggle?.props.accessibilityLabel).toBe('/');
+        expect(rootToggle?.props.tabIndex).toBe(-1);
+        expect(rootToggle?.props.accessibilityState?.expanded).toBe(false);
+
         const stopPropagation = vi.fn();
         await act(async () => {
-            const rootToggle = screen.findByTestId(getPathBrowserToggleTestId('/'));
-            expect(rootToggle).toBeTruthy();
-            const ancestorTypes: string[] = [];
-            let ancestor = rootToggle?.parent ?? null;
-            while (ancestor) {
-                ancestorTypes.push(String(ancestor.type));
-                ancestor = ancestor.parent ?? null;
-            }
-            expect(ancestorTypes).not.toContain('Pressable');
-            rootToggle?.props.onMouseDownCapture?.({ stopPropagation });
             invokeTestInstanceHandler(rootToggle, 'onPress', { stopPropagation, nativeEvent: { stopPropagation } });
         });
 
         await waitForTestId(screen, getPathBrowserRowTestId('/Users'));
 
+        // Disclosing never also activates (selects) the row it sits in.
         expect(stopPropagation).toHaveBeenCalled();
+        expect(screen.findByTestId(getPathBrowserToggleTestId('/'))?.props.accessibilityState?.expanded).toBe(true);
         expect(listMachineFileBrowserDirectoryEntriesMock).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine-1',
             directoryPath: '/',

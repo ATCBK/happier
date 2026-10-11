@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { Platform, Pressable, View, type GestureResponderEvent } from 'react-native';
+import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
+import { resolveHappierTreeRowIndentPx } from '@happier-dev/plugin-ui/presentation';
 
 import { FilesystemBrowserRow } from '@/components/ui/filesystemBrowser/FilesystemBrowserRow';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
@@ -44,19 +45,15 @@ export const MachinePathBrowserListRow = React.memo(function MachinePathBrowserL
     props: MachinePathBrowserListRowProps,
 ): React.ReactElement {
     const { theme } = useUnistyles();
-    const rowBasePaddingLeft = 36;
-    const rowDepthIndent = 12;
-    const toggleButtonSize = 16;
-    const toggleButtonOffsetLeft = 20;
-    const rowPaddingLeft = rowBasePaddingLeft + Math.min(6, Math.max(0, props.node.depth)) * rowDepthIndent;
+    // The context-menu anchor sits where the shared tree row starts this node's content.
+    const rowPaddingLeft = resolveHappierTreeRowIndentPx(props.node.depth);
     const contextMenuRowAnchorRef = React.useRef<View | null>(null);
     const { getTreeRowProps, node, onToggleDirectory } = props;
     const treeItemProps = React.useMemo(() => getTreeRowProps(node,
         node.type === 'directory' ? () => onToggleDirectory(node.path) : undefined),
     [getTreeRowProps, node, onToggleDirectory]);
 
-    const handleTogglePress = React.useCallback((event?: GestureResponderEvent) => {
-        stopToggleEventPropagation(event);
+    const handleTogglePress = React.useCallback(() => {
         props.onToggleDirectory(props.node.path);
     }, [props, props.node.path]);
 
@@ -116,9 +113,11 @@ export const MachinePathBrowserListRow = React.memo(function MachinePathBrowserL
                     : undefined
             }
             showDivider={props.showDivider}
-            basePaddingLeft={rowBasePaddingLeft}
-            depthIndent={rowDepthIndent}
-            density="tight"
+            // Folders disclose through the shared tree row (indent, chevron, hover, focus, density), so the
+            // picker's tree reads like every other tree; the toggle keeps its published test id.
+            disclosure
+            onDisclosurePress={props.node.type === 'directory' ? handleTogglePress : undefined}
+            disclosureTestID={props.node.type === 'directory' ? getPathBrowserToggleTestId(props.node.path) : undefined}
             onRetryError={(errorNode) => {
                 if (errorNode.parentDirectoryPath) {
                     props.onRetryDirectory(errorNode.parentDirectoryPath);
@@ -148,43 +147,6 @@ export const MachinePathBrowserListRow = React.memo(function MachinePathBrowserL
             }}
             wrapContent={({ content }) => (
                 <View collapsable={false}>
-                    {props.node.type === 'directory' ? (
-                        <View
-                            pointerEvents="box-none"
-                            style={{
-                                position: 'absolute',
-                                left: rowPaddingLeft - toggleButtonOffsetLeft,
-                                top: 0,
-                                bottom: 0,
-                                width: toggleButtonSize,
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                zIndex: 2,
-                            }}
-                        >
-                            <Pressable
-                                testID={getPathBrowserToggleTestId(props.node.path)}
-                                {...(Platform.OS === 'web'
-                                    ? ({ onMouseDownCapture: stopToggleEventPropagation } as any)
-                                    : {})}
-                                onPressIn={stopToggleEventPropagation}
-                                onPress={handleTogglePress}
-                                hitSlop={10}
-                                style={{
-                                    width: toggleButtonSize,
-                                    height: toggleButtonSize,
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                }}
-                            >
-                                <Icon
-                                    name={props.node.isExpanded ? 'caret-down' : 'caret-right'}
-                                    size={16}
-                                    color={theme.colors.text.secondary}
-                                />
-                            </Pressable>
-                        </View>
-                    ) : null}
                     <View
                         ref={contextMenuRowAnchorRef}
                         collapsable={false}
