@@ -21,19 +21,16 @@ export function useComputerDriverRepair(scope: ComputerSessionScope, accountLife
         setFlight(installation);
         void (async () => {
             try {
-                const confirmed = await Modal.confirm(t('computerUse.viewer.repairDriver'), t('computerUse.viewer.driverRepairBody'), {
-                    confirmText: t('computerUse.viewer.repairDriver'),
-                });
-                if (!confirmed || !installation.isCurrent() || !accountLifetime.isCurrent() || current.current !== installation) return;
                 const execution = await installation.execute('machines.capabilities.install', {
                     machineId: scope.machineId, serverId: scope.serverId ?? undefined,
                     capabilityId: COMPUTER_CUA_DRIVER_DEP_ID, method: 'install',
-                }, { presentUserConfirmation: { actionId: 'machines.capabilities.install' } });
+                });
                 if (!installation.isCurrent() || !accountLifetime.isCurrent() || current.current !== installation) return;
                 if (!execution.ok) Modal.alert(t('common.error'), execution.error);
                 else {
                     const result = MachineCapabilityInstallOutputSchema.safeParse(execution.result);
-                    if (!result.success || !result.data.supported) Modal.alert(t('common.error'), t('deps.installNotSupported'));
+                    if (!result.success) Modal.alert(t('common.error'), t('deps.installFailed'));
+                    else if (!result.data.supported) Modal.alert(t('common.error'), result.data.reason === 'not-supported' ? t('deps.installNotSupported') : t('deps.installFailed'));
                     else if (!result.data.response.ok) Modal.alert(t('common.error'), result.data.response.error.message);
                 }
                 refresh();
