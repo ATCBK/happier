@@ -30,7 +30,7 @@ import { prepareAccountSettingsV2Content } from '@/settings/accountSettings/upda
 import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
-import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { deriveBoxPublicKeyFromSeed, deriveBoxSecretKeyFromSeed, sealBoxBundle, openBoxBundleWithSecretKey } from '@happier-dev/protocol/crypto/boxBundle';
 import * as installationStore from '@/daemon/identity/store';
 import { HandoffTargetReplacementPreflightV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
@@ -440,7 +440,7 @@ it.each(['plain', 'e2ee'] as const)('admits arbitrary %s requester custody throu
     if (String(url).endsWith('/v2/account/settings')) return { status: 200, data: { content: settings, version: 1 } };
     if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
       mode, version: 1, signingKeyFingerprint: mode === 'plain' ? null : 'signing',
-      contentKeyFingerprint: credentials.encryption?.type === 'legacy' ? computeContentPublicKeyFingerprint(
+      contentKeyFingerprint: credentials.encryption?.type === 'legacy' ? computeAccountEncryptionMigrateKeyFingerprintV1(
         tweetnacl.box.keyPair.fromSecretKey(deriveAccountMachineKeyFromRecoverySecret(credentials.encryption.secret)).publicKey) : null, updatedAt: 1,
     } };
     throw new Error('Unexpected requester HTTP read');

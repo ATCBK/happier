@@ -33,6 +33,26 @@ function bootstrap(credentials: StoredCredentials, isCurrent = async () => true)
 }
 
 describe('admitted requester Action projection', () => {
+  it('keeps private custody current across unrelated Account sequence updates but retires it on encryption transitions', async () => {
+    let version = 1;
+    let updatedAt = 1;
+    // Home root verification is the network boundary; Account custody remains real.
+    vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { ok: true } });
+    vi.spyOn(axios, 'get').mockImplementation(async () => ({ status: 200, data: {
+      mode: 'plain', version: version++, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt,
+    } }));
+    const projected = await projectRequesterAccountActionAuthorization({ authorization,
+      serverIdentityId: 'stable-home', bootstrap: bootstrap({ token: 'bob', encryption: null }) });
+    expect(projected?.requesterAccountProjection).toBeDefined();
+    expect(await projected?.requesterAccountProjection?.isCurrent()).toBe(true);
+    const http = projected && await projectExternalActionRequesterHttpAuthorization({ authorization: projected,
+      serverId: 'home-profile', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://requester-home.test',
+      target: authorization.binding.target, installationId: 'installation', privateKey: nacl.sign.keyPair().secretKey,
+      isCurrent: async () => true });
+    expect(http).not.toBeNull();
+    updatedAt = 2;
+    expect(await projected?.requesterAccountProjection?.isCurrent()).toBe(false);
+  });
   it('keeps accepted private work current after the ingress releases custody and retires it on actual settlement', async () => {
     const admit = Reflect.get(requesterAccountOwner, 'admitRequesterAccountActionContext');
     expect(typeof admit).toBe('function');

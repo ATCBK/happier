@@ -40,6 +40,7 @@ import { doesWorkspaceSyncSourceRootMatchRouting, doesWorkspaceSyncSourceWriterT
     doesWorkspaceSyncTargetRoutingMatchWriterTarget, doesWorkspaceSyncProjectSourceRequestMatchRouting,
     doesWorkspaceSyncSeedRootMatchRouting } from '@/api/machine/machineRpcAuthorization';
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
+import { resolveExternalActionRootInvocationAuthority } from '@/api/externalActionExecutionAuthorization';
 import { isWorkspaceSyncTargetInstalledContent, openWorkspaceSyncTargetContent } from './workspaceSyncTargetContent';
 
 type OwnedHandlerRegistrationContext = {
@@ -310,8 +311,7 @@ export class RpcHandlerManager {
             const admission = machineAdmission.data;
             // The Home already verified the installed signer and opaque request. Keep its original
             // Action identity distinct from the relay's target-local cancellation correlation.
-            const expectedAuthority = 'authentication' in binding && binding.sessionActionOrigin === undefined
-                ? 'present_user' : 'account_automation';
+            const expectedAuthority = resolveExternalActionRootInvocationAuthority(parsedInputAuthorization.data);
             return binding.machineId === this.scopePrefix && binding.machineId === this.localMachineId
                 && admission.machineId === binding.machineId && admission.installationId === binding.installationId
                 && admission.actorAccountId === binding.accountId && admission.custodianAccountId === binding.custodianAccountId
@@ -629,6 +629,14 @@ export class RpcHandlerManager {
                 ...(request.authorization ? { authorization: request.authorization } : {}),
                 ...(machineAdmission?.success ? {
                     machineAdmission: machineAdmission.data,
+                    verifyMachineAuthorityCurrent: async () => {
+                        try {
+                            // Accepted daemon-owned work outlives the caller's transport lifetime.
+                            // Access is still re-derived through the canonical live admission owner.
+                            return this.authorizeRequest !== undefined
+                                && (await this.authorizeRequest({ ...authorizationRequest, signal: undefined })).ok;
+                        } catch { return false; }
+                    },
                     verifyMachineAdmissionCurrent: async () => {
                         try {
                             return !controller.signal.aborted && this.authorizeRequest !== undefined

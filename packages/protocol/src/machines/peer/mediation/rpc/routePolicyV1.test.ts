@@ -19,6 +19,18 @@ async function importRpcPolicy() {
 }
 
 describe('MachineRpcRoutePolicyV1', () => {
+  it('projects each public machine terminal Action through its existing server-required native route', async () => {
+    const { resolveMachineRpcRoutePolicy, resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
+    for (const actionId of ['machines.terminal.open', 'machines.terminal.list', 'machines.terminal.read',
+      'machines.terminal.write', 'machines.terminal.close', 'machines.terminal.restart'] as const) {
+      const method = getActionSpec(actionId).bindings?.rpcMethod;
+      expect(method).toBeDefined();
+      if (!method) throw new Error('Machine terminal Action requires its native route');
+      expect(resolveMachineRpcRoutePolicy(method)).toMatchObject({ routeClass: 'server_required',
+        rpcClassification: 'action_spec_bound', actionSpecId: actionId });
+      expect(resolveMachineRpcExternalActionEffectV1(method)).toBe(actionId);
+    }
+  });
   it('binds committed-copy review to the public read without granting shared Machine access or removal', async () => {
     const { resolveMachineRpcRoutePolicy, resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
     const method = RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_INSPECT;
@@ -307,6 +319,17 @@ describe('MachineRpcRoutePolicyV1', () => {
   it('keeps daemon_voice_audio as an RPC fallback classification outside peer media flows', () => {
     expect(PeerFlowKindV1Schema.safeParse('daemon_voice_audio').success).toBe(false);
     expect(PeerFlowKindV1Schema.safeParse('voice_media').success).toBe(true);
+  });
+
+  it('keeps guard notice writes on the current Account and Session server route', async () => {
+    const protocol = await importRpcPolicy();
+    if ('importError' in protocol) throw protocol.importError;
+    expect(resolveMachineRpcGovernance(SESSION_RPC_METHODS.SESSION_GUARD_NOTICE)).toEqual({ rpcClassification: 'internal_only' });
+    expect(protocol.resolveMachineRpcRoutePolicy(SESSION_RPC_METHODS.SESSION_GUARD_NOTICE)).toMatchObject({
+      routeClass: 'server_required', serverRequiredReason: 'durable_session_write', rpcClassification: 'internal_only',
+      scope: { accountRequired: true, machineRequired: true, sessionRequired: true, serverRequired: true },
+    });
+    expect(protocol.resolveEphemeralRunnerMachineRpcAuthority(SESSION_RPC_METHODS.SESSION_GUARD_NOTICE)).toBeNull();
   });
 
   it('classifies every deployed RPC and session RPC method exactly once', async () => {

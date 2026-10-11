@@ -83,7 +83,8 @@ async function projectAdmittedAccountCustody(input: RequesterAccountActionAuthor
         if (input.signal?.aborted || !await bootstrap.isCurrent()) return false;
         const next = await fetchAccountEncryptionCurrentness({ token: bootstrap.credentials.token,
           serverBaseUrl: bootstrap.serverHttpBaseUrl, ...(input.signal ? { signal: input.signal } : {}) });
-        return next.mode === currentness.mode && next.version === currentness.version
+        // Account seq also advances for unrelated activity; encryption custody follows its own mode/key transition.
+        return next.mode === currentness.mode && next.updatedAt === currentness.updatedAt
           && next.signingKeyFingerprint === currentness.signingKeyFingerprint
           && next.contentKeyFingerprint === currentness.contentKeyFingerprint
           && !input.signal?.aborted && await bootstrap.isCurrent();
