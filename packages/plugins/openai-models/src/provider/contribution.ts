@@ -6,6 +6,7 @@ export const OPENAI_PROVIDER_CONTRIBUTION = {
   v: 1,
   id: 'openai',
   name: 'OpenAI',
+  icon: 'openai',
   websiteUrl: 'https://openai.com',
   kind: 'frontier',
   endpointTemplates: [

@@ -4,6 +4,7 @@ export const DEEPSEEK_PROVIDER_CONTRIBUTION = {
   v: 1,
   id: 'deepseek',
   name: 'DeepSeek',
+  icon: 'deepseek',
   websiteUrl: 'https://www.deepseek.com',
   kind: 'frontier',
   endpointTemplates: [
