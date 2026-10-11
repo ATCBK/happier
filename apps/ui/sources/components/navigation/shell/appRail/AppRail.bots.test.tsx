@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createSessionFixture,
+  createSessionListRenderableSessionFixture,
   flushHookEffects,
   renderScreen,
   standardCleanup,
@@ -22,6 +23,7 @@ import {
   buildSessionOrganizationSessionKey,
 } from '@/sync/domains/session/organization';
 import { getStorage } from '@/sync/domains/state/storage';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
 import { AppRailSurface } from './AppRail';
 import { buildAppRailEntries } from './appRailModel';
@@ -138,6 +140,38 @@ function railTestIds(
 }
 
 describe('AppRail Bots', () => {
+  it('keeps Bot attention contextual without another global numeric badge', async () => {
+    const serverId = getActiveServerSnapshot().serverId;
+    const bot = createSessionListRenderableSessionFixture({
+      id: 'approval-bot',
+      metadata: { path: '/repo', host: 'host', bot: { kind: 'bot' } },
+      active: true,
+      activeAt: Date.now(),
+      hasPendingPermissionRequests: true,
+      pendingRequestObservedAt: Date.now(),
+    });
+    getStorage().setState({
+      isDataReady: true,
+      sessionListRowsByServerId: { [serverId]: { [bot.id]: bot } },
+      ordinarySessionListMembershipByServerId: { [serverId]: [bot.id] },
+    });
+    const screen = await renderScreen(
+      <BotsRosterRuntimeProvider>
+        <InjectedAuthProvider credentials={null}>
+          <InboxSummaryProvider>
+            <AppRailSurface entries={railWithPinnedBot()} activeId={null} onOpen={() => {}}
+              renderFooter={(item) => <View testID={item.id} />} />
+          </InboxSummaryProvider>
+        </InjectedAuthProvider>
+      </BotsRosterRuntimeProvider>,
+    );
+    await act(async () => screen.findByTestId('app-rail')?.props.onLayout?.(layout(810)));
+    const badge = screen.findByTestId('app-rail:bots-badge');
+    expect(badge).not.toBeNull();
+    expect(badge!.findAll((node) => typeof node.type === 'string' && node.props.children === '1')).toHaveLength(0);
+    expect(screen.findHostByTestId('app-rail:bots')?.props.accessibilityLabel).toContain('bots.roster.needsYou');
+  });
+
   it('stands each explicitly rail-pinned Bot right under the one Bots entry, which opens the roster from anywhere', async () => {
     let runtime: BotsRosterRuntime | null = null;
     const entries = railWithPinnedBot();

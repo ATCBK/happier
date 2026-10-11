@@ -123,7 +123,7 @@ const renderRoster = (content: SidebarFooterPopoverContentProps) => (
 
 /**
  * The rail's one Bots entry (lab `b-rail A`): the roster popover beside it, opened by a press, the
- * command palette or the phone launcher through the Bots runtime. Its badge is the needs-you count.
+ * command palette or the phone launcher through the Bots runtime. Its dot signals contextual attention.
  */
 export const AppRailBots = React.memo(function AppRailBots(
   props: Readonly<{
@@ -169,7 +169,7 @@ export const AppRailBots = React.memo(function AppRailBots(
       {needsYou > 0 && !props.renderTrigger ? (
         <AppRailBadge
           testID={`app-rail:${props.entry.id}-badge`}
-          signal={{ kind: 'count', value: needsYou, tone: 'attention' }}
+          signal={{ kind: 'dot', tone: 'attention' }}
         />
       ) : null}
     </>
