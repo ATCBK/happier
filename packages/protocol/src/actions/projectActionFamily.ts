@@ -128,6 +128,42 @@ const PROJECT_ACTION_COPY = {
   'projects.compute.exec': ['Run a command in a project', 'Run a command you give in a project\'s folder on a machine.'],
 } as const satisfies Record<ProjectActionIdV1, readonly [title: string, summary: string]>;
 
+// Forms and approval review share these operands; schemas alone do not publish review fields.
+const PROJECT_ACTION_INPUT_FIELDS = {
+  'projects.trust.list': [
+    { path: 'project', title: 'Project', widget: 'json' },
+  ],
+  'projects.trust.revoke': [
+    { path: 'project', title: 'Project', widget: 'json', required: true },
+    { path: 'expectedRevision', title: 'Reviewed revision', widget: 'number', required: true },
+    { path: 'expectedEffectDigest', title: 'Reviewed setup effect', widget: 'text', required: true },
+  ],
+  'projects.prepare': [
+    { path: 'workspace', title: 'Qualified checkout', widget: 'json', required: true },
+    { path: 'phase', title: 'Preparation phase', widget: 'select', required: true,
+      options: [{ value: 'setup', label: 'Setup' }, { value: 'teardown', label: 'Teardown' }] },
+    { path: 'skipForInvocation', title: 'Skip for this invocation', widget: 'boolean' },
+    { path: 'expectedEffectDigest', title: 'Reviewed setup effect', widget: 'text' },
+    { path: 'consentScope', title: 'Setup consent scope', widget: 'json' },
+  ],
+  'projects.script.run': [
+    { path: 'workspace', title: 'Qualified checkout', widget: 'json', required: true },
+    { path: 'selection', title: 'Selected script', widget: 'json', required: true },
+    { path: 'choice', title: 'Execution placement', widget: 'json' },
+    { path: 'expectedEffectDigest', title: 'Reviewed setup effect', widget: 'text' },
+    { path: 'memoryDemand', title: 'Memory demand', widget: 'json' },
+  ],
+  'projects.compute.exec': [
+    { path: 'workspace', title: 'Qualified checkout', widget: 'json', required: true },
+    { path: 'executable', title: 'Executable', widget: 'text', required: true },
+    { path: 'argv', title: 'Arguments', widget: 'json', required: true },
+    { path: 'cwd', title: 'Working directory', widget: 'text', required: true },
+    { path: 'environmentBindings', title: 'Saved Secret references', widget: 'json' },
+    { path: 'choice', title: 'Execution placement', widget: 'json' },
+    { path: 'memoryDemand', title: 'Memory demand', widget: 'json' },
+  ],
+} as const satisfies Record<ProjectActionIdV1, NonNullable<PreNormalizedActionSpec['inputHints']>['fields']>;
+
 function row<const Id extends ProjectActionIdV1>(id: Id) {
   const read = id === 'projects.trust.list';
   return {
@@ -152,7 +188,7 @@ function row<const Id extends ProjectActionIdV1>(id: Id) {
       completion: lazyDefinition(() => id === 'projects.prepare'
       ? createProjectCommandActionCompletionV1({ immediateResultSchema: ProjectPrepareNoLaunchResultV1Schema })
       : createProjectCommandActionCompletionV1()) } : {}),
-    inputHints: { title: PROJECT_ACTION_COPY[id][0], description: PROJECT_ACTION_COPY[id][1], fields: [] },
+    inputHints: { title: PROJECT_ACTION_COPY[id][0], description: PROJECT_ACTION_COPY[id][1], fields: PROJECT_ACTION_INPUT_FIELDS[id] },
   } satisfies PreNormalizedActionSpec;
 }
 export const PROJECT_ACTION_SPECS_V1 = PROJECT_ACTION_IDS_V1.map(id => row(id));

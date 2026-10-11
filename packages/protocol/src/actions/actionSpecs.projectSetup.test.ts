@@ -4,8 +4,36 @@ import { ActionSpecSchema, getActionSpec } from './actionSpecs.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
 import { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from './projectActionFamily.js';
+import { describeApprovalActionFields } from './actionApprovalPresentation.js';
 
 describe('Project preparation Action contracts', () => {
+  it.each([
+    { kind: 'named', name: 'fresh' },
+    { kind: 'native', source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'fresh' } },
+  ])('shows the exact checkout, script and placement before approval: $kind', (selection) => {
+    const workspace = { serverId: 'home', workspaceId: 'workspace', machineId: 'machine', rootPath: '/repo' };
+    const choice = { kind: 'primary' };
+    const actionArgs = PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.script.run'].parse({ workspace, selection, choice });
+    const presentation = describeApprovalActionFields({ actionId: 'projects.script.run', actionArgs });
+    expect(presentation.unrepresentable).toBeNull();
+    for (const [path, value] of Object.entries({ workspace, selection, choice })) {
+      expect(presentation.rows).toContainEqual(expect.objectContaining({ kind: 'value', path, value: JSON.stringify(value) }));
+    }
+  });
+  it('withholds approval when a required checkout cannot be represented', () => {
+    const presentation = describeApprovalActionFields({ actionId: 'projects.script.run', actionArgs: { selection: { kind: 'named', name: 'fresh' } } });
+    expect(presentation.unrepresentable).toEqual({ path: 'workspace', reason: 'missing_required_context' });
+  });
+  it.each([
+    ['projects.prepare', { workspace: { serverId: 'home', workspaceId: 'workspace', machineId: 'machine', rootPath: '/repo' }, phase: 'teardown', skipForInvocation: false, expectedEffectDigest: 'reviewed' }],
+    ['projects.compute.exec', { workspace: { serverId: 'home', workspaceId: 'workspace', machineId: 'machine', rootPath: '/repo' }, executable: 'printf', argv: ['a b', 'c'], cwd: '/repo/subdir', choice: { kind: 'primary' } }],
+    ['projects.trust.revoke', { project: { serverId: 'home', projectId: 'project' }, expectedRevision: 1, expectedEffectDigest: 'reviewed' }],
+  ] as const)('represents each reviewed operand of %s', (actionId, input) => {
+    const actionArgs = PROJECT_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input);
+    const presentation = describeApprovalActionFields({ actionId, actionArgs });
+    expect(presentation.unrepresentable).toBeNull();
+    expect(presentation.rows.map(row => row.path)).toEqual(expect.arrayContaining(Object.keys(actionArgs)));
+  });
   it('accepts actual finite completion declarations at the canonical catalog validator', () => {
     for (const id of ['projects.prepare', 'projects.script.run', 'projects.compute.exec'] as const) {
       expect(ActionSpecSchema.safeParse(getActionSpec(id)).success).toBe(true);
