@@ -487,6 +487,7 @@ export type ConnectedServicesConfigurationActionInputById = {
             configurationRevision: string | null;
         } | undefined;
         overrideRuntimeCooldown?: boolean | undefined;
+        switchReason?: string | undefined;
     };
     readonly "connectedServices.pools.reorder": {
         group: {
