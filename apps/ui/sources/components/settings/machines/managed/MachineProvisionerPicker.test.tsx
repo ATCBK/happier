@@ -12,10 +12,8 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 
-const navigation = vi.hoisted(() => ({ push: vi.fn() }));
 installApprovalCommonModuleMocks({
   text: async () => vi.importActual<typeof import('@/text')>('@/text'),
-  router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: navigation }).module,
 });
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -192,7 +190,6 @@ describe('provisioner picker demand', () => {
       if (credentialFailure) {
         const cards = screen.tree.findAll(node => Array.isArray(node.props.cards)).flatMap(node => node.props.cards);
         expect(cards[0].status.label).toBe(t('managedMachines.add.status.noAccount'));
-        expect(cards[0].action.label).toBe(t('managedMachines.add.action.connect'));
       }
       expect(screen.findByTestId('managed-picker.unavailable')?.props.diagnosticCode).toBeUndefined();
       await act(async () =>
@@ -200,13 +197,7 @@ describe('provisioner picker demand', () => {
           screen.findByTestId(`${row}.action`) ? `${row}.action` : row,
         ),
       );
-      if (credentialFailure) {
-        const { buildConnectedAccountPurposeSetupRoute } = await import('@/sync/domains/connectedServices/connectedAccountPurposeSetup');
-        expect(navigation.push).toHaveBeenCalledWith(buildConnectedAccountPurposeSetupRoute({
-          purpose: { consumer: contribution, purpose: 'compute' }, scope: { serverId: 'srv_build', accountId: 'owner' }, machineId: 'controller',
-        }));
-        expect(onSelectProvisioner).not.toHaveBeenCalled();
-      } else expect(onSelectProvisioner).toHaveBeenCalledWith({
+      expect(onSelectProvisioner).toHaveBeenCalledWith({
         serverId,
         provisioner: buildQualifiedPluginContributionKey(contribution),
         controller: { machineId: 'controller', installationId: 'installation' },

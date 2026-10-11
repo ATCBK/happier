@@ -24,7 +24,6 @@ import { MachineProvisionerSections } from './MachineProvisionerSections';
 import type { ManagedProvisionerCard } from './managedMachineDisplay';
 import { useManagedControllerScope, type ManagedControllerScope } from './useManagedControllerScope';
 import type { MachinePresetCollectionSettledResult } from './machinePresetCollectionClient';
-import { buildConnectedAccountPurposeSetupRoute } from '@/sync/domains/connectedServices/connectedAccountPurposeSetup';
 
 export type ManagedProvisionerSelection = Readonly<{ serverId: string; provisioner: string; controller: ManagedControllerV1 }>;
 type MachineProvisionerPickerProps = Readonly<{
@@ -109,7 +108,6 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
         const repairAction = check?.prerequisites?.find(prerequisite => prerequisite.status !== 'available' && prerequisite.repairAction)?.repairAction;
         const missingExecutable = check?.prerequisites?.some(prerequisite => prerequisite.status !== 'available');
         const noAccount = check?.code === 'credential_unavailable' || outcome?.kind === 'failed' && outcome.code === 'credential_unavailable';
-        const credentialPurpose = noAccount ? provisioner.credentialPurposes?.[0]?.purpose : undefined;
         const statusLabel = check?.status ? localized(provisioner.contribution.pluginId, check.status)
             : noAccount ? t('managedMachines.add.status.noAccount')
             : check ? t(check.available ? 'managedMachines.add.status.ready'
@@ -132,10 +130,6 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
                     if (abort.signal.aborted || !binding.isCurrent()) return;
                     if (outcome.ok) catalog.refresh(); else setError(outcome.reason);
                 }).catch(() => { if (!abort.signal.aborted && binding.isCurrent()) setError('unavailable'); });
-            } } : credentialPurpose ? { kind: 'repair', label: t('managedMachines.add.action.connect'), onPress: () => {
-                const binding = catalog.binding;
-                if (!binding?.isCurrent() || !controller) return;
-                router.push(buildConnectedAccountPurposeSetupRoute({ scope: binding.scope, machineId: controller.machineId, purpose: credentialPurpose }));
             } } : { kind: 'choose', label: t('managedMachines.add.action.choose'), onPress: () => open(id) } }];
     });
     const controllerName = scope.machine ? getMachineDisplayName(scope.machine) ?? scope.machine.id : '';
