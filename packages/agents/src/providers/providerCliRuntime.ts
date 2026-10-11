@@ -249,6 +249,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     alternativeBinaryNames: ['opencode2'],
     knownCommandCandidates: [
       { kind: 'homeBinDir', relativeDir: '.opencode/bin' },
+      { kind: 'homeBinDir', relativeDir: '.local/bin' },
       { kind: 'homePath', relativePath: 'AppData/Roaming/npm/opencode.cmd' },
     ],
     sourcePreferenceDefault: 'system-first',

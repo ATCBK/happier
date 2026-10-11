@@ -28,6 +28,16 @@ const persistedCompletion = { type: 'user', uuid: 'completion', isMeta: true,
     message: { content: [{ type: 'tool_result', tool_use_id: 'tool', content: [{ type: 'text', text: 'final findings' }], is_error: false }] } };
 
 describe('native task completion through normalization and reducer', () => {
+    // cli-v0.2.16 (b8d1c449c46ab4dfa8637db36b66f643d149e66d), sessionScanner.ts:
+    // released task-notification rewrite preserved origin.status but always wrote is_error:false.
+    it.each(['completed', 'failed', 'stopped'] as const)('preserves released native task status %s', status => {
+        const historicalCompletion = { ...persistedCompletion, origin: { ...persistedCompletion.origin, status } };
+        const tool = fold([launch, ack, historicalCompletion, { ...ack, uuid: 'late-ack' }])('tool');
+        expect(tool?.state).toBe(status === 'completed' ? 'completed' : 'error');
+        expect(isClaudeAsyncAgentLaunchToolResult(tool?.result)).toBe(false);
+        expect(JSON.stringify(tool?.result)).toContain('final findings');
+    });
+
     it('reads previously persisted native metadata completions and replaces the acknowledgement once', () => {
         const tool = fold([launch, ack, persistedCompletion, { ...persistedCompletion, uuid: 'repeat' }, { ...ack, uuid: 'replayed-ack' }])('tool');
         expect(tool?.state).toBe('completed');

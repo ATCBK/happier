@@ -13,10 +13,8 @@
  * up with three dead links in the first place — the exact history its own
  * docblock records.
  *
- * The Android situation is deliberately not smoothed over. There is no public
- * Play listing; `ANDROID_PLAY_URL` 404s for everyone, and the manifest says in
- * as many words not to ship it. The APK is what Android users actually use, so
- * that is what this page leads with.
+ * Google Play is the primary Android listing; the direct APK remains available.
+ * Both destinations come from the same manifest the website consumes.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -43,7 +41,7 @@ export function parseDownloadManifest(source) {
     desktopReleases: manifest.desktopReleasesPage,
     appStore: manifest.appStoreUrl,
     androidApk: manifest.androidApkUrl,
-    androidOptIn: manifest.androidPlayTestingOptInUrl,
+    androidPlay: manifest.androidPlayUrl,
     webApp: manifest.webAppUrl,
     installUnix: manifest.installCommandUnix,
     installWindows: manifest.installCommandWindows,
@@ -70,16 +68,12 @@ terminal prints a code for a browser or phone you are already signed in on.
 
 <Cards>
   <Card title="iPhone and iPad" href="${m.appStore}" description="Happier on the App Store." />
-  <Card title="Android (APK)" href="${m.androidApk}" description="Direct download. There is no public Play listing yet." />
+  <Card title="Android" href="${m.androidPlay}" description="Happier on Google Play." />
+  <Card title="Android (APK)" href="${m.androidApk}" description="Direct download for installation outside Google Play." />
 </Cards>
 
-Android is worth a sentence of explanation. There is no public Google Play
-listing today — the Play track is closed testing, so the store page returns
-"not found" unless your Google account is already on the tester list. The APK
-above is a direct download and is how most Android users are running Happier.
-If you would rather go through Play, you can [join the testing
-programme](${m.androidOptIn}) first; the store page starts working for your
-account once you have.
+Install Happier from Google Play, or use the APK above if you prefer to install
+it directly.
 
 ## In a browser
 

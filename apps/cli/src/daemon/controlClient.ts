@@ -827,6 +827,9 @@ export async function queryDaemonOpenCodeBrokerLoadHandshake(
 
 export async function listDaemonSessions(): Promise<any[]> {
   const result = await daemonPost('/list');
+  if (result?.error) {
+    throw new Error(String(result.error));
+  }
   return result.children || [];
 }
 

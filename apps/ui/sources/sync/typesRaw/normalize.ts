@@ -11,7 +11,7 @@ import {
 import { markUnsupportedContentMeta } from '../domains/messages/unsupportedContentMeta';
 import { hasSessionMediaRenderItems } from '../domains/sessionMedia/sessionMediaMessageMeta';
 import { rawRecordSchema, type AgentEvent, type RawAgentContent, type RawRecord, type UsageData } from './schemas';
-import { isSessionToolAnswerDeliveryMeta } from '@happier-dev/protocol';
+import { isSessionToolAnswerDeliveryMeta, normalizeClaudeActivityStatusSignal } from '@happier-dev/protocol';
 import { buildUsageDataFromTokenCountMessage } from './tokenCountUsage';
 
 // Normalized types
@@ -546,6 +546,11 @@ export function normalizeRawMessage(
             if (raw.content.data.isMeta && !nativeTaskResult) {
                 return null;
             }
+            // cli-v0.2.16 wrote is_error:false even for failed/stopped notifications.
+            // Translate that released envelope through the protocol's status owner.
+            const nativeTaskStatus = raw.content.data.isMeta && nativeTaskResult
+                ? normalizeClaudeActivityStatusSignal(outputOrigin.status)
+                : null;
 
             // Skip compact summary messages
             if (raw.content.data.isCompactSummary) {
@@ -742,7 +747,7 @@ export function normalizeRawMessage(
 		                                ...c,  // WOLOG: Preserve all fields including unknown ones
 	                                type: 'tool-result',
 	                                content: toolResultContentToText(rawResultContent),
-	                                is_error: c.is_error || false,
+	                                is_error: nativeTaskStatus === 'failed' || nativeTaskStatus === 'cancelled' || c.is_error || false,
 		                                uuid: outputUuid,
 		                                parentUUID: raw.content.data.parentUuid ?? null,
 		                                permissions: normalizeToolResultPermissions(c.permissions),
