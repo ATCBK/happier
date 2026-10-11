@@ -5,9 +5,7 @@ import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { ProjectWorkerCopyRetireInputV1Schema, type ProjectWorkerCopyRetireInputV1 } from '@happier-dev/protocol/actions/specs/projectWorkers';
 import type { WorkspaceSyncCommittedCopyPreviewV1, WorkspaceSyncCommittedCopyPreviewResultV1,
 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncCommittedCopyV1';
-import { executeProjectWorkerActionV1 } from '@/sync/ops/actions/projectWorkerActions';
 
-import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { randomUUID } from '@/platform/randomUUID';
 
 type WorkspaceSyncControllerScope = Readonly<{
@@ -32,6 +30,8 @@ export async function getWorkspaceSyncCommittedCopyPreview(input: Readonly<{
 }>): Promise<WorkspaceSyncCommittedCopyReviewResult> {
     if (!input.accountId.trim()) throw new Error('Workspace copy preview Account is unavailable');
     const request = input.request;
+    // Machine-store invalidation imports these readers; load the Action front door only for an actual inspection.
+    const { executeProjectWorkerActionV1 } = await import('@/sync/ops/actions/projectWorkerActions');
     const result = await executeProjectWorkerActionV1('projects.worker.copy.inspect', request, {
         expectedAccountId: input.accountId, ...(input.signal ? { signal: input.signal } : {}),
     });
@@ -61,6 +61,7 @@ async function callWorkspaceSync<R>(
     method: string,
     payload: unknown,
 ): Promise<R> {
+    const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
     return await machineRpcWithServerScope<R, unknown>({
         machineId: scope.controllerMachineId,
         serverId: scope.serverId,

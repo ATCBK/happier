@@ -46,7 +46,7 @@ describe('apps/ui runVitestShards', () => {
     });
 
     it('bounds each shard independently', () => {
-        expect(resolveVitestShardTimeoutMs({})).toBe(900_000);
+        expect(resolveVitestShardTimeoutMs({})).toBe(1_200_000);
         expect(resolveVitestShardTimeoutMs({ HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS: '120000' })).toBe(120_000);
         expect(classifyVitestShardTermination({ code: null, signal: 'SIGTERM', timedOut: true })).toEqual({
             outcome: 'failed',

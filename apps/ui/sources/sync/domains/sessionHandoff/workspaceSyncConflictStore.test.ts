@@ -173,6 +173,7 @@ describe('workspaceSyncConflictStore', () => {
         });
 
         const staleRefresh = refreshWorkspaceSyncConflicts(scope);
+        await vi.waitFor(() => expect(resolveStalePage).toBeTypeOf('function'));
         invalidateWorkspaceSyncConflicts(scope);
         resolveStalePage({
             status: 'page', relationshipId: 'relationship-1', totalCount: 1, nextCursor: null,

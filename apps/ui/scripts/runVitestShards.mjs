@@ -81,7 +81,9 @@ export function resolveVitestShardRange(env, shardCount) {
 }
 
 export function resolveVitestShardTimeoutMs(env) {
-  return parsePositiveInt(env?.HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS) ?? 900_000;
+  // Gate partitions have an approved twenty-minute execution budget; the job
+  // separately allows preparation/headroom. Keep the owning watchdog aligned.
+  return parsePositiveInt(env?.HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS) ?? 1_200_000;
 }
 
 export function resolveVitestShardConcurrency(env, argv) {
@@ -141,7 +143,23 @@ export async function resolveVitestPositionalFilters(passthroughArgs) {
 }
 
 /** The vitest argv tail for one shard: caller options, minus the path filters, plus its files. */
-export function buildVitestShardRunArgs({ configPath, passthroughArgs, positionalFilters, files }) {
+export function buildVitestShardRunArgs({ configPath, passthroughArgs, positionalFilters, files, partition }) {
+  if (partition) {
+    // Native sharding hashes and slices the filtered inventory deterministically.
+    // It avoids both repeated list/transform passes and large file-path argv on Windows.
+    const options = partition.options;
+    // Supplied budgets belong to the CLI parser and canonical UI config, including
+    // the legacy cap and invalid-value policy. Only replace the unsized default.
+    const hasConfiguredWorkers = process.env.HAPPIER_VITEST_MAX_WORKERS !== undefined
+      || process.env.VITEST_UI_MAX_FORKS !== undefined;
+    return [
+      'run', '--config', configPath, ...passthroughArgs,
+      `--shard=${partition.part}/${partition.parts}`,
+      ...(options.fileParallelism === undefined ? ['--file-parallelism'] : []),
+      ...(options.maxWorkers === undefined && !hasConfiguredWorkers ? [`--maxWorkers=${os.availableParallelism()}`] : []),
+      ...(options.minWorkers === undefined ? ['--minWorkers=1'] : []),
+    ];
+  }
   const droppable = new Map();
   for (const filter of positionalFilters ?? []) {
     droppable.set(filter, (droppable.get(filter) ?? 0) + 1);
@@ -215,6 +233,7 @@ function resolveVitestNodeCommand() {
 async function resolveVitestTestFiles({ vitestCommand, configPath, nodeOptions, passthroughArgs }) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'happier-ui-vitest-list-'));
   const jsonPath = path.join(tmpDir, 'vitest-files.json');
+  let operatorSignal = null;
 
   const result = await runManagedChildCommand({
     command: vitestCommand.command,
@@ -239,14 +258,15 @@ async function resolveVitestTestFiles({ vitestCommand, configPath, nodeOptions, 
     signalCleanupGraceMs: 0,
     exitCleanupGraceMs: 1_000,
     parentWatchdogPollMs: Number.parseInt(process.env.HAPPIER_TEST_PARENT_WATCHDOG_MS ?? '1000', 10),
+    onProcessSignal: (signal) => { operatorSignal ??= signal; },
   });
 
   if (!result.ok) {
     throw result.error;
   }
 
-  if (result.signal) {
-    process.exit(resolveSignalExitCode(result.signal));
+  if (operatorSignal || result.signal) {
+    process.exit(resolveSignalExitCode(operatorSignal ?? result.signal));
     return [];
   }
 
@@ -263,12 +283,13 @@ async function resolveVitestTestFiles({ vitestCommand, configPath, nodeOptions, 
   }
 }
 
-function spawnVitestRun({ vitestCommand, configPath, nodeOptions, passthroughArgs, positionalFilters, files, timeoutMs }) {
-  return runManagedChildCommand({
+async function spawnVitestRun({ vitestCommand, configPath, nodeOptions, passthroughArgs, positionalFilters, files, partition, timeoutMs, onTimeout }) {
+  let operatorSignal = null;
+  const result = await runManagedChildCommand({
     command: vitestCommand.command,
     args: [
       ...vitestCommand.argsPrefix,
-      ...buildVitestShardRunArgs({ configPath, passthroughArgs, positionalFilters, files }),
+      ...buildVitestShardRunArgs({ configPath, passthroughArgs, positionalFilters, files, partition }),
     ],
     spawnOptions: {
       env: {
@@ -282,10 +303,16 @@ function spawnVitestRun({ vitestCommand, configPath, nodeOptions, passthroughArg
     exitCleanupGraceMs: 1_000,
     parentWatchdogPollMs: Number.parseInt(process.env.HAPPIER_TEST_PARENT_WATCHDOG_MS ?? '1000', 10),
     maxRuntimeMs: timeoutMs,
+    onMaxRuntime: onTimeout,
+    onProcessSignal: (signal) => { operatorSignal ??= signal; },
   });
+  // A cooperative Vitest exit is numeric after process-tree cleanup sends SIGTERM.
+  // Preserve the operator's intent so it stops the lane instead of admitting another shard.
+  return operatorSignal ? { ...result, signal: operatorSignal, timedOut: false } : result;
 }
 
-function startVitestRun({ vitestCommand, configPath, nodeOptions, passthroughArgs, positionalFilters, files, timeoutMs }) {
+function startVitestRun({ vitestCommand, configPath, nodeOptions, passthroughArgs, positionalFilters, files, timeoutMs, onTimeout }) {
+  let operatorSignal = null;
   const child = spawn(
     vitestCommand.command,
     [
@@ -307,10 +334,12 @@ function startVitestRun({ vitestCommand, configPath, nodeOptions, passthroughArg
     signalCleanupGraceMs: 0,
     exitCleanupGraceMs: 1_000,
     parentWatchdogPollMs: Number.parseInt(process.env.HAPPIER_TEST_PARENT_WATCHDOG_MS ?? '1000', 10),
+    onProcessSignal: (signal) => { operatorSignal ??= signal; },
   });
   let timedOut = false;
   const timeout = setTimeout(() => {
     timedOut = true;
+    onTimeout?.();
     void lifecycle.cleanupChild('SIGTERM');
   }, timeoutMs);
   timeout.unref?.();
@@ -338,8 +367,8 @@ function startVitestRun({ vitestCommand, configPath, nodeOptions, passthroughArg
         child,
         ok: true,
         code,
-        signal,
-        timedOut,
+        signal: operatorSignal ?? signal,
+        timedOut: operatorSignal ? false : timedOut,
       });
     });
   });
@@ -421,10 +450,29 @@ async function main(argv) {
   const sizeMb = resolveMaxOldSpaceSizeMb(process.env);
   const nodeOptions = upsertMaxOldSpaceSize(process.env.NODE_OPTIONS, sizeMb);
   const passthroughArgs = resolveVitestPassthroughArgs(argv);
+  const part = parsePositiveInt(process.env.HAPPIER_UI_VITEST_PART);
+  const parts = parsePositiveInt(process.env.HAPPIER_UI_VITEST_PARTS);
+  const vitestCommand = resolveVitestNodeCommand();
+  if (part !== null && parts !== null && part <= parts) {
+    const { parseCLI } = await import('vitest/node');
+    const { options } = parseCLI(['vitest', 'run', ...passthroughArgs]);
+    const shardSpec = `${part}/${parts}`;
+    console.log(`[vitest] partition ${shardSpec}`);
+    const result = await spawnVitestRun({
+      vitestCommand, configPath, nodeOptions, passthroughArgs,
+      partition: { part, parts, options }, timeoutMs: shardTimeoutMs,
+      onTimeout: () => console.error(`[vitest] partition ${shardSpec} timed out after ${shardTimeoutMs}ms; terminating its process tree`),
+    });
+    if (!result.ok) throw result.error;
+    const termination = classifyVitestShardTermination(result);
+    const summary = summarizeVitestShardOutcomes({ shardCount: 1, outcomes: [{ ...termination, shardSpec }] });
+    for (const line of summary.lines) console.log(line);
+    if (summary.exitCode !== 0) process.exit(summary.exitCode);
+    return;
+  }
   // The list pass keeps the caller's filters (they are what selects the files); the shard runs
   // drop exactly those filters, because the resolved file list already carries them.
   const positionalFilters = await resolveVitestPositionalFilters(passthroughArgs);
-  const vitestCommand = resolveVitestNodeCommand();
 
   const allFiles = await resolveVitestTestFiles({ vitestCommand, configPath, nodeOptions, passthroughArgs });
   if (!shouldVitestShardRunProceedWithoutFiles({ fileCount: allFiles.length, passthroughArgs })) {
@@ -449,6 +497,10 @@ async function main(argv) {
   const startShard = (entry) => {
     // eslint-disable-next-line no-console
     console.log(`[vitest] shard ${entry.shardSpec}`);
+    const onTimeout = () => {
+      // eslint-disable-next-line no-console
+      console.error(`[vitest] shard ${entry.shardSpec} timed out after ${shardTimeoutMs}ms; terminating its process tree`);
+    };
     if (shardConcurrency <= 1) {
       return {
         promise: spawnVitestRun({
@@ -459,6 +511,7 @@ async function main(argv) {
           positionalFilters,
           files: entry.files,
           timeoutMs: shardTimeoutMs,
+          onTimeout,
         }),
         cancel: async () => {},
       };
@@ -472,6 +525,7 @@ async function main(argv) {
       positionalFilters,
       files: entry.files,
       timeoutMs: shardTimeoutMs,
+      onTimeout,
     });
   };
 

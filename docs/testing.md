@@ -355,6 +355,18 @@ six-worker ceiling; the shared override takes precedence. Explicit single-fork,
 single-thread and non-parallel lanes retain their stronger isolation contract.
 No test selection, assertions or coverage settings change with this budget.
 
+Automatic v0.3 Gate UI partitions use one native Vitest invocation per partition,
+with disjoint file-count-balanced selection rather than repeated 16-file processes.
+The partition defaults to the runner's available cores; explicit worker flags and
+the existing shared/UI-only overrides retain their precedence. CLI unit runs also
+use one invocation, or one native invocation per configured nightly partition;
+integration runs and explicit diagnostic sharding retain their existing defaults.
+The Gate forwards its observed core count through the shared worker override for
+CLI, Server and Protocol, while concurrent plugin-package commands retain their
+shared half-core budgets. Unit partitions target at most 20 minutes and have a
+30-minute job deadline including preparation/headroom. These are execution targets,
+not a claim that the full Gate has already met its 15-minute wall-clock target.
+
 ## TypeScript toolchain
 
 The repository deliberately separates the compiler from the programmatic TypeScript API:

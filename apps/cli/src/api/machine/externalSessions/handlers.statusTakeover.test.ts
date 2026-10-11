@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -19,6 +19,20 @@ import { resolveBuiltInContributions } from '@/plugins/projection/registry/resol
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { removeTempDir } from '@/testkit/fs/tempDir';
+import { logger } from '@/ui/logger';
+import { pruneLogsByCount } from '@/utils/logs/pruneLogsByCount';
+
+// The real logger prunes during import, before beforeAll can isolate its directory.
+const { privateLogsRoot, privateLogsDir } = await vi.hoisted(async () => {
+  const { createTempDir } = await import('@/testkit/fs/tempDir');
+  const { mkdir } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const privateLogsRoot = await createTempDir('happier-status-takeover-logs-');
+  const privateLogsDir = join(privateLogsRoot, 'logs');
+  await mkdir(privateLogsDir);
+  return { privateLogsRoot, privateLogsDir };
+});
 
 const {
   readCredentialsMock,
@@ -39,7 +53,7 @@ vi.mock('@/configuration', () => ({
   configuration: {
     activeServerDir: '/tmp/happier-test-active-server',
     happyHomeDir: '/tmp/happier-test-home',
-    logsDir: '/tmp',
+    logsDir: privateLogsDir,
     publicReleaseRing: 'stable',
     isDaemonProcess: false,
   },
@@ -69,6 +83,31 @@ vi.mock('@/settings/accountSettings/activeAccountSettingsSnapshot', () => ({
 }));
 
 import { registerMachineExternalSessionsRpcHandlers } from '../rpcHandlers.externalSessions';
+
+afterAll(async () => {
+  try {
+    logger.flushSync();
+  } finally {
+    await removeTempDir(privateLogsRoot);
+  }
+});
+
+describe('external-session status fixture log isolation', () => {
+  it('keeps real logger writes and pruning inside its owned private directory', async () => {
+    const foreignLogPath = join(privateLogsRoot, 'foreign.log');
+    const obsoleteLogPath = join(privateLogsDir, 'obsolete.log');
+    await writeFile(foreignLogPath, 'outside logger custody');
+    await writeFile(obsoleteLogPath, 'obsolete fixture log');
+    logger.warn('private status fixture log witness');
+    logger.flushSync();
+
+    expect(dirname(logger.getLogPath())).toBe(privateLogsDir);
+    expect(await readFile(logger.getLogPath(), 'utf8')).toContain('private status fixture log witness');
+    await pruneLogsByCount({ dir: privateLogsDir, suffix: '.log', keepCount: 0, keepPath: logger.getLogPath() });
+    await expect(stat(obsoleteLogPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(foreignLogPath, 'utf8')).toBe('outside logger custody');
+  });
+});
 
 type TestRpcHandler = (params: unknown) => Promise<unknown>;
 

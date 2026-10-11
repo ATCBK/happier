@@ -215,8 +215,9 @@ on:
 
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
-  # Superseded PRs are disposable; push runs retain exact-SHA terminal evidence.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # The v0.3 gate consumes the latest head's exact-SHA verdict. A stuck superseded
+  # push must not hold that verdict behind the workflow concurrency group.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_name == 'v0.3') }}
 
 env:
   # Speed up CI: UI postinstall vendors large web-only assets (Monaco/Kokoro/Skia web).
@@ -228,6 +229,8 @@ jobs:
     name: Select affected gate packages
     if: ${{ !inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')) }}
     runs-on: ubuntu-latest
+    # Hosted selector: 34s; twice that sample rounded up to whole minutes.
+    timeout-minutes: 2
     permissions:
       contents: read
     outputs:
@@ -235,6 +238,8 @@ jobs:
       unit_matrix: ${{ steps.select.outputs.unit_matrix }}
       server_db_contract: ${{ steps.select.outputs.server_db_contract }}
     steps:
+      - name: Gate deadline — 2 minutes
+        run: echo "Gate package selection has a 2-minute job timeout."
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
@@ -259,9 +264,13 @@ jobs:
     name: Gate — compiler diagnostics
     needs: [gate-packages]
     runs-on: ubuntu-latest
+    # Successful compiler plus preparation: 42m33s; more than twice that sample.
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:
+      - name: Gate deadline — 90 minutes
+        run: echo "Gate compiler diagnostics have a 90-minute job timeout."
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
@@ -325,6 +334,9 @@ jobs:
     needs: [gate-packages]
     if: ${{ needs.gate-packages.outputs.packages != '[]' }}
     runs-on: ubuntu-latest
+    # The approved unit-partition target is at most 20 minutes. Ten minutes
+    # of job-level preparation/headroom makes regressions fail observably.
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
@@ -334,6 +346,8 @@ jobs:
       HAPPIER_UI_VITEST_PART: ${{ matrix.part }}
       HAPPIER_UI_VITEST_PARTS: ${{ matrix.parts }}
     steps:
+      - name: Gate deadline — 30 minutes (unit target at most 20)
+        run: echo "Gate units target at most 20 minutes; the job timeout is 30 minutes including preparation/headroom."
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
@@ -343,6 +357,13 @@ jobs:
           cache: yarn
       - name: Enable Corepack
         run: corepack enable && corepack prepare yarn@1.22.22 --activate
+      - name: Observe the Gate runner worker budget
+        id: gate-workers
+        run: |
+          gate_workers="$(node -p 'require("node:os").availableParallelism()')"
+          echo "workers=$gate_workers" >> "$GITHUB_OUTPUT"
+          echo "Gate runner reports $gate_workers available cores; independent CLI/Server/Protocol pools use that existing worker override."
+          echo "Plugin packages retain their shared half-core pools because two package commands may run together."
       - uses: ./.github/actions/install-yarn-dependencies
         id: gate-unit-install
       - name: Prepare Chromium for real UI geometry unit tests
@@ -374,6 +395,7 @@ jobs:
         if: ${{ !cancelled() && steps.gate-unit-install.outcome == 'success' }}
         env:
           GATE_PACKAGES: ${{ join(matrix.packages, ' ') }}
+          GATE_VITEST_MAX_WORKERS: ${{ steps.gate-workers.outputs.workers }}
           CLI_PREPARATION_OUTCOMES: ${{ steps.cli-rust.outcome }} ${{ steps.cli-native-build.outcome }} ${{ steps.cli-workspace-build.outcome }} ${{ steps.cli-native-load.outcome }}
         run: |
           set -euo pipefail
@@ -382,15 +404,15 @@ jobs:
             case "$gate_package" in
               cli)
                 if [ "$CLI_PREPARATION_OUTCOMES" = 'success success success success' ]; then
-                  yarn workspace @happier-dev/cli test:unit || gate_status=1
+                  HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" yarn workspace @happier-dev/cli test:unit || gate_status=1
                 else
                   echo "::error::CLI preparation failed or is unavailable: $CLI_PREPARATION_OUTCOMES"
                   gate_status=1
                 fi
                 ;;
               ui) yarn workspace @happier-dev/app test:unit || gate_status=1 ;;
-              server) yarn --cwd apps/server test:unit || gate_status=1 ;;
-              protocol) yarn workspace @happier-dev/protocol test || gate_status=1 ;;
+              server) HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" yarn --cwd apps/server test:unit || gate_status=1 ;;
+              protocol) HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" yarn workspace @happier-dev/protocol test || gate_status=1 ;;
               plugins)
                 if ./apps/stack/bin/hstack-exec -- node scripts/workspaces/ensureWorkspacePackagesBuiltCli.mjs @happier-dev/plugins-channels @happier-dev/plugins-elevenlabs; then
                   yarn test:plugin-workspaces || gate_status=1
@@ -415,11 +437,15 @@ jobs:
     name: Gate — build artifacts and staged import smoke
     needs: [gate-packages]
     runs-on: ubuntu-latest
+    # Successful complete artifact job: 46m12s; twice that sample rounded up.
+    timeout-minutes: 95
     permissions:
       contents: read
     env:
       HAPPIER_UI_VENDOR_WEB_ASSETS: "1"
     steps:
+      - name: Gate deadline — 95 minutes
+        run: echo "Gate artifacts and staged import smoke have a 95-minute job timeout."
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
@@ -482,9 +508,13 @@ jobs:
     if: ${{ always() && !inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')) }}
     needs: [gate-packages, gate-compiler, gate-unit, gate-build-artifacts, server-db-contract]
     runs-on: ubuntu-latest
+    # Normally terminating aggregate: 6s; twice that sample rounded up.
+    timeout-minutes: 1
     permissions:
       contents: read
     steps:
+      - name: Gate deadline — 1 minute
+        run: echo "Gate aggregation has a 1-minute job timeout."
       - name: Require every selected check to succeed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
@@ -1614,6 +1644,8 @@ jobs:
           --health-timeout=5s
           --health-retries=10
     steps:
+      - name: Gate deadline — 25 minutes
+        run: echo "The selected Server DB contract retains its 25-minute job timeout."
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 

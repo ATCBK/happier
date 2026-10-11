@@ -1,7 +1,7 @@
-import { appendFile, mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,10 +14,24 @@ import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/contro
 import { resolveBuiltInContributions } from '@/plugins/projection/registry/resolveBuiltInContributions';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveBackendExecutionSurfaces } from '@/agent/runtime/registry/engineRegistry';
+import { removeTempDir } from '@/testkit/fs/tempDir';
+import { logger } from '@/ui/logger';
+import { pruneLogsByCount } from '@/utils/logs/pruneLogsByCount';
 import {
   resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+
+// The real logger prunes during import, before beforeAll can isolate its directory.
+const { privateLogsRoot, privateLogsDir } = await vi.hoisted(async () => {
+  const { createTempDir } = await import('@/testkit/fs/tempDir');
+  const { mkdir } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const privateLogsRoot = await createTempDir('happier-follow-lifecycle-logs-');
+  const privateLogsDir = join(privateLogsRoot, 'logs');
+  await mkdir(privateLogsDir);
+  return { privateLogsRoot, privateLogsDir };
+});
 
 const {
   readCredentialsMock,
@@ -48,7 +62,7 @@ vi.mock('@/configuration', () => ({
   configuration: {
     activeServerDir: '/tmp/happier-test-active-server',
     happyHomeDir: '/tmp/happier-test-home',
-    logsDir: '/tmp',
+    logsDir: privateLogsDir,
     publicReleaseRing: 'stable',
     isDaemonProcess: false,
   },
@@ -81,6 +95,31 @@ vi.mock('@/notifications/activity/dispatchActivityNotification', () => ({
 }));
 
 import { registerMachineExternalSessionsRpcHandlers } from '../rpcHandlers.externalSessions';
+
+afterAll(async () => {
+  try {
+    logger.flushSync();
+  } finally {
+    await removeTempDir(privateLogsRoot);
+  }
+});
+
+describe('external-session follow fixture log isolation', () => {
+  it('keeps real logger writes and pruning inside its owned private directory', async () => {
+    const foreignLogPath = join(privateLogsRoot, 'foreign.log');
+    const obsoleteLogPath = join(privateLogsDir, 'obsolete.log');
+    await writeFile(foreignLogPath, 'outside logger custody');
+    await writeFile(obsoleteLogPath, 'obsolete fixture log');
+    logger.warn('private follow fixture log witness');
+    logger.flushSync();
+
+    expect(dirname(logger.getLogPath())).toBe(privateLogsDir);
+    expect(await readFile(logger.getLogPath(), 'utf8')).toContain('private follow fixture log witness');
+    await pruneLogsByCount({ dir: privateLogsDir, suffix: '.log', keepCount: 0, keepPath: logger.getLogPath() });
+    await expect(stat(obsoleteLogPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(foreignLogPath, 'utf8')).toBe('outside logger custody');
+  });
+});
 
 function jsonlLine(value: unknown): string {
   return `${JSON.stringify(value)}\n`;
