@@ -480,6 +480,18 @@ export function createSessionListQueryHomeController(params: Readonly<{
                 publishPhase(nextQueryKey, 'not_selected');
                 return;
             }
+            if (nextInput.online === false) {
+                revision += 1;
+                activeAbortController?.abort('session-list-query-home-offline');
+                activeAbortController = null;
+                inFlight = null;
+                // Reconnect owns the next replacement; a queued refresh cannot
+                // outlive the transport that was to answer it. Feature discovery
+                // may also be unavailable, but that cannot hide a known outage.
+                refreshQueued = false;
+                publishPhase(nextQueryKey, 'offline');
+                return;
+            }
             if (nextInput.supported === null || nextInput.supported === undefined) {
                 revision += 1;
                 activeAbortController?.abort('session-list-query-support-loading');
@@ -509,19 +521,6 @@ export function createSessionListQueryHomeController(params: Readonly<{
                 inFlight = null;
                 refreshQueued = false;
                 publishPhase(nextQueryKey, state.appliedQueryKey === nextQueryKey ? 'refreshing' : 'loading');
-                return;
-            }
-            if (!nextInput.online) {
-                revision += 1;
-                activeAbortController?.abort('session-list-query-home-offline');
-                activeAbortController = null;
-                inFlight = null;
-                // A refresh queued against the request that just lost currentness
-                // cannot survive into reconnect. `update` below already performs
-                // the one canonical replacement for the newly-online input; a
-                // later invalidation can still queue against that new request.
-                refreshQueued = false;
-                publishPhase(nextQueryKey, 'offline');
                 return;
             }
             const queryChanged = previousQueryKey !== nextQueryKey

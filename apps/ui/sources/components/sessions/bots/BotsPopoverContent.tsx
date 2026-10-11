@@ -8,9 +8,9 @@ import {
   RailPopoverRoster,
   resolveRailPopoverRosterListMaxHeight,
 } from '@/components/navigation/shell/sidebarFooter/RailPopoverRoster';
-import { buildSessionListFilterHomeOptions } from '@/components/sessions/shell/search/useSessionListViewFilterController';
 import {
   buildSessionListFilterQueryHomes,
+  resolveSessionListFilterOrdinaryPageAdapter,
   resolveSessionListViewContextDefaults,
 } from '@/components/sessions/shell/search/sessionListViewFilters';
 import { SessionItem } from '@/components/sessions/shell/SessionItem';
@@ -37,6 +37,7 @@ import {
 import { useSessionListSelectionState } from '@/hooks/session/useSessionListSelectionState';
 import { useVisibleSessionListPaneState } from '@/hooks/session/useVisibleSessionListPaneState';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { getServerProfileById, readServerProfileHomeName } from '@/sync/domains/server/serverProfiles';
 import { useSessionListQueryHomeSupportByServerId, useSessionListQuerySourceState } from '@/sync/domains/session/listing/useSessionListQuerySourceState';
 import { buildSessionListIndexNodeId, type SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import { storage, useLocalSettingMutable, useSessionListRowRenderablesForItems } from '@/sync/domains/state/storage';
@@ -81,26 +82,22 @@ function useBotsRosterQueryHomes() {
         : [];
     return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
   }, [selection.activeServerId, selection.allowedServerIds]);
-  const support = useSessionListQueryHomeSupportByServerId(
-    mountedHomeServerIds,
-    true,
-  );
-  const queryEnabled = mountedHomeServerIds.some(
-    (serverId) => support[serverId] === true,
-  );
   return React.useMemo(() => {
-    if (!queryEnabled) return undefined;
     const { defaults } = resolveSessionListViewContextDefaults(
       { kind: 'global' },
       mountedHomeServerIds,
       'all',
     );
-    return buildSessionListFilterQueryHomes(defaults, {
+    const filters = { ...defaults, bot: 'bot' as const };
+    return buildSessionListFilterQueryHomes(filters, {
       storage: 'active',
       includeInactive: true,
       mountedHomeServerIds,
-    });
-  }, [mountedHomeServerIds, queryEnabled]);
+    }).map(home => ({
+      ...home,
+      ordinaryAdapter: resolveSessionListFilterOrdinaryPageAdapter(filters, home.query),
+    }));
+  }, [mountedHomeServerIds]);
 }
 
 function readRosterCounts(
@@ -256,11 +253,11 @@ export function BotsPopoverContent(
           ?.serverId ?? null)
       : null;
   const offlineHomeLabel = React.useMemo(
-    () =>
-      offlineHome
-        ? (buildSessionListFilterHomeOptions([offlineHome])[0]?.label ??
-          offlineHome)
-        : null,
+    () => {
+      if (!offlineHome) return null;
+      const profile = getServerProfileById(offlineHome);
+      return (profile ? readServerProfileHomeName(profile) : null) ?? t('settingsAccount.thisHomeTitle');
+    },
     [offlineHome],
   );
   // Still paging (a Home loading or a cursor left): the roster is not settled yet.

@@ -57,6 +57,26 @@ function result(
 }
 
 describe('SessionListQueryHomeController', () => {
+    it('settles an offline Home before feature discovery and keeps a reachable undecided Home pending', async () => {
+        const requests: SessionListQueryPageRequest[] = [];
+        const controller = createSessionListQueryHomeController({
+            serverId: 'home-a',
+            fetchPage: async request => {
+                requests.push(request);
+                return result(['bot-a']);
+            },
+        });
+        const input = { query: QUERY_A, selected: true, supported: null } as const;
+        await controller.update({ ...input, online: false });
+        expect(controller.getSnapshot()).toMatchObject({ phase: 'offline', addresses: [] });
+        expect(requests).toEqual([]);
+        await controller.update({ ...input, online: true });
+        expect(controller.getSnapshot().phase).toBe('idle');
+        expect(requests).toEqual([]);
+        await controller.update({ ...input, online: true, supported: true });
+        expect(controller.getSnapshot()).toMatchObject({ phase: 'ready', addresses: [{ serverId: 'home-a', sessionId: 'bot-a' }] });
+    });
+
     it('does not notify when the same unavailable input is re-applied', async () => {
         const controller = createSessionListQueryHomeController({
             serverId: 'home-a',

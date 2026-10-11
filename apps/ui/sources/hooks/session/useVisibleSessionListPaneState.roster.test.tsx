@@ -19,6 +19,10 @@ import { buildSessionListQueryKey } from '@/sync/domains/session/listing/session
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+// Storage imports reach Socket.IO before the harness can install a doMock.
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal),
+);
 
 installDisconnectedServerSocketBoundary(socket => {
     socket.connect = vi.fn(() => {
@@ -31,6 +35,8 @@ installDisconnectedServerSocketBoundary(socket => {
 const features = createRootLayoutFeaturesResponse({ features: { sessions: { enabled: true, filteredListing: { enabled: true } } } });
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let queryRequests: SessionListQueryV1[] = [];
+let socketErrors: string[] = [];
+let unsubscribeSocketErrors: (() => void) | undefined;
 const nextCursor = encodeV2SessionListCursorV1('page-one');
 
 function renderedSessionIds(index: readonly SessionListIndexItem[] | null) {
@@ -41,6 +47,11 @@ describe('ordinary list presentation for the opened Bots roster', () => {
     beforeAll(loadSyncSingletonForTests);
     beforeEach(async () => {
         queryRequests = [];
+        socketErrors = [];
+        const { apiSocket } = await import('@/sync/api/session/apiSocket');
+        unsubscribeSocketErrors = apiSocket.onError(error => {
+            if (error) socketErrors.push(error.message);
+        });
         connection = await restoreServerAccountForTest({
             serverUrl: 'https://bots-roster-presentation.example.test',
             serverIdentityId: 'srv_bots-roster-presentation', accountId: 'account-a',
@@ -84,6 +95,8 @@ describe('ordinary list presentation for the opened Bots roster', () => {
         await standardCleanup();
         await connection?.dispose();
         connection = undefined;
+        unsubscribeSocketErrors?.();
+        unsubscribeSocketErrors = undefined;
     });
 
     it('selects only Bots including inactive ones without changing the Account list preference or ordinary default', async () => {
@@ -117,6 +130,7 @@ describe('ordinary list presentation for the opened Bots roster', () => {
                 active: roster.getCurrent().query?.active,
                 presentation: roster.getCurrent().queryPresentation,
                 socketStatus: storage.getState().socketStatus,
+                socketErrors,
                 queryRequests,
             })).toBe('ready');
         });
