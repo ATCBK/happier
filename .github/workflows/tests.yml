@@ -345,6 +345,9 @@ jobs:
         run: corepack enable && corepack prepare yarn@1.22.22 --activate
       - uses: ./.github/actions/install-yarn-dependencies
         id: gate-unit-install
+      - name: Prepare Chromium for real UI geometry unit tests
+        if: ${{ contains(matrix.packages, 'ui') }}
+        run: ./apps/stack/bin/hstack-exec -- yarn -s playwright install --with-deps chromium
       - name: Setup pinned Rust for the CLI native runtime
         id: cli-rust
         if: ${{ contains(matrix.packages, 'cli') }}
@@ -1234,6 +1237,9 @@ jobs:
         if: matrix.part == 1
         continue-on-error: true
         run: yarn workspace @happier-dev/protocol test
+
+      - name: Prepare Chromium for real UI geometry unit tests
+        run: ./apps/stack/bin/hstack-exec -- yarn -s playwright install --with-deps chromium
 
       - name: Run unit tests
         id: unit-tests

@@ -10,19 +10,19 @@ import {
     createProviderModelProjectionFixture,
     createProviderSettingsAccountHarness,
     createProviderSettingsHarness,
-    type ProviderRpcRequest,
+    installProviderSettingsRpcBoundary,
 } from '@/dev/testkit/harness/providerSettingsHarness';
 import { refreshProviderCatalog } from '@/sync/engine/settings/providerCatalogEngine';
 import { buildDynamicModelProbeCacheKey } from '@/sync/domains/models/dynamicModelProbeCacheKey';
 import { resetDynamicModelProbeCacheForTests, writeDynamicModelProbeCacheSuccess } from '@/sync/domains/models/dynamicModelProbeCache';
 
+// Static catalog imports reach the Socket owner before the runtime installer.
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 const account = createProviderSettingsAccountHarness();
 const daemon = createProviderSettingsHarness();
-// Hoist the genuine Machine transport boundary before the shared Sync graph
-// imports Actions; the canonical daemon fixture still owns all response shapes.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (input: ProviderRpcRequest) => daemon.machineRpc(input),
-}));
+installProviderSettingsRpcBoundary(daemon);
 const { listAgentModelsForVoiceTool } = await import('./agentCatalogList');
 const targetKey = 'agent:happier.agent.claude/claude';
 const machineId = 'voice-model-machine';

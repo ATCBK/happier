@@ -25,6 +25,32 @@ beforeEach(async () => {
 afterEach(standardCleanup);
 
 describe('useResolvedActiveServerSelection', () => {
+    it('retains only an unchanged Home view in its device namespace, and publishes changed content', async () => {
+        const { loadHomeViewState, saveHomeViewState, resetServerProfilesRuntimeForTests } = await import('@/sync/domains/server/serverProfiles');
+        // Exercise namespaced browser persistence, not the suite's native
+        // MMKV boundary whose in-memory backing intentionally ignores ids.
+        vi.stubGlobal('window', { localStorage });
+        vi.stubGlobal('document', {});
+        resetServerProfilesRuntimeForTests();
+        const home = await harness.addHome({ name: 'A', serverUrl: 'https://projection.a.example', accountId: 'account-a' });
+        await saveHomeViewState({ version: 1, groups: [], activeTargetKind: null, activeTargetId: null });
+        const previous = loadHomeViewState();
+        expect(previous).not.toBeNull();
+        await saveHomeViewState({ version: 1, groups: [], activeTargetKind: 'server', activeTargetId: home });
+        const changed = loadHomeViewState();
+        expect(changed).not.toBe(previous);
+        expect(changed).toMatchObject({ activeTargetKind: 'server', activeTargetId: home });
+        expect(loadHomeViewState()).toBe(changed);
+
+        vi.stubEnv('EXPO_PUBLIC_HAPPY_STORAGE_SCOPE', 'home-view-projection-empty-scope');
+        resetServerProfilesRuntimeForTests();
+        try {
+            expect(loadHomeViewState()).toBeNull();
+        } finally {
+            vi.unstubAllEnvs();
+            resetServerProfilesRuntimeForTests();
+        }
+    });
     it('recomputes the resolved active server when a signed-in Home is added after the initial pass', async () => {
         const { useResolvedActiveServerSelection } = await import('./useEffectiveServerSelection');
         const hook = await renderHook(() => useResolvedActiveServerSelection());
@@ -66,9 +92,9 @@ describe('useResolvedActiveServerSelection', () => {
         const { useResolvedActiveServerSelection } = await import('./useEffectiveServerSelection');
         const hook = await renderHook(() => useResolvedActiveServerSelection());
         const initial = hook.getCurrent();
-        const { upsertServerProfile, getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
-        await act(async () => { await upsertServerProfile({ serverUrl: 'https://api.a.example', name: 'Renamed A' }); });
-        expect(getServerProfileById(home)?.name).toBe('Renamed A');
+        const { setServerProfileShareableUrl, getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+        await act(async () => { await setServerProfileShareableUrl(home, 'https://public.a.example'); });
+        expect(getServerProfileById(home)?.shareableServerUrl).toBe('https://public.a.example');
         expect(hook.getCurrent()).toBe(initial);
     });
 });

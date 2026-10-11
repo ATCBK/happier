@@ -1106,6 +1106,11 @@ function dedupeIdentityProfiles(params: Readonly<{
 // Keying by the raw value (re-read every call) stays correct for cross-tab and self-heal
 // writes without invalidation wiring; local writes clear it explicitly.
 let persistedStateParseCache: { raw: string; state: Required<PersistedServerState> } | null = null;
+let homeViewStateProjectionCache: {
+    storage: PersistedStateStorage;
+    serialized: string;
+    value: HomeViewStateV1 | null;
+} | null = null;
 
 function parseAccountServiceEndpoint(value: unknown): AccountServiceEndpointV1 | null {
     if (!value || typeof value !== 'object') return null;
@@ -1433,7 +1438,15 @@ function persistCanonicalStateAfterNoop(state: Required<PersistedServerState>): 
 }
 
 export function loadHomeViewState(): HomeViewStateV1 | null {
-    return readPersistedState().homeViewState;
+    const storage = getPersistedStateStorage();
+    const state = readPersistedState().homeViewState;
+    const serialized = JSON.stringify(state);
+    if (homeViewStateProjectionCache?.storage === storage
+        && homeViewStateProjectionCache.serialized === serialized) {
+        return homeViewStateProjectionCache.value;
+    }
+    homeViewStateProjectionCache = { storage, serialized, value: state };
+    return state;
 }
 
 /**
@@ -2821,6 +2834,7 @@ export function resetServerProfilesRuntimeForTests(): void {
     persistedStateStorage = null;
     persistedStateParseCache = null;
     demoPersistenceSuspendDepth = 0;
+    homeViewStateProjectionCache = null;
     durablePersistedStateStorageDuringDemo = null;
     activeServerListeners.clear();
     runtimeOriginListeners.clear();

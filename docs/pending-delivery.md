@@ -128,8 +128,11 @@ Initial Queue submissions with raw Composer attachments use the same daemon
 prepare admission as Pending edits before creating local outbox custody. An
 unreachable prepare leaves the draft with its caller. Both writers use the same
 canonical prepared-record builder, including SessionMedia metadata and staged
-handles. Successful enqueue acknowledges that exact accepted fact to the daemon
-after the server ACK; failure before local custody or a confirmed cancellation
+handles. Snapshot projection reads the finalized admitted attachment selection,
+not the draft staged-media input; an attachment-only row remains a queued Message
+even when its text is empty. Successful enqueue acknowledges that exact accepted
+fact to the daemon after the server ACK; failure before local custody or a
+confirmed cancellation
 uses the existing abandonment operation when cleanup is needed. Settlement and
 cleanup remain fenced by the captured Pending owner, including callers without an
 explicit Account lifetime. These are current-process admission effects, not a

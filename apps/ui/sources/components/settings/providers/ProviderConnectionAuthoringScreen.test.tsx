@@ -643,14 +643,15 @@ describe('ProviderConnectionAuthoringScreen', () => {
     });
 
     it('fails closed without any Provider RPC when the feature is unavailable', async () => {
+        await account.home.selectHomes([account.serverId]);
         await account.publishFeatures(account.serverId, createRootLayoutFeaturesResponse({ features: { providers: { enabled: false } } }));
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
         const screen = await renderScreen(
             <ProviderConnectionAuthoringScreen contributionKey="acme.plugin/ollama" />,
         );
 
-        expect(presentedTitles(screen))
-            .toContain('settingsProviders.unavailable');
+        await waitForHomeGovernance(() => expect(presentedTitles(screen))
+            .toContain('settingsProviders.unavailable'));
         expect(providerHarness.state.requests).toEqual([]);
     });
 
@@ -908,116 +909,65 @@ describe('ProviderConnectionAuthoringScreen', () => {
     });
 
     it('reviews and persists explicit remote endpoints on the same contribution identity', async () => {
-        state.contributionKey = 'happier.provider.cliproxyapi/cliproxyapi';
-        state.providerName = 'CLIProxyAPI';
-        state.endpointTemplates = [
-            { id: 'responses', protocol: 'openai-responses' },
-            { id: 'anthropic', protocol: 'anthropic' },
-        ];
-        describeProviderConnections.mockResolvedValueOnce({
-            status: 'success', connections: [], available: [], discoveryCandidates: [], localInstallations: [],
-            diagnostics: [], diagnosticsTruncated: false, availableTruncated: false,
-            discoveryCandidatesTruncated: false,
-            authoringPreview: {
-                status: 'resolved',
-                connectionId: 'pc_preview',
-                contributionKey: state.contributionKey,
-                created: true,
-                candidateId: 'discovery-candidate:v1:local',
-                scope: 'machine',
-                machineId: 'machine-a',
-                endpoints: [{
-                    endpointTemplateId: 'responses',
-                    protocol: 'openai-responses',
-                    normalizedUrl: 'http://127.0.0.1:8317/v1',
-                    locality: 'loopback',
-                    scope: 'machine',
-                }, {
-                    endpointTemplateId: 'anthropic',
-                    protocol: 'anthropic',
-                    normalizedUrl: 'http://127.0.0.1:8317/',
-                    locality: 'loopback',
-                    scope: 'machine',
-                }],
-                credential: null,
-                fingerprint: 'authoring-review:v1:local',
-                revision: 1,
-            },
-        }).mockResolvedValueOnce({
-            status: 'success', connections: [], available: [], discoveryCandidates: [], localInstallations: [],
-            diagnostics: [], diagnosticsTruncated: false, availableTruncated: false,
-            discoveryCandidatesTruncated: false,
-            authoringPreview: {
-                status: 'resolved',
-                connectionId: 'pc_preview',
-                contributionKey: state.contributionKey,
-                created: true,
-                candidateId: null,
-                scope: 'account',
-                machineId: null,
-                endpoints: [{
-                    endpointTemplateId: 'responses',
-                    protocol: 'openai-responses',
-                    normalizedUrl: 'https://remote.gateway.example/v1',
-                    locality: 'public',
-                    scope: 'account',
-                }, {
-                    endpointTemplateId: 'anthropic',
-                    protocol: 'anthropic',
-                    normalizedUrl: 'https://remote.gateway.example/',
-                    locality: 'public',
-                    scope: 'account',
-                }],
-                credential: null,
-                fingerprint: 'authoring-review:v1:remote',
-                revision: 1,
-            },
-        });
+        const contributionKey = 'happier.provider.cliproxyapi/cliproxyapi';
+        // This remote declaration is authored at its Account Home, without a
+        // daemon-synthesized review or an executable Machine requirement.
+        await account.selectMachine(account.serverId, null);
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
+        const { BuiltInProviderAuthoringView } = await import('./authoring/BuiltInProviderAuthoringView');
         const screen = await renderScreen(
-            <ProviderConnectionAuthoringScreen contributionKey={state.contributionKey} />,
+            <ProviderConnectionAuthoringScreen contributionKey={contributionKey} />,
         );
+        await waitForHomeGovernance(() => expect(screen.findByTestId(
+            'settings-provider-authoring-endpoint-cliproxyapi-openai-responses')).toBeDefined());
 
         const fields = screen.findAllByType(FieldTextInput);
         const responses = fields.find((field) =>
-            field.props.testID === 'settings-provider-authoring-endpoint-responses');
+            field.props.testID === 'settings-provider-authoring-endpoint-cliproxyapi-openai-responses');
+        const chat = fields.find((field) =>
+            field.props.testID === 'settings-provider-authoring-endpoint-cliproxyapi-openai-chat');
         const anthropic = fields.find((field) =>
-            field.props.testID === 'settings-provider-authoring-endpoint-anthropic');
+            field.props.testID === 'settings-provider-authoring-endpoint-cliproxyapi-anthropic');
         expect(responses).toBeDefined();
+        expect(chat).toBeDefined();
         expect(anthropic).toBeDefined();
 
         await React.act(async () => {
             responses?.props.onChangeText('https://remote.gateway.example/v1');
+            chat?.props.onChangeText('https://remote.gateway.example/v1');
             anthropic?.props.onChangeText('https://remote.gateway.example');
             await flushHookEffects({ cycles: 2, turns: 2 });
         });
 
         const endpointOverrides = [
-            { endpointTemplateId: 'responses', baseUrl: 'https://remote.gateway.example/v1' },
-            { endpointTemplateId: 'anthropic', baseUrl: 'https://remote.gateway.example/' },
+            { endpointTemplateId: 'cliproxyapi-openai-responses', baseUrl: 'https://remote.gateway.example/v1' },
+            { endpointTemplateId: 'cliproxyapi-openai-chat', baseUrl: 'https://remote.gateway.example/v1' },
+            { endpointTemplateId: 'cliproxyapi-anthropic', baseUrl: 'https://remote.gateway.example/' },
         ];
-        expect(describeProviderConnections).toHaveBeenLastCalledWith(expect.objectContaining({
-            authoringPreview: expect.objectContaining({
-                contributionKey: state.contributionKey,
-                selectedCandidateId: null,
-                endpointOverrides,
-            }),
-        }));
+        await waitForHomeGovernance(() => expect(screen.findByType(BuiltInProviderAuthoringView).props.preview)
+            .toMatchObject({ status: 'resolved', contributionKey, created: true,
+                candidateId: null, scope: 'account', machineId: null, revision: 0,
+                endpoints: endpointOverrides.map(endpoint => ({ endpointTemplateId: endpoint.endpointTemplateId,
+                    normalizedUrl: endpoint.baseUrl, scope: 'account' })),
+            }));
+        const preview = screen.findByType(BuiltInProviderAuthoringView).props.preview;
+        expect(preview.fingerprint).toMatch(/^authoring-review:v1:/);
+        expect(account.catalogMutations).toEqual([]);
 
         await React.act(async () => {
             await screen.findByTestId('settings-provider-authoring-connect')
                 ?.props.onPress?.();
         });
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({
-            action: 'createContribution',
-            contributionKey: state.contributionKey,
-            authoringReview: {
-                candidateId: null,
-                fingerprint: 'authoring-review:v1:remote',
-                revision: 1,
-                endpointOverrides,
-            },
-        }), 'save');
+        const row = account.readCatalogRow();
+        expect(row?.revision).toBe(2);
+        if (row?.content?.t !== 'plain') throw new Error('Expected persisted Plain Account contribution');
+        expect(row.content.v.connections).toEqual([expect.objectContaining({ id: preview.connectionId,
+            source: { kind: 'contribution', contributionKey }, revision: preview.revision,
+            endpointOverrides: expect.arrayContaining(endpointOverrides),
+        })]);
+        expect(row.content.v.connections[0]?.endpointOverrides).toHaveLength(endpointOverrides.length);
+        expect(account.catalogMutations.map(mutation => mutation.expectedRevision)).toEqual([1]);
+        expect(providerHarness.state.requests).toEqual([]);
     });
 
     it('progressively reveals all advanced protocol endpoints without a modal', async () => {
@@ -1326,14 +1276,19 @@ describe('ProviderConnectionAuthoringScreen', () => {
         });
         const save = screen.findByTestId('settings-provider-authoring-save');
         await React.act(async () => { await save?.props.onPress?.(); });
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({
-            action: 'createCustom',
-            manualModels: [{ id: 'first/model' }, { id: 'second/model' }],
-        }), 'save');
+        const row = account.readCatalogRow();
+        expect(row?.revision).toBe(2);
+        if (row?.content?.t !== 'plain') throw new Error('Expected persisted Plain Account authoring');
+        const connection = row.content.v.connections.find(connection => connection.displayName === 'Anthropic bridge');
+        expect(connection?.source.kind).toBe('custom');
+        expect(row.content.v.manualModelsByConnectionId[connection!.id]?.map(model => model.id))
+            .toEqual(['first/model', 'second/model']);
+        expect(account.catalogMutations.map(mutation => mutation.expectedRevision)).toEqual([1]);
+        expect(providerHarness.state.requests.filter(request => request.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTION_MUTATE)).toEqual([]);
     });
 
     it('retains no save replay after an unknown custom create outcome', async () => {
-        run.mockRejectedValueOnce(new Error('create acknowledgement lost after dispatch'));
+        account.interceptCatalogMutation((_input, next) => { next(); return { dispatchThenFail: true }; });
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
         const { ProviderErrorItems } = await import('./ProviderErrorItems');
         const screen = await renderScreen(<ProviderConnectionAuthoringScreen />);
@@ -1352,8 +1307,12 @@ describe('ProviderConnectionAuthoringScreen', () => {
         expect(screen.findByType(ProviderErrorItems.type).props.error)
             .toMatchObject({ code: 'provider_rpc_mutation_outcome_unknown' });
         expect(screen.findByType(ProviderErrorItems.type).props.retry).toBeUndefined();
-        expect(run).toHaveBeenCalledOnce();
-        const createRequest = run.mock.calls[0]?.[0] as { connectionId: string };
+        expect(account.catalogMutations.map(mutation => mutation.expectedRevision)).toEqual([1]);
+        const row = account.readCatalogRow();
+        if (row?.content?.t !== 'plain') throw new Error('Expected the committed Account connection');
+        const connection = row.content.v.connections.find(connection => connection.displayName === 'Gateway');
+        expect(connection?.source.kind).toBe('custom');
+        expect(row.revision).toBe(2);
         const reviewCurrentState = findProviderRecoveryAction(screen, 'settingsProviders.errors.actions.reviewCurrentState');
         expect(reviewCurrentState).toBeDefined();
         expect(routerPush).not.toHaveBeenCalled();
@@ -1364,11 +1323,12 @@ describe('ProviderConnectionAuthoringScreen', () => {
         });
 
         expect(routerPush).toHaveBeenCalledWith(
-            `/(app)/settings/providers/${encodeURIComponent(createRequest.connectionId)}`,
+            `/(app)/settings/providers/${encodeURIComponent(connection!.id)}`,
         );
         expect(screen.findByType(ProviderErrorItems.type).props.error)
             .toMatchObject({ code: 'provider_rpc_mutation_outcome_unknown' });
-        expect(run).toHaveBeenCalledOnce();
+        expect(account.catalogMutations.map(mutation => mutation.expectedRevision)).toEqual([1]);
+        expect(providerHarness.state.requests.filter(request => request.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTION_MUTATE)).toEqual([]);
         expect(focusField).not.toHaveBeenCalled();
     });
 
@@ -1416,7 +1376,14 @@ describe('ProviderConnectionAuthoringScreen', () => {
         await React.act(async () => { enable?.props.rightElement.props.onValueChange(false); });
         const save = screen.findByTestId('settings-provider-authoring-save');
         await React.act(async () => { await save?.props.onPress?.(); });
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({ action: 'createCustom', enable: false }), 'save');
+        const row = account.readCatalogRow();
+        expect(row?.revision).toBe(2);
+        if (row?.content?.t !== 'plain') throw new Error('Expected persisted Plain Account authoring');
+        const connection = row.content.v.connections.find(connection => connection.displayName === 'Local gateway');
+        expect(connection?.source.kind).toBe('custom');
+        expect(row.content.v.accountGrants).toEqual([]);
+        expect(account.catalogMutations.map(mutation => mutation.expectedRevision)).toEqual([1]);
+        expect(providerHarness.state.requests.filter(request => request.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTION_MUTATE)).toEqual([]);
     });
 
     it('ignores a probe response that completes after the draft changes', async () => {

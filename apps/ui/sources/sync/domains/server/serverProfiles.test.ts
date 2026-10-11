@@ -2564,6 +2564,26 @@ describe('serverProfiles', () => {
         expect(listener).toHaveBeenCalled();
     });
 
+    it('keeps the Home view snapshot stable across unrelated profile writes and refreshes changed views', async () => {
+        const scope = randomScope();
+        process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = scope;
+        seedServerState(scope, homeAState());
+        const profiles = await importFresh();
+        await profiles.saveHomeViewState({ version: 1, groups: [], activeTargetKind: 'server', activeTargetId: 'srv_home_a_marker_1' });
+        const first = profiles.loadHomeViewState();
+        expect(first).not.toBeNull();
+        expect(profiles.loadHomeViewState()).toBe(first);
+        await profiles.upsertServerProfile({ serverUrl: 'https://unrelated-home.example.test', name: 'Other' });
+        expect(profiles.loadHomeViewState()).toBe(first);
+        await profiles.saveHomeViewState({ version: 1,
+            groups: [{ id: 'group-a', name: 'Home group', serverIds: ['srv_home_a_marker_1'], presentation: 'grouped' }],
+            activeTargetKind: 'group', activeTargetId: 'group-a' });
+        const changed = profiles.loadHomeViewState();
+        expect(changed).not.toBe(first);
+        expect(changed).toMatchObject({ activeTargetKind: 'group', activeTargetId: 'group-a' });
+        expect(profiles.loadHomeViewState()).toBe(changed);
+    });
+
     it('returns referentially stable profile lists while the persisted raw state is unchanged', async () => {
         // readPersistedState is on hot selector paths (17 call sites); re-parsing the whole
         // persisted blob per call costs real CPU and breaks referential stability for

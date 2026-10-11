@@ -51,7 +51,7 @@ import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendi
 import { normalizePendingDeliveryBlockedReason, type PendingDeliveryBlockedReason } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
 import { PendingRequestedActionV1Schema, PendingResetStartSetResultV1Schema, DEFAULT_PENDING_REQUESTED_ACTION_V1, type PendingRequestedActionV1, type PendingResetStartSetResultV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema, type SessionPendingMessageComposerAdmissionAcceptedRequestV1, type SessionPendingMessageComposerAdmissionPrepareResponseV1 } from '@happier-dev/protocol/sessions/userMessageRpc';
-import { hasRawComposerAttachmentSelectionV1, HappierStructuredInputV1Schema, RawIngressStructuredInputV1Schema, readIngressComposerAttachmentSelectionV1, type RawIngressStructuredInputV1, type HappierStructuredInputV1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
+import { hasRawComposerAttachmentSelectionV1, HappierStructuredInputV1Schema, RawIngressStructuredInputV1Schema, type RawIngressStructuredInputV1, type HappierStructuredInputV1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import { PendingMessageMutationFingerprintV1Schema } from '@happier-dev/protocol/sessions/pending/pendingMessageMutationFingerprintV1';
 import { SessionMediaMessageMetaV1Schema, type SessionMediaMessageMetaV1 } from '@happier-dev/protocol/sessions/messages/sessionMediaV1';
 import { SessionStoredMessageContentSchema, type SessionStoredMessageContent } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
@@ -1019,14 +1019,13 @@ function coercePendingUserTextRecord(decrypted: unknown): { rawRecord: RawRecord
 
     const text = record.content.text;
     if (typeof text !== 'string') return null;
-    // A Pending row is Message ingress, and an attachment-only image/video turn is blank by
-    // design. Treating blank text alone as an unreadable row published the user's queued media
-    // message as a decrypt failure and dropped the rawRecord that still carried its selection.
-    if (
-        text.trim().length === 0
-        && (readIngressComposerAttachmentSelectionV1(record.meta) ?? []).length === 0
-    ) {
-        return null;
+    // Pending writes persist the finalized admission result. Read that durable
+    // selection, not the draft staged-media shape, for an attachment-only turn.
+    if (text.trim().length === 0) {
+        const admittedInput = readAdmittedHappierStructuredInputV1FromMeta(record.meta);
+        if (admittedInput.status !== 'admitted' || (admittedInput.structuredInput.composerAttachments?.length ?? 0) === 0) {
+            return null;
+        }
     }
 
     const displayTextRaw = record.meta?.displayText;
