@@ -32,7 +32,7 @@ import type { Fastify as AppFastify } from '@/app/api/types';
 import { enableAuthentication } from '@/app/api/utils/enableAuthentication';
 import { createExternalActionDaemonDispatcher, type ExternalActionForwardRpcCall } from '@/app/api/socket/externalActionDispatcher';
 import { auth } from '@/app/auth/auth';
-import { verifyCurrentExternalActionPrincipal } from '@/app/auth/externalActionExecutionAuthorization';
+import { verifyCurrentExternalActionPrincipal, verifyExternalActionDomainExecutionRequest } from '@/app/auth/externalActionExecutionAuthorization';
 import { createReleaseLessDeclarationV1 } from '@/app/plugins/availability/currentDeclaration';
 import { resolveMachineAccess, setMachineAccessGrantInTx, removeMachineAccessGrantInTx } from '@/app/machines/machineAccess';
 import { db, isPrismaErrorCode } from '@/storage/db';
@@ -257,6 +257,28 @@ describe('ordinary Account managed Action origination', () => {
             expect(await verifyCurrentExternalActionPrincipal(executionAuthorization.binding)).toMatchObject({
                 authority: 'account_automation', authentication: { kind: 'terminal' },
             });
+            const machinePath = `/v1/machines/${encodeURIComponent(selected.controller.machineId)}`;
+            const verifyMachineRead = (path = machinePath, method = 'GET', body?: unknown,
+                effectActionId = actionId, privateKey = selected.keys.secretKey) => verifyExternalActionDomainExecutionRequest({
+                authorizationToken: executionAuthorization.token, effectActionId,
+                encodedTarget: encodeExternalActionResolvedTargetV1(executionAuthorization.binding.target), method, path, body,
+                machineSignature: signExternalActionMachineRequestV1({ authorizationToken: executionAuthorization.token,
+                    effectActionId, target: executionAuthorization.binding.target,
+                    installationId: executionAuthorization.binding.installationId, requestId: executionAuthorization.binding.requestId,
+                    method, path, body, privateKey }),
+            });
+            // The actual CLI Machine RPC owner reads this exact codec row before
+            // socket emission. Each negative purpose has its own valid signature.
+            expect(await verifyMachineRead()).toMatchObject({ binding: executionAuthorization.binding,
+                principal: { accountId: selected.account.id, authority: 'account_automation' } });
+            expect(await verifyMachineRead(`/v1/machines/${crypto.randomUUID()}`)).toBeNull();
+            expect(await verifyMachineRead(`${machinePath}?machineId=${crypto.randomUUID()}`)).toBeNull();
+            expect(await verifyMachineRead(machinePath, 'GET', {})).toBeNull();
+            expect(await verifyMachineRead(machinePath, 'POST')).toBeNull();
+            expect(await verifyMachineRead('/v1/account/encryption')).toBeNull();
+            expect(await verifyMachineRead(machinePath, 'GET', undefined,
+                actionId === 'machines.work.summary.get' ? 'machines.terminal.list' : 'machines.work.summary.get')).toBeNull();
+            expect(await verifyMachineRead(machinePath, 'GET', undefined, actionId, tweetnacl.sign.keyPair().secretKey)).toBeNull();
             const relay = () => instance.inject({ method: 'POST', url: `/v1/actions/${actionId}`, headers,
                 payload: { v: 1, machineId: selected.controller.machineId, envelope, executionAuthorization } });
             const current = await relay();
@@ -267,6 +289,7 @@ describe('ordinary Account managed Action origination', () => {
             const retired = await relay();
             expect(retired.statusCode, retired.body).toBe(401);
             expect(retired.json()).toMatchObject({ error: 'invalid_token' });
+            expect(await verifyMachineRead()).toBeNull();
             expect(delivered).toHaveLength(2);
         } finally { await instance.close(); }
     });

@@ -666,9 +666,18 @@ export async function verifyExternalActionDomainExecutionRequest(
         && sameManagedInput(relay.data.executionAuthorization.binding, verified.binding)
         && isExternalActionAuthorizationBoundToEnvelope(verified.binding, { actionId: verified.effectActionId,
             machineId: relay.data.machineId, envelope: relay.data.envelope });
+    const root = SignedRootActionIdSchema.safeParse(verified.binding.actionId);
+    const readsExecutionMachine = root.success && getActionSpec(root.data).executionPlacement === 'machine'
+        && verified.effectActionId === verified.binding.actionId
+        && verified.binding.target.kind === 'machine' && verified.binding.target.machineId === verified.binding.machineId
+        && proof.method.toUpperCase() === 'GET' && proof.body === undefined
+        && proof.path === `/v1/machines/${encodeURIComponent(verified.binding.machineId)}`;
     const managedRoot = ManagedMachineActionIdV1Schema.safeParse(verified.binding.actionId);
     let managedGuestActivity: VerifiedExternalActionExecutionRequest['managedGuestActivity'];
-    if (isAdmittedRootRelay || verified.binding.handoffPreflight) {
+    if (readsExecutionMachine) {
+        // Native Machine RPC reads its exact execution Machine's content codec
+        // before delivery. This is not Account read authority or a family grant.
+    } else if (isAdmittedRootRelay || verified.binding.handoffPreflight) {
         // Exact root re-entry is not a family grant or a new originator.
     } else if (managedRoot.success) {
         const path = proof.path.split('?')[0];
