@@ -38,6 +38,7 @@ import {
     createPluginManifestV2Fixture,
 } from '@/plugins/testkit/manifestV2Fixture';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
+import { resolveAgentContributionQualifiedId } from '@/plugins/projection/registry/agentRoutingIdentity';
 import {
     createImmutablePluginGenerationRecordFromSource,
     persistValidatedAgentSessionRunnerFactories,
@@ -389,6 +390,48 @@ describe('runner managed-service invocation owner endpoint binding', () => {
                         (request) => request.capability,
                     ),
                 ]);
+            const lifetime = new AbortController();
+            const local = owner.owners.createOperationServices({
+                plugin: {
+                    id: fixture.retainedAgent.pluginId,
+                    version: fixture.retainedAgent.pluginVersion,
+                },
+                contribution: {
+                    id: fixture.retainedAgent.localAgentId,
+                    qualifiedId: resolveAgentContributionQualifiedId({
+                        pluginId: fixture.retainedAgent.pluginId,
+                        localId: fixture.retainedAgent.localAgentId,
+                    }),
+                },
+                occurrenceId: fixture.retainedAgent.sourceCustody.kind === 'managed'
+                    ? fixture.retainedAgent.sourceCustody.immutableGenerationId
+                    : fixture.sourceRootPath,
+                sourceCustody: fixture.retainedAgent.sourceCustody,
+                correlationId: 'unadmitted-bootstrap',
+                surface: 'agent',
+                signal: lifetime.signal,
+                isOccurrenceCurrent: () => !lifetime.signal.aborted,
+            }, {
+                filesystemRoots: {
+                    pluginData: join(fixture.happyHomeDir, 'plugin-data'),
+                    workspace: fixture.sourceRootPath,
+                    projects: new Map(),
+                },
+                hostAccessRequests: owner.hostAccessRequests,
+            });
+            // An Agent operation has no admitted Machine bootstrap credential.
+            // Its real local facade must refuse, never become an absent service
+            // or acquire a daemon-backed bootstrap authority.
+            expect(local.availability('machineProvisioners')).toEqual({
+                status: 'unavailable', code: 'plugin_service_unavailable',
+            });
+            expect(() => local.machineProvisioners.materializeBootstrapCredential({ kind: 'bytes' }))
+                .toThrow(expect.objectContaining({ code: 'plugin_service_unavailable' }));
+            let effectReached = false;
+            expect(() => local.machineProvisioners.withBootstrapCredentialFile({ relativePath: 'bootstrap/key' }, async () => {
+                effectReached = true;
+            })).toThrow(expect.objectContaining({ code: 'plugin_service_unavailable' }));
+            expect(effectReached).toBe(false);
         } finally {
             await owner?.owners.dispose();
             await fixture.cleanup();

@@ -364,8 +364,21 @@ integration runs and explicit diagnostic sharding retain their existing defaults
 The Gate forwards its observed core count through the shared worker override for
 CLI, Server and Protocol, while concurrent plugin-package commands retain their
 shared half-core budgets. Unit partitions target at most 20 minutes and have a
-30-minute job deadline including preparation/headroom. These are execution targets,
-not a claim that the full Gate has already met its 15-minute wall-clock target.
+30-minute job deadline including current-run artifact restoration/headroom, not
+shared preparation. The existing Gate selector also owns one shared preparation
+job: canonical frozen installation, native preparation and CLI/workspace closure
+publication run there before compiler, unit and artifact jobs consume its exact-run
+artifact. Dependency caching contains third-party dependencies only; a cache hit
+still runs the canonical frozen installer and postinstall. Successful installer
+output remains in the job log. Cache-hit installation and prepared-artifact restore
+are different measurements and must not be reported interchangeably.
+
+Shared preparation currently has an interim 45-minute deadline: the observed cold
+install/native/CLI preparation took approximately 29 minutes, with 16 minutes of
+headroom for merged prerequisites and artifact transport. Compiler and artifact
+jobs retain interim 90/95-minute deadlines. These are bounded execution guards,
+not a claim that the full Gate has met its 15-minute wall-clock target; reducing
+preparation and the remaining bodies is still required.
 
 ## TypeScript toolchain
 

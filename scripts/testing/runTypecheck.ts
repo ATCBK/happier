@@ -80,16 +80,22 @@ export interface RunRootTypecheckOptions {
   rootDir?: string;
   commands?: readonly CommandSuiteEntry[];
   compilerOnly?: boolean;
+  // The caller must have restored this run's successful canonical preparation,
+  // including generated sources and physical workspace dependency outputs.
+  preparedWorkspaces?: boolean;
   runCommand?: (command: CommandSuiteEntry) => Promise<void>;
 }
 
 export async function runRootTypecheck(
   options: RunRootTypecheckOptions = {},
 ): Promise<readonly CommandSuiteEntry[]> {
+  if (options.preparedWorkspaces && !options.compilerOnly) {
+    throw new Error('prepared workspaces require compiler-only mode');
+  }
   const rootDir = options.rootDir ?? process.cwd();
   const commands = options.commands ?? (options.compilerOnly ? ROOT_COMPILER_TYPECHECK_COMMANDS : ROOT_TYPECHECK_COMMANDS);
   const runCommand = options.runCommand ?? ((command) => runYarnCommand(command, rootDir));
-  const prepared = options.compilerOnly && !options.commands
+  const prepared = options.compilerOnly && !options.commands && !options.preparedWorkspaces
     ? await runCommandSuite({
       commands: ROOT_TYPECHECK_PREPARATION_COMMANDS,
       maxConcurrent: 1,
@@ -109,7 +115,10 @@ export async function runRootTypecheck(
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  void runRootTypecheck({ compilerOnly: process.argv.includes('--compiler-only') }).catch((error: unknown) => {
+  void runRootTypecheck({
+    compilerOnly: process.argv.includes('--compiler-only'),
+    preparedWorkspaces: process.argv.includes('--prepared-workspaces'),
+  }).catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   });

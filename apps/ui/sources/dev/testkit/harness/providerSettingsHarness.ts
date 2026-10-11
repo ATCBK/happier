@@ -44,6 +44,7 @@ import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } 
 
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { createMachineFixture } from '../fixtures/machineFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '../fixtures/accountBootstrapHttpBoundary';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance, type AddHomeOptions, type HomeDomainAnswer } from './homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from './serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from './syncSingletonLoader';
@@ -445,7 +446,23 @@ function configureProviderSettingsSocket(socket: Socket, serverUrl: string | und
 /** Account admission, row publication and retirement stay real; only Home HTTP and Socket transport are substituted. */
 export function createProviderSettingsAccountHarness() {
     const home = createHomeGovernanceHarness();
-    installHomeGovernanceBoundaries(home);
+    const bootstrapHome: typeof home = {
+        ...home,
+        request: async (input, init) => {
+            const url = new URL(input instanceof Request ? input.url : String(input));
+            const requestInit = input instanceof Request && init?.method === undefined
+                ? { ...init, method: input.method }
+                : init;
+            const record = home.findByServerUrl(url.origin);
+            const path = `${url.pathname}${url.search}`;
+            const method = (requestInit?.method ?? 'GET').toUpperCase();
+            // Keep the original leaf's request census and every explicit error/response override.
+            const response = await home.request(input, requestInit);
+            if (!record || record.answers.has(`${method} ${path}`) || record.answers.has(path)) return response;
+            return createEmptyAccountBootstrapHttpResponse(path, requestInit) ?? response;
+        },
+    };
+    installHomeGovernanceBoundaries(bootstrapHome);
     installDisconnectedServerSocketBoundary(configureProviderSettingsSocket);
     let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
     const serverUrl = 'https://provider-settings-account.test';
@@ -542,7 +559,7 @@ export function createProviderSettingsAccountHarness() {
             /** Explicit synthetic E2EE Account fixture, not a key-presence mode decision. */
             e2eeSecret?: Uint8Array;
         }> = {}) {
-            installHomeGovernanceBoundaries(home);
+            installHomeGovernanceBoundaries(bootstrapHome);
             await loadSyncSingletonForTests();
             await connection?.dispose();
             const accountId = options.accountId ?? 'account-a';
@@ -623,10 +640,10 @@ export function createProviderSettingsAccountHarness() {
             home.answer(serverId, '/v2/account/settings/history', { body: { snapshots: [] } });
             const machines = options.machines ?? installedProviderSettingsHarness.current?.state.machines;
             if (machines) await publishMachines(serverId, machines);
-            connection = await restoreServerAccountForTest({ serverUrl, accountId, request: home.request, credentials });
+            connection = await restoreServerAccountForTest({ serverUrl, accountId, request: bootstrapHome.request, credentials });
             // Account restoration scopes its bootstrap port to one Home. Subsequent
             // peer Provider reads use every declared Home's same HTTP response owner.
-            installHomeGovernanceBoundaries(home);
+            installHomeGovernanceBoundaries(bootstrapHome);
             const { storage } = await import('@/sync/domains/state/storage');
             await waitForHomeGovernance(() => {
                 const scope = storage.getState().profileScope;

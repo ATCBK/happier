@@ -320,7 +320,7 @@ export function normalizeManagedServiceSpec(
             }),
             startupTimeoutMs,
             healthPolicy,
-            ...(healthCheck ? { healthCheck } : {}),
+            healthCheck,
         });
     }
     const durableLog = spec.durableLog

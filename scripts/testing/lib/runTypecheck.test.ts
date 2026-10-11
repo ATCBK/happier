@@ -148,3 +148,59 @@ test('compiler-only typecheck executes compilers after preparation and reports c
     'tsconfig.source.json', 'tsconfig.test.json',
   ]);
 });
+
+test('current-run prepared compiler mode omits only preparation and retains every compiler owner', async () => {
+  const ordinary: string[][] = [];
+  const prepared: string[][] = [];
+  await runRootTypecheck({
+    compilerOnly: true,
+    runCommand: async ({ args }) => { ordinary.push([...args]); },
+  });
+  await runRootTypecheck({
+    compilerOnly: true,
+    preparedWorkspaces: true,
+    runCommand: async ({ args }) => { prepared.push([...args]); },
+  });
+
+  assert.deepEqual(ordinary.slice(0, 2), [
+    ['-s', 'build:packages'], ['-s', 'prepare:typecheck:workspaces'],
+  ]);
+  assert.deepEqual(prepared, ordinary.slice(2));
+  assert.ok(prepared.some((args) => args.includes('packages/protocol/tsconfig.json')));
+  for (const workspace of ['apps/ui', 'apps/cli', 'apps/server', 'packages/tests']) {
+    assert.deepEqual(prepared.filter((args) => args.includes(workspace)), [
+      ['--cwd', workspace, '-s', 'typecheck'],
+    ]);
+  }
+});
+
+test('current-run prepared compiler mode still attempts every compiler and reports failures', async () => {
+  const executed: string[] = [];
+  await assert.rejects(runRootTypecheck({
+    compilerOnly: true,
+    preparedWorkspaces: true,
+    runCommand: async ({ id }) => {
+      executed.push(id);
+      if (id === 'type-tests') throw new Error('Protocol rejected source');
+      if (id === 'apps/ui/tsconfig.json') throw new Error('UI rejected source');
+    },
+  }), (error: unknown) => {
+    assert.match(String(error), /Protocol rejected source/u);
+    assert.match(String(error), /UI rejected source/u);
+    return true;
+  });
+  assert.equal(executed[0], 'type-tests');
+  assert.equal(executed.at(-1), 'packages/tests/tsconfig.json');
+  assert.equal(executed.length, 10);
+  assert.ok(!executed.includes('build-packages'));
+  assert.ok(!executed.includes('prepare-workspaces'));
+});
+
+test('prepared workspaces are refused outside compiler-only mode before running anything', async () => {
+  const executed: string[] = [];
+  await assert.rejects(runRootTypecheck({
+    preparedWorkspaces: true,
+    runCommand: async ({ id }) => { executed.push(id); },
+  }), /prepared workspaces require compiler-only mode/u);
+  assert.deepEqual(executed, []);
+});

@@ -5,14 +5,14 @@ import { ExternalSessionsSourceSchema } from '@happier-dev/protocol/sessions/ext
 import { normalizeLinkedExternalSessionMetadataV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
 import { parseSessionRuntimeActivityProjectionFields, SessionRuntimeActivityStateSchema } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
 import { PluginAgentExternalSessionLinkDataSchema } from '@happier-dev/protocol/plugins/contributions/agentExternalSessions';
-import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { PluginProjectionV2Schema, type PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { PrimaryTurnStatusV1Schema, SessionRuntimeIssueV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
 import { SessionAccessAccountSummaryV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessPrincipalV1';
 import { SessionEffectiveAccessV1Schema } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/personal/viewer';
 import { PendingActivationAuthorizationV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
-import { PluginUiTargetedContributionsV1Schema } from '@happier-dev/protocol/plugins/ui';
+import { PluginUiTargetedContributionsV1Schema, type PluginUiTargetedContributionsV1 } from '@happier-dev/protocol/plugins/ui';
 import { z } from 'zod';
 
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
@@ -360,7 +360,13 @@ export type MachineDisplayCacheEntryV1 = z.infer<typeof MachineDisplayCacheEntry
  * together; a fresh offline process can therefore never hold one without the
  * other.
  */
-export const PluginUiProjectionCacheEntryV1Schema = z.object({
+export type PluginUiProjectionCacheEntryV1 = {
+    machineId: string;
+    projection: PluginProjectionV2;
+    targetedContributionsByPluginId?: Record<string, PluginUiTargetedContributionsV1>;
+};
+
+export const PluginUiProjectionCacheEntryV1Schema: z.ZodType<PluginUiProjectionCacheEntryV1> = z.object({
     machineId: z.string().min(1),
     projection: PluginProjectionV2Schema,
     targetedContributionsByPluginId: z.record(
@@ -368,8 +374,6 @@ export const PluginUiProjectionCacheEntryV1Schema = z.object({
         PluginUiTargetedContributionsV1Schema,
     ).optional(),
 });
-
-export type PluginUiProjectionCacheEntryV1 = z.infer<typeof PluginUiProjectionCacheEntryV1Schema>;
 
 /**
  * The last usage summary this device saw for the Account (connected accounts' quota windows), with

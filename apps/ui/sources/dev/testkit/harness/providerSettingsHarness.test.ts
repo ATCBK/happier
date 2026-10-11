@@ -26,6 +26,28 @@ describe('providerSettingsHarness', () => {
         await account.restore();
         const home = account.home.findByServerUrl('https://provider-settings-account.test');
         if (!home?.token) throw new Error('Provider fixture has no authenticated Home');
+        const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
+        const fetchAtHome = createServerFetchAtEndpoint({
+            endpointUrl: home.serverUrl, serverId: account.serverId, credentials: { token: home.token },
+        });
+        const sessionsPath = '/v2/sessions/active?limit=500';
+        const sessions = await fetchAtHome(sessionsPath);
+        expect(sessions.status).toBe(200);
+        expect(await sessions.json()).toMatchObject({
+            sessions: [], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+        });
+        const { runtimeFetch } = await import('@/utils/system/runtimeFetch');
+        expect((await runtimeFetch(new Request(new URL(sessionsPath, home.serverUrl), { method: 'POST' }))).status).toBe(404);
+        account.home.answer(account.serverId, `GET ${sessionsPath}`, { status: 503, body: { error: 'fixture_offline' } });
+        expect((await fetchAtHome(sessionsPath)).status).toBe(503);
+        expect((await fetchAtHome(sessionsPath, { method: 'POST' })).status).toBe(404);
+        expect((await fetchAtHome('/fixture-unknown-bootstrap-read')).status).toBe(404);
+        const { PluginAvailabilityActionHttpPathsV1 } = await import('@happier-dev/protocol/plugins/availability');
+        const intents = await fetchAtHome(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'], {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ knownPluginIds: [] }),
+        });
+        expect(intents.status).toBe(200);
+        expect(await intents.json()).toMatchObject({ availabilityCursor: 0, pluginIds: [], intentReads: [], failedPluginIds: [] });
         const catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
             connections: [ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_a',
                 source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' },

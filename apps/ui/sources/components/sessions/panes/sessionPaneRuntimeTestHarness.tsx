@@ -1,9 +1,7 @@
 import 'fake-indexeddb/auto';
 import * as React from 'react';
-import { AccountSettingsV2GetResponseSchema, AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema, CurrentCursorResponseSchema, FeaturesResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, V2SessionByIdResponseSchema, V2SessionByIdNotFoundSchema, V2SessionListResponseSchema } from '@happier-dev/protocol';
+import { AccountSettingsV2GetResponseSchema, AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema, CurrentCursorResponseSchema, FeaturesResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, V2SessionByIdResponseSchema, V2SessionByIdNotFoundSchema } from '@happier-dev/protocol';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
-import { AccountPetListResponseV1Schema } from '@happier-dev/protocol/pets/accountLibrary';
-import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentsListActionOutputV1Schema, PluginAvailabilityMaterializationsReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability';
 import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -14,6 +12,7 @@ import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/act
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { storage } from '@/sync/domains/state/storageStore';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
@@ -136,16 +135,8 @@ export function installSessionPaneRuntimeTestHarness(params: Readonly<{
                 if (artifactResponse) return artifactResponse;
                 if ((init?.method ?? 'GET') === 'GET' && path === '/v2/account/settings') return json(AccountSettingsV2GetResponseSchema.parse({ content: { t: 'plain', v: {} }, version: 0 }));
                 if ((init?.method ?? 'GET') === 'GET' && path === '/v1/machines') return json([]);
-                if ((init?.method ?? 'GET') === 'GET' && (path === '/v2/sessions' || path === '/v2/sessions/active')) return json(V2SessionListResponseSchema.parse({
-                    sessions: [], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
-                }));
-                if ((init?.method ?? 'GET') === 'GET' && path === '/v1/account/pets') return json(AccountPetListResponseV1Schema.parse({ ok: true, pets: [] }));
-                if (init?.method === 'POST' && path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list']) return json(
-                    PluginAvailabilityIntentsListActionOutputV1Schema.parse({ availabilityCursor: 0, pluginIds: [] }),
-                );
-                if (init?.method === 'POST' && path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']) return json(
-                    PluginAvailabilityMaterializationsReadActionOutputV1Schema.parse({ availabilityCursor: 0, snapshots: [] }),
-                );
+                const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(path, init);
+                if (bootstrapResponse) return bootstrapResponse;
                 if ((init?.method ?? 'GET') === 'GET' && path === AUTHORING_MEMORY_ROUTE_V1) return json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
                 if ((init?.method ?? 'GET') === 'GET' && path === `/v2/sessions/${sessionId}`) {
                     const session = storage.getState().sessions[sessionId];

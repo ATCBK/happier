@@ -582,6 +582,12 @@
     "../../packages/plugin-ui/src/presentation/state/scenes.ts"
   ],
   "exclude": [
+    "sources/components/settings/desktop/desktopLoginStart.ts",
+    "sources/components/machines/add/machineAddSshTask.ts",
+    "sources/components/onboarding/checklists/remoteSsh/resolveRemoteSshBootstrapFormState.ts",
+    "sources/components/serverProfiles/disconnectThisComputerFromHome.ts",
+    "sources/sync/api/externalActionAccountTransport.ts",
+    "sources/sync/ops/actions/localDaemonServiceAction.ts",
     "sources/components/workflows/editor/WorkflowStepDataEditor.tsx",
     "sources/components/workflows/editor/workflowIssueText.ts",
     "sources/components/workflows/presentation/workflowBlockedReasonText.ts",
@@ -3544,7 +3550,6 @@
     "sources/components/ui/selectionList/accessories/StatusPill.tsx",
     "sources/components/ui/selectionList/buildSelectionListOptionA11yProps.ts",
     "sources/components/ui/selectionList/filterSelectionListSections.ts",
-    "sources/components/ui/selectionList/formatRelativeTimeShort.ts",
     "sources/components/ui/selectionList/index.ts",
     "sources/components/ui/selectionList/renderSelectionListAccessory.ts",
     "sources/components/ui/selectionList/resolvePopoverSelectionListHeightBehavior.ts",
@@ -5755,6 +5760,7 @@
     "sources/sync/syncEngine.ts",
     "sources/text/_all.ts",
     "sources/text/_types.ts",
+    "sources/text/bundledPluginTranslationKeys.generated.ts",
     "sources/text/bundledPluginTranslations.generated.ts",
     "sources/text/deviceLocales.ts",
     "sources/text/i18n.ts",
