@@ -21,6 +21,7 @@ describe('plugin UI host runtime externals', () => {
             '@happier-dev/plugin-ui/hostApi',
             '@happier-dev/plugin-ui/data',
             '@happier-dev/plugin-ui/presentation',
+            '@happier-dev/plugin-ui/declarative',
             '@happier-dev/plugin-ui/environment',
             '@happier-dev/plugin-ui/advanced',
             '@happier-dev/plugin-sdk/ui/client',

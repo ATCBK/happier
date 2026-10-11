@@ -13,6 +13,7 @@ import { resolveMachineRpcGovernance } from './governanceV1.js';
 import { getActionSpec } from '../../../../actions/actionSpecs.js';
 import { ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2 } from '../../../../actions/operations/v1.js';
 import { CONNECTED_SERVICE_POOL_SELECTION_RPC_METHOD } from '../../../../connect/connectedServicePoolSelection.js';
+import { resolveSocketRpcSessionAuthorization } from '../../../../rpc/socket.js';
 
 async function importRpcPolicy() {
   return await import('./index').catch((error: unknown) => ({ importError: error }));
@@ -306,6 +307,27 @@ describe('MachineRpcRoutePolicyV1', () => {
       });
       expect(protocol.resolveEphemeralRunnerMachineRpcAuthority(method)).toBeNull();
     }
+  });
+
+  it('keeps plugin catalog freshness on the owner Session route without granting direct or Runner Machine authority', async () => {
+    const protocol = await importRpcPolicy();
+    if ('importError' in protocol) throw protocol.importError;
+    const method = SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1;
+    const policy = protocol.resolveMachineRpcRoutePolicy(method);
+    expect(policy).toMatchObject({
+      routeClass: 'server_required', serverRequiredReason: 'reconnect_catch_up',
+      sharedMachineAccess: 'custodian_only', commandReceiptRequired: false,
+      scope: { accountRequired: true, machineRequired: true, sessionRequired: true, serverRequired: true },
+    });
+    expect(protocol.isMachineRpcDirectRoutePolicy(policy)).toBe(false);
+    expect(protocol.validateMachineRpcGrantAllowedMethods([method])).toEqual({
+      ok: false, reasonCode: 'machine_rpc_method_server_required', method,
+    });
+    expect(protocol.resolveEphemeralRunnerMachineRpcAuthority(method)).toBeNull();
+    expect(protocol.resolveMachineRpcExternalActionEffectV1(method)).toBeNull();
+    expect(resolveSocketRpcSessionAuthorization(`session-1:${method}`)).toEqual({
+      method, authority: 'sessionOwner', routeToSessionOwnerDaemon: true,
+    });
   });
 
   it('binds SCM comparison operations to their existing Action authority without opening direct or Runner routes', async () => {

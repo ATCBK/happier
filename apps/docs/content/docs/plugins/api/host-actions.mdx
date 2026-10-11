@@ -5249,7 +5249,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
 
 ### Input guidance
 
@@ -7237,7 +7237,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `api`.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
 
 ### Input guidance
 
@@ -15910,6 +15910,98 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `stepId` (json, required): Agent step id (null for Workflow default)
 - `address` (json, required): Qualified Session address
 
+## `workflow.authoring.draft.discard`
+
+**Discard mounted Workflow edits** — Request human approval, then follow the host’s existing Discard confirmation. Cancel keeps the draft. A saved document stays open and Discard changes is undoable.
+
+- Safety: `danger`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`.
+
+### Input guidance
+
+- `scope` (json, required): Home and Account
+- `draftId` (text, required): Mounted draft id
+
+## `workflow.authoring.draft.edit`
+
+**Edit mounted Workflow draft** — Apply canonical Workflow edit ops to the open draft at expectedDraftRevision as one undoable, visibly highlighted change. A stale revision is refused. Does not save or run.
+
+- Safety: `safe`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `scope` (json, required): Home and Account
+- `draftId` (text, required): Mounted draft id
+- `expectedDraftRevision` (number, required): Observed draft revision
+- `ops` (json, required): Canonical Workflow edit operations
+
+## `workflow.authoring.draft.get`
+
+**Read mounted Workflow draft** — Read the answering client’s open Workflow draft, settings, validation and revision. Omit draftId to list drafts in the scope. Never loads or creates an editor.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `scope` (json, required): Home and Account
+- `draftId` (text): Mounted draft id
+
+## `workflow.authoring.draft.redo`
+
+**Redo Workflow draft change** — Redo through the mounted editor’s existing document and settings history. Does not save or run.
+
+- Safety: `safe`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `scope` (json, required): Home and Account
+- `draftId` (text, required): Mounted draft id
+
+## `workflow.authoring.draft.save`
+
+**Save mounted Workflow draft** — Explicitly save through the mounted host’s validation and conflict-checked Save, including its trigger delta. Waits for Save to finish; never starts a Run.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `scope` (json, required): Home and Account
+- `draftId` (text, required): Mounted draft id
+
+## `workflow.authoring.draft.undo`
+
+**Undo Workflow draft change** — Undo through the mounted editor’s existing document and settings history. Does not save or run.
+
+- Safety: `safe`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `scope` (json, required): Home and Account
+- `draftId` (text, required): Mounted draft id
+
 ## `workflow.definition.create`
 
 **Create workflow definition** — Create workflow definition through the canonical workflow Action owner.
@@ -16189,6 +16281,24 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 No field hints are published. Use the typed input accepted by `execute`.
+
+## `workflow.run.review.draft.set`
+
+**Prepare open Workflow review value** — Set the displayed human review buffer of the exact open hold at expectedContentRevision. Retains Keep my edits / Use newer semantics. Does not publish or accept the result.
+
+- Safety: `safe`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `scope` (json, required): Home and Account
+- `draftId` (text, required): Mounted draft id
+- `runId` (text, required): Open Run id
+- `expectedContentRevision` (text, required): Observed hold content revision
+- `value` (json, required): Proposed review value
 
 ## `workflow.run.start`
 
