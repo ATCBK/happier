@@ -2,10 +2,14 @@ import { createContext, useContext, type ReactNode } from 'react';
 import type { RenderContext } from '@happier-dev/plugin-sdk/ui';
 
 export type WidgetPresentation = NonNullable<RenderContext['widgetPresentation']>;
+export type WidgetPresentationProviderProps = Readonly<{
+  value: WidgetPresentation | undefined;
+  children?: ReactNode;
+}>;
 const WidgetPresentationContext = createContext<WidgetPresentation | undefined>(undefined);
 
 /** Presentation facts supplied by the frame; changing them preserves the body's mounted lifetime. */
-export function WidgetPresentationProvider(props: Readonly<{ value: WidgetPresentation | undefined; children?: ReactNode }>) {
+export function WidgetPresentationProvider(props: WidgetPresentationProviderProps) {
   return <WidgetPresentationContext.Provider value={props.value}>{props.children}</WidgetPresentationContext.Provider>;
 }
 

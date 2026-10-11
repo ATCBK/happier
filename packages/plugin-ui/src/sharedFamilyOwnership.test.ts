@@ -42,6 +42,7 @@ const APPROVED_CATALOG_VOCABULARY = [
   'Divider', 'Badge', 'Metadata', 'Link',
   'Markdown', 'CodeBlock',
   'Spinner', 'Status',
+  'ApprovalPrompt', 'Timeline',
   'State', 'LoadingState', 'EmptyState', 'ErrorState',
   'Button', 'IconButton',
   'Action.Execute', 'Action.Copy', 'Action.OpenExternal', 'Action.OpenSurface', 'Action.Refresh',
@@ -59,6 +60,7 @@ const APPROVED_CATALOG_VOCABULARY = [
   'Grid', 'Tree', 'Skeleton', 'DiffViewer', 'KeyHint',
   // Plan 70s2: the one widget frame with controlled viewer-local disclosure.
   'WidgetFrame',
+  'WidgetPresentationProvider',
   'EmptySlot',
   'FloatingFrame',
   // r0.42 (Triage plan): the numbered story-rail step, one presentation owner.
@@ -1335,6 +1337,52 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     },
   })),
   {
+    publicName: 'ApprovalPrompt',
+    propTypeName: 'ApprovalPromptProps',
+    family: 'Approval prompt',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/interaction/ApprovalPromptChrome.tsx',
+    sharedSymbol: 'HappierApprovalPromptChrome',
+    pluginOwner: { module: 'components/ApprovalPrompt.tsx', symbol: 'ApprovalPrompt' },
+    coreConsumers: ['components/tools/shell/approvals/ApprovalPromptChrome.tsx'],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'Approval decisions require the host approval owner; V2 has no approval-prompt node.' },
+  },
+  {
+    publicName: 'Timeline',
+    propTypeName: 'TimelineProps',
+    family: 'Timeline',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'components/Timeline.tsx',
+    sharedSymbol: 'Timeline',
+    pluginOwner: { module: 'components/Timeline.tsx', symbol: 'Timeline' },
+    coreConsumers: [],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no timeline node; authors supply ordered executable row content.' },
+  },
+  {
+    publicName: 'WidgetPresentationProvider',
+    propTypeName: 'WidgetPresentationProviderProps',
+    family: 'Widget presentation context',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'components/WidgetPresentation.tsx',
+    sharedSymbol: 'WidgetPresentationProvider',
+    pluginOwner: { module: 'components/WidgetPresentation.tsx', symbol: 'WidgetPresentationProvider' },
+    coreConsumers: ['components/widgets/frame/WidgetFrame.tsx'],
+    coreAdapter: { module: 'components/WidgetPresentation.tsx', symbol: 'WidgetPresentationProvider' },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'The provider carries mounted widget geometry; V2 content consumes those facts rather than declaring them.' },
+  },
+  {
     publicName: 'Step',
     propTypeName: 'StepProps',
     family: 'Story step',
@@ -1789,6 +1837,8 @@ const repoRoot = resolve(packageSourceRoot, '../../..');
 const appSourceRoot = resolve(packageSourceRoot, '../../../apps/ui/sources');
 const devMountPath = join(appSourceRoot, 'app/(app)/dev/plugin-ui.tsx');
 const declarativeNodeRendererPath = 'components/plugins/shared/declarativeNodes.tsx';
+const portableDeclarativeNodeRendererPath = 'declarative/declarativeNodes.tsx';
+const declarativeSurfacePath = 'components/plugins/surfaces/DeclarativePluginSurface.tsx';
 const sourceCache = new Map<string, string>();
 
 function read(filePath: string): string {
@@ -1854,6 +1904,36 @@ function sourceDeclaresSymbol(source: string, symbol: string): boolean {
 
 function sourceDeclaresExportedType(source: string, typeName: string): boolean {
   return new RegExp(`export\\s+(?:type|interface)\\s+${typeName}\\b`, 'u').test(source);
+}
+
+function coreConsumerReachabilitySource(consumer: string, source: string): string {
+  if (consumer !== declarativeNodeRendererPath) return source;
+
+  const portableOwner = read(join(packageSourceRoot, portableDeclarativeNodeRendererPath));
+  const declarativeSurface = read(join(appSourceRoot, declarativeSurfacePath));
+  const reachesPortableOwner = source.includes("from '@happier-dev/plugin-ui/declarative'")
+    && source.includes('renderDeclarativeNode as renderPortableDeclarativeNode');
+  const reachesAppAdapter = declarativeSurface.includes("from '@/components/plugins/shared/declarativeNodes'")
+    && declarativeSurface.includes('renderDeclarativeNode');
+  return reachesPortableOwner && reachesAppAdapter
+    ? `${source}\n${portableOwner}\n${declarativeSurface}`
+    : source;
+}
+
+function declarativeRendererReachesSymbol(
+  rendererSource: string | null,
+  rendererSymbol: string,
+): boolean {
+  if (!rendererSource) return false;
+  if (rendererSymbol === 'renderActionAffordance') {
+    const appAdapter = read(join(appSourceRoot, declarativeNodeRendererPath));
+    return rendererSource.includes('context.host.renderAction')
+      && appAdapter.includes('renderAction:')
+      && appAdapter.includes('renderActionAffordance');
+  }
+  return rendererSymbol.includes('.')
+    ? rendererSource.includes(rendererSymbol)
+    : new RegExp(`\\b${rendererSymbol}\\b`, 'u').test(rendererSource);
 }
 
 /**
@@ -1929,7 +2009,7 @@ function catalogProblems(
   sourceFor: (path: string) => string,
 ): string[] {
   const problems: string[] = [];
-  const declarativeNodeRendererSource = read(join(appSourceRoot, declarativeNodeRendererPath));
+  const declarativeNodeRendererSource = read(join(packageSourceRoot, portableDeclarativeNodeRendererPath));
   const publicEntries = entries.filter((entry) => entry.publiclyExported);
   const publicNames = publicEntries.map((entry) => entry.publicName);
   if (new Set(publicNames).size !== publicNames.length) {
@@ -1981,7 +2061,10 @@ function catalogProblems(
       ?? entry.coreAdapter?.symbol
       ?? entry.sharedSymbol;
     for (const consumer of entry.coreConsumers) {
-      const consumerSource = read(join(appSourceRoot, consumer));
+      const consumerSource = coreConsumerReachabilitySource(
+        consumer,
+        read(join(appSourceRoot, consumer)),
+      );
       const reachesPublicAdapter = entry.coreAdapter?.symbol === entry.publicName
         && sourceRendersPublicPluginUiComponent(consumerSource, entry.publicName);
       if (!reachesPublicAdapter && (!consumerSource.includes('@happier-dev/plugin-ui/presentation')
@@ -2009,10 +2092,9 @@ function catalogProblems(
         declarativeNodeRendererSource,
         entry.declarative.node,
       );
-      const reachesRendererSymbol = rendererSource && (
-        entry.declarative.rendererSymbol.includes('.')
-          ? rendererSource.includes(entry.declarative.rendererSymbol)
-          : new RegExp(`\\b${entry.declarative.rendererSymbol}\\b`, 'u').test(rendererSource)
+      const reachesRendererSymbol = declarativeRendererReachesSymbol(
+        rendererSource,
+        entry.declarative.rendererSymbol,
       );
       if (!reachesRendererSymbol) {
         problems.push(`${entry.publicName} declarative node ${entry.declarative.node} does not reach ${entry.declarative.rendererSymbol}`);
@@ -2386,6 +2468,9 @@ describe('graduated shared presentation families (§8.2)', () => {
       'SessionTranscript',
       'SessionComposer',
       'SessionChat',
+      'ApprovalPrompt',
+      'Timeline',
+      'WidgetPresentationProvider',
       'Step',
       'SelectionTiles',
       'Tree',
@@ -2556,7 +2641,10 @@ describe('graduated shared presentation families (§8.2)', () => {
       for (const consumer of entry.coreConsumers) {
         expect(consumer, `${entry.family} cannot graduate through a dev-only gallery`).not.toContain('/dev/');
         expect(consumer, `${entry.family} cannot graduate through the private surface carrier`).not.toContain('PluginSurfaceHost');
-        const source = read(join(appSourceRoot, consumer));
+        const source = coreConsumerReachabilitySource(
+          consumer,
+          read(join(appSourceRoot, consumer)),
+        );
         const reachesPublicAdapter = entry.coreAdapter?.symbol === entry.publicName
           && sourceRendersPublicPluginUiComponent(source, entry.publicName);
         expect(reachesPublicAdapter || source.includes('@happier-dev/plugin-ui/presentation'),

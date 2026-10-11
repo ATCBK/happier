@@ -24,6 +24,7 @@ export * from './Foundation.js';
 export * from './Form.js';
 export { Icon, type IconName, type IconProps } from './Icon.js';
 export * from './Image.js';
+export { MotionFeedback, type MotionFeedbackProps } from './MotionFeedback.js';
 export * from './StoredImage.js';
 export * from './Layout.js';
 export {
@@ -64,6 +65,7 @@ export * from './Setup.js';
 export * from './Voice.js';
 export * from './Surface.js';
 export * from './Tabs.js';
+export { Timeline, type TimelineProps, type TimelineItemContent } from './Timeline.js';
 export * from './Text.js';
 export * from './TargetedSurface.js';
 export { WidgetSurface, type WidgetSurfaceProps } from './WidgetSurface.js';
@@ -71,4 +73,9 @@ export { WidgetFrame, type WidgetFrameProps } from './WidgetFrame.js';
 export { FloatingFrame, type FloatingFrameProps } from './FloatingFrame.js';
 export { Tree, type TreeItem, type TreeProps } from './Tree.js';
 export { DragSource, DropTarget, type DragSourceProps, type DropTargetProps } from './EntityDragDrop.js';
-export { WidgetPresentationProvider, useWidgetPresentation, type WidgetPresentation } from './WidgetPresentation.js';
+export {
+  WidgetPresentationProvider,
+  useWidgetPresentation,
+  type WidgetPresentation,
+  type WidgetPresentationProviderProps,
+} from './WidgetPresentation.js';
