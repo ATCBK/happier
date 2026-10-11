@@ -33,6 +33,7 @@ const noop = () => {};
 const noSuggestions = async () => [];
 const ROWS = ['Retry relay handshake', 'Review the settings modal', 'Craft pass lab'] as const;
 const FINISH_ROLES = ['card', 'floating', 'composer', 'primaryButton', 'secondaryButton'] as const;
+const QuietHabitTranscriptDemo = React.lazy(() => import('./QuietHabitTranscriptDemo'));
 
 /** Public dev specimen outside authenticated runtimes: real owners and inert fixture controls. */
 export default function SoftSurfacesSpecimen() {
@@ -42,7 +43,7 @@ export default function SoftSurfacesSpecimen() {
     const role = FINISH_ROLES.find(candidate => candidate === params.role);
     const roleFinish = params.roleFinish === 'flat' ? 'flat' : 'soft';
     const glass = params.glass === 'full' ? 'full' : params.glass === 'content' ? 'content' : 'off';
-    const frame = params.frame === 'home' || params.frame === 'settings' || params.frame === 'glass' || params.frame === 'audit' || params.frame === 'shell' ? params.frame : 'roles';
+    const frame = params.frame === 'quiet-turns' || params.frame === 'home' || params.frame === 'settings' || params.frame === 'glass' || params.frame === 'audit' || params.frame === 'shell' ? params.frame : 'roles';
     const [ready, setReady] = React.useState(false);
     React.useLayoutEffect(() => {
         const previous = UnistylesRuntime.getTheme(theme);
@@ -75,7 +76,7 @@ export default function SoftSurfacesSpecimen() {
                     </View>
                     <ScrollView contentContainerStyle={styles.page}>
                         <Basis themeName={theme} finish={finish} glass={glass} />
-                        {frame === 'home' ? <Home /> : frame === 'settings' ? <Settings /> : frame === 'glass' ? <Glass /> : frame === 'audit' ? <Audit inputAudit={params.inputAudit === '1'} /> : frame === 'shell' ? <Shell /> : <Roles />}
+                        {frame === 'quiet-turns' ? <React.Suspense fallback={null}><QuietHabitTranscriptDemo /></React.Suspense> : frame === 'home' ? <Home /> : frame === 'settings' ? <Settings /> : frame === 'glass' ? <Glass /> : frame === 'audit' ? <Audit inputAudit={params.inputAudit === '1'} /> : frame === 'shell' ? <Shell /> : <Roles />}
                     </ScrollView>
                 </View>
             </GlassMaterialRuntime>

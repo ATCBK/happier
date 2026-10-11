@@ -33,6 +33,7 @@ const TurnMessageRow = React.memo(function TurnMessageRow(props: {
     sessionId: string;
     messageId: string;
     metadata: Metadata | null;
+    hideProvenanceAttribution?: boolean;
     forcePermissionPromptsInTranscript?: boolean;
     activeThinkingMessageId: string | null;
     getMessageById?: (messageId: string) => Message | null;
@@ -70,6 +71,7 @@ const TurnMessageRow = React.memo(function TurnMessageRow(props: {
     const messageView = canUseParentCommon ? (
         <MessageViewWithSessionCommon
             message={message}
+            hideProvenanceAttribution={props.hideProvenanceAttribution}
             messageRevision={props.getMessageRevisionById?.(message.id) ?? null}
             metadata={props.metadata}
             sessionId={effectiveSessionId}
@@ -93,6 +95,7 @@ const TurnMessageRow = React.memo(function TurnMessageRow(props: {
     ) : (
         <MessageView
             message={message}
+            hideProvenanceAttribution={props.hideProvenanceAttribution}
             messageRevision={props.getMessageRevisionById?.(message.id) ?? null}
             metadata={props.metadata}
             sessionId={effectiveSessionId}
@@ -133,6 +136,8 @@ type TurnViewProps = Readonly<{
     metadata: Metadata | null;
     sessionId: string;
     serverId?: string | null;
+    /** The quiet-turn header owns its user provenance chip in this composition. */
+    hideUserProvenanceAttribution?: boolean;
     forcePermissionPromptsInTranscript?: boolean;
     activeThinkingMessageId: string | null;
     getMessageById?: (messageId: string) => Message | null;
@@ -171,6 +176,7 @@ export const TurnViewWithSessionCommon = React.memo((props: TurnViewProps & Tran
                 <TurnMessageRow
                     sessionId={props.sessionId}
                     messageId={props.turn.userMessageId}
+                    hideProvenanceAttribution={props.hideUserProvenanceAttribution}
                     metadata={props.metadata}
                     forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
                     activeThinkingMessageId={resolveActiveThinkingMessageIdForTurnMessage(props.turn.userMessageId, props.activeThinkingMessageId)}

@@ -6,6 +6,8 @@ import type { SessionViewportAnchorSnapshot } from '@/sync/sync';
 import type { TranscriptListOrientation } from '@/components/sessions/transcript/listOrientation';
 import type { ChatTranscriptListItem } from '@/components/sessions/transcript/chatListTypes';
 import { buildTranscriptTurnUnits } from '@/components/sessions/transcript/turnGrouping/buildTranscriptTurnUnits';
+import { useQuietWorkflowTurnIds } from './useQuietWorkflowTurnIds';
+import { useTranscriptFindActive } from '../find/TranscriptFindContext';
 import { resolveTranscriptToolCallsCollapsedPreviewCount } from '@/sync/domains/settings/transcriptToolCallsCollapsedPreviewCount';
 import { shouldAutoExpandToolCallsGroupForShortTranscript } from '@/components/sessions/transcript/toolCalls/resolveToolCallsGroupAutoExpandPolicy';
 import {
@@ -75,6 +77,7 @@ export type TranscriptItemsPipelineDeps = Readonly<{
     groupingMode: string;
     isLoaded: boolean;
     items: ChatTranscriptListItem[];
+    jumpToSeq?: number | null;
     itemsRef: Ref<readonly ChatTranscriptListItem[]>;
     latestCommittedActivityKey: string | null;
     listDataRef: Ref<readonly ChatTranscriptListItem[]>;
@@ -121,6 +124,7 @@ export function useTranscriptItemsPipeline(deps: TranscriptItemsPipelineDeps) {
         isLoaded,
         items,
         itemsRef,
+        jumpToSeq,
         latestCommittedActivityKey,
         listDataRef,
         listOrientation,
@@ -167,6 +171,8 @@ export function useTranscriptItemsPipeline(deps: TranscriptItemsPipelineDeps) {
         return toolMessages;
     }, [getTurnMessageById]);
 
+    const findActive = useTranscriptFindActive();
+    const quietWorkflowTurnIds = useQuietWorkflowTurnIds(items, getTurnMessageById, { findActive, jumpToSeq });
     const decomposedItems = React.useMemo<ChatTranscriptListItem[]>(() => {
         return buildTranscriptTurnUnits({
             // Window gaps are projection output, never turn-decomposition input.
@@ -175,12 +181,14 @@ export function useTranscriptItemsPipeline(deps: TranscriptItemsPipelineDeps) {
             metadataByMessageId: forkMessageMetadataById ?? undefined,
             isGroupExpanded: (toolMessageIds) => toolMessageIds.some((id) => expandedToolCallsAnchorMessageIds.has(id)),
             collapsedPreviewCount: showToolCalls === false ? 0 : resolveTranscriptToolCallsCollapsedPreviewCount(transcriptToolCallsCollapsedPreviewCountSetting),
+            quietWorkflowTurnIds,
         });
     }, [
         expandedToolCallsAnchorMessageIds,
         forkMessageMetadataById,
         getTurnMessageById,
         items,
+        quietWorkflowTurnIds,
         transcriptToolCallsCollapsedPreviewCountSetting,
         showToolCalls,
     ]);

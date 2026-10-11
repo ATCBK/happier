@@ -88,6 +88,36 @@ function collapsedAlways(): boolean {
 }
 
 describe('buildTranscriptTurnUnits', () => {
+    it('keeps a workflow invocation and its reply together for row-local quiet-turn disclosure', () => {
+        const user = { ...userMessage('habit', 1, 1), meta: { happierProvenanceV1: {
+            v: 2, kind: 'workflow_invocation', runId: 'daily', invocationRecordId: 'summary',
+        } } };
+        const messagesById = indexMessages([user, toolMessage('habit-tool', 2, 2), agentMessage('reply', 3, 3)]);
+        const item = turnItem({ id: 'turn:habit', userMessageId: 'habit', content: [
+            { kind: 'tool_calls', id: 'habit-tools', toolMessageIds: ['habit-tool'] },
+            { kind: 'message', messageId: 'reply' },
+        ] });
+        const result = buildTranscriptTurnUnits({ items: [item], getMessageById: lookupIn(messagesById),
+            isGroupExpanded: expandedAlways, collapsedPreviewCount: 2, quietWorkflowTurnIds: new Set(['turn:habit']) });
+        expect(result).toEqual([item]);
+        expect(resolveTranscriptViewportAnchorIndex({ items: result,
+            anchor: { itemId: 'msg:reply', messageId: 'reply', seq: 3 } })).toBe(0);
+        expect(resolveTranscriptViewportAnchorIndex({ items: result,
+            anchor: { itemId: 'msg:habit-tool', messageId: 'habit-tool', seq: 2 } })).toBe(0);
+    });
+
+    it('keeps pending user actions outside folded turns in chronological order', () => {
+        const messagesById = indexMessages([userMessage('habit', 100), agentMessage('reply', 200), userMessage('next', 300)]);
+        const request = (id: string, createdAt: number): ChatListItem => ({ kind: 'pending-user-action', id,
+            request: { id, tool: 'AskUserQuestion', kind: 'user_action', arguments: { question: 'Continue?' }, createdAt }, createdAt });
+        const result = buildTranscriptTurnUnits({ items: [
+            turnItem({ id: 'turn:habit', userMessageId: 'habit', content: [{ kind: 'message', messageId: 'reply' }] }),
+            { kind: 'message', id: 'msg:next', messageId: 'next', createdAt: 300, seq: null }, request('early', 50), request('during', 150),
+        ], getMessageById: lookupIn(messagesById), isGroupExpanded: expandedAlways, collapsedPreviewCount: 0,
+            quietWorkflowTurnIds: new Set(['turn:habit']) });
+        expect(result.map((item) => item.id)).toEqual(['early', 'turn:habit', 'during', 'msg:next']);
+    });
+
     it('preserves tool row identities when filling a history gap splits their group', () => {
         const chronological: Message[] = [toolMessage('old-question', 1), agentMessage('gap-text', 2), toolMessage('recent-1', 3), toolMessage('recent-2', 4)];
         const messagesById = indexMessages(chronological);

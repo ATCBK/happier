@@ -4,6 +4,7 @@ import { insertForkDividersIntoTranscriptItems, type ForkDividerTranscriptItem }
 import { sync } from '@/sync/sync';
 import type { Message } from "@happier-dev/session-core/messages";
 import { buildTranscriptTurnsCached } from '@/components/sessions/transcript/turnGrouping/buildTranscriptTurns';
+import { groupWorkflowTranscriptTurns, readWorkflowTurnProvenance } from '@/components/sessions/transcript/turnGrouping/workflowTranscriptTurns';
 import type { ChatTranscriptListItem } from '@/components/sessions/transcript/chatListTypes';
 import type { ForkAwareMessageDescriptors } from '@/components/sessions/transcript/forkContext/buildForkAwareMessageDescriptors';
 import type { ForkedTranscriptSnapshot } from '@/sync/domains/sessionFork/forkedTranscriptSnapshot';
@@ -90,8 +91,9 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
         sessionId,
         derivedItemsCacheMaxSessions,
     );
+    const needsTurns = groupingMode === 'turns' || messageIdsOldestFirst.some((id) => readWorkflowTurnProvenance(messagesById[id]) !== null);
     const turnsCache = React.useMemo(() => {
-        if (groupingMode !== 'turns') return null;
+        if (!needsTurns) return null;
         return measureTranscriptDerivation('ui.sessions.transcript.derived.turns', () => ({
             cacheProvided: derivedItemsCacheEntry.turnsCache ? 1 : 0,
             forked: forkAwareMessageDescriptors ? 1 : 0,
@@ -116,7 +118,7 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
         discardedPendingMessages,
         forkAwareMessageDescriptors,
         groupToolCalls,
-        groupingMode,
+        needsTurns,
         messageIdsOldestFirst,
         messagesById,
         pendingMessages,
@@ -124,11 +126,11 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
     ]);
 
     React.useEffect(() => {
-        if (groupingMode !== 'turns' || !turnsCache) return;
+        if (!turnsCache) return;
         writeTranscriptDerivedItemsCacheEntry(sessionId, derivedItemsCacheMaxSessions, {
             turnsCache,
         });
-    }, [derivedItemsCacheMaxSessions, groupingMode, sessionId, turnsCache]);
+    }, [derivedItemsCacheMaxSessions, sessionId, turnsCache]);
 
     const linearCache = React.useMemo(() => {
         if (groupingMode === 'turns') return null;
@@ -186,7 +188,7 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
             pendingUserActionCount: pendingUserActionRequests.length,
         }), () => {
             if (groupingMode !== 'turns') {
-                const base = linearCache?.items ?? buildChatListItems({
+                const linearItems = linearCache?.items ?? buildChatListItems({
                     messageIdsOldestFirst,
                     messagesById,
                     pendingMessages,
@@ -194,6 +196,7 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
                     pendingUserActionRequests,
                     actionDrafts,
                 });
+                const base = turnsCache ? groupWorkflowTranscriptTurns(linearItems, turnsCache.turns, (id) => messagesById[id] ?? null) : linearItems;
                 const withForkDividers = !forkedTranscriptEnabled || !fork
                     ? base
                     : insertForkDividersIntoTranscriptItems({ items: base, fork, sourceWindowComplete: true });

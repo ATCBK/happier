@@ -57,6 +57,9 @@ import { t } from '@/text';
 import { presentExternalSessionOperationActionError } from '@/components/sessions/external/progress/externalSessionOperationActionErrorPresentation';
 import { PluginTranscriptActivityCard } from '@/components/sessions/transcript/PluginTranscriptActivityCard';
 import { matchesExternalSessionOperationPresentation } from '@/sync/runtime/external/externalSessionOperationPresentationIdentity';
+import { TurnViewWithSessionCommon } from '../turns/TurnView';
+import { QuietWorkflowTurn } from '../turns/QuietWorkflowTurn';
+import { collectMessageIdsFromTurn } from '../measurement/transcriptRowShellSignature';
 
 type Ref<T> = { current: T };
 
@@ -493,6 +496,40 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
                     />
                 </TranscriptEnterWrapper>
             ));
+        }
+        if (item.kind === 'turn') {
+            const messageIds = collectMessageIdsFromTurn(item.turn);
+            const messageRefs = messageIds.map((messageId) => ({
+                sessionId: forkMessageMetadataById?.[messageId]?.originSessionId ?? sessionId, messageId,
+            }));
+            return <TranscriptLiveMessagesRowShell item={item} messageRefs={messageRefs}
+                initialMessages={messageIds.flatMap((id) => { const message = getMessageById(id); return message ? [message] : []; })}
+                buildRowShellSignature={buildRowShellSignature} measurementReconciler={measurementReconciler}
+                onRowLayoutMutation={handleRowLayoutMutation} onRowMeasured={handleRowShellMeasured}>
+                {(messages) => {
+                    const userMessage = messages.find((message) => message.id === item.turn.userMessageId);
+                    if (!userMessage) return null;
+                    const liveMessagesById = new Map(messages.map((message) => [message.id, message]));
+                    const getLiveMessageById = (id: string) => liveMessagesById.get(id) ?? getMessageById(id);
+                    return <QuietWorkflowTurn turnId={item.id} userMessage={userMessage} messages={messages} serverId={sessionServerId}>
+                        <TurnViewWithSessionCommon turn={item.turn} sessionId={sessionId} metadata={metadata}
+                            hideUserProvenanceAttribution
+                            serverId={sessionServerId} activeThinkingMessageId={activeThinkingMessageId}
+                            getMessageById={getLiveMessageById} getMessageRevisionById={getMessageRevisionById}
+                            getMessageOrigin={(id) => { const origin = forkMessageMetadataById?.[id]; return origin ? {
+                                sessionId: origin.originSessionId, isReadOnlyContext: origin.isReadOnlyContext,
+                            } : null; }}
+                            approvalRequests={approvalRequests} expandedToolCallsAnchorMessageIds={expandedToolCallsAnchorMessageIds}
+                            setToolCallsGroupExpanded={setToolCallsGroupExpanded}
+                            resolveThinkingExpanded={resolveThinkingExpanded} setThinkingExpanded={setThinkingExpanded}
+                            interaction={transcriptInteraction} rollbackRanges={rollbackRanges}
+                            resolveRollbackAction={(id) => rollbackActionsByMessageId[id] ?? null}
+                            messagePins={messagePins} onToggleMessagePin={onToggleMessagePin}
+                            forkCommon={forkCommon} messageDisplayCommon={messageDisplayCommon}
+                            toolChromeCommon={toolChromeCommon} toolRouteCommon={toolRouteCommon} />
+                    </QuietWorkflowTurn>;
+                }}
+            </TranscriptLiveMessagesRowShell>;
         }
         if (item.kind === 'tool-calls-group') {
             const interaction = deriveReadOnlyTranscriptInteraction(transcriptInteraction, item.isReadOnlyContext === true);

@@ -69,7 +69,8 @@ export type TranscriptTurnUnitSourceItem =
     // Already-decomposed unit items pass through unchanged, so callers holding the
     // wider transcript row union (e.g. ChatList) can feed the builder without narrowing.
     | TranscriptToolGroupUnitItem;
-export type TranscriptTurnUnitListItem = Exclude<ChatListItem, { kind: 'tool-calls-group' }> | TranscriptToolGroupUnitItem;
+export type TranscriptTurnUnitListItem = Exclude<ChatListItem, { kind: 'tool-calls-group' }> | TranscriptToolGroupUnitItem
+    | Extract<TranscriptTurnUnitSourceItem, { kind: 'turn' }>;
 
 function readMessageMetadata(
     metadataByMessageId: Readonly<Record<string, ForkMessageMetadata>> | undefined,
@@ -202,11 +203,19 @@ function normalizeSyntheticItemCreatedAt(value: unknown): number | null {
 function findSyntheticUserActionInsertionIndex(
     items: readonly TranscriptTurnUnitListItem[],
     createdAt: number,
+    getMessageById: (messageId: string) => Message | null,
 ): number | null {
     let latestChronologicalIndex = -1;
 
     for (let index = 0; index < items.length; index += 1) {
         const item = items[index]!;
+        if (item.kind === 'turn') {
+            const turnCreatedAt = item.turn.userMessageId
+                ? normalizeSyntheticItemCreatedAt(getMessageById(item.turn.userMessageId)?.createdAt) : null;
+            if (turnCreatedAt !== null && turnCreatedAt > createdAt) return index;
+            if (turnCreatedAt !== null) latestChronologicalIndex = index;
+            continue;
+        }
         if (item.kind === 'pending-user-action') {
             const itemCreatedAt = normalizeSyntheticItemCreatedAt(item.createdAt);
             if (itemCreatedAt !== null && itemCreatedAt > createdAt) return index;
@@ -239,6 +248,7 @@ function findSyntheticUserActionInsertionIndex(
 
 function placeSyntheticUserActionItemsInChronologicalOrder(
     output: TranscriptTurnUnitListItem[],
+    getMessageById: (messageId: string) => Message | null,
 ): TranscriptTurnUnitListItem[] {
     const syntheticItems = output
         .map((item, sourceIndex) => ({ item, sourceIndex }))
@@ -258,7 +268,7 @@ function placeSyntheticUserActionItemsInChronologicalOrder(
     const items = output.filter((item) => !syntheticItemIds.has(item.id));
 
     for (const { item } of orderedSyntheticItems) {
-        const insertionIndex = findSyntheticUserActionInsertionIndex(items, item.createdAt);
+        const insertionIndex = findSyntheticUserActionInsertionIndex(items, item.createdAt, getMessageById);
         if (insertionIndex === null) {
             items.push(item);
         } else {
@@ -275,12 +285,18 @@ export function buildTranscriptTurnUnits(params: Readonly<{
     metadataByMessageId?: Readonly<Record<string, { originSessionId: string; isReadOnlyContext: boolean }>>;
     isGroupExpanded: (toolMessageIds: readonly string[]) => boolean;
     collapsedPreviewCount: number; // already-resolved K; <= 0 means no preview tail
+    /** Producer-observed suppressed notifications only; absent/unknown facts keep ordinary rows. */
+    quietWorkflowTurnIds?: ReadonlySet<string>;
 }>): TranscriptTurnUnitListItem[] {
     const collapsedPreviewCount = params.collapsedPreviewCount;
     const output: TranscriptTurnUnitListItem[] = [];
 
     for (const item of params.items) {
         if (item.kind === 'turn') {
+            if (params.quietWorkflowTurnIds?.has(item.id)) {
+                output.push(item);
+                continue;
+            }
             if (item.turn.userMessageId) {
                 output.push(buildMessageItem({
                     messageId: item.turn.userMessageId,
@@ -332,5 +348,5 @@ export function buildTranscriptTurnUnits(params: Readonly<{
         output.push(item);
     }
 
-    return placeSyntheticUserActionItemsInChronologicalOrder(output);
+    return placeSyntheticUserActionItemsInChronologicalOrder(output, params.getMessageById);
 }
