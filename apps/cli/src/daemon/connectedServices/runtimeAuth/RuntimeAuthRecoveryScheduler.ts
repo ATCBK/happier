@@ -1378,7 +1378,10 @@ export class RuntimeAuthRecoveryScheduler {
               },
               ...(this.providerOutcomePendingWaitMs === null
                 ? {}
-                : { nextRetryAtMs: deps.nowMs() + this.providerOutcomePendingWaitMs }),
+                : { nextRetryAtMs: awaitingContinuation && context.reason === 'manual'
+                  && intent.nextRetryAtMs !== null
+                  ? intent.nextRetryAtMs
+                  : deps.nowMs() + this.providerOutcomePendingWaitMs }),
             };
           }
           // Degraded daemon-lifecycle / endpoint-unavailable outcomes are non-terminal: keep the

@@ -158,8 +158,9 @@ describe('RuntimeAuthRecoveryScheduler', () => {
         classification: classificationFor({ groupId: null, resetsAtMs: 1000 }) });
       await scheduler.wake({ sessionId: 'proof-wait', reason: 'manual' });
       for (let count = 0; count < 4; count += 1) {
-        nowMs += 100;
+        nowMs += 20;
         await scheduler.wake({ sessionId: 'proof-wait', reason: 'manual' });
+        expect(scheduler.read('proof-wait')?.nextRetryAtMs).toBe(1100);
       }
       expect(scheduler.read('proof-wait')).toMatchObject({ status: 'resumed_awaiting_proof', attemptCount: 1 });
       for (let count = 0; count < 4; count += 1) {
