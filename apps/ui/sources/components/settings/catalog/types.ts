@@ -118,6 +118,11 @@ export type SettingsPageNode = Readonly<{
         pluginId: string;
         pageId: string;
     }>;
+    /**
+     * Reached from inside its parent's page (a collection's own add or setup row): found by settings search and
+     * owns its route, but the rail does not list it under its parent.
+     */
+    searchOnly?: boolean;
     children?: readonly SettingsPageNode[];
 }>;
 
@@ -134,6 +139,7 @@ export type ResolvedSettingsPageNode = Readonly<{
         pluginId: string;
         pageId: string;
     }>;
+    searchOnly?: boolean;
     children?: readonly ResolvedSettingsPageNode[];
 }>;
 

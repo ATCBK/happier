@@ -153,7 +153,9 @@ export const SettingsSidebar = React.memo(function SettingsSidebar() {
         level: number,
         options?: Readonly<{ expandable?: boolean }>,
     ): React.ReactNode => {
-        const childCount = node.children?.length ?? 0;
+        // A page's search-only children (its own add or setup rows) open from inside the page, not from here.
+        const navChildren = node.children?.filter((child) => !child.searchOnly) ?? [];
+        const childCount = navChildren.length;
         const isSectionHeader = childCount > 0 && !node.route;
 
         if (isSectionHeader) {
@@ -163,7 +165,7 @@ export const SettingsSidebar = React.memo(function SettingsSidebar() {
                         testID={`settings-sidebar.section.${node.id}`}
                         title={readSettingsPageTitle(node)}
                     />
-                    {node.children!.map((child) => renderTreeNode(child, level))}
+                    {navChildren.map((child) => renderTreeNode(child, level))}
                 </React.Fragment>
             );
         }
@@ -171,7 +173,9 @@ export const SettingsSidebar = React.memo(function SettingsSidebar() {
         const hasChildren = options?.expandable ?? childCount > 0;
         const expanded = expandedIds.has(node.id);
         const indentPx = RAIL_INDENT_STEP_PX * Math.max(0, level);
-        const selected = resolved.activePageId === node.id;
+        // On a search-only child's page, the page it opens from stays the selected row.
+        const selected = resolved.activePageId === node.id
+            || (node.children?.some((child) => child.searchOnly && child.id === resolved.activePageId) ?? false);
 
         const iconNode = node.icon ? node.icon({ theme }) : null;
 
@@ -236,7 +240,7 @@ export const SettingsSidebar = React.memo(function SettingsSidebar() {
                     }}
                 />
                 {hasChildren && expanded
-                    ? node.children!.map((child) => renderTreeNode(child, level + 1))
+                    ? navChildren.map((child) => renderTreeNode(child, level + 1))
                     : null}
             </React.Fragment>
         );

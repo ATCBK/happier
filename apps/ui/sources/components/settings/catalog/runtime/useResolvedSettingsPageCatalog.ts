@@ -82,6 +82,7 @@ function resolveTree(nodes: readonly SettingsPageNode[], ctx: CatalogVisibilityC
             keywords: node.keywordsKey ? splitSearchWords(String(t(node.keywordsKey))) : (node.keywords ?? []),
             icon: node.icon,
             pluginSettingsPage: node.pluginSettingsPage,
+            ...(node.searchOnly ? { searchOnly: true } : {}),
             ...(children && children.length > 0 ? { children } : {}),
         });
     }

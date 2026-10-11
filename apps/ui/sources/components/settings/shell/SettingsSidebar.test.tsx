@@ -335,10 +335,10 @@ describe('SettingsSidebar', () => {
         const { SettingsSidebar } = await import('./SettingsSidebar');
         const screen = await renderScreen(React.createElement(SettingsSidebar));
 
-        const row = screen.findByTestId('settings-sidebar.item.machines') as any;
+        const row = screen.findByTestId('settings-sidebar.item.account') as any;
         expect(row).toBeTruthy();
         const iconNamesBefore = row.findAllByType('Icon').map((node: any) => node.props?.name).filter(Boolean);
-        expect(iconNamesBefore).toContain('desktop');
+        expect(iconNamesBefore).toContain('user-circle');
         expect(iconNamesBefore).not.toContain('caret-down');
         expect(iconNamesBefore).not.toContain('caret-right');
 
@@ -346,11 +346,11 @@ describe('SettingsSidebar', () => {
             row.props.onHoverIn?.();
         });
 
-        const rowHovered = screen.findByTestId('settings-sidebar.item.machines') as any;
+        const rowHovered = screen.findByTestId('settings-sidebar.item.account') as any;
         expect(rowHovered).toBeTruthy();
         const iconNamesHovered = rowHovered.findAllByType('Icon').map((node: any) => node.props?.name).filter(Boolean);
-        expect(iconNamesHovered).toContain('desktop');
-        const disclosure = screen.findByTestId('settings-sidebar.toggle.machines');
+        expect(iconNamesHovered).toContain('user-circle');
+        const disclosure = screen.findByTestId('settings-sidebar.toggle.account');
         expect(disclosure?.props.accessibilityState).toMatchObject({ expanded: false });
         expect(disclosure?.findAll((node) => typeof node.type === 'string' && String(node.type) === 'Icon')
             .map((node) => node.props.name)).toContain('caret-right');
@@ -359,26 +359,49 @@ describe('SettingsSidebar', () => {
             rowHovered.props.onHoverOut?.();
         });
 
-        const rowAfter = screen.findByTestId('settings-sidebar.item.machines') as any;
+        const rowAfter = screen.findByTestId('settings-sidebar.item.account') as any;
         expect(rowAfter).toBeTruthy();
         const iconNamesAfter = rowAfter.findAllByType('Icon').map((node: any) => node.props?.name).filter(Boolean);
-        expect(iconNamesAfter).toContain('desktop');
+        expect(iconNamesAfter).toContain('user-circle');
     });
 
     it('allows expanding a routed parent item via its separate disclosure toggle', async () => {
         const { SettingsSidebar } = await import('./SettingsSidebar');
         const screen = await renderScreen(React.createElement(SettingsSidebar));
 
-        const machinesRow: any = screen.findByTestId('settings-sidebar.item.machines');
-        expect(machinesRow).toBeTruthy();
+        const accountRow: any = screen.findByTestId('settings-sidebar.item.account');
+        expect(accountRow).toBeTruthy();
 
         await act(async () => {
-            machinesRow.props.onHoverIn?.();
+            accountRow.props.onHoverIn?.();
         });
 
-        await screen.pressByTestIdAsync('settings-sidebar.toggle.machines');
+        await screen.pressByTestIdAsync('settings-sidebar.toggle.account');
         expect(routerNavigateSpy).not.toHaveBeenCalled();
-        expect(screen.findByTestId('settings-sidebar.item.machinesAdd')).toBeTruthy();
+        expect(screen.findByTestId('settings-sidebar.item.accountSecurity')).toBeTruthy();
+    });
+    it("keeps a collection's own add and setup pages out of the rail while search still finds them", async () => {
+        const { SettingsSidebar } = await import('./SettingsSidebar');
+        const screen = await renderScreen(React.createElement(SettingsSidebar));
+
+        // Machines adds from its own "+" menu: the rail row has no disclosure and lists no action rows.
+        expect(screen.findByTestId('settings-sidebar.item.machines')).toBeTruthy();
+        expect(screen.findByTestId('settings-sidebar.toggle.machines')).toBeFalsy();
+        expect(screen.findByTestId('settings-sidebar.item.machinesAdd')).toBeFalsy();
+
+        await act(async () => {
+            screen.changeTextByTestId('settings-sidebar.searchInput', 'ssh');
+        });
+        expect(screen.findByTestId('settings-sidebar.searchResult.machinesAdd')).toBeTruthy();
+    });
+
+    it('keeps the page selected while one of its search-only pages is open', async () => {
+        pathnameState.value = '/settings/machines/add';
+
+        const { SettingsSidebar } = await import('./SettingsSidebar');
+        const screen = await renderScreen(React.createElement(SettingsSidebar));
+
+        expect(resolveRowPressableStyle(screen, 'settings-sidebar.item.machines').backgroundColor).toBe(lightTheme.colors.surface.elevated);
     });
 });
 

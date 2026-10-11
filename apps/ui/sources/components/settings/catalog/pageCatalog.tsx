@@ -92,8 +92,10 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                         keywordsKey: 'settingsSearchKeywords.machines',
                         icon: ({ theme }) => <Icon name="desktop" size={16} color={theme.colors.text.secondary} />,
                         children: [
+                            // The collection's own add and setup rows (its "+" menu): searchable, not rail rows.
                             {
                                 id: 'machinePoolsNew',
+                                searchOnly: true,
                                 titleKey: 'machinePools.add',
                                 subtitleKey: 'machinePools.benefit',
                                 route: SETTINGS_ROUTES.machinePoolsNew,
@@ -102,6 +104,7 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                             },
                             {
                                 id: 'machinesAdd',
+                                searchOnly: true,
                                 titleKey: 'settings.addMachine',
                                 subtitleKey: 'settingsMachines.addPageDescription',
                                 route: SETTINGS_ROUTES.machinesAdd,
@@ -110,6 +113,7 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                             },
                             {
                                 id: 'machinesThisComputer',
+                                searchOnly: true,
                                 titleKey: 'settings.machineSetupCurrentMachineTitle',
                                 subtitleKey: 'settings.machineSetupCurrentMachineSubtitle',
                                 route: SETTINGS_ROUTES.machinesThisComputer,
