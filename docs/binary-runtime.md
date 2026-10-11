@@ -4,6 +4,17 @@ Happier ships binary installers. First-party runtime paths must work on machines
 
 ## Runtime contract
 
+In current development source, `scripts/pipeline/release/bun-standalone.entitlements.plist`
+owns the macOS hardened-runtime permissions for shipped Bun executables. Standalone
+signing consumes it directly. Desktop sidecar preparation derives
+`apps/ui/src-tauri/Entitlements.plist` from this policy plus the desktop's
+microphone permission; the committed projection also serves bundle-only
+finalization. Tauri applies that file when signing the app and external binaries,
+including `hsetup`.
+Signature validity and notarization alone do not prove startup: release validation
+must inspect the bundled helper's JIT entitlement and execute `hsetup --help` on
+the native target without disabling JIT.
+
 The daemon owns Plugin UI compilation and invokes the SDK's bundled esbuild
 implementation from the published workspace dependency closure. Shipped hosts
 do not spawn Vite, Re.Pack, Metro, Node, or a package manager to load a plugin.
