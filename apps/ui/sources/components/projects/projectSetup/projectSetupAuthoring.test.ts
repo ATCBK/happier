@@ -46,7 +46,7 @@ const [
     { listNewSessionDraftProjections },
     { readNewSessionDraftProjectionFromRepository, writeNewSessionDraftToRepository },
     { resolveCurrentProjectAuthoringReturn, readProjectSessionAuthoringOrigin },
-    { openProjectSetupAuthoring },
+    { openProjectSetupAuthoring, readProjectSetupAgentGuidance },
     { t },
     { useProjectSetupAuthoring, useProjectAuthoringReturn },
     { createDefaultActionExecutor },
@@ -114,7 +114,47 @@ afterEach(async () => {
     if (connection) { await connection.dispose(); connection = null; installHomeGovernanceBoundaries(homes); }
 });
 
+async function currentGuidance(workspace: Parameters<typeof readProjectSetupAgentGuidance>[0]['workspace']) {
+    const observed = await readProjectSetupAgentGuidance({ workspace });
+    if (observed.kind !== 'ready') throw new Error(`Guidance refused: ${observed.kind}`);
+    return observed.guidance;
+}
+
 describe('Project setup through ordinary authoring', () => {
+    it('keeps detection facts readable and qualified ids and hashes out of the editable prompt, with a seeded Session name', async () => {
+        const workspace = { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' };
+        const scope = { serverId, accountId: 'account-a' };
+        machineTransport.mockResolvedValue(ProjectDefinitionInspectOutputSchema.parse({
+            definition: { basis: { kind: 'absent' }, document: null },
+            detection: { entries: [
+                { source: { kind: 'native', tool: 'package_script', file: 'package.json', target: 'test' }, usage: 'script' },
+                { source: { kind: 'native', tool: 'compose', file: 'compose.yaml', target: 'web' }, usage: 'service' },
+            ], environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] }, importCandidates: [],
+        }));
+        const result = await openProjectSetupAuthoring({ workspace });
+        if (!result.ok) throw new Error(result.errorCode);
+        const opened = SessionAuthoringOpenResultV1Schema.parse(result.result);
+        if (opened.kind !== 'opened') throw new Error('Draft refused');
+        const draft = readNewSessionDraftProjectionFromRepository({ scope, draftId: opened.draftId })?.draft;
+        expect(draft?.input).toContain('package.json');
+        expect(draft?.input).toContain('compose.yaml');
+        expect.soft(draft?.input).toContain(t('projects.authoring.scriptsCount', { count: 1 }));
+        expect.soft(draft?.input).toContain(t('projects.authoring.servicesCount', { count: 1 }));
+        for (const value of ['serverId', 'workspaceId', '{', workspace.serverId, workspace.workspaceId, workspace.machineId]) {
+            expect.soft(draft?.input).not.toContain(value);
+        }
+        expect.soft(draft?.sessionName).toBe(t('projects.authoring.draftTitle', { project: 'repo' }));
+    });
+    it('returns the typed inspection failure without writing a draft or navigating', async () => {
+        const scope = { serverId, accountId: 'account-a' };
+        const before = listNewSessionDraftProjections(scope).length;
+        machineTransport.mockRejectedValue(new Error('inspection transport failed'));
+        expect(await openProjectSetupAuthoring({ workspace: {
+            serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo',
+        } })).toMatchObject({ ok: false, errorCode: 'action_failed' });
+        expect(listNewSessionDraftProjections(scope)).toHaveLength(before);
+        expect(navigation.push).not.toHaveBeenCalled();
+    });
     it.each(['account-a', 'other-account'])('reads the mounted Session return summary only for its original Home Account (%s)', async (accountId) => {
         const workspace = { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' };
         const source = { kind: 'native' as const, tool: 'package_script' as const, file: 'package.json', target: 'test' };
@@ -198,7 +238,8 @@ describe('Project setup through ordinary authoring', () => {
         if (opened.kind !== 'opened') throw new Error(`Draft refused: ${JSON.stringify(opened)}`);
         const draft = readNewSessionDraftProjectionFromRepository({ scope, draftId: opened.draftId })?.draft;
         if (!draft) throw new Error('Draft missing');
-        const facts: unknown = JSON.parse(draft.input.slice(draft.input.indexOf('\n\n{') + 2));
+        const facts = await currentGuidance(workspace);
+        expect(draft.input).not.toContain('{');
         expect(facts).toMatchObject({ advisory: true, sourceWorkspace: workspace,
             workerPreferences: { status: 'ready', preference: { destination, allowAdHoc: true, unavailable: 'ask' } },
             destination: { configured: destination, observation: { kind: 'resolved', poolId, machineId: 'worker-b' } },
@@ -286,10 +327,12 @@ describe('Project setup through ordinary authoring', () => {
         if (opened.kind !== 'opened') throw new Error(`Draft refused: ${opened.kind}`);
         const draft = readNewSessionDraftProjectionFromRepository({ scope, draftId: opened.draftId })?.draft;
         if (!draft) throw new Error('Draft missing');
-        // Observe the factual supplement at the real delivery owner, not a helper or a fake Session.
-        const start = draft.input.indexOf('\n\n{');
-        expect(start, 'Current worker facts must accompany the static setup request').toBeGreaterThanOrEqual(0);
-        const facts: unknown = JSON.parse(draft.input.slice(start + 2));
+        // Detailed advisory facts remain at the real read owner; the composer receives prose only.
+        const facts = await currentGuidance(workspace);
+        expect(draft.input).not.toContain('{');
+        expect(draft.input).toContain('package.json');
+        expect(draft.input).toContain('protoc');
+        expect(draft.input).not.toContain(preference.destination.machineId);
         if (statusMode === 'read_only') expect(facts).toEqual(readonlyGuidance);
         expect(facts).toMatchObject({
             advisory: true,
@@ -336,9 +379,9 @@ describe('Project setup through ordinary authoring', () => {
         if (opened.kind !== 'opened') throw new Error(`Draft refused: ${opened.kind}`);
         const draft = readNewSessionDraftProjectionFromRepository({ scope, draftId: opened.draftId })?.draft;
         if (!draft) throw new Error('Draft missing');
-        const start = draft.input.indexOf('\n\n{');
-        expect(start, 'Unavailable facts must not disappear from the setup request').toBeGreaterThanOrEqual(0);
-        const facts: unknown = JSON.parse(draft.input.slice(start + 2));
+        const facts = await currentGuidance(workspace);
+        expect(draft.input).not.toContain('{');
+        expect(draft.input).toContain(t('projectWorkers.policyUnavailable'));
         expect(facts).toMatchObject({ advisory: true, sourceWorkspace: workspace, workerPreferences: { status: 'invalid' }, destination: { status: 'invalid' },
             adHoc: { resolution: { status: 'refused', reason: 'preferences_unavailable' }, approval: 'configured_action_policy' } });
         expect(facts).not.toHaveProperty('workerPreferences.preference');
@@ -361,7 +404,8 @@ describe('Project setup through ordinary authoring', () => {
                 kind: 'project', accountId: 'account-a', workspace, page: 'scripts',
             } });
         if (!draft) throw new Error('Draft missing');
-        const facts: unknown = JSON.parse(draft.input.slice(draft.input.indexOf('\n\n{') + 2));
+        const facts = await currentGuidance(workspace);
+        expect(draft.input).not.toContain('{');
         expect(facts).toMatchObject({ workerPreferences: { status: 'ready', revision: 'absent', provenance: 'default',
             preference: { enabled: false, unavailable: 'ask', allowAdHoc: false, scriptOverrides: {} } },
             scripts: [], destination: null, adHoc: { resolution: { status: 'refused', reason: 'ad_hoc_disabled' } } });

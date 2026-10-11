@@ -4,6 +4,19 @@ import { describeProjectAuthoringOpenFailure } from './describeProjectAuthoringO
 
 describe('describeProjectAuthoringOpenFailure', () => {
     it.each([
+        ['unavailable', 'origin_unavailable', 'refused', 'choose_target'],
+        ['unavailable', 'client_unavailable', 'unavailable', 'open_client'],
+        ['unavailable', 'navigation_unavailable', 'unavailable', 'open_client'],
+        ['invalid', 'seed_empty', 'empty', 'choose_target'],
+        [undefined, 'machine_offline', 'offline', 'choose_target'],
+        [undefined, 'approval_required', 'pending', 'await_approval'],
+        [undefined, 'permission_denied', 'refused', 'choose_target'],
+    ] as const)('describes %s/%s at the actual opening boundary', (kind, reason, copy, recovery) => {
+        expect(describeProjectAuthoringOpenFailure(kind, reason)).toEqual({
+            titleKey: `projects.authoring.${copy}`, recovery,
+        });
+    });
+    it.each([
         ['stale', 'projects.authoring.stale', 'reopen'],
         ['offline', 'projects.authoring.offline', 'choose_target'],
         ['refused', 'projects.authoring.refused', 'choose_target'],

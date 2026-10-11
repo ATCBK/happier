@@ -10,6 +10,8 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { resolveCurrentProjectAuthoringReturn } from '@/components/projects/detail/projectRouteState';
 import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
+import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWorkspaceRefDisplayName';
+import { describeProjectEnvironment, joinProjectFiles } from './projectScriptPresentation';
 
 export type ProjectSetupAuthoringInput = Readonly<{
     workspace: WorkspaceAddressV1;
@@ -118,6 +120,35 @@ async function readProjectSetupAgentGuidanceCurrent(input: ProjectSetupAgentGuid
 export type ProjectSetupAgentGuidanceResult = Awaited<ReturnType<typeof readProjectSetupAgentGuidanceCurrent>>;
 export type ProjectSetupAgentGuidance = Extract<ProjectSetupAgentGuidanceResult, { kind: 'ready' }>['guidance'];
 
+/** The editable request contains a short observation, never the qualified inspection DTO. */
+function describeSetupAuthoringFacts(guidance: ProjectSetupAgentGuidance): string {
+    const entries = guidance.detection?.entries ?? [];
+    const scripts = entries.filter(entry => entry.usage === 'script');
+    const services = entries.filter(entry => entry.usage === 'service');
+    const scriptSources = scripts.length > 0 ? scripts.map(entry => entry.source) : (guidance.scripts ?? []).map(script => script.source);
+    const files = joinProjectFiles([...scriptSources, ...services.map(entry => entry.source)].map(source => source.file));
+    return [
+        [t('projects.authoring.scriptsCount', { count: scriptSources.length }),
+            t('projects.authoring.servicesCount', { count: services.length }),
+            ...(files ? [t('projects.scripts.foundIn', { files })] : [])].join(' · '),
+        ...(guidance.detection?.coverage === 'partial' ? [t('projects.scripts.definition.partial')] : []),
+        ...(guidance.detection?.environments ?? []).map(environment => {
+            const description = describeProjectEnvironment(environment);
+            return [description.title, description.config].filter(Boolean).join(' · ');
+        }),
+        ...(guidance.tools ?? []).map(tool => `${tool.tool}${tool.version ? ` ${tool.version}` : ''}: ${t(
+            tool.availability === 'available' ? 'projects.scripts.editor.toolAvailable'
+                : tool.availability === 'unavailable' ? 'projects.scripts.editor.toolUnavailable' : 'projects.scripts.editor.toolUnresolved',
+            { machine: t('projectWorkers.primary') })}`),
+        ...(guidance.scripts ?? []).map(script => `${script.name}: ${t(
+            script.execution === 'portable' ? 'projectWorkers.guideWorker' : 'projectWorkers.guidePrimary')}`),
+        ...('status' in guidance.workerPreferences && guidance.workerPreferences.status === 'ready'
+            ? [[t('projectWorkers.guideOther'), t(guidance.adHoc.resolution.status === 'resolved'
+                ? 'projectWorkers.guideAdHocOn' : 'projectWorkers.guideAdHocOff')].join(' ')]
+            : [t('projectWorkers.policyUnavailable')]),
+    ].join('\n');
+}
+
 /** GUIDE disclosure and ordinary authoring consume this same read-only factual owner. */
 export async function readProjectSetupAgentGuidance(input: ProjectSetupAgentGuidanceInput): Promise<ProjectSetupAgentGuidanceResult> {
     return await readProjectSetupAgentGuidanceCurrent(input);
@@ -135,14 +166,17 @@ export async function openProjectSetupAuthoring(input: ProjectSetupAuthoringInpu
     try {
         const observed = await readProjectSetupAgentGuidance(input);
         if (observed.kind !== 'ready') return { ok: true, result: observed };
+        if ('ok' in observed.guidance.definition && !observed.guidance.definition.ok) return observed.guidance.definition;
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         if (input.signal?.aborted) return { ok: true, result: { kind: 'unavailable', reason: 'aborted' } };
         if (!lifetime.isCurrent()) return { ok: true, result: { kind: 'stale', reason: 'host_retired' } };
-        if (resolveCurrentProjectAuthoringReturn(origin).kind !== 'ready') {
+        const destination = resolveCurrentProjectAuthoringReturn(origin);
+        if (destination.kind !== 'ready') {
             return { ok: true, result: { kind: 'unavailable', reason: 'origin_unavailable' } };
         }
         const request: SessionAuthoringOpenV1 = { seed: {
-            prompt: `${t('projects.authoring.prompt')}\n\n${JSON.stringify(observed.guidance)}`,
+            sessionName: t('projects.authoring.draftTitle', { project: resolveWorkspaceRefDisplayName(destination.workspaceRef) }),
+            prompt: `${t('projects.authoring.prompt')}\n\n${describeSetupAuthoringFacts(observed.guidance)}`,
             placement: { kind: 'exactTarget', serverId: input.workspace.serverId,
                 machineId: input.workspace.machineId, directory: input.workspace.rootPath },
             origin,
