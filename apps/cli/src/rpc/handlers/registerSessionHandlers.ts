@@ -133,6 +133,7 @@ export function registerSessionHandlers(
         sessionId?: string | null;
         getSessionMetadata?: () => Metadata | null;
         isUsageLimitRecoveryEnabled?: (() => Promise<boolean> | boolean) | null;
+        checkRuntimeAuthUsageLimitRecovery?: import('@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl').CheckRuntimeAuthUsageLimitRecovery | null;
         notifyUsageLimitWaitResumeCancelled?: ((request: Readonly<{
             sessionId: string;
             attemptId: string;
@@ -256,6 +257,7 @@ export function registerSessionHandlers(
     registerSessionControlHandlers(authorizedSessionRpcHandlerManager, {
         getSessionMetadata: opts?.getSessionMetadata ?? null,
         isUsageLimitRecoveryEnabled: opts?.isUsageLimitRecoveryEnabled ?? null,
+        checkRuntimeAuthUsageLimitRecovery: opts?.checkRuntimeAuthUsageLimitRecovery ?? null,
         sessionRuntimeControls: opts?.sessionRuntimeControls ?? null,
         notifyUsageLimitWaitResumeCancelled: opts?.notifyUsageLimitWaitResumeCancelled ?? null,
     });

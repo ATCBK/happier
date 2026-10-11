@@ -2083,6 +2083,13 @@ export function createDaemonControlApp({
       };
     }
     classification = applyAuthorizedRuntimeAuthFailureSourceBinding(classification, sourceAuthorization);
+    const recoveryKey = {
+      sessionId,
+      serviceId: classification.serviceId,
+      profileId: classification.profileId ?? null,
+      groupId: classification.groupId ?? null,
+      failingAccessTokenFingerprint: classification.failingAccessTokenFingerprint ?? null,
+    };
     const intake = await beginRuntimeAuthRecoveryIntake({
       ...(request.body.reportId ? { reportId: request.body.reportId } : {}),
       runtimeAuthRecoveryScheduler,
@@ -2167,10 +2174,7 @@ export function createDaemonControlApp({
         }
       }
       await runtimeAuthRecoveryScheduler?.settleResultByKey?.({
-        sessionId,
-        serviceId: classification.serviceId,
-        profileId: classification.profileId ?? null,
-        groupId: classification.groupId ?? null,
+        ...recoveryKey,
         ...(recoveryAttemptId ? { expectedAttemptId: recoveryAttemptId } : {}),
         result,
         classificationFailureKind: classification.kind,
@@ -2183,10 +2187,7 @@ export function createDaemonControlApp({
       });
       if (isLocallyCompleteWithoutProof(result)) {
         await runtimeAuthRecoveryScheduler?.markAwaitingProviderOutcomeProofByKey?.({
-          sessionId,
-          serviceId: classification.serviceId,
-          profileId: classification.profileId ?? null,
-          groupId: classification.groupId ?? null,
+          ...recoveryKey,
           ...(recoveryAttemptId ? { expectedAttemptId: recoveryAttemptId } : {}),
           result,
         }).catch((error) => {

@@ -49,7 +49,7 @@ export type DurableRecoveryGateResult =
 type TimerHandle = ReturnType<typeof setTimeout>;
 
 type DurableWakePreparation<TIntent> =
-  | Readonly<{ status: 'inactive' }>
+  | Readonly<{ status: 'inactive'; intent?: TIntent }>
   | Readonly<{ status: 'cancelled' }>
   | Readonly<{ status: 'already_exhausted' }>
   | Readonly<{ status: 'checking' }>
@@ -207,13 +207,15 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
 
   async transact<TResult>(input: Readonly<{
     sessionId: string;
-    transaction: (current: TIntent | null) => Readonly<{ intent: TIntent | null; result: TResult }>;
+    transaction: (current: TIntent | null, context: Readonly<{ unclaimed: boolean }>) => Readonly<{ intent: TIntent | null; result: TResult }>;
     schedule?: boolean;
   }>): Promise<TResult> {
     let nextIntent: TIntent | null = null;
     let changed = true;
-    const run = (current: TIntent | null) => {
-      const next = input.transaction(current);
+    const run = (current: TIntent | null, effectClaimToken: string | null = null) => {
+      const next = input.transaction(current, {
+        unclaimed: effectClaimToken === null && !this.#wakePromisesBySessionId.has(input.sessionId),
+      });
       nextIntent = next.intent;
       changed = next.intent !== current;
       return next;
@@ -231,7 +233,7 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
       return next.result;
     }
     const result = await this.#store.transact(input.sessionId, (current) => {
-      const next = run(current.intent);
+      const next = run(current.intent, current.effectClaimToken);
       return {
         ...next,
         effectClaimToken: current.effectClaimToken,
@@ -426,8 +428,12 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
     this.#clearTimer(key);
   }
 
-  async wake(input: Readonly<{ sessionId: string; reason: string }>): Promise<Readonly<{ status: string }>> {
+  async wake(input: Readonly<{ sessionId: string; reason: string; expectedCurrent?: (intent: TIntent) => boolean }>): Promise<Readonly<{ status: string }>> {
     if (this.#disposed) return { status: 'disposed' };
+    if (input.expectedCurrent) {
+      const current = this.read(input.sessionId);
+      if (!current || !input.expectedCurrent(current)) return { status: 'inactive' };
+    }
     const existingWake = this.#wakePromisesBySessionId.get(input.sessionId);
     if (existingWake) return await existingWake;
     const wakePromise = this.#performWake(input);
@@ -441,7 +447,7 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
     }
   }
 
-  async #performWake(input: Readonly<{ sessionId: string; reason: string }>): Promise<Readonly<{ status: string }>> {
+  async #performWake(input: Readonly<{ sessionId: string; reason: string; expectedCurrent?: (intent: TIntent) => boolean }>): Promise<Readonly<{ status: string }>> {
     const current = this.read(input.sessionId);
     if (!current || this.#getStatus(current) === 'cancelled') return { status: 'inactive' };
     if (this.#getStatus(current) === 'exhausted') return { status: 'exhausted' };
@@ -465,6 +471,13 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
             intent: null,
             effectClaimToken: null,
             result: { status: 'inactive' as const },
+          };
+        }
+        if (input.expectedCurrent && !input.expectedCurrent(durableIntent)) {
+          return {
+            intent: durableIntent,
+            effectClaimToken: stored.effectClaimToken,
+            result: { status: 'inactive' as const, intent: durableIntent },
           };
         }
         const durableStatus = this.#getStatus(durableIntent);
@@ -533,8 +546,14 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
 
     if (durablePreparation) {
       if (durablePreparation.status === 'inactive' || durablePreparation.status === 'cancelled') {
-        this.#intentsBySessionId.delete(input.sessionId);
-        this.#clearTimer(input.sessionId);
+        if (durablePreparation.status === 'inactive' && durablePreparation.intent !== undefined) {
+          this.#intentVersionsBySessionId.set(input.sessionId, (this.#intentVersionsBySessionId.get(input.sessionId) ?? 0) + 1);
+          this.#intentsBySessionId.set(input.sessionId, durablePreparation.intent);
+          this.#schedule(input.sessionId, durablePreparation.intent);
+        } else {
+          this.#intentsBySessionId.delete(input.sessionId);
+          this.#clearTimer(input.sessionId);
+        }
         return { status: 'inactive' };
       }
       if (durablePreparation.status === 'already_exhausted') {

@@ -42,9 +42,11 @@ const invocationId =
   process.env.HAPPIER_E2E_FAKE_CLAUDE_INVOCATION_ID ||
   process.env.HAPPY_E2E_FAKE_CLAUDE_INVOCATION_ID ||
   `fake-claude-${randomUUID()}`;
+const resumeSessionId = findArgValue(argv, '--resume');
 const sessionId =
   process.env.HAPPIER_E2E_FAKE_CLAUDE_SESSION_ID ||
   process.env.HAPPY_E2E_FAKE_CLAUDE_SESSION_ID ||
+  (typeof resumeSessionId === 'string' && resumeSessionId.trim() ? resumeSessionId : null) ||
   `fake-claude-session-${randomUUID()}`;
 const processNonce = randomUUID();
 const logPath = process.env.HAPPIER_E2E_FAKE_CLAUDE_LOG || process.env.HAPPY_E2E_FAKE_CLAUDE_LOG || '';
@@ -453,6 +455,35 @@ async function runSdkStreamUntilEof() {
 
     const now = Date.now();
     turn += 1;
+
+    // Fake only Claude's SDK transport: the real daemon owns recovery and Pending.
+    if (scenario === 'usage-limit-once') {
+      const previousEvents = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
+      if (!previousEvents.includes('"type":"sdk_usage_limit"')) {
+        const resetAtMs = now + Number(process.env.HAPPIER_E2E_FAKE_CLAUDE_RESET_DELAY_MS || '8000');
+        safeAppendJsonl(logPath, { type: 'sdk_usage_limit', invocationId, sessionId, resetAtMs, ts: now });
+        emitSdk({
+          type: 'rate_limit_event',
+          rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: resetAtMs / 1000, utilization: 1 },
+          uuid: randomUUID(),
+          session_id: sessionId,
+        });
+        emitSdk({ ...createResultSuccess(), subtype: 'error_during_execution', is_error: true, errors: ['Usage limit reached'], result: 'Usage limit reached' });
+        continue;
+      }
+      const acceptSignal = process.env.HAPPIER_E2E_FAKE_CLAUDE_CONTINUATION_ACCEPT_SIGNAL;
+      const acceptTimeoutMs = Number(process.env.HAPPIER_E2E_FAKE_CLAUDE_CONTINUATION_ACCEPT_TIMEOUT_MS);
+      if (acceptSignal && (!Number.isFinite(acceptTimeoutMs) || acceptTimeoutMs <= 0)) {
+        throw new Error('continuation_accept_signal_timeout_not_configured');
+      }
+      const acceptDeadline = Date.now() + acceptTimeoutMs;
+      while (acceptSignal && !fs.existsSync(acceptSignal)) {
+        const remainingMs = acceptDeadline - Date.now();
+        if (remainingMs <= 0) throw new Error('continuation_accept_signal_timeout');
+        await new Promise((resolveWait) => setTimeout(resolveWait, Math.min(20, remainingMs)));
+      }
+      safeAppendJsonl(logPath, { type: 'sdk_continuation_accepted', invocationId, sessionId, ts: Date.now() });
+    }
 
     if (scenario === 'memory-hints-json') {
       const match = String(promptText).match(/OPENCLAW_MEMORY_SENTINEL_[A-Za-z0-9_-]+/);

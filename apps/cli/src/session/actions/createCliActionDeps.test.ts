@@ -4978,22 +4978,29 @@ describe('createCliActionDeps hook dispatch', () => {
     }));
   });
 
-  it('delegates inactive usage-limit check-now through daemon RPC when enabled', async () => {
+  it.each([false, true])('delegates inactive or daemon-owned active usage-limit check-now through daemon RPC when active=%s', async (active) => {
+    const realApprovals = await vi.importActual<typeof import('@/session/actions/approvals/artifactStore')>('@/session/actions/approvals/artifactStore');
+    createCliApprovalsArtifactStore.mockImplementation(realApprovals.createCliApprovalsArtifactStore);
     callMachineRpc.mockResolvedValueOnce({ ok: true, status: 'ready', sessionId: 'sess-remote' });
     resolveSessionTransportContext.mockResolvedValue({
       ok: true,
       sessionId: 'sess-remote',
       rawSession: {
         id: 'sess-remote',
-        active: false,
+        active,
+        encryptionMode: 'plain',
         path: '/repo',
         machineId: 'target-machine',
-        metadata: { machineId: 'target-machine' },
+        metadata: JSON.stringify({ machineId: 'target-machine', ...(active ? { sessionUsageLimitRecoveryV1: {
+          v: 1, status: 'waiting', resumePromptMode: 'standard',
+          issueFingerprint: 'usage-limit:manual-check', armedAtMs: 1_000,
+          resetAtMs: 5_000, nextCheckAtMs: 5_000, attemptCount: 0, maxAttempts: 3,
+          lastProbeError: null, selectedAuth: { kind: 'native' },
+          runtimeAuthRecoveryAttemptId: 'runtime-auth-attempt:manual-check',
+        } } : {}) }),
       },
-      ctx: {
-        encryptionKey: new Uint8Array([1, 2, 3, 4]),
-        encryptionVariant: 'legacy',
-      },
+      accountEncryptionCurrentness: { mode: 'plain' },
+      ctx: null,
       mode: 'plain',
     });
 
@@ -5018,6 +5025,7 @@ describe('createCliActionDeps hook dispatch', () => {
     await expect(deps.sessionUsageLimitCheckNow?.({
       sessionId: 'sess-remote',
       agentId: ' codex ',
+      resumePromptMode: 'off',
     })).resolves.toEqual({ ok: true, status: 'ready', sessionId: 'sess-remote' });
 
     expect(callSessionRpc).not.toHaveBeenCalled();
@@ -5025,7 +5033,7 @@ describe('createCliActionDeps hook dispatch', () => {
       credentials: expect.objectContaining({ token: 'token' }),
       machineId: 'target-machine',
       method: RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW,
-      request: { sessionId: 'sess-remote', agentId: 'codex' },
+      request: { sessionId: 'sess-remote', agentId: 'codex', resumePromptMode: 'off' },
     });
     expect(routeSessionUsageLimitRecoveryCheckNow).not.toHaveBeenCalled();
   });

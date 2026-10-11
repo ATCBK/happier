@@ -27,13 +27,21 @@ import { join, resolve } from 'node:path';
 import {
   BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID,
   buildConnectedServiceCredentialRecord,
+  ConnectedAccountServiceKeyIngressSchema,
+  ConnectedServiceCredentialRevisionV1Schema,
   encodeQualifiedConnectedAccountV4StructuredQueryValue,
   QualifiedConnectedAccountGroupRefSchema,
   QualifiedConnectedAccountGroupResponseV4Schema,
+  QualifiedConnectedAccountRefSchema,
+  QualifiedConnectedAccountCredentialMutationV4Schema,
+  QualifiedConnectedAccountCredentialMutationSuccessV4Schema,
+  QualifiedConnectedAccountCredentialSnapshotV4Schema,
+  QualifiedConnectedAccountCredentialPayloadV1Schema,
   type QualifiedConnectedAccountGroupRef,
   type QualifiedConnectedAccountGroupV4,
   type QualifiedConnectedAccountServiceRef,
   sealAccountScopedBlobCiphertext,
+  sealQualifiedConnectedAccountContentEnvelope,
   type ConnectedServiceId,
 } from '@happier-dev/protocol';
 
@@ -382,10 +390,60 @@ export async function createConnectedServiceProfile(params: Readonly<{
   tokenType?: string | null;
   providerAccountId?: string;
   expiresAt?: number;
-}>): Promise<void> {
+  // Existing compatibility suites still seed V2; current daemon flows must opt into V4.
+  qualifiedCredential?: true;
+  expectedQualifiedCredentialRevision?: string;
+}>): Promise<string | undefined> {
   const now = Date.now();
   const providerAccountId = params.providerAccountId ?? `acct-${params.profileId}`;
   const expiresAt = params.expiresAt ?? now + 60 * 60_000;
+  if (params.qualifiedCredential) {
+    const ref = QualifiedConnectedAccountRefSchema.parse({
+      service: resolveQualifiedConnectedAccountServiceForLegacyServiceId(params.serviceId),
+      accountId: params.profileId,
+    });
+    const payload = QualifiedConnectedAccountCredentialPayloadV1Schema.parse({
+      v: 1,
+      values: {
+        accessToken: params.accessToken ?? `access-${params.profileId}`,
+        refreshToken: params.refreshToken ?? `refresh-${params.profileId}`,
+        ...(params.idToken === null ? {} : { idToken: params.idToken ?? `id-${params.profileId}` }),
+        ...(params.scope ? { scopes: params.scope } : {}),
+        ...(params.tokenType ? { tokenType: params.tokenType } : {}),
+        providerAccountId,
+        providerEmail: params.providerEmail,
+        expiresAtMs: String(expiresAt),
+      },
+    });
+    const content = sealQualifiedConnectedAccountContentEnvelope({
+      kind: 'credential', accountMode: 'e2ee',
+      material: params.fixture.machineKey
+        ? { type: 'dataKey', machineKey: params.fixture.machineKey }
+        : { type: 'legacy', secret: params.fixture.accountSecret },
+      payload,
+      randomBytes: (length) => randomBytes(length),
+    });
+    const mutation = QualifiedConnectedAccountCredentialMutationV4Schema.parse({
+      ref, authenticationModeId: 'oauth', content,
+      ...(params.expectedQualifiedCredentialRevision
+        ? { expectedCredentialRevision: ConnectedServiceCredentialRevisionV1Schema.parse(params.expectedQualifiedCredentialRevision), expectedConfigurationRevision: null }
+        : { expectedCredentialRevision: null }),
+      metadata: {
+        scopes: [...new Set(params.scope?.split(/\s+/).filter(Boolean) ?? [])],
+        providerIdentity: { accountId: providerAccountId, email: params.providerEmail },
+      },
+    });
+    const response = await fetchJson<unknown>(`${params.fixture.serverBaseUrl}/v4/connect/qualified/credential`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${params.fixture.auth.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(mutation), timeoutMs: 20_000,
+    });
+    const created = QualifiedConnectedAccountCredentialMutationSuccessV4Schema.safeParse(response.data);
+    if (response.status !== 200 || !created.success) {
+      throw new Error(`Failed to seed qualified connected account ${params.profileId} (status=${response.status}, data=${JSON.stringify(response.data)})`);
+    }
+    return created.data.credentialRevision;
+  }
   const record = buildConnectedServiceCredentialRecord({
     now,
     serviceId: params.serviceId,
@@ -435,6 +493,22 @@ export async function createConnectedServiceProfile(params: Readonly<{
   if (response.status !== 200 || response.data?.success !== true) {
     throw new Error(`Failed to seed connected service profile ${params.profileId} (status=${response.status})`);
   }
+}
+
+export async function readQualifiedConnectedServiceCredential(params: Readonly<{
+  fixture: ConnectedServiceCredentialFixture;
+  serviceId: ConnectedServiceId;
+  profileId: string;
+}>) {
+  const ref = QualifiedConnectedAccountRefSchema.parse({
+    service: resolveQualifiedConnectedAccountServiceForLegacyServiceId(params.serviceId), accountId: params.profileId,
+  });
+  const query = new URLSearchParams({ ref: encodeQualifiedConnectedAccountV4StructuredQueryValue(QualifiedConnectedAccountRefSchema, ref) });
+  const response = await fetchJson<unknown>(`${params.fixture.serverBaseUrl}/v4/connect/qualified/credential?${query}`, {
+    headers: { Authorization: `Bearer ${params.fixture.auth.token}` }, timeoutMs: 20_000,
+  });
+  if (response.status !== 200) throw new Error(`Failed to read qualified fixture credential (status=${response.status})`);
+  return QualifiedConnectedAccountCredentialSnapshotV4Schema.parse(response.data);
 }
 
 export async function createQualifiedConnectedAccountGroup(params: Readonly<{
@@ -597,7 +671,7 @@ export async function patchQualifiedConnectedAccountGroupMemberExhaustion(params
   });
 }
 
-function recoveryIntentPath(fixture: Pick<StartedConnectedServicesCodexDaemonFixture, 'daemonHomeDir' | 'serverId'>): string {
+export function recoveryIntentPath(fixture: Pick<StartedConnectedServicesCodexDaemonFixture, 'daemonHomeDir' | 'serverId'>): string {
   return resolve(
     join(
       fixture.daemonHomeDir,
@@ -629,7 +703,9 @@ export async function readRuntimeAuthRecoveryIntent(params: Readonly<{
   const matches = (intent: UnknownRecord | null): boolean => {
     if (!intent) return false;
     if (intent.sessionId !== params.sessionId) return false;
-    if (intent.serviceId !== params.serviceId) return false;
+    const actualService = ConnectedAccountServiceKeyIngressSchema.safeParse(intent.serviceId);
+    const expectedService = ConnectedAccountServiceKeyIngressSchema.safeParse(params.serviceId);
+    if (!actualService.success || !expectedService.success || actualService.data !== expectedService.data) return false;
     if ((intent.profileId ?? null) !== params.profileId) return false;
     if ((intent.groupId ?? null) !== params.groupId) return false;
     return true;
@@ -673,6 +749,8 @@ export async function startConnectedServicesClaudeDaemon(params: Readonly<{
   fakeClaudePath: string;
   fakeClaudeLogPath: string;
   fakeClaudeScenario?: string;
+  accountSettings?: Record<string, unknown>;
+  serverExtraEnv?: Record<string, string>;
   extraEnv?: Record<string, string>;
 }>): Promise<StartedConnectedServicesClaudeDaemonFixture> {
   const startedAt = new Date().toISOString();
@@ -682,6 +760,7 @@ export async function startConnectedServicesClaudeDaemon(params: Readonly<{
     extraEnv: {
       HAPPIER_FEATURE_CONNECTED_SERVICES_ACCOUNT_GROUPS__ENABLED: '1',
       HAPPIER_FEATURE_CONNECTED_SERVICES_ACCOUNT_FALLBACK__ENABLED: '1',
+      ...(params.serverExtraEnv ?? {}),
     },
   });
   const auth = await createTestAuth(server.baseUrl);
@@ -707,6 +786,7 @@ export async function startConnectedServicesClaudeDaemon(params: Readonly<{
       claudeUnifiedTerminalHost: 'auto',
       claudeRemoteAgentSdkEnabled: true,
       claudeRemoteSettingSourcesV2: ['user', 'project', 'local'],
+      ...(params.accountSettings ?? {}),
     },
   });
 
@@ -800,6 +880,17 @@ export async function spawnConnectedClaudeGroupSession(params: Readonly<{
   profileId: string;
   initialPrompt?: string;
 }>): Promise<string> {
+  return await spawnConnectedClaudeSession(params);
+}
+
+export async function spawnConnectedClaudeSession(params: Readonly<{
+  fixture: StartedConnectedServicesClaudeDaemonFixture;
+  sessionId: string;
+  groupId?: string;
+  profileId: string;
+  initialPrompt?: string;
+}>): Promise<string> {
+  const serviceKey = ConnectedAccountServiceKeyIngressSchema.parse(CLAUDE_SUBSCRIPTION_SERVICE_ID);
   const response = await daemonControlPostJson<{ success?: boolean; sessionId?: unknown; error?: string }>({
     port: params.fixture.daemonPort,
     path: '/spawn-session',
@@ -825,12 +916,11 @@ export async function spawnConnectedClaudeGroupSession(params: Readonly<{
           : {}),
       },
       connectedServices: {
-        v: 1,
+        v: 2,
         bindingsByServiceId: {
-          [CLAUDE_SUBSCRIPTION_SERVICE_ID]: {
+          [serviceKey]: {
             source: 'connected',
-            selection: 'group',
-            groupId: params.groupId,
+            ...(params.groupId ? { selection: 'group', groupId: params.groupId } : { selection: 'profile' }),
             profileId: params.profileId,
           },
         },

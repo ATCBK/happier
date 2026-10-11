@@ -204,6 +204,7 @@ export function createDaemonMachineBootstrapRuntime(
     directTransferPromptRegistryRegistry: BootstrapRuntime['directTransferPromptRegistryRegistry'];
     daemonServerWorkScheduler: BootstrapRuntime['daemonServerWorkScheduler'];
     cancelConnectedServiceRuntimeAuthRecovery?: BootstrapRuntime['cancelConnectedServiceRuntimeAuthRecovery'];
+    checkRuntimeAuthUsageLimitRecovery?: BootstrapRuntime['checkRuntimeAuthUsageLimitRecovery'];
     retryTemporaryThrottleNow?: BootstrapRuntime['retryTemporaryThrottleNow'];
     readTemporaryThrottleRecovery?: BootstrapRuntime['readTemporaryThrottleRecovery'];
     cancelTemporaryThrottleRecovery?: BootstrapRuntime['cancelTemporaryThrottleRecovery'];
@@ -632,6 +633,9 @@ export function createDaemonMachineBootstrapRuntime(
     directTransferPromptRegistryRegistry: params.directTransferPromptRegistryRegistry,
     ...(params.cancelConnectedServiceRuntimeAuthRecovery
       ? { cancelConnectedServiceRuntimeAuthRecovery: params.cancelConnectedServiceRuntimeAuthRecovery }
+      : {}),
+    ...(params.checkRuntimeAuthUsageLimitRecovery
+      ? { checkRuntimeAuthUsageLimitRecovery: params.checkRuntimeAuthUsageLimitRecovery }
       : {}),
     ...(params.retryTemporaryThrottleNow
       ? { retryTemporaryThrottleNow: params.retryTemporaryThrottleNow }

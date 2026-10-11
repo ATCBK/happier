@@ -166,7 +166,7 @@ export type RuntimeAuthRecoverySchedulerLike = Readonly<{
   }>): Promise<RuntimeAuthRecoveryScheduleResult>;
   read(sessionId: string): RuntimeAuthRecoveryIntent | null;
   readForSession(sessionId: string): ReadonlyArray<RuntimeAuthRecoveryIntent>;
-  wake(input: Readonly<{ sessionId: string; reason: 'timer' | 'manual' }>): Promise<Readonly<{ status: string }>>;
+  wake(input: Readonly<{ sessionId: string; reason: 'timer' | 'manual'; attemptId?: string; resumePromptMode?: 'standard' | 'off' | 'custom' }>): Promise<Readonly<{ status: string }>>;
   cancel(input: Readonly<{ sessionId: string }>): Promise<RuntimeAuthRecoveryIntent | null>;
   cancelExact(input: Readonly<{ sessionId: string; attemptId: string }>): Promise<ReadonlyArray<RuntimeAuthRecoveryIntent>>;
   cancelByKey(input: RuntimeAuthRecoveryKeyParts): Promise<RuntimeAuthRecoveryIntent | null>;
@@ -749,11 +749,13 @@ function matchesRuntimeAuthRecoveryIdentity(
   const hasPendingTarget = pendingTargetProfileId !== null
     || pendingTargetGeneration !== null
     || pendingTargetCredentialRevision !== null;
+  const profileContinuationTarget = intent.groupId === null
+    && intent.lastError === 'usage_limit_continuation_awaiting_provider_outcome';
   // Once recovery selects a target, proof must describe that complete target tuple.
   // Older records missing any tuple member stay pending until it is reconstructed.
   if (hasPendingTarget && (
     pendingTargetProfileId === null
-    || pendingTargetGeneration === null
+    || (!profileContinuationTarget && pendingTargetGeneration === null)
     || pendingTargetCredentialRevision === null
   )) return false;
   const failedCredentialRevision = intent.classification.expectedCredentialRevision ?? null;
@@ -1025,6 +1027,7 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
       resumePromptMode: 'standard' | 'off' | 'custom';
       recoveryInvocationSource: 'scheduler_retry';
     }>) => Promise<unknown>;
+    continueAfterUsageLimitReset?: (intent: RuntimeAuthRecoveryIntent) => Promise<unknown>;
     gate?: (input: { sessionId: string; intent: RuntimeAuthRecoveryIntent }) =>
       | Readonly<{ status: 'open' }>
       | Readonly<{ status: 'delayed'; retryAtMs: number; reason: string }>;
@@ -1092,7 +1095,6 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
         terminalReason: next.lastError,
       }),
       recover: async (intent, context) => {
-        void context;
         this.#emit({
           event: 'runtime_auth_recovery_retry',
           sessionId: intent.sessionId,
@@ -1105,15 +1107,34 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
           failureKind: intent.classification.kind,
         });
         try {
-          const result = await deps.recover({
-            sessionId: intent.sessionId,
-            switchesThisTurn: intent.switchesThisTurn,
-            classification: intent.classification,
-            resumePromptMode: intent.resumePromptMode === 'off' || intent.resumePromptMode === 'custom'
-              ? intent.resumePromptMode
-              : 'standard',
-            recoveryInvocationSource: 'scheduler_retry',
-          });
+          const dueAccountReset = intent.classification.kind === 'usage_limit'
+            && intent.classification.groupId === null
+            && intent.classification.quotaScope === 'account'
+            && typeof intent.classification.resetsAtMs === 'number'
+            && Number.isFinite(intent.classification.resetsAtMs)
+            && intent.classification.resetsAtMs <= this.#nowMs();
+          const continueAfterReset = dueAccountReset ? deps.continueAfterUsageLimitReset : undefined;
+          const continuingAfterReset = Boolean(continueAfterReset);
+          const alreadyAwaitingContinuationProof = continuingAfterReset
+            && intent.lastError === 'usage_limit_continuation_awaiting_provider_outcome';
+          const result = continueAfterReset
+            ? alreadyAwaitingContinuationProof
+              ? { status: 'continuation_enqueued' }
+              : await continueAfterReset(intent)
+            : await deps.recover({
+                sessionId: intent.sessionId,
+                switchesThisTurn: intent.switchesThisTurn,
+                classification: intent.classification,
+                resumePromptMode: intent.resumePromptMode === 'off' || intent.resumePromptMode === 'custom'
+                  ? intent.resumePromptMode
+                  : 'standard',
+                recoveryInvocationSource: 'scheduler_retry',
+              });
+          if (asRecord(result)?.status === 'continuation_cancelled') {
+            return { status: 'terminal' as const, lastError: 'usage_limit_continuation_cancelled', intent: {
+              ...intent, terminalReason: 'usage_limit_continuation_cancelled',
+            } };
+          }
           if (isSuccessfulRecoveryResult(result)) {
             return {
               status: 'success' as const,
@@ -1150,6 +1171,10 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
           }
           if (isLocallyCompleteWithoutProof(result)) {
             const pendingTarget = readPendingProofTarget(result);
+            const continuationRevision = continuingAfterReset
+              ? ConnectedServiceCredentialRevisionV1Schema.safeParse(asRecord(result)?.credentialRevision).data
+                ?? intent.pendingTargetCredentialRevision
+              : null;
             const coalescedReplay = isStaleProfileReplayForPendingProofTarget({
               intent,
               pendingTarget,
@@ -1159,20 +1184,30 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
             // consume the normal attempt budget and the recovery settles terminal
             // instead of looping forever for an idle session.
             const coalescedReplayCount = intent.coalescedReplayCount ?? 0;
-            const rollbackAttempt = isUntargetedProviderOutcomeProofWaitRefresh({
+            const rollbackAttempt = (alreadyAwaitingContinuationProof && context.reason === 'manual')
+              || (!continuingAfterReset && (isUntargetedProviderOutcomeProofWaitRefresh({
               intent,
               pendingTarget,
-            }) || (coalescedReplay && coalescedReplayCount < this.#maxCoalescedReplays);
+            }) || (coalescedReplay && coalescedReplayCount < this.#maxCoalescedReplays)));
+            const unprovenOutcomeError = continuingAfterReset
+              ? 'usage_limit_continuation_awaiting_provider_outcome'
+              : RUNTIME_AUTH_RECOVERY_UNPROVEN_PROVIDER_OUTCOME_ERROR;
             return {
               status: 'wait' as const,
-              lastError: RUNTIME_AUTH_RECOVERY_UNPROVEN_PROVIDER_OUTCOME_ERROR,
+              lastError: unprovenOutcomeError,
               intent: {
                 ...intent,
                 status: 'resumed_awaiting_proof',
                 attemptCount: rollbackAttempt ? Math.max(0, intent.attemptCount - 1) : intent.attemptCount,
-                lastError: RUNTIME_AUTH_RECOVERY_UNPROVEN_PROVIDER_OUTCOME_ERROR,
+                lastError: unprovenOutcomeError,
                 ...(coalescedReplay ? { coalescedReplayCount: coalescedReplayCount + 1 } : {}),
-                ...(pendingTarget
+                ...(continuationRevision
+                  ? {
+                      pendingTargetProfileId: intent.profileId,
+                      pendingTargetGeneration: null,
+                      pendingTargetCredentialRevision: continuationRevision,
+                    }
+                  : pendingTarget
                   ? {
                       pendingTargetProfileId: pendingTarget.activeProfileId,
                       pendingTargetGeneration: pendingTarget.generation,
@@ -1186,7 +1221,10 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
               },
               ...(this.#providerOutcomePendingWaitMs === null
                 ? {}
-                : { nextRetryAtMs: this.#nowMs() + this.#providerOutcomePendingWaitMs }),
+                : { nextRetryAtMs: alreadyAwaitingContinuationProof && context.reason === 'manual'
+                    && intent.nextRetryAtMs !== null
+                    ? intent.nextRetryAtMs
+                    : this.#nowMs() + this.#providerOutcomePendingWaitMs }),
             };
           }
           if (disposition?.kind === 'terminal') {
@@ -1647,14 +1685,34 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
     return this.#readForSession(sessionId);
   }
 
-  async wake(input: Readonly<{ sessionId: string; reason: 'timer' | 'manual' }>): Promise<Readonly<{ status: string }>> {
+  async wake(input: Readonly<{ sessionId: string; reason: 'timer' | 'manual'; attemptId?: string; resumePromptMode?: 'standard' | 'off' | 'custom' }>): Promise<Readonly<{ status: string }>> {
     const intents = this.#readForSession(input.sessionId);
-    const intent = intents.find((candidate) => isPendingRuntimeAuthRecoveryStatus(candidate.status))
-      ?? intents[0]
-      ?? null;
+    let intent = input.attemptId !== undefined
+      ? intents.find((candidate) => candidate.attemptId === input.attemptId && isPendingRuntimeAuthRecoveryStatus(candidate.status)) ?? null
+      : intents.find((candidate) => isPendingRuntimeAuthRecoveryStatus(candidate.status)) ?? intents[0] ?? null;
+    if (input.attemptId !== undefined && !intent) return { status: 'inactive' };
+    if (intent && input.resumePromptMode !== undefined) {
+      const expectedAttemptId = intent.attemptId;
+      intent = await this.#scheduler.transact<RuntimeAuthRecoveryIntent | null>({
+        sessionId: this.#keyForIntent(intent), schedule: false,
+        transaction: (value, context) => {
+          const current = normalizeRuntimeAuthRecoveryIntent(value);
+          if (!current || current.attemptId !== expectedAttemptId || !isPendingRuntimeAuthRecoveryStatus(current.status)) {
+            return { intent: value, result: null };
+          }
+          if (current.status !== 'waiting' || !context.unclaimed) return { intent: value, result: current };
+          const updated = { ...current, resumePromptMode: input.resumePromptMode };
+          return { intent: updated, result: updated };
+        },
+      });
+      if (!intent) return { status: 'inactive' };
+    }
     const result = await this.#scheduler.wake({
       sessionId: intent ? this.#keyForIntent(intent) : input.sessionId,
       reason: input.reason,
+      ...(input.attemptId !== undefined ? {
+        expectedCurrent: (current: RuntimeAuthRecoveryIntent) => current.attemptId === input.attemptId,
+      } : {}),
     });
     if (result.status === 'terminal') {
       const terminal = this.#readForSession(input.sessionId)[0] ?? null;
@@ -1766,10 +1824,17 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
   }
 
   async markAwaitingProviderOutcomeProofByKey(
-    input: RuntimeAuthRecoveryKeyParts & Readonly<{ expectedAttemptId?: string; result?: unknown }>,
+    input: RuntimeAuthRecoveryKeyParts & Readonly<{
+      expectedAttemptId?: string;
+      expectedPendingTargetCredentialRevision?: ConnectedServiceCredentialRevisionV1;
+      result?: unknown;
+    }>,
   ): Promise<RuntimeAuthRecoveryIntent | null> {
     const key = this.#buildKey(input);
     const pendingTarget = readPendingProofTarget(input.result);
+    const continuationRevision = asRecord(input.result)?.status === 'continuation_enqueued'
+      ? ConnectedServiceCredentialRevisionV1Schema.safeParse(asRecord(input.result)?.credentialRevision).data
+      : undefined;
     const awaiting = await this.#scheduler.transact<RuntimeAuthRecoveryIntent | null>({
       sessionId: key,
       transaction: (currentValue) => {
@@ -1778,14 +1843,28 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
           !current
           || !isPendingRuntimeAuthRecoveryStatus(current.status)
           || (input.expectedAttemptId && current.attemptId !== input.expectedAttemptId)
+          || (input.expectedPendingTargetCredentialRevision !== undefined && (
+            !input.expectedAttemptId
+            || current.groupId !== null
+            || current.profileId !== input.profileId
+            || current.pendingTargetProfileId !== input.profileId
+            || current.pendingTargetCredentialRevision !== input.expectedPendingTargetCredentialRevision
+            || current.lastError !== 'usage_limit_continuation_awaiting_provider_outcome'
+            || !continuationRevision
+          ))
         ) {
           return { intent: current, result: null };
         }
         const next: RuntimeAuthRecoveryIntent = {
           ...current,
           status: 'resumed_awaiting_proof',
-          lastError: 'recovery_unproven_awaiting_provider_outcome',
-          ...(pendingTarget
+          lastError: input.expectedPendingTargetCredentialRevision !== undefined
+            ? current.lastError
+            : 'recovery_unproven_awaiting_provider_outcome',
+          ...(input.expectedPendingTargetCredentialRevision !== undefined && continuationRevision
+            ? { pendingTargetProfileId: input.profileId, pendingTargetGeneration: null,
+                pendingTargetCredentialRevision: continuationRevision }
+            : pendingTarget
             ? {
                 pendingTargetProfileId: pendingTarget.activeProfileId,
                 pendingTargetGeneration: pendingTarget.generation,

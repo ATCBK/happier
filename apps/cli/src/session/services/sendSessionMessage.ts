@@ -39,7 +39,7 @@ import {
   readSessionProjectedTurnStatus,
   type SessionTurnActivity,
 } from '@/session/query/detectSessionTurnInFlight';
-import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
+import { fetchSessionById, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { openSessionEventSource, waitForIdleViaSocket } from '@/session/transport/socket/sessionSocketAgentState';
 import {
   decryptSessionPayload,
@@ -192,6 +192,11 @@ type SendSessionMessageParams = Readonly<{
   modelSelectionUpdatedAt?: number;
   incomingResumeOptions?: Parameters<typeof requestInactiveSessionResume>[0]['incomingOptions'];
   pendingAdmissionMode?: 'continuation_if_no_queued_user_input';
+  /** Host recovery qualification against the fresh Session used for authoring. */
+  canAdmitPendingInput?: (input: Readonly<{
+    rawSession: RawSessionRecord;
+    metadata: Record<string, unknown> | null;
+  }>) => boolean | Promise<boolean>;
   /** Deployed CLI compatibility only; new action callers pass modelSelectionInput. */
   modelOverride?: string | null;
   signal?: AbortSignal;
@@ -1311,6 +1316,13 @@ export async function sendSessionMessage(
       ? {}
       : { idempotencyKey: `session-input:v1:${sessionId}:${localId}` }),
   });
+
+  if (params.canAdmitPendingInput && !(await params.canAdmitPendingInput({
+    rawSession: sessionTarget.rawSession,
+    metadata: decryptedMetadata,
+  }))) {
+    return { ok: true, sessionId, localId, waited: false, suppressed: true };
+  }
 
   let enqueueResult: Awaited<ReturnType<typeof enqueuePendingQueueV2MessageViaHttp>>;
   let admissionResult: SessionInputAdmissionResultV1 | undefined;

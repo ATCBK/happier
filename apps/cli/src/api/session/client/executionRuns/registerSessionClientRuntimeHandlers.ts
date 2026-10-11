@@ -7,6 +7,8 @@ import { SessionAccessGrantSetActionInputV1Schema } from '@happier-dev/protocol/
 import type { AccountSettings, ActionExecutorDeps, TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol';
 import { configuration } from '@/configuration';
 import { notifyDaemonConnectedServiceUsageLimitWaitResumeCancel } from '@/daemon/controlClient';
+import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createExecutionBudgetRegistry } from '@/daemon/executionBudget/createExecutionBudgetRegistry';
 import type { StoredCredentials } from '@/persistence';
 import {
@@ -721,6 +723,21 @@ export function registerSessionClientRuntimeHandlers(
         transcriptActionExecutor,
         notifyUsageLimitWaitResumeCancelled: async (request) =>
             await notifyDaemonConnectedServiceUsageLimitWaitResumeCancel(request),
+        checkRuntimeAuthUsageLimitRecovery: async (request) => {
+            const machineId = params.getSessionMetadata()?.machineId;
+            if (!machineId) return { ok: false, errorCode: 'session_usage_limit_recovery_control_target_machine_unavailable' };
+            try {
+                return await callMachineRpc({
+                    credentials: params.credentials, machineId,
+                    method: RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW,
+                    request: { sessionId: request.sessionId,
+                        ...(request.resumePromptMode !== undefined ? { resumePromptMode: request.resumePromptMode } : {}),
+                    },
+                });
+            } catch {
+                return { ok: false, errorCode: 'session_usage_limit_recovery_control_target_machine_unavailable' };
+            }
+        },
     });
 
     const transcriptWriter = {

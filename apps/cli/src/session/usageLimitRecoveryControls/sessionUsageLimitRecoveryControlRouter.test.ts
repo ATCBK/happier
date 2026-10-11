@@ -110,6 +110,34 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
     ]);
   });
 
+  it.each([true, false])('keeps daemon-owned check-now in exact daemon custody when active=%s', async (active) => {
+    // The callback is the daemon transport boundary, not a provider recovery owner.
+    const checkRuntimeAuthUsageLimitRecovery = vi.fn(async () => ({ ok: true, status: 'waiting' }));
+    const callLiveSessionRpc = vi.fn(async () => ({ ok: true, status: 'ready' }));
+    const result = await routeSessionUsageLimitRecoveryCheckNow({
+      token: 'token', credentials: createCredentials(), sessionId: `sess_daemon_check_${active}`,
+      rawSession: createRawSession({ id: `sess_daemon_check_${active}`, active }),
+      metadata: createMetadata({ sessionUsageLimitRecoveryV1: {
+        v: 1, status: 'waiting', resumePromptMode: 'standard',
+        issueFingerprint: 'usage-limit:codex:turn-1:1700000000000:1700000060000',
+        armedAtMs: 1_700_000_000_000, resetAtMs: 1_700_000_060_000,
+        nextCheckAtMs: 1_700_000_060_000, attemptCount: 1, maxAttempts: 3,
+        lastProbeError: null, selectedAuth: { kind: 'native', serviceId: 'openai-codex' },
+        runtimeAuthRecoveryAttemptId: 'runtime-auth-attempt:manual-exact',
+      } }),
+      currentMachineId: 'machine-local', ctx: null, mode: 'plain',
+      stageUsageLimitRecoveryMutation, callLiveSessionRpc,
+      checkRuntimeAuthUsageLimitRecovery,
+      request: { sessionId: `sess_daemon_check_${active}`, resumePromptMode: 'off' },
+    });
+    expect(result).toMatchObject({ ok: true, status: 'waiting' });
+    expect(checkRuntimeAuthUsageLimitRecovery).toHaveBeenCalledWith({
+      sessionId: `sess_daemon_check_${active}`, attemptId: 'runtime-auth-attempt:manual-exact', resumePromptMode: 'off',
+    });
+    expect(callLiveSessionRpc).not.toHaveBeenCalled();
+    expect(stageUsageLimitRecoveryMutation).not.toHaveBeenCalled();
+  });
+
   it('arms inactive local wait-resume from the latest usage-limit issue without live session RPC', async () => {
     const callLiveSessionRpc = vi.fn();
 
@@ -151,6 +179,27 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
 
     expect(callLiveSessionRpc).not.toHaveBeenCalled();
     expect(stageUsageLimitRecoveryMutation).toHaveBeenCalledTimes(1);
+  });
+
+  it('arms predecessor native quota-source issues as native using qualified session binding evidence', async () => {
+    const issue = createUsageLimitIssue();
+    const result = await routeSessionUsageLimitRecoveryWaitResumeEnable({
+      token: 'token', credentials: createCredentials(), sessionId: 'sess_1',
+      rawSession: createRawSession({ latestTurnStatus: 'failed', lastRuntimeIssue: {
+        ...issue, usageLimit: { ...issue.usageLimit, connectedService: {
+          serviceId: 'claude-subscription', profileId: `native:${'a'.repeat(48)}`, groupId: null,
+        } },
+      } }),
+      metadata: { ...createMetadata(), connectedServices: { v: 2, bindingsByServiceId: {
+        'happier.agent.claude/claude-subscription': { source: 'native' },
+      } } },
+      currentMachineId: 'machine-local', ctx: null, mode: 'plain', stageUsageLimitRecoveryMutation,
+      request: { sessionId: 'sess_1' }, callLiveSessionRpc: vi.fn(), resolveAdapter: vi.fn(),
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect((result as Record<string, unknown>).metadata).toMatchObject({ sessionUsageLimitRecoveryV1: {
+      selectedAuth: { kind: 'native', serviceId: 'happier.agent.claude/claude-subscription' },
+    } });
   });
 
   it('starts a fresh epoch when explicitly re-arming a terminal intent for the same issue', async () => {

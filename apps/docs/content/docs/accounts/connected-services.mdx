@@ -128,6 +128,20 @@ OAuth client and Google's internal quota API, which Google can change or block.
 
 See [Antigravity](/agents/antigravity) for the managed ACP/native CLI boundary.
 
+## Continuing after a usage limit in 0.3 development
+
+Development-only usage-limit recovery lets a waiting session continue after a
+directly selected Connected Account's reported usage-limit reset. It requires
+usage-limit recovery support on the relay and automatic resume to be enabled.
+Checks from an active session, the CLI and MCP use the same daemon-owned recovery
+attempt; changing how you check does not start a separate recovery loop.
+
+Happier sends the configured continuation prompt, not a replay of your original
+request. A queued prompt is not confirmation that the Agent recovered: recovery
+remains pending until the Agent runs successfully. Cancelling the wait, stopping
+the session or sending newer work takes precedence over automatic continuation.
+This integration is unreleased and still being validated.
+
 ## Model-capacity retries
 
 In development builds, a terminal model-capacity failure such as Codex

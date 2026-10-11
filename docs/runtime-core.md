@@ -218,6 +218,30 @@ The [Session prompt-plan producer](../apps/cli/src/agent/prompting/coding/sessio
 
 The host fits retained WorkerUpdates against the current optional context allowance before dispatch. A still-deliverable wake that cannot fit stays with the input consumer until context/source, metadata, admission or user input changes; parking neither commits a transcript event nor acknowledges provider acceptance. Source admission is rechecked before parking, so a withdrawn wake releases custody even if it still cannot fit. User input keeps priority, and the retained wake is reconsidered afterward without selecting its producer again.
 
+### Usage-limit reset continuation (0.3 development)
+
+The daemon's [runtime-auth recovery scheduler](../apps/cli/src/daemon/connectedServices/runtimeAuth/RuntimeAuthRecoveryScheduler.ts)
+owns a wait for the exact failed turn and selected Connected Account. When a
+directly selected account reaches its reported reset time, recovery admits the
+configured continuation through the existing [continuation dispatcher](../apps/cli/src/daemon/connectedServices/continuation/createConnectedServiceContinuationMessageDispatcher.ts)
+and [Pending delivery owner](pending-delivery.md). Pending activation owns any
+required runtime attachment; restarting an idle runner alone is not continuation.
+Queue admission and Agent acceptance are intermediate outcomes, not recovery
+proof. The existing credential-qualified outcome owner must observe successful
+execution.
+
+Active Session RPC checks and CLI/MCP checks use the same exact daemon-owned
+attempt and resume-prompt mode. A failed daemon check cannot fall through to a
+competing provider-local recovery path; attempts without daemon ownership retain
+their existing local controls. Explicit ordinary user input goes through Pending
+rather than waking an automatic continuation during pre-admission revalidation;
+the dispatcher suppresses obsolete continuation when newer input is queued.
+Automatic continuation revalidates the current issue and recovery intent before
+admission. Cancellation, a replaced issue, newer user input
+and disabled automatic resume take precedence; the original interrupted input is
+never replayed. This development-source integration still requires composed
+loaded-runtime validation.
+
 ### Roles and managed work (0.3 development source)
 
 Protocol's [role resolver](../packages/protocol/src/prompts/roles/resolveRoleSelectionV1.ts)

@@ -672,6 +672,7 @@ export type BootstrapMachineSyncRuntimeParams = Readonly<{
     sessionId: string;
     attemptId: string;
   }>) => Promise<unknown> | unknown;
+  checkRuntimeAuthUsageLimitRecovery?: import('@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl').CheckRuntimeAuthUsageLimitRecovery;
   setDaemonServerWorkOnline?: (online: boolean) => void;
   onMachineConnectionOnline?: () => void | Promise<void>;
   reconcileConnectedServicesProjection?: Parameters<ApiMachineClient['onConnectedServicesProjection']>[0];
@@ -1389,13 +1390,13 @@ export async function bootstrapMachineSyncRuntime(
             }
           : {}),
         resumeInactiveSessionWhenUsageLimitReady: async ({ sessionId, rawSession, metadata }) =>
-          await activateInactiveUsageLimitResume({
-            fallbackMachineId: params.machineId,
+          storedCredentials ? await activateInactiveUsageLimitResume({
+            credentials: storedCredentials,
             sessionId,
             rawSession,
             metadata,
-            spawnSession: params.spawnSession,
-          }),
+            customResumePrompt: getActiveAccountSettingsSnapshot()?.settings.usageLimitRecoverySettingsV1?.customResumePrompt ?? null,
+          }) : false,
         scheduleInactiveSessionUsageLimitRecoveryCheck: async ({ sessionId, recovery, runCheckNow }) => {
           await inactiveUsageLimitRecoveryCheckOwner.schedule({
             sessionId,
@@ -1422,6 +1423,9 @@ export async function bootstrapMachineSyncRuntime(
         },
         ...(params.cancelConnectedServiceRuntimeAuthRecovery
           ? { cancelConnectedServiceRuntimeAuthRecovery: params.cancelConnectedServiceRuntimeAuthRecovery }
+          : {}),
+        ...(params.checkRuntimeAuthUsageLimitRecovery
+          ? { checkRuntimeAuthUsageLimitRecovery: params.checkRuntimeAuthUsageLimitRecovery }
           : {}),
         ...(params.retryTemporaryThrottleNow
           ? { retryTemporaryThrottleNow: params.retryTemporaryThrottleNow }

@@ -21,6 +21,8 @@ import type {
   SessionUsageLimitRecoveryControlAdapterParams,
 } from './sessionUsageLimitRecoveryControlTypes';
 import { deriveUsageLimitRecoveryTiming } from './deriveUsageLimitRecoveryTiming';
+import { buildUsageLimitIssueFingerprint } from './buildUsageLimitIssueFingerprint';
+import { resolveUsageLimitRecoverySelectedAuthFromIssue } from './usageLimitRecoverySelectedAuth';
 import {
   UsageLimitCheckNowRateLimiter,
   USAGE_LIMIT_CHECK_NOW_RATE_LIMITED_CODE,
@@ -36,6 +38,7 @@ import {
 } from './persistUsageLimitRecoveryFieldDurably';
 import { resolveRoutedUsageLimitRecoveryResumePromptMode } from './resolveRoutedUsageLimitRecoveryResumePromptMode';
 import { hasSameUsageLimitRecoveryIdentity } from './mergeUsageLimitRecoveryIntent';
+import { readRuntimeAuthUsageLimitRecoveryAttemptId, routeRuntimeAuthUsageLimitRecoveryCheckNow, type CheckRuntimeAuthUsageLimitRecovery } from './runtimeAuthUsageLimitRecoveryControl';
 
 type RouteSessionUsageLimitRecoveryControlParams = Readonly<{
   token: string;
@@ -47,6 +50,7 @@ type RouteSessionUsageLimitRecoveryControlParams = Readonly<{
   currentMachineHost?: string | null;
   currentMachineHomeDir?: string | null;
   callLiveSessionRpc: () => Promise<unknown>;
+  checkRuntimeAuthUsageLimitRecovery?: CheckRuntimeAuthUsageLimitRecovery;
   stageUsageLimitRecoveryMutation: StageUsageLimitRecoveryMutation;
   resolveAdapter?: ResolveSessionUsageLimitRecoveryControlAdapter;
   readTemporaryThrottleRecovery?: (sessionId: string) => Readonly<{ issueFingerprint: string; armedAtMs: number }> | null;
@@ -281,20 +285,6 @@ function parseRecoveryIntent(metadata: Record<string, unknown>): SessionUsageLim
   return parsed.success ? parsed.data : null;
 }
 
-function buildUsageLimitIssueFingerprint(
-  issue: NonNullable<ReturnType<typeof SessionRuntimeIssueV1Schema.safeParse>['data']>,
-): string {
-  return [
-    'usage-limit',
-    issue.agentId ?? 'unknown-agent',
-    issue.agentTurnId ?? 'unknown-turn',
-    String(issue.occurredAt),
-    issue.usageLimit?.resetAtMs === null || issue.usageLimit?.resetAtMs === undefined
-      ? 'no-reset'
-      : String(issue.usageLimit.resetAtMs),
-  ].join(':');
-}
-
 function isRetryableTemporaryThrottleIssue(rawSession: RawSessionRecord): boolean {
   const issueParsed = SessionRuntimeIssueV1Schema.safeParse(rawSession.lastRuntimeIssue);
   return issueParsed.success
@@ -306,6 +296,7 @@ function buildRecoveryIntentFromLatestUsageLimitIssue(
   params: Readonly<{
     rawSession: RawSessionRecord;
     issueFingerprint?: string;
+    connectedServices?: unknown;
   }>,
 ): SessionUsageLimitRecoveryV1 | null {
   if (params.rawSession.latestTurnStatus != null && params.rawSession.latestTurnStatus !== 'failed') {
@@ -317,22 +308,10 @@ function buildRecoveryIntentFromLatestUsageLimitIssue(
     return null;
   }
 
-  const connectedService = issueParsed.data.usageLimit.connectedService;
-  const selectedAuth: SessionUsageLimitRecoveryV1['selectedAuth'] =
-    connectedService?.groupId
-      ? {
-        kind: 'group',
-        serviceId: connectedService.serviceId,
-        groupId: connectedService.groupId,
-        profileId: connectedService.profileId ?? null,
-      }
-      : connectedService?.profileId
-        ? {
-          kind: 'profile',
-          serviceId: connectedService.serviceId,
-          profileId: connectedService.profileId,
-        }
-        : { kind: 'native' };
+  const selectedAuth = resolveUsageLimitRecoverySelectedAuthFromIssue({
+    issue: issueParsed.data,
+    connectedServices: params.connectedServices ?? null,
+  }) ?? { kind: 'native' as const };
 
   const timing = deriveUsageLimitRecoveryTiming({
     occurredAtMs: issueParsed.data.occurredAt,
@@ -366,6 +345,7 @@ async function buildEnabledRecoveryIntent(
       : undefined;
   const base = existing ?? buildRecoveryIntentFromLatestUsageLimitIssue({
     rawSession: params.rawSession,
+    connectedServices: metadata.connectedServices ?? null,
     ...(issueFingerprint ? { issueFingerprint } : {}),
   });
   if (!base) return null;
@@ -571,6 +551,16 @@ export async function routeSessionUsageLimitRecoveryCheckNow(
 ): Promise<unknown> {
   const operation = params.request?.operation === 'consume_reset_credit' ? 'consume_reset_credit' : 'check_now';
 
+  if (operation === 'check_now' && readRuntimeAuthUsageLimitRecoveryAttemptId(params.metadata)) {
+    const context = await ensureLocalInactiveControlContext(params);
+    if (!context.ok) return context.result;
+    return await routeRuntimeAuthUsageLimitRecoveryCheckNow({
+      sessionId: params.sessionId, metadata: context.metadata,
+      resumePromptMode: params.request?.resumePromptMode,
+      checkRuntimeAuthUsageLimitRecovery: params.checkRuntimeAuthUsageLimitRecovery,
+    });
+  }
+
   if (isRetryableTemporaryThrottleIssue(params.rawSession) || parseRecoveryIntent(params.metadata ?? {})?.issueFingerprint.startsWith('temporary-throttle:')) {
     const context = await ensureLocalInactiveControlContext(params);
     if (!context.ok) return context.result;
@@ -610,6 +600,7 @@ export async function routeSessionUsageLimitRecoveryCheckNow(
       ? existingIntent
       : buildRecoveryIntentFromLatestUsageLimitIssue({
         rawSession: params.rawSession,
+        connectedServices: context.metadata.connectedServices ?? null,
         issueFingerprint: requestIssueFingerprint,
       })
     : null;

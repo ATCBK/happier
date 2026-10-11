@@ -112,7 +112,7 @@ export function isLocallyCompleteWithoutProof(result: unknown): boolean {
   if (isProvenRuntimeAuthRecoverySuccess(result)) return false;
   const outer = isRecord(result) ? result : null;
   if (!outer) return false;
-  if (outer.status === 'credential_refreshed') return true;
+  if (outer.status === 'credential_refreshed' || outer.status === 'continuation_enqueued') return true;
   const inner = readRuntimeAuthRecoverySwitchResult(result);
   if (!inner) return false;
   if (outer.status !== 'switch_attempted') return false;

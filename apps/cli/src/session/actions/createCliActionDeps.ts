@@ -365,6 +365,7 @@ import { updateSessionMetadataForTarget } from '@/session/services/updateSession
 import { fetchSessionById, fetchSessionByIdCompat, fetchSessionTurnsProjection, fetchSessionsQueryPage, setSessionAttentionStanding, setSessionOrganizationPin, setSessionReportsTo, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { callSessionRpc, resolveSessionRpcContent } from '@/session/transport/rpc/sessionRpc';
+import { readRuntimeAuthUsageLimitRecoveryAttemptId } from '@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl';
 import {
   callExactMachineRpc,
   callMachineRpc,
@@ -2543,7 +2544,8 @@ export function createCliActionDeps(params: Readonly<{
     }
 
     const metadata = readTransportSessionOwnerMetadata(transport);
-    if (transport.rawSession.active === true) {
+    const daemonOwnedCheck = operation === 'checkNow' && readRuntimeAuthUsageLimitRecoveryAttemptId(metadata) !== null;
+    if (transport.rawSession.active === true && !daemonOwnedCheck) {
       return normalizeUsageLimitRecoveryOperationResult(await callSessionRpcForTransport(
         transport,
         operation === 'enable'

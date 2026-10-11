@@ -1,25 +1,26 @@
 import { resolveLinkedExternalSessionAuthorityV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
-
-import type { SpawnSessionOptions, SpawnSessionResult } from '@/session/shared/spawnSessionContract';
-
-import { buildInactiveUsageLimitResumeSpawnOptions } from './runtimeSnapshot/buildInactiveUsageLimitResumeSpawnOptions';
+import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY, SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
+import type { StoredCredentials } from '@/persistence';
+import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { continueSessionAfterUsageLimitReset } from '../connectedServices/continuation/continueSessionAfterUsageLimitReset';
 
 export type ActivateInactiveUsageLimitResumeParams = Readonly<{
-  fallbackMachineId: string;
+  credentials: StoredCredentials;
   sessionId: string;
-  rawSession: unknown;
+  rawSession: RawSessionRecord;
   metadata: Record<string, unknown>;
-  spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
+  customResumePrompt?: string | null;
+  nowMs?: number;
+  isCurrent?: () => boolean | Promise<boolean>;
 }>;
 
 /**
- * The ONE automatic resume for inactive-session usage-limit recovery: spawn the
- * hosted runtime only when this machine still owns the Session's runtime.
+ * Admit the ready usage-limit continuation through ordinary Pending. Its
+ * canonical activation owner adopts or starts the hosted runtime.
  *
  * A Session whose transcript lives with an external Agent — or whose external
  * link exists but is unresolved — is owned by External Sessions takeover, so
- * recovery fails closed here instead of spawning it. Plain unlinked sessions
- * keep the canonical auto-resume behavior.
+ * recovery fails closed here. Plain unlinked sessions retain automatic recovery.
  */
 export async function activateInactiveUsageLimitResume(
   params: ActivateInactiveUsageLimitResumeParams,
@@ -28,13 +29,14 @@ export async function activateInactiveUsageLimitResume(
   if (!linkAuthority.ok || linkAuthority.transcriptStorage === 'direct') {
     return false;
   }
-  const options = buildInactiveUsageLimitResumeSpawnOptions({
-    sessionId: params.sessionId,
-    fallbackMachineId: params.fallbackMachineId,
-    rawSession: params.rawSession,
-    metadata: params.metadata,
+  const recovery = SessionUsageLimitRecoveryV1Schema.safeParse(params.metadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]);
+  if (!recovery.success) return false;
+  const result = await continueSessionAfterUsageLimitReset({
+    credentials: params.credentials, sessionId: params.sessionId,
+    rawSession: params.rawSession, metadata: params.metadata, recovery: recovery.data,
+    customResumePrompt: params.customResumePrompt,
+    nowMs: params.nowMs ?? Date.now(),
+    isCurrent: params.isCurrent ?? (() => true),
   });
-  if (!options) return false;
-  const result = await params.spawnSession(options);
-  return result.type === 'success';
+  return result.status === 'continued' || result.status === 'suppressed';
 }

@@ -26,7 +26,7 @@ export type SessionUsageLimitRecoveryControlAdapter = Readonly<{
 export type SessionUsageLimitRecoveryBackoffPolicy = Readonly<{
   providerId: string;
   issueProviderFilter?: string | null;
-  defaultNativeServiceId?: import('@happier-dev/protocol').ConnectedServiceId | null;
+  defaultNativeServiceId?: import('@happier-dev/protocol').ConnectedAccountServiceKey | null;
   fallbackBackoffEnvKey: string;
   maxAttemptsEnvKey: string;
   defaultFallbackBackoffMs?: number;

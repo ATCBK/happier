@@ -20,6 +20,7 @@ import {
 } from '@/session/services/admitSessionStructuredInputV1';
 import type { SessionRuntimeControls } from './sessionControls';
 import { normalizePermissionModeToIntent } from '@/agent/runtime/permissions/modeCanonical';
+import { readRuntimeAuthUsageLimitRecoveryAttemptId } from '@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl';
 import {
   resolveExplicitUserPromptRecoveryDecision,
   type ExplicitUserPromptRecoveryDecision,
@@ -86,6 +87,8 @@ export function registerSessionUserMessageSendHandler(
   }>();
 
   const revalidateExplicitUserRecovery = async (localId: string): Promise<ExplicitUserPromptRecoveryDecision> => {
+    // Admit fresh input to Pending before recovery can enqueue an automatic continuation.
+    if (readRuntimeAuthUsageLimitRecoveryAttemptId(opts.getSessionMetadata?.())) return { status: 'ready' };
     const checkNow = opts.sessionRuntimeControls?.checkUsageLimitRecoveryNow;
     if (typeof checkNow !== 'function' || typeof opts.sessionId !== 'string' || opts.sessionId.length === 0) {
       return hasBlockingExplicitUserRecoveryEvidence(opts.getSessionMetadata?.())

@@ -84,8 +84,13 @@ import {
   prepareRequesterSessionBootstrap,
 } from '../sessionEncryption/requesterSessionCredentials';
 import { buildRuntimeAuthUsageLimitRecoveryProjection } from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoveryUsageLimitMetadata';
+import { checkRuntimeAuthUsageLimitRecovery } from '@/daemon/connectedServices/runtimeAuth/checkRuntimeAuthUsageLimitRecovery';
+import { isCurrentUsageLimitRecoveryAccount } from '@/daemon/connectedServices/runtimeAuth/isCurrentUsageLimitRecoveryAccount';
+import { continueAccountQualifiedSessionAfterUsageLimitReset } from '@/daemon/connectedServices/continuation/continueSessionAfterUsageLimitReset';
+import { readQualifiedConnectedAccountCredentialMaterial } from '@/daemon/connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { projectTemporaryThrottleRecoveryMetadata } from '@/daemon/connectedServices/runtimeAuth/projection/temporaryThrottleRecoveryMetadata';
 import { resolveConnectedServiceCredentialResolutions } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
+import { resolveConnectedServiceAccountMode } from '@/cloud/connectedServices/resolveConnectedServiceAccountMode';
 import { validateConnectedServiceGroupMutationCurrentness as validateGroupMutationCurrentness } from '../connectedServices/accountGroups/generation/validateGroupMutationCurrentness';
 import type { QualifiedConnectedAccountPeerOperationTransport } from '@/api/client/qualifiedConnectedAccountApi';
 import {
@@ -699,6 +704,7 @@ import { resolveProviderAccountUsageSourceProfile } from '../connectedServices/a
 import { createConnectedServiceSessionAuthSwitchCore } from '../connectedServices/runtimeAuth/connectedServiceSessionAuthSwitchCore';
 import { shouldCommitAutomaticGroupApplySessionEvent } from '../connectedServices/runtimeAuth/automaticGroupApplySessionEvents';
 import {
+  type RuntimeAuthRecoveryScheduler,
   type RuntimeAuthRecoveryDiagnostic,
   type RuntimeAuthRecoveryVisibleEventDelivery,
 } from '../connectedServices/runtimeAuth/RuntimeAuthRecoveryScheduler';
@@ -2685,6 +2691,9 @@ export async function startDaemonSessionControlRuntime(
         sessionId: string;
         attemptId: string;
       }>,
+    ) => Promise<unknown>;
+    checkRuntimeAuthUsageLimitRecovery: (
+      input: Readonly<{ sessionId: string; attemptId: string; resumePromptMode?: SessionContinuationResumePromptModeV1 }>,
     ) => Promise<unknown>;
     retryTemporaryThrottleNow: (
       input: Readonly<{ sessionId: string }>,
@@ -10615,7 +10624,7 @@ export async function startDaemonSessionControlRuntime(
       }),
     );
   };
-  const runtimeAuthRecoveryScheduler =
+  const runtimeAuthRecoveryScheduler: RuntimeAuthRecoveryScheduler =
     createRuntimeAuthRecoverySchedulerForDaemon({
       activeServerDir: configuration.activeServerDir,
       nowMs: () => Date.now(),
@@ -10642,6 +10651,68 @@ export async function startDaemonSessionControlRuntime(
       jitterMs: () =>
         Math.floor(Math.random() * runtimeAuthRecoveryJitterMaxMs),
       recover: runConnectedServiceRuntimeAuthFailureRecovery,
+      continueAfterUsageLimitReset: async (intent) => {
+        const accountContext = await resolveSessionAccountContext(intent.sessionId);
+        return await withSessionAccountHome(accountContext, async () => {
+          const credentials = accountContext?.bootstrap.credentials ?? params.credentials;
+          const isCurrent = async () => {
+            await assertSessionAccountCurrent(intent.sessionId, accountContext);
+            const current = runtimeAuthRecoveryScheduler.readForSession(intent.sessionId)
+              .find((candidate) => candidate.attemptId === intent.attemptId);
+            if (!current || (current.status !== 'checking' && current.status !== 'waiting')
+              || current.classification.resetsAtMs !== intent.classification.resetsAtMs
+              || current.resumePromptMode !== intent.resumePromptMode) return false;
+            const runtime = connectedServiceRuntimeRegistry.getBySessionId(intent.sessionId);
+            if (!runtime) return true;
+            const binding = runtime.activeBindings.find((candidate) => candidate.serviceId === intent.serviceId);
+            return Boolean(binding && binding.profileId === intent.profileId && binding.groupId === null);
+          };
+          if (!(await isCurrent())) return { status: 'recovery_superseded' };
+          const service = resolveQualifiedConnectedAccountServiceForIngressServiceId(intent.serviceId);
+          const profileId = intent.profileId;
+          if (!service || !profileId) return { status: 'recovery_superseded' };
+          const readAccount = async () => {
+            // Current credential resolution is V4-only, including retained native projections.
+            // A transport failure must reach the scheduler's retry owner, never a legacy fallback.
+            const material = await readQualifiedConnectedAccountCredentialMaterial({
+              credentials, account: { service, accountId: profileId },
+              getAccountEncryptionMode: (signal) => resolveConnectedServiceAccountMode(
+                accountContext?.api ?? params.api, { signal },
+              ),
+            });
+            return material ? {
+              providerAccountId: material.credential.values.providerAccountId
+                ?? material.snapshot.metadata.providerIdentity?.accountId ?? null,
+              credentialRevision: material.snapshot.credentialRevision,
+            } : null;
+          };
+          const account = await readAccount();
+          if (!account || !isCurrentUsageLimitRecoveryAccount({ classification: intent.classification, ...account })) {
+            return { status: 'recovery_superseded' };
+          }
+          const [rawSession, accountEncryptionCurrentness] = await Promise.all([
+            fetchSessionByIdCompat({ token: credentials.token, sessionId: intent.sessionId }),
+            fetchAccountEncryptionCurrentness({ token: credentials.token }),
+          ]);
+          if (!rawSession) return { status: 'recovery_superseded' };
+          const metadata = tryReadSessionMetadataRecord({
+            rawSession, credentials, accountEncryptionMode: accountEncryptionCurrentness.mode,
+          });
+          const recovery = buildRuntimeAuthUsageLimitRecoveryProjection(intent);
+          if (!metadata || metadata.machineId !== params.machineId || !recovery) return { status: 'recovery_superseded' };
+          return await continueAccountQualifiedSessionAfterUsageLimitReset({
+            classification: intent.classification, readAccount,
+            readActiveBinding: () => connectedServiceRuntimeRegistry.getBySessionId(intent.sessionId)
+              ?.activeBindings.find((binding) => binding.serviceId === intent.serviceId),
+            continuation: {
+              credentials, sessionId: intent.sessionId, rawSession, metadata, recovery, nowMs: Date.now(),
+              customResumePrompt: (accountContext?.readAccountSettingsSnapshot() ?? getActiveAccountSettingsSnapshot())
+                ?.settings.usageLimitRecoverySettingsV1?.customResumePrompt ?? null,
+              isCurrent,
+            },
+          });
+        });
+      },
       gate: () => {
         const nowMs = Date.now();
         pruneRuntimeAuthRecoveryStormEvents(nowMs);
@@ -12080,6 +12151,23 @@ export async function startDaemonSessionControlRuntime(
     createSessionConnectedServiceRuntimeAuthRefreshHandler({
       registry: connectedServiceRuntimeRegistry,
       resolveDaemonAuthBridge,
+      onCredentialRevisionAdopted: async (accepted) => {
+        const sessionId = accepted.target.sessionId;
+        if (!sessionId || accepted.selection.kind !== 'profile'
+          || connectedServiceRuntimeRegistry.getBySessionId(sessionId) !== accepted.target) return;
+        for (const intent of runtimeAuthRecoveryScheduler.readForSession(sessionId)) {
+          if (!intent.attemptId || intent.groupId !== null
+            || intent.serviceId !== accepted.selection.serviceId
+            || intent.profileId !== accepted.selection.profileId) continue;
+          await runtimeAuthRecoveryScheduler.markAwaitingProviderOutcomeProofByKey({
+            sessionId, serviceId: intent.serviceId, profileId: intent.profileId, groupId: null,
+            failingAccessTokenFingerprint: intent.classification.failingAccessTokenFingerprint ?? null,
+            expectedAttemptId: intent.attemptId,
+            expectedPendingTargetCredentialRevision: accepted.previousCredentialRevision,
+            result: { status: 'continuation_enqueued', credentialRevision: accepted.credentialRevision },
+          });
+        }
+      },
       captureSessionAuthority: (target) => {
         const tracked = params.pidToTrackedSession.get(target.pid);
         if (
@@ -18271,6 +18359,8 @@ export async function startDaemonSessionControlRuntime(
       attemptId,
     }) =>
       await runtimeAuthRecoveryScheduler.cancelExact({ sessionId, attemptId }),
+    checkRuntimeAuthUsageLimitRecovery: async (input) =>
+      await checkRuntimeAuthUsageLimitRecovery({ scheduler: runtimeAuthRecoveryScheduler, ...input }),
     retryTemporaryThrottleNow: async ({ sessionId }) =>
       await temporaryThrottleScheduler.wake({ sessionId, reason: 'manual' }),
     readTemporaryThrottleRecovery: (sessionId: string) =>

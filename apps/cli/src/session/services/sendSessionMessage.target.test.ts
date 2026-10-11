@@ -55,6 +55,26 @@ function mockRunReads(inputTurns: readonly unknown[]) {
 }
 
 describe('target Session input authoring through HTTP', () => {
+  it('suppresses a recovery continuation superseded during Session lookup before Pending admission', async () => {
+    let current = true;
+    const read = http.get.getMockImplementation()!;
+    http.get.mockImplementation(async (...args: unknown[]) => {
+      const result = await read(...args);
+      if (String(args[0]).includes(`/v2/sessions/${sessionId}`)) current = false;
+      return result;
+    });
+    const params = {
+      credentials, idOrPrefix: sessionId, message: 'Continue after quota reset',
+      localId: 'superseded-recovery', wait: false, timeoutMs: 1000,
+      resumeInactiveSession: false,
+      pendingAdmissionMode: 'continuation_if_no_queued_user_input' as const,
+      canAdmitPendingInput: () => current,
+    };
+    const result = await sendSessionMessage(params);
+    expect(result).toMatchObject({ ok: true, suppressed: true });
+    expect(http.post).not.toHaveBeenCalled();
+  });
+
   it.each([
     { didWrite: true, status: 'accepted' },
     { didWrite: false, status: 'alreadyAccepted' },

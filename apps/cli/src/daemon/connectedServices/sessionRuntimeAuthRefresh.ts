@@ -203,6 +203,12 @@ export function createSessionConnectedServiceRuntimeAuthRefreshHandler(input: Re
   registry: ConnectedServiceRuntimeRegistry;
   resolveDaemonAuthBridge: ResolveDaemonAuthBridge;
   captureSessionAuthority?(target: ConnectedServiceRuntimeTarget): Readonly<{ identity: object; isCurrent(): boolean }> | null;
+  onCredentialRevisionAdopted?(accepted: Readonly<{
+    target: ConnectedServiceRuntimeTarget;
+    selection: ConnectedServiceRuntimeAuthRefreshSelection;
+    previousCredentialRevision: ConnectedServiceCredentialRevisionV1;
+    credentialRevision: ConnectedServiceCredentialRevisionV1;
+  }>): Promise<void>;
 }>): SessionConnectedServiceRuntimeAuthRefreshHandler {
   return async (request) => {
     let target = input.registry.getBySessionId(request.sessionId);
@@ -212,6 +218,7 @@ export function createSessionConnectedServiceRuntimeAuthRefreshHandler(input: Re
       return { ok: false, errorCode: 'connected_service_session_refresh_forbidden' };
     }
     const isCurrent = () => (!authority || authority.isCurrent()) && input.registry.getBySessionId(request.sessionId) === target;
+    const previousSelection = resolveCurrentRefreshSelection({ target, serviceId: request.selection.serviceId });
     const result = await refreshConnectedServiceRuntimeAuthForTarget({
       target, request, scope: { sessionId: request.sessionId },
       authority: authority?.identity,
@@ -232,10 +239,14 @@ export function createSessionConnectedServiceRuntimeAuthRefreshHandler(input: Re
     if (result.ok && result.result.status === 'refreshed' && 'credentialRevision' in result.result.result) {
       const revision = ConnectedServiceCredentialRevisionV1Schema.safeParse(result.result.result.credentialRevision);
       const current = resolveCurrentRefreshSelection({ target, serviceId: request.selection.serviceId });
-      if (!revision.success || !current || !input.registry.adoptExactCredentialRevisionForTarget({
+      if (!revision.success || !current || !previousSelection) return { ok: false, errorCode: 'connected_service_session_refresh_forbidden' };
+      const adoptedTarget = input.registry.adoptExactCredentialRevisionForTarget({
         target, serviceId: current.selection.serviceId, expectedCredentialRevision: current.credentialRevision,
         credentialRevision: revision.data,
-      })) return { ok: false, errorCode: 'connected_service_session_refresh_forbidden' };
+      });
+      if (!adoptedTarget) return { ok: false, errorCode: 'connected_service_session_refresh_forbidden' };
+      await input.onCredentialRevisionAdopted?.({ target: adoptedTarget, selection: previousSelection.selection,
+        previousCredentialRevision: previousSelection.credentialRevision, credentialRevision: revision.data });
     }
     return result;
   };

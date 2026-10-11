@@ -1,83 +1,62 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-
+import type { SessionRuntimeIssueV1, SessionUsageLimitRecoveryV1 } from '@happier-dev/protocol';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { activateInactiveUsageLimitResume } from './activateInactiveUsageLimitResume';
 
-const metadata = {
-  machineId: 'machine-1',
-  path: '/repo',
-  flavor: 'codex',
-  codexSessionId: 'vendor-1',
-  backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
-};
+// Keep the recovery, authoring and Pending owners real; replace HTTP only.
+const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+vi.mock('axios', () => ({ default: { ...http, isAxiosError: () => false } }));
 
-const rawSession = {
-  id: 'session-1',
-  active: false,
-  machineId: 'machine-1',
-  path: '/repo',
-  seq: 3,
-};
+const sessionId = 'c123456789012345678901234';
+const credentials = { token: 'recovery-test', encryption: null };
+const issue: SessionRuntimeIssueV1 = { v: 1, scope: 'primary_session', status: 'failed',
+  source: 'usage_limit', code: 'usage_limit', agentId: 'codex', agentTurnId: 'interrupted-turn', occurredAt: 100,
+  usageLimit: { v: 1, resetAtMs: 200, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' } };
+const recovery: SessionUsageLimitRecoveryV1 = { v: 1, status: 'paused', armedAtMs: 110, resetAtMs: 200,
+  nextCheckAtMs: null, attemptCount: 1, maxAttempts: 3, lastProbeError: null, resumePromptMode: 'standard',
+  issueFingerprint: 'usage-limit:codex:interrupted-turn:100:200', selectedAuth: { kind: 'native' } };
+const metadata = { machineId: 'machine-1', path: '/repo', flavor: 'codex', codexSessionId: 'vendor-1',
+  sessionUsageLimitRecoveryV1: recovery };
+const rawSession = createSessionRecordFixture({ id: sessionId, active: false, encryptionMode: 'plain',
+  metadata: JSON.stringify(metadata), latestTurnId: 'canonical-failed-turn',
+  latestTurnStatus: 'failed', lastRuntimeIssue: issue });
+const params = { credentials, sessionId, rawSession, metadata, nowMs: 200, isCurrent: () => true };
 
 describe('activateInactiveUsageLimitResume', () => {
-  let spawnSession: ReturnType<typeof vi.fn>;
-
   beforeEach(() => {
-    spawnSession = vi.fn(async () => ({
-      type: 'success' as const,
-      sessionId: 'session-1',
-    }));
+    vi.resetAllMocks();
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
+      } };
+      if (url.includes(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session: rawSession } };
+      throw new Error(`Unexpected read: ${url}`);
+    });
+    http.post.mockResolvedValue({ status: 200, data: { didWrite: true, terminal: false } });
   });
 
-  it('keeps auto-resuming a plain unlinked inactive session when recovery is ready', async () => {
-    await expect(activateInactiveUsageLimitResume({
-      fallbackMachineId: 'machine-1',
-      sessionId: 'session-1',
-      rawSession,
-      metadata,
-      spawnSession,
-    })).resolves.toBe(true);
-
-    expect(spawnSession).toHaveBeenCalledTimes(1);
-    expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
-      existingSessionId: 'session-1',
-      machineId: 'machine-1',
-    }));
+  it('admits the ready native backoff continuation instead of spawning an empty runtime', async () => {
+    await expect(activateInactiveUsageLimitResume(params)).resolves.toBe(true);
+    expect(http.post).toHaveBeenCalledWith(expect.stringContaining(`/v2/sessions/${sessionId}/pending`),
+      expect.objectContaining({ deliveryMode: 'continuation_if_no_queued_user_input',
+        requestedAction: { v: 1, kind: 'send_now' } }), expect.anything());
+    expect(http.post).toHaveBeenCalledOnce();
   });
 
-  it('refuses to spawn an externally linked session so takeover owns hosted admission', async () => {
-    await expect(activateInactiveUsageLimitResume({
-      fallbackMachineId: 'machine-1',
-      sessionId: 'session-1',
-      rawSession,
-      metadata: {
-        ...metadata,
-        externalSessionV1: {
-          v: 1,
-          agentId: 'codex',
-          machineId: 'machine-1',
-          remoteSessionId: 'vendor-1',
-          source: { kind: 'codexHome', home: 'user' },
-          linkedAtMs: 1,
-        },
-      },
-      spawnSession,
-    })).resolves.toBe(false);
-
-    expect(spawnSession).not.toHaveBeenCalled();
+  it('refuses recovery without a valid durable recovery intent', async () => {
+    await expect(activateInactiveUsageLimitResume({ ...params,
+      metadata: { ...metadata, sessionUsageLimitRecoveryV1: { v: 1 } } })).resolves.toBe(false);
+    expect(http.post).not.toHaveBeenCalled();
   });
 
-  it('refuses to spawn when the external link exists but is unresolved', async () => {
-    await expect(activateInactiveUsageLimitResume({
-      fallbackMachineId: 'machine-1',
-      sessionId: 'session-1',
-      rawSession,
-      metadata: {
-        ...metadata,
-        externalSessionV1: { v: 1 },
-      },
-      spawnSession,
-    })).resolves.toBe(false);
-
-    expect(spawnSession).not.toHaveBeenCalled();
+  it.each([
+    { v: 1, agentId: 'codex', machineId: 'machine-1', remoteSessionId: 'vendor-1',
+      source: { kind: 'codexHome', home: 'user' }, linkedAtMs: 1 },
+    { v: 1 },
+  ])('refuses externally linked or unresolved Sessions so takeover owns admission: %j', async (externalSessionV1) => {
+    await expect(activateInactiveUsageLimitResume({ ...params,
+      metadata: { ...metadata, externalSessionV1 } })).resolves.toBe(false);
+    expect(http.post).not.toHaveBeenCalled();
   });
 });

@@ -18,6 +18,7 @@ import type { Metadata } from '@/api/types';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { ComposerAttachmentDispatchResolver } from '@/agent/runtime/runPermissionModePromptLoop';
 import type { StructuredInputComposerReferenceResolver } from '@/agent/runtime/turns/resolveStructuredInputProviderContext';
+import { routeRuntimeAuthUsageLimitRecoveryCheckNow, type CheckRuntimeAuthUsageLimitRecovery } from '@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl';
 import {
   resolveUsageLimitRecoveryEnabled,
   usageLimitRecoveryDisabledResult,
@@ -255,6 +256,7 @@ export function registerSessionControlHandlers(
     getSessionMetadata?: (() => Metadata | null) | null;
     sessionRuntimeControls?: SessionRuntimeControls | null;
     isUsageLimitRecoveryEnabled?: (() => Promise<boolean> | boolean) | null;
+    checkRuntimeAuthUsageLimitRecovery?: CheckRuntimeAuthUsageLimitRecovery | null;
     notifyUsageLimitWaitResumeCancelled?: ((request: Readonly<{
       sessionId: string;
       attemptId: string;
@@ -679,6 +681,13 @@ export function registerSessionControlHandlers(
         sessionId: parsed.data.sessionId,
       });
     }
+    const daemonResult = parsed.data.operation !== 'switch_account_now' ? await routeRuntimeAuthUsageLimitRecoveryCheckNow({
+      sessionId: parsed.data.sessionId,
+      metadata: opts.getSessionMetadata?.() ?? null,
+      resumePromptMode: parsed.data.resumePromptMode,
+      checkRuntimeAuthUsageLimitRecovery: opts.checkRuntimeAuthUsageLimitRecovery,
+    }) : null;
+    if (daemonResult) return daemonResult;
     if (typeof opts.sessionRuntimeControls?.checkUsageLimitRecoveryNow !== 'function') {
       return normalizeUsageLimitRecoveryOperationResult(
         unsupported(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW),

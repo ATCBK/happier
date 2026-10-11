@@ -85,6 +85,50 @@ function createAdapter() {
 }
 
 describe('createBackoffSessionUsageLimitRecoveryControlAdapter', () => {
+  it.each([
+    { name: 'known absence', connectedServices: null, kind: 'native' },
+    { name: 'qualified native binding', connectedServices: { v: 2, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'native' },
+    } }, kind: 'native' },
+    { name: 'actual same-name profile', connectedServices: { v: 2, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: `native:${'a'.repeat(48)}` },
+    } }, kind: 'profile' },
+    { name: 'malformed binding evidence', connectedServices: { v: 2, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'unexpected' },
+    } }, kind: 'profile' },
+  ])('interprets predecessor native quota identity using $name', async ({ connectedServices, kind }) => {
+    const params = createParams();
+    params.rawSession.lastRuntimeIssue!.usageLimit!.connectedService = {
+      serviceId: 'openai-codex', profileId: `native:${'a'.repeat(48)}`, groupId: null,
+    };
+    const result = await createAdapter().checkNow?.({ ...params, metadata: { connectedServices } });
+    expect(result).toMatchObject({ metadata: { sessionUsageLimitRecoveryV1: {
+      selectedAuth: { kind, serviceId: 'happier.agent.codex/openai-codex',
+        ...(kind === 'profile' ? { profileId: `native:${'a'.repeat(48)}` } : {}),
+      },
+    } } });
+  });
+
+  it.each([
+    { name: 'ordinary pending recovery', runtimeAuthRecoveryAttemptId: undefined, kind: 'native' },
+    { name: 'runtime-auth-owned recovery', runtimeAuthRecoveryAttemptId: 'runtime-auth-attempt', kind: 'profile' },
+  ])('normalizes persisted predecessor quota identity only for $name', async ({ runtimeAuthRecoveryAttemptId, kind }) => {
+    const profileId = `native:${'a'.repeat(48)}`;
+    const params = createParams();
+    params.rawSession.lastRuntimeIssue!.usageLimit!.connectedService = {
+      serviceId: 'openai-codex', profileId, groupId: null,
+    };
+    const result = await createAdapter().checkNow?.({ ...params, metadata: {
+      connectedServices: null,
+      sessionUsageLimitRecoveryV1: { ...createWaitingIntent(), runtimeAuthRecoveryAttemptId,
+        selectedAuth: { kind: 'profile', serviceId: 'openai-codex', profileId },
+      },
+    } });
+    expect(result).toMatchObject({ metadata: { sessionUsageLimitRecoveryV1: {
+      selectedAuth: { kind, serviceId: 'happier.agent.codex/openai-codex' },
+    } } });
+  });
+
   it('uses the shared fallback policy when a provider supplies no overrides', async () => {
     const params = createParams();
     params.rawSession.lastRuntimeIssue!.usageLimit!.resetAtMs = null;

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { createRecoveryIntentFileStore } from './recoveryIntentFileStore';
+import type { DurableBackoffRecoveryStore } from './DurableBackoffRecoveryScheduler';
 
 type TestStatus = 'waiting' | 'checking' | 'cancelled' | 'exhausted';
 
@@ -72,7 +73,7 @@ type SchedulerModule = Readonly<{
     }) => Promise<TResult>;
     read: (sessionId: string, options?: Readonly<{ schedule?: boolean }>) => TIntent | null;
     hydrate: (options?: Readonly<{ schedule?: boolean }>) => ReadonlyArray<TIntent>;
-	    wake: (input: { sessionId: string; reason: string }) => Promise<{ status: string }>;
+	    wake: (input: { sessionId: string; reason: string; expectedCurrent?: (intent: TIntent) => boolean }) => Promise<{ status: string }>;
 	    cancel: (input: { sessionId: string }) => Promise<TIntent | null>;
 	    clear: (input: { sessionId: string }) => Promise<TIntent | null>;
     rearmAfterConfirmedEffectOwnerLoss: (input: {
@@ -191,6 +192,34 @@ function strategy(overrides: {
 const MAX_SAFE_TIMER_DELAY_MS = 2_147_483_647;
 
 describe('DurableBackoffRecoveryScheduler', () => {
+  it('refuses a replaced intent at authoritative wake admission without touching its recovery state', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-exact-wake-'));
+    const { DurableBackoffRecoveryScheduler } = await loadModule();
+    const fileStore = createRecoveryIntentFileStore<TestIntent>(join(dir, 'intents.json'));
+    const replacement = intent({ lastError: 'replacement-attempt', nextRetryAtMs: 60_000 });
+    const recover = vi.fn(async () => ({ status: 'success' as const }));
+    // An external store writer replaces the attempt between the cached read and durable claim.
+    const store: DurableBackoffRecoveryStore<TestIntent> = {
+      ...fileStore,
+      transact: async (sessionId, transaction) => {
+        await fileStore.write(sessionId, replacement);
+        return await fileStore.transact!(sessionId, transaction);
+      },
+    };
+    const scheduler = new DurableBackoffRecoveryScheduler<TestIntent>(strategy({ store, recover }));
+    try {
+      await scheduler.upsert({ sessionId: 'exact-wake', intent: intent({ lastError: 'original-attempt', nextRetryAtMs: 60_000 }) });
+      await expect(scheduler.wake({ sessionId: 'exact-wake', reason: 'manual',
+        expectedCurrent: current => current.lastError === 'original-attempt',
+      })).resolves.toEqual({ status: 'inactive' });
+      expect(recover).not.toHaveBeenCalled();
+      expect(fileStore.read('exact-wake')).toMatchObject(replacement);
+      expect(scheduler.read('exact-wake')).toMatchObject(replacement);
+    } finally {
+      scheduler.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
   it('persists waiting work and wakes it at the scheduled time', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(1_000));

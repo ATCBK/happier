@@ -51,6 +51,33 @@ function createRegistrar(): { handlers: Map<string, RpcHandler>; registrar: RpcH
 }
 
 describe('registerSessionHandlers session controls', () => {
+  it('routes a daemon-owned live check through daemon custody before native Agent recovery', async () => {
+    const { registerSessionControlHandlers } = await import('./sessionControls');
+    const { handlers, registrar } = createRegistrar();
+    const checkRuntimeAuthUsageLimitRecovery = vi.fn(async () => ({ ok: true, status: 'waiting' }));
+    const checkUsageLimitRecoveryNow = vi.fn(async () => ({ ok: true, status: 'ready' }));
+    registerSessionControlHandlers(registrar, {
+      isUsageLimitRecoveryEnabled: () => true,
+      getSessionMetadata: () => ({ path: '/repo', host: 'test-host', machineId: 'machine-1',
+        homeDir: '/tmp', happyHomeDir: '/tmp/.happier', happyLibDir: '/tmp/.happier/lib', happyToolsDir: '/tmp/.happier/tools',
+        sessionUsageLimitRecoveryV1: SessionUsageLimitRecoveryV1Schema.parse({
+          v: 1, status: 'waiting', resumePromptMode: 'standard', issueFingerprint: 'usage-limit:live-check',
+          armedAtMs: 1_000, resetAtMs: 5_000, nextCheckAtMs: 5_000, attemptCount: 0,
+          maxAttempts: 3, lastProbeError: null, selectedAuth: { kind: 'native' },
+          runtimeAuthRecoveryAttemptId: 'runtime-auth-attempt:live-check',
+        }),
+      }),
+      sessionRuntimeControls: { checkUsageLimitRecoveryNow },
+      checkRuntimeAuthUsageLimitRecovery,
+    });
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'session-1', resumePromptMode: 'off',
+    })).resolves.toEqual({ ok: true, status: 'waiting', sessionId: 'session-1' });
+    expect(checkRuntimeAuthUsageLimitRecovery).toHaveBeenCalledWith({
+      sessionId: 'session-1', attemptId: 'runtime-auth-attempt:live-check', resumePromptMode: 'off',
+    });
+    expect(checkUsageLimitRecoveryNow).not.toHaveBeenCalled();
+  });
   it('reads opened native goal ownership without invoking provider goal refresh', async () => {
     const { registerSessionControlHandlers } = await import('./sessionControls');
     for (const native of [true, false]) {
@@ -348,7 +375,7 @@ describe('registerSessionHandlers session controls', () => {
     });
 
     expect(applyConnectedServiceAuthGeneration).toHaveBeenCalledWith({
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       reason: 'usage_limit',
       expected: { profileId: 'work', groupId: 'happier', generation: '42' },
       authGeneration: {
@@ -357,7 +384,7 @@ describe('registerSessionHandlers session controls', () => {
       },
     });
     expect(readConnectedServiceRuntimeIdentity).toHaveBeenCalledWith({
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       reason: 'same_provider_account_exhausted',
       requireExactProof: true,
       expected: { generation: 42 },

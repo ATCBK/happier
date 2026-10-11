@@ -43,10 +43,11 @@ import {
   resolveQualifiedConnectedAccountServiceForIngressServiceId,
 } from '@/plugins/projection/registry/connectedAccountPurposeCompatibility';
 import {
-  tryDecryptSessionMetadata,
+  tryDecryptSessionOwnerMetadataView,
   type SessionStoredContentCryptoContext,
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { readRuntimeAuthUsageLimitRecoveryAttemptId, type CheckRuntimeAuthUsageLimitRecovery } from '@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl';
 
 import type { RpcHandlerRegistrar } from '../rpc/types';
 
@@ -74,6 +75,7 @@ type RegisterMachineSessionGoalRpcHandlersDeps = Readonly<{
   cancelInactiveSessionUsageLimitRecoveryCheck?: CancelInactiveSessionUsageLimitRecoveryCheck;
   readInactiveSessionUsageLimitRecovery?: ReadInactiveSessionUsageLimitRecovery;
   cancelConnectedServiceRuntimeAuthRecovery?: CancelConnectedServiceRuntimeAuthRecovery;
+  checkRuntimeAuthUsageLimitRecovery?: CheckRuntimeAuthUsageLimitRecovery;
   retryTemporaryThrottleNow?: RetryTemporaryThrottleNow;
   currentMachineId?: string;
   stageUsageLimitRecoveryMutation?: (input: Readonly<{
@@ -156,6 +158,7 @@ async function resolveActionDeps(params: Readonly<{
 
 async function resolveLocalUsageLimitContext(params: Readonly<{
   sessionId: string;
+  operation: UsageLimitOperation;
   deps?: RegisterMachineSessionGoalRpcHandlersDeps;
 }>): Promise<
   | Readonly<{
@@ -174,7 +177,13 @@ async function resolveLocalUsageLimitContext(params: Readonly<{
     idOrPrefix: params.sessionId,
   });
   if (!transport.ok) return { ok: false, result: transportError(transport) };
-  if (transport.rawSession.active === true) {
+  const metadata = tryDecryptSessionOwnerMetadataView({
+    credentials,
+    accountEncryptionMode: transport.accountEncryptionCurrentness.mode,
+    rawSession: transport.rawSession,
+  });
+  const daemonOwnedCheck = params.operation === 'checkNow' && readRuntimeAuthUsageLimitRecoveryAttemptId(metadata) !== null;
+  if (transport.rawSession.active === true && !daemonOwnedCheck) {
     return {
       ok: false,
       result: buildUsageLimitRecoveryOperationError({
@@ -194,10 +203,6 @@ async function resolveLocalUsageLimitContext(params: Readonly<{
       }),
     };
   }
-  const metadata = tryDecryptSessionMetadata({
-    credentials,
-    rawSession: transport.rawSession,
-  });
   const base = {
     ok: true,
     credentials,
@@ -321,7 +326,12 @@ async function executeUsageLimitControl(params: Readonly<{
       sessionId: parsed.data.sessionId,
     });
   }
-  const resolved = await resolveLocalUsageLimitContext({ sessionId: parsed.data.sessionId, deps: params.deps });
+  const resolved = await resolveLocalUsageLimitContext({
+    sessionId: parsed.data.sessionId,
+    operation: params.operation === 'checkNow' && 'operation' in parsed.data && parsed.data.operation === 'switch_account_now'
+      ? 'switchAccountNow' : params.operation,
+    deps: params.deps,
+  });
   if (!resolved.ok) {
     return normalizeUsageLimitRecoveryOperationResult(resolved.result, {
       sessionId: parsed.data.sessionId,
@@ -352,6 +362,9 @@ async function executeUsageLimitControl(params: Readonly<{
       sessionId: resolved.sessionId,
     }),
     stageUsageLimitRecoveryMutation,
+    ...(params.deps?.checkRuntimeAuthUsageLimitRecovery
+      ? { checkRuntimeAuthUsageLimitRecovery: params.deps.checkRuntimeAuthUsageLimitRecovery }
+      : {}),
     resumePromptTierSources: {
       accountSettings: getActiveAccountSettingsSnapshot()?.settings ?? null,
       loadGroupPolicy: async (selectedAuth: SessionUsageLimitRecoveryV1['selectedAuth'] | null) => {
