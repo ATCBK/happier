@@ -1809,7 +1809,7 @@ const enContextPages = {
     memoryTitle: "Project memory",
     memoryDescription: "Facts any session here can use.",
     memoryDescriptionTeam: ({ team }: { team: string }) => `Facts any session here can use. ${team}’s sessions read them too.`,
-    memoryEmpty: "No project memory yet. Attach a memory document below and sessions here remember into it.",
+    memoryEmpty: "Nothing remembered for this project yet. Facts appear here when a session here with memory on remembers something.",
     sharedWith: ({ team }: { team: string }) => `Shared with ${team}`,
     canRead: "Can read",
     canEdit: "Can edit",

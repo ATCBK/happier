@@ -13625,7 +13625,7 @@ settingsSession: {
         memoryTitle: "專案記憶",
         memoryDescription: "此處任何工作階段都能使用的事實。",
         memoryDescriptionTeam: ({ team }: { team: string }) => `此處任何工作階段都能使用的事實。${team} 的工作階段也會讀取。`,
-        memoryEmpty: "還沒有專案記憶。在下方附加一份記憶文件，此處的工作階段就會記到其中。",
+        memoryEmpty: "這個專案還沒有記住任何內容。此處開啟記憶的工作階段記住某件事後，會顯示在這裡。",
         sharedWith: ({ team }: { team: string }) => `已與 ${team} 分享`,
         canRead: "可讀取",
         canEdit: "可編輯",

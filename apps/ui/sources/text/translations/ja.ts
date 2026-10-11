@@ -17245,7 +17245,7 @@ settingsSession: {
         memoryTitle: "プロジェクトメモリー",
         memoryDescription: "ここのどのセッションも使える事実。",
         memoryDescriptionTeam: ({ team }: { team: string }) => `ここのどのセッションも使える事実。${team} のセッションも読みます。`,
-        memoryEmpty: "プロジェクトメモリーはまだありません。下でメモリードキュメントを添付すると、ここのセッションがそこに覚えます。",
+        memoryEmpty: "このプロジェクトではまだ何も覚えていません。メモリーをオンにしたここのセッションが何かを覚えると、ここに表示されます。",
         sharedWith: ({ team }: { team: string }) => `${team} と共有`,
         canRead: "閲覧可",
         canEdit: "編集可",

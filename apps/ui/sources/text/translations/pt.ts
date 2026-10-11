@@ -17463,7 +17463,7 @@ settingsSession: {
         memoryTitle: "Memória do projeto",
         memoryDescription: "Fatos que qualquer sessão aqui pode usar.",
         memoryDescriptionTeam: ({ team }: { team: string }) => `Fatos que qualquer sessão aqui pode usar. As sessões de ${team} também os leem.`,
-        memoryEmpty: "Ainda não há memória do projeto. Anexe abaixo um documento de memória e as sessões daqui lembrarão nele.",
+        memoryEmpty: "Nada lembrado para este projeto ainda. Os fatos aparecem aqui quando uma sessão daqui com memória lembra algo.",
         sharedWith: ({ team }: { team: string }) => `Compartilhado com ${team}`,
         canRead: "Pode ler",
         canEdit: "Pode editar",

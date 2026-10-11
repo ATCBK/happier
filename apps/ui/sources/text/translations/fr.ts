@@ -17216,7 +17216,7 @@ settingsSession: {
         memoryTitle: "Mémoire du projet",
         memoryDescription: "Des faits utilisables par toute session ici.",
         memoryDescriptionTeam: ({ team }: { team: string }) => `Des faits utilisables par toute session ici. Les sessions de ${team} les lisent aussi.`,
-        memoryEmpty: "Pas encore de mémoire de projet. Joignez un document de mémoire ci-dessous et les sessions d’ici y mémoriseront.",
+        memoryEmpty: "Rien de mémorisé pour ce projet pour l’instant. Les faits apparaissent ici quand une session d’ici avec mémoire retient quelque chose.",
         sharedWith: ({ team }: { team: string }) => `Partagé avec ${team}`,
         canRead: "Lecture",
         canEdit: "Modification",

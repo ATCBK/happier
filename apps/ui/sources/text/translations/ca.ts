@@ -15388,7 +15388,7 @@ settingsSession: {
         memoryTitle: "Memòria del projecte",
         memoryDescription: "Dades que qualsevol sessió d’aquí pot fer servir.",
         memoryDescriptionTeam: ({ team }: { team: string }) => `Dades que qualsevol sessió d’aquí pot fer servir. Les sessions de ${team} també les llegeixen.`,
-        memoryEmpty: "Encara no hi ha memòria del projecte. Adjunta a sota un document de memòria i les sessions d’aquí hi recordaran.",
+        memoryEmpty: "Encara no hi ha res recordat per a aquest projecte. Les dades apareixen aquí quan una sessió d’aquí amb memòria recorda alguna cosa.",
         sharedWith: ({ team }: { team: string }) => `Compartit amb ${team}`,
         canRead: "Pot llegir",
         canEdit: "Pot editar",

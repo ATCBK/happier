@@ -6,7 +6,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { ArtifactFolderTree, useArtifactFolderCommands, type ArtifactFolderTreeHandle } from '@/components/artifacts/ArtifactFolderTree';
 import { resolveArtifactOpenRoute, type ArtifactBrowserFilter } from '@/components/artifacts/artifactBrowserModel';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
@@ -49,12 +49,10 @@ export const PromptFoldersScreen = React.memo(function PromptFoldersScreen() {
               placeholder={t('artifacts.browser.folders.promptSearch')}
               style={styles.search}
             />
-            <RoundButton
+            <ToolbarButton
               testID="promptFolders.add"
-              size="small"
-              display="secondary"
-              title={t('artifacts.browser.folders.newFolder')}
-              leading={<Icon name="folder-plus" size={14} color={theme.colors.text.secondary} />}
+              label={t('artifacts.browser.folders.newFolder')}
+              icon={<Icon name="folder-plus" size={15} color={theme.colors.text.secondary} />}
               disabled={!folders.canWrite}
               onPress={() => folderTree.current?.createFolder(null)}
             />

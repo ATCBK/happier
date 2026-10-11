@@ -16932,7 +16932,7 @@ settingsSession: {
         memoryTitle: "项目记忆",
         memoryDescription: "此处任何会话都能使用的事实。",
         memoryDescriptionTeam: ({ team }: { team: string }) => `此处任何会话都能使用的事实。${team} 的会话也会读取。`,
-        memoryEmpty: "还没有项目记忆。在下方附加一个记忆文档，此处的会话就会记到其中。",
+        memoryEmpty: "这个项目还没有记住任何内容。此处开启记忆的会话记住某件事后，会显示在这里。",
         sharedWith: ({ team }: { team: string }) => `已与 ${team} 共享`,
         canRead: "可读取",
         canEdit: "可编辑",
