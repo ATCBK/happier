@@ -128,6 +128,8 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
     const [showHistory, setShowHistory] = React.useState(false);
     const [isRefreshing, setIsRefreshing] = React.useState(false);
     const [loadFailed, setLoadFailed] = React.useState(false);
+    // Comments are read when the panel opens; until then the count is unknown, never "0".
+    const [loaded, setLoaded] = React.useState(false);
     const [bulkTransitionResult, setBulkTransitionResult] = React.useState<ReviewCommentBulkTransitionResult | null>(null);
     const [selectedActiveStates, setSelectedActiveStates] = React.useState<readonly ReviewCommentStateV1[]>(
         ACTIVE_REVIEW_COMMENT_STATES,
@@ -147,6 +149,7 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                 limit: 100,
             }) as ReviewCommentListResponseV1;
             setCommentsState((state) => applyReviewCommentList(state, response));
+            setLoaded(true);
             setBulkTransitionResult(null);
         } catch {
             setLoadFailed(true);
@@ -183,8 +186,8 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
             : `machine:${grant.authoritySource.machineId} | installation:${grant.authoritySource.installationId}`
     ), []);
 
-    const openPanel = React.useCallback(() => {
-        setPanelOpen(true);
+    const togglePanel = React.useCallback(() => {
+        setPanelOpen((open) => !open);
     }, []);
 
     const grantDirectWrite = React.useCallback(async (requestId: string) => {
@@ -390,8 +393,9 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
         >
             <ReviewCommentsHeaderButton
                 labels={headerLabels}
-                unresolvedCount={activeCount}
-                onPress={openPanel}
+                unresolvedCount={loaded ? activeCount : null}
+                expanded={panelOpen}
+                onPress={togglePanel}
                 testID={`${props.testID ?? 'review-comments'}-header`}
             />
             {panelOpen ? (

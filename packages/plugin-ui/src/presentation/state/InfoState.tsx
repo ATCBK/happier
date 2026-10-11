@@ -64,14 +64,15 @@ export function HappierStateLine(props: Readonly<{
       minHeight: metrics.minHeightPx,
       paddingHorizontal: metrics.paddingHorizontalPx,
       paddingVertical: metrics.paddingVerticalPx,
+      // One line that wraps its sentence, never its parts: the glyph and the recovery stay beside the
+      // text in a narrow column instead of stacking above and below it.
       flexDirection: 'row',
-      flexWrap: 'wrap',
       alignItems: 'center',
       gap: metrics.gapPx,
     }}>
-      {props.icon ? <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{props.icon}</View> : null}
+      {props.icon ? <View style={{ flexShrink: 0 }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{props.icon}</View> : null}
       <View style={{ flexShrink: 1, minWidth: 0 }}>{props.children}</View>
-      {props.action ?? null}
+      {props.action ? <View style={{ flexShrink: 0, marginLeft: 'auto' }}>{props.action}</View> : null}
     </View>
   );
 }

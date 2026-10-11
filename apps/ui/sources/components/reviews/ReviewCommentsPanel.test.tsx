@@ -112,11 +112,22 @@ describe('review comments panel components', () => {
         const header = await renderScreen(
             <ReviewCommentsHeaderButton
                 unresolvedCount={2}
+                expanded={false}
                 labels={{ title: 'Review comments', count: ({ count }) => `${count}` }}
             />,
         );
         expect(header.getTextContent()).toContain('Review comments');
         expect(header.getTextContent()).toContain('2');
+        // Before the comments are read the count is unknown: the row never claims "0".
+        const unread = await renderScreen(
+            <ReviewCommentsHeaderButton
+                unresolvedCount={null}
+                expanded={false}
+                labels={{ title: 'Review comments', count: ({ count }) => `${count}` }}
+            />,
+        );
+        expect(unread.getTextContent()).toContain('Review comments');
+        expect(unread.getTextContent()).not.toMatch(/\d/);
 
         const onGrant = vi.fn();
         const onCancel = vi.fn();

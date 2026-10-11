@@ -298,6 +298,8 @@ describe('ReviewCommentsSessionSurface', () => {
 
         expect(execute).not.toHaveBeenCalled();
         expect(screen.getTextContent()).not.toContain('Opened from product header.');
+        // Nothing has been read yet, so the header claims no count (never a "0" it doesn't know).
+        expect(screen.getTextContent()).not.toMatch(/\d/);
 
         const header = screen.findByTestId('review-comments-session-header');
         await pressTestInstanceAsync(header, 'review-comments-session-header');
@@ -308,6 +310,11 @@ describe('ReviewCommentsSessionSurface', () => {
             includeHistory: true,
         }));
         expect(screen.getTextContent()).toContain('Opened from product header.');
+        // Read, the header says how many are open; pressed again, the panel closes.
+        expect(screen.getTextContent()).toContain('1');
+        await pressTestInstanceAsync(screen.findByTestId('review-comments-session-header'), 'review-comments-session-header');
+        await flushHookEffects();
+        expect(screen.getTextContent()).not.toContain('Opened from product header.');
     });
 
     it('shows redacted durable comments in history even when their state is still active', async () => {

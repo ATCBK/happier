@@ -394,7 +394,7 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
                         : <SourceControlUnavailableState details={capture.error ?? t('scmComparison.unsupportedReason')} onRetry={capture.retry} /> : null}
                 scopeOptions={scopeOptions} onSelectComparison={(next) => selectTarget({ comparison: next })}
                 onSelectView={(next) => selectTarget({ view: next })} rootPath={props.rootPath}
-                fileCount={capture.comparison?.inventory.files.length ?? changedFiles.allRepositoryChangedFiles.length}
+                fileCount={capture.comparison?.inventory.files.length ?? (snapshot ? changedFiles.allRepositoryChangedFiles.length : null)}
                 reading={reading} marksAvailable={marks.unavailableReason === null && marks.record !== null}
                 modelLabel={bound.viewModel?.producer?.modelId} explain={explain} onExplainChange={(next) => selectTarget({ explain: next })}
                 onExplainDraft={bound.scope && bound.machine && comparison.kind !== 'session' && comparison.kind !== 'turnCheckpoint'
