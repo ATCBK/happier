@@ -89,7 +89,7 @@ export type HappierPressableProps = Readonly<{
   onLongPress?: (event?: HappierGestureResponderEvent) => void;
   /** Web context invocation; this is absent from React Native's native prop model. */
   onContextMenu?: (event: unknown) => void;
-  /** Framework-neutral keyboard hook used by compound selection owners. */
+  /** Framework-neutral keyboard hook used by compound selection owners; inactive while disabled or busy. */
   onKeyDown?: (key: string, event: unknown) => boolean;
   /**
    * Reports this control's own focus transitions to a composite owner.
@@ -330,6 +330,9 @@ export function HappierPressable({
   }, [busy, disabled, focused, onPress]);
 
   const handleKeyDown = useCallback((event: unknown) => {
+    // RNW still forwards custom keys while disabled. Admit them through the
+    // same pending/disabled guard as a press before a compound owner can edit.
+    if (pendingRef.current || disabled === true || busy === true) return;
     const candidate = event as Readonly<{
       preventDefault?: () => void;
       stopPropagation?: () => void;
@@ -357,7 +360,7 @@ export function HappierPressable({
     if (Platform.OS === 'web' && key === 'Enter') consumedKeyboardPressRef.current = key;
     candidate.preventDefault?.();
     candidate.stopPropagation?.();
-  }, [accessibilityRole, handlePress, onKeyDown]);
+  }, [accessibilityRole, busy, disabled, handlePress, onKeyDown]);
 
   const state: HappierPressableState = {
     pressed: pressed && !isDisabled,
@@ -451,10 +454,12 @@ export function HappierPressable({
       // screen reader on the other platform. React Native resolves the aliases
       // over the object, and both are derived here from the same values, so
       // they cannot disagree.
-      accessibilityState={{ busy: isBusy, checked, disabled: isDisabled, expanded, selected: semanticSelected }}
+      accessibilityState={{ busy: isBusy, checked, disabled: isDisabled, expanded,
+        selected: Platform.OS === 'web' ? semanticSelected : selected }}
       aria-busy={isBusy || undefined}
       aria-disabled={isDisabled || undefined}
       aria-selected={Platform.OS === 'web' && current !== undefined ? undefined : semanticSelected}
+      aria-pressed={accessibilityRole === 'button' ? selected : undefined}
       aria-current={current}
       aria-level={accessibilityLevel}
       aria-posinset={accessibilityPositionInSet}
@@ -469,7 +474,7 @@ export function HappierPressable({
       aria-haspopup={hasPopup}
       aria-controls={controls}
       aria-keyshortcuts={keyboardShortcuts}
-      tabIndex={tabIndex}
+      tabIndex={isDisabled ? -1 : tabIndex}
       disabled={isDisabled}
       // Touch targets grow through their physical layout box, never an
       // overlapping hit-slop rectangle. Pointer layouts keep their incumbent

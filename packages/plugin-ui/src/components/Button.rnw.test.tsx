@@ -80,6 +80,43 @@ async function activateWithEnter(button: HTMLElement): Promise<void> {
 }
 
 describe('plugin-ui Button renders real React Native pressable semantics', () => {
+  it.each([
+    { disabled: true, busy: false },
+    { disabled: false, busy: true },
+  ])('blocks compound keyboard edits while unavailable ($disabled disabled, $busy busy)', ({ disabled, busy }) => {
+    function CompoundControl() {
+      const [value, setValue] = useState(0);
+      return (
+        <HappierPressable
+          accessibilityRole="radio"
+          accessibilityLabel="Compound choice"
+          disabled={disabled}
+          busy={busy}
+          tabIndex={0}
+          onPress={() => setValue((current) => current + 1)}
+          onKeyDown={(key) => {
+            if (key !== 'ArrowDown') return false;
+            setValue((current) => current + 1);
+            return true;
+          }}
+        >
+          <span data-testid="compound-value">{value}</span>
+        </HappierPressable>
+      );
+    }
+    const mount = mountSurface(<CompoundControl />);
+    const control = mount.container.querySelector<HTMLElement>('[role="radio"]')!;
+    const key = new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true });
+    act(() => {
+      control.dispatchEvent(key);
+      control.click();
+    });
+    expect(mount.container.querySelector('[data-testid="compound-value"]')?.textContent).toBe('0');
+    expect(key.defaultPrevented).toBe(false);
+    expect(control.tabIndex).toBe(-1);
+    mount.unmount();
+  });
+
   it('activates a tab with Space through the shared pressable owner', async () => {
     function TabSurface() {
       const [selected, setSelected] = useState(false);
