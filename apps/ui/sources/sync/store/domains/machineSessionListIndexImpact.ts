@@ -52,6 +52,23 @@ export function resolveMachineSessionListIndexImpact(params: Readonly<{
         };
     }
 
+    const machineIds = new Set([
+        ...Object.keys(params.previousMachineDisplays),
+        ...Object.keys(params.nextMachineDisplays),
+    ]);
+    const hasGroupingRelevantMachineChange = [...machineIds].some((machineId) => {
+        const previousMachine = params.previousMachineDisplays[machineId];
+        const nextMachine = params.nextMachineDisplays[machineId];
+        return !areMachineReplacementFieldsEqual(previousMachine, nextMachine)
+            || !areMachineDisplayRenderablesEqual(previousMachine, nextMachine);
+    });
+    if (!hasGroupingRelevantMachineChange) {
+        return {
+            needsSessionListIndexRebuild: false,
+            needsProjectManagerUpdate: false,
+        };
+    }
+
     const referencedGroupIds = new Set<string>();
 
     for (const session of params.sessions) {
