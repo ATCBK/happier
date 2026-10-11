@@ -1448,6 +1448,23 @@ can supply ownership evidence when process inventory is incomplete, but cannot
 override recorded foreign-home or foreign-scope facts. The child-environment
 builder publishes the resolved home even when the daemon inherited no home override.
 
+### Usage-limit reset continuation (development)
+
+`RuntimeAuthRecoveryScheduler` owns a daemon-backed wait for the exact failed
+turn. When a directly selected profile reaches its reported reset time, recovery
+admits a continuation through the existing dispatcher and Pending queue instead
+of reclassifying the old failure or merely restarting an idle runner. Native
+quota probes use the same continuation owner when they confirm readiness.
+Admission and provider acceptance are not recovery proof; the existing outcome
+proof must observe successful execution under the selected credential.
+
+Active Session RPC checks, direct prompt revalidation, and CLI/MCP checks route
+daemon-owned attempts to that same scheduler. Provider-local checks remain for
+attempts without daemon ownership; account-switch and reset-credit controls keep
+their existing owners. A failed daemon check does not fall back to a competing
+provider-local scheduler. Cancellation, newer user input, and disabled automatic
+resume take precedence, and the original interrupted input is never replayed.
+
 ### Model-capacity recovery (development)
 
 `TemporaryThrottleRecoveryScheduler` owns scheduling after a terminal capacity failure.
