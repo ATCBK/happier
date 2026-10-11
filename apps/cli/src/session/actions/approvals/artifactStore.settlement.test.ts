@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   API_TOKEN_FULL_GRANT_V1,
+  ApprovalRequestV1Schema,
   ApprovalRequestV2Schema,
   ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES,
   createActionExecutor,
@@ -23,7 +24,11 @@ const http = vi.hoisted(() => ({
   failNextUpdateWith: null as null | Error,
 }));
 vi.mock('axios', () => ({ default: { get: http.get, post: http.post } }));
-vi.mock('@/configuration', () => ({ configuration: { apiServerUrl: 'http://approval-settlement.invalid' } }));
+vi.mock('@/configuration', () => ({ configuration: {
+  apiServerUrl: 'http://approval-settlement.invalid',
+  activeServerId: 'home-1',
+  activeServerDir: '/tmp/happier-cli-approval-settlement-test',
+} }));
 
 const rows = new Map<string, Record<string, unknown>>();
 
@@ -147,6 +152,27 @@ function storedBody(artifactId: string): string {
 }
 
 describe('approval settlement through the real CLI Artifact store', () => {
+  it('keeps retained V1 history readable at its original Home after fail-closed replay', async () => {
+    const store = createStore();
+    const request = ApprovalRequestV1Schema.parse({
+      v: 1, status: 'approved', createdAtMs: 1, updatedAtMs: 2,
+      createdBy: { surface: 'system' }, actionId: 'session.model.set', actionArgs: {},
+      summary: 'Change model', serverId: 'legacy-home',
+      decision: { kind: 'approve', decidedAtMs: 2 },
+    });
+    const { artifactId } = await store.approvalsCreate({ request, serverId: 'legacy-home' });
+    const effect = vi.fn(async () => ({}));
+    const executor = createExecutor(store, { sessionModelSet: effect });
+
+    await expect(executor.replayApprovedApprovalRequest({ artifactId }))
+      .resolves.toMatchObject({ ok: true, result: { status: 'failed' } });
+
+    const persisted = await store.approvalsGet({ artifactId, serverId: 'legacy-home' });
+    expect(persisted).toMatchObject({ v: 1, status: 'failed', execution: { ok: false, errorCode: 'approval_stale' } });
+    expect(await store.approvalsGet({ artifactId, serverId: 'other-home' })).toBeNull();
+    expect(effect).not.toHaveBeenCalled();
+  });
+
   it('durably rejects a deferred approval and keeps only the declared input projection', async () => {
     const store = createStore();
     const effect = vi.fn(async () => ({}));

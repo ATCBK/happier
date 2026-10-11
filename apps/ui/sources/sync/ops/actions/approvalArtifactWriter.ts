@@ -39,7 +39,11 @@ export async function writeApprovalRequestArtifact(input: Readonly<{
     if (!transition.ok) return transition;
     if (!transition.changed) return { ok: true };
     try {
-        await input.write(current, buildApprovalRequestArtifactHeaderV1(input.request), JSON.stringify(input.request));
+        // V1's retained Home marker is history indexing, never replay authority.
+        // Preserve it from this validated CAS basis; V2 still uses its body origin.
+        const legacyServerId = stored.request.v === 1 && typeof current.header.serverId === 'string'
+            ? current.header.serverId : null;
+        await input.write(current, buildApprovalRequestArtifactHeaderV1(input.request, { legacyServerId }), JSON.stringify(input.request));
     } catch (error) {
         if (error instanceof Error && error.message.includes(ARTIFACT_VERSION_CONFLICT_MESSAGE)) {
             return { ok: false, errorCode: 'version_mismatch', error: 'artifact_version_mismatch' };

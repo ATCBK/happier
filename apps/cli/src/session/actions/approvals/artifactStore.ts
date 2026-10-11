@@ -368,7 +368,11 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       if (!transition.ok) return transition;
       if (!transition.changed) return { ok: true };
 
-      const header = buildApprovalRequestArtifactHeaderV1(request, { legacyServerId: serverId });
+      // V1's Home marker belongs to retained history, not replay authority or
+      // the deciding caller's routing hint. Keep this validated CAS basis's index.
+      const header = buildApprovalRequestArtifactHeaderV1(request, {
+        legacyServerId: existing.v === 1 ? normalizeArtifactServerId(existingHeader.serverId) : null,
+      });
       const updated = await accountArtifactStore.update({ artifactId, expectedRevision: artifact.revision,
         header, body: JSON.stringify(request) });
 

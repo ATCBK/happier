@@ -4,7 +4,10 @@ import {
     ARTIFACT_PLAIN_DATA_KEY_MARKER,
     CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
     buildApprovalRequestArtifactHeaderV1,
+    decodePlainArtifactStoredContent,
     encodePlainArtifactStoredContent,
+    type ApprovalRequest,
+    type ApprovalRequestV1,
     type ApprovalRequestV2,
 } from '@happier-dev/protocol';
 
@@ -77,12 +80,12 @@ function openRequest(): ApprovalRequestV2 {
 }
 
 /** Creates the approval Artifact through the Home's own create route. */
-async function seed(request: ApprovalRequestV2): Promise<void> {
+async function seed(request: ApprovalRequest, header = buildApprovalRequestArtifactHeaderV1(request)): Promise<void> {
     const created = await home.artifacts.handle('/v1/artifacts', {
         method: 'POST',
         body: JSON.stringify({
             id: ARTIFACT_ID,
-            header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(request)),
+            header: encodePlainArtifactStoredContent(header),
             body: encodePlainArtifactStoredContent({ body: JSON.stringify(request) }),
             dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
         }),
@@ -105,7 +108,7 @@ const params = { credentials: { token: 'synthetic' }, encryption: null, artifact
 
 /** One UI client: the real read and the real CAS writer against the validated read. */
 function uiWriter() {
-    return async (request: ApprovalRequestV2) => await writeApprovalRequestArtifact({
+    return async (request: ApprovalRequest) => await writeApprovalRequestArtifact({
         artifactId: ARTIFACT_ID,
         request,
         read: async (artifactId) => await fetchArtifactWithBodyFromApi({ ...params, artifactId }),
@@ -127,6 +130,33 @@ const claim = (request: ApprovalRequestV2): ApprovalRequestV2 => ({ ...request, 
 describe('UI approval Artifact writer', () => {
     beforeEach(() => {
         home.artifacts.clear();
+    });
+
+    it('preserves the retained V1 Home history index when settling the validated Artifact', async () => {
+        const request: ApprovalRequestV1 = {
+            v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'system' }, actionId: 'session.model.set',
+            actionArgs: {}, summary: 'Change model',
+        };
+        await seed(request, buildApprovalRequestArtifactHeaderV1(request, { legacyServerId: 'legacy-home' }));
+
+        await expect(uiWriter()({ ...request, status: 'canceled', updatedAtMs: 2 })).resolves.toEqual({ ok: true });
+
+        const row = home.artifacts.read(ARTIFACT_ID)!;
+        expect(decodePlainArtifactStoredContent(row.header)).toMatchObject({
+            serverId: 'legacy-home', approvalStatus: 'canceled',
+        });
+        expect(JSON.parse(storedJson())).toMatchObject({ v: 1, status: 'canceled' });
+    });
+
+    it('refuses a V2 header that contradicts its body Home instead of adopting the index as authority', async () => {
+        const request = openRequest();
+        await seed(request, { ...buildApprovalRequestArtifactHeaderV1(request), serverId: 'other-home' });
+
+        await expect(uiWriter()(approve(request))).resolves.toMatchObject({ ok: false, errorCode: 'subject_mismatch' });
+
+        expect(JSON.parse(storedJson())).toMatchObject({ status: 'open', executionOriginV1: { serverId: 'home-1' } });
+        expect(home.artifacts.read(ARTIFACT_ID)?.headerVersion).toBe(1);
     });
 
     it('lets exactly one of two clients claim approved -> executing', async () => {
