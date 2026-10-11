@@ -60,7 +60,7 @@ describe('ProviderContributionV1Schema', () => {
       catalog: { ...validContribution().catalog, sourceRegistryVersion: 'gateway-sharing/v1' },
     })).toThrow();
   });
-  it('admits shared downstream endpoints for distinct upstream services and rejects undeclared or duplicate routes', () => {
+  it('admits distinct purpose endpoints and rejects undeclared, duplicate, or ambiguous routes', () => {
     const runtime = {
       kind: 'managed' as const,
       endpointTemplateIds: ['responses'],
@@ -72,10 +72,14 @@ describe('ProviderContributionV1Schema', () => {
     });
     expect(() => resolve(runtime)).not.toThrow();
     expect(() => resolve({ ...runtime, connectedAccounts: [{ ...runtime.connectedAccounts[0]!, endpointTemplateIds: ['foreign'] }] })).toThrow();
+    expect(() => resolve({ ...runtime, endpointTemplateIds: ['responses', 'other-responses'], connectedAccounts: [
+      runtime.connectedAccounts[0]!,
+      { purpose: 'other-upstream', service: 'other', endpointTemplateIds: ['other-responses'] },
+    ] })).not.toThrow();
     expect(() => resolve({ ...runtime, connectedAccounts: [
       runtime.connectedAccounts[0]!,
       { purpose: 'other-upstream', service: 'other', endpointTemplateIds: ['responses'] },
-    ] })).not.toThrow();
+    ] })).toThrow();
     expect(() => resolve({ ...runtime, connectedAccounts: [{ ...runtime.connectedAccounts[0]!, endpointTemplateIds: ['responses', 'responses'] }] })).toThrow();
   });
 

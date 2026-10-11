@@ -122,8 +122,8 @@ export function repriceUsageAnalyticsResponse(value: UsageAnalyticsQueryResponse
     cacheSavingsUsd += estimate?.breakdown?.cacheSavingsUsd ?? 0;
     const cost = repriceUsageObservationCost(row.cost, row.modelId, categories, catalog, overrides, mode);
     const existing = resolveUsageCostFacts(cost);
-    const base = { tokens: row.tokens, eventCount: 1, asOfMs: row.observedAtMs,
-      complete: value.coverage?.status === 'complete' };
+    const base = { tokens: row.tokens, eventCount: row.eventCount ?? 1, asOfMs: row.observedAtMs,
+      complete: row.eventCount !== undefined && value.coverage?.status === 'complete' };
     for (const fact of existing) facts.push({ ...base, ...fact, currency: fact.kind === 'api_equivalent' ? 'USD' : fact.currency });
     if (!estimate && row.tokens.total > 0) facts.push({ ...base, kind: 'unpriced', currency: 'USD', amountUsd: null,
       source: categories ? 'model_price_unknown' : 'token_categories_unknown', complete: false });

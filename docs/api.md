@@ -1882,6 +1882,8 @@ subsets must not be added again to inclusive input/output counters.
 
 Cost facts keep reported, estimated, API-equivalent and invoice amounts separate
 by currency and source. Unpriced tokens carry null money, not a fabricated zero.
+Repricing preserves each contribution's witnessed event count. Older contributions
+without that count retain the single-event fallback but cannot claim complete cost facts.
 `costPresentation` is omitted when the selected population has no single honest
 monetary basis. API-equivalent pricing is not paid spend; allowance state and
 live context-window state are separate domains, not accounting totals.
