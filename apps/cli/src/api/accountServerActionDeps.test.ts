@@ -527,6 +527,9 @@ describe('Account API token HTTP adapter', () => {
       contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) }, createdAtMs: 1, updatedAtMs: 1 }] };
     let graphRevision = 1;
     app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 0 }));
+    app.get('/v1/machines', async () => [sourceParent, workerParent, ...(kind === 'ordinary' ? [] : [child]), unrelated]
+      .map(ref => ({ id: ref.machineId, active: true, revokedAt: null, replacedByMachineId: null,
+        devcontainerChild: ref.machineId === child.machineId ? projection : null })));
     app.get('/v1/machines/:id', async request => {
       const id = (request.params as { id: string }).id;
       return { machine: { id, active: true, installationId: `${id}-installation`, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
@@ -607,6 +610,8 @@ describe('Account API token HTTP adapter', () => {
         alphaWorkspaceRefId: source.id, betaWorkspaceRefId: worker.id, mode: 'keep_synced', enabled: false,
         contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) }, createdAtMs: 1, updatedAtMs: 1 }];
       app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 0 }));
+      app.get('/v1/machines', async () => [source, worker].map(ref => ({ id: ref.machineId,
+        active: true, revokedAt: null, replacedByMachineId: null })));
       app.get('/v1/machines/:id', async request => {
         const id = (request.params as { id: string }).id;
         return { machine: { id, active: true, installationId: `${id}-installation`, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,

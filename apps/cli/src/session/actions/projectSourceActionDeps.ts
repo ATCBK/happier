@@ -34,6 +34,15 @@ export function createCliProjectSourceActionDeps(params: Readonly<{
     try {
       const denied = await params.admitAccount(serverId, context);
       if (denied) return denied;
+      // Home admission accepts the saved profile spelling. Signed downstream
+      // effects use the original root's portable Home, which the server knows.
+      const signedHomeId = context.externalActionExecutionAuthorization?.binding.serverIdentityId;
+      if (signedHomeId) {
+        const url = new URL(path, params.serverHttpBaseUrl);
+        if (method === 'GET') url.searchParams.set('serverId', signedHomeId);
+        path = `${url.pathname}${url.search}`;
+        if (body && typeof body === 'object') body = { ...body, serverId: signedHomeId };
+      }
       context.signal?.throwIfAborted();
       const headers = await params.resolveRequestHeaders(context, actionId, { method, path,
         ...(body === undefined ? {} : { body }) });

@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import tweetnacl from 'tweetnacl';
 import { ExternalActionExecutionAuthorizationV1Schema,
   type ExternalActionExecutionAuthorizationV1,
+  type ExternalActionExecutionAuthorizationBindingV1,
   type ExternalActionRequesterAccountProjectionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
@@ -316,6 +317,14 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
   } catch { live = false; return null; }
 }
 
+/** Original own custody excludes delegated Session/Workflow requests and foreign Accounts. */
+export function isOriginalOwnAccountActionCustody(binding: ExternalActionExecutionAuthorizationBindingV1): boolean {
+  return 'authentication' in binding
+    && (binding.authentication.kind === 'account' || binding.authentication.kind === 'terminal')
+    && !binding.sessionActionOrigin && !binding.workflowActionOrigin
+    && binding.accountId === binding.custodianAccountId;
+}
+
 /** One installed ingress for both existing Action and Machine-RPC authorization carriers. */
 export async function prepareRequesterAccountActionContext(input: Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
@@ -341,9 +350,7 @@ export async function prepareRequesterAccountActionContext(input: Readonly<{
   const recipient = finiteWake?.target.controller ?? { machineId: root.data.binding.machineId,
     installationId: root.data.binding.installationId };
   if (recipient.machineId !== input.machineId || recipient.installationId !== input.installationId) return null;
-  const regularOwnAccount = 'authentication' in root.data.binding && root.data.binding.authentication.kind === 'account'
-    && !root.data.binding.sessionActionOrigin && !root.data.binding.workflowActionOrigin
-    && root.data.binding.accountId === root.data.binding.custodianAccountId;
+  const regularOwnAccount = isOriginalOwnAccountActionCustody(root.data.binding);
   const hasBox = finiteWake ? Boolean(finiteWake.requesterAccountContext) : Boolean(root.data.requesterAccountContext);
   const encoded = hasBox ? openExternalActionRequesterAccountContextV1(input) : null;
   const credentials = hasBox
