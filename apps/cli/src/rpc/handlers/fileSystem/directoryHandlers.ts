@@ -196,7 +196,7 @@ async function getDirectoryTreeForRpc(
   }
 }
 
-function createDirectoryRpcActionExecutor(deps: DirectoryHandlerDeps): RpcActionExecutor {
+export function createDirectoryRpcActionExecutor(deps: DirectoryHandlerDeps): RpcActionExecutor {
   return {
     async execute(actionId: ActionId, input: unknown) {
       if (actionId === 'daemon.filesystem.listDirectory') {

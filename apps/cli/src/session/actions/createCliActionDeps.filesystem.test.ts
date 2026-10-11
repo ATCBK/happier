@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
-import { mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
@@ -82,6 +82,80 @@ function createReviewedFilesystemExecutor(
 }
 
 describe('exact-machine filesystem Actions', () => {
+  it('reads an admitted worktree and refuses outside paths through CLI deps and the full Machine filesystem owner', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-rooted-action-owner-'));
+    const rootPath = join(directory, '.dev', 'worktree', 'accepted');
+    const bytes = Buffer.from([0, 255, 128, 10]);
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'daemon-owner' })).toString('base64url')}.signature`;
+    const client = new ApiMachineClient(token, { id: 'machine-test', encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+    const settings = createActionSettingsProvider({ accountSettings: accountSettingsParse({ actionsSettingsV1: {
+      v: 1, actions: {}, approvalWaivedSurfaces: { 'daemon.filesystem.writeFile': ['rpc'],
+        'daemon.filesystem.createDirectory': ['rpc'], 'daemon.filesystem.rename': ['rpc'], 'daemon.filesystem.delete': ['rpc'] },
+    } }) });
+    const owner = createCliActionExecutor({ token, sessionId: '', mode: 'plain', ctx: null,
+      serverId: 'home', pluginActionExecutionOwner: 'current_process', actionsSettingsProvider: settings,
+      filesystemActionExecute: client.createFilesystemActionExecutor('home') });
+    bindCurrentFilesystemOwner(client, owner);
+    const manager = new RpcHandlerManager({ scopePrefix: 'machine-test', localMachineId: 'machine-test', encryptionMode: 'plain',
+      authorizeRequest: request => authorizeMachineRpcRequest(request, {
+        machineId: 'machine-test', resolveCustodianAccountId: async () => 'daemon-owner',
+        resolveInstallationId: () => 'installation', verifyMachineAdmission: async () => true,
+      }) });
+    const registration = registerFileSystemHandlers(manager, directory, { mutationMachineId: 'machine-test',
+      actionExecutor: { execute: (actionId, input, context) => owner.execute(actionId, input, {
+        ...context, serverId: 'home', externalActionTarget: { kind: 'machine', machineId: 'machine-test' },
+      }) } });
+    const caller = createCliActionExecutor({ token, sessionId: '', mode: 'plain', ctx: null,
+      serverId: 'home', pluginActionExecutionOwner: 'current_process', actionsSettingsProvider: settings,
+      machineActionDirectTargetTransport: { machineId: 'machine-test',
+        // Only the cross-process transport/Home admission lookup is substituted.
+        invoke: (method, params) => manager.handleRequest({ method: `machine-test:${method}`, params,
+          callerAuthority: 'account_automation', machineAdmission: { actorAccountId: 'daemon-owner',
+            custodianAccountId: 'daemon-owner', machineId: 'machine-test', installationId: 'installation',
+            role: 'use', encryptionMode: 'plain' } }) } });
+    const context = { surface: 'rpc' as const, serverId: 'home', runtimeAccountId: 'daemon-owner', authority: 'account_automation' as const,
+      externalActionTarget: { kind: 'machine' as const, machineId: 'machine-test' } };
+    try {
+      const sourcePath = join(directory, 'source');
+      await mkdir(sourcePath);
+      childProcess.execFileSync('git', ['init', sourcePath], { stdio: 'ignore' });
+      childProcess.execFileSync('git', ['-C', sourcePath, '-c', 'user.name=Filesystem test', '-c', 'user.email=filesystem@example.test',
+        'commit', '--allow-empty', '-m', 'Initial'], { stdio: 'ignore' });
+      childProcess.execFileSync('git', ['-C', sourcePath, 'worktree', 'add', '--detach', rootPath], { stdio: 'ignore' });
+      await writeFile(join(rootPath, 'README'), bytes);
+      await writeFile(join(directory, 'outside'), 'private outside bytes');
+      for (const path of ['README', join(rootPath, 'README')]) {
+        expect(await caller.execute('daemon.filesystem.readFile', { rootPath, path }, context))
+          .toEqual({ ok: true, result: { success: true, content: bytes.toString('base64') } });
+      }
+      expect(await caller.execute('daemon.filesystem.readFile', { rootPath, path: join(directory, 'outside') }, context))
+        .toMatchObject({ ok: true, result: { success: false, error: expect.any(String) } });
+      expect(await caller.execute('daemon.filesystem.listDirectory', { rootPath, path: '.' }, context))
+        .toMatchObject({ ok: true, result: { success: true, entries: expect.arrayContaining([expect.objectContaining({ name: 'README', type: 'file' })]) } });
+      expect(await caller.execute('daemon.filesystem.getDirectoryTree', { rootPath, path: '.', maxDepth: 1 }, context))
+        .toMatchObject({ ok: true, result: { success: true, tree: { children: expect.arrayContaining([expect.objectContaining({ name: 'README' })]) } } });
+      expect(await caller.execute('daemon.filesystem.writeFile', { rootPath, path: 'binary', content: bytes.toString('base64') }, context))
+        .toMatchObject({ ok: true, result: { success: true, hash: createHash('sha256').update(bytes).digest('hex') } });
+      expect(await readFile(join(rootPath, 'binary'))).toEqual(bytes);
+      expect(await caller.execute('daemon.filesystem.createDirectory', { rootPath, path: 'folder' }, context))
+        .toEqual({ ok: true, result: { success: true } });
+      expect(await caller.execute('daemon.filesystem.rename', { rootPath, from: 'binary', to: 'folder/moved', overwrite: false }, context))
+        .toEqual({ ok: true, result: { success: true } });
+      expect(await readFile(join(rootPath, 'folder/moved'))).toEqual(bytes);
+      expect(await caller.execute('daemon.filesystem.delete', { rootPath, path: 'folder', recursive: true }, context))
+        .toEqual({ ok: true, result: { success: true } });
+      await expect(stat(join(rootPath, 'folder'))).rejects.toMatchObject({ code: 'ENOENT' });
+      for (const actionId of ['daemon.filesystem.listDirectory', 'daemon.filesystem.getDirectoryTree'] as const) {
+        expect(await caller.execute(actionId, { rootPath, path: directory,
+          ...(actionId === 'daemon.filesystem.getDirectoryTree' ? { maxDepth: 1 } : {}) }, context))
+          .toMatchObject({ ok: true, result: { success: false, error: expect.any(String) } });
+      }
+      expect(await caller.execute('daemon.filesystem.writeFile', { rootPath, path: join(directory, 'outside'),
+        content: bytes.toString('base64') }, context)).toMatchObject({ ok: true, result: { success: false, error: expect.any(String) } });
+      expect(await readFile(join(directory, 'outside'), 'utf8')).toBe('private outside bytes');
+    } finally { await registration.dispose(); await client.shutdown(); await rm(directory, { recursive: true, force: true }); }
+  });
   it('projects a real prepared upload through the ApiMachine factory and full Action terminal output boundary', async () => {
     const rootPath = await mkdtemp(join(tmpdir(), 'happier-upload-full-owner-'));
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'account-one' })).toString('base64url')}.signature`;

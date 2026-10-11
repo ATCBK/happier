@@ -6,7 +6,7 @@ import type { RpcActionExecutor } from '../_actionDispatchAdapter';
 import { writeFileForRpc, type WriteFileRequest, type WriteFileHandlerDeps } from './writeFileForRpc';
 export { writeFileForRpc, type WriteFileRequest, type WriteFileResponse, type WriteFileHandlerDeps } from './writeFileForRpc';
 
-function createWriteFileRpcActionExecutor(deps: WriteFileHandlerDeps): RpcActionExecutor {
+export function createWriteFileRpcActionExecutor(deps: WriteFileHandlerDeps): RpcActionExecutor {
   return {
     async execute(actionId: ActionId, input: unknown) {
       if (actionId !== 'daemon.filesystem.writeFile') {

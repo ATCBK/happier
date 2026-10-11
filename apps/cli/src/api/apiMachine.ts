@@ -122,6 +122,10 @@ import { registerFileSystemHandlers } from '@/rpc/handlers/fileSystem';
 import { createProjectDefinitionAction, registerProjectDefinitionHandlers } from '@/rpc/handlers/projectDefinitions';
 import { projectNativeSystemIo } from '@/workspaces/projectSetup/projectNativeSystemIo';
 import { executeFilesystemMutationAction } from '@/rpc/handlers/fileSystem/pathMutationHandlers';
+import { createReadFileRpcActionExecutor } from '@/rpc/handlers/fileSystem/readFileHandler';
+import { createWriteFileRpcActionExecutor } from '@/rpc/handlers/fileSystem/writeFileHandler';
+import { createDirectoryRpcActionExecutor } from '@/rpc/handlers/fileSystem/directoryHandlers';
+import { FILESYSTEM_MUTATION_ACTION_IDS } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { createPreparedFilesystemTransferActionExecutor, projectPreparedFilesystemActionResult } from '@/machines/transfer/createPreparedFilesystemTransferActionExecutor';
 import type { DirectTransferServerLifecycle } from '@/machines/transfer/directTransferServerLifecycle';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions';
@@ -1639,6 +1643,19 @@ export class ApiMachineClient {
 
     /** Effect dependency reached only after the canonical Action admission. */
     createFilesystemActionExecutor(serverId: string): NonNullable<ActionExecutorDeps['filesystemActionExecute']> {
+        const filesystemDeps = {
+            workingDirectory: this.machineRpcWorkingDirectory, accessPolicy: this.filesystemAccessPolicy,
+            getAdditionalAllowedReadDirs: () => this.additionalAllowedReadDirs,
+            getAdditionalAllowedWriteDirs: () => this.additionalAllowedWriteDirs,
+        };
+        const readFile = createReadFileRpcActionExecutor({ ...filesystemDeps,
+            getAdditionalAllowedReadFiles: () => this.transientSessionMediaReadAllowance.readAllowedReadFiles() });
+        const writeFile = createWriteFileRpcActionExecutor(filesystemDeps);
+        const directory = createDirectoryRpcActionExecutor({ ...filesystemDeps, limits: {
+            listMaxEntries: configuration.filesDirectoryListMaxEntries,
+            treeMaxDepth: configuration.filesDirectoryTreeMaxDepth,
+            treeMaxNodes: configuration.filesDirectoryTreeMaxNodes,
+        } });
         const lifecycle = this.lifecycleDependencies.directPeerServerLifecycle;
         const transfer = lifecycle ? createPreparedFilesystemTransferActionExecutor({ lifecycle,
             admissionDrain: this.lifecycleDependencies.managedActivity?.admissionDrain,
@@ -1679,7 +1696,19 @@ export class ApiMachineClient {
                 const result = await transfer({ ...request, assertCurrentAuthority });
                 return result.success ? result : projectPreparedFilesystemActionResult(result);
             }
-            const result = await executeFilesystemMutationAction({ actionId: request.actionId, input: request.input,
+            // Reuse the incumbent effects without re-entering full Action admission.
+            const inline = request.actionId === 'daemon.filesystem.readFile' ? readFile
+                : request.actionId === 'daemon.filesystem.writeFile' ? writeFile
+                : request.actionId === 'daemon.filesystem.listDirectory' || request.actionId === 'daemon.filesystem.getDirectoryTree'
+                    ? directory : null;
+            if (inline) {
+                await assertCurrentAuthority();
+                const result = await inline.execute(request.actionId, request.input, request.context);
+                return result.ok ? result.result : result;
+            }
+            const actionId = FILESYSTEM_MUTATION_ACTION_IDS.find(id => id === request.actionId);
+            if (!actionId) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+            const result = await executeFilesystemMutationAction({ actionId, input: request.input,
                 workingDirectory: this.machineRpcWorkingDirectory, accessPolicy: this.filesystemAccessPolicy,
                 getAdditionalAllowedReadDirs: () => this.additionalAllowedReadDirs,
                 getAdditionalAllowedWriteDirs: () => this.additionalAllowedWriteDirs,

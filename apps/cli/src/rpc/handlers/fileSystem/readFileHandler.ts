@@ -69,7 +69,7 @@ async function readFileForRpc(data: ReadFileRequest | undefined, deps: ReadFileH
   }
 }
 
-function createReadFileRpcActionExecutor(deps: ReadFileHandlerDeps): RpcActionExecutor {
+export function createReadFileRpcActionExecutor(deps: ReadFileHandlerDeps): RpcActionExecutor {
   return {
     async execute(actionId: ActionId, input: unknown) {
       if (actionId !== 'daemon.filesystem.readFile') {
