@@ -7,6 +7,8 @@ import { openProjectSetupAuthoring, type ProjectSetupAuthoringInput } from './pr
 import { resolveCurrentProjectAuthoringReturn } from '@/components/projects/detail/projectRouteState';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
+export { describeProjectAuthoringOpenFailure, type ProjectAuthoringOpenFailureDescription } from './describeProjectAuthoringOpenFailure';
+
 /** Both visual setup entries consume the same callback; ordinary New Session owns all options. */
 export function useProjectSetupAuthoring(input: ProjectSetupAuthoringInput | null) {
     // A mounted entry owns only its pending opening; retirement cannot cancel the opened draft.
