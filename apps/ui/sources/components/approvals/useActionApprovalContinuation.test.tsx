@@ -14,7 +14,11 @@ import {
     waitForHomeGovernance,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createActionApprovalContinuation, type ActionApprovalContinuation } from './actionApprovalContinuation';
+
+// Keep real Sync/Account custody; only the external Socket transport stays disconnected.
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 /**
  * The shared result-custody owner, over the real approval lifecycle.
@@ -35,6 +39,7 @@ const { createServerAccountScope } = await import('@/sync/domains/scope/serverAc
 
 const ACCOUNT_ID = 'account-a';
 const TEAM_UPDATE_PATH = '/v1/teams/update';
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
 /** One Home whose Account explicitly requires approval for a Team rename. */
 async function addApprovalHome(): Promise<string> {
@@ -44,6 +49,17 @@ async function addApprovalHome(): Promise<string> {
         accountId: ACCOUNT_ID,
         teamsEnabled: true,
     });
+    const home = harness.findByServerUrl('https://approval-continuation.example');
+    if (!home?.token) throw new Error('Expected the saved Home credential');
+    connection = await restoreServerAccountForTest({
+        serverUrl: home.serverUrl,
+        accountId: ACCOUNT_ID,
+        credentials: { token: home.token },
+        request: harness.request,
+    });
+    installHomeGovernanceBoundaries(harness);
+    const { storage } = await import('@/sync/domains/state/storage');
+    await waitForHomeGovernance(() => expect(storage.getState().settingsScope).toEqual({ serverId, accountId: ACCOUNT_ID }));
     await harness.requireUiApproval(serverId, 'teams.update');
     return serverId;
 }
@@ -74,10 +90,17 @@ async function renderContinuation(serverId: string, onExecuted: () => void = vi.
 describe('useActionApprovalContinuation', () => {
     beforeEach(async () => {
         standardCleanup();
+        await connection?.dispose();
+        connection = null;
         await harness.reset();
+        installDisconnectedServerSocketBoundary();
     });
 
-    afterEach(() => standardCleanup());
+    afterEach(async () => {
+        standardCleanup();
+        await connection?.dispose();
+        connection = null;
+    });
 
     it('claims and clears an executed result before delivering it exactly once', async () => {
         const serverId = await addApprovalHome();

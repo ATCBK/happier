@@ -33,7 +33,8 @@ import {
     machineReplaceInAccount,
     machineRevokeWithProviderCleanup,
 } from '@/sync/ops';
-import { sessionExecutionRunStop } from '@/sync/ops/sessionExecutionRuns';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { Modal } from '@/modal';
 import { buildMachineTerminalSettingsPatch, resolveTerminalHost } from '@/sync/domains/settings/terminalSettings';
 import { useApplySettings } from '@/sync/store/settingsWriters';
@@ -242,6 +243,7 @@ export default function MachineDetailScreen() {
         machineListByServerId,
     }), [activeServerId, machineId, machineListByServerId]);
     const machineServerId = requestedServerId || machineListServerId || activeServerId;
+    const runStopExecution = useMountedActionExecution(machineServerId);
     const [nameDraft, setNameDraft] = useState<{ machineId: string; serverId: string; value: string } | null>(null);
     const currentNameDraft = nameDraft && nameDraft.machineId === machineId
         && areServerProfileIdentifiersEquivalent(nameDraft.serverId, machineServerId) ? nameDraft : null;
@@ -1224,6 +1226,10 @@ export default function MachineDetailScreen() {
                 {/* Execution runs */}
                 {executionRunsState.status !== 'idle' && (
                     <ItemGroup title={t('runs.title')} description={t('machineDetailPage.runsSectionDescription')}>
+                        {runStopExecution.approval.approvalPending && runStopExecution.approval.approvalId ? (
+                            <ActionApprovalPendingNotice message={t('approvals.status.open')}
+                                onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(runStopExecution.approval.approvalId!)}?serverId=${encodeURIComponent(machineServerId)}`)} />
+                        ) : null}
                         {executionRunsState.runs.some((run) => run.status !== 'running') ? <Item
                             title={t('runs.showFinished')}
                             showChevron={false}
@@ -1308,7 +1314,10 @@ export default function MachineDetailScreen() {
                                             if (!sessionId) return;
                                             if (!canStop) return;
                                             setStoppingRunId(run.runId);
+                                            let issued = false;
+                                            let refreshRuns = false;
                                             const stopSessionProcess = async () => {
+                                                if (!runStopExecution.isCurrent()) return;
                                                 const stopResult = await machineStopSession(machineId, sessionId, { serverId: machineServerId });
                                                 if (stopResult.ok) return;
 
@@ -1325,43 +1334,38 @@ export default function MachineDetailScreen() {
                                                     Modal.alert(t('common.error'), stopResult.error || t('runs.stop.failedToStopSession'));
                                                 }
                                             };
-                                            try {
-                                                const res = await sessionExecutionRunStop(
-                                                    sessionId,
-                                                    { runId: run.runId },
-                                                    { serverId: machineServerId },
-                                                );
-                                                if ((res as any)?.ok === false) {
-                                                    const confirmed = await Modal.confirm(
-                                                        t('runs.stop.stopRunFailedTitle'),
-                                                        t('runs.stop.stopRunFailedBody'),
-                                                        { confirmText: t('runs.stop.stopSession'), cancelText: t('common.cancel'), destructive: true },
-                                                    );
-                                                    if (confirmed) {
-                                                        await stopSessionProcess();
-                                                    } else {
-                                                        Modal.alert(t('common.error'), String((res as any).error ?? t('runs.stop.failedToStopRun')));
-                                                    }
+                                            const showStopFailure = async (error: string) => {
+                                                if (!runStopExecution.isCurrent()) return;
+                                                if (!issued) {
+                                                    Modal.alert(t('common.error'), error);
+                                                    return;
                                                 }
-                                            } catch (error) {
                                                 const confirmed = await Modal.confirm(
                                                     t('runs.stop.stopRunFailedTitle'),
                                                     t('runs.stop.stopRunFailedBody'),
                                                     { confirmText: t('runs.stop.stopSession'), cancelText: t('common.cancel'), destructive: true },
                                                 );
-                                                if (confirmed) {
-                                                    await stopSessionProcess();
-                                                } else {
-                                                    Modal.alert(
-                                                        t('common.error'),
-                                                        error instanceof Error ? error.message : t('runs.stop.failedToStopRun'),
-                                                    );
+                                                if (!runStopExecution.isCurrent()) return;
+                                                if (confirmed) await stopSessionProcess();
+                                                else Modal.alert(t('common.error'), error);
+                                            };
+                                            try {
+                                                const res = await runStopExecution.execute('execution.run.stop',
+                                                    { sessionId, runId: run.runId }, { onTransportIssued: () => { issued = true; } });
+                                                refreshRuns = res.ok || issued;
+                                                if (!res.ok) {
+                                                    await showStopFailure(res.error || t('runs.stop.failedToStopRun'));
                                                 }
+                                            } catch (error) {
+                                                refreshRuns = issued;
+                                                await showStopFailure(error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
                                             } finally {
                                                 setStoppingRunId(null);
-                                                const refreshed = await machineExecutionRunsList(machineId, { serverId: machineServerId });
-                                                if (refreshed.ok) {
-                                                    setExecutionRunsState({ status: 'loaded', runs: refreshed.runs });
+                                                if (refreshRuns && runStopExecution.isCurrent()) {
+                                                    const refreshed = await machineExecutionRunsList(machineId, { serverId: machineServerId });
+                                                    if (refreshed.ok && runStopExecution.isCurrent()) {
+                                                        setExecutionRunsState({ status: 'loaded', runs: refreshed.runs });
+                                                    }
                                                 }
                                             }
                                         };

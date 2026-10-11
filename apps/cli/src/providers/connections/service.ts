@@ -141,7 +141,7 @@ export function createProviderConnectionService(deps: ProviderConnectionServiceD
     return result.ok ? DaemonProviderConnectionMutationResponseV1Schema.parse(result.result) : accountFailure(result);
   };
   const flatAccountMutation = async (request: ProviderActionRequestV1,
-    preparedSavedSecret?: ProviderConnectionCreateInput['preparedSavedSecret']) => {
+    preparedSavedSecret?: ProviderConnectionCreateInput['preparedSavedSecret']): Promise<ProviderConnectionServiceResult<ProviderConnectionView>> => {
     const result = await connectionMutation(request, preparedSavedSecret);
     if (result.status === 'error') return result;
     if ('connection' in result) return { status: 'success' as const, ...result.connection };
@@ -187,10 +187,10 @@ export function createProviderConnectionService(deps: ProviderConnectionServiceD
         return { status: 'error', error: createProviderErrorV1('provider_rpc_response_invalid', { machineId: deps.machineId }) };
       });
     },
-    update: (value: Extract<DaemonProviderConnectionMutationRequestV1, { action: 'update' }>) => withIntent(value, flatAccountMutation),
-    duplicate: (value: Omit<ConnectionIntent<'duplicate'>, 'newConnectionId'> & { newConnectionId: string }) => withIntent(value, flatAccountMutation),
+    update: (value: Extract<DaemonProviderConnectionMutationRequestV1, { action: 'update' }>) => withIntent<ProviderConnectionView>(value, flatAccountMutation),
+    duplicate: (value: Omit<ConnectionIntent<'duplicate'>, 'newConnectionId'> & { newConnectionId: string }) => withIntent<ProviderConnectionView>(value, flatAccountMutation),
     delete: async (value: ConnectionIntent<'delete'>): Promise<ProviderConnectionServiceResult<{ connectionId: string }>> => {
-      return withIntent(value, async request => {
+      return withIntent<{ connectionId: string }>(value, async request => {
         const result = await connectionMutation(request);
         if (result.status === 'error') return result;
         if ('deletedConnectionId' in result) return { status: 'success', connectionId: result.deletedConnectionId };

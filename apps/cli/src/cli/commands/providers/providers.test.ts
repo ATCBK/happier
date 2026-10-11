@@ -228,14 +228,27 @@ describe('happier providers command domain', () => {
     await expect(executeProvidersCommand(args, deps)).rejects.toMatchObject({ code: 'approval_canceled' });
     expect(h.getRaw()).toEqual(before);
     decision = 'approve';
-    await expect(executeProvidersCommand(args, deps)).resolves.toMatchObject({ ok: true });
+    const approved = await executeProvidersCommand(args, deps);
+    expect(approved).toMatchObject({ ok: true });
+    if (!approved.ok || typeof approved.data !== 'object' || approved.data === null
+      || !('connectionId' in approved.data) || typeof approved.data.connectionId !== 'string') {
+      throw new Error('Expected the approved command to return its connection');
+    }
     expect((h.getRaw().secrets as readonly unknown[])).toContainEqual(prepared.record);
-    const connectionId = workflow === 'local-create' ? 'pc_4' : 'pc_1';
-    expect(settings(h.getRaw()).secretBindingsByConnectionId[connectionId]?.byMachineId?.['machine-a'])
-      .toEqual({ apiKey: prepared.id });
+    const bindings = settings(h.getRaw()).secretBindingsByConnectionId[approved.data.connectionId];
+    if (workflow === 'local-create') {
+      expect(bindings?.account).toEqual({ apiKey: prepared.id });
+      expect(bindings?.byMachineId?.['machine-a']).toBeUndefined();
+    } else {
+      expect(bindings?.byMachineId?.['machine-a']).toEqual({ apiKey: prepared.id });
+      expect(bindings?.account).toEqual({ apiKey: existingSavedSecret.id });
+    }
     expect(JSON.stringify(observedInputs)).not.toContain('private-prepared-key');
     expect(JSON.stringify(approvalRecords)).not.toContain('private-prepared-key');
-    expect(approvalRecords).toMatchObject([{ requestedSurface: 'cli', approval: { flow: 'blocking' } }]);
+    expect(approvalRecords.length).toBeGreaterThan(0);
+    for (const record of approvalRecords) {
+      expect(record).toMatchObject({ requestedSurface: 'cli', approval: { flow: 'blocking' } });
+    }
   });
   it('does not delete a connection while canonical CLI Action approval is required', async () => {
     const h = harness();

@@ -15,7 +15,7 @@ function resolveRoot(tree: TreeLike): ReactTestInstance {
     return 'root' in tree ? tree.root : tree;
 }
 
-function restoreGlobal(name: 'requestAnimationFrame' | 'window', previousValue: unknown, hadOwnValue: boolean) {
+function restoreGlobal(name: 'requestAnimationFrame' | 'cancelAnimationFrame' | 'window', previousValue: unknown, hadOwnValue: boolean) {
     if (hadOwnValue) {
         (globalThis as Record<string, unknown>)[name] = previousValue;
         return;
@@ -27,8 +27,11 @@ function restoreGlobal(name: 'requestAnimationFrame' | 'window', previousValue: 
 function installPopoverWebGlobals(options: PopoverWebGlobalsOptions = {}): () => void {
     const hadWindow = Object.prototype.hasOwnProperty.call(globalThis, 'window');
     const hadRequestAnimationFrame = Object.prototype.hasOwnProperty.call(globalThis, 'requestAnimationFrame');
+    const hadCancelAnimationFrame = Object.prototype.hasOwnProperty.call(globalThis, 'cancelAnimationFrame');
     const previousWindow = (globalThis as Record<string, unknown>).window;
     const previousRequestAnimationFrame = (globalThis as Record<string, unknown>).requestAnimationFrame;
+    const previousCancelAnimationFrame = (globalThis as Record<string, unknown>).cancelAnimationFrame;
+    const pendingFrames = new Set<ReturnType<typeof setTimeout>>();
 
     (globalThis as Record<string, unknown>).window = options.window ?? {
         addEventListener: vi.fn(),
@@ -36,16 +39,32 @@ function installPopoverWebGlobals(options: PopoverWebGlobalsOptions = {}): () =>
         setTimeout: globalThis.setTimeout.bind(globalThis),
         clearTimeout: globalThis.clearTimeout.bind(globalThis),
     };
-    (globalThis as Record<string, unknown>).requestAnimationFrame = options.frameScheduler
-        ?? options.requestAnimationFrame
+    const customFrameScheduler = options.frameScheduler ?? options.requestAnimationFrame;
+    (globalThis as Record<string, unknown>).requestAnimationFrame = customFrameScheduler
         ?? ((callback: FrameRequestCallback) => {
-            callback(0);
-            return 0;
+            // A browser frame is deferred. Synchronous callbacks recurse when
+            // the real transcript owner schedules its next layout-settle frame.
+            const timer = setTimeout(() => {
+                pendingFrames.delete(timer);
+                callback(performance.now());
+            }, 0);
+            pendingFrames.add(timer);
+            // Node timers are opaque handles; the browser port uses numeric ids.
+            return timer as unknown as number;
         });
+    if (!customFrameScheduler) {
+        (globalThis as Record<string, unknown>).cancelAnimationFrame = (frame: number) => {
+            const timer = frame as unknown as ReturnType<typeof setTimeout>;
+            if (pendingFrames.delete(timer)) clearTimeout(timer);
+        };
+    }
 
     return () => {
+        for (const timer of pendingFrames) clearTimeout(timer);
+        pendingFrames.clear();
         restoreGlobal('window', previousWindow, hadWindow);
         restoreGlobal('requestAnimationFrame', previousRequestAnimationFrame, hadRequestAnimationFrame);
+        restoreGlobal('cancelAnimationFrame', previousCancelAnimationFrame, hadCancelAnimationFrame);
     };
 }
 
@@ -118,7 +137,11 @@ export function withPopoverWebGlobals<TResult>(
     }
 
     const restore = installPopoverWebGlobals(maybeOptions);
-    return Promise.resolve(runOrOptions()).finally(() => {
-        restore();
-    });
+    return (async () => {
+        try {
+            return await runOrOptions();
+        } finally {
+            restore();
+        }
+    })();
 }

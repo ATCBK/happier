@@ -1,4 +1,5 @@
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -21,7 +22,7 @@ export function createCliAccountProviderActionExecuteV1(params: Readonly<{
   now?: () => number;
   preparedSavedSecret?: Parameters<typeof promoteSavedSecretWithProviderConnectionsCatalog>[0]['preparedSavedSecret'];
 }>): NonNullable<ActionExecutorDeps['providerActionExecute']> {
-  return (request, context) => runWithServerHttpBaseUrl(params.serverHttpBaseUrl, async () => {
+  return (request, context) => runWithServerHttpBaseUrl(params.serverHttpBaseUrl, async (): Promise<ActionExecuteResult> => {
     const store = params.operationContext
       ? createCliProviderConnectionsStoreForOperation({ operationContext: params.operationContext, signal: context.signal })
       : createCliProviderConnectionsStore({ credentials: params.credentials, signal: context.signal,

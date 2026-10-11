@@ -76,7 +76,7 @@ import type {
     ResolvedProviderCatalogParsers,
 } from '../projection/registry/types';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { arePluginMachineMaterializationRefsEqual, PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { arePluginMachineExecutionOriginsEqual, arePluginMachineMaterializationRefsEqual, PluginMachineMaterializationExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
 import { evaluatePluginFinalPolicy } from '@happier-dev/protocol/plugins/actions/policy';
 import { isDynamicPluginResourceContributionV2 } from '@happier-dev/protocol/plugins/contributions/v2';
@@ -2546,7 +2546,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
             || !arePluginMachineMaterializationRefsEqual(beforeMaterialization, afterMaterialization)
             || context.machineId !== afterMaterialization.machineId
         ) return null;
-        const origin = PluginMachineExecutionOriginV1Schema.safeParse({
+        const origin = PluginMachineMaterializationExecutionOriginV1Schema.safeParse({
             serverIdentityId: context.serverIdentityId,
             materializationRef: afterMaterialization,
         });
@@ -2602,10 +2602,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
     const sameExecutionOrigin = (
         left: PluginMachineExecutionOriginV1,
         right: PluginMachineExecutionOriginV1,
-    ): boolean => (
-        left.serverIdentityId === right.serverIdentityId
-        && arePluginMachineMaterializationRefsEqual(left.materializationRef, right.materializationRef)
-    );
+    ): boolean => arePluginMachineExecutionOriginsEqual(left, right);
     const resolveCollectionCandidateModuleCacheKey = (
         source: PluginActivationSource<PluginDaemonModuleNamespace>,
     ): string | undefined => {
@@ -4167,7 +4164,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 : {}),
             readRegisteredPromptAssetAdapters: () => promptAssetAdapters,
             resolvePluginNotifications: () => invocationServiceOwners.notifications,
-            readPluginVoiceProviders: () => resolvedRuntimeRegistryOwner?.voiceProviders ?? [],
+            readPluginVoiceProviders: () => resolvedRuntimeRegistryOwner?.contributes.voiceProviders ?? [],
             revalidatePluginActionCallerMaterialization,
             invokeContributedAction: createHostContributedActionInvoker({
                 invokeContributedAction,

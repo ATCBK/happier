@@ -58,7 +58,7 @@ function refresh(input: RefreshInput, afterChange = false): Promise<ProviderConn
       : commitActiveProviderConnectionsCatalog({ scopeKey, lifetimeToken, catalog });
   };
   let work!: Promise<ProviderConnectionsCatalogSnapshotV1>;
-  work = (async () => {
+  work = (async (): Promise<ProviderConnectionsCatalogSnapshotV1> => {
     while (true) {
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
       if (!context) reloadAfterPending.delete(key);

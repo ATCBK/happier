@@ -302,7 +302,9 @@ function readExpectedExecutionOrigin(expectedExecutionOrigin: unknown): PluginMa
     }
     return Object.freeze({
         serverIdentityId: parsed.data.serverIdentityId,
-        materializationRef: Object.freeze({ ...parsed.data.materializationRef }),
+        ...('materializationRef' in parsed.data
+            ? { materializationRef: Object.freeze({ ...parsed.data.materializationRef }) }
+            : { sourceRef: Object.freeze({ ...parsed.data.sourceRef, sourceCustody: Object.freeze({ ...parsed.data.sourceRef.sourceCustody }) }) }),
     });
 }
 

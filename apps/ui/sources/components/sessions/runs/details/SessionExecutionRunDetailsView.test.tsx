@@ -6,15 +6,18 @@ import {
     ExecutionRunCancelTurnRequestSchema, ExecutionRunEnsureRequestSchema, ExecutionRunGetRequestSchema,
     ExecutionRunGetResponseSchema, ExecutionRunPublicStateSchema,
     ExecutionRunStopRequestSchema, FeaturesResponseSchema,
-    SessionAgentActivityHeadlineV1Schema, SessionStoredMessageContentSchema, V2SessionByIdResponseSchema,
+    SessionAgentActivityHeadlineV1Schema, SessionMessagesPageV1Schema, SessionStoredMessageContentSchema, V2SessionByIdResponseSchema,
     type ExecutionRunPublicState,
 } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS, SocketRpcRequestIdSchema } from '@happier-dev/protocol/socketRpc';
+import { StopSessionResultSchema } from '@happier-dev/protocol/sessionStop';
 import type { NormalizedMessage } from '@happier-dev/session-core/raw';
 
 import { createMachineFixture, createPendingMessageFixture, createSessionFixture, flattenTestStyle,
     renderScreen, standardCleanup } from '@/dev/testkit';
 import { createSessionMessagesFixture, createToolCallMessageFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
+import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
@@ -67,13 +70,16 @@ vi.mock('@/sync/domains/state/browserRecordStorage', async () => {
 
 const boundary = vi.hoisted(() => {
     const requests: Array<Readonly<{ serverUrl: string; targetId: string; method: string; payload: unknown }>> = [];
-    return { call: vi.fn<(method: string, input: unknown) => Promise<unknown>>(), requests };
+    const frames: Array<Readonly<{ serverUrl: string; event: string; payload: unknown }>> = [];
+    return { call: vi.fn<(method: string, input: unknown) => Promise<unknown>>(), requests, frames };
 });
 vi.mock('socket.io-client', async () => {
     const { createSocketIoBoundaryStub } = await import('@/dev/testkit/mocks/socketIo');
     return { io: (serverUrl: string) => {
         const { socket } = createSocketIoBoundaryStub();
+        socket.emit.mockImplementation((event, payload) => { boundary.frames.push({ serverUrl, event, payload }); });
         socket.emitWithAck.mockImplementation(async (event, raw) => {
+            boundary.frames.push({ serverUrl, event, payload: raw });
             if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: ['s1'] };
             if (!raw || typeof raw !== 'object' || !('method' in raw) || typeof raw.method !== 'string' || !('params' in raw)) {
                 throw new Error('Malformed Socket RPC boundary request');
@@ -106,6 +112,7 @@ let structuredMeta: unknown;
 let browserRuntime: SessionBrowserContextRuntime | null = null;
 const httpReads: ServedHomeRequest[] = [];
 let httpSessionAvailable = true;
+let initialHistoryResponse: Promise<Response> | undefined;
 const pendingRows: Array<Readonly<{
     localId: string; recipient: { kind: 'execution_run'; runId: string }; messageRole: 'user';
     content: ReturnType<typeof SessionStoredMessageContentSchema.parse>;
@@ -154,6 +161,15 @@ async function refresh() {
 async function menu() {
     await screen.pressByTestIdAsync('session-run-details-actions-menu');
 }
+async function setActionPolicy(actionsSettingsV1: NonNullable<typeof settingsDefaults.actionsSettingsV1>) {
+    const { sync } = await import('@/sync/sync');
+    await sync.prepareAccountSettingsForDaemonSpawn();
+    expect(getStorage().getState().settingsScope).toEqual({ serverId, accountId: 'account-1' });
+    expect(getStorage().getState().settingsVersion).not.toBeNull();
+    sync.applySettings({ actionsSettingsV1 }, { expectedSettingsScope: getStorage().getState().settingsScope });
+    await sync.prepareAccountSettingsForDaemonSpawn();
+    expect(getStorage().getState().settings.actionsSettingsV1).toMatchObject(actionsSettingsV1);
+}
 function publishMarker(status: ExecutionRunPublicState['status'] = 'running') {
     const marker: NormalizedMessage = {
         id: 'tool-msg-1', localId: null, createdAt: 1, seq: 1, role: 'agent', isSidechain: false,
@@ -180,6 +196,7 @@ beforeEach(async () => {
     latestToolResult = undefined;
     structuredMeta = undefined;
     httpSessionAvailable = true;
+    initialHistoryResponse = undefined;
     pendingRows.length = 0;
     runState = createRun();
     getReply = async () => wireResult();
@@ -188,6 +205,9 @@ beforeEach(async () => {
     resumeReply = async () => ({ ok: true });
     boundary.call.mockReset();
     boundary.requests.length = 0;
+    boundary.frames.length = 0;
+    vi.mocked(Modal.alert).mockReset();
+    vi.mocked(Modal.confirm).mockReset();
     boundary.call.mockImplementation(async (method, input) => {
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) { ExecutionRunGetRequestSchema.parse(input); return getReply(); }
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) { ExecutionRunStopRequestSchema.parse(input); return stopReply(); }
@@ -196,14 +216,16 @@ beforeEach(async () => {
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) return { runs: [runState] };
         if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
             'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { available: true, protocolVersion: 2,
+                features: { detachedScope: true, startAndWait: true },
                 backends: { codex: { available: true, intents: ['review', 'delegate'] } } } },
         } };
-        if (method === RPC_METHODS.STOP_SESSION) return { ok: true };
+        if (method === RPC_METHODS.STOP_SESSION) return StopSessionResultSchema.parse({ status: 'stopped' });
         return { errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'Method not found' };
     });
     httpReads.length = 0;
     home = await serveActionHomes({
-        homes: [{ key: 'home', serverUrl: 'https://run-details-' + (++sequence) + '.test', accountId: 'account-1' }],
+        homes: [{ key: 'home', serverUrl: 'https://run-details-' + (++sequence) + '.test',
+            serverIdentityId: 'srv_run_details_' + sequence, accountId: 'account-1' }],
         route(request) {
             if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
                 features: { execution: { runs: { enabled: true } }, encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
@@ -212,17 +234,18 @@ beforeEach(async () => {
             }));
             if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (request.path === '/v2/sessions/s1' && !httpSessionAvailable) return new Response(null, { status: 404 });
-            if (request.path === '/v2/sessions/s1') return Response.json(V2SessionByIdResponseSchema.parse({ session: {
-                id: 's1', encryptionMode: 'plain', metadata: JSON.stringify(getStorage().getState().sessions.s1?.metadata ?? {}),
-                metadataVersion: 1, agentState: null, agentStateVersion: 1, dataEncryptionKey: null, active: true,
-                activeAt: 1, createdAt: 1, updatedAt: 1, seq: 1,
-            } }));
+            if (request.path === '/v2/sessions/s1') return Response.json(V2SessionByIdResponseSchema.parse({
+                session: createPlainSessionCurrentProjectionRecordFixture({ id: 's1', active: true,
+                    metadata: getStorage().getState().sessions.s1?.metadata ?? {},
+                }),
+            }));
             if (request.path.includes('/messages') || request.path.includes('/pending')) {
                 httpReads.push(request);
+                if (request.path.includes('/messages') && initialHistoryResponse) return initialHistoryResponse;
                 return Response.json(request.path.endsWith('/pending')
                     ? { pending: request.path.includes('/execution-runs/run_1/') ? pendingRows : [],
                         discarded: [], pendingVersion: 1, pendingCount: pendingRows.length }
-                    : { messages: [], hasMore: false, nextCursor: null });
+                    : SessionMessagesPageV1Schema.parse({ messages: [], hasMore: false, nextBeforeSeq: null }));
             }
             if (request.path === '/v1/artifacts') return Response.json([]);
             return undefined;
@@ -232,21 +255,22 @@ beforeEach(async () => {
     await restoreConnectionToActiveServer((await TokenStorage.getCredentialsForServerUrl(home.homes.home!.serverUrl))!);
     const machine = createMachineFixture({ id: 'm1', activeAt: Date.now(), storageMode: 'plain' });
     getStorage().setState({
-        sessions: { s1: createSessionFixture({ id: 's1', serverId, active: true,
-            metadata: { path: '/repo', host: 'tester.local', machineId: 'm1', flavor: 'codex' } }) },
+        sessions: {},
         machines: { m1: machine }, machineListByServerId: { [serverId]: [machine] },
         sessionMessages: { s1: createSessionMessagesFixture({ isLoaded: true }) },
         sessionPending: { s1: { messages: [], discarded: [], isLoaded: true } },
         settings: { ...settingsDefaults, backendEnabledByTargetKey: {} },
         settingsScope: { serverId, accountId: 'account-1' }, profileScope: { serverId, accountId: 'account-1' },
     });
+    getStorage().getState().applySessions([createSessionFixture({ id: 's1', serverId, active: true,
+        metadata: { path: '/repo', host: 'tester.local', machineId: 'm1', flavor: 'codex' } })]);
     await ensureSessionDraftRepositoryHydrated({ serverId, accountId: 'account-1' });
 });
 afterEach(async () => {
     standardCleanup();
     restorePopoverWebGlobals?.();
     await disconnectActiveServerConnection();
-    home?.dispose();
+    await home?.dispose();
 });
 
 describe('SessionExecutionRunDetailsView — real Home, transcript and interaction owners', () => {
@@ -310,6 +334,14 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         await mount(); await loaded();
         expect(screen.findByTestId('session-run-details-pre-marker-state')).not.toBeNull();
         expect(screen.getTextContent()).toContain('status.awaitingUpdates');
+        expect(composer()).toHaveLength(0);
+    });
+    it('does not announce waiting for updates for a finished empty Run', async () => {
+        runState = createRun({ status: 'succeeded', finishedAtMs: 2 });
+        await mount(); await loaded();
+        expect(info().run.status).toBe('succeeded');
+        expect(screen.findByTestId('session-run-details-pre-marker-state')).toBeNull();
+        expect(screen.getTextContent()).not.toContain('status.awaitingUpdates');
         expect(composer()).toHaveLength(0);
     });
     it('renders committed direct-start sidechain rows and the exact Run pending queue with one mounted composer', async () => {
@@ -432,9 +464,9 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
     });
     it('refuses Resume through Action policy before issuing its transport', async () => {
         runState = liveRun({ status: 'succeeded', interaction: undefined, lifecycle: { v: 1, state: 'recoverable' } });
-        getStorage().setState(state => ({ settings: { ...state.settings, actionsSettingsV1: {
+        await setActionPolicy({
             v: 1, actions: { 'execution.run.ensure': { disabledSurfaces: ['ui'] } },
-        } } }));
+        });
         await mount(); await loaded();
         await screen.pressByTestIdAsync('session-run-details-resume');
         await vi.waitFor(() => expect(JSON.stringify(screen.tree.toJSON())).toContain('action_disabled'));
@@ -447,11 +479,15 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         runState = liveRun({ inputTurns: { occurrenceId: 'occurrence-1', current: {
             turnId: 'turn-1', inputIds: ['input-1'], state: 'active',
         } } });
-        getStorage().setState(state => ({ settings: { ...state.settings, actionsSettingsV1: {
+        await setActionPolicy({
             v: 1, actions: { [actionId]: { disabledSurfaces: ['ui'] } },
-        } } }));
+        });
         await mount(); await loaded(); await menu();
         await screen.pressByTestIdAsync(testId);
+        if (actionId === 'execution.run.stop') {
+            await vi.waitFor(() => expect(info().stopAction?.stopping).toBe(false));
+            expect(calls(method)).toHaveLength(0);
+        }
         await vi.waitFor(() => expect(JSON.stringify(screen.tree.toJSON())).toContain('action_disabled'));
         expect(calls(method)).toHaveLength(0);
         expect(screen.findByTestId('session-run-details-stop-failed')).toBeNull();
@@ -481,7 +517,11 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
                 payload: { runId: 'run_1' } },
         ]);
         expect(info().stopAction).toBeNull();
-        expect(home.requests.every(request => request.accountId === 'account-1')).toBe(true);
+        // Features is the canonical anonymous discovery endpoint; every private
+        // request must still authenticate as this Run's exact Account.
+        expect(home.requests.filter(request => request.accountId !== 'account-1'
+            && !(request.path === '/v1/features' && request.accountId === null))
+            .map(request => ({ path: request.path, accountId: request.accountId }))).toEqual([]);
     });
     it('keeps whole-Run Stop busy until its actual transport request settles', async () => {
         runState = liveRun();
@@ -504,9 +544,24 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
     it('loads main transcript history before failing closed on an absent Run, then offers a way out', async () => {
         getStorage().setState({ sessionMessages: { s1: createSessionMessagesFixture({ isLoaded: false }) } });
         getReply = async () => ({ ok: false, error: 'Run not found', errorCode: 'execution_run_not_found' });
+        let respond!: (response: Response) => void;
+        initialHistoryResponse = new Promise(resolve => { respond = resolve; });
+        const { sync } = await import('@/sync/sync');
+        // Opening the real Session route admits its initial page; the older-page
+        // reader deliberately cannot fabricate pagination before this response.
+        const hydration = sync.ensureSessionVisibleForMessageRoute('s1', {
+            forceRefresh: true, serverId, awaitMessageHydration: true,
+        });
+        await vi.waitFor(() => expect(httpReads.some(request => request.path.includes('/messages')
+            && request.url.searchParams.get('scope') === 'main')).toBe(true));
         const close = vi.fn();
         await mount({ onRequestClose: close });
-        await vi.waitFor(() => expect(httpReads.some(request => request.path.includes('/messages'))).toBe(true));
+        expect(screen.findByTestId('session-run-details-gone')).toBeNull();
+        expect(close).not.toHaveBeenCalled();
+        await act(async () => {
+            respond(Response.json(SessionMessagesPageV1Schema.parse({ messages: [], hasMore: false, nextBeforeSeq: null })));
+            expect(await hydration).toMatchObject({ kind: 'available' });
+        });
         await vi.waitFor(() => expect(screen.findByTestId('session-run-details-gone')).not.toBeNull());
         expect(screen.findByTestId('session-run-details-loading')).toBeNull();
         await screen.pressByTestIdAsync('session-run-details-gone-action'); expect(close).toHaveBeenCalledOnce();
@@ -543,17 +598,19 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
             findings: [], generatedAtMs: 2,
         } };
         await mount(); await loaded();
-        expect(screen.getTextContent()).toContain('Two findings, one high.');
+        expect(screen.getTextContent()).toContain('The retry banner can double-charge.');
         expect(composer()).toHaveLength(0);
     });
     it('states the other live agents affected before an unconfirmed Run stop falls back to Session stop', async () => {
         runState = liveRun();
         const headline = SessionAgentActivityHeadlineV1Schema.parse({ v: 1, backendId: 'codex', updatedAt: 1,
-            activeEntries: Array.from({ length: 4 }, (_, index) => ({ entryId: 'execution_run:run_' + (index + 1),
-                kind: 'execution_run', title: 'Run ' + (index + 1), status: 'running', updatedAt: 1 })) });
-        getStorage().setState(state => ({ sessions: { s1: { ...state.sessions.s1!, metadata: {
-            ...state.sessions.s1!.metadata!, sessionAgentActivityHeadlineV1: headline,
-        } } } }));
+            activeEntries: Array.from({ length: 3 }, (_, index) => ({ entryId: 'workflow_agent:workflow_1:agent_' + index,
+                kind: 'workflow_agent', title: 'Agent ' + index, status: 'running', updatedAt: 1 })) });
+        const session = getStorage().getState().sessions.s1!;
+        getStorage().getState().applySessions([{ ...session, metadata: {
+            ...session.metadata!, sessionAgentActivityHeadlineV1: headline,
+        } }]);
+        publishMarker();
         stopReply = async () => ({ ok: false, error: 'Not confirmed', errorCode: 'rpc_timeout' });
         vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
         await mount(); await loaded(); await menu(); await screen.pressByTestIdAsync('session-run-details-stop');
@@ -565,9 +622,55 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
 });
 
 describe('Neighboring user Run Stop admission', () => {
+    it.each(['attached', 'detached'] as const)('cancels the captured %s Stop request after real Socket issuance', async target => {
+        const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+        const execute = createFrontDoorActionExecute();
+        const controller = new AbortController();
+        let issued = false;
+        let settle!: (result: unknown) => void;
+        stopReply = () => new Promise(resolve => { settle = resolve; });
+        const result = execute('execution.run.stop', { sessionId: target === 'attached' ? 's1' : null, runId: 'run_1' }, {
+            surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+            serverId, expectedAccountId: 'account-1', executionRunTargetMachineId: 'm1',
+            signal: controller.signal, onTransportIssued: () => { issued = true; },
+        });
+        await vi.waitFor(() => expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toHaveLength(1));
+        const targetId = target === 'attached' ? 's1' : 'm1';
+        const frame = boundary.frames.find(frame => frame.event === SOCKET_RPC_EVENTS.CALL
+            && frame.payload !== null && typeof frame.payload === 'object'
+            && Reflect.get(frame.payload, 'method') === `${targetId}:${SESSION_RPC_METHODS.EXECUTION_RUN_STOP}`);
+        expect(frame).toBeDefined();
+        if (!frame || !frame.payload || typeof frame.payload !== 'object') throw new Error('The issued Stop must carry a Socket request');
+        const requestId = SocketRpcRequestIdSchema.parse(Reflect.get(frame.payload, 'requestId'));
+        expect(issued).toBe(true);
+        controller.abort();
+        expect(await result).toMatchObject({ ok: false,
+            errorCode: expect.stringMatching(/\S/), error: expect.stringMatching(/\S/) });
+        expect(boundary.frames.filter(frame => frame.event === SOCKET_RPC_EVENTS.CANCEL)).toContainEqual({
+            serverUrl: home.homes.home!.serverUrl, event: SOCKET_RPC_EVENTS.CANCEL, payload: { requestId },
+        });
+        expect(calls(RPC_METHODS.STOP_SESSION)).toEqual([]);
+        await act(async () => settle({ ok: true }));
+    });
+
+    it('refuses a pre-aborted detached Stop before any Socket issuance', async () => {
+        const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+        const controller = new AbortController();
+        controller.abort();
+        let issued = false;
+        await expect(createFrontDoorActionExecute()('execution.run.stop', { sessionId: null, runId: 'run_1' }, {
+            surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+            serverId, expectedAccountId: 'account-1', executionRunTargetMachineId: 'm1',
+            signal: controller.signal, onTransportIssued: () => { issued = true; },
+        })).rejects.toMatchObject({ name: 'AbortError' });
+        expect(issued).toBe(false);
+        expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toEqual([]);
+        expect(boundary.frames.filter(frame => frame.event === SOCKET_RPC_EVENTS.CANCEL)).toEqual([]);
+    });
+
     async function mountStopSurface(surface: 'runs' | 'machine' | 'subagent') {
-        const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
-        const profile = await setServerProfileIdentityForUrl(home.homes.home!.serverUrl, serverId);
+        const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+        const profile = getServerProfileById(serverId);
         expect(profile?.serverIdentityId).toBe(serverId);
         const original = boundary.call.getMockImplementation()!;
         boundary.call.mockImplementation(async (method, input) => method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST
@@ -607,9 +710,9 @@ describe('Neighboring user Run Stop admission', () => {
     }
 
     it.each(['runs', 'machine', 'subagent'] as const)('refuses %s Stop through Action policy before transport or Session fallback', async surface => {
-        getStorage().setState(state => ({ settings: { ...state.settings, actionsSettingsV1: { v: 1, actions: {
+        await setActionPolicy({ v: 1, actions: {
             'execution.run.stop': { enabled: false, enabledPlacements: [], disabledSurfaces: [], disabledPlacements: [] },
-        } } } }));
+        } });
         const stop = await mountStopSurface(surface);
         const listsBeforeStop = calls(RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST).length;
         await stop();
@@ -639,5 +742,41 @@ describe('Neighboring user Run Stop admission', () => {
         await vi.waitFor(() => expect(calls(RPC_METHODS.STOP_SESSION)).toHaveLength(1));
         expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toHaveLength(1);
         expect(vi.mocked(Modal.confirm)).toHaveBeenCalledOnce();
+        expect(vi.mocked(Modal.alert)).not.toHaveBeenCalled();
+    });
+
+    it('retires a captured Runs Stop callback when its Home signs into another Account', async () => {
+        await mountStopSurface('runs');
+        const stop = screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' })[0]!.props.onPress;
+        await home.switchAccount('home', 'account-2');
+        await act(async () => { await stop(); });
+        expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toEqual([]);
+        expect(calls(RPC_METHODS.STOP_SESSION)).toEqual([]);
+        expect(vi.mocked(Modal.confirm)).not.toHaveBeenCalled();
+    });
+
+    it.each(['runs', 'machine'] as const)('withdraws %s issued Stop failure recovery when its Home Account retires', async surface => {
+        let settle!: (result: unknown) => void;
+        stopReply = () => new Promise(resolve => { settle = resolve; });
+        await mountStopSurface(surface);
+        const onPress = screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' })[0]!.props.onPress;
+        let operation!: Promise<void>;
+        await act(async () => { operation = onPress(); });
+        await vi.waitFor(() => expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toHaveLength(1));
+        const frame = boundary.frames.find(frame => frame.event === SOCKET_RPC_EVENTS.CALL
+            && frame.payload !== null && typeof frame.payload === 'object'
+            && Reflect.get(frame.payload, 'method') === `s1:${SESSION_RPC_METHODS.EXECUTION_RUN_STOP}`);
+        if (!frame || !frame.payload || typeof frame.payload !== 'object') throw new Error('Stop must reach the real Socket before retirement');
+        const requestId = SocketRpcRequestIdSchema.parse(Reflect.get(frame.payload, 'requestId'));
+        await act(async () => { await home.switchAccount('home', 'account-2'); await operation; });
+        expect(boundary.frames.filter(frame => frame.event === SOCKET_RPC_EVENTS.CANCEL)).toContainEqual({
+            serverUrl: home.homes.home!.serverUrl, event: SOCKET_RPC_EVENTS.CANCEL, payload: { requestId },
+        });
+        expect(vi.mocked(Modal.confirm)).not.toHaveBeenCalled();
+        expect(vi.mocked(Modal.alert)).not.toHaveBeenCalled();
+        expect(calls(RPC_METHODS.STOP_SESSION)).toEqual([]);
+        await act(async () => settle({ ok: false, error: 'The retired Run Stop was not confirmed', errorCode: 'rpc_timeout' }));
+        expect(vi.mocked(Modal.confirm)).not.toHaveBeenCalled();
+        expect(calls(RPC_METHODS.STOP_SESSION)).toEqual([]);
     });
 });

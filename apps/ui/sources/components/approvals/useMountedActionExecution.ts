@@ -32,7 +32,7 @@ export function useMountedActionExecution(scopeOrHome: ServerAccountScope | stri
     const approval = useActionApprovalContinuation({ scopeKey, serverId: scope?.serverId ?? '', onExecuted });
     const frontDoor = React.useMemo(() => createFrontDoorActionExecute(), []);
     const execute = React.useCallback(async (actionId: ActionId, input: unknown,
-        operation?: Readonly<{ signal?: AbortSignal; actionRequestId?: ActionExecutorContext['actionRequestId'] }>): Promise<ActionExecuteResult> => {
+        operation?: Readonly<{ signal?: AbortSignal; actionRequestId?: ActionExecutorContext['actionRequestId']; onTransportIssued?: ActionExecutorContext['onTransportIssued'] }>): Promise<ActionExecuteResult> => {
         if (!binding || !scope || !isCurrent()) return retired();
         const cancellation = mergeAbortSignals([lifetime.controller.signal, operation?.signal]);
         try {
@@ -43,6 +43,7 @@ export function useMountedActionExecution(scopeOrHome: ServerAccountScope | stri
             serverId: scope.serverId, expectedAccountId: scope.accountId,
             signal: cancellation.signal,
             ...(operation?.actionRequestId ? { actionRequestId: operation.actionRequestId } : {}),
+            ...(operation?.onTransportIssued ? { onTransportIssued: operation.onTransportIssued } : {}),
         });
         if (!result.ok) return result;
         const pending = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);

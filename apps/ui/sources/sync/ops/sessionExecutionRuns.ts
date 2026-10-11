@@ -76,6 +76,7 @@ function executionRunSessionRpc<R, A>(params: Readonly<{
     payload: A;
     timeoutMs?: number | null;
     signal?: AbortSignal;
+    onIssued?: () => void;
 }>): Promise<R> {
     return params.scope
         ? sessionRpcWithServerAccountScope<R, A>({ ...params, scope: params.scope })
@@ -218,7 +219,7 @@ export async function sessionExecutionRunStart(
 export async function sessionExecutionRunStop(
     sessionId: string,
     request: ExecutionRunStopRequest,
-    opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope }>,
+    opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope; onIssued?: () => void; signal?: AbortSignal }>,
 ): Promise<SessionExecutionRunStopResult> {
     try {
         const serverId = opts?.scope?.serverId ?? resolveExecutionRunSessionServerId(sessionId, opts?.serverId);
@@ -229,6 +230,8 @@ export async function sessionExecutionRunStop(
             scope: opts?.scope,
             method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP,
             payload: request,
+            ...(opts?.onIssued ? { onIssued: opts.onIssued } : {}),
+            ...(opts?.signal ? { signal: opts.signal } : {}),
         });
         const errorResponse = readErrorResponseShape(response);
         if (errorResponse) return errorResponse;
