@@ -3991,6 +3991,10 @@ export const zhHans: TranslationStructure = {
                             }
                         }
                     },
+                    claudeCodeIncludeInNativeHistory: {
+                        title: "在 Claude Code 中显示会话",
+                        subtitle: "将新的 Claude 会话标记为 Happier 来源，包括 Agent SDK 会话。关闭时保留运行时默认值。"
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "强制启用 Agent Teams",
                         subtitle: "在所有由 Happier 启动的 Claude 会话中启用 Claude Code 的实验性 Agent Teams（代理群）功能。"

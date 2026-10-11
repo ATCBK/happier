@@ -3822,6 +3822,10 @@ export const fr: TranslationStructure = {
                             }
                         }
                     },
+                    claudeCodeIncludeInNativeHistory: {
+                        title: "Afficher les sessions dans Claude Code",
+                        subtitle: "Utiliser l’attribution Happier pour les nouvelles sessions Claude, y compris avec l’Agent SDK. Désactivé conserve les valeurs par défaut."
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "Forcer l’activation des Agent Teams",
                         subtitle: "Active les Agent Teams expérimentales de Claude Code (essaim d’agents) dans toutes les sessions Claude démarrées par Happier."

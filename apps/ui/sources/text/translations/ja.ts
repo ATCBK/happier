@@ -4394,6 +4394,10 @@ localTailscale: {
                             }
                         }
                     },
+                    claudeCodeIncludeInNativeHistory: {
+                        title: "Claude Code にセッションを表示",
+                        subtitle: "Agent SDK を含む新しい Claude セッションを Happier として識別します。オフでは実行環境の既定値を維持します。"
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "Agent Teams を強制的に有効化",
                         subtitle: "Happier から開始するすべての Claude セッションで、Claude Code の実験的 Agent Teams（エージェント群）を有効にします。"
