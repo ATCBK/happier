@@ -6,6 +6,7 @@ import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { RpcActionExecutor } from '../_actionDispatchAdapter';
 import { registerActionSpecRpcHandlers } from '../registerActionSpecRpcHandlers';
 import { resolveFilesystemTargetPath } from './accessPolicy/filesystemPathAuthorization';
+import { resolveFilesystemMutationActionExecutor, type FilesystemMutationActionIngress } from './pathMutationHandlers';
 
 /** Translate predecessor path-only carriers without replacing an explicit checkout root. */
 export function registerRootedFilesystemRpcHandlers(params: Readonly<{
@@ -14,6 +15,7 @@ export function registerRootedFilesystemRpcHandlers(params: Readonly<{
   actionIds: readonly ActionId[];
   actionExecutor?: RpcActionExecutor;
   incumbentExecutor: RpcActionExecutor;
+  mutationIngress?: FilesystemMutationActionIngress;
 }>): void {
   const isRootless = (input: unknown): input is Record<string, unknown> =>
     input !== null && typeof input === 'object' && !Array.isArray(input) && !Object.hasOwn(input, 'rootPath');
@@ -22,11 +24,19 @@ export function registerRootedFilesystemRpcHandlers(params: Readonly<{
     rpcHandlerManager: params.rpcHandlerManager,
     actionIds: params.actionIds,
     actionExecutor: params.actionExecutor,
-    resolveActionExecutor: ({ input }) => isRootless(input) ? {
-      // The incumbent owner retains policy-scoped reads and exact transient-file
-      // grants. A receiving requester executor still owns its full Action admission.
-      execute: (actionId, _mapped, context) => params.incumbentExecutor.execute(actionId, input, context),
-    } : params.incumbentExecutor,
+    ...(params.mutationIngress?.mutationMachineId ? {
+      targetMachineId: params.mutationIngress.mutationMachineId, defaultMachineTarget: true,
+    } : {}),
+    resolveActionExecutor: request => {
+      const incumbentExecutor: RpcActionExecutor = isRootless(request.input) ? {
+        // The incumbent owner retains policy-scoped reads and exact transient-file
+        // grants. A receiving requester executor still owns its full Action admission.
+        execute: (actionId, _mapped, context) => params.incumbentExecutor.execute(actionId, request.input, context),
+      } : params.incumbentExecutor;
+      return params.mutationIngress
+        ? resolveFilesystemMutationActionExecutor(params.mutationIngress, request, incumbentExecutor)
+        : incumbentExecutor;
+    },
     mapRequestForMethod: ({ actionId, method, isAlias, input }) => {
       if ((!isAlias && method !== RPC_METHODS.LIST_DIRECTORY) || !isRootless(input)) return { accepted: true, input };
       const path = resolveFilesystemTargetPath({ targetPath: input.path, defaultDirectory: params.workingDirectory });

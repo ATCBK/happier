@@ -4,6 +4,7 @@ import type { FilesystemAccessPolicy } from './accessPolicy/filesystemAccessPoli
 import { registerRootedFilesystemRpcHandlers } from './registerRootedFilesystemRpcHandlers';
 import type { RpcActionExecutor } from '../_actionDispatchAdapter';
 import { writeFileForRpc, type WriteFileRequest, type WriteFileHandlerDeps } from './writeFileForRpc';
+import type { FilesystemMutationActionIngress } from './pathMutationHandlers';
 export { writeFileForRpc, type WriteFileRequest, type WriteFileResponse, type WriteFileHandlerDeps } from './writeFileForRpc';
 
 export function createWriteFileRpcActionExecutor(deps: WriteFileHandlerDeps): RpcActionExecutor {
@@ -28,13 +29,14 @@ export function registerWriteFileHandler(
     accessPolicy: FilesystemAccessPolicy;
     getAdditionalAllowedWriteDirs: () => ReadonlyArray<string>;
     actionExecutor?: RpcActionExecutor;
-  }>,
+  }> & FilesystemMutationActionIngress,
 ): void {
   registerRootedFilesystemRpcHandlers({
     rpcHandlerManager,
     workingDirectory: deps.workingDirectory,
     actionExecutor: deps.actionExecutor,
     incumbentExecutor: createWriteFileRpcActionExecutor(deps),
+    mutationIngress: deps,
     actionIds: ['daemon.filesystem.writeFile'],
   });
 }

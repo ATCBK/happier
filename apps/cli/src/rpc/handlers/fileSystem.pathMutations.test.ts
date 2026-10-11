@@ -10,7 +10,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { registerFileSystemHandlers } from './fileSystem';
 import { writeFileForRpc } from './fileSystem/writeFileForRpc';
 import { executeFilesystemMutationAction, type FilesystemMutationDeps } from './fileSystem/pathMutationHandlers';
-import { FILESYSTEM_MUTATION_ACTION_IDS } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import { FILESYSTEM_MUTATION_ACTION_IDS, FilesystemWriteFileInputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
@@ -44,10 +44,14 @@ function createMutationExecutor(
       actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: options?.requireApproval ? {} : {
         'daemon.filesystem.createDirectory': ['rpc'], 'daemon.filesystem.rename': ['rpc'],
         'daemon.filesystem.delete': ['rpc'], 'daemon.filesystem.copy': ['rpc'],
+        'daemon.filesystem.writeFile': ['rpc'],
       } },
     }) }),
   }, {
     filesystemActionExecute: request => {
+      if (request.actionId === 'daemon.filesystem.writeFile') {
+        return writeFileForRpc(FilesystemWriteFileInputSchema.parse(request.input), deps);
+      }
       const actionId = FILESYSTEM_MUTATION_ACTION_IDS.find(id => id === request.actionId);
       if (!actionId) return Promise.resolve({ ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' });
       return executeFilesystemMutationAction({ ...deps, actionId, input: request.input });
@@ -203,7 +207,7 @@ describe('filesystem path mutations', () => {
     } finally { rmSync(workspace, { recursive: true, force: true }); }
   });
 
-  it('requires the current full owner for semantic RPCs and leaves effects untouched while canonical approval is pending', async () => {
+  it.each(['daemon.filesystem.createDirectory', 'daemon.filesystem.writeFile'] as const)('requires the current full owner for %s and leaves effects untouched while canonical approval is pending', async (actionId) => {
     const workspace = mkdtempSync(join(tmpdir(), 'happier-files-live-owner-'));
     const mgr = new RpcHandlerManager({ scopePrefix: 'machine', localMachineId: 'machine', encryptionMode: 'plain' });
     let owner: RpcActionExecutor | null = null;
@@ -211,9 +215,10 @@ describe('filesystem path mutations', () => {
     const registration = registerFileSystemHandlers(mgr, workspace, {
       mutationMachineId: 'machine', resolveMutationActionExecutor: () => owner,
     });
-    const input = { rootPath: workspace, path: 'pending' };
+    const input = { rootPath: workspace, path: 'pending', ...(actionId === 'daemon.filesystem.writeFile'
+      ? { content: Buffer.from('retained exact bytes').toString('base64'), expectedHash: null } : {}) };
     try {
-      await expect(mgr.invokeLocal('daemon.filesystem.createDirectory', input)).resolves.toMatchObject({
+      await expect(mgr.invokeLocal(actionId, input)).resolves.toMatchObject({
         ok: false, errorCode: 'filesystem_action_owner_unavailable',
       });
       expect(existsSync(join(workspace, 'pending'))).toBe(false);
@@ -221,16 +226,18 @@ describe('filesystem path mutations', () => {
         // Approval Artifact persistence is the genuine external boundary.
         approvalsCreate: async ({ request }) => { requests.push(request); return { artifactId: 'approval' }; },
       });
-      await expect(mgr.invokeLocal('daemon.filesystem.createDirectory', input)).resolves.toMatchObject({
-        kind: 'approval_request_created', artifactId: 'approval', actionId: 'daemon.filesystem.createDirectory',
+      await expect(mgr.invokeLocal(actionId, input)).resolves.toMatchObject({
+        kind: 'approval_request_created', artifactId: 'approval', actionId,
       });
       expect(requests).toEqual([expect.objectContaining({ actionArgs: input })]);
       expect(existsSync(join(workspace, 'pending'))).toBe(false);
       owner = null;
-      await expect(mgr.invokeLocal('daemon.filesystem.createDirectory', input)).resolves.toMatchObject({
+      await expect(mgr.invokeLocal(actionId, input)).resolves.toMatchObject({
         ok: false, errorCode: 'filesystem_action_owner_unavailable',
       });
-      await expect(mgr.invokeLocal(RPC_METHODS.CREATE_DIRECTORY, { path: 'legacy' })).resolves.toEqual({ success: true });
+      await expect(mgr.invokeLocal(actionId === 'daemon.filesystem.writeFile' ? RPC_METHODS.WRITE_FILE : RPC_METHODS.CREATE_DIRECTORY,
+        { path: 'legacy', ...(actionId === 'daemon.filesystem.writeFile' ? { content: Buffer.from('legacy').toString('base64') } : {}) }))
+        .resolves.toMatchObject({ success: true });
       expect(existsSync(join(workspace, 'pending'))).toBe(false);
       expect(existsSync(join(workspace, 'legacy'))).toBe(true);
     } finally {

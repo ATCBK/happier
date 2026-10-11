@@ -79,6 +79,8 @@ export function registerFileSystemHandlers(
     accessPolicy,
     getAdditionalAllowedWriteDirs: resolveWriteDirs,
     actionExecutor: opts?.actionExecutor,
+    resolveMutationActionExecutor: opts?.resolveMutationActionExecutor,
+    mutationMachineId: opts?.mutationMachineId,
   });
   registerDirectoryHandlers(rpcHandlerManager, {
     workingDirectory,

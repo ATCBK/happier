@@ -8,6 +8,7 @@ import { HARD_OPENABLE_CONTENT_MAX_BYTES_V1 } from '@happier-dev/protocol/plugin
 import type { WorkspaceStatFileRequestV1 } from '@happier-dev/protocol';
 
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { ActionId } from '@happier-dev/protocol/actions';
 import { logger } from '@/ui/logger';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import {
@@ -55,6 +56,26 @@ export type FilesystemMutationActionIngress = Readonly<{
   resolveMutationActionExecutor?: () => RpcActionExecutor | null;
   mutationMachineId?: string;
 }>;
+
+const unavailableMutationExecutor: RpcActionExecutor = {
+  async execute() {
+    return { ok: false, errorCode: 'filesystem_action_owner_unavailable', error: 'The current filesystem Action owner is unavailable' };
+  },
+};
+
+/** Rooted mutations share one admission route; only predecessor aliases retain incumbent effects. */
+export function resolveFilesystemMutationActionExecutor(
+  ingress: FilesystemMutationActionIngress,
+  request: Readonly<{ actionId: ActionId; isAlias: boolean; input: unknown }>,
+  incumbentExecutor: RpcActionExecutor,
+): RpcActionExecutor {
+  const data = request.input && typeof request.input === 'object' && !Array.isArray(request.input)
+    ? request.input as Record<string, unknown> : null;
+  if (request.isAlias && request.actionId !== 'daemon.filesystem.copy' && data
+    && data.kind !== 'targeted_action_rpc' && !Object.hasOwn(data, 'rootPath')) return incumbentExecutor;
+  return (ingress.resolveMutationActionExecutor ? ingress.resolveMutationActionExecutor() : ingress.actionExecutor)
+    ?? unavailableMutationExecutor;
+}
 
 type FilesystemMutationExecutionDeps = FilesystemMutationDeps & Readonly<{
   /** Host-derived only for historical unrooted incumbent RPC aliases; never wire input. */
@@ -290,23 +311,10 @@ export function registerFilesystemMutationActionHandlers(
       return { ok: true, result: await executeFilesystemMutationAction({ ...deps, actionId: mutationId, input, incumbentPolicyScope: true }) };
     },
   };
-  const unavailableExecutor: RpcActionExecutor = {
-    async execute() {
-      return { ok: false, errorCode: 'filesystem_action_owner_unavailable', error: 'The current filesystem Action owner is unavailable' };
-    },
-  };
   registerActionSpecRpcHandlers({
     rpcHandlerManager, actionIds,
     ...(deps.mutationMachineId ? { targetMachineId: deps.mutationMachineId, defaultMachineTarget: true } : {}),
-    resolveActionExecutor: ({ actionId, isAlias, input }) => {
-      const data = input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : null;
-      if (isAlias && actionId !== 'daemon.filesystem.copy' && data
-        && data.kind !== 'targeted_action_rpc' && !Object.hasOwn(data, 'rootPath')) return incumbentExecutor;
-      // New semantic calls and rooted aliases must pass the same full admission
-      // owner as external Actions; no local effect fallback may bypass approval.
-      return (deps.resolveMutationActionExecutor ? deps.resolveMutationActionExecutor() : deps.actionExecutor)
-        ?? unavailableExecutor;
-    },
+    resolveActionExecutor: request => resolveFilesystemMutationActionExecutor(deps, request, incumbentExecutor),
     mapRequestForMethod: ({ actionId, input, isAlias }) => {
       const mutationId = actionIds.find((id) => id === actionId);
       if (!mutationId) return { accepted: false, response: failure('Unsupported filesystem mutation', 'unsupported_action') };
