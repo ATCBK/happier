@@ -56,7 +56,6 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { profileDefaults } = await import('@/sync/domains/profiles/profile');
 const { FeedResponseSchema } = await import('@/sync/domains/social/feedTypes');
 const { clearBrowserRecords } = await import('@/sync/domains/state/browserRecordStorage');
-const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
 const { areServerProfileIdentifiersEquivalent } = await import('@/sync/domains/server/serverProfiles');
 const { isMachineOnline } = await import('@/utils/sessions/machineUtils');
 const { resolveServerScopedMachine } = await import('@/sync/store/domains/machines/resolveServerScopedMachine');
@@ -113,12 +112,11 @@ async function restoreCurrentnessAccount(accountId: string) {
     harness.answer(home.serverId, '/v1/account/profile', { body: AccountProfileSchema.parse({ ...profileDefaults, id: accountId }) });
     // The prepared Socket HTTP path and Home-scoped readers must observe the
     // same server answers, not a second transport that returns bootstrap 404s.
-    const request = createServerFetchAtEndpoint({ endpointUrl: home.serverUrl, credentials: { token: home.token } });
     const restored = await restoreServerAccountForTest({
         serverUrl: home.serverUrl,
         serverIdentityId: serverIdentityId,
         accountId,
-        request: (url, init) => request(String(url), init),
+        request: harness.request,
     });
     // Retain the cleanup handle even if readiness fails before setup returns.
     connection = restored;

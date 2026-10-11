@@ -286,7 +286,6 @@ jobs:
         run: |
           yarn -s build:packages
           yarn -s prepare:typecheck:workspaces
-          ./apps/stack/bin/hstack-exec -- node scripts/workspaces/ensureWorkspacePackagesBuiltCli.mjs @happier-dev/plugins-channels @happier-dev/plugins-elevenlabs
       - name: Prepare the canonical CLI runtime closure
         run: yarn workspace @happier-dev/cli build:shared
       - name: Load the prepared Iroh native runtime
@@ -306,6 +305,7 @@ jobs:
           done
           for output in \
             packages/iroh-native/native \
+            apps/server/generated/sqlite-client apps/server/generated/mysql-client \
             apps/cli/tools/unpacked \
             apps/ui/public/monaco apps/ui/public/vendor apps/ui/public/canvaskit.wasm \
             apps/ui/public/happier-password-kdf-worker.js \
@@ -326,6 +326,9 @@ jobs:
           while IFS= read -r -d '' output; do
             case "$output" in
               apps/cli/package.json|apps/ui/package.json|\
+              apps/server/sources/app/api/routes/share/publicShareViewerBundle.generated.ts|\
+              apps/server/sources/storage/enums.generated.ts|\
+              apps/server/prisma/sqlite/schema.prisma|apps/server/prisma/mysql/schema.prisma|\
               apps/cli/src/plugins/projection/registry/sources/generatedBundledPlugins.ts|\
               apps/cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts|\
               apps/cli/src/prompts/assets/generated/pluginDescriptors.ts|\

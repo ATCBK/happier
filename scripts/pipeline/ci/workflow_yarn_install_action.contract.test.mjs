@@ -65,13 +65,24 @@ test('the current-run preparation archive restores native modes, workspace links
   write(workspace, 'node_modules/external/.env', 'secret');
   const generated = 'packages/agents/src/generated/agentIds.ts';
   const untrackedGenerated = 'apps/ui/sources/text/bundledPluginTranslations/ja.generated.ts';
+  const serverGenerated = [
+    'apps/server/sources/app/api/routes/share/publicShareViewerBundle.generated.ts',
+    'apps/server/sources/storage/enums.generated.ts',
+    'apps/server/prisma/sqlite/schema.prisma',
+    'apps/server/prisma/mysql/schema.prisma',
+  ];
   write(workspace, generated, 'export const current = true;');
   write(workspace, untrackedGenerated, 'export const currentLocale = true;');
+  for (const output of serverGenerated) write(workspace, output, `current Server projection: ${output}`);
+  for (const provider of ['sqlite', 'mysql']) {
+    write(workspace, `apps/server/generated/${provider}-client/index.js`, `current ${provider} client`);
+    write(workspace, `apps/server/generated/${provider}-client/.happier-source-schema.sha256`, `${provider} schema identity`);
+  }
   // Git is an external process boundary: the fresh checkout's producer diff is
   // supplied here; the actual archive selection, filesystem and tar stay real.
-  write(root, 'bin/git', '#!/bin/sh\ncase "$1" in\n  diff) printf "packages/agents/src/generated/agentIds.ts\\0" ;;\n  ls-files) printf "apps/ui/sources/text/bundledPluginTranslations/ja.generated.ts\\0" ;;\nesac\n', 0o755);
+  write(root, 'bin/git', `#!/bin/sh\ncase "$1" in\n  diff) printf "${[generated, ...serverGenerated].join('\\0')}\\0" ;;\n  ls-files) printf "${untrackedGenerated}\\0" ;;\nesac\n`, 0o755);
   const result = runShellStep(archive, workspace, runnerTemp, { PATH: `${path.join(root, 'bin')}:${process.env.PATH}` });
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   const consumer = path.join(root, 'consumer');
   fs.mkdirSync(consumer);
   write(consumer, generated, 'stale checkout projection');
@@ -81,6 +92,13 @@ test('the current-run preparation archive restores native modes, workspace links
   assert.equal(restored.status, 0, restored.stderr);
   assert.equal(fs.readFileSync(path.join(consumer, generated), 'utf8'), 'export const current = true;');
   assert.equal(fs.readFileSync(path.join(consumer, untrackedGenerated), 'utf8'), 'export const currentLocale = true;');
+  for (const output of serverGenerated) {
+    assert.equal(fs.readFileSync(path.join(consumer, output), 'utf8'), `current Server projection: ${output}`);
+  }
+  for (const provider of ['sqlite', 'mysql']) {
+    assert.equal(fs.readFileSync(path.join(consumer, `apps/server/generated/${provider}-client/index.js`), 'utf8'), `current ${provider} client`);
+    assert.equal(fs.readFileSync(path.join(consumer, `apps/server/generated/${provider}-client/.happier-source-schema.sha256`), 'utf8'), `${provider} schema identity`);
+  }
   assert.equal(fs.readFileSync(path.join(consumer, 'apps/bootstrap/dist/index.js'), 'utf8'), 'prepared app-workspace dependency');
   assert.equal(fs.readFileSync(path.join(consumer, 'apps/ui/public/canvaskit.wasm'), 'utf8'), 'mandatory Skia web postinstall output');
   assert.equal(fs.readlinkSync(path.join(consumer, 'node_modules/@happier-dev/protocol')), '../../packages/protocol');
