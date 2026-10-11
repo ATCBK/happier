@@ -2498,6 +2498,7 @@ export const fr: TranslationStructure = {
             },
         },
         quota: {
+            refreshing: 'Actualisation de l’utilisation…',
             loading: 'Chargement…',
             error: ({ message }: { message: string }) => `Erreur : ${message}`,
             lastUpdated: ({ time }: { time: string }) => `Dernière mise à jour : ${time}`,

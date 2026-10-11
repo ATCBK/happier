@@ -2739,6 +2739,7 @@ export const pt: TranslationStructure = {
       },
     },
     quota: {
+      refreshing: "Atualizando uso…",
       loading: "Carregando…",
       error: ({ message }: { message: string }) => `Erro: ${message}`,
       lastUpdated: ({ time }: { time: string }) => `Última atualização: ${time}`,

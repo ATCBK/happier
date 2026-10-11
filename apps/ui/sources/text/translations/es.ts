@@ -2713,6 +2713,7 @@ export const es: TranslationStructure = {
       },
     },
     quota: {
+      refreshing: "Actualizando uso…",
       loading: "Cargando…",
       error: ({ message }: { message: string }) => `Error: ${message}`,
       lastUpdated: ({ time }: { time: string }) =>
