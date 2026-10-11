@@ -1,8 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+import { AGENT_IDS, getBuiltInAcpConfig } from '@happier-dev/agents';
 
 import type { PermissionMode } from '@/api/types';
 import type { SessionId } from '@/agent/core';
@@ -16,19 +17,21 @@ import { createRuntimeOverrideSynchronizers } from '@/agent/runtime/createRuntim
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { createSessionProviderInputConsumer } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import type { DetectCliSnapshot } from '@/capabilities/snapshots/cliSnapshot';
 
-const { launchSpec } = vi.hoisted(() => ({ launchSpec: { command: '', args: [] as string[] } }));
+const { launchSpec } = vi.hoisted(() => ({ launchSpec: { command: '', args: [] as string[], resolvedPath: '' } }));
 
 // Managed-tool resolution reads the user's install; point it at a scripted ACP agent subprocess instead.
 vi.mock('@/runtime/managedTools/requireProviderCliLaunchSpec', () => ({
-  requireProviderCliLaunchSpec: () => ({ command: launchSpec.command, args: [...launchSpec.args] }),
+  requireProviderCliLaunchSpec: () => ({ ...launchSpec, args: [...launchSpec.args] }),
 }));
 
 import { createCatalogDefinedAcpBackend } from './createCatalogDefinedAcpBackend';
+import { createCatalogDefinedAcpEntry } from './createCatalogDefinedAcpEntry';
 
 type RecordedRequest = Readonly<{ method: string; params: Record<string, unknown> }>;
 
-function writeCodeBuddyAgentScript(dir: string): { scriptPath: string; callsPath: string; argvPath: string } {
+function writeCodeBuddyAgentScript(dir: string, loadSession = true): { scriptPath: string; callsPath: string; argvPath: string } {
   const callsPath = join(dir, 'calls.jsonl');
   const argvPath = join(dir, 'argv.json');
   const scriptPath = writeAcpTestAgentScript({
@@ -49,7 +52,7 @@ function writeCodeBuddyAgentScript(dir: string): { scriptPath: string; callsPath
         if (request.id === undefined) return;
         appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({ method: request.method, params: request.params ?? {} }) + '\\n');
         if (request.method === 'initialize') {
-          send({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 1, authMethods: [], agentCapabilities: { loadSession: true } } });
+          send({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 1, authMethods: [], agentCapabilities: { loadSession: ${JSON.stringify(loadSession)} } } });
           return;
         }
         if (request.method === 'session/new') {
@@ -89,12 +92,68 @@ async function withCodeBuddyAgent(
     const agent = writeCodeBuddyAgentScript(dir);
     launchSpec.command = process.execPath;
     launchSpec.args = [agent.scriptPath];
+    launchSpec.resolvedPath = agent.scriptPath;
     await run(agent);
   });
 }
 
 // The scripted agent runs outside the scratch dir so Windows can remove it while the child exits.
 const agentCwd = tmpdir();
+
+function createProbeContext(agentId: 'codebuddy' | 'fx' | 'droid', resolvedPath: string): { cliSnapshot: DetectCliSnapshot } {
+  // Every catalog identity gets an unavailable entry; only the scripted provider is installed.
+  const clis = Object.fromEntries(AGENT_IDS.map((id) => [id, { available: false }])) as DetectCliSnapshot['clis'];
+  return {
+    cliSnapshot: {
+      path: null,
+      clis: { ...clis, [agentId]: { available: true, resolvedPath } },
+      tmux: { available: false },
+      windowsTerminal: { available: false },
+    },
+  };
+}
+
+describe('catalog-defined ACP capability detection', () => {
+  it.each(['codebuddy', 'fx', 'droid'] as const)('probes %s through its declared launcher and reports negotiated resume support', async (agentId) => {
+    await withCodeBuddyAgent('happier-catalog-capability-', async ({ scriptPath, callsPath, argvPath }) => {
+      const capability = await createCatalogDefinedAcpEntry(agentId).getCliCapabilityOverride?.();
+      const result = await capability?.detect({
+        request: { id: `cli.${agentId}`, params: { includeAcpCapabilities: true } },
+        context: createProbeContext(agentId, scriptPath),
+      });
+      expect(result).toMatchObject({ available: true, resolvedPath: scriptPath, acp: { ok: true, loadSession: true } });
+      expect(JSON.parse(readFileSync(argvPath, 'utf8'))).toEqual(getBuiltInAcpConfig(agentId)?.launcher.args);
+      expect(readCalls(callsPath).map((call) => call.method)).toEqual(['initialize']);
+    });
+  });
+
+  it('reports the negotiated lack of resume support rather than the static declaration', async () => {
+    await withTempDir('happier-catalog-capability-no-load-', async (dir) => {
+      const { scriptPath } = writeCodeBuddyAgentScript(dir, false);
+      launchSpec.command = process.execPath;
+      launchSpec.args = [scriptPath];
+      launchSpec.resolvedPath = scriptPath;
+      const capability = await createCatalogDefinedAcpEntry('codebuddy').getCliCapabilityOverride?.();
+      const result = await capability?.detect({
+        request: { id: 'cli.codebuddy', params: { includeAcpCapabilities: true } },
+        context: createProbeContext('codebuddy', scriptPath),
+      });
+      expect(result).toMatchObject({ acp: { ok: true, loadSession: false } });
+    });
+  });
+
+  it('keeps ordinary detection free of an unrequested ACP process', async () => {
+    await withCodeBuddyAgent('happier-catalog-capability-base-', async ({ scriptPath, callsPath }) => {
+      const capability = await createCatalogDefinedAcpEntry('codebuddy').getCliCapabilityOverride?.();
+      const result = await capability?.detect({
+        request: { id: 'cli.codebuddy' },
+        context: createProbeContext('codebuddy', scriptPath),
+      });
+      expect(result).toEqual({ available: true, resolvedPath: scriptPath });
+      expect(existsSync(callsPath)).toBe(false);
+    });
+  });
+});
 
 describe('createCatalogDefinedAcpBackend (CodeBuddy Code)', () => {
   it.each(['create', 'resume'] as const)(

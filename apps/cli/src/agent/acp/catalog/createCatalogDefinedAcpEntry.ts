@@ -1,6 +1,7 @@
 import {
   AGENTS_CORE,
-  hasBuiltInAcpConfig,
+  getBuiltInAcpConfig,
+  getProviderCliRuntimeSpec,
   type AgentId,
 } from '@happier-dev/agents';
 
@@ -10,9 +11,11 @@ import { createCatalogDefinedCliAuthSpec } from './auth/createCatalogDefinedCliA
 import { createCatalogDefinedAcpBackend } from './createCatalogDefinedAcpBackend';
 import { createCatalogDefinedCliDetect } from './createCatalogDefinedCliDetect';
 import { createAcpSessionListCatalogHook } from './createAcpSessionListCatalogHook';
+import { resolveAcpCatalogTransportHandler } from './transport/resolveAcpCatalogTransportHandler';
 
 export function createCatalogDefinedAcpEntry(agentId: AgentId): AgentCatalogEntry {
-  if (!hasBuiltInAcpConfig(agentId)) {
+  const config = getBuiltInAcpConfig(agentId);
+  if (!config) {
     throw new Error(`Agent '${agentId}' is not registered as a built-in generic ACP agent`);
   }
 
@@ -29,6 +32,15 @@ export function createCatalogDefinedAcpEntry(agentId: AgentId): AgentCatalogEntr
     },
     getCliDetect: async () => createCatalogDefinedCliDetect(agentId),
     getCliAuthSpec: async () => createCatalogDefinedCliAuthSpec(agentId),
+    getCliCapabilityOverride: async () => {
+      const { createAcpCliCapability } = await import('@/capabilities/probes/createAcpCliCapability');
+      return createAcpCliCapability({
+        agentId,
+        title: getProviderCliRuntimeSpec(agentId).title,
+        acpArgs: [...config.launcher.args],
+        transport: resolveAcpCatalogTransportHandler(config.transportProfile),
+      });
+    },
     vendorResumeSupport: core.resume.vendorResume,
     getAcpBackendFactory: async () => {
       return (opts) => ({ backend: createCatalogDefinedAcpBackend(agentId, opts as never) });
