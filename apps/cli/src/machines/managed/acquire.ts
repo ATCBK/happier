@@ -385,13 +385,12 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
             }
             if (action === 'machines.provisioners.list') {
                 const { resolveRegistryConnectedAccountActionPurposeAuthorizations } = await import('@/daemon/connectedServices/purposeBindings/deriveRegistryConnectedAccountPurposeAuthorizations');
-                const provisioners: ManagedMachineActionOutputV1<'machines.provisioners.list'>['provisioners'] = [];
                 const currentChecks: Array<() => boolean> = [];
                 const signal = options.signal ?? new AbortController().signal;
-                for (const provider of input.runtimeRegistry.contributes.machineProvisioners ?? []) {
+                const entries = await Promise.all((input.runtimeRegistry.contributes.machineProvisioners ?? []).map(async provider => {
                     signal.throwIfAborted();
                     const occurrenceId = input.runtimeRegistry.readPluginOccurrenceId(provider.pluginId);
-                    if (!occurrenceId) continue;
+                    if (!occurrenceId) return null;
                     // Save/acquire admits exactly this Action's purposes. Other
                     // roles recheck captured selections when invoked; their
                     // private scopes cannot become extra acquisition choices.
@@ -405,11 +404,9 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                         && isDeepStrictEqual(authorizations, readAuthorizations());
                     currentChecks.push(isCurrent);
                     if (!authorizations) {
-                        provisioners.push({ contribution: provider.identity, occurrenceId, descriptor: provider.definition });
-                        continue;
+                        return { contribution: provider.identity, occurrenceId, descriptor: provider.definition };
                     }
-                    const credentialPurposes = [];
-                    for (const authorization of authorizations) {
+                    const credentialPurposes = await Promise.all(authorizations.map(async authorization => {
                         const list = input.managedProviderOperationAuthority.listActionFormConnectedAccountOptions;
                         if (!list) throw new ManagedMachineControllerError('credential_unavailable');
                         const choices = await list({ purpose: authorization.purpose, serviceRefs: authorization.serviceRefs, signal });
@@ -417,14 +414,15 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                         if (!isCurrent()) {
                             throw new ManagedMachineControllerError('provider_unavailable');
                         }
-                        credentialPurposes.push({ purpose: { consumer: provider.identity, purpose: authorization.purpose.purpose }, options: [...choices] });
-                    }
-                    provisioners.push({ contribution: provider.identity, occurrenceId, descriptor: provider.definition, credentialPurposes });
-                }
+                        return { purpose: { consumer: provider.identity, purpose: authorization.purpose.purpose }, options: [...choices] };
+                    }));
+                    return { contribution: provider.identity, occurrenceId, descriptor: provider.definition, credentialPurposes };
+                }));
                 if (currentChecks.some(isCurrent => !isCurrent())) {
                     throw new ManagedMachineControllerError('provider_unavailable');
                 }
-                return ManagedMachineActionOutputSchemasV1[action].parse({ controller: input.controller, provisioners });
+                return ManagedMachineActionOutputSchemasV1[action].parse({ controller: input.controller,
+                    provisioners: entries.filter(entry => entry !== null) });
             }
             if (action === 'machines.provisioners.check' || action === 'machines.provisioners.options') {
                 const probe = ManagedMachineActionInputSchemasV1[action].parse(parsed);

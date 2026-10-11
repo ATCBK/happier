@@ -307,6 +307,9 @@ describe('managed acquisition durable custody', () => {
                 schema: { type: 'string', minLength: 1 }, secret: true }],
         }] });
         let native: ReturnType<typeof nativeFixture>;
+        const requestedServices: string[] = [];
+        let releaseInventory!: () => void;
+        const inventoryReady = new Promise<void>(resolve => { releaseInventory = resolve; });
         const runtime = createDaemonConnectedAccountPurposeBindingRuntime({
             resolveQualifiedConnectedAccountV4Support: () => 'advertised',
             establishedRuntimeOwner: { invokeWithReceipt: unavailableTransport, invokeDirectMaterial: unavailableTransport },
@@ -322,6 +325,10 @@ describe('managed acquisition durable custody', () => {
                 listAccounts: async service => {
                     if (availability === 'unavailable') throw new Error('An unauthorized purpose must not read account inventory');
                     if (availability === 'retired') native.retire();
+                    if (availability === 'available') {
+                        requestedServices.push(service.localId);
+                        await inventoryReady;
+                    }
                     return { service, accounts: (['connected', 'needs_reauth'] as const).map(status => ({
                         ref: { service, accountId: `${service.localId}-${status}` }, status,
                         authenticationModeId: 'token', revisionSemantics: 'revisioned' as const, credentialRevision: 'csr_abcdefghijklmnopqrstuv',
@@ -342,6 +349,10 @@ describe('managed acquisition durable custody', () => {
                     optional: requiredAccess.filter(request => request.id === 'cloud'),
                 } } : {}),
                 contributes: { ...manifest.contributes,
+                ...(availability === 'available' ? { machineProvisioners: [
+                    ...manifest.contributes.machineProvisioners,
+                    { ...manifest.contributes.machineProvisioners[0]!, id: 'vm-z' },
+                ] } : {}),
                 actions: manifest.contributes.actions.map(action => action.id === 'acquire'
                     ? { ...action, hostAccess: action.hostAccess?.filter(id => id !== 'maintenance') } : action),
             } }),
@@ -354,6 +365,13 @@ describe('managed acquisition durable custody', () => {
         const nativeDriver = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId: 'home',
             controller, runtimeRegistry: native.runtimeRegistry, ...accountInputs, managedProviderOperationAuthority: authority });
         const result = nativeDriver.execute('machines.provisioners.list', { homeId: 'home', controller }, { requestId: 'catalog-request' });
+        if (availability === 'available') {
+            try {
+                // Independent credential discoveries must reach HTTP together; one slow
+                // service must not prevent the other authorized request from starting.
+                await expect.poll(() => requestedServices).toEqual(['cloud', 'cua', 'cloud', 'cua']);
+            } finally { releaseInventory(); }
+        }
         if (availability === 'retired') await expect(result).rejects.toMatchObject({ code: 'provider_unavailable' });
         else if (availability === 'unavailable') {
             const catalog = await result;
@@ -363,13 +381,14 @@ describe('managed acquisition durable custody', () => {
             expect(catalog).not.toHaveProperty('provisioners.0.credentialPurposes');
         }
         else {
-            await expect(result).resolves.toMatchObject({ controller, provisioners: [{
-                contribution: input.selection.launch.provider, occurrenceId: expect.any(String), credentialPurposes: purposes.slice(0, 2).map(({ purpose, service }) => ({
-                    purpose: { consumer: input.selection.launch.provider, purpose }, options: [{
+            await expect(result).resolves.toMatchObject({ controller, provisioners: [input.selection.launch.provider,
+                { ...input.selection.launch.provider, localId: 'vm-z' }].map(contribution => ({
+                contribution, occurrenceId: expect.any(String), credentialPurposes: purposes.slice(0, 2).map(({ purpose, service }) => ({
+                    purpose: { consumer: contribution, purpose }, options: [{
                         value: { service, accountId: `${service.localId}-connected` }, label: `${service.localId} account`,
                     }],
                 })),
-            }] });
+            })) });
         }
         expect(native.activations()).toBe(0);
         expect(native.effects()).toBe(0);
