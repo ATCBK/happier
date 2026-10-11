@@ -123,15 +123,15 @@
     "./host/registration": {
       "happier-source": "./src/host/registration/index.ts",
       "types": "./dist/host/registration/index.d.ts",
-      "browser": "./dist/host/registration/index.js",
-      "react-native": "./dist/host/registration/index.js",
+      "browser": { "happier-source": "./src/host/registration/index.ts", "default": "./dist/host/registration/index.js" },
+      "react-native": { "happier-source": "./src/host/registration/index.ts", "default": "./dist/host/registration/index.js" },
       "default": "./dist/host/registration/index.js"
     },
     "./host/ui": {
       "happier-source": "./src/host/ui/index.ts",
       "types": "./dist/host/ui/index.d.ts",
-      "browser": "./dist/host/ui/index.js",
-      "react-native": "./dist/host/ui/index.js",
+      "browser": { "happier-source": "./src/host/ui/index.ts", "default": "./dist/host/ui/index.js" },
+      "react-native": { "happier-source": "./src/host/ui/index.ts", "default": "./dist/host/ui/index.js" },
       "default": "./dist/host/ui/index.js"
     },
     "./http": {
@@ -276,7 +276,7 @@
     "./ui/client": {
       "happier-source": "./src/ui/client/index.ts",
       "types": "./dist/ui/client/index.d.ts",
-      "browser": "./dist/ui/client/index.js",
+      "browser": { "happier-source": "./src/ui/client/index.ts", "default": "./dist/ui/client/index.js" },
       "default": "./dist/ui/client/index.js"
     },
     "./voice": {
@@ -287,8 +287,8 @@
     "./voice/client": {
       "happier-source": "./src/voice/client/index.ts",
       "types": "./dist/voice/client/index.d.ts",
-      "browser": "./dist/voice/client/index.js",
-      "react-native": "./dist/voice/client/index.js",
+      "browser": { "happier-source": "./src/voice/client/index.ts", "default": "./dist/voice/client/index.js" },
+      "react-native": { "happier-source": "./src/voice/client/index.ts", "default": "./dist/voice/client/index.js" },
       "default": "./dist/voice/client/index.js"
     },
     "./voice/speech": {
