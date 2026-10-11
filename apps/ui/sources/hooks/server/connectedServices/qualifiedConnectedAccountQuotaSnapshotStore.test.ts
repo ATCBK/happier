@@ -94,6 +94,57 @@ async function flushAsyncTurns(turns = 8): Promise<void> {
 }
 
 describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
+    it.each([
+        { intent: 'retry', policy: 'poll' },
+        { intent: 'retry', policy: 'cached' },
+        { intent: 'join', policy: 'poll' },
+        { intent: 'cancel', policy: 'poll' },
+    ] as const)('handles an unresolved native refresh on $intent for a $policy consumer', async ({ intent, policy }) => {
+        vi.useFakeTimers();
+        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const context = buildContext('server-a', 1);
+        const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
+        const snapshot = { v: 1, ref, activeAccountId: 'provider-work', fetchedAt: 1, staleAfterMs: 30 * 60_000, planLabel: null, accountLabel: null, meters: [] };
+        getQuotaMock.mockResolvedValue({ ref, sourceResolution });
+        snapshotFixture.mockReturnValue(snapshot);
+        let finishRequest!: (response: Response) => void;
+        boundary.refresh.mockReturnValueOnce(new Promise<Response>((resolve) => { finishRequest = resolve; }));
+        const retain = () => {
+            const release = policy === 'poll'
+                ? store.retainQualifiedQuotaSnapshotPolling(key, context)
+                : store.loadQualifiedQuotaSnapshotOnce(key, context);
+            const unsubscribe = store.subscribeQualifiedQuotaSnapshotEntry(key, () => {});
+            return () => { unsubscribe(); release(); };
+        };
+        const release = retain();
+        let releaseAgain = () => {};
+        try {
+            await vi.advanceTimersByTimeAsync(0);
+            const first = store.refreshQualifiedQuotaSnapshot(key, context);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(boundary.refresh).toHaveBeenCalledTimes(1);
+            if (intent !== 'join') release();
+            if (intent === 'retry') releaseAgain = retain();
+            const retry = intent !== 'cancel' ? store.refreshQualifiedQuotaSnapshot(key, context) : undefined;
+            const joined = intent === 'retry' ? store.refreshQualifiedQuotaSnapshot(key, context) : undefined;
+            expect(store.getQualifiedQuotaSnapshotEntry(key)).toMatchObject({ refreshing: intent !== 'cancel', snapshot, error: null });
+            finishRequest(new Response(JSON.stringify({ success: true }), { status: 200 }));
+            await Promise.all([first, retry, joined]);
+            expect(boundary.refresh).toHaveBeenCalledTimes(intent === 'retry' ? 2 : 1);
+            expect(getQuotaMock).toHaveBeenCalledTimes(intent === 'cancel' ? 1 : 2);
+            snapshotFixture.mockReturnValue({ ...snapshot, fetchedAt: 2 });
+            await vi.advanceTimersByTimeAsync(30_000);
+            expect(store.getQualifiedQuotaSnapshotEntry(key)).toMatchObject({
+                refreshing: false, snapshot: { fetchedAt: intent === 'cancel' ? 1 : 2 }, error: null,
+            });
+        } finally {
+            release();
+            releaseAgain();
+            store.__resetQualifiedConnectedAccountQuotaSnapshotStore();
+            vi.useRealTimers();
+        }
+    });
+
     it('polls an explicit cached refresh until new data and then returns to cache-only reads', async () => {
         vi.useFakeTimers();
         const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');

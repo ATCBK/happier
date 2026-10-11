@@ -416,8 +416,9 @@ export function retainQuotaSnapshotPolling(key: string, ctx: QuotaSnapshotLoadCo
 export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadContext): Promise<void> {
     const entry = getOrCreateEntry(key);
     clearPollTimer(entry);
-    if (entry.refreshPromise) {
-        await entry.refreshPromise;
+    const previousRefresh = entry.refreshPromise;
+    if (previousRefresh && entry.refreshing) {
+        await previousRefresh;
         return;
     }
     if (entry.refreshing) return;
@@ -427,17 +428,19 @@ export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadCo
     entry.refreshing = true;
     entry.error = null;
     publish(key, entry);
-    const promise = (async () => {
+    const promise = Promise.resolve(previousRefresh).then(async () => {
+        // A new intent waits for the cancelled request without inheriting its completion.
+        if (entry.refreshPromise !== promise || !entry.refreshing || !isScopeActive(ctx.credentialScope)) return;
         const inFlightFetchedAt = (await entry.loadPromise
             ?.then((snapshot) => snapshot?.fetchedAt ?? 0)
             .catch(() => 0)) ?? 0;
-        if (!isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
+        if (entry.refreshPromise !== promise || !isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
         entry.refreshSinceFetchedAt = Math.max(entry.snapshot?.fetchedAt ?? 0, inFlightFetchedAt);
         try {
             const mode = await ctx.resolveAccountMode();
-            if (!isScopeActive(ctx.credentialScope)) return;
+            if (entry.refreshPromise !== promise || !isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
             await ctx.assertOperationAllowed('quota_refresh');
-            if (!isScopeActive(ctx.credentialScope)) return;
+            if (entry.refreshPromise !== promise || !isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
             const ok = await (mode === 'plain'
                 ? requestConnectedServiceQuotaSnapshotRefreshV3(
                     ctx.credentials,
@@ -456,27 +459,29 @@ export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadCo
                     { expectedActiveServer: ctx.serverBasis },
                 ));
             if (!ok) throw new Error(t('common.error'));
-            if (!isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
+            if (entry.refreshPromise !== promise || !isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
             await runLoad(key, ctx);
         } catch (error) {
-            if (!isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
+            if (entry.refreshPromise !== promise || !isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
             entry.error = sanitizeEndpointErrorMessage(error) ?? t('common.error');
             entry.refreshSinceFetchedAt = null;
             entry.refreshing = false;
         }
-    })();
+    });
 
     entry.refreshPromise = promise;
     try {
         await promise;
     } finally {
-        if (entry.refreshPromise === promise) entry.refreshPromise = null;
-        if (!isScopeActive(ctx.credentialScope) || !hasPollingDemand(key, entry)) {
-            entry.refreshSinceFetchedAt = null;
-            entry.refreshing = false;
+        if (entry.refreshPromise === promise) {
+            entry.refreshPromise = null;
+            if (!isScopeActive(ctx.credentialScope) || !hasPollingDemand(key, entry)) {
+                entry.refreshSinceFetchedAt = null;
+                entry.refreshing = false;
+            }
+            publish(key, entry);
+            schedulePolling(key);
         }
-        publish(key, entry);
-        schedulePolling(key);
     }
 }
 

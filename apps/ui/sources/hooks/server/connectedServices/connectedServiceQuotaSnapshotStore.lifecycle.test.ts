@@ -133,6 +133,59 @@ describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
     });
 
 
+    it.each(['poll', 'cached'] as const)('retries a cancelled unresolved refresh for a %s consumer', async (policy) => {
+        const snapshot = {
+            v: 1 as const, serviceId: ctx.serviceId, profileId: ctx.profileId,
+            fetchedAt: 1, staleAfterMs: 30 * 60_000, planLabel: null, accountLabel: null, meters: [],
+        };
+        getSnapshotPlain.mockResolvedValue(snapshot);
+        let finishRequest!: (accepted: boolean) => void;
+        requestRefresh.mockReturnValueOnce(new Promise<boolean>((resolve) => { finishRequest = resolve; }));
+        const key = buildQuotaSnapshotScopeKey(ctx.credentialScope, ctx.serviceId, ctx.profileId);
+        const retain = () => {
+            const release = policy === 'poll' ? retainQuotaSnapshotPolling(key, ctx) : retainQuotaSnapshotOnce(key, ctx);
+            const unsubscribe = subscribeQuotaSnapshotEntry(key, () => {});
+            return () => { unsubscribe(); release(); };
+        };
+        const release = retain();
+        await vi.advanceTimersByTimeAsync(0);
+        const first = refreshQuotaSnapshot(key, ctx);
+        await vi.advanceTimersByTimeAsync(0);
+        release();
+        const releaseAgain = retain();
+        const retry = refreshQuotaSnapshot(key, ctx);
+        const joinedRetry = refreshQuotaSnapshot(key, ctx);
+        expect(getQuotaSnapshotEntry(key)).toMatchObject({ refreshing: true, snapshot, error: null });
+        expect(requestRefresh).toHaveBeenCalledTimes(1);
+        finishRequest(true);
+        await Promise.all([first, retry, joinedRetry]);
+        expect(requestRefresh).toHaveBeenCalledTimes(2);
+        expect(getSnapshotPlain).toHaveBeenCalledTimes(2);
+        expect(getQuotaSnapshotEntry(key).refreshing).toBe(true);
+        getSnapshotPlain.mockResolvedValue({ ...snapshot, fetchedAt: 2 });
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(getQuotaSnapshotEntry(key)).toMatchObject({ refreshing: false, snapshot: { fetchedAt: 2 }, error: null });
+        releaseAgain();
+    });
+
+    it.each(['join', 'cancel'] as const)('does not restart an unresolved refresh on %s', async (intent) => {
+        let finishRequest!: (accepted: boolean) => void;
+        requestRefresh.mockReturnValueOnce(new Promise<boolean>((resolve) => { finishRequest = resolve; }));
+        const key = buildQuotaSnapshotScopeKey(ctx.credentialScope, ctx.serviceId, ctx.profileId);
+        const release = retainQuotaSnapshotPolling(key, ctx);
+        await vi.advanceTimersByTimeAsync(0);
+        const first = refreshQuotaSnapshot(key, ctx);
+        await vi.advanceTimersByTimeAsync(0);
+        const joined = intent === 'join' ? refreshQuotaSnapshot(key, ctx) : undefined;
+        if (intent === 'cancel') release();
+        finishRequest(true);
+        await Promise.all([first, joined]);
+        expect(requestRefresh).toHaveBeenCalledTimes(1);
+        expect(getSnapshotPlain).toHaveBeenCalledTimes(intent === 'join' ? 2 : 1);
+        expect(getQuotaSnapshotEntry(key).refreshing).toBe(intent === 'join');
+        release();
+    });
+
     it('cancels pending refresh polling when the last consumer leaves', async () => {
         const key = buildQuotaSnapshotScopeKey(ctx.credentialScope, ctx.serviceId, ctx.profileId);
         const release = retainQuotaSnapshotPolling(key, ctx);

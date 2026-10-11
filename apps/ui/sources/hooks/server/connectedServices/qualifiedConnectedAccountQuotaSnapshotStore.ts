@@ -396,7 +396,8 @@ export async function refreshQualifiedQuotaSnapshot(
     context: QualifiedQuotaSnapshotStoreContext,
 ): Promise<void> {
     const entry = getOrCreateEntry(key);
-    if (entry.refreshPromise) return entry.refreshPromise;
+    const previousRefresh = entry.refreshPromise;
+    if (previousRefresh && entry.refreshing) return previousRefresh;
     if (entry.refreshing) return;
     entry.pollContext = context;
     entry.credentialScope = context.credentialScope;
@@ -409,15 +410,18 @@ export async function refreshQualifiedQuotaSnapshot(
     entry.error = null;
     publish(key, entry);
 
-    const promise = (async () => {
+    const promise = Promise.resolve(previousRefresh).then(async () => {
         try {
+            // Cancelled admission cannot complete a later explicit intent.
+            if (entry.refreshPromise !== promise || !entry.refreshing) return;
             await entry.loadPromise;
-            if (!entry.refreshing) return;
+            if (entry.refreshPromise !== promise || !entry.refreshing) return;
             entry.refreshSinceFetchedAt = entry.snapshot?.fetchedAt ?? 0;
             await refreshQualifiedConnectedAccountQuota(context);
-            if (!entry.refreshing) return;
+            if (entry.refreshPromise !== promise || !entry.refreshing) return;
             await runLoad(key, context);
         } catch (error) {
+            if (entry.refreshPromise !== promise || !entry.refreshing) return;
             if (readConnectedServiceSettingsErrorCode(error) === 'connected_account_v4_operation_unsupported') {
                 entry.supported = false;
             }
@@ -425,15 +429,17 @@ export async function refreshQualifiedQuotaSnapshot(
             entry.refreshSinceFetchedAt = null;
             entry.refreshing = false;
         } finally {
-            entry.refreshPromise = null;
-            if (!hasPollingDemand(key, entry)) {
-                entry.refreshSinceFetchedAt = null;
-                entry.refreshing = false;
+            if (entry.refreshPromise === promise) {
+                entry.refreshPromise = null;
+                if (!hasPollingDemand(key, entry)) {
+                    entry.refreshSinceFetchedAt = null;
+                    entry.refreshing = false;
+                }
+                publish(key, entry);
+                schedulePolling(key);
             }
-            publish(key, entry);
-            schedulePolling(key);
         }
-    })();
+    });
     entry.refreshPromise = promise;
     return promise;
 }
