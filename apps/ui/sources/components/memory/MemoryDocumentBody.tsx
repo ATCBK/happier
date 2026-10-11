@@ -490,14 +490,15 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
           title={
             <Text style={styles.summary}>
               {topic ? null : `${t('memoryContext.memory.alwaysRemembered')} `}
-              <Text style={styles.summaryValue}>
+              {/* Only a known count takes the value weight; "Loading" and "Unavailable" stay quiet words. */}
+              <Text style={topic || summary.state === 'ready' ? styles.summaryValue : undefined}>
                 {topic ? t('memoryContext.memory.factCount', { count: facts.length })
                   : countLabel(summary.state === 'ready' ? summary.loadedFactCount : undefined)}
               </Text>
               {!topic ? (
                 <>
                   {` · ${t('memoryContext.memory.searchable')} `}
-                  <Text style={styles.summaryValue}>
+                  <Text style={summary.state === 'ready' ? styles.summaryValue : undefined}>
                     {countLabel(summary.state === 'ready' ? summary.indexedFactCount : undefined)}
                   </Text>
                 </>

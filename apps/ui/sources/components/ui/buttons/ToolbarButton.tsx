@@ -11,6 +11,7 @@ import { HappierPressable, type HappierSurfaceProps, HappierSurfaceGradientLayer
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { happierRaisedEdgeStyle } from '@happier-dev/plugin-ui/presentation';
 import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle';
+import { FIELD_BOX_METRICS } from '@/components/ui/forms/fieldBox';
 
 /**
  * The canonical small labelled action for pane toolbars and surface headers.
@@ -67,7 +68,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 6,
-        minHeight: 30,
+        // A toolbar's buttons and its fields (search, selects) stand at one height.
+        minHeight: FIELD_BOX_METRICS.minHeightPx,
         paddingHorizontal: 10,
         // 8, not 10 and not a capsule: on the shared radius scale, and a small rounded rect among
         // the rectangular surfaces it sits on rather than a pill of its own kind.

@@ -18,7 +18,8 @@ import { promptStackBudgetChoices } from './promptStackBudgetChoices';
  * One document in a Context list (Account, Voice, Profile, Project, a Session's Work › Context): its
  * title, then one quiet line of where its text goes and who can read it. "⋯" holds Edit, Move and
  * Remove beside the switch, which keeps a document attached without using it. A layer that cannot
- * switch or edit an entry passes no handler and the control is not drawn; a read-only row has neither.
+ * switch or edit an entry passes no handler and the control is not drawn; a read-only row has neither,
+ * and a row whose only action is opening it opens on press without a "⋯".
  */
 export const PromptStackEntryRow = React.memo(function PromptStackEntryRow(props: Readonly<{
     testID: string;
@@ -68,7 +69,8 @@ export const PromptStackEntryRow = React.memo(function PromptStackEntryRow(props
                 onPress: () => props.onBudgetChange?.(choice.maxChars) });
         }
         if (onRemove) list.push({ id: 'delete', title: props.removeLabel ?? t('common.remove'), icon: 'trash', destructive: true, disabled: props.disabled, onPress: onRemove });
-        return list;
+        // A menu holding only Edit repeats the row's own press (an inherited entry in a Session): no "⋯".
+        return list.length === 1 && list[0]?.id === 'edit' ? [] : list;
     }, [entry.maxChars, onMove, onOpen, onRemove, onShare, props.canMoveDown, props.canMoveUp, props.disabled, props.removeLabel, props.onBudgetChange]);
     const off = props.on === undefined ? entry.enabled === false : !props.on;
     // With a switch on the row, the switch says "off"; the word is only for rows that have none.

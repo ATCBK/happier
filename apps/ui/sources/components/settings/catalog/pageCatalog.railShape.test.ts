@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { PROMPTS_CONTEXT_ROUTE } from '@/components/settings/prompts/context/promptsContextSettings';
+
 import { SETTINGS_PAGE_CATALOG, readSettingsPageGate } from './pageCatalog';
 
 type CatalogNode = Readonly<{
@@ -68,6 +70,12 @@ describe('settings catalog rail shape', () => {
         // `/server` is the Home-recovery entry outside the settings layout: the rail and search must not
         // send the Homes page there, or it renders with no settings shell around it.
         expect(homes?.route).toBe('/settings/server');
+    });
+
+    it('opens Context on the Account layer page itself, not a hub that lists Context again', () => {
+        const context = walk(catalog).find(({ node }) => node.id === 'promptsStacks')?.node;
+        // The Context page already links Voice sessions and Launch profiles under "Other sessions" (c-ctx A).
+        expect(context?.route).toBe(PROMPTS_CONTEXT_ROUTE);
     });
 
     it('registers Machine Pool creation beneath the searchable Machines catalog node', () => {

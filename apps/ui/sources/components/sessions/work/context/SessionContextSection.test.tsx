@@ -36,7 +36,7 @@ let serverId: string;
 beforeEach(async () => {
     home = await createPlainArtifactHomeFixture('https://work-context.test');
     serverId = home.home.id;
-    storage.setState({ isDataReady: true });
+    storage.setState({ isDataReady: true, settingsVersion: 1 });
     storage.getState().applyArtifacts(['instructions-doc', 'memory-doc', 'notes-doc'].map(id => ({
         id, title: id, ownerAccountId: 'artifact-account', access: 'owner' as const,
         header: { kind: id === 'memory-doc' ? 'memory_doc.v1' : 'prompt_doc.v2', title: id },
@@ -44,7 +44,7 @@ beforeEach(async () => {
     })));
     applyPromptLibraryCatalogSnapshot({ serverId, accountId: 'artifact-account' }, {
         catalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] }, rawSettings: {},
-        sourceSettingsVersion: storage.getState().settingsVersion,
+        sourceSettingsVersion: 1,
     }, true);
 });
 afterEach(() => {
@@ -102,11 +102,27 @@ describe('Work › Context', () => {
     it('does not claim empty Context while the Account catalog is unavailable', async () => {
         applyPromptLibraryCatalogSnapshot({ serverId, accountId: 'artifact-account' }, {
             catalog: { status: 'unavailable', reason: 'forbidden' }, rawSettings: {},
-            sourceSettingsVersion: storage.getState().settingsVersion,
+            sourceSettingsVersion: 1,
         }, true);
         const screen = await renderScreen(<SessionContextSection serverId={serverId} session={sessionWith({})} />);
         expect(screen.findByTestId('session-work-context.layersUnavailable')).toBeTruthy();
         expect(screen.findByTestId('session-work-context.empty')).toBeNull();
+    });
+
+    it('opens an inherited document from the row itself and adds no menu that only repeats it', async () => {
+        applyPromptLibraryCatalogSnapshot({ serverId, accountId: 'artifact-account' }, {
+            catalog: { status: 'ready', rows: [{ revision: 1, record: { key: 'coding', value: { v: 1, scope: { kind: 'coding' },
+                entries: [entry('account.notes', 'notes-doc')] } } }], tombstones: [], diagnostics: [] },
+            rawSettings: {}, sourceSettingsVersion: 1,
+        }, true);
+        const screen = await renderScreen(<SessionContextSection serverId={serverId}
+            session={sessionWith({ promptStack: [entry('session.notes', 'notes-doc')] })} />);
+        const inherited = 'session-work-context.entry.account.account.notes';
+        expect(screen.findAllByTestId(inherited).some(node => typeof node.props.onPress === 'function')).toBe(true);
+        expect(screen.findByTestId(`${inherited}.enabled`)).toBeTruthy();
+        expect(screen.findByTestId(`${inherited}.more`)).toBeNull();
+        // An entry added here keeps its menu: Move, How much to load and Remove live there.
+        expect(screen.findByTestId('session-work-context.entry.session.session.notes.more')).toBeTruthy();
     });
 
     it('keeps an unresolved document off and without an editor link', async () => {

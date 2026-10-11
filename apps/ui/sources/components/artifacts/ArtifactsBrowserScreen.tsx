@@ -9,6 +9,7 @@ import { useDetailsPaneAvailable } from '@/components/appShell/panes/details/det
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { ToolbarSelect } from '@/components/ui/forms/ToolbarSelect';
@@ -475,12 +476,10 @@ function BrowserToolbar(props: Readonly<{
                 />
                 <View style={styles.grow} />
                 {props.presentation === 'folders' ? (
-                    <RoundButton
+                    <ToolbarButton
                         testID="artifacts:folders:new"
-                        size="small"
-                        display="secondary"
-                        title={t('artifacts.browser.folders.newFolder')}
-                        leading={<Icon name="folder-plus" size={14} color={theme.colors.text.secondary} />}
+                        label={t('artifacts.browser.folders.newFolder')}
+                        icon={<Icon name="folder-plus" size={15} color={theme.colors.text.secondary} />}
                         disabled={!folders.canWrite}
                         onPress={props.onNewFolder}
                     />

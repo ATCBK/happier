@@ -10,6 +10,9 @@ import type { HappierTreeNode } from '@happier-dev/plugin-ui/presentation';
 import type { PromptFolderEntryV1, PromptFoldersV1 } from '@happier-dev/protocol/prompts/library/promptFoldersV1';
 import { resolveArtifactOrganizationHeaderV1 } from '@happier-dev/protocol/artifacts/artifactOrganizationV1';
 import { PromptDocBodyV1Schema } from '@happier-dev/protocol/prompts/library/promptDocV2';
+import { MemoryDocBodyV1StoredSchema } from '@happier-dev/protocol/prompts/library/memoryDocV1';
+import { PromptBundleBodyV1Schema } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
+import { decodeBase64 } from '@/encryption/base64';
 import { RoleArtifactV1Schema } from '@happier-dev/protocol/prompts/roles/roleArtifactV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
@@ -114,6 +117,24 @@ export function readArtifactCodeLanguage(artifact: Pick<DecryptedArtifact, 'head
     return null;
 }
 
+/** The always-remembered facts, one per line, as the memory page lists them first. */
+function readMemoryPreviewText(content: unknown): string | undefined {
+    const parsed = MemoryDocBodyV1StoredSchema.safeParse(content);
+    if (!parsed.success || parsed.data.index.length === 0) return undefined;
+    return parsed.data.index.map((fact) => `- ${fact.text}`).join('\n');
+}
+
+/** A skill's own SKILL.md, without its front matter. */
+function readSkillPreviewText(content: unknown): string | undefined {
+    const parsed = PromptBundleBodyV1Schema.safeParse(content);
+    const entry = parsed.success
+        ? parsed.data.entries.find((candidate) => candidate.path === 'SKILL.md' && candidate.contentKind === 'utf8')
+        : undefined;
+    if (!entry) return undefined;
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(decodeBase64(entry.contentBase64, 'base64'));
+    return text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim() || undefined;
+}
+
 export function readArtifactPreview(artifact: Pick<DecryptedArtifact, 'id' | 'header' | 'rawHeader' | 'title' | 'body' | 'provenance'>): ArtifactPreview {
     const header = artifact.rawHeader ?? artifact.header;
     if (header?.kind === 'prompt_doc.v2' || header?.kind === 'role.v1') {
@@ -129,6 +150,19 @@ export function readArtifactPreview(artifact: Pick<DecryptedArtifact, 'id' | 'he
                 const parsed = createStoredReadSchema(RoleArtifactV1Schema).safeParse(content);
                 if (parsed.success) text = parsed.data.instructions;
             }
+            const clipped = deriveArtifactExcerptV1(text ?? null);
+            return clipped ? { kind: 'markdown', text: clipped } : { kind: 'none' };
+        } catch {
+            return { kind: 'none' };
+        }
+    }
+    if (header?.kind === 'memory_doc.v1' || header?.kind === 'prompt_bundle.v2') {
+        // What a memory remembers and what a skill says, never the stored envelope around them.
+        const stored = artifact.body === undefined ? header.excerpt : artifact.body;
+        if (typeof stored !== 'string') return { kind: 'none' };
+        try {
+            const content: unknown = JSON.parse(stored);
+            const text = header.kind === 'memory_doc.v1' ? readMemoryPreviewText(content) : readSkillPreviewText(content);
             const clipped = deriveArtifactExcerptV1(text ?? null);
             return clipped ? { kind: 'markdown', text: clipped } : { kind: 'none' };
         } catch {

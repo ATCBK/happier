@@ -111,42 +111,4 @@ describe('PromptsSettingsHome catalog counts', () => {
         });
         for (const id of rowIds.slice(2)) expect(detail(id), id).toBeUndefined();
     });
-
-    it('keeps the neighboring Stacks counts unknown until each source answers and retains them during refresh', async () => {
-        const { PromptStacksScreen } = await import('./stacks/PromptStacksScreen');
-        const screen = await renderScreen(<PromptStacksScreen />);
-        const detail = (id: string) => {
-            const row = screen.findAllByType(Item).find(row => row.props.testID === id);
-            expect(row, id).toBeTruthy();
-            return row!.props.detail;
-        };
-        const ids = ['promptStacks.coding', 'promptStacks.voice', 'promptStacks.profiles'];
-        for (const id of ids) expect(detail(id), id).toBeUndefined();
-        await act(async () => {
-            applyPromptLibraryCatalogSnapshot(scope, {
-                catalog: { status: 'ready', rows: [{ revision: 1, record: { key: 'coding', value: { v: 1, scope: { kind: 'coding' }, entries: [
-                    { id: 'coding-entry', ref: { kind: 'doc', artifactId: 'doc' }, enabled: true, placement: 'system_append' },
-                ] } } }], tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 1,
-            }, true);
-            storage.setState({ settingsScope: scope });
-        });
-        expect(detail('promptStacks.coding')).toBe(t('promptLibrary.profileStackCount', { count: 1 }));
-        expect(detail('promptStacks.voice')).toBe(t('promptLibrary.profileStackCount', { count: 0 }));
-        expect(detail('promptStacks.profiles')).toBeUndefined();
-        await act(async () => {
-            applyProfileCatalogSnapshot(scope, emptyProfiles, true);
-        });
-        expect(detail('promptStacks.profiles')).toBe(t('promptLibrary.profileStacksSubtitle', { count: 0 }));
-        await act(async () => { beginPromptLibraryCatalogLoad(scope); beginProfileCatalogLoad(scope); });
-        expect(detail('promptStacks.coding')).toBe(t('promptLibrary.profileStackCount', { count: 1 }));
-        expect(detail('promptStacks.profiles')).toBe(t('promptLibrary.profileStacksSubtitle', { count: 0 }));
-        await act(async () => { applyProfileCatalogSnapshot(scope, { ...emptyProfiles, status: 'partial' }, true); });
-        expect(detail('promptStacks.profiles')).toBeUndefined();
-        await act(async () => { beginProfileCatalogLoad(scope); });
-        expect(detail('promptStacks.profiles')).toBeUndefined();
-        await act(async () => {
-            applyProfileCatalogSnapshot(scope, { status: 'unavailable', reason: 'unauthorized' }, true);
-        });
-        expect(detail('promptStacks.profiles')).toBeUndefined();
-    });
 });

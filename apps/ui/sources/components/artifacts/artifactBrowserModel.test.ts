@@ -274,4 +274,23 @@ describe('artifactBrowserModel', () => {
         expect(readArtifactPreview(artifact('document', { title: 'Stored example' }, { body: prompt })))
             .toEqual({ kind: 'markdown', text: prompt });
     });
+
+    it('previews what a memory remembers and a skill says, never their stored envelopes', () => {
+        const fact = (id: string, text: string) => ({ id, text, createdAtMs: 1, sourceSessionRef: null });
+        const memory = JSON.stringify({ v: 1, index: [fact('f1', 'Releases ship from release/0.3.'), fact('f2', 'Ana reviews sync.')],
+            topics: [{ title: 'archive', summary: 'Expired, replaced and forgotten facts.', facts: [fact('f0', 'Old rule.')] }] });
+        expect(readArtifactPreview(artifact('memory', { kind: 'memory_doc.v1', title: 'Account memory' }, { body: memory })))
+            .toEqual({ kind: 'markdown', text: '- Releases ship from release/0.3.\n- Ana reviews sync.' });
+        expect(readArtifactPreview(artifact('memory', { kind: 'memory_doc.v1', title: 'Account memory' }, {
+            body: JSON.stringify({ v: 1, index: [], topics: [] }) }))).toEqual({ kind: 'none' });
+        const skill = '# API style guide\nPrefer plain nouns.';
+        const bundle = JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 2, entries: [
+            { path: 'scripts/check.sh', contentBase64: btoa('echo ok'), contentKind: 'utf8' },
+            { path: 'SKILL.md', contentBase64: btoa(skill), contentKind: 'utf8' },
+        ] });
+        expect(readArtifactPreview(artifact('skill', { kind: 'prompt_bundle.v2', title: 'API style guide', bundleSchemaId: 'skills' }, { body: bundle })))
+            .toEqual({ kind: 'markdown', text: skill });
+        expect(readArtifactPreview(artifact('skill', { kind: 'prompt_bundle.v2', title: 'API style guide', excerpt: bundle.slice(0, 40) })))
+            .toEqual({ kind: 'none' });
+    });
 });

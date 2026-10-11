@@ -2,7 +2,7 @@ import { useAiLaunchProfilesForLegacyUi } from '@/sync/store/useAiLaunchProfiles
 import * as React from 'react';
 import { useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
 
-import { PromptStacksScreen } from '@/components/settings/prompts/stacks/PromptStacksScreen';
+import { PromptProfileStacksScreen } from '@/components/settings/prompts/stacks/PromptProfileStacksScreen';
 import { PromptStackEditorScreen } from '@/components/settings/prompts/stacks/PromptStackEditorScreen';
 
 function firstParam(value: string | string[] | undefined): string | null {
@@ -14,7 +14,7 @@ export function PromptProfileStackEditorRoute() {
   const profileId = firstParam(params.id);
   const profiles = useAiLaunchProfilesForLegacyUi();
 
-  if (!profileId) return <PromptStacksScreen />;
+  if (!profileId) return <PromptProfileStacksScreen />;
 
   const profileName = profiles.find((p) => p.id === profileId)?.name ?? profileId;
 

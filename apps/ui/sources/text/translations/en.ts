@@ -1924,11 +1924,6 @@ const enPromptLibrary = {
       'Group prompts and skills so they are easier to find.',
     foldersSectionDescription:
       'Deleting a folder keeps its items; they just leave the folder.',
-    stacksPageDescription:
-      'Prompts and skills added to an agent’s instructions automatically.',
-    stacksSection: 'Where they apply',
-    stacksSectionDescription:
-      'Each list is added in order when a session starts.',
     profileStacksDescription:
       'Extra prompts for sessions started with a profile.',
     profileStacksPageDescription:

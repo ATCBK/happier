@@ -41,7 +41,7 @@ export const SETTINGS_ROUTES = {
     prompts: '/settings/prompts',
     promptsTemplates: '/settings/prompts/templates',
     promptsFolders: '/settings/prompts/folders',
-    promptsStacks: '/settings/prompts/stacks',
+    promptsStacks: '/settings/prompts/stacks/coding',
     promptsRegistries: '/settings/prompts/registries',
     promptsLibrary: '/settings/prompts/docs',
     promptsAssets: '/settings/prompts/assets',
