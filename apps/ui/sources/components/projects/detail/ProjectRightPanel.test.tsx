@@ -1,10 +1,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen, withPopoverWebGlobals } from '@/dev/testkit';
+import { flushHookEffects, renderScreen, withPopoverWebGlobals } from '@/dev/testkit';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { installSessionDetailsPanelNonRnModuleMocks } from '@/components/sessions/panes/sessionDetailsPanelNonRnModuleMocks';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
+import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 
 const router = vi.hoisted(() => ({ replace: vi.fn() }));
 const device = vi.hoisted(() => ({ phone: false }));
@@ -35,16 +36,21 @@ async function renderPanel(props: Partial<React.ComponentProps<typeof import('./
     const { ProjectRightPanel } = await import('./ProjectRightPanel');
     const screen = await renderScreen(<runtime.Wrapper />);
     await act(async () => runtime.pane.openRight({ tabId: 'git' }));
-    await act(async () => screen.update(<runtime.Wrapper><ProjectRightPanel
-        workspaceRef={workspaceRef()} scopeId="project:wr_1" activeRootPath="/repo" onSelectRootPath={() => {}} {...props}
-    /></runtime.Wrapper>));
+    await act(async () => screen.update(<runtime.Wrapper><DestinationInstanceHost tabId="project-right-panel"
+        ref={{ kind: 'project', params: { workspaceRefId: 'wr_1', serverId: runtime.serverId } }}
+        pathname="/projects/wr_1/code" focused visible
+        navigation={{ push: () => {}, replace: router.replace, back: () => {}, setParams: () => {} }}>
+        <ProjectRightPanel workspaceRef={workspaceRef()} scopeId="project:wr_1" activeRootPath="/repo"
+            onSelectRootPath={() => {}} {...props} />
+    </DestinationInstanceHost></runtime.Wrapper>));
+    await flushHookEffects({ cycles: 30 });
     return screen;
 }
 describe('ProjectRightPanel', () => {
     it('renders the canonical Git surface without a close affordance when the parent supplies none', async () => {
-        const { WorkspaceRightPanelGitView } = await import('@/components/projects/scm/WorkspaceRightPanelGitView');
+        const { ProjectGitSurface } = await import('./surfaces/ProjectGitSurface');
         const screen = await renderPanel();
-        expect(screen.tree.findAllByType(WorkspaceRightPanelGitView)).toHaveLength(1);
+        expect(screen.tree.findAllByType(ProjectGitSurface)).toHaveLength(1);
         expect(screen.findHostByTestId('project-rightpanel-header')).not.toBeNull();
         expect(screen.findHostByTestId('project-rightpanel-close')).toBeNull();
     });
@@ -53,7 +59,7 @@ describe('ProjectRightPanel', () => {
         const screen = await renderPanel({ activeWorktreeId: null, onRequestClose: () => {} });
         await screen.pressByTestIdAsync('project-rightpanel-tab:files');
         expect(runtime.pane.scopeState?.right).toMatchObject({ isOpen: true, activeTabId: 'files' });
-        expect(router.replace).toHaveBeenCalledWith(`/projects/wr_1/code?worktreeId=%40root&serverId=${encodeURIComponent(runtime.serverId)}&mobileSurface=browse`);
+        expect(router.replace).toHaveBeenCalledWith(`/projects/wr_1/code?serverId=${encodeURIComponent(runtime.serverId)}&worktreeId=%40root&mobileSurface=browse`);
         expect(screen.findHostByTestId('project-rightpanel-close')).toBeNull();
     });
     it('preserves the selected worktree in the sibling mobile route and pane selection', async () => {
@@ -63,6 +69,6 @@ describe('ProjectRightPanel', () => {
         });
         await screen.pressByTestIdAsync('project-rightpanel-tab:files');
         expect(runtime.pane.scopeState?.right).toMatchObject({ isOpen: true, activeTabId: 'files' });
-        expect(router.replace).toHaveBeenCalledWith(`/projects/wr_1/code?worktreeId=gitwt_feature&serverId=${encodeURIComponent(runtime.serverId)}&mobileSurface=browse`);
+        expect(router.replace).toHaveBeenCalledWith(`/projects/wr_1/code?serverId=${encodeURIComponent(runtime.serverId)}&worktreeId=gitwt_feature&mobileSurface=browse`);
     });
 });

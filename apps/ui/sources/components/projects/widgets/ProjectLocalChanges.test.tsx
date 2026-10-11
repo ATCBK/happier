@@ -20,6 +20,7 @@ import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/act
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 
 let disposeActionLoader: (() => void) | undefined;
 beforeAll(async () => { disposeActionLoader = await installRealActionExecutorModuleLoader(); });
@@ -174,9 +175,14 @@ beforeEach(async () => {
 });
 async function mount(rootPath = '/repo', id: 'project_changes' | 'project_checkouts' | 'project_scripts' | 'project_code' | 'project_readme' = 'project_changes') {
     const { ProjectBuiltinWidgetBody } = await import('./ProjectBuiltinWidgetBody');
-    const screen = await renderScreen(<runtime.Wrapper><ProjectBuiltinWidgetBody id={id}
-        checkout={{ serverId: runtime.serverId, id: 'wr_1', machineId: 'm1', rootPath, projectKey: 'project', createdAtMs: 1 }}
-        workspace={{ serverId: runtime.serverId, workspaceId: 'wr_1', machineId: 'm1', rootPath }} testID="local-changes" /></runtime.Wrapper>);
+    const routeParams = { workspaceRefId: 'wr_1', serverId: runtime.serverId, ...boundary.routeParams };
+    const screen = await renderScreen(<runtime.Wrapper><DestinationInstanceHost tabId="project-local-changes"
+        ref={{ kind: 'project', params: routeParams }} pathname={boundary.pathname} focused visible
+        navigation={{ push: boundary.navigate, replace: boundary.navigate, back: () => {}, setParams: () => {} }}>
+        <ProjectBuiltinWidgetBody id={id}
+            checkout={{ serverId: runtime.serverId, id: 'wr_1', machineId: 'm1', rootPath, projectKey: 'project', createdAtMs: 1 }}
+            workspace={{ serverId: runtime.serverId, workspaceId: 'wr_1', machineId: 'm1', rootPath }} testID="local-changes" />
+    </DestinationInstanceHost></runtime.Wrapper>);
     await vi.waitFor(async () => {
         await flushHookEffects();
         if (id === 'project_changes' || id === 'project_checkouts') {

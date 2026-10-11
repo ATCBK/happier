@@ -10,6 +10,7 @@ import { settingsDefaults, type Settings } from '@/sync/domains/settings/setting
 import { projectAgentInputAttachmentRowItems } from './agentInputContracts';
 import { findAllHostTestInstances, flattenTestStyle as flattenStyle } from '@/dev/testkit';
 import { createLayoutChangeEvent } from '@/dev/testkit/fixtures/nativeEventFixtures';
+import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
 
 vi.mock('expo-haptics', () => ({
     impactAsync: vi.fn(async () => {}),
@@ -88,10 +89,17 @@ afterAll(() => {
 const runtime = installSessionPaneRuntimeTestHarness({ sessionId: 'session-1' });
 
 let restoreViewport: (() => void) | undefined;
-afterEach(() => { restoreViewport?.(); restoreViewport = undefined; });
+let activeAccountScope: Awaited<ReturnType<typeof activateStorageAccountScope>> | undefined;
+afterEach(() => {
+    restoreViewport?.();
+    restoreViewport = undefined;
+    activeAccountScope?.dispose();
+    activeAccountScope = undefined;
+});
 
 describe('AgentInput (action bar auto layout)', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        activeAccountScope = await activateStorageAccountScope({ serverId: runtime.serverId, accountId: 'account-a' });
         storageSettings = { ...settingsDefaults, agentInputEnterToSend: true,
             agentInputActionBarLayout: 'auto', agentInputChipDensity: 'labels',
             sessionPermissionModeApplyTiming: 'immediate' };
@@ -218,7 +226,7 @@ describe('AgentInput (action bar auto layout)', () => {
         ))).toHaveLength(1);
     });
 
-    it.each(['ios', 'web'] as const)('keeps the person\'s collapsed controls on reachable scroll rails on %s', async (platform) => {
+    it.each(['ios', 'web'] as const)('keeps the person\'s collapsed controls on one reachable scroll rail on %s', async (platform) => {
         layoutMockState.platform = platform;
         layoutMockState.width = 390;
         storageSettings = { ...storageSettings, agentInputActionBarLayout: 'collapsed' };
@@ -228,26 +236,34 @@ describe('AgentInput (action bar auto layout)', () => {
             barControlIds={['machine', 'engine', 'actionMenu']}
             onMachineClick={() => {}} machineName="Unnamed machine"
             onAgentClick={() => {}} agentType="claude" agentLabel="Claude" engineLabel="Sonnet 4.6"
-            onPermissionClick={() => {}}
+            permissionMode="default" onPermissionModeChange={() => {}}
+            modelMode="default" onModelModeChange={() => {}}
+            profileId={null} onProfileClick={() => {}}
             onPathClick={() => {}} currentPath="/repo"
+            extraActionChips={[{
+                key: 'collapsed-options',
+                controlId: 'mcp',
+                render: () => <React.Fragment />,
+                collapsedAction: () => ({ id: 'collapsed-options', label: 'Options', icon: null, onPress: () => {} }),
+            }]}
             autocompleteKinds={[]} autocompleteSuggestions={async () => []}
         />;
         const screen = await renderAgentInput(input);
 
-        // A new session keeps its two rails under the collapsed setting too: the bar's setup chips,
-        // then where it runs (machine) on the location rail.
+        // Collapsed is the intentionally compact presentation: the host-selected controls share
+        // one reachable rail, including the machine that otherwise lives on the location rail.
         const tracks = findAllHostTestInstances(screen.tree.root, node => (
             node.type === 'ScrollView' && node.props.horizontal === true
         ));
-        expect(tracks).toHaveLength(2);
-        const [setupRail, locationRail] = tracks;
+        expect(tracks).toHaveLength(1);
+        const [setupRail] = tracks;
         expect(findAllHostTestInstances(setupRail!, node => (
             node.type === 'Text' && node.props.children === 'Sonnet 4.6'
         ))).toHaveLength(1);
-        expect(findAllHostTestInstances(setupRail!, node => (
+        expect(findAllHostTestInstances(screen.tree.root, node => (
             node.props.testID === 'agent-input-action-menu-button'
         ))).toHaveLength(1);
-        expect(findAllHostTestInstances(locationRail!, node => (
+        expect(findAllHostTestInstances(setupRail!, node => (
             node.type === 'Text' && node.props.children === 'Unnamed machine'
         ))).toHaveLength(1);
         // Sending remains fixed beside the rails, not scrolled off with chips.
@@ -631,6 +647,7 @@ describe('AgentInput (action bar auto layout)', () => {
                     collapsedMaxHeight: 200,
                     onToggle: vi.fn(),
                 }}
+                voiceAffordance="none"
                 sessionId="session-1"
                 value=""
                 placeholder="Type"

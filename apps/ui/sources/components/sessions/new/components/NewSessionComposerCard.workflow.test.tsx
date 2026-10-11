@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { createNewSessionPromptStore } from '../hooks/screenModel/newSessionPromptStore';
 import { NewSessionComposerCard } from './NewSessionComposerCard';
@@ -10,8 +10,18 @@ import { getStorage } from '@/sync/domains/state/storageStore';
 import { act } from 'react-test-renderer';
 import { flattenTestStyle } from '@/dev/testkit';
 import Color from 'color';
+import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
 
 const platformState = vi.hoisted(() => ({ os: 'web' as 'web' | 'android', width: 1440 }));
+let activeAccountScope: Awaited<ReturnType<typeof activateStorageAccountScope>> | null = null;
+
+beforeEach(async () => {
+    activeAccountScope = await activateStorageAccountScope({ serverId: 'server-a', accountId: 'account-a' });
+});
+afterEach(() => {
+    activeAccountScope?.dispose();
+    activeAccountScope = null;
+});
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -36,10 +46,12 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
 });
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
-    getAppliedActiveServerSnapshot: () => ({ serverId: 'server-a' }),
-    isAppliedActiveServerRuntimeAvailable: () => true,
-}));
+vi.mock('@/sync/runtime/orchestration/connectionManager', async (importOriginal) => {
+    const { createConnectionManagerModuleMock } = await import('@/dev/testkit/mocks/connectionManager');
+    return createConnectionManagerModuleMock(importOriginal, {
+        getSnapshot: () => ({ serverId: 'server-a', serverUrl: 'https://server-a.test', generation: 1 }),
+    });
+});
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key: string) => key });
@@ -108,7 +120,7 @@ describe('New workflow entry', () => {
                 autocompleteKinds={[]} autocompleteSuggestions={async () => []} />);
             const surface = screen.findByTestId('agent-input-material-surface');
             expect(surface).not.toBeNull();
-            expect(Color(flattenTestStyle(surface?.props.style).backgroundColor as string).alpha()).toBe(0.9);
+            expect(Color(flattenTestStyle(surface?.props.style).backgroundColor as string).alpha()).toBe(0.02);
             expect(screen.getTextContent()).toContain('Frozen document');
             expect(screen.findByTestId('new-session-composer-input')).toBeNull();
         } finally {
@@ -127,7 +139,7 @@ describe('New workflow entry', () => {
             const screen = await renderScreen(<NewSessionComposerCard panelProps={panelProps()} layout="screen" attachments={false} surfaceGroup="floating" />);
             const surface = screen.findByTestId('agent-input-material-surface');
             expect(surface).not.toBeNull();
-            expect(Color(flattenTestStyle(surface?.props.style).backgroundColor as string).alpha()).toBe(0.9);
+            expect(Color(flattenTestStyle(surface?.props.style).backgroundColor as string).alpha()).toBe(0.02);
             expect(screen.findByTestId('new-session-composer-input')?.props.value).toBe('Keep this brief');
             await act(async () => {
                 store.setState({ settings: { ...previous, glassBlurEnabled: false, glassSurfaceMaterials: null } });
@@ -167,7 +179,7 @@ describe('New workflow entry', () => {
             const composer = hook.getCurrent().composer;
             if (composer === null) throw new Error('Selected workflow composer is missing');
             const screen = await renderScreen(composer);
-            expect(Color(flattenTestStyle(screen.findByTestId('agent-input-material-surface')?.props.style).backgroundColor as string).alpha()).toBe(0.9);
+            expect(Color(flattenTestStyle(screen.findByTestId('agent-input-material-surface')?.props.style).backgroundColor as string).alpha()).toBe(0.02);
             expect(screen.findByTestId('new-session-composer-input')?.props.value).toBe('Keep this brief');
         } finally {
             platformState.os = 'web';
