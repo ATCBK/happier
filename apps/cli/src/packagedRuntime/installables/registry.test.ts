@@ -17,6 +17,13 @@ import { CODEX_ACP_INSTALLABLE_DESCRIPTOR } from '@happier-dev/plugins-codex/age
 import { getArchiveDownloadInstallableAdapter, getRuntimeInstallableAdapter } from './registry';
 
 describe('managed native computer driver', () => {
+  it('exposes the same managed native driver to the admitted install capability', async () => {
+    const adapter = await getRuntimeInstallableAdapter('computer-cua-driver');
+    expect(adapter.capabilityId).toBe('dep.computer-cua-driver');
+    expect(adapter.key).toBe('computer-cua-driver');
+    const status = await adapter.detectCapabilityStatus?.({ env: { HAPPIER_HOME_DIR: '/nonexistent/df23-computer' } });
+    expect(status).toMatchObject({ installed: false, sourceKind: 'pinned_archive' });
+  });
   it('resolves the pinned native source and refuses unsupported platform installation', async () => {
     const adapter = getArchiveDownloadInstallableAdapter('computer-cua-driver');
     expect(adapter).not.toBeNull();

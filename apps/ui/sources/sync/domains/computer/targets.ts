@@ -26,8 +26,8 @@ export function needsComputerPermission(grants: ComputerGrantStatusV1, access: C
 }
 
 export type ComputerRecovery = Readonly<{
-    cause: 'permission_denied' | 'permission_unknown' | 'headless' | 'unsupported' | 'machine_mismatch' | 'driver_missing' | 'driver_invalid' | 'offline' | 'access_removed' | 'source_lost' | 'empty' | 'failed';
-    action: 'open_settings' | 'refresh' | 'repair_driver' | 'reconnect' | 'choose_source' | null;
+    cause: 'permission_denied' | 'permission_unknown' | 'headless' | 'unsupported' | 'machine_mismatch' | 'driver_missing' | 'driver_invalid' | 'geometry_changed' | 'input_unknown' | 'offline' | 'access_removed' | 'source_lost' | 'empty' | 'failed';
+    action: 'open_settings' | 'refresh' | 'repair_driver' | 'capture' | 'reconnect' | 'choose_source' | null;
     permission?: 'capture' | 'input';
     code?: string;
 }>;
@@ -44,11 +44,15 @@ export function resolveComputerRecovery(state: ComputerTargetPickerState, access
         return state.targets.length ? null : { cause: 'empty', action: 'refresh' };
     }
     const { code } = state;
+    if (code === 'capture_permission_denied' || code === 'input_permission_denied') return { cause: 'permission_denied', action: 'open_settings', permission: code.startsWith('capture') ? 'capture' : 'input', code };
+    if (code === 'capture_permission_unknown' || code === 'input_permission_unknown') return { cause: 'permission_unknown', action: 'refresh', permission: code.startsWith('capture') ? 'capture' : 'input', code };
     if (code === 'computer_machine_mismatch') return { cause: 'machine_mismatch', action: null, code };
     if (code === 'computer_display_unavailable') return { cause: 'headless', action: null, code };
     if (code === 'target_unsupported' || code === 'computer_unavailable') return { cause: 'unsupported', action: null, code };
     if (code === 'driver_unavailable' || code === 'driver_install_failed') return { cause: 'driver_missing', action: 'repair_driver', code };
     if (code === 'driver_result_invalid' || code === 'driver_executable_invalid') return { cause: 'driver_invalid', action: 'repair_driver', code };
+    if (code === 'stale_capture') return { cause: 'geometry_changed', action: 'capture', code };
+    if (code === 'human_input_interruption_uncertain') return { cause: 'input_unknown', action: 'capture', code };
     if (code === 'machine_unreachable') return { cause: 'offline', action: 'reconnect', code };
     if (code === 'forbidden') return { cause: 'access_removed', action: null, code };
     if (code === 'computer_target_not_available' || code === 'computer_target_not_open') return { cause: 'source_lost', action: 'choose_source', code };

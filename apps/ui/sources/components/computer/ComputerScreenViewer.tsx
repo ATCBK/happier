@@ -19,6 +19,8 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { resolveComputerRecovery } from '@/sync/domains/computer/targets';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import type { BrowserCopresence } from '@/sync/domains/browser/automation/copresence';
@@ -100,6 +102,9 @@ export type ComputerScreenViewerProps = Readonly<{
     /** The agent's action is in flight ("is using"), not merely allowed ("can use"). */
     agentActing: boolean;
     checking?: boolean;
+    failure?: string | null;
+    repairingDriver?: boolean;
+    onRepairDriver?: () => void;
     onTakeControl: NonNullable<BrowserPresenceCapsuleProps['onTakeControl']>;
     onHandBack: () => void;
     onCheckAgain: () => void;
@@ -150,7 +155,7 @@ export function resolveComputerAgentTitle(props: Pick<ComputerScreenViewerProps,
 
 /** Screen capture is not granted on the machine, so the picture is the permission card. */
 export function computerCaptureNeedsPermission(props: Pick<ComputerScreenViewerProps, 'shared' | 'grants'>): boolean {
-    return props.shared && props.grants != null && props.grants.capture !== 'granted';
+    return props.grants != null && props.grants.capture !== 'granted';
 }
 
 /**
@@ -226,10 +231,43 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
     }, []);
     const frameSize = useFirstFrameSize(pictureUp ? playerState?.lastFrameUrl : null, playerState?.phase);
     const pageRect = pictureUp && viewport ? containRect(viewport, frameSize) : null;
-    const inputOpen = props.presence.kind !== 'unconfirmed' && props.presence.kind !== 'stopping';
+    const failure = props.failure ?? playerState?.diagnostic?.reasonCode;
+    const recovery = failure ? resolveComputerRecovery({ kind: 'failed', code: failure }, props.access ?? 'use') : null;
+    const needsCapture = recovery?.action === 'capture';
+    const needsDriverRepair = recovery?.action === 'repair_driver';
+    const hasRecovery = recovery != null && (props.failure != null || recovery.cause !== 'failed');
     const target = props.targetTitle ?? t('computerUse.viewer.tabFallback');
     const machine = props.machineName ?? '';
     const agentName = props.agent.name;
+    const recoveryTitle = recovery?.cause === 'driver_missing' ? t('computerUse.viewer.driverMissing')
+        : recovery?.cause === 'driver_invalid' ? t('computerUse.viewer.driverInvalid')
+        : recovery?.cause === 'geometry_changed' ? t('computerUse.viewer.geometryChanged')
+        : recovery?.cause === 'input_unknown' ? t('computerUse.viewer.inputUnknown')
+        : recovery?.cause === 'headless' ? t('computerUse.picker.noScreenTitle', { machine })
+        : recovery?.cause === 'unsupported' ? t('computerUse.picker.unsupportedTitle', { machine })
+        : recovery?.cause === 'machine_mismatch' ? t('computerUse.picker.otherMachineTitle', { machine })
+        : recovery?.cause === 'offline' ? t('computerUse.viewer.offlineTitle', { machine })
+        : recovery?.cause === 'access_removed' || recovery?.cause === 'permission_denied' ? t('errors.permissionDenied')
+        : recovery?.cause === 'source_lost' ? t('computerUse.viewer.endedTitle', { target })
+        : t('computerUse.viewer.unavailableTitle');
+    const recoveryReason = needsDriverRepair ? t('computerUse.viewer.driverRepairBody')
+        : recovery?.cause === 'headless' ? t('computerUse.picker.noScreenBody')
+        : recovery?.cause === 'unsupported' ? t('computerUse.picker.unsupportedBody')
+        : recovery?.cause === 'machine_mismatch' ? t('computerUse.picker.otherMachineBody')
+        : recovery?.cause === 'offline' ? t('computerUse.viewer.offlineBody')
+        : recovery?.cause === 'source_lost' ? t('computerUse.viewer.endedBody', { agent: agentName })
+        : recoveryTitle;
+    const recoveryPermission = recovery?.permission;
+    const recoveryAction = needsDriverRepair
+        ? props.onRepairDriver ? { label: t('computerUse.viewer.repairDriver'), onPress: props.onRepairDriver, busy: props.repairingDriver, disabled: props.repairingDriver } : undefined
+        : recovery?.action === 'choose_source' ? { label: t('computerUse.request.choose'), onPress: props.onChooseWindow }
+        : recovery?.action === 'open_settings' ? props.onOpenSettings && recoveryPermission
+            ? { label: t('computerUse.permission.openPrivacy', { machine }), onPress: () => props.onOpenSettings?.(recoveryPermission) } : undefined
+        : recovery?.action === 'capture' || recovery?.action === 'refresh' || recovery?.action === 'reconnect'
+            ? { label: t('computerUse.permission.checkAgain'), onPress: recovery.action === 'capture' ? props.onCheckAgain : props.onRefresh ?? props.onCheckAgain, busy: props.checking, disabled: props.checking }
+            : undefined;
+    const inputOpen = surfaceState === 'live' && !hasRecovery
+        && props.presence.kind !== 'unconfirmed' && props.presence.kind !== 'stopping';
     const [menuOpen, setMenuOpen] = React.useState(false);
     const onPictureChange = props.onPictureChange;
     const frameWidth = frameSize?.width;
@@ -241,17 +279,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
     const pausedAtMs = playerState?.lastFrameAtMs;
     const onRetryStream = props.stream?.onRetry;
     const needsPermission = computerCaptureNeedsPermission(props);
-    const stage = !props.shared ? (
-        <View style={stylesheet.centered} testID={`${testID}-not-shared`}>
-            <SurfaceStateCard
-                kind="empty"
-                iconName="browsers"
-                title={t('computerUse.viewer.notSharedTitle')}
-                reason={t('computerUse.viewer.notSharedBody', { agent: agentName })}
-                action={{ label: t('computerUse.request.choose'), onPress: props.onChooseWindow }}
-            />
-        </View>
-    ) : needsPermission && props.grants && props.onOpenSettings ? (
+    const stage = needsPermission && props.grants && props.onOpenSettings ? (
         <View style={stylesheet.centered} testID={`${testID}-permission`}>
             <ComputerPermissionCard
                 machineName={machine}
@@ -260,6 +288,28 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                 onOpenSettings={props.onOpenSettings}
                 onCheckAgain={props.onRefresh ?? props.onCheckAgain}
                 testID={`${testID}-permission-card`}
+            />
+        </View>
+    ) : hasRecovery && !pictureUp ? (
+        <View style={stylesheet.centered}>
+            <SurfaceStateCard
+                testID={`${testID}-recovery`}
+                kind={recovery?.cause === 'access_removed' || recovery?.cause === 'permission_denied' ? 'denied'
+                    : recovery?.action === null || recovery?.cause === 'offline' ? 'unavailable' : 'error'}
+                title={recoveryTitle}
+                reason={recoveryTitle !== recoveryReason ? recoveryReason : undefined}
+                diagnosticCode={failure}
+                action={recoveryAction}
+            />
+        </View>
+    ) : !props.shared ? (
+        <View style={stylesheet.centered} testID={`${testID}-not-shared`}>
+            <SurfaceStateCard
+                kind="empty"
+                iconName="browsers"
+                title={t('computerUse.viewer.notSharedTitle')}
+                reason={t('computerUse.viewer.notSharedBody', { agent: agentName })}
+                action={{ label: t('computerUse.request.choose'), onPress: props.onChooseWindow }}
             />
         </View>
     ) : props.machineOnline === false && !pictureUp ? (
@@ -314,7 +364,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                 />
             ) : null}
             {surfaceState === 'stalled' ? <View style={stylesheet.pausedScrim} testID={`${testID}-paused-scrim`} /> : null}
-            {surfaceState === 'stalled' ? (
+            {surfaceState === 'stalled' && !hasRecovery ? (
                 <BrowserFrameStatusCapsule
                     testID={`${testID}-stalled`}
                     text={pausedAtMs
@@ -371,6 +421,10 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                     />
                 ) : null}
             </View>}
+            {pictureUp && hasRecovery ? (
+                <SurfaceFreshnessLine testID={`${testID}-recovery`} reason={recoveryReason} asOf={pausedAtMs}
+                    busy={needsDriverRepair ? props.repairingDriver : props.checking} tone="warning" action={recoveryAction} />
+            ) : null}
             <View style={stylesheet.stage} onLayout={onLayout}>
                 {stage}
                 {pictureUp && props.presence.kind === 'agent' ? (

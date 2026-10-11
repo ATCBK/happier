@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 import { MACHINE_LIVE_STREAM_SOCKET_EVENT, MachineLiveStreamDecodedEnvelopeV1Schema as MachineLiveStreamRelayEnvelopeV1Schema, type MachineLiveStreamCapsV1, type MachineLiveStreamRelayEnvelopeV1, type MachineLiveStreamFrameV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import type { MachineLiveStreamCodecIdV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/codecsV1';
+import { MachineLiveStreamReceiptV1Schema, type MachineLiveStreamReceiptV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/receipts';
 
 import { openMachineLiveStreamRelayClient, renewMachineLiveStreamRelayClient, type MachineLiveStreamRelayClientInput } from '@/sync/domains/machines/peer/mediation/stream/relayClient';
 import { resolveLiveStreamViewerCapabilities, type LiveStreamViewerCapabilities } from '@/sync/domains/machines/peer/mediation/stream/capabilities';
@@ -62,10 +63,13 @@ export type UseSimulatorRelayIngestionInput = Readonly<{
     timeoutMs?: number;
     /** Source-owned metadata shares this one scoped subscriber, but never enters the image decoder. */
     onMetadataFrame?: (frame: MachineLiveStreamFrameV1) => void;
+    /** Source-owned receipt facts share this subscriber without becoming player lifecycle decisions. */
+    onReceipt?: (receipt: MachineLiveStreamReceiptV1) => void;
 }>;
 
 export type UseSimulatorRelayIngestionResult = Readonly<{
     playerStatesBySimulatorId: Readonly<Record<string, SimulatorPreviewStreamState | undefined>>;
+    retry: () => void;
 }>;
 
 const EMPTY_PLAYER_STATES: Readonly<Record<string, SimulatorPreviewStreamState | undefined>> = {};
@@ -116,6 +120,7 @@ export function useSimulatorRelayIngestion(
     input: UseSimulatorRelayIngestionInput,
 ): UseSimulatorRelayIngestionResult {
     const enabled = (input.enabled ?? true) && input.transport !== null;
+    const [attempt, retry] = React.useReducer((value: number) => value + 1, 0);
     const [state, dispatch] = React.useReducer(
         reduceSimulatorRelayStreamState,
         input.streamId,
@@ -265,6 +270,10 @@ export function useSimulatorRelayIngestion(
                     nextSequence: parsed.data.message.frame.sequence + 1,
                 }));
             }
+            if (parsed.data.message.kind === 'receipt') {
+                const receipt = MachineLiveStreamReceiptV1Schema.safeParse(parsed.data.message.receipt);
+                if (receipt.success && receipt.data.streamId === streamId) latestRef.current.onReceipt?.(receipt.data);
+            }
             const event = mapSimulatorRelayEnvelopeToIngestionEvent({
                 envelope: parsed.data,
                 sourceMachineId,
@@ -307,7 +316,7 @@ export function useSimulatorRelayIngestion(
             unsubscribe();
             stop();
         };
-    }, [enabled, transport, serverId, simulatorId, sourceMachineId, targetMachineId, streamId, streamFamily, sourceId, sourceOccurrenceId]);
+    }, [attempt, enabled, transport, serverId, simulatorId, sourceMachineId, targetMachineId, streamId, streamFamily, sourceId, sourceOccurrenceId]);
 
     const onFrameDecoded = React.useCallback(() => dispatch({ type: 'frame_decoded', streamId }), [streamId]);
     const streamIdentityKey = createStreamIdentityKey({ serverId, simulatorId, sourceMachineId, targetMachineId, streamId, streamFamily, sourceId, sourceOccurrenceId });
@@ -318,7 +327,7 @@ export function useSimulatorRelayIngestion(
         return { [simulatorId]: { ...toSimulatorPreviewStreamState(state), onFrameDecoded } };
     }, [streamIdentityKey, simulatorId, state, onFrameDecoded]);
 
-    return React.useMemo(() => ({ playerStatesBySimulatorId }), [playerStatesBySimulatorId]);
+    return React.useMemo(() => ({ playerStatesBySimulatorId, retry }), [playerStatesBySimulatorId, retry]);
 }
 
 export type { SimulatorRelayStreamState };

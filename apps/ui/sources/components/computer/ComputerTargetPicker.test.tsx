@@ -26,6 +26,18 @@ function renderPicker(overrides: Partial<React.ComponentProps<typeof ComputerTar
     return { props, screen: renderScreen(<ComputerTargetPicker {...props} />) };
 }
 
+describe('Computer driver recovery', () => {
+    it.each(['driver_unavailable', 'driver_result_invalid'] as const)('offers driver repair, not list retry, after %s', async code => {
+        const onRepairDriver = vi.fn();
+        const onRetry = vi.fn();
+        const screen = await renderPicker({ state: { kind: 'failed', code }, onRepairDriver, onRetry }).screen;
+        await screen.pressByTestIdAsync('p-recovery-action');
+        expect(onRepairDriver).toHaveBeenCalledTimes(1);
+        expect(onRetry).not.toHaveBeenCalled();
+        expect(screen.findByTestId('p-target:window')).toBeNull();
+    });
+});
+
 describe('resolveSuggestedTargetKey', () => {
     it('finds the listed window an agent’s hint names, and nothing when no title contains it', () => {
         expect(resolveSuggestedTargetKey([screenTarget, lumen], 'lumen')).toBe(computerTargetKey(lumen.target));

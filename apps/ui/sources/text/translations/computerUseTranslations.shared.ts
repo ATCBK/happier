@@ -143,6 +143,12 @@ export type ComputerUseTranslations = Readonly<{
         agentWorkingOn: (params: Readonly<{ agent: string; machine: string }>) => string;
         watchingSourceA11y: (params: Readonly<{ source: string }>) => string;
         controlNotAllowed: string;
+        driverMissing: string;
+        driverInvalid: string;
+        driverRepairBody: string;
+        repairDriver: string;
+        geometryChanged: string;
+        inputUnknown: string;
         paused: (params: Readonly<{ time: string }>) => string;
         offlineTitle: (params: Readonly<{ machine: string }>) => string;
         offlineBody: string;
@@ -312,6 +318,12 @@ export const computerUseTranslationsEnglish = { en: {
             agentWorkingOn: ({ agent, machine }) => `${agent} is working on ${machine}`,
             watchingSourceA11y: ({ source }) => `Watching ${source}`,
             controlNotAllowed: 'Mouse and keyboard control aren’t allowed',
+            driverMissing: 'The computer driver isn’t available',
+            driverInvalid: 'The computer driver needs repair',
+            driverRepairBody: 'Reinstall the native driver on this machine, then check its current permissions and source.',
+            repairDriver: 'Repair driver',
+            geometryChanged: 'The window changed. Capture it again before using it.',
+            inputUnknown: 'The last input couldn’t be confirmed. Check again; it won’t be repeated.',
             paused: ({ time }) => `Stream paused · last frame ${time}`,
             offlineTitle: ({ machine }) => `${machine} isn’t answering`,
             offlineBody: 'Reconnect to watch it. Watching doesn’t start it.',

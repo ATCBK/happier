@@ -7,7 +7,7 @@ import { resolveExecutableManagedDependenciesRegistry } from '@/plugins/projecti
 import { getGitHubReleaseBinaryRuntimeInstallableAdapter } from './sourceAdapters/githubReleaseBinary';
 import { getManagedPypiWheelAssetRuntimeInstallableAdapter } from './sourceAdapters/pypiWheelAsset';
 import { getPinnedArchiveRuntimeInstallableAdapter } from './sourceAdapters/pinnedArchive';
-import { COMPUTER_CUA_DRIVER_INSTALLABLE_KEY, getComputerCuaDriverArchiveDownloadInstallableAdapter } from './sourceAdapters/computerCuaDriver';
+import { COMPUTER_CUA_DRIVER_INSTALLABLE_KEY, getComputerCuaDriverArchiveDownloadInstallableAdapter, getComputerCuaDriverRuntimeInstallableAdapter } from './sourceAdapters/computerCuaDriver';
 import {
   ARCHIVE_DOWNLOAD_INSTALLABLE_SOURCE_KIND,
   BROWSER_CHROMIUM_INSTALLABLE_KEY,
@@ -116,6 +116,7 @@ export async function getRuntimeInstallableAdapter(
   }
 
   if (descriptor.source.kind === 'pinned_archive') {
+    if (key === COMPUTER_CUA_DRIVER_INSTALLABLE_KEY) return getComputerCuaDriverRuntimeInstallableAdapter(descriptor);
     const adapter = getPinnedArchiveRuntimeInstallableAdapter(descriptor);
     if (adapter) {
       return adapter;

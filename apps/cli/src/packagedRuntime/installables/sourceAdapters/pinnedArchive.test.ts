@@ -82,6 +82,28 @@ afterEach(async () => {
 });
 
 describe('pinned archive runtime installable adapter', () => {
+  it('repairs the native Computer capability in its retained archive destination with the same pins and executable validation', async () => {
+    configurationState.happyHomeDir = await makeTempHome();
+    stageArchiveContaining('cua-driver');
+    const { createInstallableCapabilitiesFromContributions } = await import('@/capabilities/registry/installables');
+    const { getArchiveDownloadInstallableAdapter } = await import('../registry');
+    const { COMPUTER_CUA_DRIVER_INSTALLABLE_DESCRIPTOR } = await import('@happier-dev/protocol/installables');
+    const capabilities = await createInstallableCapabilitiesFromContributions({});
+    const capability = capabilities.find(entry => entry.descriptor.id === 'dep.computer-cua-driver');
+    expect(capability).toBeDefined();
+    await expect(capability?.invoke?.({ method: 'install' })).resolves.toEqual({ ok: true, result: { logPath: null } });
+    const source = COMPUTER_CUA_DRIVER_INSTALLABLE_DESCRIPTOR.source;
+    if (source.kind !== 'pinned_archive') throw new Error('Native Computer must use its pinned archive');
+    const asset = source.assetsByPlatform[`${process.platform as 'darwin' | 'linux' | 'win32'}-${process.arch as 'arm64' | 'x64'}`];
+    expect(downloadMock).toHaveBeenCalledWith(expect.objectContaining({ url: asset?.archiveUrl, digest: `sha256:${asset?.sha256}` }));
+    const archive = getArchiveDownloadInstallableAdapter('computer-cua-driver');
+    const executable = join(configurationState.happyHomeDir, 'tools', 'computer-cua-driver', 'current', 'cua-driver');
+    await expect(archive?.resolveInstalledExecutable()).resolves.toBe(executable);
+    await expect(capability?.detect({ request: { id: 'dep.computer-cua-driver' }, context: { cliSnapshot: null } })).resolves.toMatchObject({ installed: true, installedVersion: '0.31.0' });
+    await appendFile(executable, 'changed');
+    await expect(archive?.resolveInstalledExecutable()).resolves.toBeNull();
+    await expect(capability?.detect({ request: { id: 'dep.computer-cua-driver' }, context: { cliSnapshot: null } })).resolves.toMatchObject({ installed: false });
+  });
   it('launches the installed executable with the declared platform arguments', async () => {
     configurationState.happyHomeDir = await makeTempHome();
     const mod = await import('./pinnedArchive');

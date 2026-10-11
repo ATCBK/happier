@@ -197,7 +197,9 @@ export function createComputerCaptureSource(input: Readonly<{
             control.observe(epoch);
             if (JSON.stringify(observation.geometry) !== JSON.stringify(viewedGeometry)) { failInput('stale_capture'); return; }
             const outcome = await execute(observation.captureId, operation, 'human');
-            if (outcome.status === 'failed' || outcome.status === 'interrupted') failInput('human_input_failed');
+            if (outcome.status === 'failed') failInput(outcome.code);
+            else if (outcome.status === 'interrupted') failInput(outcome.completion === 'unknown'
+              ? 'human_input_interruption_uncertain' : 'human_input_failed');
           }).catch(() => failInput('human_input_failed'));
           return { ok: true };
         },

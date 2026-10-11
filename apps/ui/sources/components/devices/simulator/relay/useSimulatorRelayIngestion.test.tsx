@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { Platform } from 'react-native';
+import { PEER_MEDIATION_RECEIPTS } from '@happier-dev/protocol/machines/peer/mediation/receipts';
 
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import {
@@ -152,6 +153,40 @@ describe('useSimulatorRelayIngestion', () => {
     afterEach(() => {
         vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
         if (platformOsDescriptor) Object.defineProperty(Platform, 'OS', platformOsDescriptor);
+    });
+
+    it('retries the same source on its existing transport, retaining the frame until fresh pixels arrive', async () => {
+        const fake = createFakeTransport();
+        const openedSources: (string | undefined)[] = [];
+        const input: UseSimulatorRelayIngestionInput = {
+            ...baseInput(fake.transport),
+            sourceId: 'computer-window-a',
+            startProduction: async request => {
+                openedSources.push(request.sourceId);
+                const authorized = { ...startRequest(), sourceId: request.sourceId,
+                    authorization: { ...startRequest().authorization!, payload: { ...startRequest().authorization!.payload, sourceId: request.sourceId } } };
+                return { ok: true, routeKind: 'server_relay', startRequest: authorized, relayAuthorization: authorized.authorization! };
+            },
+        };
+        const hook = await renderHook(() => useSimulatorRelayIngestion(input));
+        await act(async () => fake.deliver(frameEnvelope(imageFrame(1))));
+        const held = hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID];
+        await act(async () => fake.deliver({ v: 1, sourceMachineId: SOURCE, targetMachineId: TARGET,
+            message: { kind: 'control', control: { v: 1, streamId: STREAM_ID, kind: 'grant_refresh_denied', reasonCode: 'relay_disconnected' } } }));
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]?.phase).toBe('error');
+        expect(hook.getCurrent().retry).toEqual(expect.any(Function));
+        await act(async () => hook.getCurrent().retry());
+        expect(openedSources).toEqual(['computer-window-a', 'computer-window-a']);
+        expect(fake.listenerCount()).toBe(1);
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]).toMatchObject({
+            phase: 'reconnecting', lastFrameUrl: held?.lastFrameUrl, decodedFrames: held?.decodedFrames,
+        });
+        await act(async () => fake.deliver(frameEnvelope(imageFrame(2, { payloadBase64: 'BAUG' }))));
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]).toMatchObject({
+            phase: 'playing', lastFrameUrl: 'data:image/jpeg;base64,BAUG',
+        });
+        await hook.unmount();
+        expect(fake.listenerCount()).toBe(0);
     });
 
     it('opens and renews the exact signed capture source', async () => {
@@ -342,6 +377,26 @@ describe('useSimulatorRelayIngestion', () => {
         expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]).toBe(held);
         expect(held?.decodedFrames).toBe(1);
         expect(fake.sent.at(-1)).toMatchObject({ message: { kind: 'control', control: { kind: 'ack', nextSequence: 3 } } });
+        await hook.unmount();
+    });
+
+    it('delivers only this stream’s valid source receipts without ending or replacing its picture', async () => {
+        const fake = createFakeTransport();
+        const reasons: string[] = [];
+        const hook = await renderHook(() => useSimulatorRelayIngestion({
+            ...baseInput(fake.transport), onReceipt: receipt => reasons.push(receipt.reasonCode ?? ''),
+        }));
+        await act(async () => fake.deliver(frameEnvelope(imageFrame(1))));
+        const held = hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID];
+        const receipt = { v: 1, id: PEER_MEDIATION_RECEIPTS.streamPaused, streamId: STREAM_ID,
+            routeKind: 'server_relay', flowKind: 'live_stream', terminal: false, reasonCode: 'stale_capture' };
+        await act(async () => {
+            for (const value of [{ ...receipt, streamId: 'foreign' }, { ...receipt, payloadBase64: 'secret' }, receipt]) {
+                fake.deliver({ v: 1, sourceMachineId: SOURCE, targetMachineId: TARGET, message: { kind: 'receipt', receipt: value } });
+            }
+        });
+        expect(reasons).toEqual(['stale_capture']);
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]).toBe(held);
         await hook.unmount();
     });
 

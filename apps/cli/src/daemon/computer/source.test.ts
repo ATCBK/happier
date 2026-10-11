@@ -23,6 +23,34 @@ function deferred<T>() {
 }
 
 describe('computer source status projection', () => {
+  it.each(['unknown', 'stale'] as const)('reports the actual %s native viewer input failure without replaying physical input', async kind => {
+    native.capture.mockResolvedValue(observation);
+    native.captureFrame.mockResolvedValue({ png: observation.png, geometry });
+    native.input.mockClear();
+    native.input.mockResolvedValue(kind === 'unknown' ? { status: 'interrupted', completion: 'unknown' } : { status: 'failed', code: 'stale_capture' });
+    native.close.mockResolvedValue(undefined);
+    const source = createComputerCaptureSource({ sessionId: 'native-unknown', target: { kind: 'window', displayId: ':77', pid: 1, windowId: 2 } });
+    const failure = deferred<string>();
+    const stream = await source.adapter.start({ streamId: 'viewer-input', streamFamily: 'screen',
+      sourceMachineId: 'machine', targetMachineId: 'machine', caps: {},
+      startRequest: { v: 1, streamId: 'viewer-input', streamFamily: 'screen', sourceId: source.sourceId, codecId: 'image.frame.v1',
+        routeKind: 'loopback_direct', sourceMachineId: 'machine', targetMachineId: 'machine' },
+      startedAtMs: 0, expiresAtMs: 60_000, nowMs: () => 0,
+      offerFrame: () => ({ ok: true }), applyControl: () => ({ ok: true }),
+      emitReceipt(receipt) { if (receipt.reasonCode) failure.resolve(receipt.reasonCode); },
+    });
+    if (!stream.ok) throw new Error(stream.reasonCode);
+    try {
+      expect(stream.session.applySidebandControl?.({ v: 1, streamId: 'viewer-input', sourceId: source.sourceId,
+        eventId: 'click-1', kind: 'tap', x: 0.5, y: 0.5 })).toEqual({ ok: true });
+      expect(await failure.promise).toBe(kind === 'unknown' ? 'human_input_interruption_uncertain' : 'stale_capture');
+      expect(source.status()).toMatchObject({ controller: 'human', uncertain: kind === 'unknown' });
+      expect(native.input).toHaveBeenCalledTimes(1);
+    } finally {
+      await stream.session.stop();
+      await source.close();
+    }
+  });
   it('streams actual agent activity and takeover settlement without using image cadence', async () => {
     const captured = deferred<ComputerDriverCapture>();
     const dispatched = deferred<ComputerDriverInputResult>();

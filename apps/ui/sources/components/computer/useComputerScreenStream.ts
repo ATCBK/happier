@@ -4,7 +4,7 @@ import type { MachineLiveStreamCapsV1, MachineLiveStreamControlSidebandV1 } from
 import type { BrowserStreamedSurfaceRuntime } from '@/components/browser/adapters/BrowserStreamedTarget';
 import { useSimulatorRelayIngestion, type SimulatorRelayTransport } from '@/components/devices/simulator/relay/useSimulatorRelayIngestion';
 import { useMachineLiveStreamRelaySocket } from '@/components/stream/useMachineLiveStreamRelaySocket';
-import { publishComputerStatusFrame } from '@/sync/domains/computer/computerControlClient';
+import { publishComputerStatusFrame, publishComputerStreamInputFailure } from '@/sync/domains/computer/computerControlClient';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 /** The live-stream family and codec W7's native computer source registers (`_CONTRACTS.md`, W7 U3 supplement). */
@@ -62,6 +62,11 @@ export function useComputerScreenStream(input: Readonly<{
         onMetadataFrame: frame => {
             if (sourceId && machineId) publishComputerStatusFrame({ sessionId: input.sessionId, machineId, serverId: serverId || null }, sourceId, frame);
         },
+        onReceipt: receipt => {
+            if (sourceId && machineId && receipt.terminal === false && receipt.reasonCode) {
+                publishComputerStreamInputFailure({ sessionId: input.sessionId, machineId, serverId: serverId || null }, sourceId, receipt.reasonCode);
+            }
+        },
     });
     const sendControl = React.useMemo(() => {
         if (!socket || !streamId || !sourceId) return null;
@@ -81,7 +86,8 @@ export function useComputerScreenStream(input: Readonly<{
             machineName,
             connecting: !socket || !playerState,
             playerState,
+            onRetry: ingestion.retry,
             input: inputEnabled && sendControl && streamId ? { sourceId, streamId, send: sendControl } : null,
         };
-    }, [inputEnabled, machineName, playerState, sendControl, socket, sourceId, streamId]);
+    }, [ingestion.retry, inputEnabled, machineName, playerState, sendControl, socket, sourceId, streamId]);
 }

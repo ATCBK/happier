@@ -10,6 +10,7 @@ import {
     type ComputerSessionScope,
 } from '@/sync/domains/computer/computerControlClient';
 import { projectComputerCopresence } from '@/sync/domains/computer/presence';
+import { resolveComputerRecovery } from '@/sync/domains/computer/targets';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
@@ -205,10 +206,12 @@ export function useComputerSessionControl(input: Readonly<{
     const appName = selection?.approvalDisplay.appName ?? null;
     const machineName = selection?.approvalDisplay.machineDisplayName ?? null;
     const canRead = Boolean(selection?.sourceId && grants?.capture === 'granted');
-    // See/use constrains the Agent, not the person's native stream controls.
-    const canInput = canRead && grants?.input === 'granted' && Boolean(status && !status.stopping && !status.uncertain);
-    const inputDenied = canRead && grants?.input === 'denied';
     const currentFailure = ownerFailure ?? failure;
+    const recoveryAction = currentFailure === null ? null : resolveComputerRecovery({ kind: 'failed', code: currentFailure }, 'use')?.action;
+    // See/use constrains the Agent, not the person's native stream controls.
+    const canInput = canRead && recoveryAction !== 'capture' && recoveryAction !== 'repair_driver'
+        && grants?.input === 'granted' && Boolean(status && !status.stopping && !status.uncertain);
+    const inputDenied = canRead && grants?.input === 'denied';
 
     return React.useMemo(() => ({
         selection, presence, agentActing, targetTitle, appName, machineName, busy, failure: currentFailure, canRead, canInput, inputDenied,

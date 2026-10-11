@@ -279,6 +279,8 @@ export function ComputerTargetPicker(props: Readonly<{
     onStopSharing: () => void;
     onCancel: () => void;
     onRetry: () => void;
+    onRepairDriver?: () => void;
+    repairingDriver?: boolean;
     onOpenSettings: (permission: 'capture' | 'input') => void;
     openSettings: ComputerOpenSettingsState;
     /** The agent's name, for what it may do and the ask-first line. */
@@ -319,6 +321,7 @@ export function ComputerTargetPicker(props: Readonly<{
     if (state.kind === 'failed') {
         const noScreen = recovery?.cause === 'headless';
         const unsupported = recovery?.cause === 'unsupported';
+        const repairDriver = recovery?.action === 'repair_driver';
         if (recovery?.cause === 'machine_mismatch') {
             return (
                 <View style={stylesheet.state} testID={`${testID}-failed`}>
@@ -335,18 +338,23 @@ export function ComputerTargetPicker(props: Readonly<{
         return (
             <View style={stylesheet.state} testID={`${testID}-failed`}>
                 <SurfaceStateCard
+                    testID={repairDriver ? `${testID}-recovery` : undefined}
                     kind={noScreen || unsupported ? 'unavailable' : 'error'}
                     iconName={noScreen || unsupported ? 'desktop' : undefined}
-                    title={noScreen
+                    title={repairDriver
+                        ? t(recovery?.cause === 'driver_missing' ? 'computerUse.viewer.driverMissing' : 'computerUse.viewer.driverInvalid')
+                        : noScreen
                         ? t('computerUse.picker.noScreenTitle', { machine: machineName })
                         : unsupported
                             ? t('computerUse.picker.unsupportedTitle', { machine: machineName })
                             : t('computerUse.picker.failedTitle', { machine: machineName })}
-                    reason={noScreen
+                    reason={repairDriver ? t('computerUse.viewer.driverRepairBody') : noScreen
                         ? t('computerUse.picker.noScreenBody')
                         : unsupported ? t('computerUse.picker.unsupportedBody') : t('computerUse.picker.failedBody')}
                     diagnosticCode={state.code}
-                    action={noScreen || unsupported ? undefined : { label: t('computerUse.picker.tryAgain'), onPress: props.onRetry }}
+                    action={noScreen || unsupported ? undefined : repairDriver
+                        ? props.onRepairDriver ? { label: t('computerUse.viewer.repairDriver'), onPress: props.onRepairDriver, busy: props.repairingDriver, disabled: props.repairingDriver } : undefined
+                        : { label: t('computerUse.picker.tryAgain'), onPress: props.onRetry }}
                 />
             </View>
         );

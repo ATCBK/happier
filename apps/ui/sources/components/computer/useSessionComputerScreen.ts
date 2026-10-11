@@ -13,6 +13,7 @@ import { openComputerTargetPickerForSession, resolveComputerTargetPickerForSessi
 import type { ComputerTargetPickerRequest } from './showComputerTargetPicker';
 import { useComputerScreenStream } from './useComputerScreenStream';
 import { useComputerSessionControl } from './useComputerSessionControl';
+import { useComputerDriverRepair } from './useComputerDriverRepair';
 
 /** Esc requests takeover while the Agent owns input; after takeover the target handles it. */
 function useEscapeTakesControl(active: boolean, takeControl: () => void): void {
@@ -54,6 +55,7 @@ export function useSessionComputerScreen(props: Readonly<{
     );
     const enabled = props.enabled ?? true;
     const control = useComputerSessionControl({ scope, refreshKey: identity.turnActive, enabled, accountLifetime });
+    const driverRepair = useComputerDriverRepair(scope, accountLifetime, control.refresh);
     const stream = useComputerScreenStream({
         sessionId: props.sessionId,
         machineId: props.machineId,
@@ -112,6 +114,9 @@ export function useSessionComputerScreen(props: Readonly<{
         presence: control.presence,
         agentActing: control.agentActing,
         checking: control.busy === 'check',
+        failure: control.failure,
+        onRepairDriver: driverRepair.repair,
+        repairingDriver: driverRepair.repairing,
         onTakeControl: control.takeControl,
         onHandBack: control.handBack,
         onCheckAgain: control.checkAgain,

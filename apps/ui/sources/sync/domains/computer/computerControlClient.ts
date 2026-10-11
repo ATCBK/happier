@@ -9,6 +9,7 @@ import { decodeBase64 } from '@/encryption/base64';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import type { UiActionExecutorContext } from '@/sync/ops/actions/defaultActionExecutor';
+import { resolveComputerRecovery } from './targets';
 
 /** The Session and machine whose shared window the person is acting on. */
 export type ComputerSessionScope = Readonly<{
@@ -110,7 +111,18 @@ function createComputerSessionProjection(scope: ComputerSessionScope, execute: C
         if (invalidate && flight) invalidated = true;
         const admitted = snapshot.grants && snapshot.grants.capture !== 'granted' ? null : selection;
         publish({ ...snapshot, selection: admitted, status: admitted?.sourceId === snapshot.status?.sourceId ? snapshot.status : null,
-            failure: admitted === null ? snapshot.failure : null });
+            failure: admitted === null || (!invalidate && admitted?.sourceId === snapshot.selection?.sourceId && captureRequired()) ? snapshot.failure : null });
+    }
+    function captureRequired(): boolean {
+        return snapshot.failure !== null && resolveComputerRecovery({ kind: 'failed', code: snapshot.failure }, 'use')?.action === 'capture';
+    }
+    function applySourceFailure(sourceId: string, code: string): void {
+        if (!client.isCurrent() || sourceId !== snapshot.selection?.sourceId) return;
+        publish({ ...snapshot, failure: code });
+    }
+    function confirmCapture(sourceId: string): void {
+        if (!client.isCurrent() || sourceId !== snapshot.selection?.sourceId) return;
+        publish({ ...snapshot, failure: null });
     }
     function applyFailure(code: string): void {
         if (!client.isCurrent()) return;
@@ -121,7 +133,7 @@ function createComputerSessionProjection(scope: ComputerSessionScope, execute: C
         const readable = targets.grants.capture === 'granted';
         publish({ ...snapshot, grants: targets.grants,
             ...(!readable ? { selection: null, status: null, failure: targets.grants.capture === 'denied' ? 'capture_permission_denied' : 'capture_permission_unknown' }
-                : { failure: null }) });
+                : { failure: captureRequired() ? snapshot.failure : null }) });
     }
     function applyStatus(status: ComputerControlStatusResponseV1): void {
         if (!client.isCurrent()) return;
@@ -173,6 +185,8 @@ function createComputerSessionProjection(scope: ComputerSessionScope, execute: C
         applyStatus,
         applyReadiness,
         applyFailure,
+        applySourceFailure,
+        confirmCapture,
         refresh,
         subscribe(listener: () => void, active = true) {
             // React can replay the subscription while retaining this projection.
@@ -227,6 +241,12 @@ export function publishComputerStatusFrame(scope: ComputerSessionScope, sourceId
 }
 export type ComputerSessionProjection = ReturnType<typeof createComputerSessionProjection>;
 
+/** A native input refusal is source-owned evidence, not a stream-ending event or a replay request. */
+export function publishComputerStreamInputFailure(scope: ComputerSessionScope, sourceId: string, code: string): void {
+    if (resolveComputerRecovery({ kind: 'failed', code }, 'use')?.action !== 'capture') return;
+    for (const projection of mountedProjections.get(projectionKey(scope)) ?? []) projection.applySourceFailure(sourceId, code);
+}
+
 export function getComputerSessionProjection(scope: ComputerSessionScope, execute: ComputerActionExecute, accountLifetime?: ServerAccountScopeLifetime | null): ComputerSessionProjection {
     // An unavailable or mismatched binding must not displace a current Account's shared reader.
     if (!createComputerControlClient(scope, execute, accountLifetime).isCurrent()) {
@@ -258,6 +278,14 @@ export function publishComputerActionAnswer(scope: ComputerSessionScope, actionI
         }
     } else if (actionId === 'computer.control.interrupt' || actionId === 'computer.control.handBack'
         || actionId === 'computer.target.close' || actionId === 'computer.capture') {
+        if (actionId === 'computer.capture') {
+            const capture = ComputerCaptureResponseV1Schema.safeParse(answer);
+            if (capture.success && capture.data.status === 'captured') {
+                for (const projection of mounted) projection.confirmCapture(capture.data.sourceId);
+            } else if (capture.success && capture.data.status === 'failed') {
+                for (const projection of mounted) projection.applySourceFailure(capture.data.sourceId, capture.data.code);
+            }
+        }
         const result = actionId === 'computer.capture' ? ComputerCaptureResponseV1Schema.safeParse(answer) : ComputerActionResultV1Schema.safeParse(answer);
         if (!result.success) return;
         for (const projection of mounted) void projection.refresh(true);

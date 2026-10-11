@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 
 import { renderScreen } from '@/dev/testkit';
 
@@ -12,6 +13,15 @@ import {
 vi.mock('@expo/vector-icons', async () =>
   (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock(),
 );
+vi.mock('react-native', async () => {
+  const React = await import('react');
+  const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+  // Image sizing is a platform boundary; retain the real viewer and input geometry.
+  return createReactNativeWebMock({ Image: Object.assign(
+    (props: Record<string, unknown>) => React.createElement('Image', props),
+    { getSize: (_url: string, success: (width: number, height: number) => void) => success(800, 600) },
+  ) });
+});
 vi.mock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
   return createTextModuleMock({
@@ -43,6 +53,41 @@ function props(
 }
 
 describe('ComputerScreenViewer', () => {
+  it('keeps a removed-access refusal visible after the owner retires the selection, with no choose or repair bypass', async () => {
+    const screen = await renderScreen(<ComputerScreenViewer {...props({ shared: false, failure: 'forbidden' })} />);
+    expect(screen.findByTestId('v-not-shared')).toBeNull();
+    expect(screen.findByTestId('v-recovery')).toBeTruthy();
+    expect(screen.findByTestId('v-recovery-action')).toBeNull();
+  });
+  it.each(['driver_unavailable', 'driver_result_invalid'] as const)('offers the native installation repair for %s before selection is available', async failure => {
+    const onRepairDriver = vi.fn();
+    const screen = await renderScreen(<ComputerScreenViewer {...props({ shared: false })} failure={failure} onRepairDriver={onRepairDriver} />);
+    expect(screen.findByTestId('v-not-shared') === null).toBe(true);
+    expect(screen.findByTestId('v-recovery')).toBeTruthy();
+    await screen.pressByTestIdAsync('v-recovery-action');
+    expect(onRepairDriver).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['stale_capture', 'human_input_interruption_uncertain'] as const)('keeps the frame and recaptures without input replay for %s', async failure => {
+    const onCheckAgain = vi.fn();
+    const screen = await renderScreen(<ComputerScreenViewer {...props({
+      onCheckAgain,
+      presence: { kind: 'human', controlEpoch: 1 },
+      stream: { machineName: 'mac-vm-1', input: { sourceId: 'computer-window-a', streamId: 'stream-a', send: vi.fn() }, playerState: {
+        phase: 'playing', selectedCodec: 'image.mjpeg', activeRenderer: 'mjpeg',
+        lastFrameUrl: 'data:image/jpeg;base64,AQID', decodedFrames: 1, droppedFrames: 0, bufferedBytes: 0,
+      } },
+    })} failure={failure} />);
+    await act(async () => screen.root.findAll(node => typeof node.props.onLayout === 'function')[0].props.onLayout({
+      nativeEvent: { layout: { width: 800, height: 600 } },
+    }));
+    expect(screen.findByTestId('v-player')).toBeTruthy();
+    expect(screen.findByTestId('v-recovery')).toBeTruthy();
+    await screen.pressByTestIdAsync('v-recovery-action');
+    expect(onCheckAgain).toHaveBeenCalledTimes(1);
+    expect(screen.findByTestId('v-input')).toBeNull();
+  });
+
   it('says once that control isn’t allowed and offers no Take control while the machine denies input', async () => {
     const denied = await renderScreen(
       <ComputerScreenViewer {...props({ inputDenied: true })} />,
@@ -98,7 +143,7 @@ describe('ComputerScreenViewer', () => {
     const onOpenSettings = vi.fn();
     const denied = await renderScreen(
       <ComputerScreenViewer
-        {...props({ grants: { capture: 'denied', input: 'granted' }, onOpenSettings })}
+        {...props({ shared: false, grants: { capture: 'denied', input: 'granted' }, onOpenSettings })}
       />,
     );
     expect(denied.getTextContent()).toContain('computerUse.permission.captureTitle:{"machine":"mac-vm-1"}');

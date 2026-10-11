@@ -9,7 +9,7 @@ import type { MachineLiveStreamFrameV1 } from '@happier-dev/protocol/machines/pe
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createComputerRuntimeActionExecutor, type ComputerMachineRpc } from '@/sync/domains/computer/actions/runtimeActionExecutor';
-import { createComputerControlClient, getComputerSessionProjection, publishComputerStatusFrame } from '@/sync/domains/computer/computerControlClient';
+import { createComputerControlClient, getComputerSessionProjection, publishComputerStatusFrame, publishComputerStreamInputFailure } from '@/sync/domains/computer/computerControlClient';
 import { encodeBase64 } from '@/encryption/base64';
 
 import { useComputerSessionControl } from './useComputerSessionControl';
@@ -109,6 +109,47 @@ async function renderControl(machine: ComputerMachineRpc) {
 }
 
 describe('useComputerSessionControl', () => {
+    it.each(['stale_capture', 'human_input_interruption_uncertain'] as const)('retains the exact source but blocks input after %s until capture is confirmed', async code => {
+        const { machine, calls } = createMachine();
+        const scope = { sessionId: 'input-refusal', machineId: 'machine_1' };
+        const executor = executorWith(machine);
+        const hook = await renderHook(() => useComputerSessionControl({ scope, execute: executor.execute }));
+        await act(async () => publishComputerStreamInputFailure(scope, 'foreign-source', 'stale_capture'));
+        expect(hook.getCurrent().canInput).toBe(true);
+        await act(async () => publishComputerStreamInputFailure(scope, selection.sourceId, code));
+        expect(hook.getCurrent().failure).toBe(code);
+        expect(hook.getCurrent().selection?.sourceId).toBe(selection.sourceId);
+        expect(hook.getCurrent().canInput).toBe(false);
+        await act(async () => getComputerSessionProjection(scope, executor.execute).applyStatus(status('human')));
+        expect(hook.getCurrent().failure).toBe(code);
+        await act(async () => hook.getCurrent().refresh());
+        expect(hook.getCurrent().failure).toBe(code);
+        await act(async () => hook.getCurrent().checkAgain());
+        expect(hook.getCurrent().failure).toBeNull();
+        expect(hook.getCurrent().canInput).toBe(true);
+        expect(calls.filter(action => action === 'computer.capture')).toHaveLength(1);
+        expect(calls).not.toContain('computer.input');
+    });
+    it('does not release the native quarantine when an explicit recapture still fails', async () => {
+        const calls: string[] = [];
+        const machine: ComputerMachineRpc = async ({ actionId }) => {
+            calls.push(actionId);
+            if (actionId === 'computer.target.get') return selection;
+            if (actionId === 'computer.targets.list') return targetList;
+            if (actionId === 'computer.capture') return { ...identity, status: 'failed', code: 'driver_unavailable' };
+            return status('human', { uncertain: true });
+        };
+        const scope = { sessionId: 'quarantined-native', machineId: 'machine_1' };
+        const executor = executorWith(machine);
+        const hook = await renderHook(() => useComputerSessionControl({ scope, execute: executor.execute }));
+        await act(async () => publishComputerStreamInputFailure(scope, selection.sourceId, 'human_input_interruption_uncertain'));
+        await act(async () => hook.getCurrent().checkAgain());
+        expect(hook.getCurrent().canInput).toBe(false);
+        expect(hook.getCurrent().presence.kind).toBe('unconfirmed');
+        expect(hook.getCurrent().failure).toBe('driver_unavailable');
+        expect(calls).not.toContain('computer.input');
+    });
+
     it('refuses Computer reads and effects when borrowed Account authority is explicitly unavailable', async () => {
         const { machine, calls } = createMachine();
         const executor = executorWith(machine);
