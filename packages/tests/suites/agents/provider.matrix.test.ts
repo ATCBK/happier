@@ -23,6 +23,12 @@ describe('providers: contract matrix (harness)', () => {
     { id: 'auggie', envVar: 'HAPPIER_E2E_PROVIDER_AUGGIE', timeoutMs: 1_200_000 },
     { id: 'pi', envVar: 'HAPPIER_E2E_PROVIDER_PI', timeoutMs: 1_200_000 },
     { id: 'grok', envVar: 'HAPPIER_E2E_PROVIDER_GROK', timeoutMs: 1_200_000 },
+    { id: 'devin', envVar: 'HAPPIER_E2E_PROVIDER_DEVIN', timeoutMs: 1_200_000 },
+    { id: 'cursor', envVar: 'HAPPIER_E2E_PROVIDER_CURSOR', timeoutMs: 2_400_000 },
+    { id: 'antigravity', envVar: 'HAPPIER_E2E_PROVIDER_ANTIGRAVITY', timeoutMs: 1_200_000 },
+    { id: 'fx', envVar: 'HAPPIER_E2E_PROVIDER_FX', timeoutMs: 1_200_000 },
+    { id: 'droid', envVar: 'HAPPIER_E2E_PROVIDER_DROID', timeoutMs: 1_200_000 },
+    { id: 'codebuddy', envVar: 'HAPPIER_E2E_PROVIDER_CODEBUDDY', timeoutMs: 1_200_000 },
   ] as const;
 
   const providersEnabled = (process.env.HAPPIER_E2E_PROVIDERS ?? '').toString().trim() === '1';

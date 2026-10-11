@@ -23,6 +23,11 @@ describe('scenarioCatalog (kilo resume metadata)', () => {
       { providerId: 'kimi', key: 'kimiSessionId' },
       { providerId: 'auggie', key: 'auggieSessionId' },
       { providerId: 'grok', key: 'grokSessionId' },
+      { providerId: 'codebuddy', key: 'codebuddySessionId' },
+      { providerId: 'fx', key: 'fxSessionId' },
+      { providerId: 'droid', key: 'droidSessionId' },
+      { providerId: 'devin', key: 'devinSessionId' },
+      { providerId: 'antigravity', key: 'antigravitySessionId' },
     ] as const;
 
     for (const testCase of cases) {
