@@ -1585,8 +1585,9 @@ const SessionItemContent = React.memo(
                 separator={Boolean(embedded && !embeddedIsLast)}
                 onLayout={sourceTagChips.length > 0 ? handleRowLayout : undefined}
                 renderContainer={(content, rowStyle) => (
-                    // When the list carries this row itself, that is its one drag (it reaches panes too).
-                    <WorkspaceDestinationRow existingMenu dragSource={!dragEnabled} href={buildScopedSessionRouteHref({
+                    // When the list carries this row itself, that is its one drag (it reaches panes too). The
+                    // wrapper takes the press target's flex slot, so a long title truncates and the meta stays in view.
+                    <WorkspaceDestinationRow existingMenu dragSource={!dragEnabled} style={rowStyle} href={buildScopedSessionRouteHref({
                         sessionId: resolvedSession.id, serverId: serverId ?? null,
                     })}>
                     <Pressable

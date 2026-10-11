@@ -3,7 +3,7 @@ import * as React from 'react';
 import { StyleSheet } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
-import { flushHookEffects, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { createSessionListRenderableSessionFixture, flushHookEffects, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
@@ -244,6 +244,27 @@ describe('ColumnDestinationRows', () => {
         expect(row?.props.disabled).toBe(true);
         expect(row?.props.subtitle).toEqual(expect.any(String));
         expect(row?.props.subtitle).not.toBe('feature_disabled');
+    });
+
+    it("carries the Bots faces and what needs you on the phone launcher's one Bots entry", async () => {
+        // DF-B1: the launcher row is the phone's only way to the roster, so it says what the lab's
+        // My work entry said (b-rail Ap): a few faces, then what needs you.
+        const bots = ['alpha', 'beta'].map((id) => createSessionListRenderableSessionFixture({
+            id, metadata: { path: '/home/happier', bot: { kind: 'bot' } },
+        }));
+        storage.setState({ sessionListRowsByServerId: {
+            ...storage.getState().sessionListRowsByServerId,
+            [runtime.serverId]: Object.fromEntries(bots.map((row) => [row.id, row])),
+        } });
+        const { ColumnDestinationRows } = await import('./ColumnDestinationRows');
+        const launcher = await render(<ColumnDestinationRows />);
+
+        const row = rowFor(launcher, 'compact-app-destination:bots');
+        expect(row?.props.rightElement).toBeTruthy();
+        expect(launcher.findAllByTestId('bots-entry-summary')).toHaveLength(1);
+        // A column (desktop) keeps its quiet row: the rail button carries the Bots dot there.
+        const column = await render(<ColumnDestinationRows column="sessions" />);
+        expect(column.findAllByTestId('bots-entry-summary')).toHaveLength(0);
     });
 
     it('keeps column and phone discovery visible when the rail icon is hidden', async () => {

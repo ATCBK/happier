@@ -7,7 +7,6 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSettingMutable } from '@/sync/domains/state/storage';
 import { useUnistyles } from 'react-native-unistyles';
 import { RecoveryKeyReminderBanner } from '@/components/account/RecoveryKeyReminderBanner';
-import { BotsListEntryRow } from '@/components/sessions/bots/BotsListEntryRow';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Text } from '@/components/ui/text/Text';
@@ -353,13 +352,12 @@ export const SessionsListHeader = React.memo(function SessionsListHeader() {
     const styles = sessionListStyles;
     // Wide layouts show the home hub beside this list, and its "Get set up" section owns the
     // recovery-key step; a second card here would repeat it. Phones have no hub, so it stays here.
-    // Phones have no rail either: their way to the Bots roster opens My work (lab `b-rail Ap`).
+    // The phone reaches the Bots roster through the launcher's one Bots entry above My work.
     const wideLayout = useIsTablet();
     if (wideLayout) return null;
 
     return (
         <View style={styles.listHeaderSection}>
-            <BotsListEntryRow />
             <RecoveryKeyReminderBanner />
         </View>
     );

@@ -4,6 +4,7 @@ import { Platform, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Item } from '@/components/ui/lists/Item';
+import { BotsEntrySummary } from '@/components/sessions/bots/BotsEntrySummary';
 import { WorkspaceDestinationRow } from '@/components/appShell/workspace/WorkspaceDestinationRow';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
@@ -187,6 +188,9 @@ export const ColumnDestinationRows = React.memo(function ColumnDestinationRows(p
                     icon={<Icon name={destination.icon} color={theme.colors.text.secondary} />}
                     rightElement={destination.kind === 'plugin' && destination.badge ? (
                         <CompactAppDestinationBadge destination={destination} />
+                    ) : column === undefined && destination.activation === 'botsRoster' ? (
+                        // The phone's one Bots entry carries the faces and what needs you (lab b-rail Ap).
+                        <BotsEntrySummary />
                     ) : undefined}
                     density={column === undefined ? 'comfortable' : 'tight'}
                     showChevron={column === undefined}
