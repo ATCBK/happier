@@ -588,6 +588,7 @@ function useSessionListQueryHomeStatesLayer(input: SessionListQueryInput): Sessi
             if (!isSessionListQueryHomeCoverageComplete({
                 state,
                 requestedQueryKey: home.queryKey,
+                query: home.query,
             })) {
                 coverageComplete = false;
             }
@@ -679,6 +680,7 @@ export function useSessionListQuerySourceState(input: SessionListQueryInput): Se
             isSessionListQueryHomeCoverageComplete({
                 state: layer.statesByServerId[home.serverId],
                 requestedQueryKey: home.queryKey,
+                query: home.query,
                 bot: home.query.bot,
                 rowsBySessionId: rowsByServerId[home.serverId] ?? undefined,
             })
@@ -691,12 +693,29 @@ export function useSessionListQuerySourceState(input: SessionListQueryInput): Se
                 nextByServerId[home.serverId] = Array.isArray(previousIndex) && previousIndex.length === 0 ? previousIndex : [];
                 continue;
             }
-            const membership = layer.renderMembershipByServerId[home.serverId];
+            let membership = layer.renderMembershipByServerId[home.serverId];
+            const homeRows = rowsByServerId[home.serverId];
+            const state = layer.statesByServerId[home.serverId];
+            // A secondary Bot roster never publishes membership. Until its candidates finish
+            // paging, render this Home's held rows through the same Bot selector downstream.
+            // This display-only retention neither advances cursors nor certifies coverage.
+            if (home.queryMembership === 'rowOnly' && home.query.bot === 'bot'
+                && (!state || state.appliedQueryKey !== home.queryKey
+                    || state.phase === 'loading' || state.phase === 'refreshing'
+                    || state.phase === 'offline' || state.phase === 'error'
+                    || state.hasNext || state.attentionHasNext)) {
+                const knownIds = new Set(membership?.addresses.map(address => address.sessionId));
+                const heldAddresses = Object.keys(homeRows ?? {}).filter(sessionId => !knownIds.has(sessionId)
+                    && (home.query.storage === 'archived' ? homeRows?.[sessionId]?.archivedAt != null : homeRows?.[sessionId]?.archivedAt == null))
+                    .map(sessionId => ({ serverId: home.serverId, sessionId }));
+                if (heldAddresses.length > 0) {
+                    membership = { addresses: [...(membership?.addresses ?? []), ...heldAddresses], retained: true };
+                }
+            }
             if (!membership) {
                 nextByServerId[home.serverId] = null;
                 continue;
             }
-            const homeRows = rowsByServerId[home.serverId];
             const previousIndex = previous.byServerId[home.serverId];
             // Retained rows show only what this device still holds; a retained id with
             // no row (retired meanwhile) is not a loading placeholder.

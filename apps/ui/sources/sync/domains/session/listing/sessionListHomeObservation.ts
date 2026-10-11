@@ -1,6 +1,6 @@
-import type { SessionListQueryHomeState } from './sessionListQueryController';
+import { canSessionListOrdinaryPageAnswerQuery, type SessionListQueryHomeState } from './sessionListQueryController';
 import { matchSessionBotFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
-import type { SessionBotFilterV1 } from '@happier-dev/protocol/sessions/listing/query';
+import type { SessionBotFilterV1, SessionListQueryV1 } from '@happier-dev/protocol/sessions/listing/query';
 
 /**
  * Authoritative lifecycle phase of one Home's Session list. Query-backed Homes publish it from
@@ -53,10 +53,11 @@ export type SessionListObservationCacheByServerId = Readonly<Record<string, Read
     listObservation?: SessionListHomeObservation | null;
 }> | null | undefined>>;
 
-/** Strict query coverage belongs to the exact applied query lifecycle, never its GET adapter. */
+/** Coverage belongs to the exact applied corpus; GET is complete only for predicates it can answer. */
 export function isSessionListQueryHomeCoverageComplete(input: Readonly<{
     state: SessionListQueryHomeState | undefined;
     requestedQueryKey: string;
+    query?: SessionListQueryV1;
     bot?: SessionBotFilterV1;
     rowsBySessionId?: Readonly<Record<string, Readonly<{ metadata?: unknown }> | undefined>>;
 }>): boolean {
@@ -68,7 +69,9 @@ export function isSessionListQueryHomeCoverageComplete(input: Readonly<{
         && !state.hasNext
         && !state.attentionHasNext
         && (state.metadataUpgradeRequiredCount ?? 0) === 0
-        && state.appliedSourceKind === 'query'
+        && (state.appliedSourceKind === 'query'
+            || (state.appliedSourceKind === 'ordinary' && input.query !== undefined
+                && canSessionListOrdinaryPageAnswerQuery(input.query)))
         && (input.bot === undefined || state.addresses.every((address) => (
             matchSessionBotFilterV1(input.rowsBySessionId?.[address.sessionId]?.metadata, input.bot) !== 'unavailable'
         )))

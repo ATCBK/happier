@@ -129,6 +129,17 @@ describe('Bot metadata coverage', () => {
 });
 
 describe('isSessionListQueryHomeCoverageComplete', () => {
+    it('certifies a readable exhausted Bot roster when its ordinary adapter answers the requested corpus', () => {
+        const state = { ...queryState('ready', 1_000), appliedSourceKind: 'ordinary' as const,
+            addresses: [{ serverId: 'home-a', sessionId: 'bot' }] };
+        const query = { v: 1 as const, storage: 'active' as const, includeInactive: true,
+            scope: 'my_work' as const, attention: 'any' as const, audiences: [], tagIds: [] };
+        const input = { state, requestedQueryKey: 'query', query, bot: 'bot' as const,
+            rowsBySessionId: { bot: { metadata: { bot: { kind: 'bot' } } } } };
+        expect(isSessionListQueryHomeCoverageComplete(input)).toBe(true);
+        expect(isSessionListQueryHomeCoverageComplete({ ...input, query: { ...query, scope: 'all_accessible' } })).toBe(false);
+        expect(isSessionListQueryHomeCoverageComplete({ ...input, rowsBySessionId: { bot: { metadata: null } } })).toBe(false);
+    });
     it('keeps exhausted historical metadata omissions incomplete until a clean refresh', () => {
         const state = { ...queryState('ready', 1_000), metadataUpgradeRequiredCount: 1 };
         expect(isSessionListQueryHomeCoverageComplete({ state, requestedQueryKey: 'query' })).toBe(false);

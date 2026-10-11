@@ -37,6 +37,7 @@ let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefi
 let queryRequests: SessionListQueryV1[] = [];
 let socketErrors: string[] = [];
 let unsubscribeSocketErrors: (() => void) | undefined;
+let queryGate: Promise<void> | undefined;
 const nextCursor = encodeV2SessionListCursorV1('page-one');
 
 function renderedSessionIds(index: readonly SessionListIndexItem[] | null) {
@@ -47,6 +48,7 @@ describe('ordinary list presentation for the opened Bots roster', () => {
     beforeAll(loadSyncSingletonForTests);
     beforeEach(async () => {
         queryRequests = [];
+        queryGate = undefined;
         socketErrors = [];
         const { apiSocket } = await import('@/sync/api/session/apiSocket');
         unsubscribeSocketErrors = apiSocket.onError(error => {
@@ -60,6 +62,7 @@ describe('ordinary list presentation for the opened Bots roster', () => {
                 if (path === '/v2/sessions/query') {
                     const query = SessionListQueryV1Schema.parse(JSON.parse(String(init?.body)));
                     queryRequests.push(query);
+                    await queryGate;
                     const lastPage = query.cursor === nextCursor;
                     return Response.json(SessionListQueryResponseV1Schema.parse({
                         sessions: [], nextCursor: lastPage ? null : nextCursor, hasNext: !lastPage,
@@ -148,5 +151,38 @@ describe('ordinary list presentation for the opened Bots roster', () => {
         });
         expect(roster.getCurrent().query?.coverageComplete).toBe(false);
         expect(storage.getState().sessionListQueryMembershipByKey).toEqual(memberships);
+    });
+
+    it('keeps held Bots visible while a row-only roster pages without publishing membership or coverage', async () => {
+        let release!: () => void;
+        queryGate = new Promise<void>(resolve => { release = resolve; });
+        const serverId = resolveServerProfileScopeIdForIdentifier(connection!.home.id);
+        const query: SessionListQueryV1 = { v: 1, storage: 'active', includeInactive: true,
+            scope: 'all_accessible', attention: 'any', audiences: [], tagIds: [] };
+        storage.getState().applyServerScopedSessionListRows(serverId, [
+            createSessionListRenderableSessionFixture({ id: 'archived-bot', archivedAt: 1,
+                metadata: { path: '/project', bot: { kind: 'bot' } } }),
+        ], { source: 'rowOnly', mode: 'append' });
+        const memberships = storage.getState().sessionListQueryMembershipByKey;
+        const { useVisibleSessionListPaneState } = await import('./useVisibleSessionListPaneState');
+        const roster = await renderHook(() => useVisibleSessionListPaneState('all', {
+            botsRoster: true, queryHomes: [{ serverId, query,
+                ordinaryAdapter: { path: '/v2/sessions', allowV1Fallback: true, membership: 'ordinary' } }],
+        }));
+        try {
+            await vi.waitFor(() => expect(roster.getCurrent().query?.statesByServerId[serverId]?.phase).toBe('loading'));
+            expect(renderedSessionIds(roster.getCurrent().visibleSessionListIndex).sort()).toEqual(['active-bot', 'inactive-bot']);
+            expect(roster.getCurrent().queryPresentation?.kind).toBe('refreshing');
+            expect(roster.getCurrent().query?.coverageComplete).toBe(false);
+            expect(storage.getState().sessionListQueryMembershipByKey).toEqual(memberships);
+            release();
+            await vi.waitFor(() => expect(roster.getCurrent().query?.statesByServerId[serverId]?.phase).toBe('ready'));
+            expect(roster.getCurrent().query?.statesByServerId[serverId]?.hasNext).toBe(true);
+            expect(renderedSessionIds(roster.getCurrent().visibleSessionListIndex).sort()).toEqual(['active-bot', 'inactive-bot']);
+            await roster.getCurrent().query?.loadNext();
+            await flushHookEffects();
+            expect(renderedSessionIds(roster.getCurrent().visibleSessionListIndex)).toEqual([]);
+            expect(storage.getState().sessionListQueryMembershipByKey).toEqual(memberships);
+        } finally { release(); }
     });
 });

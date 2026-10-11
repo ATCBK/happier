@@ -2,7 +2,7 @@ import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useShallow } from 'zustand/react/shallow';
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FRESHNESS_LINE_METRICS, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import {
   RailPopoverRoster,
@@ -24,6 +24,7 @@ import {
 } from '@/components/sessions/shell/sessionListRowViewModels';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
@@ -267,7 +268,6 @@ export function BotsPopoverContent(
   // Settled but not whole (locked or withheld candidates): say so, never call it a complete empty roster.
   const incomplete = !paging && presentation?.kind === 'ready' && !presentation.complete;
   const failed =
-    incomplete ||
     presentation?.kind === 'error' ||
     (presentation?.kind === 'partial' && !offlineHome);
   const loading =
@@ -294,6 +294,17 @@ export function BotsPopoverContent(
   const retry = React.useCallback(() => {
     if (query) fireAndForget(query.refresh(), { tag: 'BotsRoster.retry' });
   }, [query]);
+
+  const freshnessLine = failed || incomplete ? (
+    <View style={styles.line}>
+      <SurfaceFreshnessLine
+        testID={failed ? 'bots-roster.partial' : 'bots-roster.unreadable'}
+        tone={failed ? 'warning' : 'neutral'}
+        reason={t(failed ? 'bots.partial' : 'bots.unreadable')}
+        action={failed ? { label: t('common.retry'), onPress: retry } : undefined}
+      />
+    </View>
+  ) : null;
 
   const iconColor = theme.colors.text.secondary;
   const footerActions = [
@@ -357,16 +368,7 @@ export function BotsPopoverContent(
             />
           }
         />
-        {failed ? (
-          <View style={styles.line}>
-            <SurfaceFreshnessLine
-              testID="bots-roster.partial"
-              tone="warning"
-              reason={t('bots.partial')}
-              action={{ label: t('common.retry'), onPress: retry }}
-            />
-          </View>
-        ) : null}
+        {freshnessLine}
         {offerVisible ? (
           <>
             <View style={styles.divider} />
@@ -400,16 +402,21 @@ export function BotsPopoverContent(
       title={t('bots.title')}
       actions={footerActions}
       summary={
-        summary ? (
-          <View style={styles.summary}>
-            {counts.needsYou > 0 ? (
-              <StatusDot color={theme.colors.state.warning.foreground} />
+        <View style={styles.summary}>
+          <View style={{ width: HAPPIER_FRESHNESS_LINE_METRICS.glyphPx - 1, height: HAPPIER_FRESHNESS_LINE_METRICS.glyphPx - 1 }}>
+            {paging || presentation?.kind === 'refreshing' ? (
+              <ActivitySpinner testID="bots-roster.refreshing" size={HAPPIER_FRESHNESS_LINE_METRICS.glyphPx - 1} />
             ) : null}
+          </View>
+          {counts.needsYou > 0 ? (
+            <StatusDot color={theme.colors.state.warning.foreground} />
+          ) : null}
+          {summary ? (
             <Text style={styles.summaryText} numberOfLines={1}>
               {summary}
             </Text>
-          </View>
-        ) : null
+          ) : null}
+        </View>
       }
     >
       {offlineHomeLabel ? (
@@ -470,16 +477,7 @@ export function BotsPopoverContent(
           />
         ) : null}
       </ScrollView>
-      {failed ? (
-        <View style={styles.line}>
-          <SurfaceFreshnessLine
-            testID="bots-roster.partial"
-            tone="warning"
-            reason={t('bots.partial')}
-            action={{ label: t('common.retry'), onPress: retry }}
-          />
-        </View>
-      ) : null}
+      {freshnessLine}
     </RailPopoverRoster>
   );
 }
