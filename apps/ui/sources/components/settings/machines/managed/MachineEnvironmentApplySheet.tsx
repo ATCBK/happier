@@ -44,13 +44,14 @@ export function MachineEnvironmentApplySheet(
   const router = useRouter();
   const { setChrome, onClose } = props;
   React.useEffect(() => {
+    // The same card chrome as the machine's other sheets (Share): its title, the machine it acts on, and a close.
     setChrome?.({
       kind: 'card',
-      header: 'none',
       title: t('machinePresets.environment.applyTitle'),
+      subtitle: props.machineName,
       phonePresentation: 'sheet',
     });
-  }, [setChrome]);
+  }, [setChrome, props.machineName]);
   const serverIds = React.useMemo(() => [props.serverId], [props.serverId]);
   const { presetsByServerId, statesByServerId, refresh } =
     useMachinePresets(serverIds);
@@ -161,7 +162,6 @@ export function MachineEnvironmentApplySheet(
         />
       ) : null}
       <ItemGroup
-        title={t('machinePresets.environment.applyTitle')}
         description={t('machinePresets.environment.applyDescription', {
           machine: props.machineName,
         })}
@@ -194,10 +194,19 @@ export function MachineEnvironmentApplySheet(
                   ? t('machinePresets.loadFailed')
                   : t('machinePresets.environment.applyEmpty')
             }
+            // Nothing to apply yet leads to where a preset is made, instead of a sentence with no way there.
             action={
               state?.error
                 ? { label: t('common.retry'), onPress: refresh }
-                : undefined
+                : state?.loading
+                  ? undefined
+                  : {
+                      label: t('machinePresets.newPreset'),
+                      onPress: () => {
+                        onClose();
+                        router.push(`/settings/machines/presets/new?serverId=${encodeURIComponent(props.serverId)}` as never);
+                      },
+                    }
             }
           />
         ) : null}

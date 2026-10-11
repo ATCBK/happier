@@ -45,8 +45,15 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
     return await nativeRpc.replay(payload.artifactId);
   });
 });
+const routerHandle = vi.hoisted(() => ({ current: null as null | { spies: { push: { mock: { calls: unknown[][] } } } } }));
 installApprovalCommonModuleMocks({
   text: async () => vi.importActual<typeof import('@/text')>('@/text'),
+  router: async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    const router = createExpoRouterMock();
+    routerHandle.current = router;
+    return router.module;
+  },
 });
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -292,5 +299,26 @@ describe('Set up from a preset (D53)', () => {
     });
     expect(onClose).toHaveBeenCalledTimes(1);
     await mounted.unmount();
+  });
+
+  it('leads from no preset that sets anything up to making one, closing the sheet', async () => {
+    const home = await harness.addHome({
+      name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true,
+    });
+    const serverId = resolveServerProfileScopeIdForIdentifier(home);
+    harness.answer(home, '/v1/machines', { body: [createPlainMachineRowFixture({ id: 'devbox', accountId: 'owner' })] });
+    harness.answer(home, '/v1/machines/presets/list', { body: { kind: 'listed', presets: [] } });
+    const { MachineEnvironmentApplySheet } = await import('./MachineEnvironmentApplySheet');
+    const onClose = vi.fn();
+    const screen = await renderScreen(<MachineEnvironmentApplySheet serverId={serverId} machineId="devbox" machineName="devbox"
+      onClose={onClose} setChrome={vi.fn()} {...({} as never)} />);
+    await waitForHomeGovernance(() => expect(screen.tree.findAll(node => node.props?.testID === 'machine-environment-apply.state'
+      && node.props.kind === 'empty').length).toBeGreaterThan(0));
+    expect(screen.findByTestId('machine-environment-apply.state-action')).not.toBeNull();
+    await screen.pressByTestIdAsync('machine-environment-apply.state-action');
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(routerHandle.current?.spies.push.mock.calls.at(-1)?.[0])
+      .toBe(`/settings/machines/presets/new?serverId=${encodeURIComponent(serverId)}`);
+    await screen.unmount();
   });
 });
