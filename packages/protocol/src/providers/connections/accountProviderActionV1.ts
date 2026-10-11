@@ -357,7 +357,10 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
         }
         case 'providers.models.experimental.confirm': {
           const input = request.input; requireRevision(find(input.connectionId), input.expectedConnectionRevision);
-          settings = setProviderExperimentalConfirmationV1(settings, { ...input, confirmedAt: now });
+          settings = setProviderExperimentalConfirmationV1(settings, {
+            connectionId: input.connectionId, agentTargetKey: input.agentTargetKey, modelId: input.modelId,
+            compatibilityFingerprint: input.compatibilityFingerprint, confirmedAt: now,
+          });
           output = { status: 'success', action: input.action }; break;
         }
         default: return { ok: false, errorCode: 'provider_account_action_unavailable', error: 'provider_account_action_unavailable' };

@@ -18,12 +18,19 @@ describe('Session Pending machine admission V1', () => {
     const request = { v: 1, sessionId: 'session-1', targetMachineId: 'machine-1', localId: 'input-1',
       content: { t: 'encrypted', c: 'cipher' }, requestedAction: { v: 1, kind: 'enqueue' } };
     const externalAction = { v: 1, authorization: { v: 1, token: 'proof', binding: {
-      serverIdentityId: 'home', accountId: 'owner', principalId: 'token-1', credentialId: 'token-1',
+      serverIdentityId: 'home', accountId: 'owner', custodianAccountId: 'owner', installationId: 'installation-1',
+      principalId: 'token-1', credentialId: 'token-1',
       grant: API_TOKEN_FULL_GRANT_V1, machineId: 'machine-1', actionId: 'session.message.send',
       requestId: 'request-1', requestEnvelopeDigest: 'A'.repeat(43), target: { kind: 'session', sessionId: 'session-1' },
     } }, effectActionId: 'session.message.send', target: { kind: 'session', sessionId: 'session-1' },
       installationId: 'installation-1', machineSignature: 'A'.repeat(86) };
     expect(SessionPendingEnqueueByMachineRequestV1Schema.safeParse({ ...request, externalAction }).success).toBe(true);
+    for (const field of ['custodianAccountId', 'installationId'] as const) {
+      const { [field]: _requiredFact, ...binding } = externalAction.authorization.binding;
+      expect(SessionPendingEnqueueByMachineRequestV1Schema.safeParse({ ...request,
+        externalAction: { ...externalAction, authorization: { ...externalAction.authorization, binding } },
+      }).success).toBe(false);
+    }
     expect(SessionPendingEnqueueByMachineRequestV1Schema.safeParse({ ...request, callerInputConstraints: { models: null, permissionModes: null } }).success).toBe(false);
   });
   it('exposes a separate closed Account target resource instead of widening main admission', () => {

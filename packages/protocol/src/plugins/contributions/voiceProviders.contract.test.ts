@@ -13,6 +13,7 @@ import {
 import { PluginContributesV2Schema } from './v2.js';
 import { createPluginManifestJsonSchemaV2 } from '../manifest/jsonSchema.js';
 import { PluginManifestV2Schema } from '../manifest/v2.js';
+import { compileProtocolJsonSchema } from '../actions/jsonSchemaCompiler.js';
 
 const credential = Object.freeze({
   slot: {
@@ -117,37 +118,34 @@ describe('canonical Voice provider declarations', () => {
     }
   });
   it('keeps refined Voice setting field references in both JSON dialects', () => {
-    const object = (value: unknown): Record<string, unknown> => {
-      if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected JSON Schema object');
-      return value as Record<string, unknown>;
-    };
+    const manifestForSettings = (settings: unknown) => ({
+      schemaVersion: 2, id: 'acme.voice', version: '0.1.0', displayName: 'Voice fixture',
+      engines: { happier: '^0.3.0' }, runtime: { apiVersion: 1 },
+      entrypoints: { daemon: './dist/index.js' },
+      contributes: { voiceProviders: [
+        { id: 'dictation', title: 'Dictation', kind: 'speech', roles: ['dictation_stt'], platforms: ['web'], settings },
+        { id: 'conversation', title: 'Conversation', kind: 'conversation', roles: ['realtime_conversation'],
+          platforms: ['web'], capabilities: { turn: { cancelResponse: false, bargeIn: false } },
+          client: { artifactId: 'voice-runtime-web', exportName: 'activate' }, settings },
+      ] },
+    });
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
       const manifest = PluginManifestV2Schema.toJSONSchema({ io: 'input', target, unrepresentable: 'any' });
-      const prefix = target === 'draft-7' ? '#/definitions/' : '#/$defs/';
-      const definitions = object(target === 'draft-7' ? manifest.definitions : manifest.$defs);
-      const dereference = (value: unknown): Record<string, unknown> => {
-        const node = object(value);
-        return typeof node.$ref === 'string' && node.$ref.startsWith(prefix)
-          ? object(definitions[node.$ref.slice(prefix.length)])
-          : node;
-      };
-      const contributions = dereference(object(manifest.properties).contributes);
-      const providers = dereference(object(contributions.properties).voiceProviders);
-      const items = object(providers.items);
-      if (!Array.isArray(items.oneOf)) throw new Error('Expected inline Voice union');
-      for (const variant of items.oneOf) {
-        const provider = dereference(variant);
-        const settingsReference = object(object(provider.properties).settings);
-        const settings = dereference(Array.isArray(settingsReference.allOf) ? settingsReference.allOf[0] : settingsReference);
-        const fields = dereference(object(settings.properties).fields);
-        const field = dereference(fields.items);
-        if (target === 'draft-7') {
-          expect(field).toHaveProperty('allOf');
-          expect(field).not.toHaveProperty('$ref');
-        } else {
-          expect(field).toHaveProperty('$ref');
-          expect(field).not.toHaveProperty('allOf');
-        }
+      // The native dialect compiler resolves references and their refinement siblings.
+      const validateManifest = compileProtocolJsonSchema(manifest, target === 'draft-7' ? 'draft-07' : target);
+      const validManifest = manifestForSettings(reservedSttSettings);
+      expect(PluginManifestV2Schema.safeParse(validManifest).success).toBe(true);
+      expect(validateManifest(validManifest)).toBe(true);
+      for (const field of [
+        { ...reservedSttSettings.fields[0], id: '' },
+        { ...reservedSttSettings.fields[0], schema: { type: 'string', minLength: -1 } },
+        { ...reservedSttSettings.fields[0], undeclared: true },
+      ]) {
+        const settings = { ...reservedSttSettings, fields: [field] };
+        const invalidManifest = manifestForSettings(settings);
+        expect(VoiceProviderSettingsSchema.safeParse(settings).success).toBe(false);
+        expect(PluginManifestV2Schema.safeParse(invalidManifest).success).toBe(false);
+        expect(validateManifest(invalidManifest)).toBe(false);
       }
     }
   });

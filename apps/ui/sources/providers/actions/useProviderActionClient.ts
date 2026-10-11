@@ -16,7 +16,8 @@ export function useProviderActionClient(serverId: string | null, initiatingLifet
     const resolvedServerId = resolveMachineRpcTargetServerId(serverId) ?? null;
     const transportServerId = resolvedServerId ? getServerProfileById(resolvedServerId)?.id ?? resolvedServerId : null;
     const router = useRouter();
-    const { binding } = useServerCredentialAccountScopeBinding(resolvedServerId);
+    const accountScope = useServerCredentialAccountScopeBinding(resolvedServerId);
+    const { binding } = accountScope;
     const lifetime = React.useMemo(() => ({ controller: new AbortController() }), [binding]);
     React.useEffect(() => {
         // React's development effect replay must restore local interest, not a retired Account.
@@ -62,6 +63,7 @@ export function useProviderActionClient(serverId: string | null, initiatingLifet
             cancelProviderModelLoad: bind(client.cancelProviderModelLoad),
             mutateProviderModelSettings: bind(client.mutateProviderModelSettings),
             setProviderModelPickerVisibility: bind(client.setProviderModelPickerVisibility),
+            setProviderDefaultModelSelection: bind(client.setProviderDefaultModelSelection),
             describeProviderBindingStatus: bind(client.describeProviderBindingStatus),
             prepareLegacyProfileMigrationSource: bind(client.prepareLegacyProfileMigrationSource),
             previewLegacyProfileMigration: bind(client.previewLegacyProfileMigration),
@@ -69,7 +71,7 @@ export function useProviderActionClient(serverId: string | null, initiatingLifet
             confirmLegacyProfileMigrationConflict: bind(client.confirmLegacyProfileMigrationConflict),
         };
     }, [approval.requestApproval, binding, initiatingLifetime, lifetime, router, transportServerId]);
-    return { ...methods, ready: binding !== null && binding.isCurrent()
+    return { ...methods, accountScope, ready: binding !== null && binding.isCurrent()
         && initiatingLifetime !== null && (!initiatingLifetime || (initiatingLifetime.isCurrent()
             && areServerAccountScopesEqual(initiatingLifetime.scope, binding.scope))) };
 }

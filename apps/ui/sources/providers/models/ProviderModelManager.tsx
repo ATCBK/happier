@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
-import { serializeModelVisibilityRefV1, type ModelVisibilityRefV1 } from '@happier-dev/protocol/providers/model-selection';
+import { serializeModelVisibilityRefV1, type ModelVisibilityRefV1, type ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 import type {
     DaemonProviderModelProjectionGroupV1,
     DaemonProviderModelProjectionRowV1,
@@ -10,6 +10,7 @@ import type {
 import { Switch } from '@/components/ui/forms/Switch';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { StatusPill } from '@/components/ui/status/StatusPill';
+import { Text } from '@/components/ui/text/Text';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import {
     SelectionListScreen,
@@ -56,6 +57,8 @@ function ModelVisibilityAccessory(props: Readonly<{
     disabled: boolean;
     /** New sessions start on this model. */
     isDefault?: boolean;
+    isFavorite?: boolean;
+    onSetDefault?: () => void;
     onVisibleChange: (visible: boolean) => void;
     onRemove?: () => void;
     onShowOnly?: () => void;
@@ -66,7 +69,20 @@ function ModelVisibilityAccessory(props: Readonly<{
     const actionLabel = (action: string) => `${props.label}, ${action}`;
     return (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            {props.isFavorite ? <Text accessibilityLabel={t('profiles.groups.favorites')}>★</Text> : null}
             {props.isDefault ? <ModelDefaultTag /> : null}
+            {props.onSetDefault ? (
+                <IconButton
+                    testID="provider-model-manager.set-default"
+                    iconName="check-circle"
+                    accessibilityLabel={actionLabel(t('connectedServices.detail.actions.setDefault'))}
+                    tooltip={t('connectedServices.detail.actions.setDefault')}
+                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                    interactiveTargetGapPx={6}
+                    variant="plain"
+                    onPress={props.onSetDefault}
+                />
+            ) : null}
             {props.onCancelLoad ? (
                 <IconButton
                     testID="provider-model-manager.cancel-load"
@@ -143,6 +159,8 @@ export type ProviderModelManagerSourceGrouping = Readonly<{
     connectionDescription: string;
     /** The agent's default model, tagged where it is listed. */
     defaultRef: Readonly<{ providerConnectionId: string | null; modelId: string }> | null;
+    favoriteRefs?: readonly ProviderBoundModelRef[];
+    onSetDefault?: (ref: ProviderBoundModelRef) => void;
     /**
      * A source's own control in its header: the Account-wide "Show in model picker" switch that the
      * R1 owner supplies. Nothing is drawn for a source it does not answer.
@@ -299,6 +317,11 @@ export function buildProviderModelManagerSections(input: Readonly<{
     const isDefault = (providerConnectionId: string | null, modelId: string) => defaultRef !== null
         && defaultRef.providerConnectionId === providerConnectionId
         && defaultRef.modelId === modelId;
+    const favoriteKeys = new Set(grouping?.favoriteRefs?.filter(ref => ref.agentTargetKey === agentScope?.agentTargetKey)
+        .map(ref => providerModelRowKey(ref.providerConnectionId ?? '', ref.modelId)));
+    const isFavorite = (providerConnectionId: string | null, modelId: string) => favoriteKeys.has(
+        providerModelRowKey(providerConnectionId ?? '', modelId),
+    );
     const nativeOptions: SelectionListOption[] = [];
     const sourceSections: ProviderModelManagerSection[] = [];
     const availableOptions: SelectionListOption[] = [];
@@ -318,15 +341,17 @@ export function buildProviderModelManagerSections(input: Readonly<{
                 accessibilityLabel: `${model.name}, ${modelVisibilityActionLabel(model.hidden)}`,
                 rightAccessoryOutsidePressable: true,
                 rightAccessory: (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        {isDefault(null, model.id) ? <ModelDefaultTag /> : null}
-                        <Switch
-                            compact
-                            value={!model.hidden}
-                            accessibilityLabel={model.name}
-                            onValueChange={(visible) => input.onSetVisibility(ref, !visible)}
-                        />
-                    </View>
+                    <ModelVisibilityAccessory
+                        label={model.name}
+                        visible={!model.hidden}
+                        disabled={false}
+                        isDefault={isDefault(null, model.id)}
+                        isFavorite={isFavorite(null, model.id)}
+                        onSetDefault={!isDefault(null, model.id) && grouping?.onSetDefault
+                            ? () => grouping.onSetDefault?.({ agentTargetKey: agentScope.agentTargetKey, providerConnectionId: null, modelId: model.id })
+                            : undefined}
+                        onVisibleChange={(visible) => input.onSetVisibility(ref, !visible)}
+                    />
                 ),
                 onSelect: () => input.onSetVisibility(ref, !model.hidden),
             };
@@ -385,6 +410,10 @@ export function buildProviderModelManagerSections(input: Readonly<{
                         visible={!hiddenForScope}
                         disabled={lockedByConnectionScope}
                         isDefault={isDefault(group.connectionId, row.ref.modelId)}
+                        isFavorite={isFavorite(group.connectionId, row.ref.modelId)}
+                        onSetDefault={agentScope && !isDefault(group.connectionId, row.ref.modelId) && grouping?.onSetDefault
+                            ? () => grouping.onSetDefault?.({ agentTargetKey: agentScope.agentTargetKey, providerConnectionId: connectionId, modelId: row.ref.modelId })
+                            : undefined}
                         onVisibleChange={(visible) => input.onSetVisibility(ref, !visible)}
                         onShowOnly={!lockedByConnectionScope && input.onShowOnly
                             ? () => input.onShowOnly?.(ref)

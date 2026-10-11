@@ -1,50 +1,16 @@
-import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ActivityBadgeRuntime } from '@/activity/badges/ActivityBadgeRuntime';
+import { DesktopActivityOverlayRuntime } from '@/activity/adapters/desktop/runtime/DesktopActivityOverlayRuntime';
 
-import {
-    createRootLayoutFeaturesResponse,
-    flushHookEffects,
-    renderScreen,
-    standardCleanup,
-} from '@/dev/testkit';
-import { installRootLayoutRouteCommonModuleMocks } from './rootLayoutRouteTestHelpers';
+import { flushHookEffects, standardCleanup } from '@/dev/testkit';
+import { initializeRootLayoutRuntimeForTests, renderRootLayoutRoute, installRootLayoutRouteCommonModuleMocks } from './rootLayoutRouteTestHelpers';
 
 type ReactActEnvironmentGlobal = typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
 };
 (globalThis as ReactActEnvironmentGlobal).IS_REACT_ACT_ENVIRONMENT = true;
 
-const desktopActivityOverlayRuntimeSpy = vi.fn(() => null);
-const activityBadgeRuntimeSpy = vi.fn(() => null);
-
-vi.mock('@expo/vector-icons', () => ({
-    Ionicons: 'Ionicons',
-}));
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ isAuthenticated: true, refreshFromActiveServer: vi.fn(async () => {}) }),
-}));
-vi.mock('@/auth/routing/authRouting', () => ({
-    isPublicRouteForUnauthenticated: () => true,
-}));
-vi.mock('@/utils/platform/platform', () => ({
-    isRunningOnMac: () => false,
-}));
-vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
-    getPendingTerminalConnect: () => null,
-}));
-vi.mock('@/sync/domains/pending/pendingNotificationNav', () => ({
-    getPendingNotificationNav: () => null,
-    clearPendingNotificationNav: vi.fn(),
-    setPendingNotificationNav: vi.fn(),
-}));
-vi.mock('@/sync/domains/pending/pendingNotificationAction', () => ({
-    getPendingNotificationAction: () => null,
-    clearPendingNotificationAction: vi.fn(),
-    setPendingNotificationAction: vi.fn(),
-}));
-vi.mock('@/sync/api/capabilities/getReadyServerFeatures', () => ({
-    getReadyServerFeatures: async () => createRootLayoutFeaturesResponse(),
-}));
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 installRootLayoutRouteCommonModuleMocks({
     reactNative: async () => {
@@ -70,33 +36,26 @@ installRootLayoutRouteCommonModuleMocks({
             },
         }).module;
     },
-    desktopActivityOverlayRuntime: async () => ({
-        DesktopActivityOverlayRuntime: desktopActivityOverlayRuntimeSpy,
-    }),
-    activityBadgeRuntime: async () => ({
-        ActivityBadgeRuntime: activityBadgeRuntimeSpy,
-    }),
 });
 
+await initializeRootLayoutRuntimeForTests();
+
 afterEach(() => {
-    activityBadgeRuntimeSpy.mockClear();
-    desktopActivityOverlayRuntimeSpy.mockClear();
     vi.restoreAllMocks();
-    vi.resetModules();
     standardCleanup();
 });
 
 async function renderRootLayout() {
     const RootLayout = (await import('@/app/(app)/_layout')).default;
-    await renderScreen(React.createElement(RootLayout));
+    const screen = await renderRootLayoutRoute(RootLayout);
     await flushHookEffects();
+    return screen;
 }
 
 describe('RootLayout terminal connect shell runtimes', () => {
     it('does not mount shell runtimes on plain web terminal-connect routes', async () => {
-        await renderRootLayout();
-
-        expect(activityBadgeRuntimeSpy).not.toHaveBeenCalled();
-        expect(desktopActivityOverlayRuntimeSpy).not.toHaveBeenCalled();
+        const screen = await renderRootLayout();
+        expect(screen.tree.root.findAllByType(ActivityBadgeRuntime)).toHaveLength(0);
+        expect(screen.tree.root.findAllByType(DesktopActivityOverlayRuntime)).toHaveLength(0);
     });
 });

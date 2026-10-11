@@ -143,6 +143,7 @@ function createRuntimeActionSpecFor<
       ...(actionId === 'localServices.launcher.start' || controlRpcMethod ? { rpc: !requiresAnsweringClient, cli: !requiresAnsweringClient, voice: !requiresAnsweringClient } : {}),
       ...(domainRpc ? { cli: true, voice: true } : {}),
       ...(actionId === 'localServices.launcher.start' || domainRpc || (controlRpcMethod && !requiresAnsweringClient) ? { mcp: true } : {}),
+      ...(actionId === 'projects.service.relocate' && executorReal ? { cli: true } : {}),
     },
     sideEffectClass,
     outputSchema: params.outputSchema,

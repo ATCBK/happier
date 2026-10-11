@@ -127,6 +127,8 @@ describe('preserveSessionListRenderableStaleFields', () => {
     it('does not reuse a renderable when only the responsible Account summary changes', () => {
         const previous = buildRenderable({
             id: 's_responsible_summary',
+            latestReadyEventSeq: null,
+            latestReadyEventAt: null,
             responsibleAccountId: 'account-alice',
             responsibleAccount: {
                 kind: 'account', accountId: 'account-alice', firstName: 'Alice', lastName: null, username: 'alice', avatarUrl: null,

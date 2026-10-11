@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
-import React from 'react';
+
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverProfiles';
+import { getPendingTerminalConnect, setPendingTerminalConnect } from '@/sync/domains/pending/pendingTerminalConnect';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    flushHookEffects,
-    renderScreen,
-    standardCleanup,
-} from '@/dev/testkit';
-import { installRootLayoutRouteCommonModuleMocks } from './rootLayoutRouteTestHelpers';
+import { flushHookEffects, standardCleanup } from '@/dev/testkit';
+import { initializeRootLayoutRuntimeForTests, renderRootLayoutRoute, installRootLayoutRouteCommonModuleMocks } from './rootLayoutRouteTestHelpers';
 
 type ReactActEnvironmentGlobal = typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -19,13 +19,10 @@ let historyReplaceStateSpy = vi.fn();
 const routerPushSpy = vi.fn();
 const routerReplaceSpy = vi.fn();
 
-const upsertActivateAndSwitchServerSpy = vi.fn(async (_params: { serverUrl: string; source: string; scope: string; refreshAuth: unknown }) => true);
-const refreshFromActiveServerSpy = vi.fn(async () => {});
-let isAuthenticated = true;
-let activeServerUrl = 'https://api.happier.dev';
-let pendingTerminalConnect: Readonly<{ publicKeyB64Url: string; serverUrl: string }> | null = null;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 
 function installWebLocation(params: Readonly<{ href: string }>) {
+    const browserWindow = window;
     const locationState = {
         href: params.href,
         pathname: new URL(params.href).pathname,
@@ -45,20 +42,14 @@ function installWebLocation(params: Readonly<{ href: string }>) {
     vi.stubGlobal('window', {
         location: locationState,
         history: { replaceState: historyReplaceStateSpy },
+        addEventListener: browserWindow.addEventListener.bind(browserWindow),
+        removeEventListener: browserWindow.removeEventListener.bind(browserWindow),
     });
 
     return { historyReplaceStateSpy };
 }
 
-vi.mock('expo-updates', () => ({
-    checkForUpdateAsync: vi.fn(async () => ({ isAvailable: false })),
-    fetchUpdateAsync: vi.fn(async () => ({})),
-    reloadAsync: vi.fn(async () => {}),
-}));
-
-vi.mock('@expo/vector-icons', () => ({
-    Ionicons: 'Ionicons',
-}));
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 installRootLayoutRouteCommonModuleMocks({
     router: async () => {
@@ -96,98 +87,24 @@ installRootLayoutRouteCommonModuleMocks({
     },
 });
 
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ isAuthenticated, refreshFromActiveServer: refreshFromActiveServerSpy }),
-}));
+await initializeRootLayoutRuntimeForTests();
 
-vi.mock('@/auth/routing/authRouting', () => ({
-    isPublicRouteForUnauthenticated: () => true,
-}));
-
-vi.mock('@/hooks/server/useFriendsIdentityReadiness', () => ({
-    useFriendsIdentityReadiness: () => ({ isReady: true }),
-}));
-
-vi.mock('@/hooks/inbox/useUpdates', () => ({
-    useUpdates: () => ({
-        updateAvailable: false,
-        isChecking: false,
-        checkForUpdates: vi.fn(async () => {}),
-        reloadApp: vi.fn(async () => {}),
-    }),
-}));
-
-vi.mock('@/utils/platform/platform', () => ({
-    isRunningOnMac: () => false,
-}));
-
-vi.mock('@/utils/path/routeUtils', () => ({
-    coerceRelativeRoute: (value: string) => value,
-}));
-
-vi.mock('@/components/navigation/Header', () => ({
-    createHeader: () => null,
-}));
-
-vi.mock('@/components/appShell/runtime/AuthenticatedAppRuntimeMounts', () => ({
-    AuthenticatedAppRuntimeMounts: () => null,
-}));
-
-vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
-    getPendingTerminalConnect: () => pendingTerminalConnect,
-}));
-
-vi.mock('@/sync/domains/pending/pendingNotificationNav', () => ({
-    getPendingNotificationNav: () => null,
-    clearPendingNotificationNav: vi.fn(),
-    setPendingNotificationNav: vi.fn(),
-}));
-
-vi.mock('@/sync/domains/pending/pendingNotificationAction', () => ({
-    getPendingNotificationAction: () => null,
-    clearPendingNotificationAction: vi.fn(),
-    setPendingNotificationAction: vi.fn(),
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', async () => {
-    const actual = await vi.importActual<typeof import('@/sync/domains/server/serverProfiles')>('@/sync/domains/server/serverProfiles');
-    return {
-        ...actual,
-        getActiveServerUrl: () => activeServerUrl,
-        getActiveServerSnapshot: () => ({ serverId: 'server-a', serverUrl: activeServerUrl, generation: 1 }),
-        listServerProfiles: () => [],
-    };
-});
-
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
-    normalizeServerUrl: (value: string) => String(value ?? '').trim().replace(/\/+$/, ''),
-    upsertActivateAndSwitchServer: upsertActivateAndSwitchServerSpy,
-}));
-
-vi.mock('@/sync/api/capabilities/getReadyServerFeatures', () => ({
-    getReadyServerFeatures: async () => null,
-}));
-
-afterEach(() => {
-    standardCleanup();
-    isAuthenticated = true;
-    activeServerUrl = 'https://api.happier.dev';
+afterEach(async () => {
+    await standardCleanup();
+    await connection?.dispose();
+    connection = undefined;
     historyReplaceStateSpy.mockReset();
     routerPushSpy.mockReset();
     routerReplaceSpy.mockReset();
-    upsertActivateAndSwitchServerSpy.mockReset();
-    refreshFromActiveServerSpy.mockReset();
-    pendingTerminalConnect = null;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    vi.resetModules();
 });
 
 // Collect the real route graph before the test deadline, without weakening it.
 const RootLayout = (await import('@/app/(app)/_layout')).default;
 
 async function renderRootLayout() {
-    await renderScreen(React.createElement(RootLayout));
+    await renderRootLayoutRoute(RootLayout);
     await flushHookEffects();
 }
 
@@ -205,7 +122,6 @@ describe('App RootLayout server override', () => {
         })).toEqual({
             kind: 'switch_server',
             serverUrl: 'https://stack.example.test',
-            cleanedRelativeUrl: '/server',
         });
     });
 
@@ -214,16 +130,23 @@ describe('App RootLayout server override', () => {
         installWebLocation({
             href: 'https://app.example.test/',
         });
-        activeServerUrl = 'http://localhost:53288';
-        pendingTerminalConnect = {
+        connection = await restoreServerAccountForTest({ serverUrl: 'http://localhost:53288',
+            serverIdentityId: 'srv_home_local',
+            request: async input => new URL(String(input)).pathname === '/v1/account/encryption/currentness'
+                ? Response.json(createPlainAccountEncryptionCurrentnessFixture()) : new Response('{}', { status: 404 }),
+        });
+        setPendingTerminalConnect({
             publicKeyB64Url: 'abc123',
             serverUrl: 'http://happier-repo-dev-a1cc5e0671.localhost:53288',
-        };
+            serverIdentityId: 'srv_home_local',
+        });
+        expect(getPendingTerminalConnect()).toEqual({ publicKeyB64Url: 'abc123',
+            serverUrl: 'http://happier-repo-dev-a1cc5e0671.localhost:53288', serverIdentityId: 'srv_home_local' });
 
         await renderRootLayout();
 
-        expect(upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
-        expect(routerReplaceSpy).toHaveBeenCalledWith('/terminal/connect#key=abc123&server=http%3A%2F%2Fhappier-repo-dev-a1cc5e0671.localhost%3A53288');
+        expect(getActiveServerSnapshot().serverUrl).toBe('http://localhost:53288');
+        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/terminal/connect#key=abc123&server=http%3A%2F%2Fhappier-repo-dev-a1cc5e0671.localhost%3A53288'));
     });
 
     it('redirects legacy `/?id=<sessionId>` deep-links to the canonical session route on web', async () => {

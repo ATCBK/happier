@@ -95,7 +95,9 @@ export function useAgentAdministrationCatalog(options?: Readonly<{
     const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey');
     const targetSelection = useAgentsAdministrationTargetSelection();
     const scope = useAgentsMachineScope(targetSelection);
-    const { snapshot: acpCatalog } = useAcpCatalogForServer(scope.projectionScope?.serverId);
+    const { snapshot: acpCatalog } = useAcpCatalogForServer(scope.projectionScope?.serverId
+        ?? (targetSelection.selectedTarget === null || targetSelection.selectedTargetServerMatchesActiveAccount
+            ? undefined : null));
     const daemonMergedProjection = useDaemonMergedProjectionInputs({
         machineId: scope.projectionScope?.machineId ?? null,
         serverId: scope.projectionScope?.serverId ?? null,
@@ -116,6 +118,7 @@ export function useAgentAdministrationCatalog(options?: Readonly<{
     return {
         targetSelection,
         executionTarget: scope.executionTarget,
+        projectionScope: scope.projectionScope,
         machineOnline: scope.executionTarget !== null,
         machineLabel: scope.machineLabel,
         projectionCurrent: daemonMergedProjection.phase === 'ready',

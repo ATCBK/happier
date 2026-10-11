@@ -1,19 +1,27 @@
 import { vi } from 'vitest';
+import type * as React from 'react';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { createRealAppRouteElement, renderRealAppRoute } from '@/dev/testkit/render/renderRealAppRoute';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+
+export const initializeRootLayoutRuntimeForTests = initializeRealAppRuntimeForTests;
+
+const routeCredentials: AuthCredentials = { token: 'e30.eyJzdWIiOiJhY2NvdW50LWEifQ.signature' };
+
+export async function rootLayoutRouteElement(Screen: React.ComponentType, credentials: AuthCredentials | null = routeCredentials) {
+    const { RootLayoutRouteContexts } = await import('./rootLayoutRouteContexts');
+    return createRealAppRouteElement(Screen, credentials, { contextWrapper: RootLayoutRouteContexts });
+}
+
+export async function renderRootLayoutRoute(Screen: React.ComponentType, credentials: AuthCredentials | null = routeCredentials) {
+    const { RootLayoutRouteContexts } = await import('./rootLayoutRouteContexts');
+    return renderRealAppRoute(Screen, credentials, { contextWrapper: RootLayoutRouteContexts });
+}
 
 type RootLayoutRouteModuleFactory = () => unknown | Promise<unknown>;
-type RootLayoutRouteImportOriginal = <T = unknown>() => Promise<T>;
-type RootLayoutRouteStorageModuleFactory = (
-    importOriginal: RootLayoutRouteImportOriginal,
-) => unknown | Promise<unknown>;
-
 type InstallRootLayoutRouteCommonModuleMocksOptions = Readonly<{
-    activityBadgeRuntime?: RootLayoutRouteModuleFactory;
-    desktopActivityOverlayRuntime?: RootLayoutRouteModuleFactory;
-    mainAppTabState?: RootLayoutRouteModuleFactory;
-    modal?: RootLayoutRouteModuleFactory;
     reactNative?: RootLayoutRouteModuleFactory;
     router?: RootLayoutRouteModuleFactory;
-    storage?: RootLayoutRouteStorageModuleFactory;
     unistyles?: RootLayoutRouteModuleFactory;
     text?: RootLayoutRouteModuleFactory;
 }>;
@@ -22,11 +30,6 @@ const rootLayoutRouteModuleState = vi.hoisted(() => ({
     options: {
         reactNative: undefined as RootLayoutRouteModuleFactory | undefined,
         router: undefined as RootLayoutRouteModuleFactory | undefined,
-        storage: undefined as RootLayoutRouteStorageModuleFactory | undefined,
-        activityBadgeRuntime: undefined as RootLayoutRouteModuleFactory | undefined,
-        desktopActivityOverlayRuntime: undefined as RootLayoutRouteModuleFactory | undefined,
-        mainAppTabState: undefined as RootLayoutRouteModuleFactory | undefined,
-        modal: undefined as RootLayoutRouteModuleFactory | undefined,
         unistyles: undefined as RootLayoutRouteModuleFactory | undefined,
         text: undefined as RootLayoutRouteModuleFactory | undefined,
     },
@@ -38,14 +41,16 @@ export function installRootLayoutRouteCommonModuleMocks(
     rootLayoutRouteModuleState.options = {
         reactNative: options.reactNative,
         router: options.router,
-        storage: options.storage,
-        activityBadgeRuntime: options.activityBadgeRuntime,
-        desktopActivityOverlayRuntime: options.desktopActivityOverlayRuntime,
-        mainAppTabState: options.mainAppTabState,
-        modal: options.modal,
         unistyles: options.unistyles,
         text: options.text,
     };
+
+    // Expo's published CJS serializer otherwise requires an unrelated native
+    // entrypoint outside Vitest's platform aliases. Keep its real path logic.
+    vi.mock('expo-router/build/fork/getPathFromState', async () => {
+        const { loadInstalledExpoPathSerializer } = await import('@/dev/testkit/runtime/installedExpoPathSerializer');
+        return loadInstalledExpoPathSerializer();
+    });
 
     vi.mock('expo-router', async () => {
         const activeOptions = rootLayoutRouteModuleState.options;
@@ -85,62 +90,6 @@ export function installRootLayoutRouteCommonModuleMocks(
         });
     });
 
-    vi.mock('@/activity/badges/ActivityBadgeRuntime', async () => {
-        const activeOptions = rootLayoutRouteModuleState.options;
-        if (activeOptions.activityBadgeRuntime) {
-            return await activeOptions.activityBadgeRuntime();
-        }
-        return {
-            ActivityBadgeRuntime: () => null,
-        };
-    });
-
-    vi.mock('@/activity/adapters/ios/runtime/ActivitySurfacesRuntime', () => ({
-        ActivitySurfacesRuntime: () => null,
-    }));
-
-    vi.mock('@/activity/notifications/runtime/ActivityLocalNotificationRuntime', () => ({
-        ActivityLocalNotificationRuntime: () => null,
-    }));
-
-    vi.mock('@/modal', async () => {
-        const activeOptions = rootLayoutRouteModuleState.options;
-        if (activeOptions.modal) {
-            return await activeOptions.modal();
-        }
-
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock().module;
-    });
-
-    vi.mock('@/components/navigation/mobile/chrome/MainAppTabStateProvider', async () => {
-        const activeOptions = rootLayoutRouteModuleState.options;
-        if (activeOptions.mainAppTabState) {
-            return await activeOptions.mainAppTabState();
-        }
-
-        const { createMainAppTabStateProviderMock } = await import('@/dev/testkit/mocks/mainAppTabState');
-        return createMainAppTabStateProviderMock().module;
-    });
-
-    vi.mock('@/activity/adapters/desktop/runtime/DesktopActivityOverlayRuntime', async () => {
-        const activeOptions = rootLayoutRouteModuleState.options;
-        if (activeOptions.desktopActivityOverlayRuntime) {
-            return await activeOptions.desktopActivityOverlayRuntime();
-        }
-        return {
-            DesktopActivityOverlayRuntime: () => null,
-        };
-    });
-
-    vi.mock('@/desktop/tray/DesktopTrayRuntime', () => ({
-        DesktopTrayRuntime: () => null,
-    }));
-
-    vi.mock('@/desktop/quit/DesktopQuitHandoffRuntime', () => ({
-        DesktopQuitHandoffRuntime: () => null,
-    }));
-
     vi.mock('react-native-unistyles', async () => {
         const activeOptions = rootLayoutRouteModuleState.options;
         if (activeOptions.unistyles) {
@@ -159,18 +108,5 @@ export function installRootLayoutRouteCommonModuleMocks(
 
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock();
-    });
-
-    vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-        const activeOptions = rootLayoutRouteModuleState.options;
-        if (activeOptions.storage) {
-            return await activeOptions.storage(importOriginal);
-        }
-
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {},
-        });
     });
 }

@@ -3,6 +3,7 @@ import type { DaemonProviderConnectionsDescribeResponseV1 } from '@happier-dev/p
 
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
+import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import {
     captureActiveServerAccountScopeLifetime,
     type ActiveServerAccountScopeLifetime,
@@ -36,7 +37,7 @@ export function useProviderConnections(input: Readonly<{
     serverId: string | null;
     connectionId?: string;
 }>) {
-    const { describeProviderConnections, ready } = useProviderActionClient(input.serverId);
+    const { describeProviderConnections, ready, accountScope: { resolution, binding } } = useProviderActionClient(input.serverId);
     const active = input.active ?? true;
     const activeRef = React.useRef(active);
     activeRef.current = active;
@@ -56,13 +57,16 @@ export function useProviderConnections(input: Readonly<{
         input.machineId,
         input.serverId,
         input.connectionId ?? null,
+        resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : null,
     ]);
     const stateMatchesScope = state.scopeKey === scopeKey
         && state.accountLifetime === accountLifetime;
     const scopeEnabled = input.enabled;
     const data = stateMatchesScope ? state.data : null;
     const error = stateMatchesScope ? state.error : null;
-    const loading = active && scopeEnabled && (!ready || !stateMatchesScope || state.loading);
+    const loading = active && scopeEnabled
+        && (resolution.kind === 'resolving' || resolution.kind === 'bound')
+        && (!ready || !stateMatchesScope || state.loading);
 
     React.useEffect(() => {
         const registration = accountLifetime?.onRetire(() => {
@@ -81,6 +85,7 @@ export function useProviderConnections(input: Readonly<{
         const requestStillCurrent = (): boolean => (
             activeRef.current && currentAccountLifetimeRef.current === accountLifetime
             && (accountLifetime?.isCurrent() ?? true)
+            && binding?.isCurrent() === true
         );
         if (!requestStillCurrent()) return null;
         if (!input.enabled) {
@@ -139,7 +144,7 @@ export function useProviderConnections(input: Readonly<{
                     : current);
             }
         }
-    }, [accountLifetime, describeProviderConnections, ready, input.connectionId, input.enabled, input.machineId, input.serverId, scopeKey]);
+    }, [accountLifetime, binding, describeProviderConnections, ready, input.connectionId, input.enabled, input.machineId, input.serverId, scopeKey]);
 
     React.useEffect(() => {
         const reader = active && input.enabled
@@ -162,7 +167,8 @@ export function useProviderConnections(input: Readonly<{
         const ownRead = read();
         if (input.enabled
             && currentAccountLifetimeRef.current === accountLifetime
-            && (accountLifetime?.isCurrent() ?? true)) {
+            && (accountLifetime?.isCurrent() ?? true)
+            && binding?.isCurrent() === true) {
             // Invoke private reads, never peer refreshes, so this cannot recurse.
             // Each read presents its own failure without failing a successful write.
             for (const reader of activeReaders) {
@@ -175,7 +181,7 @@ export function useProviderConnections(input: Readonly<{
             }
         }
         return await ownRead;
-    }, [accountLifetime, input.enabled, input.machineId, input.serverId, read]);
+    }, [accountLifetime, binding, input.enabled, input.machineId, input.serverId, read]);
 
     return { data, error, loading, refresh };
 }

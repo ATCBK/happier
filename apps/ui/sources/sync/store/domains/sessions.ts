@@ -8,6 +8,7 @@ import type {
 } from '../../domains/state/storageTypes';
 import type { NormalizedMessage } from "@happier-dev/session-core/raw";
 import type { ConcurrentSessionListCacheByServerId } from '../../domains/session/listing/concurrentSessionListCache';
+import { readSessionListRowForServerId } from '../../domains/session/listing/sessionListRowStateLookup';
 import type { SessionListQueryMembership } from '../../domains/session/listing/sessionListQueryController';
 import { readStoredSessionMessagesFromStateLike } from "@happier-dev/session-core/messages";
 import {
@@ -843,7 +844,20 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             const session = state.sessions[sessionId];
             if (!session || (session.resumingAt ?? null) === resumingAt) return state;
 
-            const nextSession = { ...session, resumingAt };
+            // Capture this Home's already-observed recency before message-first updates can
+            // advance the row; legacy hydration carrying that baseline is not new activity.
+            const observedMeaningfulActivityAt = resumingAt === null ? null : normalizeSessionOrderingNumber(
+                readSessionListRowForServerId(state.sessionListRowsByServerId, session.serverId, sessionId)?.meaningfulActivityAt,
+            );
+            const previousMeaningfulActivityAt = normalizeSessionOrderingNumber(session.meaningfulActivityAt);
+            const nextSession = {
+                ...session,
+                resumingAt,
+                ...(observedMeaningfulActivityAt !== null
+                    && observedMeaningfulActivityAt > (previousMeaningfulActivityAt ?? 0)
+                    ? { meaningfulActivityAt: observedMeaningfulActivityAt }
+                    : {}),
+            };
             let nextRowsByServerId = state.sessionListRowsByServerId;
             for (const [serverId, rows] of Object.entries(state.sessionListRowsByServerId ?? {})) {
                 const row = rows?.[sessionId];

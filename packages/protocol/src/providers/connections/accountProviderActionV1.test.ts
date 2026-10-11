@@ -29,7 +29,7 @@ function accountRow(catalog: ProviderConnectionsCatalogV1 = DEFAULT_PROVIDER_CON
       return { status: outcome };
     },
   });
-  return { execute, get catalog() { return current; }, get writes() { return writes; },
+  return { execute, get catalog() { return current; }, get revision() { return revision; }, get writes() { return writes; },
     setOutcome(value: typeof outcome) { outcome = value; }, clearDefinitions() { definitions = []; },
     setDefinitions(value: readonly AccountProviderDeclarationV1[]) { definitions = value; } };
 }
@@ -41,6 +41,36 @@ describe('shared Provider Account Action producer', () => {
     credential: { kind: 'apiKey', required: true, transports: [{ id: 'key', protocols: ['openai-chat'],
       uses: ['probe', 'runtime'], destination: { kind: 'httpHeader', name: 'Authorization', format: 'bearer' } }] },
     catalog: { source: 'manual', manualModelPolicy: 'allowed' } });
+
+  it('persists only canonical experimental confirmation fields through the captured Account catalog revision', async () => {
+    const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_experimental',
+      source: { kind: 'custom', template: { ...customTemplate, credential: undefined,
+        endpointTemplates: [{ ...customTemplate.endpointTemplates[0], protocol: 'openai-responses' }] } },
+      role: 'named', displayName: 'Experimental', displayNameMode: 'custom', revision: 3, createdAt: 1, updatedAt: 1 });
+    const previous = { v: 1 as const, connectionId: connection.id, agentTargetKey: 'agent:happier.agent.codex/codex',
+      modelId: 'experimental-model', compatibilityFingerprint: 'compatibility:v1:previous', confirmedAt: 1 };
+    const neighbor = { ...previous, modelId: 'another-model' };
+    const row = accountRow({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [connection],
+      manualModelsByConnectionId: { [connection.id]: [{ id: 'experimental-model', addedAt: 1 }] },
+      experimentalBindingConfirmations: [previous, neighbor] });
+    const input = { action: 'confirmExperimental', connectionId: connection.id,
+      expectedConnectionRevision: 3, machineId: 'machine_optional', agentTargetKey: previous.agentTargetKey,
+      modelId: previous.modelId, compatibilityFingerprint: 'compatibility:v1:experimental' } as const;
+    const captured = row.catalog;
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.experimental.confirm', {
+      ...input, expectedConnectionRevision: 2,
+    }), {})).toMatchObject({ ok: false, errorCode: 'provider_connection_changed' });
+    expect(row.catalog).toBe(captured);
+    expect(row.writes).toBe(0);
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.experimental.confirm', input), {}))
+      .toEqual({ ok: true, result: { status: 'success', action: 'confirmExperimental' } });
+    expect(row.revision).toBe(2);
+    expect(row.catalog.connections).toEqual([connection]);
+    expect(row.catalog.experimentalBindingConfirmations).toEqual([neighbor, {
+      v: 1, connectionId: connection.id, agentTargetKey: input.agentTargetKey, modelId: input.modelId,
+      compatibilityFingerprint: input.compatibilityFingerprint, confirmedAt: 10,
+    }]);
+  });
 
   it.each([
     ['providers.models.source_visibility.set', { action: 'setConnectionVisibility', connectionId: 'pc_target', shown: false }],

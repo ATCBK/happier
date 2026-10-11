@@ -26,7 +26,7 @@ import { MEMORY_DOCUMENT_ACTION_IDS_V1 } from '../prompts/library/memoryActionsV
 import { MANAGED_GITHUB_APP_ACTION_IDS_V1 } from '../identity/githubApps.js';
 import { resolveRuntimeActionSurfaces } from './surfaces.js';
 import { resolveActionSurfaceAvailability } from './actionSurfaceAvailability.js';
-import { LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS } from './specs/localServices.js';
+import { LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, resolveLocalServiceDomainActionRpcBinding } from './specs/localServices.js';
 import type { ActionSpec } from './actionSpecs.js';
 import {
   ActionIdSchema,
@@ -387,6 +387,7 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'plugins.settings.secret.status',
   'plugin.webhook.endpoint.read',
   'plugin.webhook.endpoint.checkCorrespondence',
+  'plugin.webhook.endpoint.ensure',
   'plugins.sessionHooks.status.get',
   'session.log.tail',
   'transcript.page',
@@ -466,7 +467,6 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'plugins.permissions.grants.revoke',
   'plugins.permissions.grants.dismissRequest',
   'plugin.webhook.endpoint.convergeTarget',
-  'plugin.webhook.endpoint.ensure',
   'plugin.webhook.endpoint.revoke',
   'plugin.webhook.endpoint.retarget',
   'plugin.webhook.delivery.movePending',
@@ -2808,14 +2808,17 @@ describe('Action Spec Registry', () => {
       const publicProjection = !isInternalActionId(id);
       const controlRpcMethod = Object.hasOwn(LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, id)
         ? LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS[id as keyof typeof LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS] : undefined;
-      const answeringClient = id === 'localServices.actions.copyUrl' || id === 'localServices.actions.openPreview';
+      const answeringClient = id === 'localServices.actions.copyUrl' || id === 'localServices.actions.openPreview'
+        || id === 'localServices.launcher.openPreview' || id === 'localServices.publicPreview.copyUrl';
+      const domainRpc = resolveLocalServiceDomainActionRpcBinding(id as RuntimeActionIdV1);
       const serviceFrontDoor = id === 'localServices.launcher.start' || controlRpcMethod !== undefined;
       expect(spec.surfaces, id).toEqual({
         ...resolveRuntimeActionSurfaces(id as RuntimeActionIdV1),
         // The family now declares actual native-control ingress separately
         // from the generic runtime UI/Agent backing default.
-        ...(serviceFrontDoor ? { rpc: true, cli: !answeringClient, voice: !answeringClient } : {}),
-        ...(serviceFrontDoor && !answeringClient ? { mcp: true } : {}),
+        ...(serviceFrontDoor ? { rpc: !answeringClient, cli: !answeringClient, voice: !answeringClient } : {}),
+        ...(domainRpc ? { cli: true, voice: true } : {}),
+        ...(domainRpc || serviceFrontDoor && !answeringClient ? { mcp: true } : {}),
         ...(publicProjection && spec.requiredAuthority === 'present_user' ? { agent: true, mcp: true } : {}),
         api: publicProjection && spec.requiredAuthority === 'account_automation',
         plugin: publicProjection,
@@ -2823,6 +2826,10 @@ describe('Action Spec Registry', () => {
       if (serviceFrontDoor) {
         expect(spec.bindings?.rpcMethod).toBe(id === 'localServices.launcher.start'
           ? RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START : controlRpcMethod);
+      } else if (domainRpc) {
+        expect(spec.bindings?.rpcMethod).toBe(domainRpc.rpcMethod);
+      } else if (id === 'projects.service.relocate') {
+        expect(spec.bindings?.mcpToolName).toBe('projects_service_relocate');
       } else {
         expect(spec.bindings).toBeUndefined();
       }
@@ -3302,7 +3309,7 @@ describe('Action Spec Registry', () => {
       expect(spec.surfaces.api).toBe(true);
       expect(spec.surfaces.mcp).toBe(true);
       expect(spec.surfaces.agent).toBe(true);
-      expect(spec.surfaces.voice).toBe(false);
+      expect(spec.surfaces.voice).toBe(id === 'scm.pullRequest.get' || id === 'scm.pullRequest.openCompose');
       expect(spec.sideEffectClass).toBe(sideEffectClass);
     }
 
@@ -3832,20 +3839,15 @@ describe('Action Spec Registry', () => {
     ).toThrow();
   });
 
-  it('accepts additive-open agents.models.list input while canonical execution drops unknown fields', () => {
+  it('admits canonical agents.models.list selection and refuses unknown input fields', () => {
     const spec = getActionSpec('agents.models.list');
-
-    expect(spec.inputSchema.parse({
+    const input = {
       backendTargetKey: 'backend:codex',
       machineId: 'machine-1',
       limit: 10,
-      providerTraceId: 'preview-field',
-    })).toMatchObject({
-      backendTargetKey: 'backend:codex',
-      machineId: 'machine-1',
-      limit: 10,
-      providerTraceId: 'preview-field',
-    });
+    };
+    expect(spec.inputSchema.parse(input)).toEqual(input);
+    expect(spec.inputSchema.safeParse({ ...input, providerTraceId: 'preview-field' }).success).toBe(false);
   });
 
   it('accepts a canonical plugin backendTargetKey with an explicit runtime carrier when listing models', () => {
@@ -4222,6 +4224,7 @@ describe('Action Spec Registry', () => {
       'targetMachineId',
       'targetPath',
       'targetSessionStorageMode',
+      'stateTransfer',
       'workspaceAction',
     ]);
   });
@@ -4872,7 +4875,8 @@ describe('Action Spec Registry', () => {
     expect(isVoicePromptHotPathSpec({ prompting: { voiceHotPath: false } })).toBe(false);
   });
 
-  it.each(listActionSpecs().filter((spec) => spec.surfaces.voice))('uses concrete schema-shaped voice args examples for $id', (spec) => {
+  // Public discovery permits absent examples; validate authored examples without inventing invocation facts.
+  it.each(listActionSpecs().filter((spec) => spec.surfaces.voice && spec.examples?.voice?.argsExample !== undefined))('uses concrete schema-shaped authored voice args examples for $id', (spec) => {
     const placeholderFragments = ['...optional...', '"..."', 'allow|deny', '...|null'];
 
     const argsExample = spec.examples?.voice?.argsExample;

@@ -909,6 +909,10 @@ export const MACHINE_RPC_ROUTE_POLICIES = Object.freeze([
   actionSpecServerRequired(SESSION_RPC_METHODS.SESSION_PENDING_INPUT_INTERRUPT_AND_RUN, 'destructive_or_recovery_mutation', 'Interrupt-and-run stops a live provider turn and promotes an exact queued prompt, so it stays on the authenticated server-scoped session route.', 'session.pendingInput.interruptAndRun', SESSION_SERVER_REQUIRED_SCOPE),
   serverRequired(SESSION_RPC_METHODS.SESSION_INPUT_CANCEL_EXACT_TURN_V1, 'durable_session_write', 'Exact-turn cancellation mutates the live Session runtime and remains bound to server-authoritative Session access.', SESSION_SERVER_REQUIRED_SCOPE),
   serverRequired(SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1, 'auth', 'Native Agent tool calls execute inside the live Session authority boundary and stay on the authenticated Session route.', SESSION_SERVER_REQUIRED_SCOPE),
+  {
+    ...serverRequired(SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1, 'reconnect_catch_up', 'Daemon plugin catalog freshness hints stay on the authenticated owner Session route; executable admission remains daemon-owned.', SESSION_SERVER_REQUIRED_SCOPE),
+    sharedMachineAccess: 'custodian_only',
+  } satisfies MachineRpcRoutePolicyV1,
   ...serverRequiredRows(PLUGIN_PERMISSION_GRANT_METHODS, 'auth', 'Plugin permission grant reads and mutations are authorization policy state and stay server-routed.'),
   ...serverRequiredRows(REVIEW_COMMENT_METHODS, 'server_persistence', 'Review comment reads and mutations operate on durable review-comment state and stay server-routed.'),
   ...serverRequiredRows(SESSION_AUTH_CONTROL_METHODS, 'auth', 'Session connected-service auth runtime controls expose or mutate authentication state and stay server-routed.', SESSION_SERVER_REQUIRED_SCOPE),

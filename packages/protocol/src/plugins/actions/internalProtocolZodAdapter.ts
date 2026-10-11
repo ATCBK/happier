@@ -90,7 +90,11 @@ export function asProtocolZod<TInput, TOutput>(
     // Project the canonical Protocol-owned JSON Schema into exporters so public
     // authoring schemas retain the same admission constraints as runtime.
     adapter._zod.processJSONSchema = (_context, jsonSchema) => {
-      Object.assign(jsonSchema, structuredClone(schema.jsonSchema));
+      // This is a fragment of the parent's document. Its exporter owns the root
+      // dialect; the neutral schema remains an unchanged draft-07 document.
+      const fragment = Object.fromEntries<unknown>(Object.entries(structuredClone(schema.jsonSchema))
+        .filter(([keyword]) => keyword !== '$schema'));
+      Object.assign(jsonSchema, fragment);
     };
 
     return defineStoredReadProjection<z.core.$ZodType<TOutput, TInput>>(adapter, () => {

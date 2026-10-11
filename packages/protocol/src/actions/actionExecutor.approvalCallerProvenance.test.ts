@@ -394,6 +394,8 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
         principalId: 'account-1',
         credentialId: '00000000-0000-4000-8000-000000000001',
         machineId: 'machine-1',
+        custodianAccountId: 'account-1',
+        installationId: 'installation-1',
         actionId: scenario === 'explicit approval' ? 'approval.request.create' : 'teams.members.remove',
         requestId: 'pat-request-1',
         requestEnvelopeDigest: 'a'.repeat(43),
@@ -573,6 +575,8 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
         principalId: 'principal-1',
         credentialId: '00000000-0000-4000-8000-000000000001',
         machineId: 'machine-1',
+        custodianAccountId: 'account-1',
+        installationId: 'installation-1',
         actionId: 'action.invoke' as const,
         requestId: 'outer-request-1',
         requestEnvelopeDigest: 'a'.repeat(43),
@@ -1218,6 +1222,7 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
           binding: {
             serverIdentityId: 'server-1', accountId: 'account-1', principalId: 'principal-1',
             credentialId: 'credential-1', machineId: 'machine-1',
+            custodianAccountId: 'account-1', installationId: 'installation-1',
             actionId: 'session.title.set', requestId: 'request-1',
             requestEnvelopeDigest: 'a'.repeat(43),
             target: { kind: 'session', sessionId: 'session-1' },
@@ -1323,7 +1328,6 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
       decision: 'approve',
       originServerId: 'creator-device-profile',
       serverIdentityId: 'srv_shared_home',
-      serverId: 'current-device-profile',
     }, {
       surface: 'ui',
       authority: 'present_user',

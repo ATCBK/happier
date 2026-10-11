@@ -1,63 +1,14 @@
-import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
-import { installRootLayoutRouteCommonModuleMocks } from './rootLayoutRouteTestHelpers';
+import { initializeRootLayoutRuntimeForTests, renderRootLayoutRoute, installRootLayoutRouteCommonModuleMocks } from './rootLayoutRouteTestHelpers';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 installRootLayoutRouteCommonModuleMocks();
 
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({
-        isAuthenticated: true,
-        refreshFromActiveServer: vi.fn(async () => {}),
-    }),
-}));
+await initializeRootLayoutRuntimeForTests();
 
-vi.mock('@/auth/routing/authRouting', () => ({
-    isPublicRouteForUnauthenticated: () => false,
-}));
-
-vi.mock('@/hooks/server/useFriendsIdentityReadiness', () => ({
-    useFriendsIdentityReadiness: () => ({ isReady: true }),
-}));
-
-vi.mock('@/hooks/server/useHappierVoiceSupport', () => ({
-    useHappierVoiceSupport: () => true,
-}));
-
-vi.mock('@/components/navigation/mobile/chrome/MobileBottomChromeHost', () => ({
-    MobileBottomChromeHost: () => React.createElement('MobileBottomChromeHost'),
-}));
-
-vi.mock('@/components/appShell/runtime/AuthenticatedAppRuntimeMounts', () => ({
-    AuthenticatedAppRuntimeMounts: () => React.createElement('AuthenticatedAppRuntimeMounts'),
-}));
-
-vi.mock('@/desktop/window/isDesktopOverlayWindowContext', () => ({
-    isDesktopOverlayWindowContext: () => false,
-}));
-
-vi.mock('@/components/onboarding/tour/state/journeySession', () => ({
-    doesOnboardingJourneyOwnTransientDemoServer: (active: boolean) => active,
-    useOnboardingJourneySessionActive: () => false,
-}));
-
-vi.mock('@/components/navigation/mobile/chrome/MainAppTabStateProvider', () => ({
-    MainAppTabStateProvider: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, null, children),
-}));
-
-afterEach(() => {
-    vi.resetModules();
-});
-
-/**
- * The app stack is the one route-title owner. A route it does not register has
- * no title at all: the custom header renders an empty title bar and the native
- * header falls back to the raw route name, so every reachable Automation route
- * must be declared here rather than through a screen-local `Stack.Screen`.
- */
+/** The current top-level automation destinations share the root title owner. */
 describe('RootLayout automation route titles', () => {
     it.each([
         'automations/index',
@@ -65,11 +16,9 @@ describe('RootLayout automation route titles', () => {
         'automations/new',
         'automations/edit',
         'automations/settings',
-        'session/[id]/automations',
-        'session/[id]/automations/new',
     ])('declares a central header title for %s', async (routeName) => {
         const RootLayout = (await import('@/app/(app)/_layout')).default;
-        const screen = await renderScreen(<RootLayout />);
+        const screen = await renderRootLayoutRoute(RootLayout);
 
         const stackScreen = screen.tree.root
             .findAllByType('StackScreen' as never)

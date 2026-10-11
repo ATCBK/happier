@@ -8,7 +8,7 @@ import { flushHookEffects, type FlushHookEffectsOptions } from '../hooks/flushHo
 export type RenderWithAppProvidersOptions = Readonly<{
     wrapper?: React.ComponentType<React.PropsWithChildren>;
     flushOptions?: FlushHookEffectsOptions;
-    createNodeMock?: (element: React.ReactElement<Record<string, unknown>>) => unknown;
+    createNodeMock?: (element: Readonly<{ type: React.ReactElement['type']; props: Record<string, unknown> }>) => unknown;
 }>;
 
 export type RenderWithAppProvidersResult = Readonly<{
