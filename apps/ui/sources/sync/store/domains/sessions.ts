@@ -133,6 +133,11 @@ import {
     getServerProfileById,
 } from '../../domains/server/serverProfiles';
 import { normalizeTrimmedString } from '@/sync/domains/session/listing/normalizeTrimmedString';
+import {
+    EMPTY_PROJECT_AUTHORING_SESSION_INPUTS,
+    updateProjectAuthoringSessionInputs,
+    type ProjectAuthoringSessionInputs,
+} from './projectAuthoringSessions';
 
 export {
     classifySessionTupleApplyCurrentness,
@@ -289,6 +294,7 @@ function readLoadedStoredSessionMessagesForRenderable(sessionMessages: unknown) 
 
 export type SessionsDomain = {
     sessions: Record<string, Session>;
+    projectAuthoringSessions: ProjectAuthoringSessionInputs;
     /**
      * Ids this viewer has watched be deleted.
      *
@@ -948,6 +954,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
 
     return {
         sessions: {},
+        projectAuthoringSessions: EMPTY_PROJECT_AUTHORING_SESSION_INPUTS,
         deletedSessionIds: {},
         sessionListRenderableDelta: {
             revision: 0,
@@ -1135,6 +1142,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 ? state.sessionListRowsByServerId[activeServerId] ?? {}
                 : {};
             let mergedSessions: Record<string, Session> = state.sessions;
+            let projectAuthoringSessions = state.projectAuthoringSessions;
             let mergedRowsByServerId = state.sessionListRowsByServerId;
             let mergedOrdinaryMembershipByServerId = state.ordinarySessionListMembershipByServerId;
             let mergedArchivedMembershipByServerId = state.archivedSessionListMembershipByServerId;
@@ -1330,6 +1338,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                         mergedSessions = { ...state.sessions };
                     }
                     mergedSessions[session.id] = mergedSession;
+                    projectAuthoringSessions = updateProjectAuthoringSessionInputs(projectAuthoringSessions, session.id, mergedSession);
                 }
 
                 const mergedTranscriptAggregate = readReusableRenderableAggregate(
@@ -1685,6 +1694,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             const nextStateBase = {
                 ...state,
                 sessions: mergedSessions,
+                projectAuthoringSessions,
                 sessionListRowsByServerId: mergedRowsByServerId,
                 ordinarySessionListMembershipByServerId: mergedOrdinaryMembershipByServerId,
                 archivedSessionListMembershipByServerId: mergedArchivedMembershipByServerId,
@@ -2729,6 +2739,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return {
                     ...state,
                     sessions: nextSessions,
+                    projectAuthoringSessions: updateProjectAuthoringSessionInputs(state.projectAuthoringSessions, sessionId, nextSession),
                 };
             });
         },
@@ -3399,6 +3410,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             const nextStateBase = {
                 ...state,
                 sessions: remainingSessions,
+                projectAuthoringSessions: retireActiveCarrier
+                    ? updateProjectAuthoringSessionInputs(state.projectAuthoringSessions, sessionId, undefined)
+                    : state.projectAuthoringSessions,
                 sessionListRowsByServerId: remainingRowsByServerId,
                 ordinarySessionListMembershipByServerId: remainingOrdinaryMembershipByServerId,
                 archivedSessionListMembershipByServerId: remainingArchivedMembershipByServerId,
