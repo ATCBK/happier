@@ -138,9 +138,13 @@ export function MachineAddFormWithFlow(props: MachineAddFormProps & Readonly<{ f
         );
     }
 
+    // Create one's "Managed from" chip ends the row of ways in (lab m-add has no header control): it appears
+    // beside the bar it belongs to, so choosing Create one moves nothing above or below it. A phone has no
+    // room beside its two segments; there the picker leads with the chip as its own row.
+    const scopeChip = showCreate && !grouped ? props.managedScope?.chip ?? null : null;
     const pane = showCreate || active === null
         ? <MachineProvisionerPicker serverId={flow.serverId} onSetUpThisComputer={setUpThisComputer}
-            scope={creating ? props.managedScope : undefined} />
+            scope={scopeChip ? props.managedScope : undefined} />
         : <MachineAddPane flow={flow} pathId={active} testID={`${props.testID}.pane`} onStartSession={props.onStartSession} />;
     const poolFoot = props.onNewPool ? (
         <Text style={styles.foot}>
@@ -173,6 +177,7 @@ export function MachineAddFormWithFlow(props: MachineAddFormProps & Readonly<{ f
             <ItemGroup surface="none">
             {/* Two to four short ways in: one segmented bar, as wide as its words (lab m-add). Each pane
                 opens with its own lead line, so the bar carries names only. */}
+            <View style={styles.pathsRow}>
             <View style={styles.paths}>
             <SegmentedTabBar<MachineAddPathId | 'connect' | 'create'>
                 role="radiogroup"
@@ -193,6 +198,8 @@ export function MachineAddFormWithFlow(props: MachineAddFormProps & Readonly<{ f
                     else { setCreating(false); flow.choosePath(next); }
                 }}
             />
+            </View>
+            {scopeChip}
             </View>
             </ItemGroup>
             {grouped && !showCreate && active !== null && paths.length > 1 ? (
@@ -483,6 +490,13 @@ function MachineAddPane(props: Readonly<{
 }
 
 const styles = StyleSheet.create((theme) => ({
+    pathsRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+    },
     paths: {
         alignSelf: 'flex-start',
         maxWidth: '100%',

@@ -47,8 +47,8 @@ export const MachineAddDraftScreen = React.memo(function MachineAddDraftScreen()
     // One read of the Account's opt-out serves the header's promise and the form's Create one.
     const accountScope = useServerCredentialAccountScopeBinding(serverId);
     const canCreate = useManagedMachineAccountSettings(accountScope.binding ?? undefined).settings?.managedMachineCreationEnabled === true;
-    // Create one's "Managed from" is a page-level scope (lab m-add): its chip sits in this header while
-    // Create one is open, and the catalog below reads the machine it names.
+    // Create one's "Managed from" scope: the form shows its chip beside the ways in while Create one is open,
+    // and the catalog below reads the machine it names.
     const creating = useMachineAddFlowDraftSelector((draft) => draft.creating) && canCreate;
     const managedScope = useManagedControllerScope({ serverId, testIDPrefix: 'managed-picker.controller' });
     const navigate = React.useCallback((href: unknown, tag: string, replace: boolean) => {
@@ -82,7 +82,6 @@ export const MachineAddDraftScreen = React.memo(function MachineAddDraftScreen()
                 meta={[{ key: 'home', icon: 'house', text: homeName ? t('addFlows.machineJoinsHome', { home: homeName }) : t('managedMachines.add.joinsThisHome') }]}
                 actions={(
                     <>
-                        {creating ? managedScope.chip : null}
                         <RoundButton
                             testID="settings.machines.draft.discard"
                             size="small"

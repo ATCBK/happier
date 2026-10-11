@@ -33,7 +33,7 @@ type MachineProvisionerPickerProps = Readonly<{
     /** Local presentation handoff to the same configurator, without navigation or acquisition. */
     onSelectProvisioner?: (selection: ManagedProvisionerSelection) => void;
     /**
-     * The "Managed from" scope of a page that shows its chip in its own header (the Add page). The
+     * The "Managed from" scope of a page that shows its chip itself (beside the Add page's ways in). The
      * picker then reads that controller and draws no chip of its own; without it, the picker owns one.
      */
     scope?: ManagedControllerScope;
