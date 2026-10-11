@@ -976,6 +976,11 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                 <PageHeader
                     testID="session-info-header"
                     alwaysShowTitle
+                    cancelAction={{
+                        title: t('common.close'),
+                        testID: 'session-info-close',
+                        onPress: () => safeRouterBack({ router, fallbackHref: '/' }),
+                    }}
                     title={sessionName}
                     leading={<Avatar id={getSessionAvatarId(session)} size={48} monochrome={!sessionStatus.isConnected} flavor={agentId} />}
                     details={(
