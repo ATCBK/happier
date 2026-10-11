@@ -521,7 +521,9 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
         <Item
           key={entry.title}
           testID={`${testID}.topic.${entry.title}`}
-          // No leading glyph: facts and topics share one text edge, and the chevron says a topic opens.
+          // A topic opens its own page, so it leads with its mark like every navigation row (lab `c-mem A`,
+          // `c-ctx A`): a tag for a named topic, the archive box for the archive.
+          icon={<Icon name={entry.title === MEMORY_ARCHIVE_TOPIC_TITLE_V1 ? 'archive' : 'tag'} />}
           title={memoryTopicLabel(entry.title)}
           subtitle={
             entry.title === MEMORY_ARCHIVE_TOPIC_TITLE_V1

@@ -126,6 +126,7 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
         basisContainerWidthPx: rightPaneWidthBasisPx,
         containerWidthPx: panelContainerWidthPx,
         minPx: right.minPx,
+        skipScalingWhenPreferredWidthPxMatches: right.defaultPx,
     });
     const scaledDetailsPreferredPx = resolveScaledPaneWidthPxUncapped({
         preferredWidthPx: detailsPaneWidthPx,
@@ -139,6 +140,7 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
         containerWidthPx: panelContainerWidthPx,
         minPx: right.minPx,
         maxPx: right.maxPx,
+        skipScalingWhenPreferredWidthPxMatches: right.defaultPx,
     });
     const storedEffectiveDetailsDockWidthPx = resolveScaledPaneWidthPx({
         preferredWidthPx: detailsPaneWidthPx,

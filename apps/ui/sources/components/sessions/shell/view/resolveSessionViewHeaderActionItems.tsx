@@ -48,7 +48,8 @@ export function resolveSessionViewHeaderActionItems(input: Readonly<{
         items.push({
             id: 'header.openSubagents',
             title: t('session.openSubagents', { count: input.subagentActiveCount }),
-            icon: <Icon name="robot" size={ICON_SIZE.md} color={input.actionIconColor} />,
+            // Menu rows share one glyph size, so every title starts on the same edge.
+            icon: <Icon name="robot" size={ICON_SIZE.sm} color={input.actionIconColor} />,
         });
     }
     // No separate "Runs" entry: the Agents roster is the one list of a Session's runs and agents.
@@ -56,7 +57,7 @@ export function resolveSessionViewHeaderActionItems(input: Readonly<{
         items.push({
             id: 'header.openAutomations',
             title: t('session.openAutomations'),
-            icon: <Icon name="timer" size={16} color={input.actionIconColor} />,
+            icon: <Icon name="timer" size={ICON_SIZE.sm} color={input.actionIconColor} />,
         });
     }
 

@@ -2,6 +2,7 @@ import {
     DEFAULT_DETAILS_MIN_PX,
     DEFAULT_MAIN_MIN_PX,
     DEFAULT_RIGHT_MIN_PX,
+    DEFAULT_RIGHT_PREFERRED_PX,
 } from '@/components/ui/panels/paneBreakpoints';
 
 /**
@@ -17,6 +18,8 @@ export const PANE_SIZING_DEFAULTS = {
     mainMinThreePanePx: 320,
     right: {
         minPx: DEFAULT_RIGHT_MIN_PX,
+        /** Unscaled until the user resizes the sidebar (`skipScalingWhenPreferredWidthPxMatches`). */
+        defaultPx: DEFAULT_RIGHT_PREFERRED_PX,
         // No global cap: the effective max is derived from the container width minus the main min width
         // (and any other docked pane). This enables user-resizable panes to scale naturally on wide screens.
         maxPx: Number.POSITIVE_INFINITY,

@@ -51,6 +51,11 @@ export const DEFAULT_MAIN_MIN_PX = 420;
 /** The narrowest docked right sidebar and details pane. `PANE_SIZING_DEFAULTS` re-exports these. */
 export const DEFAULT_RIGHT_MIN_PX = 260;
 export const DEFAULT_DETAILS_MIN_PX = 320;
+/**
+ * The right sidebar's width until the user drags it (the labs' side column, 340 px). It stays this
+ * width at every window size; only a width the user chose scales with the window.
+ */
+export const DEFAULT_RIGHT_PREFERRED_PX = 340;
 
 export function resolvePaneLayout(input: ResolvePaneLayoutInput): ResolvedPaneLayout {
     const mainMinPx = input.mainMinPx ?? DEFAULT_MAIN_MIN_PX;

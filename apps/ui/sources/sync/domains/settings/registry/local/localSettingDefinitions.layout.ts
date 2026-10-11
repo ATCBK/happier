@@ -4,6 +4,7 @@ import { SessionCompanionPreferencesV1Schema } from '@/components/sessions/compa
 import { normalizeSessionMobileSurface, type SessionMobileSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
 import { normalizeProjectMobileSurface, type ProjectMobileSurface } from '@/components/workspaceCockpit/project/projectCockpitState';
 import { StoredNavigationSurfacePlacementsV1Schema } from '../../mobileSurfacePinning';
+import { DEFAULT_RIGHT_PREFERRED_PX } from '@/components/ui/panels/paneBreakpoints';
 
 import {
     EMPTY_PERSISTED_PANE_SCOPE_STATE,
@@ -67,7 +68,7 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
     },
     rightPaneWidthPx: {
         schema: z.number(),
-        default: 360,
+        default: DEFAULT_RIGHT_PREFERRED_PX,
         description: 'Preferred right pane dock width in px',
         storageScope: 'local',
         analytics: {

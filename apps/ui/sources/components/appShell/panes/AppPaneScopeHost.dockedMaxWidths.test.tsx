@@ -148,4 +148,28 @@ describe('AppPaneScopeHost (docked max widths)', () => {
         expect(lastProps.rightDockMaxWidthPx).toBe(1800 - 420);
         expect(lastProps.rightDockWidthPx).toBe(520);
     });
+
+    it('keeps the right sidebar at its 340 px default width at every window width until the user resizes it', async () => {
+        const { AppPaneScopeHost } = await import('./AppPaneScopeHost');
+        const render = async (windowWidthPx: number, rightPaneWidthPx: number) => {
+            lastProps = null;
+            mockedWindowWidthPx = windowWidthPx;
+            mockedSettings = {
+                uiMultiPanePanelsEnabled: true,
+                rightPaneWidthPx,
+                rightPaneWidthBasisPx: 1200,
+                detailsPaneWidthPx: 520,
+                detailsPaneWidthBasisPx: 1200,
+                bottomPaneHeightPx: 320,
+                bottomPaneHeightBasisPx: 900,
+            };
+            await renderScreen(<AppPaneScopeHost scopeId="scope1" main={<div />} rightPaneBuiltinAdapter={rightPaneBuiltinAdapter} />);
+            return lastProps.rightDockWidthPx as number;
+        };
+        // The lab's side column (lane12-final `xp-side`, app-surfaces `ss-side`) is 340 px wide.
+        expect(await render(1440, 340)).toBe(340);
+        expect(await render(946, 340)).toBe(340);
+        // A width the user chose still scales with the window, as before.
+        expect(await render(1440, 400)).toBe(480);
+    });
 });

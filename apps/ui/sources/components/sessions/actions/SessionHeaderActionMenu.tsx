@@ -635,24 +635,6 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
       }));
     }
 
-    if (externalSessionLink && supportsExternalSessionBackgroundFollowForLink) {
-      push('session', {
-        id: 'session.externalSession.backgroundFollow',
-        title: t('session.actionMenu.backgroundFollow'),
-        icon: <Icon name="arrows-clockwise" size={16} color={iconColor} />,
-        subtitle: externalSessionFollowPolicy === 'background_follow' ? t('common.enabled') : t('common.disabled'),
-      });
-    }
-
-    if (followEditor.enabled && sessionServerId) {
-      push('session', {
-        id: SESSION_FOLLOW_IN_ANOTHER_SESSION_ACTION_ID,
-        icon: <Icon name="share-network" size={16} color={iconColor} />,
-        title: t('session.follow.sources.add'),
-        subtitle: t('session.follow.sources.includeNextTurn'),
-      });
-    }
-
     if (Array.isArray(props.extraItems) && props.extraItems.length > 0) {
       for (const item of props.extraItems) push(resolveSessionHeaderExtraItemGroup(item.id), item);
     }
@@ -686,6 +668,26 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
         accountShowToolCalls,
       });
       if (item) push(getSessionActionMetadata(actionId)?.group ?? 'session', item);
+    }
+
+    // After the session's own rows: "This session" opens with its name, the rail choice and Talk (lab
+    // `b-promote`); following rows come after them.
+    if (externalSessionLink && supportsExternalSessionBackgroundFollowForLink) {
+      push('session', {
+        id: 'session.externalSession.backgroundFollow',
+        title: t('session.actionMenu.backgroundFollow'),
+        icon: <Icon name="arrows-clockwise" size={16} color={iconColor} />,
+        subtitle: externalSessionFollowPolicy === 'background_follow' ? t('common.enabled') : t('common.disabled'),
+      });
+    }
+
+    if (followEditor.enabled && sessionServerId) {
+      push('session', {
+        id: SESSION_FOLLOW_IN_ANOTHER_SESSION_ACTION_ID,
+        icon: <Icon name="share-network" size={16} color={iconColor} />,
+        title: t('session.follow.sources.add'),
+        subtitle: t('session.follow.sources.includeNextTurn'),
+      });
     }
 
     if (showTeleportAction) {
@@ -790,6 +792,9 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
       onOpenChange={setOpen}
       items={actions}
       showCategoryTitles
+      // On a phone the menu is the shared bottom sheet, titled by the session it acts on (lab `b-promote Ap`).
+      popoverPhonePresentation="sheet"
+      popoverAccessibilityLabel={readSessionDisplayTitleField(session).value || ownerMetadata?.name || t('session.actionMenu.openA11y')}
       onSelect={(actionId) => {
         setOpen(false);
         if (actionId === 'header.findChat') {
