@@ -23,7 +23,6 @@ import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/proto
 import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { ACTION_OPERATION_RPC_METHODS_V2, ActionOperationGetV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
-import { createProjectManifestActionClient } from '@/components/projects/projectSetup/projectManifestActionClient';
 import * as React from 'react';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
@@ -71,6 +70,7 @@ const configureRelay: NonNullable<Parameters<typeof installDisconnectedServerSoc
 };
 installDisconnectedServerSocketBoundary(configureRelay);
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+const { createProjectManifestActionClient } = await import('@/components/projects/projectSetup/projectManifestActionClient');
 // Load the real UI graph during collection; compilation is not a Script behavior deadline.
 await import('@/components/projects/projectSetup/ProjectScriptsBody');
 let serverId: string;
@@ -622,7 +622,7 @@ describe('Project finite delivery through the default UI Action host', () => {
             }) })]);
             if (consentScope === 'thisTime') expect(calls).toEqual([]);
             expect(controller.getCurrent().failure, JSON.stringify(controller.getCurrent().failure)).toBeNull();
-            expect(controller.getCurrent().pendingKey).toBeNull();
+            expect(controller.getCurrent().pendingKeys).toEqual({});
             if (consentScope === 'thisTime') {
                 expect.soft(controller.getCurrent().consent).toMatchObject({ code: 'project_setup_consent_required', reviewedEffectDigest, consentScope });
                 expect(onChanged).not.toHaveBeenCalled();
