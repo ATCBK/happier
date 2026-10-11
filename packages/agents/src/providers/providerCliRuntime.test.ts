@@ -181,6 +181,7 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
     ]);
     expect(getProviderCliRuntimeSpec('opencode').knownCommandCandidates).toEqual([
       { kind: 'homeBinDir', relativeDir: '.opencode/bin' },
+      { kind: 'homeBinDir', relativeDir: '.local/bin' },
       { kind: 'homePath', relativePath: 'AppData/Roaming/npm/opencode.cmd' },
     ]);
     expect(getProviderCliRuntimeSpec('codex').knownCommandCandidates).toBeNull();

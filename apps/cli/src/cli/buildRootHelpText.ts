@@ -6,6 +6,7 @@ const HELP_LABEL_WIDTH = 27;
 
 const EXAMPLES = [
   { label: 'happier', description: 'Start session' },
+  { label: 'happier session create --help', description: 'Create a scripted session with a model, title, and prompt' },
   { label: 'happier --refresh-settings', description: 'Force-refresh account settings before starting' },
   { label: 'happier --launch-profile <id-or-name>', description: 'Start with a launch profile from your settings' },
   { label: 'happier --auth cs:<id>', description: 'Start with an exact Connected Services profile or pool' },
