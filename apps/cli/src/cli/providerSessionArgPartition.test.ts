@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { serializeSessionModelSelectionV1, SessionModelSelectionV1Schema } from '@happier-dev/protocol';
+import { resolveAcpToolPermissionPolicy } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { partitionProviderSessionArgs } from './providerSessionArgPartition';
 
@@ -20,6 +21,36 @@ function encodeNativeForkSourceTestVector(): string {
 }
 
 describe('partitionProviderSessionArgs', () => {
+  it('consumes --auto as the canonical automatic-edit permission intent', () => {
+    const result = partitionProviderSessionArgs({
+      args: ['opencode', '--auto', '--native-option'],
+      providerSubcommand: 'opencode',
+    });
+
+    expect(result.permissionMode).toBe('safe-yolo');
+    expect(resolveAcpToolPermissionPolicy(result.permissionMode)).toMatchObject({
+      '*': 'ask', read: 'allow', edit: 'allow', write: 'allow', bash: 'ask',
+    });
+    expect(result.providerArgs).toEqual(['--native-option']);
+    expect(result.permissionMode).toBe(partitionProviderSessionArgs({
+      args: ['opencode', '--permission-mode', 'auto'],
+      providerSubcommand: 'opencode',
+    }).permissionMode);
+  });
+
+  it.each([
+    { flags: ['--auto', '--permission-mode', 'read_only'], expected: 'read-only' },
+    { flags: ['--permission-mode', 'read_only', '--auto'], expected: 'safe-yolo' },
+  ])('keeps permission flag ordering for $flags', ({ flags, expected }) => {
+    const result = partitionProviderSessionArgs({
+      args: ['opencode', ...flags],
+      providerSubcommand: 'opencode',
+    });
+
+    expect(result.permissionMode).toBe(expected);
+    expect(result.providerArgs).toEqual([]);
+  });
+
   it('presents the cross-provider permission vocabulary when input is invalid', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: string | number | null): never => {

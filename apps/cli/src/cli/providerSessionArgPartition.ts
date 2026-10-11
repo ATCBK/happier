@@ -243,6 +243,11 @@ export function partitionProviderSessionArgs(
       continue;
     }
 
+    if (arg === '--auto') {
+      permissionMode = parsePermissionModeAlias('auto')!;
+      continue;
+    }
+
     if (arg === '--yolo') {
       permissionMode = 'yolo';
       providerArgs.push(...(opts.yoloProviderArgs ?? []));
