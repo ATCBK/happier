@@ -89,6 +89,56 @@ it('exposes missing versus present-empty and current admitted dashboard identity
     await hook.unmount();
 });
 
+it('settles an acknowledged widget add even when its follow-up layout read is still pending', async () => {
+    const surface: WidgetSurfaceRefV1 = { serverId: 'home', accountId: 'actor', owner: { kind: 'project', projectId: 'anchor' } };
+    const rows = new Map<string, HomeHubArtifactV1>();
+    const transport: HomeHubArtifactTransportV1 = {
+        read: async id => rows.get(id) ?? null,
+        create: async input => {
+            const row = { ...input, ownerAccountId: 'actor', access: 'owner' as const, revision: { headerVersion: 1, bodyVersion: 1 } };
+            rows.set(input.artifactId, row);
+            return row;
+        },
+        update: async input => {
+            const row = rows.get(input.artifactId)!;
+            if (row.revision.bodyVersion !== input.expectedRevision.bodyVersion) return { ok: false, errorCode: 'version_mismatch', error: 'version_mismatch' };
+            const next = { ...row, body: input.body, header: input.header, revision: { headerVersion: row.revision.headerVersion + 1, bodyVersion: row.revision.bodyVersion + 1 } };
+            rows.set(input.artifactId, next);
+            return { ok: true, revision: next.revision };
+        },
+    };
+    const owner = createWidgetSurfaceArtifactPortV1(transport, { surface, isCurrent: () => true });
+    const area = createWidgetAreaActionPortV1(() => owner);
+    let listReads = 0;
+    const port: WidgetAreaPort = { execute: async (operation) => {
+        if (operation.actionId === 'widgets.item.list') {
+            listReads += 1;
+            if (listReads > 1) await new Promise<never>(() => {});
+            return PluginUiWidgetAreaResultV1Schema.parse({ ok: true, result: await area.read(surface, {}) });
+        }
+        if (operation.actionId !== 'widgets.item.add') throw new Error('Unexpected operation');
+        return PluginUiWidgetAreaResultV1Schema.parse(await area.apply(surface, {
+            kind: 'add',
+            instance: operation.instance,
+            ...(operation.area ? { area: operation.area } : {}),
+            ...(operation.size ? { size: operation.size } : {}),
+        }, {}));
+    } };
+    const context = {};
+    const hook = await renderHook(() => useWidgetAreaLayout(port, context));
+    await flushHookEffects();
+    let settled: unknown;
+    void hook.getCurrent().write({
+        actionId: 'widgets.item.add',
+        instance: { v: 1, id: 'added', definition: { kind: 'builtin', id: 'project_about' }, bindings: {} },
+        area: 'aside',
+    }).then(outcome => { settled = outcome; });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(settled).toEqual({ kind: 'applied' });
+    expect(rows.size).toBe(1);
+    await hook.unmount();
+});
+
 it('withdraws mounted effect admission on exact Artifact publication before a delayed reread settles', async () => {
     const storedSurface: WidgetSurfaceRefV1 = { serverId: 'home', accountId: 'owner',
         owner: { kind: 'project', projectId: 'anchor', layoutId: 'named' } };

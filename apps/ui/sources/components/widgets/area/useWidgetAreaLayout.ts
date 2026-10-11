@@ -152,7 +152,10 @@ export function useWidgetAreaLayout<C>(port: WidgetAreaPort, context: C): Widget
         } catch {
             outcome = { kind: 'refused', errorCode: 'widget_area_unavailable' };
         }
-        if (mounted.current) await read();
+        // The Action result is the write acknowledgement. A publication (or this explicit refresh)
+        // updates the layout independently; a slow follow-up read must not keep the initiating
+        // control busy after the write has already committed.
+        if (mounted.current) void read();
         return outcome;
     }, [context, port, read]);
 

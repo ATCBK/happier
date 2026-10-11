@@ -593,20 +593,36 @@ export function useNewSessionMachinePathState(params: Readonly<{
             lastAppliedPersistedMachineIdRef.current = '';
             return;
         }
-        if (reconciledPersistedMachineId === lastAppliedPersistedMachineIdRef.current) {
+        const persistedMachine = params.machines.find(machine => machine.id === reconciledPersistedMachineId) ?? null;
+        const preferredMachineId = resolveMachineId(reconciledPersistedMachineId);
+        const preferredMachine = preferredMachineId
+            ? params.machines.find(machine => machine.id === preferredMachineId) ?? null
+            : null;
+        // A stored draft is remembered authoring, not a fresh exact-target command. If that
+        // machine has retired or is offline, restore onto the best reachable machine instead of
+        // leaving Start blocked by an unreachable historical instance. Explicit route and user
+        // selections remain exact through their separate owners above.
+        const recoversPersistedMachine = preferredMachineId !== null
+            && preferredMachineId !== reconciledPersistedMachineId
+            && preferredMachine !== null
+            && isMachineOnline(preferredMachine)
+            && (persistedMachine === null || !isMachineOnline(persistedMachine));
+        const restoredMachineId = recoversPersistedMachine ? preferredMachineId : reconciledPersistedMachineId;
+        const restorationKey = `${reconciledPersistedMachineId}:${restoredMachineId}`;
+        if (restorationKey === lastAppliedPersistedMachineIdRef.current) {
             return;
         }
 
-        lastAppliedPersistedMachineIdRef.current = reconciledPersistedMachineId;
-        hasCommittedExactTargetRef.current = true;
-        if (reconciledPersistedMachineId === selectedMachineIdRef.current) {
+        lastAppliedPersistedMachineIdRef.current = restorationKey;
+        hasCommittedExactTargetRef.current = !recoversPersistedMachine;
+        if (restoredMachineId === selectedMachineIdRef.current) {
             return;
         }
 
-        setSelectedMachineIdState(reconciledPersistedMachineId);
+        setSelectedMachineIdState(restoredMachineId);
         hasUserEditedPathRef.current = false;
         applyCommittedSelectedPath(
-            getPersistedPathForMachine(reconciledPersistedMachineId) || getBestPathForMachine(reconciledPersistedMachineId),
+            (recoversPersistedMachine ? '' : getPersistedPathForMachine(restoredMachineId)) || getBestPathForMachine(restoredMachineId),
         );
     }, [
         applyCommittedSelectedPath,
@@ -616,7 +632,9 @@ export function useNewSessionMachinePathState(params: Readonly<{
         params.persistedExecutionTarget,
         params.persistedManagedMachineSelection,
         params.persistedPath,
+        params.machines,
         resolvePersistedMachineId,
+        resolveMachineId,
         setSelectedMachineIdState,
     ]);
 

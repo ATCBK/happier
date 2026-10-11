@@ -815,7 +815,7 @@ describe('useNewSessionMachinePathState', () => {
         await hook.unmount();
     });
 
-    it('keeps a persisted exact machine and its path when another machine is online', async () => {
+    it('recovers a retained offline machine to an online launch machine and its directory', async () => {
         const now = Date.now();
 
         const hook = await renderMachinePathState({
@@ -834,8 +834,8 @@ describe('useNewSessionMachinePathState', () => {
         });
 
         expect(getSelection(hook.getCurrent())).toEqual({
-            selectedMachineId: 'machine-offline',
-            selectedPath: '/repo/stale',
+            selectedMachineId: 'machine-online',
+            selectedPath: '/online',
         });
 
         await hook.unmount();
@@ -1087,9 +1087,9 @@ describe('useNewSessionMachinePathState', () => {
         await hook.unmount();
     });
 
-    it('keeps an absent persisted exact machine and path instead of selecting an available machine', async () => {
+    it('recovers an absent persisted machine to an available launch machine', async () => {
         const hook = await renderMachinePathState({
-            machines: toMachines({ id: 'machine-b', metadata: { homeDir: '/b' } }),
+            machines: toMachines({ id: 'machine-b', metadata: { homeDir: '/b' }, active: true, activeAt: Date.now() }),
             recentMachinePaths: [{ machineId: 'machine-b', path: '/b/repo' }],
             machineIdParam: null,
             pathParam: null,
@@ -1098,8 +1098,8 @@ describe('useNewSessionMachinePathState', () => {
         });
 
         expect(getSelection(hook.getCurrent())).toEqual({
-            selectedMachineId: 'machine-a',
-            selectedPath: '/a/repo',
+            selectedMachineId: 'machine-b',
+            selectedPath: '/b/repo',
         });
 
         await hook.unmount();
