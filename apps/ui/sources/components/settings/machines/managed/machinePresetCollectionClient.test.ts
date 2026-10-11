@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -5,12 +6,15 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import type { PresetMutationResultV1 } from '@happier-dev/protocol/machines/managed/managedMachinePresetV1';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 // Boundary mocks must be registered first; cold module transformation is not this contract.
 const { useMachinePresets, useMachinePresetDetail } = await import('./useMachinePresets');
 const { createMachinePresetCollectionClient } = await import('./machinePresetCollectionClient');
+const { useActionApprovalContinuation } = await import('@/components/approvals/useActionApprovalContinuation');
 beforeEach(async () => {
     await harness.reset();
     (await import('@/sync/ops/actions/scopedHomeActionExecutor')).resetScopedHomeActionExecutorsForTests();
@@ -27,6 +31,37 @@ const resource = { id: 'resource', homeId: 'srv_history', custodianAccountId: 'o
     retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false, archivedAt: 0 } as const;
 
 describe('preset collection and history through Actions', () => {
+    it.each([
+        { kind: 'conflict', currentRevision: 5 },
+        { kind: 'refused', code: 'permission_denied' },
+    ] satisfies PresetMutationResultV1[])('retains the typed $kind result of an approved preset mutation', async result => {
+        const serverId = await harness.addHome({ name: 'History', serverUrl: 'https://history.example',
+            serverIdentityId: 'srv_history', accountId: 'owner', currentAccount: true });
+        harness.answer(serverId, '/v1/machines/presets/get', { body: { kind: 'found', preset } });
+        harness.answer(serverId, '/v1/machines/managed/actions/list', { body: { machines: [resource] } });
+        harness.answer(serverId, '/v1/machines/presets/update', { body: result });
+        await harness.requireUiApproval(serverId, 'machines.presets.update');
+        const rendered = await renderHook(() => {
+            const registration = React.useRef<(approval: ActionApprovalRegistration) => void>(() => {});
+            const onApprovalPending = React.useCallback((approval: ActionApprovalRegistration) => registration.current(approval), []);
+            const detail = useMachinePresetDetail(serverId, 'preset', onApprovalPending);
+            const approval = useActionApprovalContinuation({ serverId, scopeKey: `${serverId}:owner:preset`, onExecuted: detail.refresh });
+            registration.current = approval.requestApproval;
+            return { detail, approval };
+        });
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().detail.state.value?.preset.id).toBe('preset'));
+        await act(async () => { expect(await rendered.getCurrent().detail.update({ name: 'Updated' })).toMatchObject({ kind: 'approval_pending' }); });
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().approval.approvalStatus).toBe('open'));
+        expect(harness.requestsFor('/v1/machines/presets/update')).toEqual([]);
+        if (result.kind === 'refused') harness.answer(serverId, '/v1/machines/presets/get', { status: 403, body: result });
+        await expect(decideApprovalAsInbox(serverId, harness.artifacts(serverId).list()[0]!.id, 'approve'))
+            .resolves.toMatchObject({ ok: true });
+        expect(rendered.getCurrent().detail.mutationResult).toEqual(result);
+        if (result.kind === 'refused') expect(rendered.getCurrent().detail.state.value).toBeNull();
+        else expect(rendered.getCurrent().detail.state.value?.preset.revision).toBe(3);
+        await rendered.unmount();
+    });
+
     it('settles the Machines page preset inventory without a controller catalog or managed-resource answer', async () => {
         const serverId = await harness.addHome({ name: 'History', serverUrl: 'https://history.example', serverIdentityId: 'srv_history', accountId: 'owner', currentAccount: true });
         const { storage } = await import('@/sync/domains/state/storage');

@@ -125,9 +125,10 @@ async function seed() {
 async function seedConfiguration(serverId: string) {
     seedOptionsDeclaration(provisioner, PluginJsonSchemaV2Schema.parse({ type: 'object', properties: {}, additionalProperties: false }));
     const { storage } = await import('@/sync/domains/state/storage');
-    const machine = createMachineFixture({ id: preset.controller.machineId, installationId: preset.controller.installationId });
+    const machine = createMachineFixture({ id: preset.controller.machineId, installationId: preset.controller.installationId,
+        activeAt: Date.now() });
     const scopeId = resolveServerProfileScopeIdForIdentifier(serverId);
-    storage.setState({ machineListByServerId: { [scopeId]: [machine] } });
+    storage.setState({ machineListByServerId: { [scopeId]: [machine] }, machineListStatusByServerId: { [scopeId]: 'idle' } });
     for (const [actionId, result] of [
         ['machines.provisioners.list', { controller: preset.controller, provisioners: [provisioner] }],
         ['machines.provisioners.check', { available: true }],

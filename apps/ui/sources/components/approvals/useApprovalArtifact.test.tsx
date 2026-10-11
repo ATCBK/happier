@@ -33,6 +33,10 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+// Load the real reader/executor after boundary registration, before timed cases.
+// Cold transformation of their module graphs is not the approval contract.
+await import('@/sync/ops/actions/defaultActionExecutor');
+const { useApprovalArtifact } = await import('./useApprovalArtifact');
 
 const ACCOUNT_ID = 'account-1';
 // Real published identities: the profile owner ignores a malformed one, so a
@@ -134,7 +138,6 @@ function homeSignedRequest(serverId: string, serverIdentityId: string) {
 }
 
 async function renderReader(artifactId: string, serverId: string | null) {
-    const { useApprovalArtifact } = await import('./useApprovalArtifact');
     return await renderHook(() => useApprovalArtifact({ artifactId, serverId }));
 }
 

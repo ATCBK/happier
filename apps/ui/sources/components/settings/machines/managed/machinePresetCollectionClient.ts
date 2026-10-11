@@ -28,6 +28,18 @@ export type MachinePresetCollectionOptions<T> = Readonly<{
 }>;
 export type MachinePresetHistoryData = Readonly<{ preset: ManagedMachinePresetV1; machines: readonly ManagedMachineV1[] }>;
 
+function readPresetDomainFailureResult<T extends MachinePresetActionIdV1>(actionId: T, code: string,
+    details: unknown): MachinePresetActionOutputV1<T> | null {
+    const output = MachinePresetActionOutputSchemasV1[actionId].safeParse(details);
+    if (!output.success) return null;
+    const value = output.data;
+    // Approval history classifies these exact domain answers as failures. The
+    // preset client still owes its caller the same typed answer as a direct write.
+    return value.kind === 'conflict' && code === 'conflict'
+        || value.kind === 'refused' && value.code === code
+        ? value as MachinePresetActionOutputV1<T> : null;
+}
+
 /** Settings reads and mutations all pass through the existing exact-Home Action front door. */
 export function createMachinePresetCollectionClient(scope: ServerAccountScope, homeId: string) {
     const executeAction = scopedHomeActionExecutor(scope);
@@ -39,12 +51,23 @@ export function createMachinePresetCollectionClient(scope: ServerAccountScope, h
         const parsed = MachinePresetActionInputSchemasV1[actionId].safeParse(input);
         if (!parsed.success || parsed.data.homeId !== homeId) return { kind: 'failed', code: 'invalid_parameters' };
         const outcome = classifyHomeActionOutcome(await executeAction(actionId, parsed.data, context(options?.signal)));
-        if (outcome.kind === 'failed') return { kind: 'failed', code: homeDomainFailureCode(outcome.failure) };
+        if (outcome.kind === 'failed') {
+            const code = homeDomainFailureCode(outcome.failure);
+            const value = readPresetDomainFailureResult(actionId, code, outcome.failure.details);
+            return value ? { kind: 'succeeded', value } : { kind: 'failed', code };
+        }
         if (outcome.kind === 'approval_pending') {
             const approval = createActionApprovalContinuation<MachinePresetActionOutputV1<T>, T>({
                 artifactId: outcome.artifactId, actionId, scope, expectedInput: parsed.data,
                 ...(options?.signal ? { signal: options.signal } : {}),
-                onSucceeded: async value => await options?.onApprovalSucceeded?.(value), onFailed: options?.onApprovalFailed,
+                onSucceeded: async value => await options?.onApprovalSucceeded?.(value),
+                onFailed: (code, failure) => {
+                    const value = readPresetDomainFailureResult(actionId, code, failure?.details);
+                    if (value) {
+                        void Promise.resolve().then(() => options?.onApprovalSucceeded?.(value))
+                            .catch(() => options?.onApprovalFailed?.('operation_failed'));
+                    } else options?.onApprovalFailed?.(code);
+                },
             });
             options?.onApprovalPending?.(approval);
             return { kind: 'approval_pending', approval };
