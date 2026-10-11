@@ -33,6 +33,7 @@ import {
 import {
   assertResolvedRuntimeDependencyMatchesDeclaration,
   copyDirDereferenceContainedSync,
+  omitWorkspaceSourceCondition,
   resolveInstalledRuntimePackage,
 } from '../../../packages/cli-common/workspaceRuntimeDependencies.mjs';
 import * as workspaceDependencyBuildOrder from '../../../scripts/workspaces/resolveWorkspaceDependencyBuildOrder.mjs';
@@ -921,7 +922,14 @@ function readPublishedPackageRootTargetSignatures(
   }
 
   const targetPaths = new Set();
-  for (const target of collectPackageBuildOutputTargets(packageJson)) {
+  const publishedPackageJson = {
+    ...packageJson,
+    exports: omitWorkspaceSourceCondition(packageJson.exports),
+    ...(packageJson.imports === undefined
+      ? {}
+      : { imports: omitWorkspaceSourceCondition(packageJson.imports) }),
+  };
+  for (const target of collectPackageBuildOutputTargets(publishedPackageJson)) {
     if (!isLocalPackageBuildOutputTarget(target) || isPackageBuildDistOutputTarget(target)) continue;
     const matches = resolvePackageBuildOutputTargetMatches({
       packageDir,

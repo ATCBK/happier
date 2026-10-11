@@ -373,6 +373,15 @@ still runs the canonical frozen installer and postinstall. Successful installer
 output remains in the job log. Cache-hit installation and prepared-artifact restore
 are different measurements and must not be reported interchangeably.
 
+The shared tar contains an explicit prepared-output inventory: dependency and
+compiled/native directories, runtime tools, web assets, the existing ignored
+generated compile inputs, and the CLI's exact public preparation-state files.
+It does not classify Git changes or copy changed authored sources. Tracked
+generated sources remain the responsibility of their generator and committed
+checkout; they are not admitted through a workflow allowlist. Dependency cache
+publication runs explicitly after a successful install, before later workspace
+preparation can fail.
+
 Shared preparation currently has an interim 45-minute deadline: the observed cold
 install/native/CLI preparation took approximately 29 minutes, with 16 minutes of
 headroom for merged prerequisites and artifact transport. Compiler and artifact

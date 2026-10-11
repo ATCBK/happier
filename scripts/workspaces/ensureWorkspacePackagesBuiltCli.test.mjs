@@ -4,6 +4,8 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import yaml from 'js-yaml';
 
 import { ensureWorkspacePackagesBuiltByName, ensureWorkspacePackagesBuiltForComponent } from './ensureWorkspacePackagesBuilt.mjs';
 import { copyDirDereferenceContainedSync, vendorRuntimeDependencyTree } from '../../packages/cli-common/workspaceRuntimeDependencies.mjs';
@@ -46,7 +48,7 @@ for (const compiledAlready of [false, true]) {
     const toolchain = JSON.parse(readFileSync(toolchainOwnerPath, 'utf8'));
     // The publisher's source loader uses jiti; its authoring input owner uses
     // esbuild. Include their actual CLI declarations alongside the toolchain.
-    const dependencies = Object.fromEntries(['tsx', 'typescript', 'yaml', 'jiti', 'esbuild'].map((name) => {
+    const dependencies = Object.fromEntries(['tsx', 'typescript', 'yaml', 'jiti', 'esbuild', ...(!compiledAlready ? ['tweetnacl'] : [])].map((name) => {
       const version = toolchain.dependencies?.[name] ?? toolchain.devDependencies?.[name];
       assert.equal(typeof version, 'string', `Fixture toolchain ${name} must be declared`);
       return [name, version];
@@ -65,7 +67,10 @@ for (const compiledAlready of [false, true]) {
       mkdirSync(componentDir, { recursive: true });
       writeFileSync(join(componentDir, 'package.json'), JSON.stringify({
         name: `@happier-dev/${component}`, type: 'module',
-        dependencies: Object.fromEntries(hostDependencies.map((name) => [name, '0.0.0'])),
+        dependencies: {
+          ...Object.fromEntries(hostDependencies.map((name) => [name, '0.0.0'])),
+          ...(component === 'cli' && !compiledAlready ? { tweetnacl: dependencies.tweetnacl } : {}),
+        },
         bundledDependencies: hostDependencies,
       }));
     }
@@ -122,6 +127,39 @@ for (const compiledAlready of [false, true]) {
       assert.equal(readFileSync(join(installed, '.happier-plugin/daemon.js'), 'utf8'), readFileSync(join(packageDir, '.happier-plugin/daemon.js'), 'utf8'));
       const runtime = await import(pathToFileURL(join(installed, '.happier-plugin/daemon.js')).href);
       assert.equal(typeof runtime.activate, 'function');
+    }
+    if (!compiledAlready) {
+      // Currentness must use the same execution-root inputs as the builder,
+      // not this test process's shared-checkout environment.
+      const readinessProcess = spawnSync(process.execPath, ['--input-type=module', '-e',
+        `const { syncCliRuntimeDependencies, publishSourceDevReadinessFromRuntimeClosure } = await import(${JSON.stringify(pathToFileURL(join(sourceRoot, 'apps/cli/scripts/buildSharedDeps.mjs')).href)});\n`
+        + 'syncCliRuntimeDependencies({ repoRoot: process.cwd() });\n'
+        + `process.stdout.write(JSON.stringify(publishSourceDevReadinessFromRuntimeClosure({ repoRoot: process.cwd(), workspaceNames: ${JSON.stringify(hostDependencies)} })));`,
+      ], { cwd: repoRoot, env, encoding: 'utf8' });
+      assert.equal(readinessProcess.status, 0, readinessProcess.stderr);
+      const readiness = JSON.parse(readinessProcess.stdout);
+      assert.deepEqual(readiness, { stamped: true }, 'archive input must carry genuine verified runtime readiness');
+      const workflow = yaml.load(readFileSync(join(sourceRoot, '.github/workflows/tests.yml'), 'utf8'));
+      const action = yaml.load(readFileSync(join(sourceRoot, '.github/actions/install-yarn-dependencies/action.yml'), 'utf8'));
+      const runnerTemp = join(repoRoot, 'runner-temp');
+      mkdirSync(runnerTemp);
+      const archive = workflow.jobs['gate-prepare'].steps.find((step) => step.name === "Archive the current run's coherent preparation");
+      const archived = spawnSync('bash', ['-c', archive.run], { cwd: repoRoot, env: { ...env, RUNNER_TEMP: runnerTemp }, encoding: 'utf8' });
+      assert.equal(archived.status, 0, `${archived.stdout}\n${archived.stderr}`);
+      const restoredRoot = join(repoRoot, 'restored');
+      mkdirSync(restoredRoot);
+      mkdirSync(join(runnerTemp, 'gate-prepared'));
+      cpSync(join(runnerTemp, 'gate-prepared-workspace.tar'), join(runnerTemp, 'gate-prepared/gate-prepared-workspace.tar'));
+      const restore = action.runs.steps.find((step) => step.name === "Restore this run's prepared workspace");
+      const restored = spawnSync('bash', ['-c', restore.run], {
+        cwd: restoredRoot, env: { ...env, RUNNER_TEMP: runnerTemp, GITHUB_WORKSPACE: restoredRoot, RESTORE_STARTED_SECONDS: String(Math.floor(Date.now() / 1000)) }, encoding: 'utf8',
+      });
+      assert.equal(restored.status, 0, `${restored.stdout}\n${restored.stderr}`);
+      for (const output of ['.happier-plugin/plugin.json', '.happier-plugin/daemon.js']) {
+        assert.equal(readFileSync(join(restoredRoot, 'packages/plugins/selected', output), 'utf8'), readFileSync(join(packageDir, output), 'utf8'));
+      }
+      const stamp = '.project/tmp/cli-source-dev-shared-deps-sync.json';
+      assert.equal(readFileSync(join(restoredRoot, stamp), 'utf8'), readFileSync(join(repoRoot, stamp), 'utf8'));
     }
   });
 }

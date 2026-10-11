@@ -316,49 +316,6 @@ jobs:
           for output in apps/cli/tools/archives/happier-cliproxyapi-managed-* apps/cli/tools/archives/checksums.runtime-assets.sha256 apps/ui/public/pierre-diff-worker*.js; do
             [ ! -f "$output" ] || printf '%s\0' "$output" >> "$archive_paths"
           done
-          # Full publication can update tracked compiler inputs. Carry only its
-          # existing producer-owned projections, never arbitrary source or secrets.
-          # New locale/family outputs can be untracked in this fresh checkout.
-          generated_paths="$RUNNER_TEMP/gate-generated-paths"
-          git diff --name-only -z HEAD -- apps packages > "$generated_paths"
-          git ls-files --others --exclude-standard -z -- apps packages >> "$generated_paths"
-          sort -zu "$generated_paths" -o "$generated_paths"
-          while IFS= read -r -d '' output; do
-            case "$output" in
-              apps/cli/package.json|apps/ui/package.json|\
-              apps/server/sources/app/api/routes/share/publicShareViewerBundle.generated.ts|\
-              apps/server/sources/storage/enums.generated.ts|\
-              apps/server/prisma/sqlite/schema.prisma|apps/server/prisma/mysql/schema.prisma|\
-              apps/cli/src/plugins/projection/registry/sources/generatedBundledPlugins.ts|\
-              apps/cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts|\
-              apps/cli/src/prompts/assets/generated/pluginDescriptors.ts|\
-              apps/ui/sources/agents/registry/generatedBundledPluginEntries*.ts|\
-              apps/ui/sources/text/bundledPluginTranslations.generated.ts|\
-              apps/ui/sources/text/bundledPluginTranslations/*.generated.ts|\
-              apps/ui/sources/text/bundledPluginTranslationKeys.generated.ts|\
-              apps/ui/sources/voice/registry/generatedBundledVoice*.ts|\
-              packages/agents/src/generated/agentIds.ts|\
-              packages/agents/src/generated/bundledAgentDefinitions.ts|\
-              packages/agents/src/generated/runtimeDescriptorReaders.ts|\
-              packages/protocol/src/generated/providers/agentProviderIdsV1.ts|\
-              packages/protocol/src/generated/agents/bundledAgentIdentitiesV1.ts|\
-              packages/protocol/src/connect/generatedBuiltInLegacyConnectedAccountCompatibility.ts|\
-              packages/protocol/src/agents/generated/sessionPresentationCompatV1.ts|\
-              packages/protocol/src/agents/generated/externalSession/sources.ts|\
-              packages/protocol/src/voice/settings/generatedBundledVoiceSelectionOptions.ts|\
-              packages/plugin-sdk/src/actions/actionTypeMap.generated.ts|\
-              packages/plugin-sdk/src/actions/dtos/*.generated.ts|\
-              packages/plugin-sdk/src/ui/build/publicToolchainCompatibility.generated.ts|\
-              packages/sdk/src/actions/generated.ts)
-                if [ ! -f "$output" ]; then
-                  echo "::error::Preparation deleted generated source: $output"
-                  exit 1
-                fi
-                printf '%s\0' "$output" >> "$archive_paths"
-                ;;
-              *) echo "::error::Unexpected preparation source change: $output"; exit 1 ;;
-            esac
-          done < "$generated_paths"
           test -f .project/tmp/cli-source-dev-shared-deps-sync.json
           tar --create --file "$RUNNER_TEMP/gate-prepared-workspace.tar" \
             --exclude='.env' --exclude='.env.*' --exclude='.happier' \

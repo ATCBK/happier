@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import { AccountPetListResponseV1Schema, AccountProfileSchema, AutomationDefinitionListResponseSchema, CurrentCursorResponseSchema, DaemonContributionRegistryProjectionDescribeRequestSchema, DaemonContributionRegistryProjectionDescribeResponseSchema, FeaturesResponseSchema, PluginProjectionV2Schema, V2SessionListResponseSchema } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentsListActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability';
+import { PluginAvailabilityActionHttpPathsV1 } from '@happier-dev/protocol/plugins/availability';
 
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -16,6 +16,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { renderWithAppProviders } from '@/dev/testkit/render/renderWithAppProviders';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 
 const projectionRuntime = vi.hoisted(() => ({
     describe: vi.fn<(machineId: string, options?: unknown) => Promise<unknown>>(),
@@ -128,7 +129,7 @@ async function restoreCurrentnessAccount(accountId: string) {
     return restored;
 }
 
-function answerBootstrap() {
+async function answerBootstrap() {
     const features = createRootLayoutFeaturesResponse();
     const homeFeatures = FeaturesResponseSchema.parse({
         ...features,
@@ -147,9 +148,12 @@ function answerBootstrap() {
     harness.answer(homeId, '/v1/kv?prefix=todo.&limit=1000', { body: { items: [] } });
     harness.answer(homeId, '/v1/feed?limit=100', { body: FeedResponseSchema.parse({ items: [], hasMore: false }) });
     harness.answer(homeId, '/v3/automations?limit=100', { body: AutomationDefinitionListResponseSchema.parse({ automations: [], nextCursor: null }) });
-    harness.answer(homeId, `POST ${PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list']}`, {
-        body: PluginAvailabilityIntentsListActionOutputV1Schema.parse({ availabilityCursor: 0, pluginIds: [], intentReads: [], failedPluginIds: [] }),
-    });
+    for (const actionId of ['account.plugins.availability.materializations.read', 'account.plugins.availability.intents.list'] as const) {
+        const path = PluginAvailabilityActionHttpPathsV1[actionId];
+        const response = createEmptyAccountBootstrapHttpResponse(path, { method: 'POST' });
+        if (!response) throw new Error('Missing canonical Plugin Account bootstrap response');
+        harness.answer(homeId, `POST ${path}`, { body: await response.json() });
+    }
 }
 
 async function assertProjectionFixtureReady() {
@@ -241,7 +245,7 @@ describe('usePluginUiProjectionCurrentness', () => {
         await harness.reset();
         await loadSyncSingletonForTests();
         homeId = await harness.addHome({ name: 'Projection currentness', serverUrl: 'https://relay.example.test', serverIdentityId: serverIdentityId, accountId: 'account-a', active: false });
-        answerBootstrap();
+        await answerBootstrap();
         connection = await restoreCurrentnessAccount('account-a');
         storage.setState({ endpointStatus: 'online' });
         setMachine({ active: true, daemonStateVersion: 1 });
@@ -266,6 +270,11 @@ describe('usePluginUiProjectionCurrentness', () => {
 
     it('publishes one exact Home Machine inventory through device-local and portable aliases', () => {
         if (!connection) throw new Error('The real focused Home was not restored');
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('The real Account lifetime was not admitted');
+        expect(readPluginAccountAvailability(lifetime.scope).readMaterializations()).toMatchObject({
+            kind: 'available', availabilityCursor: 0,
+        });
         expect(connection.home.id).not.toBe(serverIdentityId);
         // A complete Home list may settle before a later Machine event uses
         // this device's equivalent local profile id. Both are the same owner.
@@ -839,11 +848,16 @@ describe('usePluginUiProjectionCurrentness', () => {
                 await rendered.update(surface(true));
             });
 
-            expect(captureActiveServerAccountScopeLifetime()?.scope.accountId).toBe('account-b');
+            const accountB = captureActiveServerAccountScopeLifetime()?.scope;
+            expect(accountB?.accountId).toBe('account-b');
+            if (!accountB) throw new Error('The successor Account lifetime was not admitted');
+            expect(readPluginAccountAvailability(accountB).readMaterializations()).toMatchObject({
+                kind: 'available', availabilityCursor: 0,
+            });
             expect(snapshot.current?.interactionEnabled).toBe(false);
             expect(snapshot.current?.connectedAccountProjection).toBeNull();
             expect(accountAReader.readMaterializations()).toEqual({
-                kind: 'unavailable', code: 'account_availability_not_loaded',
+                kind: 'unavailable', code: 'account_availability_scope_mismatch',
             });
             expect(errors.mock.calls.filter((args) => args.some((value) => (
                 typeof value === 'string' && value.includes('Cannot update a component')

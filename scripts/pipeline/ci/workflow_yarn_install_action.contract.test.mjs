@@ -38,7 +38,7 @@ function runShellStep(step, workspace, runnerTemp, env = {}) {
   });
 }
 
-test('the current-run preparation archive restores native modes, workspace links, generated inputs and readiness together', (t) => {
+test('the current-run preparation archive restores prepared outputs and readiness without collecting source changes', (t) => {
   const { root, workspace, runnerTemp } = fixture(t);
   const workflow = yaml.load(fs.readFileSync(path.join(workflowsDir, 'tests.yml'), 'utf8'));
   const action = yaml.load(fs.readFileSync(installActionPath, 'utf8'));
@@ -50,9 +50,17 @@ test('the current-run preparation archive restores native modes, workspace links
   write(workspace, 'apps/bootstrap/dist/index.js', 'prepared app-workspace dependency');
   write(workspace, 'packages/plugins/example/package.json', '{"name":"@happier-dev/plugins-example"}');
   write(workspace, 'packages/plugins/example/.happier-plugin/plugin.json', '{"current":true}');
+  const untrackedRuntime = 'packages/plugins/example/.happier-plugin/agent/runtime/factory.js';
+  write(workspace, untrackedRuntime, 'current published plugin runtime');
+  write(workspace, 'packages/plugins/example/.happier-plugin/.env.local', 'private plugin state');
   write(workspace, 'packages/iroh-native/native/iroh.node', 'native-output', 0o755);
   write(workspace, 'apps/cli/tools/unpacked/helper', '#!/bin/sh\nexit 0\n', 0o755);
   write(workspace, 'apps/ui/public/canvaskit.wasm', 'mandatory Skia web postinstall output');
+  const ignoredGeneratedOutputs = [
+    'apps/ui/sources/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts.js',
+    'packages/protocol/src/features/embeddedFeaturePolicies.generated.ts',
+  ];
+  for (const output of ignoredGeneratedOutputs) write(workspace, output, `canonical ignored output: ${output}`);
   write(workspace, 'apps/cli/node_modules/@happier-dev/protocol/dist/index.js', 'current physical copy');
   write(workspace, 'node_modules/external/index.js', 'third-party');
   fs.mkdirSync(path.join(workspace, 'node_modules/@happier-dev'), { recursive: true });
@@ -78,9 +86,10 @@ test('the current-run preparation archive restores native modes, workspace links
     write(workspace, `apps/server/generated/${provider}-client/index.js`, `current ${provider} client`);
     write(workspace, `apps/server/generated/${provider}-client/.happier-source-schema.sha256`, `${provider} schema identity`);
   }
-  // Git is an external process boundary: the fresh checkout's producer diff is
-  // supplied here; the actual archive selection, filesystem and tar stay real.
-  write(root, 'bin/git', `#!/bin/sh\ncase "$1" in\n  diff) printf "${[generated, ...serverGenerated].join('\\0')}\\0" ;;\n  ls-files) printf "${untrackedGenerated}\\0" ;;\nesac\n`, 0o755);
+  // No source inventory is required: even an unavailable Git boundary must not
+  // prevent archiving the canonical prepared output directories.
+  write(workspace, 'apps/cli/src/private.ts', 'not a prepared output');
+  write(root, 'bin/git', '#!/bin/sh\necho "unexpected Git inventory invocation" >&2\nexit 42\n', 0o755);
   const result = runShellStep(archive, workspace, runnerTemp, { PATH: `${path.join(root, 'bin')}:${process.env.PATH}` });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   const consumer = path.join(root, 'consumer');
@@ -90,10 +99,9 @@ test('the current-run preparation archive restores native modes, workspace links
   fs.copyFileSync(path.join(runnerTemp, 'gate-prepared-workspace.tar'), path.join(runnerTemp, 'gate-prepared/gate-prepared-workspace.tar'));
   const restored = runShellStep(restore, consumer, runnerTemp, { RESTORE_STARTED_SECONDS: String(Math.floor(Date.now() / 1000)) });
   assert.equal(restored.status, 0, restored.stderr);
-  assert.equal(fs.readFileSync(path.join(consumer, generated), 'utf8'), 'export const current = true;');
-  assert.equal(fs.readFileSync(path.join(consumer, untrackedGenerated), 'utf8'), 'export const currentLocale = true;');
-  for (const output of serverGenerated) {
-    assert.equal(fs.readFileSync(path.join(consumer, output), 'utf8'), `current Server projection: ${output}`);
+  assert.equal(fs.readFileSync(path.join(consumer, generated), 'utf8'), 'stale checkout projection');
+  for (const output of [untrackedGenerated, ...serverGenerated, 'apps/cli/src/private.ts']) {
+    assert.equal(fs.existsSync(path.join(consumer, output)), false);
   }
   for (const provider of ['sqlite', 'mysql']) {
     assert.equal(fs.readFileSync(path.join(consumer, `apps/server/generated/${provider}-client/index.js`), 'utf8'), `current ${provider} client`);
@@ -101,15 +109,19 @@ test('the current-run preparation archive restores native modes, workspace links
   }
   assert.equal(fs.readFileSync(path.join(consumer, 'apps/bootstrap/dist/index.js'), 'utf8'), 'prepared app-workspace dependency');
   assert.equal(fs.readFileSync(path.join(consumer, 'apps/ui/public/canvaskit.wasm'), 'utf8'), 'mandatory Skia web postinstall output');
+  for (const output of ignoredGeneratedOutputs) {
+    assert.equal(fs.readFileSync(path.join(consumer, output), 'utf8'), `canonical ignored output: ${output}`);
+  }
   assert.equal(fs.readlinkSync(path.join(consumer, 'node_modules/@happier-dev/protocol')), '../../packages/protocol');
   assert.equal(fs.readFileSync(path.join(consumer, 'apps/cli/node_modules/@happier-dev/protocol/dist/index.js'), 'utf8'), 'current physical copy');
   assert.equal(fs.readFileSync(path.join(consumer, 'packages/plugins/example/.happier-plugin/plugin.json'), 'utf8'), '{"current":true}');
+  assert.equal(fs.readFileSync(path.join(consumer, untrackedRuntime), 'utf8'), 'current published plugin runtime');
   for (const file of ['packages/iroh-native/native/iroh.node', 'apps/cli/tools/unpacked/helper']) {
     assert.equal(fs.statSync(path.join(consumer, file)).mode & 0o777, 0o755);
   }
   assert.equal(fs.readFileSync(path.join(consumer, '.project/tmp/cli-source-dev-shared-deps-sync.json'), 'utf8'), '{"version":8}');
   assert.deepEqual(readBundledPluginPublicationFailures(consumer), failures);
-  for (const file of ['.project/private-state', 'apps/cli/node_modules/external/.project/private-state', 'node_modules/external/.env']) {
+  for (const file of ['.project/private-state', 'apps/cli/node_modules/external/.project/private-state', 'node_modules/external/.env', 'packages/plugins/example/.happier-plugin/.env.local']) {
     assert.equal(fs.existsSync(path.join(consumer, file)), false);
   }
 });
@@ -141,7 +153,7 @@ test('dependency cache excludes stale first-party copies and private state but p
   }
 });
 
-test('prepared restore refuses a missing artifact and preparation refuses an unrecognized source mutation', (t) => {
+test('prepared restore refuses a missing artifact and preparation requires canonical readiness', (t) => {
   const { root, workspace, runnerTemp } = fixture(t);
   const workflow = yaml.load(fs.readFileSync(path.join(workflowsDir, 'tests.yml'), 'utf8'));
   const action = yaml.load(fs.readFileSync(installActionPath, 'utf8'));
@@ -152,19 +164,9 @@ test('prepared restore refuses a missing artifact and preparation refuses an unr
   fs.mkdirSync(path.join(workspace, 'node_modules'));
   fs.mkdirSync(path.join(workspace, 'apps'));
   fs.mkdirSync(path.join(workspace, 'packages'));
-  write(root, 'bin/git', '#!/bin/sh\nprintf "apps/cli/src/private.ts\\0"\n', 0o755);
   const archive = workflow.jobs['gate-prepare']?.steps.find((step) => step.name === "Archive the current run's coherent preparation");
-  const unexpected = runShellStep(archive, workspace, runnerTemp, { PATH: `${path.join(root, 'bin')}:${process.env.PATH}` });
-  assert.notEqual(unexpected.status, 0);
-  assert.match(unexpected.stdout, /Unexpected preparation source change: apps\/cli\/src\/private\.ts/);
-  assert.equal(fs.existsSync(path.join(runnerTemp, 'gate-prepared-workspace.tar')), false);
-  write(root, 'bin/git', '#!/bin/sh\nprintf "packages/agents/src/generated/agentIds.ts\\0"\n', 0o755);
-  const deleted = runShellStep(archive, workspace, runnerTemp, { PATH: `${path.join(root, 'bin')}:${process.env.PATH}` });
-  assert.notEqual(deleted.status, 0);
-  assert.match(deleted.stdout, /Preparation deleted generated source: packages\/agents\/src\/generated\/agentIds\.ts/);
-  write(root, 'bin/git', '#!/bin/sh\nexit 42\n', 0o755);
-  const failedInventory = runShellStep(archive, workspace, runnerTemp, { PATH: `${path.join(root, 'bin')}:${process.env.PATH}` });
-  assert.equal(failedInventory.status, 42);
+  const absentReadiness = runShellStep(archive, workspace, runnerTemp);
+  assert.notEqual(absentReadiness.status, 0);
   assert.equal(fs.existsSync(path.join(runnerTemp, 'gate-prepared-workspace.tar')), false);
 });
 
