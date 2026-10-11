@@ -18,7 +18,9 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
         justifyContent: 'flex-end',
         alignItems: 'center',
         rowGap: 6,
-        paddingHorizontal: 4,
+        // The line starts on the card's content edge (0.2): its dot sits over the field's first
+        // letter and the chips' first glyph, and the right cluster ends where the card's content does.
+        paddingHorizontal: theme.margins.xl,
     },
     rootCollapsed: {
         minHeight: 0,

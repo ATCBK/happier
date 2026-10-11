@@ -20,6 +20,7 @@ type SessionModeChipControlLike = Pick<Parameters<typeof resolveSessionModeChipP
 export function useRenderedAgentInputControlRows(params: Readonly<{
     readOnly?: boolean;
     layout: 'scroll' | 'wrap' | 'collapsed';
+    /** One rail (an existing session); otherwise setup rail + location rail. */
     singleRow?: boolean;
     /** Collapsed layout: the controls the host keeps on its bar (see `resolveRenderedAgentInputControls`). */
     barControlIds?: readonly AgentInputControlId[];

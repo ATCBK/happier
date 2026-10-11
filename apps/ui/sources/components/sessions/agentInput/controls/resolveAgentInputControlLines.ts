@@ -31,7 +31,7 @@ export function sortControlIdsInRegistryOrder(controlIds: readonly AgentInputCon
 export function resolveAgentInputControlLines(params: Readonly<{
     layout: AgentInputActionBarLayout;
     controlIds: readonly AgentInputControlId[];
-    /** Document starts and automatic phone bars keep all controls on one row. */
+    /** An existing session's composer is one rail: its location controls ride the same rail. */
     singleRow?: boolean;
 }>): AgentInputResolvedControlLines {
     const orderedControlIds = sortControlIdsInRegistryOrder(params.controlIds);

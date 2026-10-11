@@ -4,16 +4,16 @@ import { describe, expect, it } from 'vitest';
 import { resolveRenderedAgentInputControls } from './resolveRenderedAgentInputControls';
 
 describe('resolveRenderedAgentInputControls', () => {
-    it('keeps document controls in one wrapping row without hiding controls outside the collapsed bar', () => {
+    it('keeps setup controls on the first rail and the machine on the location rail, whatever the collapsed bar names', () => {
         const node = (key: string) => <React.Fragment key={key}>{key}</React.Fragment>;
         const controls = resolveRenderedAgentInputControls({
-            layout: 'wrap', singleRow: true,
+            layout: 'scroll',
             coreControlNodesById: { machine: [node('machine')] },
             extraControlNodesById: { workflow: [node('workflow')], workflowInputs: [node('inputs')], workflowRoles: [node('roles')] },
             extraChips: [node('unregistered')], barControlIds: ['workflow'],
         });
-        expect(controls.chips.map((chip) => (chip as React.ReactElement).key)).toEqual(['workflow', 'inputs', 'roles', 'machine', 'unregistered']);
-        expect(controls.secondaryLeadingControls).toEqual([]);
+        expect(controls.chips.map((chip) => (chip as React.ReactElement).key)).toEqual(['workflow', 'inputs', 'roles', 'unregistered']);
+        expect(controls.secondaryLeadingControls.map((chip) => (chip as React.ReactElement).key)).toEqual(['machine']);
     });
     it('renders admitted plugin controls at the one plugin insertion point and keeps them in collapsed overflow', () => {
         const pluginControl = <React.Fragment key="plugin-control">Plugin control</React.Fragment>;

@@ -184,7 +184,7 @@ import {
     type AgentScopedPluginSettingsDeclarations,
 } from '@/agents/registry/agentScopedPluginSettingsDeclarations';
 import { resolveNewSessionOperationalBackendTarget } from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
-import { buildNewSessionLaunchStatusBadges } from '@/components/sessions/new/hooks/screenModel/newSessionLaunchStatusBadges';
+import { buildNewSessionLaunchStatus } from '@/components/sessions/new/hooks/screenModel/newSessionLaunchStatusBadges';
 import { resolveNewSessionCreateAdmission } from '@/components/sessions/new/hooks/screenModel/newSessionCreateAdmission';
 import { resolveMachineAgentStatus } from '@/components/machines/agents/machineAgentPresentation';
 import { formatMachineAgentStatus } from '@/components/machines/agents/machineAgentCopy';
@@ -3895,8 +3895,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
         draftChangeKey: launchIntentSignature,
     });
 
-    const launchStatusBadges = React.useMemo(
-        () => buildNewSessionLaunchStatusBadges({ isCreating: isCreating || temporaryComputerLaunchActive,
+    const launchStatus = React.useMemo(
+        () => buildNewSessionLaunchStatus({ isCreating: isCreating || temporaryComputerLaunchActive,
             disabledReason: createAdmission.disabledReason, translate: t,
             requesterDisclosure: targetAccountScopeResolution.kind === 'bound' && selectedMachine?.access
                 && selectedMachine.access.custodian.accountId !== targetAccountScopeResolution.scope.accountId
@@ -3905,9 +3905,19 @@ export function useNewSessionScreenModel(input?: Readonly<{
                 : undefined }),
         [isCreating, temporaryComputerLaunchActive, createAdmission.disabledReason, selectedMachine, targetAccountScopeResolution, requesterSignInPurposes],
     );
+    // One cause, one line: the machine's own state leads (it is the cause of a blocked launch), then the
+    // launch's blocker or progress, on the status line above the card where a session states its status.
+    const composerConnectionStatus = React.useMemo(() => {
+        if (connectionStatus || !launchStatus.line) return connectionStatus;
+        return launchStatus.line.kind === 'blocked'
+            ? { text: launchStatus.line.text, color: theme.colors.state.warning.textForeground,
+                dotColor: theme.colors.state.warning.foreground, isPulsing: false }
+            : { text: launchStatus.line.text, color: theme.colors.text.secondary,
+                dotColor: theme.colors.status.connecting, isPulsing: true };
+    }, [connectionStatus, launchStatus.line, theme]);
     const composerStatusBadges = React.useMemo(
-        () => [...launchStatusBadges, ...(input?.statusBadges ?? [])],
-        [input?.statusBadges, launchStatusBadges],
+        () => [...launchStatus.badges, ...(input?.statusBadges ?? [])],
+        [input?.statusBadges, launchStatus.badges],
     );
 
     // Why the chosen agent can't start on the chosen machine, with its fix (lab agent-setup ST):
@@ -4077,7 +4087,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             retryProviderLaunch,
             emptyAutocompleteKinds,
             emptyAutocompleteSuggestions,
-            connectionStatus,
+            connectionStatus: composerConnectionStatus,
             statusBadges: composerStatusBadges,
             composerTopContent,
             composerBottomContent: input?.composerBottomContent,
@@ -4178,7 +4188,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             },
         },
         machineAndResume: {
-            connectionStatus,
+            connectionStatus: composerConnectionStatus,
             selectedMachine,
             executionTarget,
             destination: {

@@ -79,7 +79,6 @@ import {
 import { useUserMessageHistory } from '@/hooks/session/useUserMessageHistory';
 import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/connectionManager';
 import { Theme } from '@/theme';
-import { resolveThemeSurfaceBorderStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
 import { t } from '@/text';
 import { Metadata } from '@happier-dev/session-core/state';
 import {
@@ -473,19 +472,11 @@ interface AgentInputProps {
         recovery?: 'machine';
     };
     /**
-     * The action bar layout this host prefers while the person's setting is "auto" (their own
-     * choice always wins). Home's column composer uses `collapsed`: one row of core chips with the
-     * rest behind the actions menu.
-     */
-    autoActionBarLayout?: 'wrap' | 'scroll' | 'collapsed';
-    /**
-     * Collapsed layout: the controls this host keeps on the bar, in bar order; every other
-     * control is reached from the actions menu. Home passes machine · folder · agent · permission ·
-     * actions, the lab's one row.
+     * The person's collapsed action-bar setting only: the controls this composer keeps on the
+     * bar, in bar order; every other control is reached from the actions menu. A host names
+     * WHAT it contains; it never picks how the bar is laid out (owner, 2026-10-11).
      */
     barControlIds?: readonly AgentInputControlId[];
-    /** The status row above the card takes no height while it has nothing to show (Home). */
-    collapseEmptyStatusRow?: boolean;
     /**
      * `document`: the composer is one card in a document (a workflow step), not the floating
      * composer of a conversation. It draws the plain hairline card the read-only presentation
@@ -494,8 +485,6 @@ interface AgentInputProps {
      * Default `composer`.
      */
     panelPresentation?: 'composer' | 'document';
-    /** Run-review decisions use the same chip controls with a flat ink border. */
-    chipPresentation?: 'quiet' | 'bordered';
     /**
      * Plan/quota usage bundle rendered by the instrument strip. Data path stays
      * System-B-owned (SessionView); the strip only restyles the trigger.
@@ -1119,12 +1108,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         ...(Platform.OS === 'web' ? {} : { marginRight: 6, marginBottom: NATIVE_ACTION_CHIP_GAP_Y }),
     },
     actionChip: AGENT_INPUT_ACTION_CHIP_STYLE,
-    actionChipBordered: {
-        ...resolveThemeSurfaceBorderStyle({ borderColor: theme.colors.border.default }),
-        borderRadius: theme.borderRadius.md,
-    },
     actionChipText: resolveAgentInputActionChipTextStyle(theme),
-    actionChipBorderedText: { ...resolveAgentInputActionChipTextStyle(theme), color: theme.colors.text.primary },
     actionChipCountText: {
         color: theme.colors.composer.chipTint,
     },
@@ -1220,13 +1204,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const voiceFeatureEnabled = useFeatureEnabled('voice');
     const voiceEnabled = !readOnly && voiceFeatureEnabled && props.voiceAffordance !== 'none';
     const documentPanel = props.panelPresentation === 'document';
-    const borderedDocument = documentPanel && props.chipPresentation === 'bordered';
-    const chipTint = borderedDocument ? theme.colors.text.primary : theme.colors.composer.chipTint;
+    const chipTint = theme.colors.composer.chipTint;
     const composerSurfaceStyleSetting = useSetting('composerSurfaceStyle');
     const isGlassComposer = !documentPanel && isGlassComposerSurface({ setting: composerSurfaceStyleSetting });
     const surfaceGroup = props.surfaceGroup ?? 'content';
-    const composerSurfaceColor = borderedDocument ? theme.colors.edge.floatingFill
-        : isGlassComposer ? theme.colors.glass.composerSurface : theme.colors.input.background;
+    const composerSurfaceColor = isGlassComposer ? theme.colors.glass.composerSurface : theme.colors.input.background;
     const panelMaterialProps = { surfaceGroup, nested: surfaceGroup === 'content', solidColor: composerSurfaceColor, finishRole: 'composer' as const };
     const keyboardShortcutsV2Enabled = useSetting('keyboardShortcutsV2Enabled') === true;
     const keyboardSingleKeyShortcutsEnabled = useSetting('keyboardSingleKeyShortcutsEnabled') === true;
@@ -1631,13 +1613,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (agentInputActionBarLayout === 'wrap' || agentInputActionBarLayout === 'scroll' || agentInputActionBarLayout === 'collapsed') {
             return agentInputActionBarLayout;
         }
-        // auto
-        if (props.autoActionBarLayout) return props.autoActionBarLayout;
-        if (isMobileLayoutWidth(screenWidth)) return 'scroll';
-        // Flex layout measures the actual remaining column after Voice/Send,
-        // so desktop controls wrap rather than being clipped.
-        return 'wrap';
-    }, [agentInputActionBarLayout, props.autoActionBarLayout, screenWidth]);
+        // auto: every composer's rails scroll sideways behind an edge fade and never wrap
+        // (0.2's rails; owner, 2026-10-11). Only the person's own setting changes this.
+        return 'scroll';
+    }, [agentInputActionBarLayout]);
 
     React.useEffect(() => {
         props.onComposerActionBarLayoutChange?.(effectiveActionBarLayout);
@@ -2890,7 +2869,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }), []);
     const chipStyle = React.useCallback((pressed: boolean) => ([
         styles.actionChip,
-        props.chipPresentation === 'bordered' ? styles.actionChipBordered : null,
         !showChipLabels ? actionChipTransientStyles.iconOnly : null,
         pressed ? actionChipTransientStyles.pressed : null,
     ]), [
@@ -2898,12 +2876,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         actionChipTransientStyles.pressed,
         showChipLabels,
         styles.actionChip,
-        props.chipPresentation,
-        styles.actionChipBordered,
     ]);
     const chipStyleAutoHide = React.useCallback((pressed: boolean) => ([
         styles.actionChip,
-        props.chipPresentation === 'bordered' ? styles.actionChipBordered : null,
         !showAutoHideChipLabels ? actionChipTransientStyles.iconOnly : null,
         pressed ? actionChipTransientStyles.pressed : null,
     ]), [
@@ -2911,8 +2886,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         actionChipTransientStyles.pressed,
         showAutoHideChipLabels,
         styles.actionChip,
-        props.chipPresentation,
-        styles.actionChipBordered,
     ]);
 
     const actionBarFadeColor = useGlassSurfaceColor(panelMaterialProps.solidColor, panelMaterialProps.surfaceGroup, panelMaterialProps.nested);
@@ -3045,11 +3018,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         hasEnvVars,
         hasAgent,
     });
-    const singleRowControls = borderedDocument || (
-        agentInputActionBarLayout === 'auto'
-        && effectiveActionBarLayout === 'scroll'
-        && isMobileLayoutWidth(screenWidth)
-    );
     const {
         controlNodes: renderedActionControlNodes,
         hasPermissionControl,
@@ -3060,7 +3028,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     } = useRenderedAgentInputControlRows({
         readOnly,
         layout: effectiveActionBarLayout,
-        singleRow: singleRowControls,
+        singleRow: isConversation,
         ...(props.barControlIds ? { barControlIds: props.barControlIds } : {}),
         chips: props.extraActionChips,
         overlayAnchorRef,
@@ -3072,7 +3040,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         showAutoHideChipLabels: readOnly || showAutoHideChipLabels,
         chipStyle,
         chipStyleAutoHide,
-        textStyle: borderedDocument ? styles.actionChipBorderedText : styles.actionChipText,
+        textStyle: styles.actionChipText,
         countTextStyle: styles.actionChipCountText,
         actionButtonStyle: styles.actionButton,
         actionButtonPressedStyle: styles.actionButtonPressed,
@@ -3128,7 +3096,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         sourceControlWrapperStyle: styles.actionItemWrapper,
     });
 
-    const showSecondaryControlsRow = !singleRowControls && shouldShowSecondaryControlRow(
+    // One rail in an existing session; a new session adds the machine · folder · resume rail
+    // beneath its setup rail at every width (0.2's rails).
+    const showSecondaryControlsRow = !isConversation && shouldShowSecondaryControlRow(
         effectiveActionBarLayout,
         secondaryLeadingControlsForWrap.length > 0 || hasPath || hasResume,
     );
@@ -3475,7 +3445,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     activeStatusBadgeKey={props.activeStatusBadgeKey}
                     onActiveStatusBadgeKeyChange={props.onActiveStatusBadgeKeyChange}
                     onGitPress={props.onFileViewerPress}
-                    collapseWhenEmpty={props.collapseEmptyStatusRow === true || documentPanel}
+                    collapseWhenEmpty={documentPanel}
                 />
 
                 {/* Box 2: Action Area (Input + Send) */}

@@ -484,9 +484,6 @@ export const ScopedAuthoringComposer = React.forwardRef<
                 onAgentClick={context?.onAgentClick}
                 contentPaddingHorizontal={0}
                 panelPresentation="document"
-                // A document card's chips wrap under its words at every width (lab editor-P1): a
-                // sideways strip would truncate the engine chip on a phone (DESIGN-7 N34).
-                autoActionBarLayout="wrap"
                 voiceAffordance={props.voiceAffordance}
             />
             {pluginPresentation.afterComposer}

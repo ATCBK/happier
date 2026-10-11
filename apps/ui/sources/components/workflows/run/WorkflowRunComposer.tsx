@@ -262,7 +262,6 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                 <PluginContextualResourceStoreProvider>
                     <AgentInput
                         panelPresentation="document"
-                        chipPresentation="bordered"
                         inputPresentation={main === null ? 'controlsOnly' : 'full'}
                         panelStyle={styles.hostedPanel}
                         surfaceGroup={props.surfaceGroup}
@@ -282,8 +281,6 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                             ...(props.authoringControls ? ['machine' as const, 'path' as const] : []),
                         ])]}
                         extraActionChips={chips}
-                        autoActionBarLayout="wrap"
-                        collapseEmptyStatusRow
                     />
                 </PluginContextualResourceStoreProvider>
             </View>

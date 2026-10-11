@@ -218,13 +218,13 @@ describe('AgentInput (action bar auto layout)', () => {
         ))).toHaveLength(1);
     });
 
-    it.each(['ios', 'web'] as const)('keeps the embedded Home collapsed controls on one reachable scroll track on %s', async (platform) => {
+    it.each(['ios', 'web'] as const)('keeps the person\'s collapsed controls on reachable scroll rails on %s', async (platform) => {
         layoutMockState.platform = platform;
         layoutMockState.width = 390;
+        storageSettings = { ...storageSettings, agentInputActionBarLayout: 'collapsed' };
         const { AgentInput } = await import('./AgentInput');
         const input = <AgentInput
             value="" placeholder="Type" onChangeText={() => {}} onSend={() => {}}
-            autoActionBarLayout="collapsed"
             barControlIds={['machine', 'engine', 'actionMenu']}
             onMachineClick={() => {}} machineName="Unnamed machine"
             onAgentClick={() => {}} agentType="claude" agentLabel="Claude" engineLabel="Sonnet 4.6"
@@ -234,27 +234,30 @@ describe('AgentInput (action bar auto layout)', () => {
         />;
         const screen = await renderAgentInput(input);
 
+        // A new session keeps its two rails under the collapsed setting too: the bar's setup chips,
+        // then where it runs (machine) on the location rail.
         const tracks = findAllHostTestInstances(screen.tree.root, node => (
             node.type === 'ScrollView' && node.props.horizontal === true
         ));
-        expect(tracks).toHaveLength(1);
-        const track = tracks[0];
-        expect(findAllHostTestInstances(track, node => (
-            node.type === 'Text' && node.props.children === 'Unnamed machine'
-        ))).toHaveLength(1);
-        expect(findAllHostTestInstances(track, node => (
+        expect(tracks).toHaveLength(2);
+        const [setupRail, locationRail] = tracks;
+        expect(findAllHostTestInstances(setupRail!, node => (
             node.type === 'Text' && node.props.children === 'Sonnet 4.6'
         ))).toHaveLength(1);
-        expect(findAllHostTestInstances(track, node => (
+        expect(findAllHostTestInstances(setupRail!, node => (
             node.props.testID === 'agent-input-action-menu-button'
         ))).toHaveLength(1);
-        // Sending remains fixed beside the overflow, not scrolled off with chips.
-        expect(findAllHostTestInstances(track, node => (
-            node.props.testID === 'new-session-composer-send'
-        ))).toHaveLength(0);
+        expect(findAllHostTestInstances(locationRail!, node => (
+            node.type === 'Text' && node.props.children === 'Unnamed machine'
+        ))).toHaveLength(1);
+        // Sending remains fixed beside the rails, not scrolled off with chips.
+        for (const track of tracks) {
+            expect(findAllHostTestInstances(track, node => (
+                node.props.testID === 'new-session-composer-send'
+            ))).toHaveLength(0);
+        }
 
-        // The person's explicit Wrap preference continues to override Home's
-        // automatic collapsed presentation.
+        // The person's setting alone picks the bar's presentation.
         storageSettings = { ...storageSettings, agentInputActionBarLayout: 'wrap' };
         await act(async () => { storage.setState({ settings: storageSettings }); });
         await screen.update(React.cloneElement(input, { value: 'Updated draft' }));
@@ -287,7 +290,8 @@ describe('AgentInput (action bar auto layout)', () => {
 
         const screen = await renderAgentInput(render());
 
-        expect(onComposerActionBarLayoutChange).toHaveBeenLastCalledWith('wrap');
+        // Rails scroll at every width; they never wrap (owner, 2026-10-11).
+        expect(onComposerActionBarLayoutChange).toHaveBeenLastCalledWith('scroll');
 
         storageSettings = { ...storageSettings, agentInputActionBarLayout: 'scroll' };
         await act(async () => { storage.setState({ settings: storageSettings }); });
@@ -765,6 +769,27 @@ describe('AgentInput (action bar auto layout)', () => {
         });
 
         expect(screen.tree.root.findByProps({ testID: 'new-session-composer-input' }).props.maxHeight).toBe(614);
+    });
+
+    it('composes a new session as two scrolling rails on a phone: setup chips, then where it runs', async () => {
+        layoutMockState.width = 390;
+        const { AgentInput } = await import('./AgentInput');
+        const screen = await renderAgentInput(
+            <AgentInput
+                value="" placeholder="Type" onChangeText={() => {}} onSend={() => {}}
+                onPermissionClick={() => {}} onAgentClick={() => {}} agentType="codex"
+                onMachineClick={() => {}} machineName="Builder"
+                onPathClick={() => {}} currentPath="/tmp/my-repo"
+                autocompleteKinds={[]} autocompleteSuggestions={async () => []}
+            />,
+        );
+        const rails = screen.tree.root.findAll((node) => node.type === 'ScrollView' && node.props.horizontal === true);
+        const railOf = (testID: string) => rails.findIndex((rail) => (
+            findAllHostTestInstances(rail, (node) => node.props.testID === testID).length > 0
+        ));
+        expect(railOf('agent-input-agent-chip')).toBe(0);
+        expect(railOf('agent-input-machine-chip')).toBe(1);
+        expect(railOf('agent-input-path-chip')).toBe(1);
     });
 
     it('keeps the path chip label visible even when chip density is icons', async () => {

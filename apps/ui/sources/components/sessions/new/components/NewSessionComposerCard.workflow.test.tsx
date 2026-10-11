@@ -174,11 +174,9 @@ describe('New workflow entry', () => {
             await act(async () => { store.setState({ settings: previous.settings, profileScope: previous.profileScope }); });
         }
     });
-    it('keeps the embedded bar focused while Workflow stays available in its actions menu', async () => {
+    it('gives Home\'s embedded composer the same rails as the page: Workflow stays on the bar', async () => {
         const screen = await renderScreen(<NewSessionComposerCard panelProps={panelProps()} layout="embedded" attachments={false} />);
-        expect(screen.findByTestId('new-session-workflow-chip')).toBeNull();
-        await screen.pressByTestIdAsync('agent-input-action-menu-button');
-        expect(screen.getTextContent()).toContain('workflows');
+        expect(screen.findByTestId('new-session-workflow-chip')).not.toBeNull();
         expect(screen.findByTestId('new-session-composer-input')?.props.value).toBe('Keep this brief');
     });
     it('keeps typed text as the first text input, then withdraws that private draft on Account change', async () => {

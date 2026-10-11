@@ -17,12 +17,7 @@ import { NewSessionProviderLaunchError } from '@/components/sessions/new/compone
 import { useNewSessionPromptValue } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 import type { NewSessionSimplePanelProps } from '@/components/sessions/new/components/NewSessionSimplePanel';
 import { useNewSessionWorkflowStart } from '../hooks/useNewSessionWorkflowStart';
-import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
 import type { GlassSurfaceGroup } from '@/components/ui/glass/glassMaterial';
-
-/** Home's one-row bar (lab I1): where, what with, how much latitude, and everything else behind +. */
-const EMBEDDED_BAR_CONTROL_IDS = ['machine', 'path', 'engine', 'permission', 'actionMenu'] as const;
-const EMBEDDED_PHONE_BAR_CONTROL_IDS = ['machine', 'engine', 'actionMenu'] as const;
 
 /**
  * The New Session composer card: the real `AgentInput` in new-session mode with its attachments,
@@ -94,9 +89,7 @@ export function NewSessionComposerCard(input: Readonly<{
     // composer and nothing above it — not the panel, and not the screen model.
     const sessionPrompt = useNewSessionPromptValue(props.promptStore);
     const workflowStart = useNewSessionWorkflowStart({ panelProps: props, prompt: sessionPrompt, surfaceGroup: input.surfaceGroup });
-    const { height: windowHeight, width: windowWidth } = useWindowDimensions();
-    const embeddedBarControlIds = isMobileLayoutWidth(windowWidth)
-        ? EMBEDDED_PHONE_BAR_CONTROL_IDS : EMBEDDED_BAR_CONTROL_IDS;
+    const { height: windowHeight } = useWindowDimensions();
     const availablePanelHeight = useComposerAvailablePanelHeight();
     const initialAvailablePanelHeight = React.useMemo(() => {
         if (
@@ -201,9 +194,6 @@ export function NewSessionComposerCard(input: Readonly<{
                         onAcpConfigOptionChange={props.setAcpConfigOptionOverride}
                         // A machine that cannot start a session says so above the card; a ready one is quiet.
                         connectionStatus={props.connectionStatus}
-                        autoActionBarLayout={embedded ? 'collapsed' : undefined}
-                        barControlIds={embedded ? embeddedBarControlIds : undefined}
-                        collapseEmptyStatusRow={embedded}
                         statusBadges={props.statusBadges}
                         statusTrailingActions={props.statusTrailingActions}
                         showStatusPermissionMode={false}

@@ -1,4 +1,3 @@
-import type * as React from 'react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 // Only native styling, icon rendering and navigation are platform boundaries.
@@ -8,73 +7,50 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 
-describe('buildNewSessionLaunchStatusBadges', () => {
-    let buildNewSessionLaunchStatusBadges: typeof import('./newSessionLaunchStatusBadges').buildNewSessionLaunchStatusBadges;
+describe('buildNewSessionLaunchStatus', () => {
+    let buildNewSessionLaunchStatus: typeof import('./newSessionLaunchStatusBadges').buildNewSessionLaunchStatus;
     beforeAll(async () => {
-        ({ buildNewSessionLaunchStatusBadges } = await import('./newSessionLaunchStatusBadges'));
+        ({ buildNewSessionLaunchStatus } = await import('./newSessionLaunchStatusBadges'));
     }, 120_000);
-    it('explains why creation is disabled and withdraws the reason once it is ready', () => {
-        const blocked = buildNewSessionLaunchStatusBadges({
+
+    it('states why creation is blocked on the status line, not as a badge, and withdraws it once ready', () => {
+        const blocked = buildNewSessionLaunchStatus({
             isCreating: false,
             disabledReason: 'Selected credentials are unavailable',
             requesterDisclosure: { owner: 'Alice', machine: 'devbox', signIn: 'full' },
             translate: (key) => key,
         });
-        expect(blocked).toEqual([expect.objectContaining({ key: 'machine-requester-disclosure' }), expect.objectContaining({
-            key: 'new-session-create-blocked',
-            label: 'Selected credentials are unavailable',
-            accessibilityLabel: 'Selected credentials are unavailable',
-            tone: 'warning',
-        })]);
-        // A blocked launch leads with the same warning glyph as every other warning badge in the strip.
-        const blockedMark = blocked[1]!.icon!('tint') as React.ReactElement<{ name: string }>;
-        expect(blockedMark.props.name).toBe('warning');
-        expect(buildNewSessionLaunchStatusBadges({
-            isCreating: false, disabledReason: null, translate: (key) => key,
-        })).toEqual([]);
+        // The status line above the card carries the cause (left, like a session's status);
+        // badges on the right keep only facts with their own detail.
+        expect(blocked.line).toEqual({ kind: 'blocked', text: 'Selected credentials are unavailable' });
+        expect(blocked.badges.map((badge) => badge.key)).toEqual(['machine-requester-disclosure']);
+
+        expect(buildNewSessionLaunchStatus({ isCreating: false, disabledReason: null, translate: (key) => key }))
+            .toEqual({ line: null, badges: [] });
     });
-    it('uses the incumbent full-sign-in disclosure before a requester Machine launch starts', async () => {
-        const badges = buildNewSessionLaunchStatusBadges({
+
+    it('keeps the requester disclosure as a badge with its detail popover', () => {
+        const status = buildNewSessionLaunchStatus({
             isCreating: false,
             requesterDisclosure: { owner: 'Alice', machine: 'devbox', signIn: 'full' },
             translate: (key) => key,
         });
-        expect(badges).toEqual([expect.objectContaining({
+        expect(status.line).toBeNull();
+        expect(status.badges).toEqual([expect.objectContaining({
             key: 'machine-requester-disclosure',
             label: 'Runs on Alice’s devbox',
-            labelNumberOfLines: 0,
             renderPopover: expect.any(Function),
         })]);
-        expect(buildNewSessionLaunchStatusBadges({
-            isCreating: false, translate: (key) => key,
-        })).toEqual([]);
-    });
-    it('does not add launch status while the create action is idle', async () => {
-        expect(buildNewSessionLaunchStatusBadges({
-            isCreating: false,
-            translate: (key) => key,
-        })).toEqual([]);
     });
 
-    it('surfaces launch progress while a spawn request is unresolved, quietly, with a spinner as its mark', async () => {
+    it('says the launch is in progress on the status line while a spawn request is unresolved', () => {
         const translate = vi.fn((key: string) => key);
-        const { ActivitySpinner } = await import('@/components/ui/feedback/ActivitySpinner');
-
-        const badges = buildNewSessionLaunchStatusBadges({
+        const status = buildNewSessionLaunchStatus({
             isCreating: true,
             disabledReason: 'Selected credentials are unavailable',
             translate,
         });
-        expect(badges).toEqual([{
-            key: 'new-session-launch-starting',
-            label: 'newSession.startingSession',
-            accessibilityLabel: 'newSession.startingSession',
-            testID: 'new-session-launch-status',
-            tone: 'neutral',
-            emphasis: 'prominent',
-            icon: expect.any(Function),
-        }]);
-        expect((badges[0]!.icon!('tint') as React.ReactElement).type).toBe(ActivitySpinner);
+        expect(status).toEqual({ line: { kind: 'starting', text: 'newSession.startingSession' }, badges: [] });
         expect(translate).toHaveBeenCalledWith('newSession.startingSession');
     });
 });
