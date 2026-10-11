@@ -11,6 +11,7 @@ import {
     MANAGED_SESSION_DIRECTORY_MARKER,
 } from '@/sync/domains/session/listing/sessionListRenderableMetadataComparison';
 import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadata/directory';
+import { readSessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import { parseSessionRuntimeActivityProjectionFields } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { normalizeSessionAccessProjection } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
@@ -154,6 +155,7 @@ function areSessionListCacheEntriesEqual(
         && nextEntry.flavor === previousEntry.flavor
         && areExternalSessionCacheEntriesEqual(nextEntry.externalSessionV1, previousEntry.externalSessionV1)
         && nextEntry.hiddenSystemSession === previousEntry.hiddenSystemSession
+        && nextEntry.bot === previousEntry.bot
         && nextEntry.managedSessionDirectory === previousEntry.managedSessionDirectory
         && nextEntry.keepVisibleWhenInactive === previousEntry.keepVisibleWhenInactive
         && nextEntry.hasPendingPermissionRequests === previousEntry.hasPendingPermissionRequests
@@ -217,6 +219,7 @@ export function buildSessionListRenderableFromCacheEntry(entry: SessionListCache
             flavor: entry.flavor ?? null,
             externalSessionV1: entry.externalSessionV1 ?? null,
             hiddenSystemSession: entry.hiddenSystemSession === true,
+            ...(entry.bot === true ? { bot: { kind: 'bot' as const } } : {}),
             sessionDirectoryV1: entry.managedSessionDirectory === true ? MANAGED_SESSION_DIRECTORY_MARKER : null,
         } : null,
         thinking: false,
@@ -377,6 +380,9 @@ export function buildSessionListCacheEntryFromRenderable(
         managedSessionDirectory: preserveMetadata
             ? previousEntry.managedSessionDirectory === true
             : readSessionDirectoryKind(projectedMetadata) === 'managed',
+        ...((preserveMetadata ? previousEntry.bot === true : readSessionBotV1(projectedMetadata?.bot) !== null)
+            ? { bot: true }
+            : {}),
         keepVisibleWhenInactive: session.keepVisibleWhenInactive === true,
         // Verbatim, not `=== true`: coercing an absent flag to `false` would claim
         // "no pending requests" for a row that is simply not hydrated yet, and it makes the

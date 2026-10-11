@@ -633,6 +633,24 @@ describe('warmCacheAdapters', () => {
         expect(readSessionDirectoryKind(buildSessionListRenderableFromCacheEntry(inFolder).metadata)).toBe('path');
     });
 
+    it('keeps a Bot a Bot across a cold restore, so the Bots roster and Bot filter still find it', () => {
+        const botRenderable = {
+            ...makeWindowRenderable('bot-1', 20),
+            metadata: { bot: { kind: 'bot' as const }, name: 'Release captain', path: '/home/u/happier', host: 'mbp', machineId: 'm1' },
+        } as unknown as SessionListRenderableSession;
+        const restored = buildSessionListRenderableFromCacheEntry(
+            SessionListCacheEntryV1Schema.parse(buildSessionListCacheEntryFromRenderable(botRenderable)),
+        );
+        expect(restored.metadata?.bot).toEqual({ kind: 'bot' });
+
+        // An ordinary Session restores without a marker, and demoting a Bot is a cache change.
+        const ordinary = { ...botRenderable, metadata: { ...botRenderable.metadata!, bot: undefined } } as SessionListRenderableSession;
+        const ordinaryEntry = buildSessionListCacheEntryFromRenderable(ordinary);
+        expect(buildSessionListRenderableFromCacheEntry(ordinaryEntry).metadata?.bot).toBeUndefined();
+        const previous = buildSessionListCacheEntriesFromRenderables({ 'bot-1': botRenderable });
+        expect(buildSessionListCacheEntriesFromRenderables({ 'bot-1': ordinary }, previous)).not.toBe(previous);
+    });
+
     it('roundtrips keepVisibleWhenInactive through cache entries', () => {
         const entry = buildSessionListCacheEntryFromRenderable({
             id: 's1',
