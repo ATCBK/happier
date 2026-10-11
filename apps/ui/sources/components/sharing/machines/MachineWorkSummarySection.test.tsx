@@ -25,7 +25,7 @@ describe('MachineWorkSummarySection', () => {
     ).toBe('1 session');
   });
 
-  it('sums active work across people, without navigation or a zero for unavailable work', async () => {
+  it('counts the people at work, without navigation or a zero for unavailable work', async () => {
     const { MachineWorkSummarySection } = await import('./MachineWorkSummarySection');
     const unavailable = await renderScreen(
       <MachineWorkSummarySection
@@ -38,10 +38,14 @@ describe('MachineWorkSummarySection', () => {
     expect(unavailable.findByTestId('work.unavailable')).not.toBeNull();
     expect(unavailable.findByTestId('work.empty')).toBeNull();
     expect(unavailable.findByTestId('work.retry')).not.toBeNull();
+    // Nobody is counted while the work is unknown.
+    expect(unavailable.findByTestId('work.people')).toBeNull();
     await act(async () => { unavailable.tree.unmount(); });
 
+    // The machine page is a page list: its section headers carry the title accessory.
+    const { ListPresentationProvider } = await import('@/components/ui/lists/listPresentation');
     const current = await renderScreen(
-      <MachineWorkSummarySection
+      <ListPresentationProvider value="page"><MachineWorkSummarySection
         testID="work"
         machineName="devbox"
         state={{
@@ -73,11 +77,14 @@ describe('MachineWorkSummarySection', () => {
             ],
           },
         }}
-      />,
+      /></ListPresentationProvider>,
     );
     expect(current.findByTestId('work.ana')).not.toBeNull();
     expect(current.findByTestId('work.bob')).not.toBeNull();
-    expect(current.getTextContent()).toContain('6 active');
+    // The title counts people (lab m-share A "In use by others 2"); each row says how much.
+    const people = current.findByTestId('work.people');
+    expect(people?.findAll((node) => node.children.includes('2')).length ?? 0).toBeGreaterThan(0);
+    expect(current.getTextContent()).not.toContain('active ·');
     for (const accountId of ['ana', 'bob']) {
       const row = current.findByTestId(`work.${accountId}`);
       expect(row?.props.onPress).toBeUndefined();

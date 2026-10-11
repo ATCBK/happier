@@ -312,7 +312,6 @@ export const managedMachines: ManagedMachinesTranslations = {
             missing: "Diese verwaltete Maschine wurde in diesem Home nicht gefunden.",
             loadFailed: "Diese Maschine konnte nicht gelesen werden. Versuche es erneut, um ihren Zustand zu prüfen.",
             cancelDescription: "Wenn die Ressource bereits existiert, muss sie möglicherweise noch entfernt werden.",
-            onItNow: "Gerade darauf",
             recipeTitle: "Größe, Image und Standort",
             recipeDescription: "Beim Erstellen festgelegt. Bearbeite die Vorlage für neue Maschinen; diese Maschine behält, womit sie erstellt wurde.",
             madeFromPreset: ({ preset }: { preset: string }) => `Aus der Vorlage ${preset} erstellt.`,
@@ -478,7 +477,6 @@ export const managedMachines: ManagedMachinesTranslations = {
         terminalNotice: ({ owner, machine }: { owner: string; machine: string }) => `Befehle laufen als Maschinenbenutzer von ${owner} auf ${machine}.`,
     },
     machineWork: {
-        counts: ({ active }: { active: number }) => `Von anderen genutzt · ${active} aktiv`,
         title: "Von anderen genutzt",
         description: ({ machine }: { machine: string }) => `Wer gerade auf ${machine} arbeitet. Ihre Sitzungen bleiben ihre; Happier zeigt nur, wer und wie viel.`,
         empty: ({ machine }: { machine: string }) => `Gerade arbeiten keine Teammitglieder auf ${machine}.`,

@@ -1,16 +1,15 @@
 import * as React from 'react';
 import type { MachineWorkSummaryV1 } from '@happier-dev/protocol/machines/machineWorkSummaryV1';
 
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Avatar } from '@/components/ui/avatar/Avatar';
-import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import { useUnistyles } from 'react-native-unistyles';
 
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { ManagedSectionCount } from '@/components/settings/machines/managed/ManagedSectionCount';
 
 /** What the owner-or-Manage reader returned: the content-free summary, or why there is none. */
 export type MachineWorkSummaryState =
@@ -53,7 +52,6 @@ export const MachineWorkSummarySection = React.memo(
       testID: string;
     }>,
   ) {
-    const { theme } = useUnistyles();
     const machine = props.machineName;
     const suppliedState = props.state;
     const visibleRequesters =
@@ -74,10 +72,10 @@ export const MachineWorkSummarySection = React.memo(
     const requesters = state === suppliedState ? visibleRequesters : null;
     return (
       <ItemGroup
-        title={requesters && requesters.length > 0
-          ? t('machineWork.counts', { active: requesters.reduce(
-              (total, requester) => total + requester.sessions + requester.tasks + requester.terminals, 0,
-            ) }) : t('machineWork.title')}
+        title={t('machineWork.title')}
+        // Lab m-share A: the quiet count beside the title is how many people, the rows say how much each.
+        titleAccessory={requesters && requesters.length > 0
+          ? <ManagedSectionCount count={requesters.length} testID={`${props.testID}.people`} /> : undefined}
         description={t('machineWork.description', { machine })}
       >
         {state.kind === 'summary' && state.summary.kind === 'current' && state.stale ? (
@@ -88,63 +86,23 @@ export const MachineWorkSummarySection = React.memo(
             action={props.onRetry && state.stale !== 'loading'
               ? { label: t('common.retry'), onPress: props.onRetry } : undefined} />
         ) : null}
+        {/* Nobody to list is one quiet state line (the shared sheet state), never a row that reads like a person. */}
         {state.kind === 'loading' ? (
-          <Item
-            testID={`${props.testID}.loading`}
-            title={t('machineWork.loading', { machine })}
-            loading
-            mode="info"
-            showChevron={false}
-          />
+          <SurfaceStateCard testID={`${props.testID}.loading`} kind="loading" size="line"
+            title={t('machineWork.loading', { machine })} />
         ) : state.kind === 'offline' ? (
-          <Item
-            testID={`${props.testID}.offline`}
-            title={t('machineWork.offline', { machine })}
-            mode="info"
-            showChevron={false}
-          />
+          <SurfaceStateCard testID={`${props.testID}.offline`} kind="unavailable" size="line"
+            title={t('machineWork.offline', { machine })} />
         ) : state.kind === 'denied' ? (
-          <Item
-            testID={`${props.testID}.denied`}
-            title={t('machineWork.denied')}
-            titleLines={0}
-            mode="info"
-            showChevron={false}
-          />
+          <SurfaceStateCard testID={`${props.testID}.denied`} kind="denied" size="line"
+            title={t('machineWork.denied')} />
         ) : requesters === null ? (
-          <Item
-            testID={`${props.testID}.unavailable`}
+          <SurfaceStateCard testID={`${props.testID}.unavailable`} kind="warning" size="line"
             title={t('machineWork.unavailable', { machine })}
-            titleLines={0}
-            icon={
-              <Icon
-                name="warning"
-                size={20}
-                color={theme.colors.state.warning.foreground}
-              />
-            }
-            mode="info"
-            showChevron={false}
-            rightElement={
-              props.onRetry ? (
-                <RoundButton
-                  testID={`${props.testID}.retry`}
-                  size="small"
-                  display="secondary"
-                  title={t('common.retry')}
-                  onPress={props.onRetry}
-                />
-              ) : undefined
-            }
-          />
+            action={props.onRetry ? { label: t('common.retry'), onPress: props.onRetry, testID: `${props.testID}.retry` } : undefined} />
         ) : requesters.length === 0 ? (
-          <Item
-            testID={`${props.testID}.empty`}
-            title={t('machineWork.empty', { machine })}
-            titleLines={0}
-            mode="info"
-            showChevron={false}
-          />
+          <SurfaceStateCard testID={`${props.testID}.empty`} kind="empty" size="line"
+            title={t('machineWork.empty', { machine })} />
         ) : (
           requesters.map((requester) => (
             <Item

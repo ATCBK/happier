@@ -312,7 +312,6 @@ export const managedMachines: ManagedMachinesTranslations = {
             missing: "在此 Home 中找不到此受管理機器。",
             loadFailed: "無法讀取此機器。請重試以查看最新狀態。",
             cancelDescription: "如果資源已存在，可能仍需要清理。",
-            onItNow: "目前進行中",
             recipeTitle: "規格、映像檔和位置",
             recipeDescription: "在建立時設定。編輯預設組合以用於新機器；這台機器保留建立時的設定。",
             madeFromPreset: ({ preset }: { preset: string }) => `由預設組合「${preset}」建立。`,
@@ -478,7 +477,6 @@ export const managedMachines: ManagedMachinesTranslations = {
         terminalNotice: ({ owner, machine }: { owner: string; machine: string }) => `指令以 ${owner} 在 ${machine} 上的機器使用者身分執行。`,
     },
     machineWork: {
-        counts: ({ active }: { active: number }) => `其他人正在使用 · ${active} 項活躍工作`,
         title: "他人正在使用",
         description: ({ machine }: { machine: string }) => `目前在 ${machine} 上工作的人。他們的工作階段仍屬於他們；Happier 只顯示是誰以及用量多少。`,
         empty: ({ machine }: { machine: string }) => `目前沒有隊友在 ${machine} 上工作。`,

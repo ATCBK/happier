@@ -312,7 +312,6 @@ export const managedMachines: ManagedMachinesTranslations = {
             missing: "この管理対象マシンはこのHomeで見つかりませんでした。",
             loadFailed: "このマシンを読み取れませんでした。再試行して状態を確認してください。",
             cancelDescription: "リソースが既に存在する場合、クリーンアップが必要なことがあります。",
-            onItNow: "現在の作業",
             recipeTitle: "サイズ、イメージ、場所",
             recipeDescription: "作成時に設定されました。新しいマシン用にはプリセットを編集してください。このマシンは作成時の設定のままです。",
             madeFromPreset: ({ preset }: { preset: string }) => `プリセット「${preset}」から作成されました。`,
@@ -478,7 +477,6 @@ export const managedMachines: ManagedMachinesTranslations = {
         terminalNotice: ({ owner, machine }: { owner: string; machine: string }) => `コマンドは ${machine} 上で ${owner} さんのマシンユーザーとして実行されます。`,
     },
     machineWork: {
-        counts: ({ active }: { active: number }) => `他のユーザーが使用中 · ${active} 件がアクティブ`,
         title: "他のユーザーが使用中",
         description: ({ machine }: { machine: string }) => `現在 ${machine} で作業している人です。セッションは各自のものです。Happier は誰がどれだけ使っているかのみを表示します。`,
         empty: ({ machine }: { machine: string }) => `現在 ${machine} で作業しているチームメイトはいません。`,

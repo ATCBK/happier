@@ -312,7 +312,6 @@ export const managedMachines: ManagedMachinesTranslations = {
             missing: "No s’ha trobat aquesta màquina gestionada en aquesta Home.",
             loadFailed: "No s’ha pogut llegir aquesta màquina. Torna-ho a provar per comprovar-ne l’estat.",
             cancelDescription: "Si el recurs ja existeix, encara pot caldre netejar-lo.",
-            onItNow: "Ara mateix",
             recipeTitle: "Mida, imatge i ubicació",
             recipeDescription: "Es va definir en crear-la. Edita el valor predefinit per a màquines noves; aquesta màquina conserva amb què es va crear.",
             madeFromPreset: ({ preset }: { preset: string }) => `Creada a partir de la configuració predefinida ${preset}.`,
@@ -478,7 +477,6 @@ export const managedMachines: ManagedMachinesTranslations = {
         terminalNotice: ({ owner, machine }: { owner: string; machine: string }) => `Les ordres s’executen com a usuari de la màquina de ${owner} a ${machine}.`,
     },
     machineWork: {
-        counts: ({ active }: { active: number }) => `En ús per altres · ${active} actius`,
         title: "En ús per altres persones",
         description: ({ machine }: { machine: string }) => `Qui està treballant a ${machine} ara mateix. Les seves sessions continuen sent seves; Happier només mostra qui i quant.`,
         empty: ({ machine }: { machine: string }) => `Cap company d’equip no està treballant a ${machine} ara mateix.`,

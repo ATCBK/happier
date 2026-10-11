@@ -312,7 +312,6 @@ export const managedMachines: ManagedMachinesTranslations = {
             missing: "Esta máquina gerenciada não foi encontrada nesta Home.",
             loadFailed: "Não foi possível ler esta máquina. Tente novamente para verificar seu estado.",
             cancelDescription: "Se o recurso já existir, ainda poderá precisar de limpeza.",
-            onItNow: "Nela agora",
             recipeTitle: "Tamanho, imagem e local",
             recipeDescription: "Definido na criação. Edite a predefinição para novas máquinas; esta máquina mantém o que tinha ao ser criada.",
             madeFromPreset: ({ preset }: { preset: string }) => `Criada a partir da predefinição ${preset}.`,
@@ -478,7 +477,6 @@ export const managedMachines: ManagedMachinesTranslations = {
         terminalNotice: ({ owner, machine }: { owner: string; machine: string }) => `Os comandos são executados como o usuário de máquina de ${owner} em ${machine}.`,
     },
     machineWork: {
-        counts: ({ active }: { active: number }) => `Em uso por outros · ${active} ativos`,
         title: "Em uso por outras pessoas",
         description: ({ machine }: { machine: string }) => `Quem está trabalhando em ${machine} agora. As sessões continuam sendo delas; o Happier mostra só quem e quanto.`,
         empty: ({ machine }: { machine: string }) => `Nenhum colega está trabalhando em ${machine} agora.`,

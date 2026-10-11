@@ -96,10 +96,11 @@ export function createMachineShareAdapter(input: Readonly<{
                 controller.issue.retryable ? { label: t('common.retry'), onPress: () => { void controller.retryContent(); } } : undefined));
             if (!input.online) notices.push(notice('offline', 'unavailable', t('machines.sharing.offline', { machine })));
             if (controller.notice) notices.push(notice('notice', 'warning', controller.notice.message));
-            if (controller.response?.canManage && !controller.model.grants.length) notices.push(notice('empty', 'empty', t('machines.sharing.empty', { machine })));
             if (controller.approvalId && input.openApproval) {
                 const id = controller.approvalId;
-                notices.push({ id: 'approval', label: t('approvals.title'), subtitle: t('approvals.status.open'), onSelect: () => input.openApproval?.(id) });
+                // Waiting on the owner's own approval is the one line here that needs them; it leads to the approval.
+                notices.push(notice('approval', 'warning', t('machines.sharing.approvalPending'),
+                    { label: t('approvals.details'), onPress: () => input.openApproval?.(id) }));
             }
             return { leading, ...(notices.length ? { trailing: [{ kind: 'static', id: 'machine-status', options: notices }] } : {}) };
         },

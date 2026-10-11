@@ -6,8 +6,8 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
 /** The quiet tabular count after a section title ("On it now 2", "Made from this preset 2"). */
-export function ManagedSectionCount(props: Readonly<{ count: number }>) {
-    return <Text style={styles.count}>{String(props.count)}</Text>;
+export function ManagedSectionCount(props: Readonly<{ count: number; testID?: string }>) {
+    return <Text testID={props.testID} style={styles.count}>{String(props.count)}</Text>;
 }
 
 const styles = StyleSheet.create((theme) => ({

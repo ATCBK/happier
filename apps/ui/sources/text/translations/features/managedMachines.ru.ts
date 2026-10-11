@@ -312,7 +312,6 @@ export const managedMachines: ManagedMachinesTranslations = {
             missing: "Эта управляемая машина не найдена в этом Home.",
             loadFailed: "Не удалось прочитать эту машину. Повторите попытку, чтобы проверить её состояние.",
             cancelDescription: "Если ресурс уже существует, может потребоваться его удаление.",
-            onItNow: "Сейчас на ней",
             recipeTitle: "Размер, образ и расположение",
             recipeDescription: "Задано при создании. Измените пресет для новых машин; эта машина сохраняет то, с чем была создана.",
             madeFromPreset: ({ preset }: { preset: string }) => `Создана из пресета ${preset}.`,
@@ -478,7 +477,6 @@ export const managedMachines: ManagedMachinesTranslations = {
         terminalNotice: ({ owner, machine }: { owner: string; machine: string }) => `Команды выполняются от имени пользователя машины ${owner} на ${machine}.`,
     },
     machineWork: {
-        counts: ({ active }: { active: number }) => `Используется другими · ${active} активных`,
         title: "Используется другими",
         description: ({ machine }: { machine: string }) => `Кто сейчас работает на ${machine}. Их сеансы остаются их; Happier показывает только кто и сколько.`,
         empty: ({ machine }: { machine: string }) => `Сейчас никто из команды не работает на ${machine}.`,

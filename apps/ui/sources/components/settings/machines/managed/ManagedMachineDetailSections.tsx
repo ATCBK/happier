@@ -16,51 +16,12 @@ import {
   ManagedMachineKeepControl,
   type ManagedMachineKeepControlProps,
 } from './ManagedMachineKeepControl';
-import { ManagedSectionCount } from './ManagedSectionCount';
 
 /**
- * The sections a created machine adds to its page (lab `m-detail`, plans 50s3/52): current work first,
- * the live Keep it policy (policy, not recipe, so it stays editable), the controller, and the recipe it
- * was made with. Each takes facts from its owner; none resolves policy or power itself.
+ * The sections a created machine adds to its page (lab `m-detail`, plans 50s3/52): the live Keep it policy
+ * (policy, not recipe, so it stays editable), the controller, and the recipe it was made with; its current
+ * work is the machine page's own work sections. Each takes facts from its owner; none resolves policy or power itself.
  */
-
-export type ManagedWorkRow = Readonly<{
-  id: string;
-  title: string;
-  subtitle: string;
-  leading: React.ReactNode;
-  onPress?: () => void;
-}>;
-
-export const ManagedMachineWorkSection = React.memo(
-  function ManagedMachineWorkSection(
-    props: Readonly<{
-      rows: readonly ManagedWorkRow[];
-      testID: string;
-    }>,
-  ) {
-    if (props.rows.length === 0) return null;
-    return (
-      <ItemGroup
-        title={t('managedMachines.detail.onItNow')}
-        titleAccessory={<ManagedSectionCount count={props.rows.length} />}
-      >
-        {props.rows.map((row) => (
-          <Item
-            key={row.id}
-            testID={`${props.testID}.${row.id}`}
-            title={row.title}
-            subtitle={row.subtitle}
-            icon={row.leading}
-            showChevron={Boolean(row.onPress)}
-            mode={row.onPress ? 'interactive' : 'info'}
-            onPress={row.onPress}
-          />
-        ))}
-      </ItemGroup>
-    );
-  },
-);
 
 /** The rule a session-created machine follows when its session is archived (D23): a read-only summary. */
 export type ManagedScopeRule = Readonly<{

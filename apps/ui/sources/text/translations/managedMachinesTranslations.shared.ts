@@ -318,7 +318,6 @@ export const managedMachinesEn = {
             missing: "This managed machine was not found in this Home.",
             loadFailed: "This machine couldn’t be read. Retry to check its latest state.",
             cancelDescription: "If a resource already exists, cleanup may still be needed.",
-            onItNow: "On it now",
             recipeTitle: "Size, image and place",
             recipeDescription: "Set when it was created. Edit the preset for new machines; this machine keeps what it was made with.",
             madeFromPreset: ({ preset }: { preset: string }) => `Made from the ${preset} preset.`,
@@ -488,7 +487,6 @@ export const managedMachinesEn = {
     },
     machineWork: {
         title: "In use by others",
-        counts: ({ active }: { active: number }) => `In use by others · ${active} active`,
         description: ({ machine }: { machine: string }) => `Who is working on ${machine} right now. Their sessions stay theirs; Happier shows only who and how much.`,
         empty: ({ machine }: { machine: string }) => `No teammates are working on ${machine} right now.`,
         loading: ({ machine }: { machine: string }) => `Checking who is using ${machine}.`,
