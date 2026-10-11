@@ -336,7 +336,7 @@ describe('DetectedLocalServicesPane', () => {
         expect(onRefresh).toHaveBeenCalledTimes(1);
     });
 
-    it('renders launcher-unavailable state instead of synthesizing detected rows when daemon targets are empty', async () => {
+    it('renders the empty state when a valid scan has no launcher targets', async () => {
         const screen = await renderScreen(
             <DetectedLocalServicesPane
                 inventoryState={buildLocalServiceInventoryState({
@@ -347,8 +347,8 @@ describe('DetectedLocalServicesPane', () => {
             />,
         );
 
-        expect(screen.findByTestId('local-services-pane-launcher-unavailable')).toBeTruthy();
-        expect(screen.findByTestId('local-services-pane-launcher-unavailable-card')).toBeTruthy();
+        expect(screen.findByTestId('local-services-pane-empty')).toBeTruthy();
+        expect(screen.findAllByTestId('local-services-pane-launcher-unavailable')).toHaveLength(0);
         expect(screen.findAllByTestId('local-services-pane-row:inventory:inventory-only')).toHaveLength(0);
         expect(screen.findAllByTestId('local-services-pane-row:inventory:inventory-only-open')).toHaveLength(0);
     });

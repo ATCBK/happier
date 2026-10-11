@@ -655,10 +655,13 @@ export function DetectedLocalServicesPane(props: Readonly<{
                                 />
                             ) : (
                                 <SurfaceStateCard
-                                    testID={`${testID}-launcher-unavailable`}
-                                    kind="unavailable"
-                                    title={t('common.unavailable')}
-                                    reason={t('localServices.launcher.status.unavailableGeneric')}
+                                    testID={`${testID}-empty`}
+                                    kind="empty"
+                                    iconName="globe"
+                                    scene="nothingListening"
+                                    title={t('localServices.pane.emptyTitle')}
+                                    reason={t('localServices.pane.emptyReason')}
+                                    {...(checkAgain ? { action: checkAgain } : {})}
                                 />
                             )}
                         {props.footer}
