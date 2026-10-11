@@ -232,6 +232,7 @@ describe('resolveActionBackendTargetSelection (RU-02 customAcp ingress-only)', (
       configuredBackendId: 'kiro',
       sourceKind: 'configured',
     });
+    expect(backendTargetKey).toBe('agent:happier.agent.custom-acp/custom-acp:definition:kiro');
 
     const res = resolveActionBackendTargetSelection({
       agentId: 'customAcp',
@@ -249,7 +250,7 @@ describe('resolveActionBackendTargetSelection (RU-02 customAcp ingress-only)', (
     });
     expect(res.selection.canonicalBackendTarget).toMatchObject({
       kind: 'backend',
-      backendId: 'customAcpRuntimeCarrier',
+      backendId: 'kiro',
       configuredBackendId: 'kiro',
       sourceKind: 'configured',
     });

@@ -31,6 +31,6 @@ describe('runEphemeralExecutionRunTextPromptWithRunnerConfig', () => {
       backendTarget: { kind: 'configuredAcpBackend', backendId: 'review-bot' },
       intent: 'task',
       waitForCompletion: true,
-    }), { surface: 'cli', defaultSessionId: 'sess-1' });
+    }), { surface: 'cli', authority: 'account_automation', defaultSessionId: 'sess-1' });
   });
 });

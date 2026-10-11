@@ -5,8 +5,9 @@ import { readLegacyRoleInventoryV1, readLegacyRolesV1, retainLegacyRolesV1 } fro
 import { ACCOUNT_SETTING_MAX_COLLECTION_ENTRIES, ACCOUNT_SETTING_MAX_STRING_BYTES } from './catalog/accountSettingBounds.js';
 import { RolesV1Schema } from './rolesV1.js';
 import { projectAccountRoleActionRefusalV1, retainLegacyRoleArtifactsV1, type RoleArtifactStoreV1 } from '../../prompts/roles/accountRoleActions.js';
-import { emptyPromptLibraryRecordV1, loadPromptLibraryCatalogV1 } from '../../prompts/library/promptLibraryCatalogV1.js';
+import { emptyPromptLibraryRecordV1, loadPromptLibraryCatalogV1, readRetainedPromptLibraryRecordV1 } from '../../prompts/library/promptLibraryCatalogV1.js';
 import { PromptLibraryCatalogKeyV1Schema } from '../../prompts/library/promptLibraryRowsV1.js';
+import { RoleOverrideRecordV1Schema } from '../../prompts/roles/roleOverrideRecordV1.js';
 
 // V1 vectors copied from ../0.2 packages/protocol/src/prompts/executionRunsGuidanceV1.test.ts
 // at 17ba05df68d4d3d4cad1c1241b58e63805db37ed; the entry carrier is declared by
@@ -68,9 +69,18 @@ describe('rolesV1 Account settings', () => {
   );
 
   it('owns only role overrides and rejects a second role-content store', () => {
-    expect(accountSettingsParse({}).rolesV1).toEqual({ overrides: {} });
-    expect(ACCOUNT_SETTING_DEFINITIONS.rolesV1.parseMutationValue({
-      overrides: {}, roles: [{ name: 'Another store', instructions: 'Do work' }],
+    const rolesV1 = { overrides: { builder: { roleId: 'builder', instructionsOverride: 'Keep the retained override' } } };
+    expect(accountSettingsParse({ rolesV1 })).not.toHaveProperty('rolesV1');
+    expect(ACCOUNT_SETTING_DEFINITIONS).not.toHaveProperty('rolesV1');
+    expect(readRetainedPromptLibraryRecordV1({}, 'role-overrides')).toEqual({
+      status: 'ready', record: { key: 'role-overrides', value: { v: 1, overrides: {} } },
+    });
+    expect(readRetainedPromptLibraryRecordV1({ rolesV1 }, 'role-overrides')).toEqual({
+      status: 'ready', record: { key: 'role-overrides', value: { v: 1, ...rolesV1 } },
+    });
+    expect(RoleOverrideRecordV1Schema.safeParse({ v: 1, ...rolesV1 }).success).toBe(true);
+    expect(RoleOverrideRecordV1Schema.safeParse({
+      v: 1, ...rolesV1, roles: [{ name: 'Another store', instructions: 'Do work' }],
     }).success).toBe(false);
   });
 

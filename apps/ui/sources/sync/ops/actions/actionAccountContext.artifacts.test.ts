@@ -146,7 +146,8 @@ describe('scoped Account workflow Artifact operations', () => {
             finding = await find();
             if (!finding) throw new Error('Expected fresh binding witness after Undo');
             const staleReversal = await apply(finding.evidenceKey);
-            expect(await executor.execute('mcp.bindings.enable', { bindingId: 'binding' }, context)).toMatchObject({ ok: true, result: { status: 'updated' } });
+            const intervening = await executor.execute('mcp.bindings.enable', { bindingId: 'binding', expectedRevision: revision }, context);
+            expect(intervening, JSON.stringify(intervening)).toMatchObject({ ok: true, result: { status: 'updated' } });
             const edited = JSON.stringify(catalog);
             expect(await executor.execute('usage.coach.undo', { query, evidenceKey: finding.evidenceKey, reversal: staleReversal }, context))
                 .toMatchObject({ ok: false, errorCode: 'coach_owner_refused', details: { status: 'conflict' } });
@@ -825,7 +826,7 @@ describe('scoped Account workflow Artifact operations', () => {
             const published = stored;
             const publishedRead = await publication('artifact.get', { artifactId: published!.id }, caller);
             expect(publishedRead).toMatchObject({ ok: true, result: { artifact: { body: '<h1>Published</h1>', header: { kind: 'html' }, provenance: {
-                source: { sessionId: 'publication-session', machineId: 'publication-machine', path: 'result.html', sha: expect.any(String) } } } });
+                source: { sessionId: 'publication-session', machineId: 'publication-machine', path: 'result.html', sha: expect.any(String) } } } } });
             expect(publishedRead).not.toHaveProperty('result.previewUrl');
             const calls = download.mock.calls.length;
             expect(await publication('artifact.publish_from_file', { path: '../private.txt' }, sessionCaller))

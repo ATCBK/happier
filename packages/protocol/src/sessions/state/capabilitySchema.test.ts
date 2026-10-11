@@ -46,10 +46,14 @@ describe('SessionStateCapabilitiesV1Schema', () => {
       'intent.model',
       'intent.role',
       'intent.sessionRoles',
+      'intent.memoryEnabled',
+      'intent.voicePreference',
+      'intent.context',
       'intent.permissionMode',
       'intent.acpSessionMode',
       'intent.acpConfigOption',
       'display.title',
+      'display.bot',
       'runtime.workState',
       'runtime.activity',
       'runtime.externalAgent',
@@ -58,7 +62,19 @@ describe('SessionStateCapabilitiesV1Schema', () => {
       'runtime.sessionRunner',
       'view.readState',
       'view.attention',
+      'view.transcriptToolCalls',
     ]);
+    const capability = { supported: true };
+    const admitted = {
+      ...capability, happierToProvider: { supported: false }, providerToHappier: { supported: false },
+    };
+    expect(SessionStateCapabilitiesV1Schema.parse({
+      intent: { memoryEnabled: capability, voicePreference: capability, context: capability },
+      display: { bot: capability }, view: { transcriptToolCalls: capability },
+    })).toEqual({
+      intent: { memoryEnabled: admitted, voicePreference: admitted, context: admitted },
+      display: { bot: admitted }, view: { transcriptToolCalls: admitted },
+    });
   });
 
   it('accepts usage-limit recovery capabilities in the closed schema', () => {

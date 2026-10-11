@@ -22,6 +22,10 @@ import { writeSandboxTextFile } from './testkit/cliBinPreflightSandbox';
 
 const execFileAsync = promisify(execFile);
 
+// Prepare the real implementation graph before fixture case clocks begin. A cold
+// cli-common dependency build belongs to suite setup, not a target sandbox test.
+await loadCliCommonWorkspacesModule(resolve(import.meta.dirname, '../../../..'));
+
 describe('bundleWorkspaceDeps', () => {
   it('admits an existing cli-common dist before importing the implementation helper', async () => {
     const { repoRoot, cleanup } = createPackageLayoutSandbox('happy-bundle-workspace-helper-admission-');

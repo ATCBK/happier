@@ -29,10 +29,10 @@ describe('workspace client actions', () => {
       expect(ActionIdSchema.safeParse(id)).toEqual({ success: true, data: id });
     }
   });
-  it('publishes client execution on every requested surface without accepting caller-supplied geometry', () => {
+  it('publishes mounted-client execution without exposing standalone CLI or caller-supplied geometry', () => {
     for (const spec of WORKSPACE_ACTION_SPECS) {
       expect(spec.executionPlacement).toBe('client');
-      expect(spec.surfaces).toMatchObject({ ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false });
+      expect(spec.surfaces).toMatchObject({ ui: true, voice: true, agent: true, mcp: true, cli: false, rpc: false });
     }
     expect(WORKSPACE_ACTION_INPUT_SCHEMAS['workspace.split'].safeParse({ direction: 'right', availableSizePx: 1000 }).success).toBe(false);
     expect(WORKSPACE_ACTION_INPUT_SCHEMAS['workspace.resize'].safeParse({ splitId: 'split:1', ratio: 2 }).success).toBe(false);
