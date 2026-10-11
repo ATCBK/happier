@@ -381,11 +381,14 @@ generated sources remain the responsibility of their generator and committed
 checkout; they are not admitted through a workflow allowlist. Dependency cache
 publication runs explicitly after a successful install, before later workspace
 preparation can fail.
+Cache keys retain dependency, toolchain and postinstall inputs, but exclude test
+and spec files and `__tests__` directories; changing a keeper alone must not
+invalidate installed dependencies.
 
-Shared preparation currently has an interim 45-minute deadline: the observed cold
-install/native/CLI preparation took approximately 29 minutes, with 16 minutes of
-headroom for merged prerequisites and artifact transport. Compiler and artifact
-jobs retain interim 90/95-minute deadlines. These are bounded execution guards,
+Shared preparation currently has an interim 45-minute deadline. The latest cold
+hosted preparation, including prerequisite builds and artifact transport, took
+approximately 44 minutes 52 seconds and nearly exhausted that guard. Compiler
+and artifact jobs retain interim 90/95-minute deadlines. These are bounded execution guards,
 not a claim that the full Gate has met its 15-minute wall-clock target; reducing
 preparation and the remaining bodies is still required.
 
@@ -398,24 +401,30 @@ The repository deliberately separates the compiler from the programmatic TypeScr
 - `scripts/workspaces/resolveTypeScriptCliInvocation.mjs` is the only compiler-selection owner. First-party scripts must use `runTypeScriptCli.mjs`, `buildTypeScriptPackageDist.mjs`, or that resolver directly; do not invoke a bare `tsc` shim or resolve `typescript/bin/tsc`.
 - `yarn tsc ...` is defined at the repository root and in every TypeScript-owning workspace; it delegates to the shared native runner and therefore uses TypeScript 7.
 
-CLI and UI typechecks run `tsconfig.source.json` (source) and `tsconfig.test.json`
-(tests and their imported source) sequentially through that runner, including
-the root source-workspace lane. Both retain the original strictness, aliases
-and ambient declarations, with separate incremental caches. The original
+CLI typechecks run `tsconfig.source.json` and `tsconfig.test.json` sequentially
+through that runner. UI checks its dependency-ordered `tsconfig.foundation.json`,
+`tsconfig.core.json`, `tsconfig.source.json`, then `tsconfig.test.json`, including
+the root source-workspace lane. Source partitions own their complete imported
+implementation graph; recursive components must not cross project boundaries.
+All retain the original strictness, aliases and ambient declarations, with
+separate incremental caches. The original
 `tsconfig.json` remains the shared full-coverage base so existing configs that
 extend it retain their coverage. Repeated
 `--project` arguments check every project even after compiler diagnostics and
 return a nonzero result if any project fails; cancellation or launch failure
 stops the sequence. These large app programs explicitly use `--singleThreaded`
 to avoid retaining duplicate native checker state. Use the public package
-`typecheck` entry point to check both programs, not only the source config.
+`typecheck` entry point to check every project, not only the source config.
 
 Ordinary CLI builds also use one native checker. Under the existing CLI
 publication lock, `apps/cli/scripts/build.mjs` reuses the source-generation path
 and its compiler metadata across dev-watch builds. Each generation replaces all
-copied authored inputs and removes them after use; only the incremental cache
-survives. Unlocked builds keep private generations. Package dist compilation
-uses one checker by default and the existing package-lock-owned compiler cache
+copied authored inputs and removes them after use; compiler paths keep internal
+aliases on captured source and external aliases on their prepared dependency
+declarations. The CLI uses its directly declared Zod declaration identity while
+published workspace copies retain their own runtime dependencies. Only the
+incremental cache survives. Unlocked builds keep private generations. Package
+dist compilation uses one checker by default and the existing package-lock-owned compiler cache
 in `scripts/workspaces/buildTypeScriptPackageDist.mjs`; an explicit
 `--singleThreaded false` compiler argument opts out. Content currentness and
 output promotion remain owned by the existing workspace build pipeline.
