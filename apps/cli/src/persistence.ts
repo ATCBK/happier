@@ -1092,6 +1092,7 @@ export async function clearDaemonStateForTests(options: Readonly<{
 export async function reclaimDeadDaemonPublication(options: Readonly<{
   stateFile?: string;
   expectedState?: Readonly<{ pid: number; httpPort: number; startedAt?: number; controlToken?: string }> | null;
+  expectedPid?: number;
   expectedLockRaw?: string | null;
 }> = {}): Promise<boolean> {
   const stateFile = options.stateFile ?? configuration.daemonStateFile;
@@ -1108,6 +1109,7 @@ export async function reclaimDeadDaemonPublication(options: Readonly<{
     const expected = options.expectedState ?? null;
     const lockPid = lockRaw === null ? null : Number(lockRaw.trim());
     const pid = expected?.pid ?? lockPid;
+    if (options.expectedPid !== undefined && pid !== options.expectedPid) return false;
     if (!pid || !Number.isSafeInteger(pid) || pid <= 0 || isPidAliveBySignal(pid)) return false;
     if (lockRaw !== null && lockPid !== pid) return false;
     if (readOptional(lockFile) !== lockRaw) return false;

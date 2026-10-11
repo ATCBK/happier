@@ -17,6 +17,20 @@ beforeAll(async () => {
 // The HTTP service and child are real. Only the caller's PID namespace is an OS boundary fixture.
 describe('confirmed stop across a hidden daemon PID namespace', () => {
 
+  it('preserves another departed lock owner when force stop targets a different PID', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'daemon-dead-other-lock-' }, async () => {
+      const target = spawnSleepyDetachedProcess();
+      const replacement = spawnSleepyDetachedProcess();
+      expect(await target.kill()).toBe(true);
+      expect(await replacement.kill()).toBe(true);
+      mkdirSync(dirname(configuration.daemonLockFile), { recursive: true });
+      const replacementRaw = String(replacement.pid);
+      writeFileSync(configuration.daemonLockFile, replacementRaw);
+      await controlClient.forceStopKnownDaemonPid(target.pid);
+      expect(readFileSync(configuration.daemonLockFile, 'utf8')).toBe(replacementRaw);
+    });
+  });
+
   it.each(['single', 'all'] as const)('%s stop reclaims a dead lock without a state publication', async (mode) => {
     await withConfiguredDaemonTestHome({ prefix: 'daemon-dead-lock-' }, async () => {
       const child = spawnSleepyDetachedProcess();

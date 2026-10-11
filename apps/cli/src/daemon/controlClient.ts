@@ -1122,7 +1122,7 @@ async function forceKillKnownDaemonPid(pid: number, observation?: PublishedDaemo
     if (observation) await observation.reclaimIfDead();
     else {
       const state = await readDaemonState();
-      if (!state || state.pid === pid) await reclaimDeadDaemonPublication({ expectedState: state });
+      if (!state || state.pid === pid) await reclaimDeadDaemonPublication({ expectedState: state, expectedPid: pid });
     }
     return { status: 'not_running' };
   }
@@ -1148,7 +1148,7 @@ async function forceKillKnownDaemonPid(pid: number, observation?: PublishedDaemo
   if (observation) await observation.reclaimIfDead();
   else {
     const state = await readDaemonState();
-    if (!state || state.pid === pid) await reclaimDeadDaemonPublication({ expectedState: state });
+    if (!state || state.pid === pid) await reclaimDeadDaemonPublication({ expectedState: state, expectedPid: pid });
   }
   return { status: 'stopped', method: 'force' };
 }
