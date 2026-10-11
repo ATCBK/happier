@@ -16,6 +16,14 @@ import { createWorkspaceState, createWorkspaceEmptyTab } from '@/components/appS
 import { projectWorkspaceTabsList } from '@/components/appShell/workspace/workspaceActions';
 import { createClientActionReverseDispatcher } from '../../../../../cli/src/session/actions/clientActionReverseDispatch';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionFixture, createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { buildSessionDetailAccessProjectionQuery } from '@/sync/api/session/sessionDetailAccessProjection';
+import { SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
+import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
+import { createLocalConversationVoiceAdapter } from '@/voice/adapters/localConversation/localConversationAdapter';
+import { getVoiceAdapterRegistry, registerVoiceAdapters } from '@/voice/session/voiceAdapterRegistry';
+import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { storage } from '@/sync/domains/state/storage';
 import { apiSocket } from '@/sync/api/session/apiSocket';
@@ -58,7 +66,7 @@ afterEach(async () => {
   if (connection) { await connection.dispose(); connection = null; installHomeGovernanceBoundaries(homes); }
 });
 
-describe('admitted daemon-to-app Action continuation', () => {
+describe('Account alias custody and admitted daemon-to-app Action continuation', () => {
   it('reaches the captured Home registry owner through the public app Settings executor after focus changes', async () => {
     const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
     const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
@@ -100,16 +108,8 @@ describe('admitted daemon-to-app Action continuation', () => {
     if (!followPath) throw new Error('Follow preference transport is undeclared');
     homes.answer(serverId, `GET ${followPath}`, { body: { assigned: false, direct: true, team: false, group: true } });
     homes.answer(serverId, `PUT ${followPath}`, { body: { assigned: true, direct: true, team: false, group: true } });
-    const receive = createUiClientActionReverseHandler({ serverId, accountId: 'relay-account', isCurrent: () => true });
-    const clientActionExecute = createClientActionReverseDispatcher(() => ({
-      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
-      callConnectedClientRpc: async (_method, payload, options) => {
-        options.onIssued();
-        return { ok: true, result: await receive(payload, { signal: options.signal ?? new AbortController().signal }) };
-      },
-    }));
-    // Unused process dependencies cannot be reached by this client-placed root Action.
-    const caller = createActionExecutor({ clientActionExecute } as unknown as ActionExecutorDeps);
+    const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+    const caller = createDefaultActionExecutor();
     const result = await caller.execute('settings.set', { anchor, value }, {
       surface: 'cli', authority: 'account_automation', serverId, bypassApprovals: true,
       actionRequestId: 'restricted-settings-root', externalActionCredential: {
@@ -126,7 +126,7 @@ describe('admitted daemon-to-app Action continuation', () => {
   it.each([
     { anchor: 'homeAdministration.serverSettings.HAPPIER_API_CORS_MAX_AGE_SECONDS', value: 900, ownerId: 'home.settings.set' },
     { anchor: 'notifications.autoFollowAssigned', value: true, ownerId: 'session.follow.preferences.set' },
-  ] as const)('routes reverse $ownerId aliases through their captured domain owner', async ({ anchor, value, ownerId }) => {
+  ] as const)('routes Account $ownerId aliases through their captured domain owner', async ({ anchor, value, ownerId }) => {
     const key = 'HAPPIER_API_CORS_MAX_AGE_SECONDS';
     const projection = (value: number) => ({ revision: 3, startedAt: null, entries: [{ key, value,
       source: 'home', fixed: false, editable: 'home', apply: 'restart', declaration: { type: 'int', section: 'server' } }] });
@@ -142,14 +142,8 @@ describe('admitted daemon-to-app Action continuation', () => {
     if (!followPath) throw new Error('Follow preference transport is undeclared');
     homes.answer(serverId, `GET ${followPath}`, { body: { assigned: false, direct: true, team: false, group: true } });
     homes.answer(serverId, `PUT ${followPath}`, { body: { assigned: true, direct: true, team: false, group: true } });
-    const receive = createUiClientActionReverseHandler({ serverId, accountId: 'relay-account', isCurrent: () => true });
-    const caller = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => ({
-      hasConnectedClientRpcHandler: () => true,
-      callConnectedClientRpc: async (_method, payload, options) => {
-        options.onIssued();
-        return { ok: true, result: await receive(payload, { signal: options.signal ?? new AbortController().signal }) };
-      },
-    })) } as unknown as ActionExecutorDeps);
+    const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+    const caller = createDefaultActionExecutor();
     const result = await caller.execute('settings.set', { anchor, value }, {
       surface: 'cli', authority: 'present_user', serverId, bypassApprovals: true, actionRequestId: 'settings-alias-request',
     });
@@ -161,19 +155,13 @@ describe('admitted daemon-to-app Action continuation', () => {
         : { assigned: true, direct: true, team: false, group: true },
     })]));
   });
-  it('returns nested Home approval with original requester identity without executing the Home write', async () => {
+  it('returns nested Account Home approval with original requester identity without executing the Home write', async () => {
     const key = 'HAPPIER_API_CORS_MAX_AGE_SECONDS';
     const anchor = `homeAdministration.serverSettings.${key}`;
     homes.answer(serverId, '/v1/home/settings/get', { body: { revision: 3, startedAt: null, entries: [{ key, value: 600,
       source: 'home', fixed: false, editable: 'home', apply: 'restart', declaration: { type: 'int', section: 'server' } }] } });
-    const receive = createUiClientActionReverseHandler({ serverId, accountId: 'relay-account', isCurrent: () => true });
-    const caller = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => ({
-      hasConnectedClientRpcHandler: () => true,
-      callConnectedClientRpc: async (_method, payload, options) => {
-        options.onIssued();
-        return { ok: true, result: await receive(payload, { signal: options.signal ?? new AbortController().signal }) };
-      },
-    })) } as unknown as ActionExecutorDeps);
+    const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+    const caller = createDefaultActionExecutor();
     expect(await caller.execute('settings.set', { anchor, value: 900 }, {
       surface: 'cli', authority: 'present_user', serverId, bypassApprovals: true, actionRequestId: 'nested-home-request',
     })).toMatchObject({ ok: true, result: { kind: 'approval_request_created', actionId: 'home.settings.set' } });
@@ -246,6 +234,127 @@ describe('admitted daemon-to-app Action continuation', () => {
     expect(await caller.execute('session.pending.next', {}, context)).toEqual({ ok: true, result: { status: 'opened' } });
     expect(navigatedHome).toBe(serverId);
     expect(await caller.execute('workspace.tabs.list', {}, context)).toEqual({ ok: true, result: projectWorkspaceTabsList(state) });
+  });
+
+  it.each(['ui', 'agent', 'mcp'] as const)('reuses a same-Home Voice carrier through the admitted client continuation on %s', async (surface) => {
+    const previousAdapters = getVoiceAdapterRegistry().list();
+    registerVoiceAdapters([createLocalConversationVoiceAdapter()]);
+    releases.push(() => registerVoiceAdapters(previousAdapters));
+    const rootId = 'teleport-root';
+    const carrierId = 'teleport-carrier';
+    const machine = createMachineFixture({ id: 'teleport-machine', activeAt: Date.now() });
+    const voice = voiceSettingsParse({ providerId: 'local_conversation', providers: {
+      local_conversation: { schemaVersion: 1, config: {
+        conversationMode: 'agent', agent: { stayInVoiceHome: false, teleportEnabled: true },
+      } },
+    } });
+    const previousVoice = storage.getState().settings.voice;
+    releases.push(() => storage.setState(state => ({ settings: { ...state.settings, voice: previousVoice } })));
+    storage.setState(state => ({ ...state,
+      settings: { ...state.settings, voice },
+      machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] },
+    }));
+    const metadata = { path: '/Users/tester/project', homeDir: '/Users/tester',
+      host: 'tester.local', machineId: machine.id };
+    const carrierMetadata = { ...metadata,
+      systemSessionV1: { v: 1 as const, key: 'voice_conversation', hidden: true },
+      voiceConversationScopeV1: { v: 1 as const, kind: 'session_root' as const, sessionRootId: rootId },
+    };
+    storage.getState().applySessions([
+      createSessionFixture({ id: rootId, serverId, metadata }),
+      createSessionFixture({ id: carrierId, serverId, metadata: carrierMetadata }),
+    ]);
+    let carrier = createPlainSessionCurrentProjectionRecordFixture({ id: carrierId, metadata: carrierMetadata });
+    const carrierPath = `/v2/sessions/${carrierId}`;
+    homes.answer(serverId, `GET ${carrierPath}${buildSessionDetailAccessProjectionQuery(serverId)}`, { select: () => ({ body: { session: carrier } }) });
+    homes.answer(serverId, `PATCH ${carrierPath}`, { select: input => {
+      // Only the Home's HTTP tuple storage/ACK is replaced; Sync's parser,
+      // privacy projection, binding and carrier custody remain real.
+      const patch = SessionMetadataTuplePatchV1Schema.parse(input);
+      if (patch.mode !== 'owner') throw new Error('Expected an owner metadata tuple');
+      expect(patch.sharedMetadata.expectedVersion).toBe(carrier.metadataVersion);
+      expect(patch.agentState.expectedVersion).toBe(carrier.agentStateVersion);
+      carrier = { ...carrier, metadata: patch.sharedMetadata.ciphertext,
+        metadataVersion: carrier.metadataVersion + 1, ownerMetadata: patch.ownerMetadata,
+        agentState: patch.agentState.ciphertext, agentStateVersion: carrier.agentStateVersion + 1 };
+      return { body: SessionMetadataTuplePatchSuccessV1Schema.parse({ success: true,
+        metadataLayoutVersion: 1, sharedMetadata: { version: carrier.metadataVersion },
+        agentState: { version: carrier.agentStateVersion } }) };
+    } });
+    releases.push(() => voiceSessionBindingStore.getState().unbind(carrierId));
+    const receive = createUiClientActionReverseHandler({ serverId, accountId: 'relay-account', isCurrent: () => true });
+    const clientActionExecute = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+      callConnectedClientRpc: async (_method, payload, options) => {
+        options.onIssued();
+        return { ok: true, result: await receive(payload, { signal: options.signal ?? new AbortController().signal }) };
+      },
+    }));
+    const caller = createActionExecutor({ clientActionExecute });
+    const result = await caller.execute('ui.voice_agent.teleport', { sessionId: rootId },
+      { surface, authority: surface === 'ui' ? 'present_user' : 'account_automation',
+        ...(surface === 'agent' ? { defaultSessionId: rootId } : {}) });
+    expect(result)
+      .toEqual({ ok: true, result: { ok: true, sessionId: rootId } });
+    expect(voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID))
+      .toMatchObject({ conversationSessionAddress: { serverId, sessionId: carrierId },
+        targetSessionAddress: { serverId, sessionId: rootId } });
+    expect(carrier.metadataVersion).toBeGreaterThan(1);
+    expect(homes.requestsFor(carrierPath).every(request => request.serverId === serverId)).toBe(true);
+    if (surface === 'agent') {
+      const committedVersion = carrier.metadataVersion;
+      storage.getState().applySessions([createSessionFixture({ id: 'another-root', serverId, metadata })]);
+      expect(await caller.execute('ui.voice_agent.teleport', { sessionId: 'another-root' }, {
+        surface, authority: 'account_automation', defaultSessionId: rootId,
+      })).toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+      expect(homes.requests.some(request => request.path.startsWith('/v2/sessions/another-root'))).toBe(false);
+      expect(carrier.metadataVersion).toBe(committedVersion);
+      expect(voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID)?.targetSessionAddress)
+        .toEqual({ serverId, sessionId: rootId });
+    }
+  });
+
+  it('refuses Voice teleport before carrier publication when the target, provider, binding or relay is unavailable', async () => {
+    const previousVoice = storage.getState().settings.voice;
+    releases.push(() => storage.setState(state => ({ settings: { ...state.settings, voice: previousVoice } })));
+    const receive = createUiClientActionReverseHandler({ serverId, accountId: 'relay-account', isCurrent: () => true });
+    const connected = () => ({
+      hasConnectedClientRpcHandler: (method: string) => method === RPC_METHODS.UI_ACTION_EXECUTE,
+      callConnectedClientRpc: async (_method: string, payload: unknown, options: { onIssued(): void; signal?: AbortSignal }) => {
+        options.onIssued();
+        return { ok: true as const, result: await receive(payload, { signal: options.signal ?? new AbortController().signal }) };
+      },
+    });
+    const caller = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(connected) });
+    const context = { surface: 'ui' as const, authority: 'present_user' as const };
+    expect(await caller.execute('ui.voice_agent.teleport', {}, context)).toMatchObject({ ok: false, errorCode: 'session_not_selected' });
+    for (const [agent, code] of [
+      [{ stayInVoiceHome: false, teleportEnabled: false }, 'VOICE_TELEPORT_DISABLED'],
+      [{ stayInVoiceHome: true, teleportEnabled: true }, 'VOICE_TELEPORT_BLOCKED_BY_HOME'],
+    ] as const) {
+      storage.setState(state => ({ settings: { ...state.settings, voice: voiceSettingsParse({
+        providerId: 'local_conversation', providers: { local_conversation: { schemaVersion: 1,
+          config: { conversationMode: 'agent', agent } } },
+      }) } }));
+      expect(await caller.execute('ui.voice_agent.teleport', { sessionId: 'unbound-root' }, context))
+        .toMatchObject({ ok: false, errorCode: code });
+    }
+    const previousAdapters = getVoiceAdapterRegistry().list();
+    registerVoiceAdapters([]);
+    releases.push(() => registerVoiceAdapters(previousAdapters));
+    storage.setState(state => ({ settings: { ...state.settings, voice: voiceSettingsParse({
+      providerId: 'local_conversation', providers: { local_conversation: { schemaVersion: 1,
+        config: { conversationMode: 'agent', agent: { stayInVoiceHome: false, teleportEnabled: true } } } },
+    }) } }));
+    expect(await caller.execute('ui.voice_agent.teleport', { sessionId: 'unbound-root' }, context))
+      .toMatchObject({ ok: false, errorCode: 'VOICE_TELEPORT_UNAVAILABLE' });
+    storage.setState(state => ({ settings: { ...state.settings, voice: voiceSettingsParse({ providerId: 'off' }) } }));
+    expect(await caller.execute('ui.voice_agent.teleport', { sessionId: 'unbound-root' }, context))
+      .toMatchObject({ ok: false, errorCode: 'VOICE_TELEPORT_UNAVAILABLE' });
+    const unavailable = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => null) });
+    expect(await unavailable.execute('ui.voice_agent.teleport', { sessionId: 'unbound-root' }, context))
+      .toMatchObject({ ok: false, errorCode: 'unavailable' });
+    expect(homes.requests.some(request => request.path.startsWith('/v2/sessions/unbound-root'))).toBe(false);
   });
 
   it('does not create a second approval at the trusted continuation', async () => {

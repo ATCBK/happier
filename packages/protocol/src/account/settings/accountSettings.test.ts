@@ -1244,11 +1244,11 @@ describe('accountSettings', () => {
 
     expect(parsed.backendEnabledByTargetKey).toEqual({
       'agent:happier.agent.claude/claude': true,
-      'backend:team-review:configured:team-review': false,
+      'agent:happier.agent.custom-acp/custom-acp:definition:team-review': false,
     });
     expect(parsed.backendCliSourcePreferenceByTargetKey).toEqual({
       'agent:happier.agent.claude/claude': 'system-first',
-      'backend:team-review:configured:team-review': 'managed-first',
+      'agent:happier.agent.custom-acp/custom-acp:definition:team-review': 'managed-first',
     });
     expect(readAccountSettingValueForBackendTarget(parsed, 'backendEnabledByTargetKey', {
       kind: 'builtInAgent', agentId: 'claude',
@@ -1769,7 +1769,7 @@ describe('isExpoPushNotificationChannelEnabled', () => {
 
 });
 
-it('keeps Classic validation errors at root and generated definition boundaries', () => {
+it('keeps Classic validation errors and strict policy writes separate from stored field recovery', () => {
  const definition=accountCatalogDefinition(z.string().trim().min(1),' default ',{semanticDomain:'test preference',classification:'preference',maximumSerializedValueBytes:1024,recoverMalformed:false});
  expect(definition.default).toBe('default');
  expect(definition.schema.parse(undefined)).toBe('default');
@@ -1777,7 +1777,13 @@ it('keeps Classic validation errors at root and generated definition boundaries'
   expect(result.success).toBe(false);
   if(!result.success)expect(result.error).toBeInstanceOf(z.ZodError);
  }
- expect(()=>accountSettingsParse({sessionAgentSpawnPolicyV1:{v:99}})).toThrow(z.ZodError);
+ const storedPolicy = { v: 99, allowCrossMachine: false, allowModelOverride: 'invalid', futurePolicy: true };
+ expect(accountSettingsParse({ sessionAgentSpawnPolicyV1: storedPolicy }).sessionAgentSpawnPolicyV1)
+   .toMatchObject({ v: 1, allowCrossMachine: false, allowModelOverride: true });
+ expect(accountSettingsParse({ sessionAgentSpawnPolicyV1: storedPolicy }).sessionAgentSpawnPolicyV1)
+   .not.toHaveProperty('futurePolicy');
+ expect(ACCOUNT_SETTING_DEFINITIONS.sessionAgentSpawnPolicyV1.parseMutationValue(storedPolicy))
+   .toMatchObject({ success: false, reason: 'invalidValue' });
 });
 it('keeps preference bounds distinct from size-tolerant legacy reads', () => {
  const read=createStoredReadSchema(AccountSettingsSchema);
@@ -1786,10 +1792,14 @@ it('keeps preference bounds distinct from size-tolerant legacy reads', () => {
  expect(read.parse({favoriteModelSelectionsV1:atLimit}).favoriteModelSelectionsV1).toEqual(atLimit);
  const parsed=read.parse({favoriteModelSelectionsV1:overLimit,profiles:overLimit});
  expect(parsed.favoriteModelSelectionsV1).toEqual([]);
- expect(parsed.profiles).toEqual(overLimit);
- expect(ACCOUNT_SETTING_DEFINITIONS.profiles.schema.parse(overLimit)).toEqual(overLimit);
+ expect(parsed).not.toHaveProperty('profiles');
+ expect(ACCOUNT_SETTING_DEFINITIONS).not.toHaveProperty('profiles');
+ expect(AccountSettingsPersistedObjectSchema.parse({ profiles: overLimit }).profiles).toEqual(overLimit);
+ expect(parseRetainedAccountSettingsEntitySourceV1('profiles', overLimit))
+   .toEqual({ success: true, data: overLimit });
  expect(ACCOUNT_SETTING_DEFINITIONS.favoriteModelSelectionsV1.schema.parse([undefined])).toEqual([]);
- expect(()=>read.parse({profiles:[undefined]})).toThrow(z.ZodError);
+ expect(parseRetainedAccountSettingsEntitySourceV1('profiles', [undefined]))
+   .toMatchObject({ success: false, reason: 'invalidValue' });
  for(const target of ['draft-7','draft-2020-12'] as const)for(const io of ['input','output'] as const) {
   expect(z.toJSONSchema(read,{target,io,unrepresentable:'any'})).toHaveProperty(['properties','favoriteModelSelectionsV1','anyOf',1,'maxItems'],256);
  }

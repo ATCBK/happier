@@ -10844,12 +10844,13 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     sideEffectClass: 'write',
     description: 'Move the daemon-backed voice agent into the current or specified session root.',
     safety: 'safe',
+    requiredAuthority: 'account_automation',
     placements: ['voice_panel'],
-    bindings: { voiceClientToolName: 'teleportVoiceAgentToSessionRoot' },
+    bindings: { voiceClientToolName: 'teleportVoiceAgentToSessionRoot', mcpToolName: 'ui_voice_agent_teleport' },
     inputHints: {
       title: 'Teleport voice agent',
       description: 'Teleport the active voice agent into a session root. Defaults to the current action session when omitted.',
-      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text' }],
+      fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' }],
     },
     examples: {
       voice: { argsExample: '{"sessionId":"{{sessionId}}"}' },
@@ -10857,8 +10858,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     surfaces: {
       ui: true,
       voice: true,
-      agent: false,
-      mcp: false,
+      agent: true,
+      mcp: true,
       cli: false,
       rpc: false,
       },

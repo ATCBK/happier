@@ -16,11 +16,17 @@ import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoard
 import { createWorkBoardAccountStore } from '@/components/boards/model/workBoardAccountStore';
 import { createWorkBoardUiActionPort } from '@/components/boards/model/workBoardEntityDrop';
 import { projectBoardMembership } from '@/components/boards/model/boardMembership';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { ArtifactAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 
 // Only HTTP, credentials and native UI modules are replaced; domain and encryption owners run.
 installApprovalCommonModuleMocks();
+installDisconnectedServerSocketBoundary();
 const initialState = getStorage().getState();
-afterEach(() => {
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+afterEach(async () => {
+    await connection?.dispose(); connection = null;
     retireActiveServerAccountScopeLifetime(); resetRuntimeFetch(); invalidateAccountEncryptionModeCache();
     resetServerFeaturesClientForTests(); getStorage().setState(initialState, true); vi.restoreAllMocks();
 });
@@ -43,16 +49,22 @@ describe('Board Actions through captured Home Artifacts', () => {
             header: encodePlainArtifactStoredContent({ kind: 'work-board.v1', v: 1, title: board.name, pinnedInSessions: board.pinnedInSessions, readsNeedsYou: false }),
             body: encodePlainArtifactStoredContent({ body: JSON.stringify(board) }),
             headerVersion: version, bodyVersion: version, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
-            seq: version, createdAt: 1, updatedAt: version, ownerAccountId: 'board-owner', access: 'owner', encryptionMode: 'plain' });
-        setRuntimeFetch(async (input, init) => {
+            seq: version, createdAt: 1, updatedAt: version, ownerAccountId: 'board-owner', access: 'owner', encryptionMode: 'plain', publicAudience: 'none' });
+        const request: Parameters<typeof setRuntimeFetch>[0] = async (input, init) => {
             const url = new URL(String(input));
             expect(url.origin).toBe('https://board-target.test');
             expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${token}`);
             const method = init?.method ?? 'GET';
+            if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') return Response.json({});
             requests.push(`${method} ${url.pathname}`);
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: { unrelated: 'x'.repeat(600_000) } }, version: 1 });
             if (url.pathname === '/v1/artifacts') return Response.json(deleted ? [] : [row()]);
+            if (url.pathname === '/v1/artifacts/mine/access/grants' && method === 'GET') return deleted
+                ? Response.json({ error: 'artifact_not_found' }, { status: 404 })
+                : Response.json(ArtifactAccessGrantsListResponseV1Schema.parse({ artifactId: board.id,
+                    ownerAccountId: 'board-owner', access: 'owner', grants: [] }));
             if (url.pathname === '/v1/artifacts/mine' && method === 'GET') return deleted ? Response.json({ error: 'not_found' }, { status: 404 }) : Response.json(row());
             if (url.pathname === '/v1/artifacts/mine' && method === 'POST') {
                 const write = writeSchema.parse(JSON.parse(String(init?.body)));
@@ -70,10 +82,12 @@ describe('Board Actions through captured Home Artifacts', () => {
                 deleted = true; return Response.json({ success: true });
             }
             return Response.json({ error: 'not_found' }, { status: 404 });
-        });
+        };
+        setRuntimeFetch(request);
         const executor = createDefaultActionExecutor();
         const context = { serverId: target.id, surface: 'ui', bypassApprovals: true } as const;
-        expect(await executor.execute('boards.apply', { intent: { kind: 'set_positions', boardId: 'mine', positionsByItemRef: { [first]: { x: 48, y: 96 } } } }, context))
+        const firstApply = await executor.execute('boards.apply', { intent: { kind: 'set_positions', boardId: 'mine', positionsByItemRef: { [first]: { x: 48, y: 96 } } } }, context);
+        expect(firstApply, JSON.stringify(firstApply))
             .toMatchObject({ ok: true, result: { board: { positionsByItemRef: { [first]: { x: 48, y: 96 }, [second]: { x: 3, y: 4 } } } } });
         // The mounted UI queue is the trusted live-membership port, not a second writer.
         // Account capture, Action schema/policy and execution all stay real above the Artifact boundary.
@@ -88,6 +102,10 @@ describe('Board Actions through captured Home Artifacts', () => {
             .toMatchObject({ ok: true, result: { board: { positionsByItemRef: { [first]: { x: 72, y: 120 } } } } });
         expect(uiPersistence.acknowledged().boards[0]!.positionsByItemRef).toEqual({ [first]: { x: 72, y: 120 } });
         expect(board.positionsByItemRef[first]).toEqual({ x: 48, y: 96 });
+        // Widget catalog admission requires this Home's genuine mounted Account;
+        // the preceding Board writes still prove captured, non-focused Home routing.
+        connection = await restoreServerAccountForTest({ serverUrl: target.serverUrl, accountId: 'board-owner', credentials: { token }, request });
+        setRuntimeFetch(request);
         const surface = { serverId: target.id, accountId: 'board-owner', owner: { kind: 'workBoard', boardId: 'mine' } } as const;
         const instance = { v: 1, id: 'configured', definition: { kind: 'inline', definition: { v: 1, id: 'checks', name: 'Checks',
             sizeDeclaration: { sizes: ['medium', 'full'], defaultSize: 'medium' }, inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false },
