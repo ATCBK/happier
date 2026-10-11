@@ -1,3 +1,4 @@
+import { extractDeferredToolExecutionCall } from './deferredToolExecutionCanonicalization';
 import { truncateDeep } from '../redaction/redact';
 import type { ToolHappierMetaV2, ToolNormalizationProtocol } from '@happier-dev/protocol';
 import { isChangeTitleToolNameAlias, isShellToolNameAlias } from '@happier-dev/protocol/tools/v2/aliases';
@@ -91,6 +92,10 @@ export function canonicalizeToolNameV2(opts: {
     const shellBridgeCanonical = isShellToolNameAlias(name)
         ? resolveCanonicalToolNameFromHappierToolsShellBridge(opts.toolInput) : null;
     if (shellBridgeCanonical) return shellBridgeCanonical;
+    const deferredCall = extractDeferredToolExecutionCall({ ...opts, rawInput: opts.toolInput });
+    if (deferredCall) {
+        return canonicalizeToolNameV2({ ...opts, toolName: deferredCall.toolName, toolInput: deferredCall.params });
+    }
     const record = asRecord(opts.toolInput) ?? {};
     const titleCandidate =
         typeof (record as any).title === 'string'
@@ -306,8 +311,11 @@ export function normalizeToolCallInputV2(opts: {
     canonicalToolName: string;
     rawInput: unknown;
 }): unknown {
-    const effectiveRawInput = (isShellToolNameAlias(opts.toolName)
-        ? extractCanonicalInputFromHappierToolsShellBridge(opts.rawInput) : null) ?? opts.rawInput;
+    const deferredCall = extractDeferredToolExecutionCall(opts);
+    const effectiveToolName = deferredCall?.toolName ?? opts.toolName;
+    const unwrappedInput = deferredCall?.params ?? opts.rawInput;
+    const effectiveRawInput = (isShellToolNameAlias(effectiveToolName)
+        ? extractCanonicalInputFromHappierToolsShellBridge(unwrappedInput) : null) ?? unwrappedInput;
 
     if (opts.canonicalToolName.startsWith('mcp__')) {
         const normalized = normalizeMcpInput(opts.canonicalToolName, effectiveRawInput);
@@ -323,7 +331,7 @@ export function normalizeToolCallInputV2(opts: {
     }
 
     if (opts.canonicalToolName === 'Bash') {
-        const normalized = normalizeBashInput(opts.rawInput);
+        const normalized = normalizeBashInput(effectiveRawInput);
         const meta: ToolHappierMetaV2 = {
             v: 2,
             protocol: opts.protocol,
@@ -336,7 +344,7 @@ export function normalizeToolCallInputV2(opts: {
     }
 
     if (opts.canonicalToolName === 'Read') {
-        const normalized = normalizeReadInput(opts.rawInput);
+        const normalized = normalizeReadInput(effectiveRawInput);
         const meta: ToolHappierMetaV2 = {
             v: 2,
             protocol: opts.protocol,
@@ -349,7 +357,7 @@ export function normalizeToolCallInputV2(opts: {
     }
 
     if (opts.canonicalToolName === 'Delete') {
-        const normalized = normalizeDeleteInput(opts.rawInput);
+        const normalized = normalizeDeleteInput(effectiveRawInput);
         const meta: ToolHappierMetaV2 = {
             v: 2,
             protocol: opts.protocol,
@@ -362,7 +370,7 @@ export function normalizeToolCallInputV2(opts: {
     }
 
     if (opts.canonicalToolName === 'TodoWrite') {
-        const normalized = normalizeTodoWriteInput(opts.rawInput);
+        const normalized = normalizeTodoWriteInput(effectiveRawInput);
         const meta: ToolHappierMetaV2 = {
             v: 2,
             protocol: opts.protocol,
@@ -375,7 +383,7 @@ export function normalizeToolCallInputV2(opts: {
     }
 
     if (opts.canonicalToolName === 'TodoRead') {
-        const normalized = normalizeTodoReadInput(opts.rawInput);
+        const normalized = normalizeTodoReadInput(effectiveRawInput);
         const meta: ToolHappierMetaV2 = {
             v: 2,
             protocol: opts.protocol,
@@ -388,7 +396,7 @@ export function normalizeToolCallInputV2(opts: {
     }
 
     if (opts.canonicalToolName === 'SubAgent' || opts.canonicalToolName === 'Task') {
-        const normalized = normalizeTaskInput(opts.toolName, effectiveRawInput);
+        const normalized = normalizeTaskInput(effectiveToolName, effectiveRawInput);
         const meta: ToolHappierMetaV2 = {
             v: 2,
             protocol: opts.protocol,
