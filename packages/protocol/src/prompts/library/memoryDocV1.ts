@@ -56,7 +56,11 @@ function isExpired(fact: MemoryFactV1, nowMs: number): boolean {
 
 /** One index projection for on-demand reads and always-loaded prompt rendering. */
 export function projectMemoryDocIndexV1(body: MemoryDocBodyV1, nowMs: number): MemoryDocIndexV1 {
-  const topics = body.topics.map(({ title, summary }) => ({ title, summary }));
+  // Named topics first, the archive last: it is one more topic, searchable and never loaded.
+  const topics = [
+    ...body.topics.filter(topic => topic.title !== MEMORY_ARCHIVE_TOPIC_TITLE_V1),
+    ...body.topics.filter(topic => topic.title === MEMORY_ARCHIVE_TOPIC_TITLE_V1),
+  ].map(({ title, summary }) => ({ title, summary }));
   if (!topics.some(topic => topic.title === MEMORY_ARCHIVE_TOPIC_TITLE_V1)
     && (body.index.some(fact => isExpired(fact, nowMs)) || body.topics.some(topic => topic.facts.some(fact => isExpired(fact, nowMs))))) {
     topics.push({ title: MEMORY_ARCHIVE_TOPIC_TITLE_V1, summary: MEMORY_ARCHIVE_TOPIC_SUMMARY_V1 });

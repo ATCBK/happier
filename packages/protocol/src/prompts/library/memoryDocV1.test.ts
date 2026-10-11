@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MemoryDocBodyV1Schema, MemoryDocBodyV1StoredSchema, renderMemoryDocV1 } from './memoryDocV1.js';
+import { MemoryDocBodyV1Schema, MemoryDocBodyV1StoredSchema, projectMemoryDocIndexV1, renderMemoryDocV1 } from './memoryDocV1.js';
 
 const fact = (id: string, text = id) => ({ id, text, createdAtMs: 1, sourceSessionRef: null });
 
@@ -73,5 +73,13 @@ describe('memory document content', () => {
     expect(renderMemoryDocV1({ body: { v: 1, index: [], topics: [] }, nowMs: 5 }).markdown).toBe('');
     const distant = MemoryDocBodyV1Schema.parse({ v: 1, index: [{ ...fact('distant'), createdAtMs: Number.MAX_SAFE_INTEGER }], topics: [] });
     expect(renderMemoryDocV1({ body: distant, nowMs: 5 })).toMatchObject({ loadedFactIds: ['distant'] });
+  });
+
+  it('lists the archive after the named topics, wherever it was stored', () => {
+    const body = MemoryDocBodyV1Schema.parse({ v: 1, index: [], topics: [
+      { title: 'archive', summary: 'Expired, replaced and forgotten facts.', facts: [] },
+      { title: 'Releases', summary: 'How a release is cut.', facts: [fact('r1')] },
+    ] });
+    expect(projectMemoryDocIndexV1(body, 5).topics.map(topic => topic.title)).toEqual(['Releases', 'archive']);
   });
 });
