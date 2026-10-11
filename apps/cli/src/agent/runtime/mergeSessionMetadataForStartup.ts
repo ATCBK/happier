@@ -335,7 +335,7 @@ export function mergeSessionMetadataForStartup(opts: {
     mode?: StartupMergeMode;
 }): Metadata {
     const mode: StartupMergeMode = opts.mode ?? 'start';
-    let merged: Metadata = {
+    let merged: { -readonly [K in keyof Metadata]: Metadata[K] } = {
         ...opts.current,
         ...opts.next,
         // A runtime choice accepted by this Session is not a fresh process

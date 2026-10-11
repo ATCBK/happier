@@ -46,7 +46,7 @@ function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = 
   }
   beginActiveAcpCatalogRefresh({ scopeKey, lifetimeToken });
   let work!: Promise<AcpCatalogSnapshotV1>;
-  work = (async () => {
+  work = (async (): Promise<AcpCatalogSnapshotV1> => {
     let requestInput: RefreshInput = afterChange ? { credentials: input.credentials } : input;
     while (true) {
       let catalog: AcpCatalogSnapshotV1;

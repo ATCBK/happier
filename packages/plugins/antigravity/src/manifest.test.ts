@@ -2,6 +2,7 @@ import { ingestPluginManifestV2 } from '@happier-dev/protocol';
 import { describe, expect, it } from 'vitest';
 
 import { PLUGIN_MANIFEST } from './manifest.js';
+import { AGENT_DEFINITION } from './agent/definition.js';
 
 const officialAssets = [
   ['darwin', 'arm64', 'macos', 'darwin-arm64', '7cd97045f7b4fe81175a107cdf16f9c51484e3c78a5162cae415338bb6aa5b88', 111_456_962, 278_535_456, 397_146_848],
@@ -22,6 +23,9 @@ describe('Antigravity plugin manifest', () => {
   });
 
   it('declares host-owned ACP as the sole Antigravity session runtime', () => {
+    expect(AGENT_DEFINITION.core.sessionCapabilities).toMatchObject({
+      usageLimitRecovery: { checkNow: 'supported' },
+    });
     expect(PLUGIN_MANIFEST).toMatchObject({
       id: 'happier.agent.antigravity',
       entrypoints: { daemon: './.happier-plugin/daemon.js' },
@@ -54,13 +58,10 @@ describe('Antigravity plugin manifest', () => {
         primary: 'sessions',
         connectedAccounts: [{
           purpose: 'model_upstream',
-          service: {
-            pluginId: 'happier.agent.gemini',
-            localId: 'gemini-account',
-          },
+          service: 'antigravity-account',
           required: false,
-          materializationKinds: ['environment'],
-          credentialKinds: ['token'],
+          materializationKinds: ['files', 'environment'],
+          credentialKinds: ['oauth'],
         }],
         capabilities: expect.objectContaining({
           surfaces: ['terminal', 'externalSessions'],
@@ -69,6 +70,7 @@ describe('Antigravity plugin manifest', () => {
             delivery: ['newTurn'],
             cancel: true,
             executionRunContext: { versions: [1] },
+            usageLimitRecovery: { active: ['checkNow'], inactive: ['checkNow'] },
           },
         }),
         surfaces: {
@@ -78,7 +80,7 @@ describe('Antigravity plugin manifest', () => {
             },
             sources: [expect.objectContaining({
               sourceKind: 'antigravityCliPrint',
-              contentSearch: false,
+              contentSearch: true,
               schema: {
                 fields: [
                   { kind: 'literal', name: 'kind', value: 'antigravityCliPrint' },

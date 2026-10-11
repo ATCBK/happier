@@ -145,7 +145,6 @@ export const ANTIGRAVITY_PLUGIN = definePlugin({
             delivery: ['newTurn'],
             cancel: true,
             executionRunContext: { versions: [1] },
-            usageLimitRecovery: { inactive: ['checkNow'] },
           },
         }),
         surfaces: {

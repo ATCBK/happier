@@ -29,6 +29,7 @@ export const AGENT_DEFINITION = Object.freeze({
       sessionListing: 'unsupported',
       sessionFork: { conversation: 'unsupported', fromMessage: 'unsupported' },
       sessionRollback: { conversation: 'unsupported' },
+      usageLimitRecovery: { checkNow: 'supported' },
     },
     handoff: { vendorStateTransfer: 'unsupported' },
     localControl: {
