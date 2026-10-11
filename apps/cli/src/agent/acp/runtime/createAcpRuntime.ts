@@ -17,7 +17,12 @@ import {
   handleAcpModelOutputDelta,
   handleAcpStatusRunning,
 } from '@/agent/acp/bridge/acpCommonHandlers';
-import { reconcileModelOutput, type ModelOutputReconciliationState } from '@/agent/core/reconcileModelOutput';
+import {
+  isModelOutputSegmentBoundary,
+  reconcileModelOutput,
+  resetModelOutputSegment,
+  type ModelOutputReconciliationState,
+} from '@/agent/core/reconcileModelOutput';
 import { createAcpAgentMessageForwarder } from '@/agent/acp/bridge/createAcpAgentMessageForwarder';
 import { isThinkingToolName } from '@/agent/acp/bridge/thinkingToolCall';
 import { recordToolTraceEvent } from '@/agent/tools/trace/toolTrace';
@@ -1316,6 +1321,16 @@ export function createAcpRuntime(params: {
         return;
       }
 
+      if (msg.type === 'tool-result') evictToolCallCache(Date.now());
+      const thinkingToolBoundary = (msg.type === 'tool-call' || msg.type === 'tool-result')
+        && isThinkingToolName(msg.type === 'tool-result'
+          ? toolNameByCallId.get(msg.callId)?.toolName ?? msg.toolName
+          : msg.toolName);
+      if (isModelOutputSegmentBoundary(msg) && !thinkingToolBoundary) {
+        resetModelOutputSegment(modelOutputState);
+        void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' });
+      }
+
       switch (msg.type) {
         case 'model-output': {
           const change = reconcileModelOutput(modelOutputState, msg);
@@ -1416,8 +1431,6 @@ export function createAcpRuntime(params: {
             break;
           }
 
-          modelOutputState.segmentText = '';
-          void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' });
           params.messageBuffer.addMessage(`Executing: ${msg.toolName}`, 'tool');
           recordToolCall(msg.callId, msg.toolName);
           forwarder.forward(msg);
@@ -1426,7 +1439,6 @@ export function createAcpRuntime(params: {
 
         case 'tool-result': {
           const callId = msg.callId;
-          evictToolCallCache(Date.now());
           const originToolName = toolNameByCallId.get(callId)?.toolName ?? msg.toolName;
           if (typeof originToolName === 'string' && isThinkingToolName(originToolName)) {
             forwarder.forward(msg);
@@ -1579,7 +1591,7 @@ export function createAcpRuntime(params: {
           } catch (e) {
             logger.debug(`[${params.provider}] Failed to run permission-request hook (non-fatal)`, e);
           }
-          modelOutputState.segmentText = '';
+          resetModelOutputSegment(modelOutputState);
           void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' }).finally(() => {
             forwarder.forward(msg);
           });
