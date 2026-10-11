@@ -45,6 +45,7 @@ function createMachine() {
         switch (actionId) {
             case 'computer.targets.list': return targetList;
             case 'computer.target.get': return selection;
+            case 'computer.target.select': return selection;
             case 'computer.control.status': return current;
             case 'computer.control.interrupt': {
                 current = status('human', { stopping: true, controlEpoch: 2 });
@@ -128,6 +129,7 @@ describe('useComputerSessionControl', () => {
         expect(hook.getCurrent().failure).toBeNull();
         expect(hook.getCurrent().canInput).toBe(true);
         expect(calls.filter(action => action === 'computer.capture')).toHaveLength(1);
+        expect(calls.filter(action => action === 'computer.target.select')).toHaveLength(code === 'human_input_interruption_uncertain' ? 1 : 0);
         expect(calls).not.toContain('computer.input');
     });
     it('does not release the native quarantine when an explicit recapture still fails', async () => {
@@ -135,6 +137,7 @@ describe('useComputerSessionControl', () => {
         const machine: ComputerMachineRpc = async ({ actionId }) => {
             calls.push(actionId);
             if (actionId === 'computer.target.get') return selection;
+            if (actionId === 'computer.target.select') return selection;
             if (actionId === 'computer.targets.list') return targetList;
             if (actionId === 'computer.capture') return { ...identity, status: 'failed', code: 'driver_unavailable' };
             return status('human', { uncertain: true });
@@ -147,6 +150,26 @@ describe('useComputerSessionControl', () => {
         expect(hook.getCurrent().canInput).toBe(false);
         expect(hook.getCurrent().presence.kind).toBe('unconfirmed');
         expect(hook.getCurrent().failure).toBe('driver_unavailable');
+        expect(calls).not.toContain('computer.input');
+    });
+
+    it('keeps unknown input quarantined when admitted source recovery is refused', async () => {
+        const calls: string[] = [];
+        const machine: ComputerMachineRpc = async ({ actionId }) => {
+            calls.push(actionId);
+            if (actionId === 'computer.target.get') return selection;
+            if (actionId === 'computer.targets.list') return targetList;
+            if (actionId === 'computer.control.status') return status('human', { uncertain: true });
+            if (actionId === 'computer.target.select') return { ok: false, errorCode: 'approval_rejected', error: 'approval_rejected' };
+            if (actionId === 'computer.capture') return capture;
+            throw new Error(`Unexpected recovery RPC: ${actionId}`);
+        };
+        const hook = await renderControl(machine);
+        await act(async () => { hook.getCurrent().checkAgain(); });
+        expect(hook.getCurrent().canInput).toBe(false);
+        expect(hook.getCurrent().presence.kind).toBe('unconfirmed');
+        expect(hook.getCurrent().failure).toBe('approval_rejected');
+        expect(calls).not.toContain('computer.capture');
         expect(calls).not.toContain('computer.input');
     });
 
@@ -394,6 +417,52 @@ describe('useComputerSessionControl', () => {
             expect(await effect).toMatchObject({ ok: true, value: effectResult });
             expect(await client.handBack()).toEqual({ ok: false, code: 'action_account_scope_changed' });
         } finally {
+            publishAppliedActiveServerRuntimeAvailability(false);
+            storage.setState({ profileScope: previousScope, profile: previousProfile });
+            publishAppliedActiveServerSnapshot(previousSnapshot, previousAvailable);
+        }
+    });
+
+    it('does not capture after the admitted recovery selection settles for a retired Account', async () => {
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const previousScope = storage.getState().profileScope;
+        const previousProfile = storage.getState().profile;
+        const previousSnapshot = getAppliedActiveServerSnapshot();
+        const previousAvailable = isAppliedActiveServerRuntimeAvailable();
+        const serverId = 'recovery-account-home';
+        storage.getState().activateProfileScope({ serverId, accountId: 'recovery-account-a' });
+        publishAppliedActiveServerSnapshot({ serverId, serverUrl: 'https://recovery-account.test', generation: 1 });
+        const accountLifetime = captureActiveServerAccountScopeLifetime();
+        if (!accountLifetime) throw new Error('Expected the canonical recovery Account lifetime');
+        const pendingSelection = createDeferred<typeof selection>();
+        const selectIssued = createDeferred<void>();
+        const calls: string[] = [];
+        const machine: ComputerMachineRpc = async ({ actionId }) => {
+            calls.push(actionId);
+            if (actionId === 'computer.target.get') return selection;
+            if (actionId === 'computer.targets.list') return targetList;
+            if (actionId === 'computer.control.status') return status('human', { uncertain: true });
+            if (actionId === 'computer.target.select') { selectIssued.resolve(); return await pendingSelection.promise; }
+            if (actionId === 'computer.capture') return capture;
+            throw new Error(`Unexpected recovery RPC: ${actionId}`);
+        };
+        const executor = executorWith(machine);
+        const scope = { serverId, sessionId: 'recovery-account-session', machineId: 'machine_1' };
+        const hook = await renderHook(() => useComputerSessionControl({ scope, execute: executor.execute, accountLifetime }));
+        try {
+            await act(async () => { hook.getCurrent().checkAgain(); });
+            expect(calls).toContain('computer.target.select');
+            await selectIssued.promise;
+            await act(async () => { storage.getState().activateProfileScope({ serverId, accountId: 'recovery-account-b' }); });
+            await act(async () => { pendingSelection.resolve({ ...selection, sourceId: 'retired-recovery-source' }); });
+            expect(hook.getCurrent().selection).toBeNull();
+            expect(hook.getCurrent().canInput).toBe(false);
+            expect(calls).not.toContain('computer.capture');
+        } finally {
+            pendingSelection.resolve(selection);
+            await hook.unmount();
             publishAppliedActiveServerRuntimeAvailability(false);
             storage.setState({ profileScope: previousScope, profile: previousProfile });
             publishAppliedActiveServerSnapshot(previousSnapshot, previousAvailable);

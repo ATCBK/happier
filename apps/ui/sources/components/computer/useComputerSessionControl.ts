@@ -1,10 +1,11 @@
 import * as React from 'react';
-import type { ComputerGrantStatusV1, ComputerSelectedTargetResponseV1 } from '@happier-dev/protocol';
+import type { ComputerGrantStatusV1, ComputerSelectedTargetResponseV1, ComputerTargetV1 } from '@happier-dev/protocol';
 import type { HappierPresenceTakeControlResult } from '@happier-dev/plugin-ui/presentation';
 
 import type { BrowserCopresence } from '@/sync/domains/browser/automation/copresence';
 import {
     getComputerSessionProjection,
+    createComputerControlClient,
     type ComputerActionExecute,
     type ComputerControlClient,
     type ComputerSessionScope,
@@ -14,6 +15,7 @@ import { resolveComputerRecovery } from '@/sync/domains/computer/targets';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
 let frontDoorExecute: ComputerActionExecute | null = null;
 const EMPTY_SNAPSHOT = { selection: null, status: null, grants: null, failure: null };
@@ -90,7 +92,17 @@ export function useComputerSessionControl(input: Readonly<{
         () => (sessionId && machineId && accountLifetime !== null ? getComputerSessionProjection({ serverId, sessionId, machineId }, execute, accountLifetime) : null),
         [accountLifetime, execute, machineId, serverId, sessionId],
     );
-    const client: ComputerControlClient | null = projection?.client ?? null;
+    const mountedEffects = useMountedActionExecution(input.execute ? null : accountLifetime?.scope ?? null);
+    const mountedExecute: ComputerActionExecute = React.useCallback((actionId, actionInput, context) => mountedEffects.execute(actionId, actionInput, {
+        ...(context.defaultSessionId ? { defaultSessionId: context.defaultSessionId } : {}),
+        ...(context.signal ? { signal: context.signal } : {}),
+    }), [mountedEffects.execute]);
+    // Read projections keep the incumbent shared executor identity. A mounted
+    // effect borrows the same Account but awaits the existing approval owner.
+    const client: ComputerControlClient | null = React.useMemo(() => input.execute
+        ? projection?.client ?? null
+        : sessionId && machineId && accountLifetime ? createComputerControlClient({ serverId, sessionId, machineId }, mountedExecute, accountLifetime) : null,
+    [accountLifetime, input.execute, machineId, mountedExecute, projection, serverId, sessionId]);
     const enabled = input.enabled ?? true;
     const subscribe = React.useCallback((listener: () => void) => projection?.subscribe(listener, enabled) ?? (() => {}), [enabled, projection]);
     const getSnapshot = React.useCallback(() => projection?.getSnapshot() ?? EMPTY_SNAPSHOT, [projection]);
@@ -155,8 +167,30 @@ export function useComputerSessionControl(input: Readonly<{
         if (!owner?.isCurrent()) return;
         updateLocalPresentation({ busy: 'check', failure: null });
         void (async () => {
+            const snapshot = projection?.getSnapshot();
+            let identity: Readonly<{ target: ComputerTargetV1; sourceId: string }> | undefined;
+            if (snapshot?.status?.uncertain || snapshot?.failure === 'human_input_interruption_uncertain') {
+                const selected = snapshot.selection;
+                if (!selected?.selectedTarget || !selected.sourceId) {
+                    updateLocalPresentation({ busy: null, failure: 'computer_target_not_open' });
+                    return;
+                }
+                // Only the existing selection owner can retire the uncertain
+                // native process. A fresh observation cannot clear that quarantine.
+                const recovered = await owner.selectTarget(selected.selectedTarget, selected.access ?? 'use');
+                if (clientRef.current !== owner || !owner.isCurrent()) return;
+                if (!recovered.ok || !recovered.value.selectedTarget || !recovered.value.sourceId) {
+                    updateLocalPresentation({ failure: recovered.ok ? 'invalid_action_output' : recovered.code });
+                    await refreshStatus();
+                    if (clientRef.current !== owner || !owner.isCurrent()) return;
+                    updateLocalPresentation({ busy: null });
+                    return;
+                }
+                projection?.applySelection(recovered.value);
+                identity = { target: recovered.value.selectedTarget, sourceId: recovered.value.sourceId };
+            }
             // The person's own look at the window is the fresh observation that confirms the release.
-            const result = await owner.observe();
+            const result = await owner.observe(identity);
             if (clientRef.current !== owner || !owner.isCurrent()) return;
             if (!result.ok) updateLocalPresentation({ failure: result.code });
             else if (result.value.status === 'failed') updateLocalPresentation({ failure: result.value.code });
@@ -164,7 +198,7 @@ export function useComputerSessionControl(input: Readonly<{
             if (clientRef.current !== owner || !owner.isCurrent()) return;
             updateLocalPresentation({ busy: null });
         })();
-    }, [client, refreshStatus, updateLocalPresentation]);
+    }, [client, projection, refreshStatus, updateLocalPresentation]);
 
     const stopSharing = React.useCallback(() => {
         const owner = client;

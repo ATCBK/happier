@@ -212,6 +212,10 @@ export function createComputerCaptureSource(input: Readonly<{
     get appName() { return appName; },
     async resolveTarget() {
       if (closed) throw new Error('capture_source_unavailable');
+      // Unknown input settlement quarantines this retained process, not the
+      // installed driver. Keep its proven selection and authoritative uncertain
+      // status readable until admitted target selection retires the process.
+      if (control.getStatus().uncertain) return { target: input.target, title, ...(appName ? { appName } : {}) };
       const target = (await (await getDriver()).listTargets()).find(entry =>
         computerTargetKey(entry.target) === computerTargetKey(input.target));
       if (target) { title = target.title ?? ''; appName = target.appName; }

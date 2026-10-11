@@ -1,12 +1,121 @@
 import { describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { createUnavailableRuntimeActionExecutor } from '@happier-dev/protocol/actions/executor/dispatch';
 import { native, target, captureResult } from './nativeComputerBoundary.testkit';
 import { createManagedComputerDriver } from './managedComputerDriver';
 import { createComputerCaptureSource } from '../source';
 import { createComputerRoutes } from '../routes';
 import { createMachineLiveStreamCaptureRegistry } from '../../peer/mediation/stream/captureRegistry';
 
+// The CLI retains its isolated filesystem home. The real cross-package UI owner
+// also needs its canonical native boundary, including CJS loads that vi.mock
+// alone cannot intercept. Load that setup before resolving the UI owner graph.
+await import('../../../../../ui/sources/dev/vitestSetup');
+const { useComputerSessionControl } = await import('../../../../../ui/sources/components/computer/useComputerSessionControl');
+const { renderHook } = await import('../../../../../ui/sources/dev/testkit/hooks/renderHook');
+const { createComputerRuntimeActionExecutor } = await import('../../../../../ui/sources/sync/domains/computer/actions/runtimeActionExecutor');
+const { publishComputerStreamInputFailure } = await import('../../../../../ui/sources/sync/domains/computer/computerControlClient');
+
 // Keep lifecycle/admission real beneath the shared stdio process boundary.
 describe.skipIf(process.platform !== 'linux')('native input settlement and recovery', () => {
+  it.each([false, true])('recovers a mounted uncertain source through retirement and fresh capture without replaying physical input (reopened: %s)', async reopened => {
+    let physicalInputs = 0;
+    let nextCapture = 0;
+    // The image-writer's complete 1×1 PNG vector, unlike the parser-only
+    // header fixture, is valid through the real capture media persistence path.
+    const persistedPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=';
+    native.call.mockImplementation(async ({ name }) => {
+      if (name === 'get_window_state') return { ...captureResult(), content: [{ type: 'image', mimeType: 'image/png', data: persistedPng }],
+        structuredContent: { ...captureResult().structuredContent, screenshot_width: 1, screenshot_height: 1,
+          capture_id: `mounted-recovery-${nextCapture++}` } };
+      if (name === 'list_windows') return { structuredContent: { windows: [{ pid: 42, window_id: 123, title: 'Editor' }] } };
+      if (name === 'check_permissions') return { structuredContent: { x11: true, xsend_event: true } };
+      if (name === 'click') { physicalInputs += 1; throw new Error('lost physical input acknowledgement'); }
+      return { structuredContent: { effect: 'unverifiable' } };
+    });
+    const registry = createMachineLiveStreamCaptureRegistry();
+    const source = createComputerCaptureSource({ sessionId: 'mounted-session', target, executablePath: '/managed/cua-driver' });
+    registry.register({ sourceId: source.sourceId, streamFamily: 'screen', computer: source, adapter: source.adapter,
+      capabilities: { v: 1, sourceId: source.sourceId, sourceKind: 'screen', supportedCodecs: ['image.frame.v1'], inputMode: 'shared', sidebands: [], health: { status: 'available' } } });
+    const routes = createComputerRoutes({ machineId: 'machine', registry, executablePath: '/managed/cua-driver', defaultDisplayId: ':73' });
+    const scope = { sessionId: 'mounted-session', machineId: 'machine' };
+    const actions: string[] = [];
+    const runtimeActionExecute = createComputerRuntimeActionExecutor({
+      fallback: createUnavailableRuntimeActionExecutor(),
+      executeOnMachine: async ({ actionId, input, sessionId, signal }) => {
+        actions.push(actionId);
+        return routes.dispatch(actionId, input, { authority: 'present_user', defaultSessionId: sessionId, signal });
+      },
+    });
+    // Unrelated host transports are unavailable; the Action front door, native
+    // source, control and process settlement beneath this boundary stay real.
+    const unavailablePort = async (): Promise<never> => { throw new Error('Unexpected non-computer transport'); };
+    const executor = createActionExecutor({
+      executionRunStart: unavailablePort, executionRunList: unavailablePort, executionRunGet: unavailablePort,
+      detachedExecutionRunSend: unavailablePort, executionRunStop: unavailablePort, executionRunAction: unavailablePort,
+      executionRunWait: unavailablePort, sessionOpen: unavailablePort, sessionFork: unavailablePort,
+      sessionRollback: unavailablePort, sessionSpawnNew: unavailablePort, pathsListRecent: unavailablePort,
+      machinesList: unavailablePort, serversList: unavailablePort, reviewEnginesList: unavailablePort,
+      agentsBackendsList: unavailablePort, agentsModelsList: unavailablePort, sessionSendMessage: unavailablePort,
+      sessionModeSet: unavailablePort, sessionModesList: unavailablePort, sessionList: unavailablePort,
+      sessionActivityGet: unavailablePort, sessionRecentMessagesGet: unavailablePort, resetGlobalVoiceAgent: unavailablePort,
+      daemonMemorySearch: unavailablePort, daemonMemoryGetWindow: unavailablePort, daemonMemoryEnsureUpToDate: unavailablePort,
+      runtimeActionExecute,
+    } satisfies ActionExecutorDeps);
+    let hook = await renderHook(() => useComputerSessionControl({ scope, execute: executor.execute }));
+    try {
+      expect(hook.getCurrent().canInput).toBe(true);
+      await act(async () => {
+        // Native viewer input first acquires the existing takeover owner, then
+        // observes the held target before issuing its physical effect.
+        await source.interrupt();
+        const oldCapture = await source.observe('human');
+        expect(await source.input(oldCapture.captureId, { kind: 'click', x: 0, y: 0 }, 'human'))
+          .toMatchObject({ status: 'interrupted', completion: 'unknown' });
+        publishComputerStreamInputFailure(scope, source.sourceId, 'human_input_interruption_uncertain');
+        hook.getCurrent().refresh();
+      });
+      expect(hook.getCurrent().failure).toBe('human_input_interruption_uncertain');
+      expect(hook.getCurrent().selection?.sourceId).toBe(source.sourceId);
+      expect(hook.getCurrent().canInput).toBe(false);
+      if (reopened) {
+        await hook.unmount();
+        hook = await renderHook(() => useComputerSessionControl({ scope, execute: executor.execute }));
+        expect(hook.getCurrent().selection?.sourceId).toBe(source.sourceId);
+        expect(hook.getCurrent().presence.kind).toBe('unconfirmed');
+        expect(hook.getCurrent().failure).toBeNull();
+        expect(hook.getCurrent().canInput).toBe(false);
+      }
+      const oldTransport = native.instances[0]!;
+      native.close.mockImplementation(async (transport: { onclose?: () => void }) => {
+        if (transport !== oldTransport) transport.onclose?.();
+      });
+      const recoveryStart = actions.length;
+      await act(async () => { hook.getCurrent().checkAgain(); });
+      await vi.waitFor(() => expect(oldTransport.close).toHaveBeenCalledOnce());
+      expect(hook.getCurrent().busy).toBe('check');
+      expect(registry.list()[0]?.computer).toBe(source);
+      expect(physicalInputs).toBe(1);
+      await act(async () => { oldTransport.onclose?.(); });
+      await vi.waitFor(() => expect(hook.getCurrent().busy).toBeNull());
+      const fresh = registry.list()[0]!.computer!;
+      expect(fresh.sourceId).not.toBe(source.sourceId);
+      await expect(source.observe()).rejects.toThrow('capture_source_unavailable');
+      expect(hook.getCurrent().selection?.sourceId).toBe(fresh.sourceId);
+      expect(hook.getCurrent().failure).toBeNull();
+      expect(hook.getCurrent().canInput).toBe(true);
+      expect(fresh.status().uncertain).toBe(false);
+      expect(actions.slice(recoveryStart)).toContain('computer.target.select');
+      expect(actions.slice(recoveryStart).indexOf('computer.target.select')).toBeLessThan(actions.slice(recoveryStart).indexOf('computer.capture'));
+      expect(physicalInputs).toBe(1);
+      expect(actions).not.toContain('computer.input');
+    } finally {
+      for (const transport of native.instances) transport.onclose?.();
+      await hook.unmount();
+      await routes.dispose();
+    }
+  });
   it('keeps a proven capture target refusal known and allows a fresh observation', async () => {
     let refused = true;
     native.call.mockImplementation(async ({ name }) => name === 'get_window_state' ? captureResult()
@@ -179,7 +288,7 @@ describe.skipIf(process.platform !== 'linux')('native input settlement and recov
     }
   });
 
-  it('returns typed native failure when reading an unusable selected source', async () => {
+  it('retains the selected identity and producer uncertainty when reading a quarantined source', async () => {
     native.call.mockImplementation(async ({ name }) => name === 'get_window_state' ? captureResult()
       : { isError: true, structuredContent: { effect: 'refused', error: { code: 'tool_error' } } });
     const registry = createMachineLiveStreamCaptureRegistry();
@@ -192,7 +301,9 @@ describe.skipIf(process.platform !== 'linux')('native input settlement and recov
     try {
       expect(await routes.dispatch('computer.target.get', { machineId: 'machine' },
         { authority: 'present_user', defaultSessionId: 'session' }))
-        .toMatchObject({ ok: false, errorCode: 'driver_unavailable' });
+        .toMatchObject({ selectedTarget: target, sourceId: source.sourceId });
+      expect(await routes.dispatch('computer.control.status', { machineId: 'machine' },
+        { authority: 'present_user', defaultSessionId: 'session' })).toMatchObject({ uncertain: true });
       expect(registry.list()[0]?.computer).toBe(source);
     } finally { await routes.dispose(); }
   });

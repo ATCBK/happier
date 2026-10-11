@@ -70,7 +70,8 @@ export function createComputerControlClient(scope: ComputerSessionScope, execute
         interrupt: () => run<ComputerActionResultV1>('computer.control.interrupt', machine, ComputerActionResultV1Schema),
         handBack: () => run<ComputerActionResultV1>('computer.control.handBack', machine, ComputerActionResultV1Schema),
         /** A fresh look at the window by the person: what confirms an unconfirmed stop. */
-        observe: () => run<ComputerCaptureResponseV1>('computer.capture', machine, ComputerCaptureResponseV1Schema),
+        observe: (identity?: Readonly<{ target: ComputerTargetV1; sourceId: string }>) => run<ComputerCaptureResponseV1>(
+            'computer.capture', { ...machine, ...identity }, ComputerCaptureResponseV1Schema),
         stopSharing: () => run<ComputerActionResultV1>('computer.target.close', machine, ComputerActionResultV1Schema),
     };
 }

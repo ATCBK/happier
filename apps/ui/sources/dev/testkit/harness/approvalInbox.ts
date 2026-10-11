@@ -83,6 +83,8 @@ export async function replayApprovedAsDaemon(input: Readonly<{
     machineId: string;
     artifactId: string;
     signal?: AbortSignal;
+    /** Runtime-native Actions use their real owner over the caller's daemon IO boundary. */
+    runtimeActionExecute?: import('@happier-dev/protocol/actions/executor/types').RuntimeActionExecute;
 }>): Promise<ExecuteResult> {
     const [{ createActionExecutor }, { approvalArtifactBodyMatchesHeaderV1 },
         { captureLazyActionAccountContext }, { createMachineConnectionActionDeps },
@@ -101,6 +103,7 @@ export async function replayApprovedAsDaemon(input: Readonly<{
         const read = (artifactId: string) => account.fetchArtifact(artifactId);
         const deps = {
             ...createMachineConnectionActionDeps(),
+            ...(input.runtimeActionExecute ? { runtimeActionExecute: input.runtimeActionExecute } : {}),
             connectedServiceAction: createUiConnectedServiceAction(account),
             approvalsGet: async ({ artifactId }) => {
                 const artifact = await read(artifactId);
