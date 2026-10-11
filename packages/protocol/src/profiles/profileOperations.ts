@@ -345,8 +345,12 @@ export function createProfileOperations(ports: ProfileOperationsPorts) {
             && Object.entries(proposedBindings).every(([key, value]) => Object.hasOwn(bindings, key) && bindings[key] === value);
           const effective = opened.profiles.find(profile => profile.id === id)?.secretBindings;
           if (!unchanged(existing.record.secretBindings) && (!effective || !unchanged(effective))) {
+            // Save supplies the authoritative private map, not a sparse patch.
+            // Preserve unrelated None masks without resurrecting omitted refs
+            // for genuinely removed requirements.
+            const noneMasks = Object.fromEntries(Object.entries(record.secretBindings).filter(([, binding]) => binding === null));
             const parsed = ProfileRecordV1Schema.safeParse({ ...record,
-              secretBindings: { ...record.secretBindings, ...proposedBindings } });
+              secretBindings: { ...noneMasks, ...proposedBindings } });
             if (!parsed.success) return invalid('invalid-definition', id);
             record = parsed.data;
           }

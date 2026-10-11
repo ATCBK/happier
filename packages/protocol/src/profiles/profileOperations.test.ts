@@ -751,6 +751,32 @@ describe('Profile semantic operations', () => {
       secretBindings: { DEFAULT: 'secret-default' } });
   });
 
+  it('removes a deleted Artifact requirement private reference while preserving unrelated None masks on combined Save', async () => {
+    const artifactProfile = { ...profile, envVarRequirements: [
+      { name: 'TOKEN', kind: 'secret' as const, required: true },
+      { name: 'KEPT', kind: 'secret' as const, required: true },
+    ] };
+    const artifact = { artifactId: 'published-a', header: { kind: 'launch-profile.v1', profileId: 'a', name: 'Alpha' },
+      body: JSON.stringify({ kind: 'launch-profile.v1', profile: artifactProfile, secretBindings: {} }),
+      access: 'edit' as const, revision: { headerVersion: 2, bodyVersion: 3 } };
+    let record = ProfileRecordV1Schema.parse({ ...row, definition: { kind: 'artifact', artifactId: artifact.artifactId },
+      secretBindings: { TOKEN: 'secret-removed', KEPT: 'secret-kept', MASKED: null } });
+    const owner = createProfileOperations({ readCatalog: () => ({ ...activeAuthority, status: 'ready',
+      records: [{ record, revision: 4 }], diagnostics: [], referenceGuardRevision: 5 }),
+      artifactsById: () => new Map([[artifact.artifactId, artifact]]),
+      writeRecord: async input => { record = ProfileRecordV1Schema.parse(input.record); return { status: 'updated', id: record.id, revision: 5 }; },
+      deleteRecord: async input => ({ status: 'updated', id: input.id, revision: 5 }),
+      writeArtifactProfile: async input => {
+        artifact.body = JSON.stringify({ kind: 'launch-profile.v1', profile: input.profile, secretBindings: {} });
+        return { status: 'updated', id: record.id, revision: input.expectedRevision };
+      } });
+    expect(await owner.save({ profile: { ...artifactProfile, envVarRequirements: artifactProfile.envVarRequirements.filter(requirement => requirement.name !== 'TOKEN') },
+      expectedRevision: 4, expectedArtifactRevision: artifact.revision, secretBindings: { KEPT: 'secret-kept' } }))
+      .toEqual({ status: 'updated', id: 'a', revision: 5 });
+    expect(record.secretBindings).toEqual({ KEPT: 'secret-kept', MASKED: null });
+    expect(JSON.parse(artifact.body).profile.envVarRequirements).toEqual([{ name: 'KEPT', kind: 'secret', required: true }]);
+  });
+
   it('refuses stale row, Artifact and retired Home evidence before either Save mutation', async () => {
     const artifact = { artifactId: 'published-a', header: { kind: 'launch-profile.v1', profileId: 'a', name: 'Alpha' },
       body: JSON.stringify({ kind: 'launch-profile.v1', profile, secretBindings: {} }), access: 'edit' as const,
