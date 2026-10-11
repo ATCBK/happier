@@ -120,8 +120,8 @@ describe('Prompt catalog captured Account mutation publication', () => {
     await expect(mutatePromptLibraryRoleOverride(scope, { kind: 'set', override: {
       roleId: 'builder', workspaceWrites: 'deny',
     } }, controller.signal)).resolves.toBeUndefined();
-    expect(getPromptLibraryCatalogValue(scope, 'role-overrides')).toMatchObject({ status: 'ready', revision: 2,
-      value: { overrides: { builder: { workspaceWrites: 'deny' } } } });
+    await vi.waitFor(() => expect(getPromptLibraryCatalogValue(scope, 'role-overrides')).toMatchObject({ status: 'ready', revision: 2,
+      value: { overrides: { builder: { workspaceWrites: 'deny' } } } }));
     expect(getStorage().getState().settingsVersion).toBe(settingsVersion);
   });
 });

@@ -1,11 +1,24 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyPromptLibraryCatalogSnapshot, beginPromptLibraryCatalogLoad, getPromptLibraryCatalogValue,
+import { applyPromptLibraryCatalogSnapshot, applyPromptLibraryCatalogAcknowledgedRecord, beginPromptLibraryCatalogLoad, getPromptLibraryCatalogValue,
     resetPromptLibraryCatalogSnapshotsForTests } from './promptLibraryCatalogSnapshot';
 afterEach(resetPromptLibraryCatalogSnapshotsForTests);
 const scope = { serverId: 'home', accountId: 'account' };
 const catalog = { status: 'ready' as const, rows: [{ record: { key: 'folders' as const,
     value: { v: 1 as const, folders: [{ id: 'folder', name: 'Folder' }] } }, revision: 3 }], tombstones: [], diagnostics: [] };
 describe('Prompt library scoped publications', () => {
+    it('publishes an acknowledged row during refresh without replacing siblings, newer receipts, or retired Accounts', () => {
+        applyPromptLibraryCatalogSnapshot(scope, { catalog, rawSettings: {}, sourceSettingsVersion: 1 }, true);
+        beginPromptLibraryCatalogLoad(scope);
+        const sibling = getPromptLibraryCatalogValue(scope, 'role-overrides');
+        const record = { key: 'folders' as const, value: { v: 1 as const, folders: [{ id: 'folder', name: 'Acknowledged' }] } };
+        applyPromptLibraryCatalogAcknowledgedRecord(scope, record, 4, true);
+        expect(getPromptLibraryCatalogValue(scope, 'folders')).toMatchObject({ status: 'loading', stale: true, revision: 4, value: record.value });
+        const acknowledged = getPromptLibraryCatalogValue(scope, 'folders');
+        applyPromptLibraryCatalogAcknowledgedRecord(scope, catalog.rows[0]!.record, 3, true);
+        applyPromptLibraryCatalogAcknowledgedRecord(scope, catalog.rows[0]!.record, 5, false);
+        expect(getPromptLibraryCatalogValue(scope, 'folders')).toBe(acknowledged);
+        expect(getPromptLibraryCatalogValue(scope, 'role-overrides')).toBe(sibling);
+    });
     it('keeps unchanged active domains stable across preference revisions and sibling catalog edits', () => {
         applyPromptLibraryCatalogSnapshot(scope, { catalog, rawSettings: {}, sourceSettingsVersion: 1 }, true);
         const first = getPromptLibraryCatalogValue(scope, 'folders');

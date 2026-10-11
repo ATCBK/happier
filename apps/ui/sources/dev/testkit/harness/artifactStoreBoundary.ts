@@ -1,5 +1,6 @@
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { encodeBase64, decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { Buffer } from 'buffer';
 
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -149,7 +150,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
                 const encodedCursor = url.searchParams.get('cursor');
                 if (encodedCursor) {
                     try {
-                        const decoded: unknown = JSON.parse(Buffer.from(encodedCursor, 'base64url').toString('utf8'));
+                        const decoded: unknown = JSON.parse(Buffer.from(decodeBase64(encodedCursor, 'base64url')).toString('utf8'));
                         if (decoded && typeof decoded === 'object' && 'id' in decoded && typeof decoded.id === 'string' && 'updatedAt' in decoded) {
                             const updatedAt = new Date(Number(decoded.updatedAt)).getTime();
                             if (Number.isFinite(updatedAt)) cursor = { updatedAt, id: decoded.id };
@@ -270,7 +271,7 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
         import('@/sync/runtime/orchestration/appliedActiveServerRuntime'),
     ]);
     const accountId = 'artifact-account';
-    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const token = `header.${encodeBase64(Buffer.from(JSON.stringify({ sub: accountId })), 'base64url')}.signature`;
     const credentialSpy = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
     const boundary = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: 'plain' });
     const requests: Readonly<{ path: string; method: string }>[] = [];

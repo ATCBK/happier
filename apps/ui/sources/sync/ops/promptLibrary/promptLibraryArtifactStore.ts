@@ -153,13 +153,16 @@ export function createUiPromptLibraryArtifactStore(
     assertCurrent: account.assertCurrent,
     readCatalog: async signal => {
       const { refreshPromptLibraryCatalog } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
-      const { getPromptLibraryCatalogSnapshot } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
+      const { getPromptLibraryCatalogSnapshot, getPromptLibraryCatalogValue } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
       throwIfAborted(signal);
       account.assertCurrent();
       // The catalog loader publishes readable authority before retained-source/history maintenance,
       // and owns the Account lifetime until that maintenance settles. Actions share that read owner.
       const scope = { serverId: account.serverId, accountId: account.accountId };
-      await refreshPromptLibraryCatalog(scope);
+      // The reviewed fresh row is usable authority; the Home CAS detects any unobserved remote edit.
+      // A known-stale row is never used to construct a mutation.
+      const folders = getPromptLibraryCatalogValue(scope, 'folders');
+      if (folders.status !== 'ready' || folders.stale) await refreshPromptLibraryCatalog(scope);
       throwIfAborted(signal);
       account.assertCurrent();
       const projection = getPromptLibraryCatalogSnapshot(scope);

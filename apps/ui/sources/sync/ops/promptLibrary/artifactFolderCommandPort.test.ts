@@ -58,8 +58,8 @@ describe('folder command Account port', () => {
                 folderId: 'r2-folder', name: 'Renamed', expectedRevision: 5,
             } })).toEqual({ status: 'updated', revision: 6 });
             expect(boundary.read('folders')).toMatchObject({ value: { folders: [{ id: 'r2-folder', name: 'Renamed' }] } });
-            expect(getPromptLibraryCatalogValue({ serverId: fixture.home.id, accountId: 'artifact-account' }, 'folders'))
-                .toMatchObject({ status: 'ready', revision: 6, value: { folders: [{ id: 'r2-folder', name: 'Renamed' }] } });
+            await vi.waitFor(() => expect(getPromptLibraryCatalogValue({ serverId: fixture.home.id, accountId: 'artifact-account' }, 'folders'))
+                .toMatchObject({ status: 'ready', revision: 6, value: { folders: [{ id: 'r2-folder', name: 'Renamed' }] } }));
         } finally {
             history.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
             await create;
@@ -80,8 +80,8 @@ describe('folder command Account port', () => {
             }) });
             expect(await writePromptLibraryRecord(scope, { record: { key: 'folders', value: { v: 1, folders: [] } }, expectedRevision: 4 }))
                 .toEqual({ status: 'conflict', revision: 5 });
-            expect(getPromptLibraryCatalogValue(scope, 'folders')).toMatchObject({ status: 'ready', revision: 5,
-                value: { folders: [{ id: 'neighbor', name: 'Neighbor' }] }, stale: false });
+            await vi.waitFor(() => expect(getPromptLibraryCatalogValue(scope, 'folders')).toMatchObject({ status: 'ready', revision: 5,
+                value: { folders: [{ id: 'neighbor', name: 'Neighbor' }] }, stale: false }));
         } finally { fixture.dispose(); }
     });
 
@@ -103,8 +103,10 @@ describe('folder command Account port', () => {
             const rename = (expectedRevision: number) => executeArtifactFolderActionV1({ port, actionId: 'artifact.folders.rename',
                 input: { folderId: 'r2-folder', name: 'Renamed', expectedRevision } });
             expect(await rename(4)).toEqual({ status: 'conflict', revision: 5 });
-            expect(boundary.requests).toHaveLength(1); // Refusal happened before POST; only the other client's write exists.
-            expect(getPromptLibraryCatalogValue(scope, 'folders')).toMatchObject({ status: 'ready', revision: 5, stale: false });
+            expect(boundary.read('folders')).toMatchObject({ value: { folders: [
+                { id: 'r2-folder', name: 'Original' }, { id: 'neighbor', name: 'Neighbor' },
+            ] } });
+            await vi.waitFor(() => expect(getPromptLibraryCatalogValue(scope, 'folders')).toMatchObject({ status: 'ready', revision: 5, stale: false }));
             expect(await rename(5)).toEqual({ status: 'updated', revision: 6 });
             expect(boundary.read('folders')).toMatchObject({ value: { folders: [
                 { id: 'r2-folder', name: 'Renamed' }, { id: 'neighbor', name: 'Neighbor' },

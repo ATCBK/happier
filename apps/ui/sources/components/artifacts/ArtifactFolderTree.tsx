@@ -11,6 +11,7 @@ import {
 } from '@happier-dev/plugin-ui/presentation';
 import { isArtifactFolderActionIdV1 } from '@happier-dev/protocol/prompts/library/artifactFolderActionIdsV1';
 import { isRecord } from '@happier-dev/protocol/common/records';
+import { ActionApprovalRequestCreatedResultSchema, type ActionApprovalRequestCreatedResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { PromptFolderEntryV1 } from '@happier-dev/protocol/prompts/library/promptFoldersV1';
 import type {
   EntityDragScopeV1,
@@ -28,6 +29,7 @@ import {
 import { Icon } from '@/components/ui/icons/Icon';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import {
   useEntityDragDropSnapshot,
@@ -47,7 +49,8 @@ import {
   useEntityDragDomBinding,
   useEntityDropDomBinding,
 } from '@/components/ui/treeDragDrop/useEntityDragDomBinding';
-import { Modal } from '@/modal';
+import { Modal, type CustomModalInjectedProps } from '@/modal';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { randomUUID } from '@/platform/randomUUID';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { useArtifacts } from '@/sync/domains/state/storage';
@@ -61,6 +64,7 @@ import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { isHoverCapablePrimaryPointer } from '@/utils/platform/webMobileHeuristics';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { HappyError } from '@/utils/errors/errors';
 
 import {
   projectArtifactBrowserRows,
@@ -120,12 +124,24 @@ export function useArtifactFolderCommands(): Readonly<{
   catalog: FolderActions['catalog'];
 }> {
   const { catalog, canWrite, execute } = useArtifactFolderActions();
+  const scope = useAccountSettingsScope();
+  const router = useRouter();
   const settle = React.useCallback(
     async (run: () => Promise<unknown>): Promise<boolean> => {
       try {
         await run();
         return true;
-      } catch {
+      } catch (error) {
+        const pending = ActionApprovalRequestCreatedResultSchema.safeParse(error instanceof HappyError ? error.details : null);
+        if (pending.success) {
+          Modal.alert(t('connect.waitingForApproval'), undefined, [
+            { text: t('common.cancel'), style: 'cancel' },
+            { text: t('common.open'), onPress: () => {
+              if (scope) router.push(`/inbox/approvals/${encodeURIComponent(pending.data.artifactId)}?serverId=${encodeURIComponent(scope.serverId)}` as never);
+            } },
+          ]);
+          return false;
+        }
         Modal.alert(
           t('common.error'),
           t('artifacts.browser.folders.saveFailed'),
@@ -133,7 +149,7 @@ export function useArtifactFolderCommands(): Readonly<{
         return false;
       }
     },
-    [],
+    [router, scope],
   );
   const create = React.useCallback(
     async (input: Readonly<{ id: string; parentId: string | null; name: string }>) => {
@@ -240,6 +256,7 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
   const styles = stylesheet;
   const wide = useDeviceType() !== 'phone';
   const settingsScope = useAccountSettingsScope();
+  const router = useRouter();
   const scope = React.useMemo<EntityDragScopeV1 | null>(
     () =>
       settingsScope
@@ -308,10 +325,10 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
   }, [commands.canWrite, revealFolder, scopeKey]);
   // "New folder…" from the Move chooser: once the folder it named is in the catalog, the entry moves
   // into it through the same semantic move the chooser's other places perform.
-  const [pendingMove, setPendingMove] = React.useState<Readonly<{ sourceId: string; folderId: string }> | null>(null);
+  const [pendingMove, setPendingMove] = React.useState<Readonly<{ sourceId: string; folderId: string; scopeKey: string }> | null>(null);
   const onFolderCreated = React.useCallback((created: FolderEdit, folderId: string) => {
     if (created.kind === 'create' && created.moveSourceId)
-      setPendingMove({ sourceId: created.moveSourceId, folderId });
+      setPendingMove({ sourceId: created.moveSourceId, folderId, scopeKey: created.scopeKey });
   }, []);
   const renameFolder = React.useCallback((folder: PromptFolderEntryV1) => {
     if (!commands.canWrite) return;
@@ -327,6 +344,22 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
   const finishEdit = React.useCallback((finished: FolderEdit) => {
     setEdit(current => current === finished ? null : current);
   }, []);
+  React.useEffect(() => {
+    if (currentEdit?.kind !== 'create') return;
+    const inFlight = { current: false };
+    const id = Modal.show({
+      component: FolderCreateModal,
+      props: { edit: currentEdit, testID: props.testID, onFinish: finishEdit, onCreated: onFolderCreated, inFlight },
+      chrome: {
+        kind: 'card', material: 'solid', title: t('artifacts.browser.folders.newFolder'),
+        subtitle: t('artifacts.browser.folders.nameHelp'),
+        dimensions: { size: 'dialog' }, phonePresentation: 'card', testID: `${props.testID}:edit:modal`,
+      },
+      onDismissRequest: () => !inFlight.current,
+      onRequestClose: () => finishEdit(currentEdit),
+    });
+    return () => Modal.hide(id);
+  }, [currentEdit, finishEdit, onFolderCreated, props.testID]);
 
   const orderedFolders = React.useMemo(() => {
     const children = new Map<string | null, PromptFolderEntryV1[]>();
@@ -448,17 +481,21 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
         await commands.execute(effect.actionId, input);
         return { status: 'applied' };
       } catch (error) {
-        const code =
-          error instanceof Error && error.message ? error.message : 'unknown';
+        const code = error instanceof HappyError ? error.code ?? 'unknown' : 'unknown';
+        const pending = ActionApprovalRequestCreatedResultSchema.safeParse(error instanceof HappyError ? error.details : null);
+        if (pending.success && scope) {
+          router.push(`/inbox/approvals/${encodeURIComponent(pending.data.artifactId)}?serverId=${encodeURIComponent(scope.serverId)}` as never);
+        }
         return {
           status: 'refused',
-          reason: { code, message: t('artifacts.browser.folders.saveFailed') },
+          reason: { code, message: pending.success ? t('connect.waitingForApproval') : t('artifacts.browser.folders.saveFailed') },
         };
       }
     },
   });
   React.useEffect(() => {
-    if (!pendingMove || !folders?.folders.some(folder => folder.id === pendingMove.folderId)) return;
+    if (pendingMove && pendingMove.scopeKey !== scopeKey) { setPendingMove(null); return; }
+    if (!pendingMove || !canWrite || !folders?.folders.some(folder => folder.id === pendingMove.folderId)) return;
     setPendingMove(null);
     fireAndForget(
       (async () => {
@@ -467,7 +504,7 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
       })(),
       { tag: 'ArtifactFolderTree.moveIntoNewFolder' },
     );
-  }, [folders, pendingMove, runtime, targetId]);
+  }, [canWrite, folders, pendingMove, runtime, scopeKey, targetId]);
   const dropDom = useEntityDropDomBinding(scope ? runtime : undefined);
   const hostRef = React.useCallback(
     (node: unknown) => {
@@ -533,27 +570,7 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
       })),
     [tree],
   );
-  const editKey = currentEdit
-    ? currentEdit.kind === 'rename'
-      ? `folder:${currentEdit.folder.id}`
-      : `draft:${currentEdit.id}`
-    : null;
-  const editingItems = React.useMemo(() => {
-    if (currentEdit?.kind !== 'create') return items;
-    const parentKey = currentEdit.parentId === null ? null : `folder:${currentEdit.parentId}`;
-    const parentIndex = items.findIndex(item => item.key === parentKey);
-    const parent = items[parentIndex];
-    const draft: TreeItem = {
-      key: `draft:${currentEdit.id}`,
-      parentKey,
-      depth: parent ? parent.depth + 1 : 0,
-      kind: 'leaf',
-      expanded: false,
-      title: t('artifacts.browser.folders.newFolder'),
-      mark: <Icon name="folder" />,
-    };
-    return [...items.slice(0, parentIndex + 1), draft, ...items.slice(parentIndex + 1)];
-  }, [currentEdit, items]);
+  const editKey = currentEdit?.kind === 'rename' ? `folder:${currentEdit.folder.id}` : null;
   const renderInlineEdit = React.useCallback(
     (item: TreeItem) => currentEdit && item.key === editKey ? (
       <FolderInlineEditor
@@ -612,7 +629,7 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
   );
 
   const unavailable =
-    scope !== null && catalog.status !== 'loading' && !canWrite;
+    scope !== null && !canWrite && (catalog.value !== null || catalog.status !== 'loading');
   const noFolders = canWrite && (folders?.folders.length ?? 0) === 0;
   const retry = React.useCallback(() => {
     if (settingsScope)
@@ -628,7 +645,8 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
           <SurfaceFreshnessLine
             testID={`${props.testID}:unavailable`}
             tone="warning"
-            reason={t('artifacts.browser.folders.unavailable')}
+            busy={catalog.status === 'loading'}
+            reason={t('artifacts.browser.folders.refusedUnavailable')}
             action={{ label: t('common.retry'), onPress: retry }}
           />
         </View>
@@ -651,7 +669,7 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
         <Tree
           testID={props.testID}
           accessibilityLabel={props.accessibilityLabel}
-          items={editingItems}
+          items={items}
           presentation="table"
           selectedKey={
             props.selectedArtifactId
@@ -690,6 +708,17 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
   );
 });
 
+function FolderCreateModal(props: CustomModalInjectedProps & Readonly<{
+  edit: FolderEdit;
+  testID: string;
+  onFinish: (edit: FolderEdit) => void;
+  onCreated: (edit: FolderEdit, folderId: string) => void;
+  inFlight: { current: boolean };
+}>) {
+  const commands = useArtifactFolderCommands();
+  return <FolderInlineEditor {...props} commands={commands} canWrite={commands.canWrite} />;
+}
+
 /** Only the editing row subscribes to draft keystrokes; the draft survives a hidden/collapsed row. */
 function FolderInlineEditor(props: Readonly<{
   edit: FolderEdit;
@@ -698,16 +727,24 @@ function FolderInlineEditor(props: Readonly<{
   testID: string;
   onFinish: (edit: FolderEdit) => void;
   onCreated: (edit: FolderEdit, folderId: string) => void;
+  inFlight?: { current: boolean };
 }>) {
   const name = props.edit.titles.useTitle();
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
-  const inFlight = React.useRef(false);
+  const [approval, setApproval] = React.useState<ActionApprovalRequestCreatedResult | null>(null);
+  const [errorCode, setErrorCode] = React.useState<string | null>(null);
+  const localInFlight = React.useRef(false);
+  const inFlight = props.inFlight ?? localInFlight;
+  const scope = useAccountSettingsScope();
+  const router = useRouter();
+  const sameScope = props.edit.scopeKey === JSON.stringify([scope?.serverId, scope?.accountId]);
   const save = async () => {
-    if (inFlight.current || !props.canWrite || !normalizePromptFolderName(name)) return;
+    if (inFlight.current || approval || !sameScope || !props.canWrite || !normalizePromptFolderName(name)) return;
     inFlight.current = true;
     setSaving(true);
     setError(null);
+    setErrorCode(null);
     try {
       if (props.edit.kind === 'create') {
         const folderId = await props.commands.create({
@@ -720,8 +757,14 @@ function FolderInlineEditor(props: Readonly<{
         await props.commands.rename(props.edit.folder, name);
       }
       props.onFinish(props.edit);
-    } catch {
-      setError(t('artifacts.browser.folders.saveFailed'));
+    } catch (failure) {
+      const pending = ActionApprovalRequestCreatedResultSchema.safeParse(failure instanceof HappyError ? failure.details : null);
+      if (pending.success) setApproval(pending.data);
+      else {
+        const code = failure instanceof HappyError ? failure.code : undefined;
+        setError(code === 'catalog-unavailable' ? refusalMessage(code) : t('artifacts.browser.folders.saveFailed'));
+        setErrorCode(code ?? 'folder-write-failed');
+      }
     } finally {
       inFlight.current = false;
       setSaving(false);
@@ -740,10 +783,9 @@ function FolderInlineEditor(props: Readonly<{
           accessibilityLabelledBy={`${props.testID}:edit:label`}
           value={name}
           onChangeText={props.edit.titles.publish}
-          error={error}
           autoFocus
           selectTextOnFocus
-          editable={!saving}
+          editable={!saving && !approval}
           placeholder={t('artifacts.browser.folders.namePlaceholder')}
           returnKeyType="done"
           onSubmitEditing={submit}
@@ -752,21 +794,15 @@ function FolderInlineEditor(props: Readonly<{
           }}
         />
       </FieldItem>
-      {props.edit.kind === 'create' ? (
-        // Said where a folder is made: a folder is personal filing, never sharing (lab `c-art TN`).
-        <Text style={stylesheet.editorHelp} testID={`${props.testID}:edit:help`}>
-          {t('artifacts.browser.folders.nameHelp')}
-        </Text>
-      ) : null}
+      {error ? <SurfaceStateCard size="line" kind="error" testID={`${props.testID}:edit:refused`}
+        title={error} diagnosticCode={errorCode ?? undefined} accessibilitySemantics="alert" /> : null}
+      {approval ? <SurfaceStateCard size="line" kind="warning" testID={`${props.testID}:edit:approval`}
+        title={t('connect.waitingForApproval')} action={{ label: t('common.open'), onPress: () => {
+          if (!scope || !sameScope) return;
+          props.onFinish(props.edit);
+          router.push(`/inbox/approvals/${encodeURIComponent(approval.artifactId)}?serverId=${encodeURIComponent(scope.serverId)}` as never);
+        } }} /> : null}
       <View style={stylesheet.editorActions}>
-        <RoundButton
-          testID={`${props.testID}:edit:save`}
-          title={props.edit.kind === 'create' ? t('artifacts.browser.folders.create') : t('common.save')}
-          size="small"
-          disabled={!props.canWrite || !normalizePromptFolderName(name)}
-          loading={saving}
-          onPress={submit}
-        />
         <RoundButton
           testID={`${props.testID}:edit:cancel`}
           title={t('common.cancel')}
@@ -774,6 +810,14 @@ function FolderInlineEditor(props: Readonly<{
           display="secondary"
           disabled={saving}
           onPress={() => props.onFinish(props.edit)}
+        />
+        <RoundButton
+          testID={`${props.testID}:edit:save`}
+          title={props.edit.kind === 'create' ? t('artifacts.browser.folders.create') : t('common.save')}
+          size="small"
+          disabled={!sameScope || Boolean(approval) || !props.canWrite || !normalizePromptFolderName(name)}
+          loading={saving}
+          onPress={submit}
         />
       </View>
     </View>
@@ -1326,12 +1370,7 @@ function ArtifactRowMenu(
 
 const stylesheet = StyleSheet.create((theme) => ({
   editor: { minWidth: 0, paddingVertical: 8, gap: 8 },
-  editorActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  editorHelp: {
-    ...Typography.default(),
-    ...happierPageTextMetrics('meta'),
-    color: theme.colors.text.secondary,
-  },
+  editorActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8 },
   freshness: {
     marginBottom: 12,
   },

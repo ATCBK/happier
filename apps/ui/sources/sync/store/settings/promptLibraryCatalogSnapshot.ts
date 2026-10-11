@@ -26,6 +26,32 @@ export function getPromptLibraryCatalogValue<K extends PromptLibraryCatalogKeyV1
 export function getPromptLibraryCatalogSnapshot(scope: ServerAccountScope): PromptLibraryCatalogProjection | null {
     return snapshots.get(serverAccountScopeKeySuffix(scope))?.projection ?? null;
 }
+/** A received CAS confirms this row, not the freshness of the rest of the catalog. */
+export function applyPromptLibraryCatalogAcknowledgedRecord(scope: ServerAccountScope, record: PromptLibraryRecordV1,
+    revision: number, current: boolean): void {
+    if (!current) return;
+    const scopeKey = serverAccountScopeKeySuffix(scope);
+    const previous = snapshots.get(scopeKey);
+    const old = previous?.values.get(record.key);
+    const catalog = previous?.projection.catalog;
+    const recordedRevision = catalog?.status === 'ready' || catalog?.status === 'partial'
+        ? catalog.rows.find(row => row.record.key === record.key)?.revision
+            ?? catalog.tombstones.find(row => row.key === record.key)?.revision
+        : undefined;
+    if ((typeof old?.revision === 'number' && old.revision > revision)
+        || (recordedRevision !== undefined && recordedRevision > revision)) return;
+    const values = new Map(previous?.values);
+    values.set(record.key, { status: old?.status ?? 'loading', value: record.value,
+        revision, sourceSettingsVersion: null, stale: true, reason: 'loading' });
+    const nextCatalog: PromptLibraryCatalogSnapshotV1 = catalog?.status === 'ready' || catalog?.status === 'partial'
+        ? { ...catalog, rows: [...catalog.rows.filter(row => row.record.key !== record.key), { record, revision }],
+            tombstones: catalog.tombstones.filter(row => row.key !== record.key),
+            diagnostics: catalog.diagnostics.filter(row => row.key !== record.key) }
+        : catalog ?? { status: 'loading' };
+    snapshots.set(scopeKey, { scope, values, projection: { catalog: nextCatalog,
+        rawSettings: previous?.projection.rawSettings ?? {}, sourceSettingsVersion: previous?.projection.sourceSettingsVersion ?? 0 } });
+    for (const listener of [...listeners]) listener();
+}
 export function applyPromptLibraryCatalogSnapshot(scope: ServerAccountScope, projection: PromptLibraryCatalogProjection, current: boolean): void {
     if (!current || (projection.catalog.status === 'unavailable' && projection.catalog.reason === 'scope-retired')) return;
     const scopeKey = serverAccountScopeKeySuffix(scope);

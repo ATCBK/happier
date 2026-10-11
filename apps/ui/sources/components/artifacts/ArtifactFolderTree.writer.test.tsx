@@ -1,50 +1,87 @@
+// @vitest-environment jsdom
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installWebLockManagerMock, type WebLockManagerMockHandle } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { renderScreen } from '@/dev/testkit';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
-import { resetPromptLibraryCatalogEngineForTests } from '@/sync/engine/settings/promptLibraryCatalogEngine';
-import { refreshPromptLibraryCatalog } from '@/sync/engine/settings/promptLibraryCatalogEngine';
-import { installPromptLibrarySettingsCommonModuleMocks } from '../settings/prompts/promptLibrarySettingsTestHelpers';
+import { resetPromptLibraryCatalogEngineForTests, refreshPromptLibraryCatalog } from '@/sync/engine/settings/promptLibraryCatalogEngine';
 import { ArtifactFolderTree } from './ArtifactFolderTree';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { ArtifactsBrowser } from './ArtifactsBrowserScreen';
+import { ModalProvider } from '@/modal';
 
-installPromptLibrarySettingsCommonModuleMocks({ storage: importOriginal => importOriginal() });
+const navigation = vi.hoisted(() => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn() }));
+// Only platform/rendering boundaries are replaced. Storage and the real ModalProvider stay
+// unmocked: an async importActual mock of the modal barrel can await its own import graph.
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ View: 'View', ScrollView: 'ScrollView', TextInput: 'TextInput',
+        Platform: { OS: 'web', select: ({ web, default: fallback }: { web?: unknown; default?: unknown }) => web ?? fallback } });
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock({ router: navigation }).module;
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: key => key });
+});
+// Browser portal transport is outside the renderer's host tree; retain the actual modal,
+// focus/dismissal components and form while projecting their portal children into this tree.
+vi.mock('@/utils/web/reactDomCjs', () => {
+    const portal = { createPortal: (children: React.ReactNode) => children };
+    return { requireReactDOM: () => portal, preloadReactDOM: async () => portal };
+});
 // Popover rendering is a platform boundary; the menu choices and command owner remain real.
 vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
     DropdownMenu: (props: Record<string, unknown>) => React.createElement('DropdownMenu', props),
 }));
 
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
+let webLocks: WebLockManagerMockHandle | undefined;
 let homeCount = 0;
+beforeEach(() => {
+    webLocks = installWebLockManagerMock();
+});
 afterEach(() => {
     resetPromptLibraryCatalogEngineForTests();
     resetPromptLibraryCatalogSnapshotsForTests();
     fixture?.dispose(); fixture = undefined;
+    webLocks?.restore(); webLocks = undefined;
     vi.clearAllMocks();
 });
 
-async function setup(kind: 'all' | 'prompt', initial: readonly { id: string; name: string; parentId: string | null }[] = [], browser = false) {
+async function setup(kind: 'all' | 'prompt', initial: readonly { id: string; name: string; parentId: string | null }[] = [], browser = false, askFirst = false) {
     const boundary = createPromptLibraryCatalogBoundary({ records: [{ key: 'folders', value: { v: 1, folders: [...initial] } }], revision: 4 });
     let outcome: 'updated' | 'conflict' | 'failed' = 'updated';
+    let holdReads: Promise<void> | null = null;
     fixture = await createPlainArtifactHomeFixture(`https://inline-folders-${++homeCount}.test`, { handleRequest: async (path, init) => {
+        if (path === '/v2/account/settings' && askFirst) return Response.json({ version: 0, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, actions: { 'artifact.folders.create': { approvalRequiredSurfaces: ['ui'] } } },
+        } } });
+        if (path === '/v1/account/entity-rows/prompt-library' && holdReads) await holdReads;
         if (path === '/v1/account/entity-rows/prompt-library/folders' && init?.method === 'POST') {
             if (outcome === 'conflict') return Response.json({ status: 'conflict', revision: 4 });
             if (outcome === 'failed') return Response.json({ error: 'unavailable' }, { status: 503 });
         }
         return boundary.handle(path, init);
     } });
+    if (askFirst) await fixture.hydrateAccountSettings();
     const testID = browser ? 'artifacts:folders' : 'folders';
-    const screen = await renderScreen(browser ? <AppPaneProvider><ArtifactsBrowser artifacts={[{
+    const screen = await renderScreen(<ModalProvider>{browser ? <AppPaneProvider><ArtifactsBrowser artifacts={[{
         id: 'document', title: 'Notes', isDecrypted: true, header: { title: 'Notes' }, headerVersion: 1,
         bodyVersion: 1, seq: 1, body: 'Notes', createdAt: 1, updatedAt: 1, access: 'owner', storageMode: 'plain',
     }]} loaded loadFailed={false} onRetry={() => {}} usage={null} /></AppPaneProvider>
         : <CoreCollectionScope><ArtifactFolderTree testID={testID} accessibilityLabel="Folders"
-            filter={{ query: '', kind, sort: 'title_asc' }} onOpenArtifact={() => {}} /></CoreCollectionScope>);
+            filter={{ query: '', kind, sort: 'title_asc' }} onOpenArtifact={() => {}} /></CoreCollectionScope>}</ModalProvider>);
     if (browser) await screen.pressByTestIdAsync('artifacts:view:folders');
     await vi.waitFor(() => expect(screen.findByTestId(initial.length ? `${testID}:row:folder:${initial[0]!.id}` : `${testID}:invite:new`)).toBeTruthy());
     const read = () => {
@@ -59,8 +96,78 @@ async function setup(kind: 'all' | 'prompt', initial: readonly { id: string; nam
         const menu = screen.findAll(node => node.props.testID === `folders:menu:folder:${folderId}` && typeof node.props.onSelect === 'function')[0];
         await act(async () => { menu!.props.onSelect(id); });
     };
-    return { screen, read, boundary, changeName, select, setOutcome: (next: typeof outcome) => { outcome = next; } };
+    return { screen, read, boundary, changeName, select, setOutcome: (next: typeof outcome) => { outcome = next; },
+        holdCatalogReads: () => {
+            let release!: () => void;
+            holdReads = new Promise<void>(resolve => { release = resolve; });
+            return () => { holdReads = null; release(); };
+        } };
 }
+
+it('uses current catalog authority and settles its durable receipt before a held refresh', async () => {
+    const state = await setup('all');
+    await state.screen.pressByTestIdAsync('folders:invite:new');
+    await state.changeName('Receipt folder');
+    const release = state.holdCatalogReads();
+    try {
+        await state.screen.pressByTestIdAsync('folders:edit:save');
+        await vi.waitFor(() => expect(state.read().folders[0]?.name).toBe('Receipt folder'));
+        await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:name')).toBeNull());
+        expect(state.screen.findByTestId('folders:row:folder:' + state.read().folders[0]!.id)).toBeTruthy();
+        expect(state.screen.findByTestId('folders:unavailable-action')).toBeTruthy();
+    } finally { await act(async () => { release(); }); }
+    await vi.waitFor(() => expect(state.screen.findByTestId('folders:unavailable')).toBeNull());
+});
+
+it('opens New folder in the shared modal without inserting an inline tree draft', async () => {
+    const state = await setup('all');
+    await state.screen.pressByTestIdAsync('folders:invite:new');
+    expect(state.screen.findByTestId('folders:edit:modal')).toBeTruthy();
+    expect(state.screen.findByTestId('folders:edit:name')).toBeTruthy();
+    const tree = state.screen.findByTestId('folders:sheet')!;
+    expect(tree.findAll(node => node.props.testID === 'folders:edit:name')).toHaveLength(0);
+    await state.screen.pressByTestIdAsync('folders:edit:cancel');
+    await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:name')).toBeNull());
+    expect(state.read().folders).toEqual([]);
+});
+
+it('keeps a draft while stale and refuses submission until the canonical refresh completes', async () => {
+    const state = await setup('all');
+    await state.screen.pressByTestIdAsync('folders:invite:new');
+    await state.changeName('Reviewed after refresh');
+    const { storage } = await import('@/sync/domains/state/storage');
+    const scope = storage.getState().settingsScope!;
+    const release = state.holdCatalogReads();
+    let refresh!: Promise<void>;
+    try {
+        await act(async () => { refresh = refreshPromptLibraryCatalog(scope); });
+        expect(state.screen.findByTestId('folders:edit:save')!.props.disabled).toBe(true);
+        expect(state.screen.findByTestId('folders:unavailable-action')).toBeTruthy();
+        await act(async () => { state.screen.findByTestId('folders:edit:name')!.props.onSubmitEditing(); });
+        expect(state.boundary.requests).toEqual([]);
+        expect(state.screen.findByTestId('folders:edit:name')!.props.value).toBe('Reviewed after refresh');
+    } finally { await act(async () => { release(); await refresh; }); }
+    await state.screen.pressByTestIdAsync('folders:edit:save');
+    await vi.waitFor(() => expect(state.read().folders[0]?.name).toBe('Reviewed after refresh'));
+});
+
+it('keeps the create draft visibly pending on its durable approval without claiming a folder exists', async () => {
+    const state = await setup('all', [], false, true);
+    await state.screen.pressByTestIdAsync('folders:invite:new');
+    await state.changeName('Approval folder');
+    await state.screen.pressByTestIdAsync('folders:edit:save');
+    await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:approval')).toBeTruthy());
+    expect(state.screen.findByTestId('folders:edit:name')!.props.value).toBe('Approval folder');
+    expect(state.screen.findByTestId('folders:edit:save')!.props.disabled).toBe(true);
+    expect(state.screen.findByTestId('folders:edit:name.error')).toBeNull();
+    expect(state.read().folders).toEqual([]);
+    expect(fixture!.boundary.list()).toHaveLength(1);
+    const approval = fixture!.boundary.list()[0]!;
+    await state.screen.pressByTestIdAsync('folders:edit:approval-action');
+    expect(navigation.push).toHaveBeenLastCalledWith(
+        `/inbox/approvals/${encodeURIComponent(approval.id)}?serverId=${encodeURIComponent(fixture!.home.id)}`,
+    );
+});
 
 describe.each(['all', 'prompt'] as const)('shared folder inline writes (%s)', kind => {
     it('renames a just-settled create without reloading the tree', async () => {
@@ -89,7 +196,7 @@ describe.each(['all', 'prompt'] as const)('shared folder inline writes (%s)', ki
             ] } } },
         }) });
         await state.screen.pressByTestIdAsync('folders:edit:save');
-        await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:name.error')).toBeTruthy());
+        await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:refused')).toBeTruthy());
         expect(state.screen.findByTestId('folders:edit:name')!.props.value).toBe('  r2-folder   retry  ');
         expect(state.read().folders[0]!.name).toBe('Original');
         await state.screen.pressByTestIdAsync('folders:edit:save');
@@ -98,7 +205,7 @@ describe.each(['all', 'prompt'] as const)('shared folder inline writes (%s)', ki
             expect.objectContaining({ id: 'original', name: 'r2-folder retry' }),
             expect.objectContaining({ id: 'neighbor', name: 'Neighbor' }),
         ]);
-        expect(state.boundary.requests.map(request => request.expectedRevision)).toEqual([4, 5]);
+        expect(state.boundary.requests.map(request => request.expectedRevision)).toEqual([4, 4, 5]);
     });
 
     it('creates only on Save, normalizes names, and reuses an existing folder', async () => {
@@ -121,7 +228,7 @@ describe.each(['all', 'prompt'] as const)('shared folder inline writes (%s)', ki
         await select('newInside', folderId);
         await changeName('Discard this child');
         await screen.pressByTestIdAsync('folders:edit:cancel');
-        expect(screen.findByTestId('folders:edit:name')).toBeNull();
+        await vi.waitFor(() => expect(screen.findByTestId('folders:edit:name')).toBeNull());
         expect(boundary.requests).toHaveLength(1);
         await select('newInside', folderId);
         await changeName('Child folder');
@@ -147,13 +254,13 @@ describe.each(['all', 'prompt'] as const)('shared folder inline writes (%s)', ki
         });
     });
 
-    it.each(['conflict', 'failed'] as const)('keeps the create draft and inline error after %s, then saves on retry', async outcome => {
+    it.each(['conflict', 'failed'] as const)('keeps the create draft and typed refusal after %s, then saves on retry', async outcome => {
         const state = await setup(kind);
         state.setOutcome(outcome);
         await state.screen.pressByTestIdAsync('folders:invite:new');
         await state.changeName('  Keep   my draft  ');
         await state.screen.pressByTestIdAsync('folders:edit:save');
-        await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:name.error')).toBeTruthy());
+        await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:refused')).toBeTruthy());
         expect(state.screen.findByTestId('folders:edit:name')!.props.value).toBe('  Keep   my draft  ');
         expect(state.read().folders).toEqual([]);
         state.setOutcome('updated');
@@ -169,7 +276,7 @@ describe.each(['all', 'prompt'] as const)('shared folder inline writes (%s)', ki
         await state.changeName('  Renamed   folder  ');
         state.setOutcome('conflict');
         await act(async () => { state.screen.findByTestId('folders:edit:name')!.props.onSubmitEditing(); });
-        await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:name.error')).toBeTruthy());
+        await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:refused')).toBeTruthy());
         expect(state.screen.findByTestId('folders:edit:name')!.props.value).toBe('  Renamed   folder  ');
         state.setOutcome('updated');
         await state.screen.pressByTestIdAsync('folders:edit:save');
@@ -193,7 +300,7 @@ describe.each(['all', 'prompt'] as const)('shared folder inline writes (%s)', ki
     });
 });
 
-it('starts the same inline draft from the Artifacts browser toolbar', async () => {
+it('starts the same creation modal from the Artifacts browser toolbar', async () => {
     const state = await setup('all', [], true);
     await state.screen.pressByTestIdAsync('artifacts:folders:new');
     await state.changeName('  Browser   folder  ');

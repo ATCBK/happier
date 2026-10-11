@@ -6,6 +6,8 @@ import { useArtifacts } from '@/sync/domains/state/storage';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import { requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { HappyError } from '@/utils/errors/errors';
 import { projectArtifactBrowserTree, type ArtifactBrowserFilter } from './artifactBrowserModel';
 
 /** One narrow catalog subscription; views project the same tree rather than owning folder grouping. */
@@ -27,13 +29,20 @@ export function useArtifactFolderActions() {
     const executor = React.useMemo(() => createDefaultActionExecutor(), []);
     const canWrite = Boolean(scope) && catalog.status === 'ready' && !catalog.stale && catalog.value !== null;
     const execute = React.useCallback(async (actionId: ArtifactFolderActionIdV1, input: Readonly<Record<string, unknown>>) => {
-        if (!scope || !canWrite) throw new Error('Artifact folder catalog is unavailable');
+        if (!scope || !canWrite) throw new HappyError('Artifact folder catalog is unavailable', false, { code: 'catalog-unavailable' });
         const receipt = await executor.execute(actionId, { expectedRevision: catalog.revision, ...input },
-            { surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId });
-        if (!receipt.ok) throw new Error(receipt.errorCode);
+            { surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId }).catch((error: unknown) => {
+                if (error instanceof Error && !(error instanceof HappyError) && 'code' in error && typeof error.code === 'string')
+                    throw new HappyError(error.message, false, { code: error.code });
+                throw error;
+            });
+        requireActionSuccess(receipt);
+        if (!receipt.ok) throw new HappyError(receipt.error, false, { code: receipt.errorCode });
         // An approval-request receipt is not a durable folder mutation.
         const mutation = ArtifactFolderMutationResultV1Schema.parse(receipt.result);
-        if (mutation.status !== 'updated') throw new Error(mutation.status === 'conflict' ? 'revision-conflict' : mutation.reason);
+        if (mutation.status !== 'updated') throw new HappyError(mutation.status, false, {
+            code: mutation.status === 'conflict' ? 'revision-conflict' : mutation.reason, details: mutation,
+        });
         return mutation;
     }, [scope, canWrite, catalog.revision, executor]);
     return { catalog, canWrite, execute };

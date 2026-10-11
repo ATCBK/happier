@@ -11,7 +11,8 @@ import { readAccountSettingsBaseline } from '@/sync/engine/settings/accountSetti
 import { normalizeAccountSettingsHistoryAfterTransfer } from '@/sync/engine/settings/accountSettingsHistoryRestore';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { classifyHttpMutationRequestFailure } from '@/sync/http/mutationRequestOutcome';
-import type { PromptLibraryCatalogProjection } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
+import { applyPromptLibraryCatalogAcknowledgedRecord, type PromptLibraryCatalogProjection } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 export type PromptLibraryAccountContext = Awaited<ReturnType<typeof import('@/sync/ops/actions/actionAccountContext').captureLazyActionAccountContext>>;
 export type PromptLibraryRowMutationResponseV1 = ReturnType<typeof PromptLibraryRowMutationResponseV1Schema.parse>;
@@ -153,8 +154,15 @@ export async function writePromptLibraryRecordAndPublishInContext(context: Promp
     const { invalidatePromptLibraryCatalogAfterAcknowledgedMutation } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
     const result = await writePromptLibraryRecordInContext(context, input, signal);
     if (result.status === 'updated' || result.status === 'conflict') {
-        try { await invalidatePromptLibraryCatalogAfterAcknowledgedMutation({ serverId: context.serverId, accountId: context.accountId },
-            context.assertAccountCurrent); }
+        try {
+            context.assertAccountCurrent();
+            const scope = { serverId: context.serverId, accountId: context.accountId };
+            if (result.status === 'updated') applyPromptLibraryCatalogAcknowledgedRecord(scope, input.record, result.revision, true);
+            // The acknowledged row is visible immediately. The existing loader marks retained
+            // authority stale and owns revalidation; a held read cannot hold the durable receipt.
+            fireAndForget(invalidatePromptLibraryCatalogAfterAcknowledgedMutation(scope, context.assertAccountCurrent),
+                { tag: 'promptLibraryCatalog.afterAcknowledgedMutation' });
+        }
         catch { /* Projection failure cannot erase the received CAS outcome. */ }
     }
     return result;
