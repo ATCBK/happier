@@ -63,10 +63,50 @@ Monitor runs through the discovered action contract: use start-and-wait or `exec
   documents contain only product decisions, seam ownership, acceptance criteria, and evidence specific
   to that program.
 - Any lane touching user-facing surfaces, components, or animations must load
-  `.agents/skills/happier-ui-craft` (Happier's own method, which ranks first) and the
-  `make-interfaces-feel-better` and `interface-details` skills before writing surface code, reuse
+  `.agents/skills/happier-ui-craft` (Happier's own method, which ranks first) and the installed craft
+  skills (`make-interfaces-feel-better`, `interface-details`, `design-taste-frontend`, `gpt-taste`,
+  `high-end-visual-design`, `minimalist-ui`, `redesign-existing-projects`, `apple-design`,
+  `emil-design-eng`, `review-animations`) before writing surface code; they raise the bar but never
+  override DESIGN.md tokens, materials, primitives or the no-fork rule — translate web/landing-page
+  recipes (fonts, palettes, GSAP, bento layouts) into Happier's owners, never import them. Reuse
   existing components, themed tokens, and text primitives, and treat duplicate animation/UI primitives
   as a review finding.
+- **Briefs carry the UI rule; agents on other providers never read this file.** Every brief for a lane
+  whose change renders anything (new state, control, copy, error or repair view), including Codex/Sol
+  "behavior", fix, parity and QA lanes, names `.agents/skills/happier-ui-craft`, the reference (lab
+  scene or shipped screen) and the whole-page live check. Never split a feature into a "non-visual"
+  lane that ships rendered states and a later "visual" lane that dresses them; the lane that adds a
+  rendered state owns its craft, or hands that state to a craft lane before it lands.
+- **Design fidelity is judged per page, live, by eyes.** Audits that diff code against a lab, or lists
+  of region deltas, are inputs. A UI corridor is not done until a taste lane has compared each touched
+  page whole (in its real shell, real-looking data, current loaded bundle, light/dark/phone) with its
+  reference and recomposed what reads wrong, and the orchestrator has viewed the key side-by-sides
+  itself. A stale bundle is not evidence; get a hot-reloaded or freshly exported UI first.
+- **One composition owner per surface.** Visual composition of a user-facing page, sheet or popover
+  is done by one Opus UI lane per boundary, which owns that whole surface (all its states and phone
+  form). Logic/data lanes (Sol) deliver hooks, props and data and do not edit that surface's layout,
+  styling or render tree; when a logic fix needs a visible change, they describe it for the UI owner.
+  Briefs scope UI lanes by **surface**, not by lab frame or findings list, so the page is judged as a
+  whole (method: `.agents/skills/happier-ui-craft/references/validation.md` → "Building a designed page").
+- **UI lanes always get a live render path.** Never brief a UI lane with live rendering forbidden or
+  the stack down; if no runnable stack exists, start or fix one first, or mark the UI work blocked.
+  For iterative design work, run the QA stack's UI from the dev stack's moving Expo
+  (`stack start <qa> --runtime=source --restart --ui=borrowed`) so an edit shows on a browser reload;
+  a frozen web export needs a full restart per change and starves the design loop. Final acceptance
+  still uses the loaded build the program ships.
+  Source-only verification of a UI lane is not a completion state. The orchestrator itself looks at the
+  rendered whole pages (not only cropped elements) next to the lab at every UI boundary.
+- **Who builds and checks surfaces (user ruling 2026-10-11).** Lanes that design or change how a
+  user-facing page looks run on Opus with `happier-ui-craft` loaded and a live stack to render on.
+  Sol/Codex lanes may wire data, Actions and behaviour behind a surface but must not change its visual
+  composition unseen; when a Sol lane's change alters a surface, an Opus fidelity pass on the whole
+  page follows before the corridor closes. Design verification is page-level (whole lab scene next to
+  the whole live page, every state including degraded ones), never only component crops, and the
+  orchestrator looks at the full-page pairs itself before accepting.
+- **One lifecycle owner per QA stack.** Only the orchestrator starts, restarts or stops a program's QA stack; lanes never do.
+  Each restart can force remote daemon runtimes to rebuild behind shared locks and strands every other lane mid-row
+  (ORC, 2026-10-11: repeated lane restarts kept the daemon down for hours). A UI lane that needs its edits loaded asks
+  in its report; the orchestrator batches reloads at quiet points and tells the lanes when the new build is live.
 
 ## Delegation shape (what worked)
 
