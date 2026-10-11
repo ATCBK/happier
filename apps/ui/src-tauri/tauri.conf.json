@@ -53,6 +53,7 @@
     ],
     "macOS": {
       "minimumSystemVersion": "13.0",
+      "entitlements": "../../../scripts/pipeline/release/bun-standalone.entitlements.plist",
       "dmg": {
         "background": "./dmg/dmg-background.png",
         "windowSize": {
