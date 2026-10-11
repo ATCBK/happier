@@ -500,10 +500,11 @@ describe('useSessionViewShellSession', () => {
             const session = useSessionViewShellSession(base.id, home);
             return session ? getSessionName(session, home) : null;
         });
-        let hook: Awaited<ReturnType<typeof renderHook>> | null = null;
+        let unmount: (() => Promise<void>) | null = null;
         try {
             storage.setState({ sessions: { [base.id]: base }, sessionListRowsByServerId: { [home]: { [base.id]: row } } });
-            hook = await renderHook(render);
+            const hook = await renderHook(render);
+            unmount = hook.unmount;
             expect(hook.getCurrent()).toBe('tmp');
             render.mockClear();
             await act(async () => storage.setState({ sessionListRowsByServerId: {
@@ -523,7 +524,7 @@ describe('useSessionViewShellSession', () => {
             } }));
             expect(render).not.toHaveBeenCalled();
         } finally {
-            await hook?.unmount();
+            await unmount?.();
             storage.setState(previousState);
         }
     });
