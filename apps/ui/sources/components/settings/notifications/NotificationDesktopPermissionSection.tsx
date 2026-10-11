@@ -3,13 +3,14 @@ import * as React from 'react';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { t } from '@/text';
-import { router } from 'expo-router';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 
 import { useTauriNotificationPermissionDiagnostics } from './useTauriNotificationPermissionDiagnostics';
 
 export function NotificationDesktopPermissionSection(): React.ReactElement {
+    const router = useRouter();
     const permission = useTauriNotificationPermissionDiagnostics(true);
     const scope = useActiveServerAccountScope();
 
@@ -33,7 +34,7 @@ export function NotificationDesktopPermissionSection(): React.ReactElement {
             description={t('settingsNotifications.desktop.footer')}
         >
             {permission.approval.approvalPending && permission.approval.approvalId && scope ? <ActionApprovalPendingNotice
-                message={t('approvals.title')} onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(permission.approval.approvalId!)}?serverId=${encodeURIComponent(scope.serverId)}`)} /> : null}
+                message={t('approvals.title')} onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(permission.approval.approvalId!)}?serverId=${encodeURIComponent(scope.serverId)}`)} /> : null}
             <Item
                 testID="settings-notifications-desktop-permission"
                 title={t('settingsNotifications.desktop.permission.title')}

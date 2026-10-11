@@ -149,12 +149,12 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
             {importApproval.approvalId && scope ? (
                 <ActionApprovalPendingNotice testID="mcp.detected.import.approval"
                     message={t('secrets.catalog.approvalPending')}
-                    onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(importApproval.approvalId!)}?serverId=${encodeURIComponent(scope.serverId)}`)} />
+                    onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(importApproval.approvalId!)}?serverId=${encodeURIComponent(scope.serverId)}`)} />
             ) : null}
             {probeExecution.approval.approvalId && executionTarget ? (
                 <ActionApprovalPendingNotice testID="mcp.detected.approval"
                     message={t('secrets.catalog.approvalPending')}
-                    onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(probeExecution.approval.approvalId!)}?serverId=${encodeURIComponent(executionTarget.serverId)}`)} />
+                    onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(probeExecution.approval.approvalId!)}?serverId=${encodeURIComponent(executionTarget.serverId)}`)} />
             ) : null}
             <McpDetectedServersTab
                 selectedMachineId={executionTarget?.machine.id ?? null}

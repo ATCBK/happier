@@ -10,7 +10,7 @@ import { SettingRow, SettingSection } from '@/components/settings/shell/SettingR
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
-import { router } from 'expo-router';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/remoteHosts/remoteHostActionsV1';
 
 import { REMOTE_HOSTS_ACCESS_SETTINGS } from './remoteHostsSettings';
@@ -24,6 +24,7 @@ function formatTrustedHostKeySubtitle(record: RemoteHostTrustedHostKeyRecord): s
 }
 
 export const TrustedHostKeysSection = React.memo(function TrustedHostKeysSection() {
+    const router = useRouter();
     const scope = useActiveServerAccountScope();
     const execution = useMountedActionExecution(scope);
     const store = React.useMemo(() => getRemoteHostTrustedHostKeyStore(), []);
@@ -72,7 +73,7 @@ export const TrustedHostKeysSection = React.memo(function TrustedHostKeysSection
             description={t('settingsRemoteHostsPage.trustedHostKeysDescription')}
         >
             {execution.approval.approvalPending && execution.approval.approvalId && scope ? <ActionApprovalPendingNotice
-                message={t('approvals.title')} onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(execution.approval.approvalId!)}?serverId=${encodeURIComponent(scope.serverId)}`)} /> : null}
+                message={t('approvals.title')} onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(execution.approval.approvalId!)}?serverId=${encodeURIComponent(scope.serverId)}`)} /> : null}
             {records.map((record) => (
                 <Item
                     key={`${record.hostLower}:${record.port}:${record.algorithm}`}

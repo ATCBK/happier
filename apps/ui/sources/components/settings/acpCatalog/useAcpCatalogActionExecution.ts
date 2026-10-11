@@ -11,7 +11,7 @@ type AcpAuthoringActionId = 'agents.acp.backends.upsert' | 'agents.acp.backends.
 export function useAcpCatalogActionExecution(scope: ServerAccountScope | null | undefined) {
     const router = useRouter();
     const onApprovalPending = React.useCallback((registration: ActionApprovalContinuation) => {
-        if (registration.scope) router.push(`/inbox/approvals/${encodeURIComponent(registration.artifactId)}?serverId=${encodeURIComponent(registration.scope.serverId)}`);
+        if (registration.scope) router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(registration.artifactId)}?serverId=${encodeURIComponent(registration.scope.serverId)}`);
     }, [router]);
     const execution = useMountedActionExecution(scope, { onApprovalPending });
     const execute: (actionId: AcpAuthoringActionId, input: unknown) => Promise<ActionExecuteResult> = execution.execute;

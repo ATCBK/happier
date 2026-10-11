@@ -294,7 +294,7 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
         await removeSharedResource(entry.repair.resourceId, entry.repair.expectedRevision, t('secrets.catalog.unavailableName'));
     }, [removeSharedResource]);
 
-    const openApproval = approvalId && scope ? () => router.push(
+    const openApproval = approvalId && scope ? () => router.pushRetainingCurrent(
         `/inbox/approvals/${encodeURIComponent(approvalId)}?serverId=${encodeURIComponent(scope.serverId)}`,
     ) : undefined;
 

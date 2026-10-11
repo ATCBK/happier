@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { WORKSPACE_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol';
 import { storage } from '@/sync/domains/state/storage';
-import { resolveCompactAppDestinations } from '../destinations/compactAppDestinationCatalog';
+import { hrefForDestinationRef, resolveCompactAppDestinations } from '../destinations/compactAppDestinationCatalog';
 import { DestinationInstanceHost, useDestinationInstanceKey, useDestinationParams, useDestinationRouter } from './DestinationInstanceHost';
 import type { WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
 import { WorkspaceProvider } from './WorkspaceProvider';
@@ -128,6 +128,34 @@ function installBrowserBoundary(input: Record<string, unknown> & { history: obje
 }
 
 describe('consumed workspace navigation owner', () => {
+    it('opens approval review beside a dirty preview and preserves it through subsequent preview navigation', async () => {
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: false, friends: false } });
+        const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>
+            {navigation => React.createElement('WorkspaceOwner', { navigation })}
+        </WorkspaceProvider>);
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        const before = navigation().state;
+        const groupId = before.focusedGroupId;
+        const editorTabId = before.groups[groupId].activeTabId;
+        const target = before.tabs[editorTabId].target;
+        const dirty = { current: true };
+        const requestDecision = vi.fn(async () => 'keepEditing' as const);
+        setActiveUnsavedChangesGuard({ isDirtyRef: dirty, requestDecision, tag: 'approval-retention-test' });
+        await act(async () => {
+            navigation().navigationForTab(editorTabId).pushRetainingCurrent!('/inbox/approvals/request-a?serverId=home-a');
+        });
+        const reviewed = navigation().state;
+        expect(reviewed.tabs[editorTabId]).toMatchObject({ target, preview: false });
+        expect(reviewed.groups[groupId].activeTabId).not.toBe(editorTabId);
+        expect(hrefForDestinationRef(catalog, reviewed.tabs[reviewed.groups[groupId].activeTabId].target))
+            .toBe('/inbox/approvals/request-a?serverId=home-a');
+        expect(requestDecision).not.toHaveBeenCalled();
+        expect(dirty.current).toBe(true);
+        // The approval owns focus now; opening another preview must not retire the editor.
+        clearActiveUnsavedChangesGuard();
+        await act(async () => { navigation().openHref('/session/A2?serverId=home-a'); });
+        expect(navigation().state.tabs[editorTabId]).toMatchObject({ target, preview: false });
+    });
     it('retains qualified Project page and resource through mounted phone tab admission and activation', async () => {
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: false, friends: false } });
         const screen = await renderScreen(<WorkspaceProvider enabled={false} phone catalog={catalog}>

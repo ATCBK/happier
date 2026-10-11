@@ -33,6 +33,10 @@ import { buildApprovalRequestArtifactHeaderV1, StoredApprovalRequestSchema, type
 import { createArtifactStoreBoundary, type ArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
+import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -43,6 +47,7 @@ const modalConfirmSpy = vi.fn(async (..._args: any[]) => true);
 const routerBackSpy = vi.fn();
 const routerPushSpy = vi.fn();
 const routerReplaceSpy = vi.fn();
+const retainedApprovalNavigationSpy = vi.fn();
 const navigationDispatchSpy = vi.fn();
 const navigationSetOptionsSpy = vi.fn();
 const navigationPreventRemove = vi.hoisted(() => ({
@@ -270,7 +275,7 @@ function findBindingTargetDropdown(screen: Awaited<ReturnType<typeof renderEdito
 }
 
 async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; ask?: boolean;
-    mcpUpdatePolicy?: 'disabled' | 'ask' }> = {}) {
+    mcpUpdatePolicy?: 'disabled' | 'ask'; hosted?: boolean }> = {}) {
     const configuredHome = await upsertServerProfileOnly({ serverUrl: options.mcpUpdatePolicy
         ? `https://mcp-editor-update-${options.mcpUpdatePolicy}.test` : options.ask ? 'https://mcp-editor-ask-row.test' : options.activeAccount
         ? 'https://mcp-editor-active-row.test' : 'https://mcp-editor-row.test', name: 'MCP editor' });
@@ -324,6 +329,10 @@ async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; a
         }));
         if (path === '/v1/machines') return Response.json(machines.map(machine => createPlainMachineRowFixture({ id: machine.id, accountId })));
         if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json(V2SessionListResponseSchema.parse({ sessions: [], nextCursor: null, hasNext: false }));
+        if (path === '/v2/session-organization') return Response.json(SessionOrganizationSnapshotResponseSchema.parse({
+            snapshot: { schemaVersion: SESSION_ORGANIZATION_SNAPSHOT_VERSION, version: 0,
+                pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] },
+        }));
         if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: accountId }));
         if (path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']) {
             return Response.json(PluginAvailabilityMaterializationsReadActionOutputV1Schema.parse({ availabilityCursor: 0, snapshots: [] }));
@@ -433,7 +442,15 @@ async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; a
         }
     } finally { await targetSelection.unmount(); }
     const { McpServerEditorScreen } = await import('./McpServerEditorScreen');
-    const screen = await renderScreen(React.createElement(McpServerEditorScreen));
+    const editor = React.createElement(McpServerEditorScreen);
+    const screen = await renderScreen(options.hosted ? <DestinationInstanceHost
+        tabId="mcp-editor" ref={{ kind: 'settings', params: { pageId: 'mcp', serverId: 'server-1' } }}
+        pathname="/settings/mcp/servers/server-1" focused visible navigation={{
+            push: href => { void runGuardedNavigation(() => routerPushSpy(href)); },
+            pushRetainingCurrent: retainedApprovalNavigationSpy,
+            replace: routerReplaceSpy,
+            back: routerBackSpy,
+        }}>{editor}</DestinationInstanceHost> : editor);
     await act(async () => { await refreshMcpServerCatalog(accountScope!); });
     return screen;
 }
@@ -459,6 +476,7 @@ beforeEach(async () => {
     routerBackSpy.mockReset();
     routerReplaceSpy.mockReset();
     routerPushSpy.mockReset();
+    retainedApprovalNavigationSpy.mockReset();
     installMcpServersCommonModuleMocks(mcpServersCommonModuleMockOptions);
     // Sync restoration must see the real store domains, not the shared UI
     // harness's presentation-only stub.
@@ -504,9 +522,9 @@ describe('McpServerEditorScreen', () => {
         expect(navigationPreventRemove.enabled).toBe(true);
     });
 
-    it('keeps an ordinary MCP editor Save under its original update Action approval without replay', async () => {
+    it('opens the original MCP approval while retaining the dirty editor and later edits without replay', async () => {
         mcpServersModuleState.routerSearchParams = { serverId: 'server-1' };
-        const screen = await renderEditorScreen({ activeAccount: true, mcpUpdatePolicy: 'ask' });
+        const screen = await renderEditorScreen({ activeAccount: true, mcpUpdatePolicy: 'ask', hosted: true });
         await act(async () => { screen.changeTextByTestId('mcp.server.editor.name', 'approved-policy-draft'); });
         act(() => { screen.pressByTestId('mcp.server.editor.save'); });
         await vi.waitFor(() => expect(approvalArtifacts!.list().length + rowMutationRequests.length
@@ -521,12 +539,28 @@ describe('McpServerEditorScreen', () => {
         if (request.v !== 2) throw new Error('Expected typed MCP update approval');
         expect(request.actionId).toBe('mcp.servers.update');
         expect(request.actionArgs).toMatchObject({ expectedRevision: 3, entry: { id: 'server-1', name: 'approved-policy-draft' } });
+        await act(async () => { screen.changeTextByTestId('mcp.server.editor.name', 'later-local-edit'); });
+        unsavedChangesDecision = 'keepEditing';
+        await act(async () => {
+            const notice = screen.findAll(node => node.props.testID === 'mcp.server.editor.approval'
+                && typeof node.props.onOpenApproval === 'function')[0]!;
+            notice.props.onOpenApproval();
+        });
+        expect(retainedApprovalNavigationSpy).toHaveBeenCalledWith(
+            `/inbox/approvals/${encodeURIComponent(artifact.id)}?serverId=${encodeURIComponent(accountScope!.serverId)}`,
+        );
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+        expect(screen.findByTestId('mcp.server.editor.name').props.value).toBe('later-local-edit');
         // The real Inbox decision executes the captured Action against this
         // HTTP row and publishes its genuine durable approval receipt.
-        expect(await decideApprovalAsInbox(accountScope!.serverId, artifact.id, 'approve')).toMatchObject({ ok: true });
-        await vi.waitFor(() => expect(navigationPreventRemove.enabled).toBe(false));
+        const decision = await decideApprovalAsInbox(accountScope!.serverId, artifact.id, 'approve');
+        expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true });
+        await vi.waitFor(() => expect(catalogRevision).toBe(4));
         expect(routerReplaceSpy).not.toHaveBeenCalled();
-        expect(screen.findByTestId('mcp.server.editor.name').props.value).toBe('approved-policy-draft');
+        expect(screen.findByTestId('mcp.server.editor.name').props.value).toBe('later-local-edit');
+        // Reviewing the approval never authorizes abandoning subsequent edits.
+        await act(async () => { expect(await runGuardedNavigation(() => routerBackSpy())).toBe(false); });
+        expect(routerBackSpy).not.toHaveBeenCalled();
         expect(approvalArtifacts!.list()).toHaveLength(1);
         expect(rowMutationRequests).toHaveLength(1);
         expect(rowMutationRequests[0]?.expectedRevision).toBe(3);

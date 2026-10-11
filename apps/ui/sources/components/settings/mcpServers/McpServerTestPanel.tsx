@@ -174,7 +174,7 @@ export const McpServerTestPanel = React.memo(function McpServerTestPanel(props: 
             {testExecution.approval.approvalId && executionTarget ? (
                 <ActionApprovalPendingNotice testID="mcp.server.test.approval"
                     message={t('secrets.catalog.approvalPending')}
-                    onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(testExecution.approval.approvalId!)}?serverId=${encodeURIComponent(executionTarget.serverId)}`)} />
+                    onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(testExecution.approval.approvalId!)}?serverId=${encodeURIComponent(executionTarget.serverId)}`)} />
             ) : null}
             <DropdownMenu
                 open={openMenu === 'binding'}
