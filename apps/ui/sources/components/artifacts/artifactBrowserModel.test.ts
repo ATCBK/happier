@@ -6,6 +6,7 @@ import { getWidgetSizeFootprintV1 } from '@happier-dev/protocol/widgets/widgetPr
 import {
     classifyArtifactBrowserKind,
     countArtifactBrowserKinds,
+    countArtifactBrowserSavedSince,
     projectArtifactBrowserRows,
     projectArtifactBrowserTree,
     readArtifactPreview,
@@ -204,6 +205,16 @@ describe('artifactBrowserModel', () => {
         expect(keys({ query: 'ALPHA', kind: 'all', sort: 'updated_desc' })).toEqual(['b']);
         expect(keys({ query: '', kind: 'board', sort: 'updated_desc' })).toEqual(['c']);
         expect([...countArtifactBrowserKinds(rows)]).toEqual([['document', 2], ['board', 1]]);
+    });
+
+    it('counts only listed artifacts as saved since a moment, so today never exceeds the total', () => {
+        const rows = [
+            artifact('old', { title: 'Old notes' }, { createdAt: 5 }),
+            artifact('new', { title: 'New notes' }, { createdAt: 50 }),
+            artifact('hidden', { kind: 'approval_request.v1', title: 'Approval' }, { createdAt: 60 }),
+            artifact('draft', { title: 'Draft' }, { createdAt: 70, draft: true }),
+        ];
+        expect(countArtifactBrowserSavedSince(rows, 10)).toBe(1);
     });
 
     it('uses raw storage kind rather than normalized display kind for the canonical open target', () => {

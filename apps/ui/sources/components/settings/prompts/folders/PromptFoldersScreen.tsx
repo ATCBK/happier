@@ -39,7 +39,8 @@ export const PromptFoldersScreen = React.memo(function PromptFoldersScreen() {
     <CoreCollectionScope>
       <ItemList>
         <SettingsPageHeader description={t('promptLibrary.surface.foldersPageDescription')} />
-        <View style={styles.body}>
+        {/* The page column's insets, no card: the tree draws its own sheet (lab `c-art L`). */}
+        <ItemGroup surface="none">
           <View style={styles.toolbar}>
             <CompactSearchField
               testID="promptFolders.search"
@@ -65,8 +66,9 @@ export const PromptFoldersScreen = React.memo(function PromptFoldersScreen() {
             filter={filter}
             onOpenArtifact={openArtifact}
           />
-        </View>
-        <ItemGroup>
+        </ItemGroup>
+        {/* A quiet way across, not another sheet. */}
+        <ItemGroup surface="none">
           <Item
             testID="promptFolders.allKinds"
             icon={<Icon name="files" />}
@@ -80,13 +82,10 @@ export const PromptFoldersScreen = React.memo(function PromptFoldersScreen() {
 });
 
 const stylesheet = StyleSheet.create(() => ({
-  body: {
-    marginTop: 4,
-    marginBottom: 20,
-  },
   toolbar: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 8,
     marginBottom: 14,
   },

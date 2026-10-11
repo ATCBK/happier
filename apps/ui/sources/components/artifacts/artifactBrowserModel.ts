@@ -293,6 +293,15 @@ export function projectArtifactBrowserTree<T extends ArtifactBrowserArtifact>(ar
     return nodes;
 }
 
+/** How many listed artifacts were saved at or after `sinceMs`: the same rows the total counts, never more. */
+export function countArtifactBrowserSavedSince(artifacts: readonly ArtifactBrowserArtifact[], sinceMs: number): number {
+    let count = 0;
+    for (const artifact of artifacts) {
+        if ((artifact.createdAt ?? 0) >= sinceMs && classifyArtifactBrowserKind(artifact) !== null) count += 1;
+    }
+    return count;
+}
+
 /** How many listed artifacts each kind holds (for the kind filter); kinds with none are omitted. */
 export function countArtifactBrowserKinds(artifacts: readonly DecryptedArtifact[]): ReadonlyMap<ArtifactBrowserKind, number> {
     const counts = new Map<ArtifactBrowserKind, number>();

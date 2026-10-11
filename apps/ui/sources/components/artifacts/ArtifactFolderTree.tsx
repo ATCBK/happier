@@ -1144,9 +1144,13 @@ function RowMenu(
       items={props.items}
       onSelect={props.onSelect}
       selectedId={null}
+      // The ⋯ is a 28 px trigger: the menu takes its own width and opens toward the page (lab `c-art TA`).
+      matchTriggerWidth={false}
+      popoverAnchorAlign="end"
       // A phone gets the shared bottom sheet, and so does its Move chooser (lab `c-art TAp`).
       popoverPhonePresentation="sheet"
-      popoverAccessibilityLabel={t('artifacts.browser.folders.options', { name: props.title })}
+      // The phone sheet is titled by this label: the item's own name, not "<name> options".
+      popoverAccessibilityLabel={props.title}
       trigger={({ toggle }) => (
         <View style={revealed ? null : stylesheet.concealed}>
           <IconButton
