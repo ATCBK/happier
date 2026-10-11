@@ -130,13 +130,28 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     } finally { scheduler.dispose(); }
   });
 
-  it('bounds the proof wait without resending the admitted continuation', async () => {
+  it('bounds timer proof waits without letting manual checks exhaust an admitted continuation', async () => {
     let nowMs = 1000;
-    const continueAfterUsageLimitReset = vi.fn(async () => ({ ok: true, status: 'continuation_enqueued' }));
+    const pending: string[] = [];
+    const dispatcher = createConnectedServiceContinuationMessageDispatcher({
+      credentials: { token: 'test-token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      // Pending submission is the transport boundary; admission remains owned by the real dispatcher.
+      sendMessage: async (request) => {
+        pending.push(request.message);
+        return { ok: true, sessionId: 'proof-wait', localId: request.localId!, waited: false };
+      },
+    });
     const scheduler = new RuntimeAuthRecoveryScheduler({
       nowMs: () => nowMs, maxAttempts: 3, providerOutcomePendingWaitMs: 100, jitterMs: () => 0,
       recover: async () => ({ status: 'recovery_action_required', action: { kind: 'profile_action_required', reason: 'usage_limit' } }),
-      continueAfterUsageLimitReset,
+      continueAfterUsageLimitReset: async (intent) => {
+        await dispatcher.enqueueInterruptedOriginContinuation({
+          sessionId: intent.sessionId, attemptId: intent.attemptId!, interruptedOriginId: 'failed-turn',
+          interruption: 'provider_failed_turn', resumePromptMode: intent.resumePromptMode ?? 'standard',
+          recoveryKind: intent.classification.kind,
+        });
+        return { ok: true, status: 'continuation_enqueued' };
+      },
     });
     try {
       await scheduler.beginClassifiedFailure({ sessionId: 'proof-wait', switchesThisTurn: 0,
@@ -146,7 +161,12 @@ describe('RuntimeAuthRecoveryScheduler', () => {
         nowMs += 100;
         await scheduler.wake({ sessionId: 'proof-wait', reason: 'manual' });
       }
-      expect(continueAfterUsageLimitReset).toHaveBeenCalledTimes(1);
+      expect(scheduler.read('proof-wait')).toMatchObject({ status: 'resumed_awaiting_proof', attemptCount: 1 });
+      for (let count = 0; count < 4; count += 1) {
+        nowMs += 100;
+        await scheduler.wake({ sessionId: 'proof-wait', reason: 'timer' });
+      }
+      expect(pending).toEqual(['Usage limits are lifted. Continue where you left off.']);
       expect(scheduler.read('proof-wait')).toMatchObject({ status: 'exhausted', attemptCount: 3 });
     } finally { scheduler.dispose(); }
   });

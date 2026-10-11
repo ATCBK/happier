@@ -1273,17 +1273,19 @@ export class RuntimeAuthRecoveryScheduler {
         next,
         reason,
       }),
-      recover: async (intent) => {
+      recover: async (intent, context) => {
         try {
           const resetAtMs = intent.classification.resetsAtMs;
           const dueProfileLimit = intent.groupId === null
             && intent.classification.kind === 'usage_limit'
             && typeof resetAtMs === 'number' && Number.isFinite(resetAtMs)
             && resetAtMs <= deps.nowMs();
+          const awaitingContinuation = dueProfileLimit && Boolean(deps.continueAfterUsageLimitReset)
+            && intent.lastError === USAGE_LIMIT_CONTINUATION_PROOF_WAIT_ERROR;
           // An elapsed profile limit needs a provider retry, not another evaluation
           // of the historic failure as an action-required credential problem.
           const result = dueProfileLimit && deps.continueAfterUsageLimitReset
-            ? intent.lastError === USAGE_LIMIT_CONTINUATION_PROOF_WAIT_ERROR
+            ? awaitingContinuation
               // Pending already owns this turn. Refresh the bounded proof wait without
               // replaying admission or attaching again while that turn is in flight.
               ? { ok: true, status: 'continuation_enqueued' }
@@ -1358,9 +1360,10 @@ export class RuntimeAuthRecoveryScheduler {
             // additionally bounded by maxCoalescedReplays when the target profile
             // keeps changing under the same durable recovery.
             const coalescedReplayCount = intent.coalescedReplayCount ?? 0;
-            const rollbackAttempt = switchResultForHandoff?.status !== 'continuation_enqueued'
-              && (isUntargetedProviderOutcomeProofWaitRefresh({ intent, pendingTarget })
-                || (coalescedReplay && coalescedReplayCount < this.maxCoalescedReplays));
+            const rollbackAttempt = (awaitingContinuation && context.reason === 'manual')
+              || (switchResultForHandoff?.status !== 'continuation_enqueued'
+                && (isUntargetedProviderOutcomeProofWaitRefresh({ intent, pendingTarget })
+                  || (coalescedReplay && coalescedReplayCount < this.maxCoalescedReplays)));
             return {
               status: 'wait',
               lastError: switchResultForHandoff?.status === 'continuation_enqueued'
