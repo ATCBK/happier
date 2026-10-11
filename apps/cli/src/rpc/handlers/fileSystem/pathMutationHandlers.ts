@@ -23,7 +23,7 @@ import {
 
 import { validatePath } from '../pathSecurity';
 import { filesystemPathComparisonKey, type FilesystemAccessPolicy } from './accessPolicy/filesystemAccessPolicy';
-import { authorizeFilesystemPath } from './accessPolicy/filesystemPathAuthorization';
+import { authorizeFilesystemPath, authorizeFilesystemPathWithinRoot } from './accessPolicy/filesystemPathAuthorization';
 import { registerActionSpecRpcHandlers } from '../registerActionSpecRpcHandlers';
 import type { RpcActionExecutor } from '../_actionDispatchAdapter';
 
@@ -137,19 +137,9 @@ function authorizeMutationPath(path: string, rootPath: string | undefined, mode:
       additionalAllowedDirs: allowances,
     });
   }
-  if (!rootPath || !isAbsolute(rootPath)) return { valid: false as const, error: 'The filesystem root must be absolute' };
-  const root = authorizeFilesystemPath({
-    targetPath: rootPath, defaultDirectory: deps.workingDirectory, accessPolicy: deps.accessPolicy,
-    additionalAllowedDirs: allowances,
-  });
-  if (!root.valid) return root;
-  const confined = authorizeFilesystemPath({
-    targetPath: path, defaultDirectory: root.resolvedPath,
-    accessPolicy: { kind: 'restrictedRoots', roots: [root.resolvedPath] },
-  });
-  if (!confined.valid) return confined;
-  return authorizeFilesystemPath({
-    targetPath: confined.resolvedPath, defaultDirectory: root.resolvedPath,
+  if (!rootPath) return { valid: false as const, error: 'The filesystem root must be absolute' };
+  return authorizeFilesystemPathWithinRoot({
+    targetPath: path, rootPath, defaultDirectory: deps.workingDirectory,
     accessPolicy: deps.accessPolicy, additionalAllowedDirs: allowances,
   });
 }

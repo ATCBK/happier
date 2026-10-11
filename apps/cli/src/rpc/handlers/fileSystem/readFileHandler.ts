@@ -1,17 +1,17 @@
 import { readFile, stat } from 'fs/promises';
-import { resolve as resolvePath } from 'node:path';
 
 import { configuration } from '@/configuration';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import { logger } from '@/ui/logger';
 
 import { validatePath } from '../pathSecurity';
+import { authorizeFilesystemPathWithinRoot } from './accessPolicy/filesystemPathAuthorization';
 import type { FilesystemAccessPolicy } from './accessPolicy/filesystemAccessPolicy';
 import {
   authorizeExactAllowedReadFile,
   type ExactAllowedReadFile,
 } from './accessPolicy/exactAllowedReadFile';
-import { registerActionSpecRpcHandlers } from '../registerActionSpecRpcHandlers';
+import { registerRootedFilesystemRpcHandlers } from './registerRootedFilesystemRpcHandlers';
 import type { RpcActionExecutor } from '../_actionDispatchAdapter';
 import type { ActionId } from '@happier-dev/protocol';
 
@@ -31,15 +31,16 @@ type ReadFileHandlerDeps = Readonly<{
 async function readFileForRpc(data: ReadFileRequest | undefined, deps: ReadFileHandlerDeps): Promise<ReadFileResponse> {
   const path = typeof data?.path === 'string' ? data.path : '';
   logger.debug('Read file request:', path);
-  if (data?.rootPath !== undefined && resolvePath(data.rootPath) !== resolvePath(deps.workingDirectory)) {
-    return { success: false, error: 'Workspace root does not match this filesystem owner' };
-  }
-
-  const validation = validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedReadDirs(), deps.accessPolicy);
+  const validation = data?.rootPath === undefined
+    ? validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedReadDirs(), deps.accessPolicy)
+    : authorizeFilesystemPathWithinRoot({ targetPath: path, rootPath: data.rootPath,
+      defaultDirectory: deps.workingDirectory, accessPolicy: deps.accessPolicy,
+      additionalAllowedDirs: deps.getAdditionalAllowedReadDirs() });
   let resolvedPath: string;
   if (validation.valid && validation.resolvedPath) {
     resolvedPath = validation.resolvedPath;
   } else {
+    if (data?.rootPath !== undefined) return { success: false, error: validation.error ?? 'Access denied' };
     const exactFileValidation = authorizeExactAllowedReadFile({
       targetPath: path,
       workingDirectory: deps.workingDirectory,
@@ -92,13 +93,11 @@ export function registerReadFileHandler(
     actionExecutor?: RpcActionExecutor;
   }>,
 ): void {
-  registerActionSpecRpcHandlers({
+  registerRootedFilesystemRpcHandlers({
     rpcHandlerManager,
-    actionExecutor: deps.actionExecutor ?? createReadFileRpcActionExecutor(deps),
+    workingDirectory: deps.workingDirectory,
+    actionExecutor: deps.actionExecutor,
+    incumbentExecutor: createReadFileRpcActionExecutor(deps),
     actionIds: ['daemon.filesystem.readFile'],
-    mapRequestForMethod: ({ isAlias, input }) => ({ accepted: true,
-      input: isAlias && input && typeof input === 'object'
-        ? { ...(input as Record<string, unknown>), rootPath: deps.workingDirectory }
-        : input }),
   });
 }

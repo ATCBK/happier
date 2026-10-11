@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, resolve as resolvePath } from 'node:path';
+import { dirname } from 'node:path';
 
 import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
 
 import { validatePath } from '../pathSecurity';
+import { authorizeFilesystemPathWithinRoot } from './accessPolicy/filesystemPathAuthorization';
 import type { FilesystemAccessPolicy } from './accessPolicy/filesystemAccessPolicy';
 
 export type WriteFileRequest = Readonly<{ rootPath?: string; path: string; content: string; expectedHash?: string | null }>;
@@ -22,10 +23,11 @@ export type WriteFileHandlerDeps = Readonly<{
 export async function writeFileForRpc(data: WriteFileRequest | undefined, deps: WriteFileHandlerDeps): Promise<WriteFileResponse> {
   const path = typeof data?.path === 'string' ? data.path : '';
   logger.debug('Write file request:', path);
-  if (data?.rootPath !== undefined && resolvePath(data.rootPath) !== resolvePath(deps.workingDirectory)) {
-    return { success: false, error: 'Workspace root does not match this filesystem owner' };
-  }
-  const validation = validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedWriteDirs(), deps.accessPolicy);
+  const validation = data?.rootPath === undefined
+    ? validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedWriteDirs(), deps.accessPolicy)
+    : authorizeFilesystemPathWithinRoot({ targetPath: path, rootPath: data.rootPath,
+      defaultDirectory: deps.workingDirectory, accessPolicy: deps.accessPolicy,
+      additionalAllowedDirs: deps.getAdditionalAllowedWriteDirs() });
   if (!validation.valid || !validation.resolvedPath) return { success: false, error: validation.error ?? 'Access denied' };
   const resolvedPath = validation.resolvedPath;
   try {

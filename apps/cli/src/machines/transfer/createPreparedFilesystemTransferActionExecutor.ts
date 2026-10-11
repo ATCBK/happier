@@ -7,7 +7,7 @@ import {
   FilesystemUploadInputSchema, FilesystemDownloadInputSchema, FilesystemTransferCancelInputSchema, FilesystemPreparedCopyInputSchema,
   type FilesystemUploadOutput, type FilesystemDownloadOutput, type FilesystemTransferCancelOutput, type FilesystemCopyOutput,
 } from '@happier-dev/protocol/actions/filesystemActionFamily';
-import { authorizeFilesystemPath } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
+import { authorizeFilesystemPathWithinRoot } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
 import { filesystemPathComparisonKey, isFilesystemPathAbsolute, type FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import type { DirectTransferServerLifecycle } from './directTransferServerLifecycle';
 import { prepareWorkspaceFileExport, prepareWorkspaceEntryExport } from './prepareWorkspaceFileExport';
@@ -32,15 +32,10 @@ export function createPreparedFilesystemTransferActionExecutor(params: Readonly<
 }>) {
   const admittedPath = (rootPath: string, path: string, kind: 'read' | 'write' = 'write') => {
     const additionalAllowedDirs = kind === 'read' ? params.getAdditionalAllowedReadDirs?.() : params.getAdditionalAllowedWriteDirs?.();
-    if (!isFilesystemPathAbsolute(rootPath)) throw new Error('Filesystem root must be absolute');
-    const root = authorizeFilesystemPath({ targetPath: rootPath, defaultDirectory: params.workingDirectory, accessPolicy: params.accessPolicy, additionalAllowedDirs });
-    if (!root.valid) throw new Error(root.error);
-    const target = authorizeFilesystemPath({ targetPath: path, defaultDirectory: root.resolvedPath,
-      accessPolicy: { kind: 'restrictedRoots', roots: [root.resolvedPath] } });
-    if (!target.valid) throw new Error(target.error);
-    const admitted = authorizeFilesystemPath({ targetPath: target.resolvedPath, defaultDirectory: root.resolvedPath, accessPolicy: params.accessPolicy, additionalAllowedDirs });
+    const admitted = authorizeFilesystemPathWithinRoot({ targetPath: path, rootPath,
+      defaultDirectory: params.workingDirectory, accessPolicy: params.accessPolicy, additionalAllowedDirs });
     if (!admitted.valid) throw new Error(admitted.error);
-    return { rootPath: root.resolvedPath, path: admitted.resolvedPath };
+    return { rootPath: admitted.rootPath, path: admitted.resolvedPath };
   };
   return async (args: Readonly<{ actionId: TransferActionId; input: unknown; context: ActionExecutorContext;
     assertCurrentAuthority?: () => Promise<void> }>): Promise<TransferActionOutput> => {

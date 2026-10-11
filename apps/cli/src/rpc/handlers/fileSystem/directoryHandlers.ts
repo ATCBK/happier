@@ -1,5 +1,5 @@
 import { readdir, stat } from 'fs/promises';
-import { basename, join, resolve as resolvePath } from 'path';
+import { basename, join } from 'path';
 
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import { logger } from '@/ui/logger';
@@ -7,8 +7,9 @@ import type { ActionId } from '@happier-dev/protocol';
 
 import { listDirectoryEntries } from './directoryListing/listDirectoryEntries';
 import { validatePath } from '../pathSecurity';
+import { authorizeFilesystemPathWithinRoot } from './accessPolicy/filesystemPathAuthorization';
 import type { FilesystemAccessPolicy } from './accessPolicy/filesystemAccessPolicy';
-import { registerActionSpecRpcHandlers } from '../registerActionSpecRpcHandlers';
+import { registerRootedFilesystemRpcHandlers } from './registerRootedFilesystemRpcHandlers';
 import type { RpcActionExecutor } from '../_actionDispatchAdapter';
 import { registerFilesystemMutationActionHandlers, type FilesystemMutationActionIngress } from './pathMutationHandlers';
 
@@ -67,11 +68,11 @@ async function listDirectoryForRpc(
 ): Promise<ListDirectoryResponse> {
   const path = typeof data?.path === 'string' ? data.path : '';
   logger.debug('List directory request:', path);
-  if (data?.rootPath !== undefined && resolvePath(data.rootPath) !== resolvePath(deps.workingDirectory)) {
-    return { success: false, error: 'Workspace root does not match this filesystem owner' };
-  }
-
-  const validation = validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedReadDirs(), deps.accessPolicy);
+  const validation = data?.rootPath === undefined
+    ? validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedReadDirs(), deps.accessPolicy)
+    : authorizeFilesystemPathWithinRoot({ targetPath: path, rootPath: data.rootPath,
+      defaultDirectory: deps.workingDirectory, accessPolicy: deps.accessPolicy,
+      additionalAllowedDirs: deps.getAdditionalAllowedReadDirs() });
   if (!validation.valid || !validation.resolvedPath) {
     return { success: false, error: validation.error ?? 'Access denied' };
   }
@@ -111,11 +112,11 @@ async function getDirectoryTreeForRpc(
   const path = typeof data?.path === 'string' ? data.path : '';
   const requestedMaxDepth = typeof data?.maxDepth === 'number' ? data.maxDepth : Number(data?.maxDepth ?? 0);
   logger.debug('Get directory tree request:', path, 'maxDepth:', requestedMaxDepth);
-  if (data?.rootPath !== undefined && resolvePath(data.rootPath) !== resolvePath(deps.workingDirectory)) {
-    return { success: false, error: 'Workspace root does not match this filesystem owner' };
-  }
-
-  const validation = validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedReadDirs(), deps.accessPolicy);
+  const validation = data?.rootPath === undefined
+    ? validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedReadDirs(), deps.accessPolicy)
+    : authorizeFilesystemPathWithinRoot({ targetPath: path, rootPath: data.rootPath,
+      defaultDirectory: deps.workingDirectory, accessPolicy: deps.accessPolicy,
+      additionalAllowedDirs: deps.getAdditionalAllowedReadDirs() });
   if (!validation.valid || !validation.resolvedPath) {
     return { success: false, error: validation.error ?? 'Access denied' };
   }
@@ -221,13 +222,11 @@ export function registerDirectoryHandlers(
 ): void {
   registerFilesystemMutationActionHandlers(rpcHandlerManager, deps, ['daemon.filesystem.createDirectory']);
 
-  registerActionSpecRpcHandlers({
+  registerRootedFilesystemRpcHandlers({
     rpcHandlerManager,
-    actionExecutor: deps.actionExecutor ?? createDirectoryRpcActionExecutor(deps),
+    workingDirectory: deps.workingDirectory,
+    actionExecutor: deps.actionExecutor,
+    incumbentExecutor: createDirectoryRpcActionExecutor(deps),
     actionIds: ['daemon.filesystem.listDirectory', 'daemon.filesystem.getDirectoryTree'],
-    mapRequestForMethod: ({ isAlias, input }) => ({ accepted: true,
-      input: isAlias && input && typeof input === 'object'
-        ? { ...(input as Record<string, unknown>), rootPath: deps.workingDirectory }
-        : input }),
   });
 }

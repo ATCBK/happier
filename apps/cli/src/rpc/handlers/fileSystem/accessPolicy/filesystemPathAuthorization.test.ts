@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { authorizeFilesystemPath, prepareFilesystemPathAuthorizer } from './filesystemPathAuthorization';
+import { authorizeFilesystemPath, authorizeFilesystemPathWithinRoot, prepareFilesystemPathAuthorizer } from './filesystemPathAuthorization';
 import { validatePath } from '../../pathSecurity';
 
 const createdPaths = new Set<string>();
@@ -24,6 +24,19 @@ afterEach(() => {
 });
 
 describe('authorizeFilesystemPath', () => {
+  it('admits Windows checkout roots under host policy while preserving exact root confinement', () => {
+    const input = { defaultDirectory: 'C:\\Users\\alice', rootPath: 'C:/Users/alice/Work/Repo',
+      accessPolicy: { kind: 'restrictedRoots', roots: ['C:\\Users\\alice\\work'] } as const,
+      platform: 'win32' as const };
+    expect(authorizeFilesystemPathWithinRoot({ ...input, targetPath: 'folder\\file.bin' }))
+      .toEqual({ valid: true, rootPath: 'C:\\Users\\alice\\Work\\Repo', resolvedPath: 'C:\\Users\\alice\\Work\\Repo\\folder\\file.bin' });
+    for (const targetPath of ['../Repo2/file', 'C:/Users/alice/work/Repo2/file', 'D:/file']) {
+      expect(authorizeFilesystemPathWithinRoot({ ...input, targetPath })).toMatchObject({ valid: false });
+    }
+    expect(authorizeFilesystemPathWithinRoot({ ...input, rootPath: 'C:/Users/alice2/work/Repo', targetPath: 'file' }))
+      .toMatchObject({ valid: false });
+  });
+
   it('rejects dangling symlinks that would create files outside the root, while allowing contained links', async () => {
     const allowed = createTempRoot('happier-fs-policy-dangling-allowed');
     const outside = createTempRoot('happier-fs-policy-dangling-outside');

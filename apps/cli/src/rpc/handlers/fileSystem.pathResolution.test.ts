@@ -21,6 +21,9 @@ import { stat } from 'fs/promises';
 import { registerFileSystemHandlers } from './fileSystem';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { resolve } from 'path';
+import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { accountSettingsParse } from '@happier-dev/protocol';
 
 const restrictedWorkDirPolicy = { kind: 'restrictedRoots', roots: ['/work/dir'] } as const;
 
@@ -37,80 +40,38 @@ function createRpcHandlerManager(): { handlers: Map<string, Handler>; registerHa
 }
 
 describe('registerFileSystemHandlers', () => {
-  it('dispatches filesystem read RPCs through ActionSpec when an executor is provided', async () => {
-    const execute = vi.fn(async () => ({
-      ok: true as const,
-      result: { success: true, content: Buffer.from('hello', 'utf8').toString('base64') },
-    }));
+  it('admits predecessor rootless filesystem requests through the real canonical Action parser', async () => {
     const mgr = createRpcHandlerManager();
-
-    registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, '/work/dir', {
-      actionExecutor: { execute },
+    // No filesystem effect is mounted: reaching its typed unsupported result proves
+    // that real Action admission accepted the legacy carrier without mocking parsing.
+    const { executor } = createCliActionExecutorHarness({
+      token: 'admitted-daemon', sessionId: '', mode: 'plain', ctx: null,
+      actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({
+        actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'daemon.filesystem.writeFile': ['rpc'] } },
+      }) }),
+    }, { filesystemActionExecute: undefined });
+    const registration = registerFileSystemHandlers(mgr, '/work/dir', {
+      actionExecutor: { execute: (actionId, input, context) => executor.execute(actionId, input, {
+        ...context, serverId: 'home', runtimeAccountId: 'account',
+        externalActionTarget: { kind: 'machine', machineId: 'machine' },
+      }) },
     });
-
-    const read = mgr.handlers.get(RPC_METHODS.READ_FILE);
-    if (!read) {
-      throw new Error('expected readFile handler');
-    }
-
-    await expect(read({ path: '/work/dir/README.md' })).resolves.toEqual({
-      success: true,
-      content: Buffer.from('hello', 'utf8').toString('base64'),
-    });
-
-    expect(execute).toHaveBeenCalledWith(
-      'daemon.filesystem.readFile',
-      { path: '/work/dir/README.md' },
-      expect.objectContaining({ surface: 'rpc' }),
-    );
-  });
-
-    it('dispatches filesystem mutation and directory RPCs through ActionSpec when an executor is provided', async () => {
-    const execute = vi.fn(async (actionId: string) => ({
-      ok: true as const,
-      result: { success: true, actionId },
-    }));
-    const mgr = createRpcHandlerManager();
-
-    registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, '/work/dir', {
-      actionExecutor: { execute },
-    });
-
-    const write = mgr.handlers.get(RPC_METHODS.WRITE_FILE);
-    const listDirectory = mgr.handlers.get(RPC_METHODS.LIST_DIRECTORY);
-    const getDirectoryTree = mgr.handlers.get(RPC_METHODS.GET_DIRECTORY_TREE);
-    if (!write || !listDirectory || !getDirectoryTree) {
-      throw new Error('expected file-system ActionSpec handlers');
-    }
-
-    await expect(write({ path: '/work/dir/out.txt', content: 'eA==' })).resolves.toEqual({
-      success: true,
-      actionId: 'daemon.filesystem.writeFile',
-    });
-    await expect(listDirectory({ path: '/work/dir' })).resolves.toEqual({
-      success: true,
-      actionId: 'daemon.filesystem.listDirectory',
-    });
-    await expect(getDirectoryTree({ path: '/work/dir', maxDepth: 1 })).resolves.toEqual({
-      success: true,
-      actionId: 'daemon.filesystem.getDirectoryTree',
-    });
-
-    expect(execute).toHaveBeenCalledWith(
-      'daemon.filesystem.writeFile',
-      { path: '/work/dir/out.txt', content: 'eA==' },
-      expect.objectContaining({ surface: 'rpc' }),
-    );
-    expect(execute).toHaveBeenCalledWith(
-      'daemon.filesystem.listDirectory',
-      { path: '/work/dir' },
-      expect.objectContaining({ surface: 'rpc' }),
-    );
-    expect(execute).toHaveBeenCalledWith(
-      'daemon.filesystem.getDirectoryTree',
-      { path: '/work/dir', maxDepth: 1 },
-      expect.objectContaining({ surface: 'rpc' }),
-    );
+    try {
+      for (const [method, input] of [
+        [RPC_METHODS.LIST_DIRECTORY, { path: '/work/dir', includeGitIgnore: true }],
+        [RPC_METHODS.GET_DIRECTORY_TREE, { path: '/work/dir', maxDepth: 1 }],
+        [RPC_METHODS.READ_FILE, { path: '/work/dir/README' }],
+        [RPC_METHODS.WRITE_FILE, { path: '/work/dir/notes', content: 'eA==' }],
+      ] as const) {
+        const handler = mgr.handlers.get(method);
+        if (!handler) throw new Error(`expected filesystem handler: ${method}`);
+        await expect(handler(input)).resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+      }
+      const listDirectory = mgr.handlers.get(RPC_METHODS.LIST_DIRECTORY);
+      if (!listDirectory) throw new Error('expected directory handler');
+      await expect(listDirectory({ rootPath: 42, path: '/work/dir' }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    } finally { await registration.dispose(); }
   });
 
   it('allows absolute writes outside the default directory by default', async () => {
@@ -182,6 +143,7 @@ describe('registerFileSystemHandlers', () => {
     await expect(read({ path: '/tmp/transient-media/sibling-secret.png' })).resolves.toMatchObject({
       success: false,
     });
+    await expect(read({ rootPath: '/work/dir', path: grantedPath })).resolves.toMatchObject({ success: false });
     expect(readFile).toHaveBeenCalledTimes(1);
   });
 

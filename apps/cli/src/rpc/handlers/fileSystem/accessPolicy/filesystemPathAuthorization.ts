@@ -196,6 +196,25 @@ export function authorizeFilesystemPath(input: AuthorizeFilesystemPathInput): Fi
   };
 }
 
+/** Admit the checkout under host policy, then confine its entry under that exact root. */
+export function authorizeFilesystemPathWithinRoot(
+  input: AuthorizeFilesystemPathInput & Readonly<{ rootPath: string }>,
+): (Readonly<{ valid: true; resolvedPath: string; rootPath: string }> | Readonly<{ valid: false; error: string }>) {
+  if (!isFilesystemPathAbsolute(input.rootPath, input.platform)) {
+    return { valid: false, error: 'The filesystem root must be absolute' };
+  }
+  const root = authorizeFilesystemPath({ ...input, targetPath: input.rootPath });
+  if (!root.valid) return root;
+  const confined = authorizeFilesystemPath({
+    targetPath: input.targetPath, defaultDirectory: root.resolvedPath,
+    accessPolicy: { kind: 'restrictedRoots', roots: [root.resolvedPath] },
+    platform: input.platform,
+  });
+  if (!confined.valid) return confined;
+  const admitted = authorizeFilesystemPath({ ...input, targetPath: confined.resolvedPath, defaultDirectory: root.resolvedPath });
+  return admitted.valid ? { ...admitted, rootPath: root.resolvedPath } : admitted;
+}
+
 export async function prepareFilesystemPathAuthorizer(
   input: Omit<AuthorizeFilesystemPathInput, 'targetPath'>,
 ): Promise<FilesystemPathAuthorizer> {

@@ -8,6 +8,7 @@ import { statSync } from 'node:fs';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { registerFileSystemHandlers } from './fileSystem';
+import { writeFileForRpc } from './fileSystem/writeFileForRpc';
 import { executeFilesystemMutationAction, type FilesystemMutationDeps } from './fileSystem/pathMutationHandlers';
 import { FILESYSTEM_MUTATION_ACTION_IDS } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
@@ -65,6 +66,68 @@ function mutationDeps(workingDirectory: string): FilesystemMutationDeps {
   return { workingDirectory, accessPolicy: { kind: 'osUser' },
     getAdditionalAllowedReadDirs: () => [], getAdditionalAllowedWriteDirs: () => [] };
 }
+
+describe('qualified checkout filesystem admission', () => {
+  it.each(['clone', '.dev/worktree/branch', 'copy-export'])('reads and mutates the admitted %s root rather than the daemon default', async (checkout) => {
+    const workspace = mkdtempSync(join(tmpdir(), 'happier-qualified-checkout-'));
+    const rootPath = join(workspace, checkout);
+    mkdirSync(rootPath, { recursive: true });
+    const bytes = Buffer.from([0, 255, 128, 10]);
+    writeFileSync(join(rootPath, 'README'), bytes);
+    writeFileSync(join(workspace, 'outside'), 'outside');
+    symlinkSync(join(workspace, 'outside'), join(rootPath, 'outside-link'));
+    const deps = mutationDeps(workspace);
+    const mgr = new RpcHandlerManager({ scopePrefix: 'machine', localMachineId: 'machine', encryptionMode: 'plain' });
+    const registration = registerFileSystemHandlers(mgr, workspace, {
+      resolveMutationActionExecutor: () => createMutationExecutor(deps), mutationMachineId: 'machine',
+    });
+    try {
+      // The predecessor's rootless OS-user read remains usable.
+      await expect(mgr.invokeLocal(RPC_METHODS.READ_FILE, { path: join(rootPath, 'README') }))
+        .resolves.toEqual({ success: true, content: bytes.toString('base64') });
+      for (const method of ['daemon.filesystem.readFile', RPC_METHODS.READ_FILE]) {
+        await expect(mgr.invokeLocal(method, { rootPath, path: 'README' }))
+          .resolves.toEqual({ success: true, content: bytes.toString('base64') });
+        await expect(mgr.invokeLocal(method, { rootPath, path: join(workspace, 'outside') }))
+          .resolves.toMatchObject({ success: false });
+      }
+      await expect(mgr.invokeLocal('daemon.filesystem.writeFile', { rootPath, path: 'notes', content: bytes.toString('base64'), expectedHash: null }))
+        .resolves.toMatchObject({ success: true });
+      expect(readFileSync(join(rootPath, 'notes'))).toEqual(bytes);
+      await expect(mgr.invokeLocal(RPC_METHODS.LIST_DIRECTORY, { rootPath, path: '.' }))
+        .resolves.toMatchObject({ success: true, entries: expect.arrayContaining([expect.objectContaining({ name: 'notes', type: 'file' })]) });
+      await expect(mgr.invokeLocal('daemon.filesystem.getDirectoryTree', { rootPath, path: '.', maxDepth: 1 }))
+        .resolves.toMatchObject({ success: true, tree: { path: rootPath, children: expect.arrayContaining([expect.objectContaining({ name: 'README' })]) } });
+      await expect(mgr.invokeLocal('daemon.filesystem.createDirectory', { rootPath, path: 'folder' })).resolves.toEqual({ success: true });
+      await expect(mgr.invokeLocal('daemon.filesystem.rename', { rootPath, from: 'notes', to: 'folder/renamed', overwrite: false })).resolves.toEqual({ success: true });
+      expect(readFileSync(join(rootPath, 'folder', 'renamed'))).toEqual(bytes);
+      await expect(mgr.invokeLocal('daemon.filesystem.delete', { rootPath, path: 'folder', recursive: true })).resolves.toEqual({ success: true });
+      expect(existsSync(join(rootPath, 'folder'))).toBe(false);
+      for (const method of ['daemon.filesystem.writeFile', RPC_METHODS.WRITE_FILE]) {
+        await expect(mgr.invokeLocal(method, { rootPath, path: '../escaped', content: bytes.toString('base64') }))
+          .resolves.toMatchObject({ success: false });
+      }
+      await expect(mgr.invokeLocal(RPC_METHODS.LIST_DIRECTORY, { rootPath, path: '..' })).resolves.toMatchObject({ success: false });
+      await expect(mgr.invokeLocal('daemon.filesystem.getDirectoryTree', { rootPath, path: '..', maxDepth: 0 })).resolves.toMatchObject({ success: false });
+      await expect(mgr.invokeLocal('daemon.filesystem.createDirectory', { rootPath, path: '../escaped' })).resolves.toMatchObject({ success: false });
+      await expect(mgr.invokeLocal('daemon.filesystem.rename', { rootPath, from: 'README', to: '../escaped', overwrite: false })).resolves.toMatchObject({ success: false });
+      await expect(mgr.invokeLocal('daemon.filesystem.delete', { rootPath, path: join(workspace, 'outside'), recursive: false })).resolves.toMatchObject({ success: false });
+      await expect(mgr.invokeLocal('daemon.filesystem.readFile', { rootPath, path: 'outside-link' })).resolves.toMatchObject({ success: false });
+      await expect(mgr.invokeLocal('daemon.filesystem.writeFile', { rootPath, path: 'outside-link', content: bytes.toString('base64') })).resolves.toMatchObject({ success: false });
+      await expect(mgr.invokeLocal('daemon.filesystem.copy', { rootPath, from: 'README', to: 'copied', recursive: false, overwrite: false })).resolves.toEqual({ success: true });
+      expect(readFileSync(join(rootPath, 'copied'))).toEqual(bytes);
+      await expect(mgr.invokeLocal('daemon.filesystem.copy', { rootPath, from: 'README', to: '../escaped', recursive: false, overwrite: false })).resolves.toMatchObject({ success: false });
+      expect(readFileSync(join(workspace, 'outside'), 'utf8')).toBe('outside');
+      // A supplied root cannot widen the host's restricted-root policy.
+      const restricted = { ...deps, accessPolicy: { kind: 'restrictedRoots', roots: [rootPath] } as const };
+      await expect(writeFileForRpc({ rootPath: workspace, path: 'outside', content: bytes.toString('base64') }, restricted))
+        .resolves.toMatchObject({ success: false });
+    } finally {
+      await registration.dispose();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('filesystem path mutations', () => {
   it('replaces an overwritten directory entry and keeps that destination intact when the next staged copy is invalid', async () => {

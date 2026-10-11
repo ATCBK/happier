@@ -1,9 +1,11 @@
-import { mkdirSync, mkdtempSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { describe, expect, it, vi } from 'vitest';
 import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createTestGitRpcManager, runGit as git } from './__tests__/testRpcHarness';
 
 import { createScmBackendRegistry } from '@/scm/registry';
 import type { ScmBackend } from '@/scm/types';
@@ -18,6 +20,44 @@ type TestResponse = {
 const emptyRegistry = createScmBackendRegistry([]);
 
 describe('runScmRoute', () => {
+    it('keeps linked-worktree history and Changes bound to its checkout, not the shared Git directory', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'happier-worktree-route-'));
+        try {
+            git(root, ['init']);
+            git(root, ['config', 'user.name', 'RPC Author']);
+            git(root, ['config', 'user.email', 'rpc@example.test']);
+            const commit = (cwd: string, content: string) => {
+                writeFileSync(join(cwd, 'README'), content);
+                git(cwd, ['add', '--', 'README']);
+                git(cwd, ['commit', '-m', content]);
+                return git(cwd, ['rev-parse', 'HEAD']);
+            };
+            const sourceHead = commit(root, 'source commit');
+            const worktree = join(root, '.dev', 'worktree', 'branch');
+            git(root, ['worktree', 'add', '-b', 'worktree-branch', worktree]);
+            const worktreeHead = commit(worktree, 'worktree commit');
+            writeFileSync(join(worktree, 'README'), 'worktree edit');
+            vi.stubEnv('HAPPIER_MACHINE_RPC_WORKING_DIRECTORY', root);
+            const { call } = createTestGitRpcManager({ workingDirectory: root });
+            for (const [cwd, headOid] of [[root, sourceHead], [worktree, worktreeHead]] as const) {
+                expect(await call(RPC_METHODS.SCM_HISTORY_ENTRIES, {
+                    cwd, folder: '', paths: ['README'], outcomeVersion: 1,
+                })).toMatchObject({ success: true, headOid, entries: [{ path: 'README', kind: 'commit', commit: { oid: headOid } }] });
+            }
+            expect(await call(RPC_METHODS.SCM_STATUS_SNAPSHOT, { cwd: worktree })).toMatchObject({
+                success: true, snapshot: { entries: expect.arrayContaining([expect.objectContaining({ path: 'README' })]) },
+            });
+            expect(await call(RPC_METHODS.SCM_STATUS_SNAPSHOT, { cwd: root })).toMatchObject({
+                success: true, snapshot: { entries: expect.not.arrayContaining([expect.objectContaining({ path: 'README' })]) },
+            });
+            expect(await call(RPC_METHODS.SCM_DIFF_FILE, { cwd: worktree, path: 'README', area: 'pending' })).toMatchObject({
+                success: true, diff: expect.stringContaining('+worktree edit'),
+            });
+        } finally {
+            vi.unstubAllEnvs();
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
     it('uses the non-repository handler for cwd outside the default directory when unrestricted', async () => {
         const suiteDir = mkdtempSync(join(tmpdir(), 'happier-scm-dispatch-'));
         const workspace = join(suiteDir, 'default');
@@ -214,7 +254,7 @@ describe('runScmRoute', () => {
                 detectRepo: async () => {
                     throw Object.assign(
                         new Error('SCM executable not found for sapling-cli (sl)'),
-                        { errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE },
+                        { errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_NOT_INSTALLED },
                     );
                 },
             } as unknown as ScmBackend,

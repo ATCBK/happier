@@ -1,7 +1,7 @@
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { ActionId } from '@happier-dev/protocol';
 import type { FilesystemAccessPolicy } from './accessPolicy/filesystemAccessPolicy';
-import { registerActionSpecRpcHandlers } from '../registerActionSpecRpcHandlers';
+import { registerRootedFilesystemRpcHandlers } from './registerRootedFilesystemRpcHandlers';
 import type { RpcActionExecutor } from '../_actionDispatchAdapter';
 import { writeFileForRpc, type WriteFileRequest, type WriteFileHandlerDeps } from './writeFileForRpc';
 export { writeFileForRpc, type WriteFileRequest, type WriteFileResponse, type WriteFileHandlerDeps } from './writeFileForRpc';
@@ -30,13 +30,11 @@ export function registerWriteFileHandler(
     actionExecutor?: RpcActionExecutor;
   }>,
 ): void {
-  registerActionSpecRpcHandlers({
+  registerRootedFilesystemRpcHandlers({
     rpcHandlerManager,
-    actionExecutor: deps.actionExecutor ?? createWriteFileRpcActionExecutor(deps),
+    workingDirectory: deps.workingDirectory,
+    actionExecutor: deps.actionExecutor,
+    incumbentExecutor: createWriteFileRpcActionExecutor(deps),
     actionIds: ['daemon.filesystem.writeFile'],
-    mapRequestForMethod: ({ isAlias, input }) => ({ accepted: true,
-      input: isAlias && input && typeof input === 'object'
-        ? { ...(input as Record<string, unknown>), rootPath: deps.workingDirectory }
-        : input }),
   });
 }
