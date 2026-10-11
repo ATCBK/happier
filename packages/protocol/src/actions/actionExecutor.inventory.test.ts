@@ -259,11 +259,13 @@ const inventoryAgentStartContext = {
 } satisfies AgentStartContextV1;
 
 describe('createActionExecutor (inventory/discovery)', () => {
-  // Blocked: contributed field-owned sources remain rejected by author admission until all executable consumers are migrated.
-  it('[blocked: authored contributed source] resolves a granted typed widget field source before its type Resource and refuses ungranted discovery', async () => {
+  it('refuses a catalog field with a competing input source before reading either source', async () => {
     const surface = { serverId: 'home', accountId: 'account', owner: { kind: 'home' as const } };
     const definition = { kind: 'installed' as const, surface: { pluginId: 'com.acme.inputs', localId: 'choice-widget' } };
     const consumer = { kind: 'widget' as const, surface, definition };
+    const notificationChannelsList = vi.fn(async () => ({ items: [{ id: 'allowed', label: 'Allowed' }] }));
+    const resolveInputType = vi.fn(async () => { throw new Error('Invalid fields must not read a type Resource'); });
+    const readAdmittedInputTypeOptions = vi.fn(async () => { throw new Error('Invalid fields must not relay to the type Resource'); });
     const executor = createActionExecutor({ ...createDeps(),
       widgetAccountScope: () => ({ serverId: 'home', accountId: 'account' }),
       widgetCatalog: { list: async () => [{ definition, title: 'Choice',
@@ -271,9 +273,9 @@ describe('createActionExecutor (inventory/discovery)', () => {
         fields: [{ path: 'choice', title: 'Choice', widget: 'select',
           inputType: { pluginId: 'com.acme.inputs', localId: 'choice' }, optionsSourceId: 'notifications.channels.available' }],
         availability: 'available', instanceCount: 0 }] },
-      notificationChannelsList: async () => ({ items: [{ id: 'allowed', label: 'Allowed' }] }),
-      resolveInputType: async () => { throw new Error('The consuming source does not read a type Resource'); },
-      readAdmittedInputTypeOptions: async () => { throw new Error('The consuming source must not relay to the type Resource'); },
+      notificationChannelsList,
+      resolveInputType,
+      readAdmittedInputTypeOptions,
     });
     const granted = { surface: 'api' as const, authority: 'account_automation' as const,
       externalActionCredential: { accountId: 'account', principalId: 'principal', credentialId: 'credential', grant: {
@@ -281,11 +283,14 @@ describe('createActionExecutor (inventory/discovery)', () => {
         approve: false, origins: [], models: null, permissionModes: null, create: null,
       } } };
     expect(await executor.execute('action.options.resolve', { consumer, fieldPath: 'choice' }, granted))
-      .toMatchObject({ ok: true, result: { optionsSourceId: 'notifications.channels.available', options: [{ value: 'allowed', label: 'Allowed' }] } });
+      .toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
     expect(await executor.execute('action.options.resolve', { consumer, fieldPath: 'choice' }, {
       ...granted, externalActionCredential: { ...granted.externalActionCredential,
         grant: { ...granted.externalActionCredential.grant, actions: { families: [], ids: ['paths.list_recent'] } } },
     })).toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
+    expect(notificationChannelsList).not.toHaveBeenCalled();
+    expect(resolveInputType).not.toHaveBeenCalled();
+    expect(readAdmittedInputTypeOptions).not.toHaveBeenCalled();
   });
   it('resolves declared plugin input options only through the granted consuming field', async () => {
     const inputType = { pluginId: 'com.acme.inputs', localId: 'repository' };
@@ -1086,7 +1091,8 @@ describe('createActionExecutor (inventory/discovery)', () => {
     deps.reviewEnginesList = vi.fn(async () => ({ items: [{ value: 'codex', label: 'Codex' }] }));
     const executor = createActionExecutor(deps);
     expect(await executor.execute('action.options.resolve', {
-      actionId: 'review.start', fieldPath: 'engineIds', sessionId: null, machineId: 'machine-review',
+      actionId: 'review.start', fieldPath: 'engineIds',
+      draftInput: { sessionId: null, machineId: 'machine-review' },
     }, { defaultSessionId: 'session-active' })).toMatchObject({ ok: true, result: { options: [{ value: 'codex' }] } });
     expect(deps.reviewEnginesList).toHaveBeenCalledWith({ sessionId: null, machineId: 'machine-review' });
   });
@@ -1138,9 +1144,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
         runClass: 'long_lived',
         ioMode: 'streaming',
         launchOrigin: presentUserActionLaunchOrigin,
-        intentInput: expect.objectContaining({
-          backendTargetKey: 'agent:codex',
-        }),
+        instructions: 'Start the voice agent run.',
       }),
       { authority: 'present_user' },
     );
@@ -1272,9 +1276,14 @@ describe('createActionExecutor (inventory/discovery)', () => {
       );
 
       expect(result.ok).toBe(true);
-      expect(deps[dependencyName]).toHaveBeenCalledWith(expect.objectContaining({
-        serverId: 'host-stamped',
-      }));
+      const expectedInput = expect.objectContaining({ serverId: 'host-stamped' });
+      if (dependencyName === 'spawnConnectedServicesList') {
+        expect(deps[dependencyName]).toHaveBeenCalledWith(expectedInput, {
+          authority: 'present_user', surface: 'ui', serverId: 'host-stamped',
+        });
+      } else {
+        expect(deps[dependencyName]).toHaveBeenCalledWith(expectedInput);
+      }
     },
   );
 
@@ -1347,7 +1356,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       agentId: 'codex',
       backendTargetKey: 'backend:codex',
       includeUnavailable: true,
-    });
+    }, { authority: 'present_user', surface: 'ui' });
 
     await expect(executor.execute('sessions.spawn.mcp_servers.preview' as any, {
       agentId: 'codex',
@@ -1361,7 +1370,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
     });
   });
 
-  it('drops additive undeclared fields for agents.models.list', async () => {
+  it('rejects undeclared fields for the closed agents.models.list input before reading inventory', async () => {
     const deps = createDeps();
     const executor = createActionExecutor(deps);
 
@@ -1372,13 +1381,8 @@ describe('createActionExecutor (inventory/discovery)', () => {
       providerTraceId: 'preview-field',
     });
 
-    expect(res.ok).toBe(true);
-    expect(deps.agentsModelsList).toHaveBeenCalledWith({
-      agentId: 'codex',
-      backendTargetKey: 'backend:codex',
-      machineId: 'm1',
-      limit: 2,
-    });
+    expect(res).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(deps.agentsModelsList).not.toHaveBeenCalled();
   });
 
   it('routes configured ACP backendTargetKey through agents.models.list', async () => {
@@ -1913,8 +1917,8 @@ describe('createActionExecutor (inventory/discovery)', () => {
       { surface: 'api' },
     )).resolves.toEqual({
       ok: false,
-      errorCode: 'unavailable',
-      error: 'unavailable',
+      errorCode: 'options_source_not_supported',
+      error: 'options_source_not_supported',
     });
     await expect(executor.execute(
       'action.options.resolve',
@@ -2010,7 +2014,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       optionsSourceId: 'execution.backends.enabled',
       options: [
         { value: 'agent:happier.agent.codex/codex', label: 'Codex' },
-        { value: 'backend:review-bot:configured:review-bot', label: 'Review Bot' },
+        { value: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot', label: 'Review Bot' },
       ],
     });
   });
@@ -2256,7 +2260,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
     expect(deps.spawnConnectedServicesList).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'pi',
       backendTargetKey: 'agent:pi',
-    }));
+    }), { authority: 'present_user', surface: 'ui' });
   });
 
   it('returns a typed missing dependency for ergonomic-run options without a selected target', async () => {

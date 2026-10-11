@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as externalActionApi from './externalActionApi.js';
-import { ApiTokenGrantV1Schema } from '../auth/apiTokenGrant.js';
+import { API_TOKEN_FULL_GRANT_V1, ApiTokenGrantV1Schema } from '../auth/apiTokenGrant.js';
 import { SessionActionRpcOriginV1Schema } from '../rpc/socket.js';
 
 const invocationGrant = ApiTokenGrantV1Schema.parse({ v: 1, actions: { families: [], ids: ['session.title.set'] },
@@ -169,7 +169,7 @@ it('carries an offline admitted row receipt only on target unavailability, never
   expect(() => externalActionApi.projectExternalActionHttpError('invalid_envelope', 'request', receipt)).toThrow();
 });
 
-it('requires canonical spawn facts on sealed managed child requests while retaining explicit Plain framing', () => {
+it('frames sealed managed setup without spawn facts while keeping supplied facts closed and Plain explicit', () => {
   const envelope = { v: 2, requestId: 'child', target: { kind: 'machine', machineId: 'guest' },
     payload: { t: 'encrypted', c: 'sealed-private-startup' }, sessionSpawnAdmission: {
       executionTarget: { serverId: 'home', machineId: 'guest' }, directory: { kind: 'managed' },
@@ -179,8 +179,9 @@ it('requires canonical spawn facts on sealed managed child requests while retain
     managedContinuation: { managedId: 'managed', creationRequestId: 'acquire', expectedIntentRevision: 0 } };
   expect(externalActionApi.ExternalActionExecutionAuthorizationRequestV1Schema.parse(body)).toEqual(body);
   const { sessionSpawnAdmission: _facts, ...missingFacts } = envelope;
+  // The HTTP Action owner requires spawn facts for Session spawn, not environment setup.
   expect(externalActionApi.ExternalActionExecutionAuthorizationRequestV1Schema.safeParse({ ...body,
-    envelope: missingFacts }).success).toBe(false);
+    envelope: missingFacts }).success).toBe(true);
   // Persisted Account mode, not this framing parser, authorizes Plain ingress.
   expect(externalActionApi.ExternalActionExecutionAuthorizationRequestV1Schema.safeParse({ ...body,
     envelope: { v: 1, requestId: 'child', target: envelope.target, input: envelope.sessionSpawnAdmission } }).success).toBe(true);

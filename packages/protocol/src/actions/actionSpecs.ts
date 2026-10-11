@@ -8118,7 +8118,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     safety: 'safe',
     placements: [],
     bindings: { mcpToolName: 'machines_agents_list' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'List agents on a machine',
       fields: [

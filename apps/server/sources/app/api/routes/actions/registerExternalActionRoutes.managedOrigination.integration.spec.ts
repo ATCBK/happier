@@ -1060,6 +1060,20 @@ describe('ordinary Account managed Action origination', () => {
                     method: 'POST', path, body, privateKey: selected.keys.secretKey }),
             };
             expect(JSON.stringify(body)).not.toContain(privateText);
+            const { sessionSpawnAdmission: _spawnFacts, ...setupEnvelope } = envelope;
+            const missingSpawnFactsBody = { ...body, envelope: setupEnvelope };
+            const sessionCountBeforeMissingFacts = await db.session.count({ where: { accountId: selected.account.id } });
+            const missingSpawnFacts = await instance.inject({ method: 'POST', url: path,
+                payload: missingSpawnFactsBody, headers: { ...headers,
+                    [EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER]: signExternalActionMachineRequestV1({
+                        authorizationToken: root.token, effectActionId: 'machines.managed.acquire', target: root.binding.target,
+                        installationId: root.binding.installationId, requestId: root.binding.requestId,
+                        method: 'POST', path, body: missingSpawnFactsBody, privateKey: selected.keys.secretKey }) } });
+            expect(missingSpawnFacts.statusCode, missingSpawnFacts.body).toBe(401);
+            expect(missingSpawnFacts.json()).toMatchObject({ error: 'invalid_token' });
+            expect(deliveredChild).toBeUndefined();
+            expect(await db.managedMachine.findUniqueOrThrow({ where: { id: row.id } })).toEqual(row);
+            expect(await db.session.count({ where: { accountId: selected.account.id } })).toBe(sessionCountBeforeMissingFacts);
             const mintChild = () => instance.inject({ method: 'POST', url: path, payload: body, headers });
             const childResponse = await mintChild();
             expect(childResponse.statusCode).toBe(200);
