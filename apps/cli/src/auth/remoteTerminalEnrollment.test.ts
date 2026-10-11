@@ -25,16 +25,18 @@ describe('managed remote terminal enrollment', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it('does not persist the claimed Account bearer after cancellation at the authenticated Home observation', async () => {
+  it('uses the relay pairing deadline and does not persist the claimed Account bearer after cancellation at the authenticated Home observation', async () => {
     await withTempDir('happier-managed-enrollment-cancel-', async (homeDir) => {
       env.patch({ HAPPIER_HOME_DIR: homeDir });
       const controller = new AbortController();
       let response = '';
+      const expiresAt = Date.now() + 240_000;
+      let observedExpiry: number | undefined;
       // HTTP is the only mocked boundary: pairing, crypto, Home verification and credential IO stay real.
       const httpResult = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: { headers: new AxiosHeaders() } });
       vi.spyOn(axios, 'post').mockImplementation(async (url) => httpResult(String(url).endsWith('/claim')
         ? { state: 'authorized', serverIdentityId: descriptor.homeServerIdentityId, token: 'full-account-bearer', response }
-        : {}));
+        : { state: 'requested', expiresAt }));
       vi.spyOn(axios, 'get').mockResolvedValue(httpResult({ status: 'authorized' }));
       vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url) => {
         if (String(url).endsWith('/authenticated')) controller.abort();
@@ -43,6 +45,7 @@ describe('managed remote terminal enrollment', () => {
       const { runRemoteTerminalEnrollment } = await import('./remoteTerminalEnrollment');
       await expect(runRemoteTerminalEnrollment({ target, managedEnrollment: correlation, timeoutMs: 5_000, signal: controller.signal,
         onPairingRequest: (request) => {
+          observedExpiry = request.pairing.expiresAtMs;
           response = Buffer.from(sealTerminalProvisioningV3TokenOnlyPayload({
             terminalEphemeralPublicKey: Buffer.from(request.publicKey, 'base64'),
             pairingSecret: Buffer.from(request.pairing.secretB64Url, 'base64url'),
@@ -51,6 +54,7 @@ describe('managed remote terminal enrollment', () => {
           })).toString('base64');
         },
       })).rejects.toThrow(/cancel|abort/i);
+      expect(observedExpiry).toBe(expiresAt);
       expect((await readdir(homeDir, { recursive: true })).some((path) => /(?:^|[\\/])access\.key$/u.test(path))).toBe(false);
     });
   });
