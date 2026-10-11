@@ -278,6 +278,7 @@ describe('activate', () => {
                         supported: true,
                         modes: ['linked', 'copied', 'isolated'],
                         entries: [
+                            { path: 'CLAUDE.md', mode: 'linked_or_copied' },
                             { path: 'settings.json', mode: 'linked_or_copied' },
                             { path: 'settings.local.json', mode: 'linked_or_copied' },
                             { path: 'agents', mode: 'linked_or_copied' },
@@ -319,6 +320,21 @@ describe('activate', () => {
                 hotApply: expect.any(Function),
                 probeQuota: expect.any(Function),
             }));
+            const verifyResumeReachable = launch?.continuity?.verifyResumeReachable;
+            expect(verifyResumeReachable).toBeTypeOf('function');
+            if (!verifyResumeReachable) throw new Error('Missing Claude resume reachability verifier');
+            await expect(verifyResumeReachable({
+                vendorResumeId: 'claude-session-exact',
+                sessionFiles: {
+                    verifyDeclaredPaths: async () => ({ found: false }),
+                    findDeclaredCandidate: async ({ matchesCandidate }) => ({
+                        found: matchesCandidate({
+                            fileName: 'claude-session-exact.jsonl',
+                            nativeSessionId: 'claude-session-exact',
+                        }),
+                    }),
+                },
+            })).resolves.toEqual({ ok: true });
             expect(launch).not.toHaveProperty('serviceIds');
             expect(launch?.stateSharingDescriptor).not.toHaveProperty('providerId');
         } finally {

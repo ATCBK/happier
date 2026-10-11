@@ -17,6 +17,7 @@ import {
   createClaudeConnectedAccountNativeAuthCodec,
   createClaudeConnectedServiceRuntimeAuthAdapter,
 } from './agent/auth/services/runtime/failure.js';
+import { verifyResumeReachableClaude } from './agent/auth/services/runtime/verifyResumeReachable.js';
 import { AGENT_DEFINITION, AGENT_STATE_SHARING_DESCRIPTOR } from './agent/definition.js';
 import {
   claudeCliSessionCommandConfig,
@@ -483,6 +484,7 @@ export const CLAUDE_PLUGIN = definePlugin({
           generationApplicationScope: 'shared_group_auth_surface',
           nativeAuthCodec: createClaudeConnectedAccountNativeAuthCodec(),
           runtimeAuthAdapter: createClaudeConnectedServiceRuntimeAuthAdapter(),
+          verifyResumeReachable: verifyResumeReachableClaude,
         },
       },
       cliSessionCommand: {
