@@ -114,6 +114,26 @@ describe('providers: ACP scenario builders (permissions)', () => {
     expect(flat.some((key) => key.includes('/tool-result/'))).toBe(false);
   });
 
+  it.each(['filepath', 'file_path'])('accepts the %s path carried by native permission input', async (pathField) => {
+    const workspaceDir = await mkdtemp(join(tmpdir(), 'happier-acp-outside-codebuddy-'));
+    const outsidePath = `${workspaceDir}-outside.txt`;
+    try {
+      const scenario = makeAcpPermissionOutsideWorkspaceScenario({
+        providerId: 'codebuddy', content: 'CODEBUDDY_OUTSIDE_OK', decision: 'approve',
+        expectPermissionRequest: true, expectWriteCompletion: false,
+      });
+      await writeFile(outsidePath, 'CODEBUDDY_OUTSIDE_OK\n', 'utf8');
+      await expect(scenario.verify?.(buildVerifyContext({
+        workspaceDir, fixtures: {
+          'acp/codebuddy/permission-request/Write': [{ payload: { options: { input: { [pathField]: outsidePath } } } }],
+        },
+      }))).resolves.toBeUndefined();
+    } finally {
+      await rm(outsidePath, { force: true });
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it('accepts Kimi unknown permission-request payloads and extracts path from toolCall content', async () => {
     const workspaceDir = await mkdtemp(join(tmpdir(), 'happier-acp-outside-kimi-'));
     const outsidePath = join(tmpdir(), `happier-kimi-outside-${Date.now()}.txt`);

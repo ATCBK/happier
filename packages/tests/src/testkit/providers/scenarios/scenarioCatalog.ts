@@ -18,6 +18,7 @@ import {
   yoloFlagForPermissionMode,
 } from '../permissions/acpPermissionPrompts';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { applyAcpConfigOptionIntentSessionMetadata } from '@happier-dev/agents/session/state/metadataWriters';
 import { withCapabilityProbeRetry } from '../harness/capabilityRetry';
 import { enrichCapabilityProbeError } from '../harness/capabilityProbeFailure';
@@ -1281,7 +1282,7 @@ await server.connect(new StdioServerTransport());
       providerId: acpProviderId(provider),
       content: `ACP_CAPS_SENTINEL_${randomUUID()}`,
       id: 'acp_probe_capabilities',
-      title: 'acp: capabilities.detect cli.* returns ACP capability snapshot',
+      title: 'acp: active session publishes negotiated runtime capabilities',
     });
 
     return {
@@ -1295,29 +1296,12 @@ await server.connect(new StdioServerTransport());
         run: async ({ workspaceDir, baseUrl, token, sessionId, secret, cliHome }) => {
           await waitForSessionActive({ baseUrl, token, sessionId, timeoutMs: 60_000 });
 
-          const parsed = await withCapabilityProbeRetry(
-            () =>
-              invokeCapabilitiesMethod({
-                baseUrl,
-                token,
-                cliHome,
-                secret,
-                rpcMethod: RPC_METHODS.CAPABILITIES_DETECT,
-                payload: {
-                  requests: [
-                    {
-                      id: `cli.${provider.id}`,
-                      params: { includeAcpCapabilities: true, includeLoginStatus: true },
-                    },
-                  ],
-                },
-                timeoutMs: capabilityProbeRpcTimeoutMs(provider.id),
-              }),
-            capabilityProbeRetryOptions(provider.id),
-          );
-          const envelope = parsed && typeof parsed === 'object' ? parsed as any : null;
-          await writeFile(join(workspaceDir, outputRel), JSON.stringify(envelope, null, 2) + '\n', 'utf8');
-          await sleep(50);
+          const snapshot = await fetchSessionV2(baseUrl, token, sessionId);
+          const metadata: unknown = decryptLegacyBase64(snapshot.metadata, secret);
+          const runtimeCapabilities = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+            ? (metadata as Record<string, unknown>).agentRuntimeCapabilitiesV1
+            : undefined;
+          await writeFile(join(workspaceDir, outputRel), JSON.stringify({ runtimeCapabilities }, null, 2) + '\n', 'utf8');
         },
       },
       verify: async ({ workspaceDir }) => {
@@ -1325,56 +1309,33 @@ await server.connect(new StdioServerTransport());
         const raw = await readFile(outPath, 'utf8').catch(() => '');
         if (!raw) throw new Error(`acp_probe_capabilities: missing output file: ${outPath}`);
 
-        let json: any = null;
-        try {
-          json = JSON.parse(raw);
-        } catch {
-          throw new Error(`acp_probe_capabilities: output file is not valid JSON: ${outPath}`);
+        const json: unknown = JSON.parse(raw);
+        const publication = json && typeof json === 'object' && !Array.isArray(json)
+          ? (json as Record<string, unknown>).runtimeCapabilities
+          : null;
+        const capabilities = publication && typeof publication === 'object' && !Array.isArray(publication)
+          ? (publication as Record<string, unknown>).sessionCapabilities
+          : null;
+        if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) {
+          throw new Error('acp_probe_capabilities: missing active session capability publication');
         }
-
-        const entry = json?.results?.[`cli.${provider.id}`];
-        if (!entry || entry.ok !== true) {
-          throw new Error(`acp_probe_capabilities: missing successful result for cli.${provider.id}`);
-        }
-
-        const data = entry.data;
-        if (!data || typeof data !== 'object') {
-          throw new Error(`acp_probe_capabilities: result.data is not an object`);
-        }
-        if (data.available !== true) {
-          throw new Error(`acp_probe_capabilities: expected available=true for cli.${provider.id}`);
-        }
-
-        const acp = data.acp;
-        if (!acp || typeof acp !== 'object') {
-          throw new Error(`acp_probe_capabilities: missing acp snapshot for cli.${provider.id}`);
-        }
-        if (acp.ok !== true) {
-          if (provider.id === 'gemini') {
-            const message = typeof acp.error?.message === 'string' ? acp.error.message.trim() : '';
-            if (!message) {
-              throw new Error(`acp_probe_capabilities: expected acp.error.message for degraded cli.${provider.id} probe`);
-            }
-            return;
-          }
-          throw new Error(`acp_probe_capabilities: expected acp.ok=true for cli.${provider.id}`);
-        }
-        if (typeof acp.loadSession !== 'boolean') {
-          throw new Error(`acp_probe_capabilities: expected acp.loadSession boolean`);
-        }
-
-        const agentCapabilities = acp.agentCapabilities;
-        if (!agentCapabilities || typeof agentCapabilities !== 'object') {
-          throw new Error(`acp_probe_capabilities: expected acp.agentCapabilities object`);
-        }
-        if (!agentCapabilities.promptCapabilities || typeof agentCapabilities.promptCapabilities !== 'object') {
-          throw new Error(`acp_probe_capabilities: expected promptCapabilities object`);
-        }
-        if (!agentCapabilities.mcpCapabilities || typeof agentCapabilities.mcpCapabilities !== 'object') {
-          throw new Error(`acp_probe_capabilities: expected mcpCapabilities object`);
-        }
-        if (!agentCapabilities.sessionCapabilities || typeof agentCapabilities.sessionCapabilities !== 'object') {
-          throw new Error(`acp_probe_capabilities: expected sessionCapabilities object`);
+        // Validate the consumer-visible negotiated support facts through their canonical schema.
+        // Specialized runtimes can publish additional capabilities beyond this smoke's corridor.
+        const observed = capabilities as Record<string, unknown>;
+        const parsed = SessionOwnerMetadataV1Schema.safeParse({
+          v: 1,
+          runtime: {
+            agentRuntimeCapabilitiesV1: {
+              sessionCapabilities: {
+                sessionListing: observed.sessionListing,
+                sessionFork: observed.sessionFork,
+                sessionRollback: observed.sessionRollback,
+              },
+            },
+          },
+        });
+        if (!parsed.success) {
+          throw new Error(`acp_probe_capabilities: invalid negotiated session capability publication: ${parsed.error.message}`);
         }
       },
     } satisfies ProviderScenario;
@@ -3164,13 +3125,13 @@ await server.connect(new StdioServerTransport());
   mcp_change_title: (provider) => {
     const pid = acpProviderId(provider);
     const title = `${provider.id.toUpperCase()}_MCP_TITLE_E2E`;
-    const maxToolEvents = provider.id === 'grok' ? 2 : 1;
+    const maxToolEvents = provider.id === 'grok' || provider.id === 'codebuddy' ? 2 : 1;
     return {
       id: 'mcp_change_title',
       title: 'mcp: change_title via Happier MCP server',
       tier: 'extended',
       yolo: true,
-      // Grok discovers hidden MCP tools through one provider-owned search call before invoking them.
+      // These providers discover deferred MCP tools before invoking the title action.
       maxTraceEvents: { toolCalls: maxToolEvents, toolResults: maxToolEvents, permissionRequests: 1 },
       prompt: ({ workspaceDir }) =>
         [

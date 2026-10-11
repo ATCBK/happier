@@ -1,3 +1,5 @@
+import { getAgentCore } from '@happier-dev/agents';
+
 import type { ProviderScenario, ProviderUnderTest } from '../types';
 
 export function assertProviderId(
@@ -20,14 +22,7 @@ export function acpProviderId(provider: ProviderUnderTest): string {
 }
 
 export function acpResumeMetadataKey(providerId: ProviderUnderTest['id']): string {
-  if (providerId === 'codex') return 'codexSessionId';
-  if (providerId === 'kilo') return 'kiloSessionId';
-  if (providerId === 'gemini') return 'geminiSessionId';
-  if (providerId === 'qwen') return 'qwenSessionId';
-  if (providerId === 'kimi') return 'kimiSessionId';
-  if (providerId === 'auggie') return 'auggieSessionId';
-  if (providerId === 'grok') return 'grokSessionId';
-  return 'opencodeSessionId';
+  return getAgentCore(providerId)?.resume.vendorResumeIdField ?? 'opencodeSessionId';
 }
 
 export function claudeAgentTeamsCreateAndSpawnPrompt(teamId: string): string {
