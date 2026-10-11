@@ -33,6 +33,34 @@ describe('searchDaemonMemory', () => {
         summary: 'A matching archived fact', score: 0.8,
     };
 
+    it('reads scoped preparation and exact-revision fact coverage, with old peers explicitly unavailable', async () => {
+        const { fetchDaemonMemoryDocumentSummary } = await import('./fetchDaemonMemoryStatus');
+        const args = { ...query, ref: documentHit.ref, revision: documentHit.revision, scope: { type: 'session' as const, sessionId: 'session-1' } };
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ...status, documents: { state: 'ready', facts: [
+            { ref: documentHit.ref, revision: documentHit.revision, loadedFactCount: 1, indexedFactCount: 5 },
+        ] } });
+        expect(await fetchDaemonMemoryDocumentSummary(args)).toEqual({ state: 'ready', loadedFactCount: 1, indexedFactCount: 5 });
+        expect(machineRpcWithServerScopeMock.mock.calls[0]?.[0]).toMatchObject({
+            serverId: 'server-a', accountId: 'account-a', machineId: 'machine-a',
+            method: RPC_METHODS.DAEMON_MEMORY_STATUS, payload: { scope: args.scope },
+        });
+        machineRpcWithServerScopeMock.mockResolvedValueOnce(status);
+        expect(await fetchDaemonMemoryDocumentSummary(args)).toEqual({ state: 'unavailable' });
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ...status, documents: { state: 'ready', facts: [
+            { ref: documentHit.ref, revision: { headerVersion: 1, bodyVersion: 3 }, loadedFactCount: 2, indexedFactCount: 6 },
+        ] } });
+        expect(await fetchDaemonMemoryDocumentSummary(args)).toEqual({ state: 'pending' });
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ...status, documents: { state: 'pending' } });
+        expect(await fetchDaemonMemoryDocumentSummary(args)).toEqual({ state: 'pending' });
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ...status, documents: { state: 'unavailable' } });
+        expect(await fetchDaemonMemoryDocumentSummary(args)).toEqual({ state: 'unavailable' });
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ...status, documents: { state: 'ready', facts: [
+            { ref: documentHit.ref, revision: documentHit.revision, indexedFactCount: 5 },
+        ] } });
+        expect(await fetchDaemonMemoryDocumentSummary({ ...args, scope: { type: 'global' } }))
+            .toEqual({ state: 'ready', indexedFactCount: 5 });
+    });
+
     it('negotiates document support at the exact Account target before requesting mixed corpora', async () => {
         machineRpcWithServerScopeMock.mockResolvedValueOnce({ ...status, documentSearchSupported: true });
         machineRpcWithServerScopeMock.mockResolvedValueOnce({

@@ -40,6 +40,8 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { memoryDocumentHref } from './memoryDocumentRoutes';
 import type { MemoryDocumentSource } from './useMemoryDocument';
+import { useMemoryDocumentSummary } from './useMemoryDocumentSummary';
+import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
 
 /** A fact this fresh reads "Just now" rather than today's date. */
 const JUST_NOW_MS = 60_000;
@@ -120,6 +122,9 @@ export type MemoryDocumentBodyProps = Readonly<{
   /** No document is attached yet: the first fact goes to the Session's own memory, which the host creates. */
   sessionTarget?: MemorySessionTarget | null;
   scopeTarget?: MemoryScopeTargetV1;
+  /** A fresh admitted preparation, not the Session's last accepted turn. */
+  preparationScope?: MemorySearchScope;
+  preparationBasis?: string;
   onCreatedMemory?: (receipt: MemoryCreationReceipt) => void;
   emptyText: string;
   /**
@@ -148,6 +153,14 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   const view = source.view;
   const target = source.target;
   const topic = view?.topic ?? null;
+  const readSummary = useMemoryDocumentSummary({ source, serverId,
+    scope: props.preparationScope, preparationBasis: props.preparationBasis,
+    enabled: topic === null });
+  const summary = source.status === 'ready' && !source.stale
+    ? readSummary : { state: 'unavailable' as const };
+  const countLabel = (count: number | undefined) => count === undefined
+    ? t(summary.state === 'pending' ? 'common.loading' : 'common.unavailable')
+    : t('memoryContext.memory.factCount', { count });
   const archive = topic?.title === MEMORY_ARCHIVE_TOPIC_TITLE_V1;
   const writable = !props.readOnly && !archive;
   const [busy, setBusy] = React.useState(false);
@@ -478,13 +491,14 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
             <Text style={styles.summary}>
               {topic ? null : `${t('memoryContext.memory.alwaysRemembered')} `}
               <Text style={styles.summaryValue}>
-                {t('memoryContext.memory.factCount', { count: facts.length })}
+                {topic ? t('memoryContext.memory.factCount', { count: facts.length })
+                  : countLabel(summary.state === 'ready' ? summary.loadedFactCount : undefined)}
               </Text>
-              {topics.length > 0 ? (
+              {!topic ? (
                 <>
-                  {` · ${t('memoryContext.memory.topicsLabel')} `}
+                  {` · ${t('memoryContext.memory.searchable')} `}
                   <Text style={styles.summaryValue}>
-                    {String(topics.length)}
+                    {countLabel(summary.state === 'ready' ? summary.indexedFactCount : undefined)}
                   </Text>
                 </>
               ) : null}

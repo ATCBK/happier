@@ -19,6 +19,10 @@ import type { DeepIndexDbHandle, DeepIndexDocumentEntry, DeepIndexDocumentIdenti
 export type MemoryDocumentSearchScope = Readonly<{
   state: 'ready';
   eligibleDocuments: readonly DeepIndexDocumentIdentity[];
+  /** Same admitted documents, restricted by their decoded memory header; instructions are excluded. */
+  eligibleMemoryDocuments?: readonly DeepIndexDocumentIdentity[];
+  /** Only a named Session has one preparation; global admission is a union of attachments. */
+  preparation?: readonly (DeepIndexDocumentIdentity & Readonly<{ loadedFactIds: readonly string[] }>)[];
   assertCurrent: () => void;
 }> | Readonly<{ state: 'pending' | 'unavailable'; eligibleDocuments: readonly DeepIndexDocumentIdentity[] }>;
 
@@ -64,7 +68,8 @@ export async function syncMemoryDocuments(params: Readonly<{
     return await withCliPromptLibraryArtifactReader(async reader => {
       const home = await reader.readScope();
       if (!home) throw new Error('context_source_unavailable');
-      const projections = new Map<string, DeepIndexDocumentIdentity & { entries: readonly DeepIndexDocumentEntry[] }>();
+      const projections = new Map<string, DeepIndexDocumentIdentity & { entries: readonly DeepIndexDocumentEntry[]; memory: boolean }>();
+      const preparation = new Map<string, DeepIndexDocumentIdentity & { loadedFactIds: readonly string[] }>();
       const assertions: (() => void)[] = [params.assertCurrent, assertAccount];
       const reads = new Map<string, Promise<PromptLibraryStoredArtifact | null>>();
       const key = (ref: PromptArtifactRefV1) => JSON.stringify([ref.serverId ?? home.serverId, ref.artifactId]);
@@ -101,6 +106,14 @@ export async function syncMemoryDocuments(params: Readonly<{
           const artifact = await readArtifact(admitted.ref);
           if (!artifact || !artifact.body) throw new Error('context_source_unavailable');
           const body: unknown = JSON.parse(artifact.body);
+          if (params.scope.type === 'session' && admitted.memory) {
+            const previous = preparation.get(key(admitted.ref));
+            preparation.set(key(admitted.ref), {
+              ref: { serverId: admitted.ref.serverId ?? home.serverId, artifactId: admitted.ref.artifactId },
+              revision: admitted.revision,
+              loadedFactIds: [...new Set([...(previous?.loadedFactIds ?? []), ...admitted.memory.loadedFactIds])],
+            });
+          }
           const entries: DeepIndexDocumentEntry[] = artifact.header?.kind === 'memory_doc.v1'
             ? (() => {
               const stored = MemoryDocBodyV1StoredSchema.parse(body);
@@ -114,7 +127,7 @@ export async function syncMemoryDocuments(params: Readonly<{
             })()
             : [{ location: 'document', text: createStoredReadSchema(PromptDocBodyV1Schema).parse(body).markdown }];
           projections.set(key(admitted.ref), { ref: { serverId: admitted.ref.serverId ?? home.serverId, artifactId: admitted.ref.artifactId },
-            revision: admitted.revision, entries });
+            revision: admitted.revision, entries, memory: artifact.header?.kind === 'memory_doc.v1' });
         }
       };
       if (params.scope.type === 'global') await admit();
@@ -125,10 +138,13 @@ export async function syncMemoryDocuments(params: Readonly<{
       };
       assertCurrent();
       const eligibleDocuments = [...projections.values()].map(({ ref, revision }) => ({ ref, revision }));
+      const eligibleMemoryDocuments = [...projections.values()].filter(document => document.memory)
+        .map(({ ref, revision }) => ({ ref, revision }));
       for (const projection of projections.values()) params.db.replaceDocumentIndexData(projection);
       // A single Session cannot revoke another Session's attached document projection.
       if (params.scope.type === 'global') params.db.pruneDocumentIndexData({ eligibleDocuments });
-      return { state: 'ready', eligibleDocuments, assertCurrent };
+      return { state: 'ready', eligibleDocuments, eligibleMemoryDocuments, assertCurrent,
+        ...(params.scope.type === 'session' ? { preparation: [...preparation.values()] } : {}) };
     }, { credentials: params.credentials, signal: params.signal });
   } catch (error) {
     params.signal?.throwIfAborted();

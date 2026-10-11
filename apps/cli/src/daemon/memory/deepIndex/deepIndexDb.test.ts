@@ -175,6 +175,15 @@ describe('deepIndexDb', () => {
       })).toEqual([expect.objectContaining({ location: 'document', text: 'Searchable instruction text' })]);
       expect(db.search({ query: 'searchable', scope: { type: 'global' }, maxResults: 10 })).toEqual([]);
       expect(db.getDeepIndexStats()).toMatchObject({ searchableDocumentCount: 2, deepDocumentEntryCount: 5 });
+      // Scope/revision admission, rather than query matches or transcript rows, owns this fact count.
+      db.insertChunk({ sessionId: 'past-session', seqFrom: 1, seqTo: 1, createdAtFromMs: 1, createdAtToMs: 1, text: 'Searchable past Session' });
+      expect(db.getDocumentFactCounts({ eligibleDocuments: [{ ref, revision }, { ref, revision },
+        { ref: { serverId: 'home-two', artifactId: 'same-id' }, revision }] })).toEqual([
+        { ref, revision, indexedFactCount: 4 },
+        { ref: { serverId: 'home-two', artifactId: 'same-id' }, revision, indexedFactCount: 0 },
+      ]);
+      expect(db.getDocumentFactCounts({ eligibleDocuments: [{ ref, revision: { ...revision, bodyVersion: 8 } }] })).toEqual([]);
+      expect(db.getDocumentFactCounts({ eligibleDocuments: [] })).toEqual([]);
       db.close();
     } finally {
       await rm(dir, { recursive: true, force: true });

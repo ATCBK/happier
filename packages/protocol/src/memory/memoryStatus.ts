@@ -1,6 +1,22 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 import { MemorySourceV1Schema, MemoryExternalTranscriptSourceV1Schema } from './memorySearch.js';
+import { ArtifactRevisionV1Schema } from '../artifacts/artifactRevisionV1.js';
+import { PromptDocArtifactRefV1Schema } from '../prompts/library/promptArtifactRefsV1.js';
+
+/** Fresh scope admission and exact-revision index coverage, never an accepted historical turn. */
+export const MemoryDocumentStatusV1Schema = lazyZodSchema(() => z.discriminatedUnion('state', [
+  z.object({ state: z.literal('ready'), facts: z.array(z.object({
+    ref: PromptDocArtifactRefV1Schema.extend({ serverId: z.string().min(1) }),
+    revision: ArtifactRevisionV1Schema,
+    indexedFactCount: z.number().int().nonnegative(),
+    // Global scope has no single prepared Session. Omission is unavailable, not zero.
+    loadedFactCount: z.number().int().nonnegative().optional(),
+  }).strict()) }).strict(),
+  z.object({ state: z.literal('pending') }).strict(),
+  z.object({ state: z.literal('unavailable') }).strict(),
+]));
+export type MemoryDocumentStatusV1 = z.infer<typeof MemoryDocumentStatusV1Schema>;
 
 /** Read projection: external readiness covers a configured source, not one native conversation. */
 export const MemoryIndexSourceStatusV1Schema = lazyZodSchema(() => z.object({
@@ -110,6 +126,8 @@ export const MemoryStatusV1Schema = lazyZodSchema(() => z
      * a document request; omission preserves old daemon transcript operation.
      */
     documentSearchSupported: z.boolean().optional(),
+    /** Scoped status only. Older daemons omit this projection and ignore the scope request. */
+    documents: MemoryDocumentStatusV1Schema.optional(),
     /** Omission is an older daemon, never proof that native sources are current. */
     sources: z.array(MemoryIndexSourceStatusV1Schema).optional(),
   })

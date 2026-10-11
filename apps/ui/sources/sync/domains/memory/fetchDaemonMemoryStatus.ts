@@ -1,5 +1,8 @@
 import { MemoryStatusV1Schema, type MemoryStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
+import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
+import type { MemoryDocumentRevision } from '@/sync/ops/promptLibrary/memoryDocuments';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 
@@ -8,6 +11,7 @@ export async function fetchDaemonMemoryStatus(args: Readonly<{
   accountId?: string | null;
   machineId: string | null | undefined;
   timeoutMs?: number;
+  scope?: MemorySearchScope;
   /**
    * Caller cancellation, handed to the incumbent machine-RPC cancellation path so a
    * superseded status probe stops waiting locally and relays the cancel.
@@ -24,9 +28,32 @@ export async function fetchDaemonMemoryStatus(args: Readonly<{
     serverId,
     ...(accountId ? { accountId, preferScoped: true } : {}),
     method: RPC_METHODS.DAEMON_MEMORY_STATUS,
-    payload: {},
+    payload: args.scope ? { scope: args.scope } : {},
     ...(typeof args.timeoutMs === 'number' ? { timeoutMs: args.timeoutMs } : {}),
     ...(args.signal ? { signal: args.signal } : {}),
   });
   return MemoryStatusV1Schema.parse(raw);
+}
+
+export type MemoryDocumentSummary = Readonly<{
+  state: 'ready'; indexedFactCount: number; loadedFactCount?: number;
+}> | Readonly<{ state: 'pending' | 'unavailable' }>;
+
+/** Select only the displayed revision from the daemon's fresh admitted scope. */
+export async function fetchDaemonMemoryDocumentSummary(args: Parameters<typeof fetchDaemonMemoryStatus>[0] & Readonly<{
+  scope: MemorySearchScope;
+  ref: PromptDocArtifactRefV1;
+  revision: MemoryDocumentRevision;
+}>): Promise<MemoryDocumentSummary> {
+  const status = await fetchDaemonMemoryStatus(args);
+  const documents = status?.documents;
+  if (!documents || documents.state === 'unavailable') return { state: 'unavailable' };
+  if (documents.state === 'pending') return { state: 'pending' };
+  const document = documents.facts.find(fact => fact.ref.serverId === (args.ref.serverId ?? args.serverId)
+    && fact.ref.artifactId === args.ref.artifactId);
+  if (!document) return { state: 'unavailable' };
+  if (document.revision.headerVersion !== args.revision.headerVersion
+    || document.revision.bodyVersion !== args.revision.bodyVersion) return { state: 'pending' };
+  return { state: 'ready', indexedFactCount: document.indexedFactCount,
+    ...(document.loadedFactCount === undefined ? {} : { loadedFactCount: document.loadedFactCount }) };
 }

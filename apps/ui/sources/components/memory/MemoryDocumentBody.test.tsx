@@ -45,7 +45,8 @@ vi.mock('expo-router', async () => {
 });
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({ translate: (key: string) => key });
+    return createTextModuleMock({ translate: (key: string, options?: Record<string, unknown>) =>
+        key === 'memoryContext.memory.factCount' ? `${options?.count} facts` : key });
 });
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -188,6 +189,16 @@ it('reads document content through memory.read admission instead of bypassing a 
     const hook = await renderHook(() => useMemoryDocument({ ref, serverId }));
     await settled(() => expect(hook.getCurrent().status).toBe('unavailable'));
     await hook.unmount();
+});
+
+it('shows unavailable preparation rather than fabricating counts from the open index or topic list', async () => {
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'One'), fact('two', 'Two')],
+        topics: [{ title: 'detail', summary: 'More facts', facts: [fact('three', 'Three')] }] });
+    const screen = await renderDocument(ref);
+    const rendered = screen.getTextContent();
+    expect(rendered).toContain('common.unavailable');
+    expect(rendered).not.toContain('2 facts');
+    await screen.unmount();
 });
 
 /** Coding-row HTTP/CAS boundary: the actual catalog reader and attachment writer run above it. */

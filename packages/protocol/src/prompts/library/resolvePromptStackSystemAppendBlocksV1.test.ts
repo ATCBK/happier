@@ -120,14 +120,21 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     });
     expect(result.blocks).toEqual([`Memory: ${JSON.stringify({ document: 'Project memory', layer: 'project',
       ref: { kind: 'doc', artifactId: 'memory' } })}\n${index}`]);
+    expect(result.admittedEntries).toEqual([expect.objectContaining({ memory: {
+      loadedFactIds: ['key'], notLoadedFactIds: [], loadedTopicTitles: ['architecture'], notLoadedTopicTitles: ['archive'],
+    } })]);
     await expect(resolvePromptStackSystemAppendBlocksV1({
       surface: 'coding', projectEntries: [{ ...entry('memory'), maxChars: indexLine.length - 1 }],
       nowMs: () => 1, readArtifact,
-    })).resolves.toMatchObject({ blocks: [expect.stringContaining(summaryLine)] });
+    })).resolves.toMatchObject({ blocks: [expect.stringContaining(summaryLine)], admittedEntries: [expect.objectContaining({ memory: {
+      loadedFactIds: [], notLoadedFactIds: ['key'], loadedTopicTitles: ['architecture'], notLoadedTopicTitles: ['archive'],
+    } })] });
     await expect(resolvePromptStackSystemAppendBlocksV1({
       surface: 'coding', projectEntries: [{ ...entry('memory'), maxChars: 0 }],
       nowMs: () => 1, readArtifact,
-    })).resolves.toMatchObject({ blocks: [], admittedEntries: [{ entryId: 'memory', outcome: 'valid-empty' }] });
+    })).resolves.toMatchObject({ blocks: [], admittedEntries: [{ entryId: 'memory', outcome: 'valid-empty', memory: {
+      loadedFactIds: [], notLoadedFactIds: ['key'], loadedTopicTitles: [], notLoadedTopicTitles: ['architecture', 'archive'],
+    } }] });
   });
 
   it('publishes the admitted inventory with qualified addresses, revisions and valid-empty versus unavailable outcomes', async () => {

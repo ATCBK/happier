@@ -92,6 +92,8 @@ const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<
         sessionId: session.id, serverId, ownerMetadata: props.ownerMetadata, metadataVersion: session.metadataVersion,
     });
     const enabled = layers.memoryEnabled;
+    const preparationScope = React.useMemo(() => ({ type: 'session' as const, sessionId: session.id }), [session.id]);
+    const preparationBasis = React.useMemo(() => JSON.stringify([session.metadataVersion, layers]), [layers, session.metadataVersion]);
     const selection = React.useMemo(() => selectSessionMemory(layers, serverId), [layers, serverId]);
     const { receipt, ref, onCreatedMemory } = useMemoryCreationReceipt({
         serverId, scopeKey: JSON.stringify([session.id, selection.scope]), attachedRef: selection.ref,
@@ -202,6 +204,8 @@ const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<
                     testID="session-work-memory.doc"
                     source={displayedSource}
                     serverId={serverId}
+                    preparationScope={preparationScope}
+                    preparationBasis={preparationBasis}
                     collapsedFactCount={COLLAPSED_FACTS}
                     footer={footer}
                     readOnly={readOnly}

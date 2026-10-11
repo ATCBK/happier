@@ -101,6 +101,9 @@ export type DeepIndexDbHandle = Readonly<{
   }>>;
   getDeepIndexStats: () => DeepIndexStats;
   replaceDocumentIndexData: (args: DeepIndexDocumentIdentity & Readonly<{ entries: readonly DeepIndexDocumentEntry[] }>) => void;
+  /** Counts indexed facts only after current scope and exact revision admission. */
+  getDocumentFactCounts: (args: Readonly<{ eligibleDocuments: readonly DeepIndexDocumentIdentity[] }>) =>
+    readonly (DeepIndexDocumentIdentity & Readonly<{ indexedFactCount: number }>)[];
   /** The caller supplies current readable attachments, never cached access facts. */
   searchDocuments: (args: Readonly<{
     query: string;
@@ -589,6 +592,30 @@ export function openDeepIndexDb(args: Readonly<{ dbPath: string }>): DeepIndexDb
         db.exec('ROLLBACK');
         throw error;
       }
+    },
+    getDocumentFactCounts: ({ eligibleDocuments }) => {
+      const documents = [...new Map(eligibleDocuments.map(document => [documentIdentityKey(document), document])).values()];
+      const counts: Array<DeepIndexDocumentIdentity & { indexedFactCount: number }> = [];
+      const batchSize = resolveSqliteSupportedValueBatchSize({ fixedParameterCount: 0, parametersPerValue: 4 });
+      for (let offset = 0; offset < documents.length; offset += batchSize) {
+        const batch = documents.slice(offset, offset + batchSize);
+        const params = batch.flatMap(document => [document.ref.serverId, document.ref.artifactId,
+          document.revision.headerVersion, document.revision.bodyVersion]);
+        const rows = db.prepare(`
+          WITH eligible(serverId, artifactId, headerVersion, bodyVersion) AS (VALUES ${batch.map(() => '(?, ?, ?, ?)').join(',')})
+          SELECT d.documentId, d.serverId, d.artifactId, d.headerVersion, d.bodyVersion,
+            COUNT(e.factId) AS indexedFactCount
+          FROM eligible a JOIN indexed_documents d
+            ON d.serverId = a.serverId AND d.artifactId = a.artifactId
+              AND d.headerVersion = a.headerVersion AND d.bodyVersion = a.bodyVersion
+          LEFT JOIN document_entries e ON e.documentId = d.documentId
+          GROUP BY d.documentId ORDER BY d.documentId;
+        `).all(...params) as Array<IndexedDocumentRow & { indexedFactCount: number }>;
+        counts.push(...rows.map(row => ({ ref: { serverId: row.serverId, artifactId: row.artifactId },
+          revision: { headerVersion: Number(row.headerVersion), bodyVersion: Number(row.bodyVersion) },
+          indexedFactCount: Number(row.indexedFactCount) })));
+      }
+      return counts;
     },
     searchDocuments: ({ query, eligibleDocuments, maxResults }) => {
       const terms = tokenizeMemoryText(normalizeQuery(query));

@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
-import { MemorySearchQueryV1Schema } from '@happier-dev/protocol/memory/memorySearch';
+import { MemorySearchQueryV1Schema, MemorySearchScopeSchema } from '@happier-dev/protocol/memory/memorySearch';
 import type { MemorySearchResultV1, MemoryWindowV1 } from '@happier-dev/protocol';
-import { MemoryStatusV1Schema } from '@happier-dev/protocol/memory/memoryStatus';
+import { MemoryStatusV1Schema, type MemoryDocumentStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
 import { MemorySettingsV1Schema } from '@happier-dev/protocol/memory/memorySettings';
 import { MemoryWindowRequestV1Schema, MemoryWindowV1Schema } from '@happier-dev/protocol/memory/memoryWindow';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -33,7 +33,7 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
 }>): void {
   const { rpcHandlerManager, memoryWorker } = params;
 
-  rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_MEMORY_STATUS, async () => {
+  rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_MEMORY_STATUS, async (raw: unknown, context) => {
     const settings = memoryWorker.getSettings();
     const embeddingsDiagnostics = memoryWorker.getEmbeddingsDiagnostics();
     const tier1DbPath = memoryWorker.getTier1DbPath();
@@ -75,6 +75,42 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
     const deepIndexHasContent = (deepStats?.deepChunkCount ?? 0) > 0;
     const activeIndexSearchable = settings.indexMode === 'deep' ? deepIndexHasContent : hintsIndexHasContent;
     const workerStatus = memoryWorker.getWorkerStatus();
+    // Ordinary status probes stay cheap. Scoped probes reuse fresh document admission,
+    // not a saved preparation or a second index owned by the status consumer.
+    const requestedScope = raw && typeof raw === 'object' && 'scope' in raw ? raw.scope : undefined;
+    const parsedScope = MemorySearchScopeSchema.safeParse(requestedScope);
+    let documents: MemoryDocumentStatusV1 | undefined;
+    let assertDocumentsCurrent: (() => void) | undefined;
+    if (requestedScope !== undefined) {
+      documents = { state: 'unavailable' };
+      if (parsedScope.success && settings.enabled && deepDbPath && memoryWorker.resolveDocumentSearchScope) {
+        try {
+          const admitted = await memoryWorker.resolveDocumentSearchScope(parsedScope.data, context?.signal);
+          if (admitted.state !== 'ready') documents = { state: admitted.state };
+          else if (admitted.eligibleMemoryDocuments) {
+            admitted.assertCurrent();
+            const db = openDeepIndexDb({ dbPath: deepDbPath });
+            try {
+              const counts = db.getDocumentFactCounts({ eligibleDocuments: admitted.eligibleMemoryDocuments });
+              documents = { state: 'ready', facts: counts.map(document => {
+                const preparation = admitted.preparation?.find(prepared => prepared.ref.serverId === document.ref.serverId
+                  && prepared.ref.artifactId === document.ref.artifactId
+                  && prepared.revision.headerVersion === document.revision.headerVersion
+                  && prepared.revision.bodyVersion === document.revision.bodyVersion);
+                return { ...document, ref: { kind: 'doc' as const, ...document.ref },
+                  ...(preparation ? { loadedFactCount: preparation.loadedFactIds.length } : {}) };
+              }) };
+              // Missing admitted revisions are pending, never an invented zero.
+              if (counts.length !== admitted.eligibleMemoryDocuments.length) documents = { state: 'pending' };
+              assertDocumentsCurrent = admitted.assertCurrent;
+            } finally { db.close(); }
+          }
+        } catch {
+          context?.signal?.throwIfAborted();
+          documents = { state: 'unavailable' };
+        }
+      }
+    }
 
     const readBytes = async (path: string | null): Promise<number | null> => (
       path ? await getSqliteFootprintBytes(path) : null
@@ -98,6 +134,11 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
         }
       : null;
 
+    const tier1DbBytes = await readBytes(tier1DbPhysicalPath);
+    const deepDbBytes = await readBytes(deepDbPhysicalPath);
+    try { assertDocumentsCurrent?.(); }
+    catch { documents = { state: 'pending' }; }
+    context?.signal?.throwIfAborted();
     return MemoryStatusV1Schema.parse({
       v: 1,
       enabled: settings.enabled,
@@ -107,6 +148,7 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
       // daemons omit it and must not be presented as applying the setting.
       includeArchivedSessionsEffective: settings.includeArchivedSessions === true,
       ...(memoryWorker.resolveDocumentSearchScope ? { documentSearchSupported: true } : {}),
+      ...(documents ? { documents } : {}),
       ...(memoryWorker.getIndexSources ? { sources: [...memoryWorker.getIndexSources()] } : {}),
       hintsIndexReady,
       hintsIndexHasContent,
@@ -123,8 +165,8 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
       embeddingsUsingFallback: embeddingsDiagnostics.usingFallback,
       tier1DbPath,
       deepDbPath,
-      tier1DbBytes: await readBytes(tier1DbPhysicalPath),
-      deepDbBytes: await readBytes(deepDbPhysicalPath),
+      tier1DbBytes,
+      deepDbBytes,
       indexContent,
       worker: workerStatus ?? null,
       queue: tier1Stats?.queue

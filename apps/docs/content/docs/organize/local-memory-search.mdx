@@ -34,6 +34,15 @@ current attachment membership, read access, and document revision before returni
 snippets. Unavailable context reports unavailable document coverage, not a complete
 search with zero matches.
 
+In the development memory-document summary, **Always remembered** counts facts
+selected by a fresh preparation for the open Session, after its switches, inherited
+entry exclusions, expiry and prompt budget apply. It does not describe a previous
+accepted turn. **Searchable** counts indexed facts at the displayed document's exact
+revision: key facts, topic facts, archive and expired facts. Instructions and past
+Session transcripts are not part of that fact count. A document page without a
+Session preparation shows the loaded count as unavailable; pending indexing,
+unreadable context and older daemons do not become zero counts.
+
 Authenticated CLI/MCP calls negotiate document support with the selected daemon;
 older daemons retain Session matches without claiming document coverage. A
 credentialless Session-bound MCP tool has no document authority and remains
