@@ -1551,7 +1551,9 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials) return { items: [] };
       return await listRecentSpawnPathItems({ credentials: params.credentials, machineId, limit });
     },
-    machinesList: async ({ limit }) => await listSpawnMachineItems({ limit }),
+    machinesList: async ({ limit }) => params.credentials
+      ? await listSpawnMachineItems({ credentials: params.credentials, limit })
+      : { items: [] },
     serversList: async ({ limit }) => await listSpawnServerItems({ limit }),
     sessionsSpawnProfilesList: async ({ agentId, backendTargetKey, includeDisabled, limit }) => {
       if (!params.credentials) return { items: [] };

@@ -43,7 +43,9 @@ async function readClaudeTitleFromTail(filePath: string): Promise<string | null>
       filePath,
       endOffsetBytes,
       maxBytes: TITLE_SCAN_CHUNK_MAX_BYTES,
-      maxItems: TITLE_SCAN_CHUNK_MAX_ITEMS,
+      // The byte page already bounds memory. Every JSONL record consumes at
+      // least one byte, so do not stop at 64 items and reread the same chunk.
+      maxItems: TITLE_SCAN_CHUNK_MAX_BYTES,
     });
     for (let index = page.items.length - 1; index >= 0; index -= 1) {
       const value = page.items[index]?.value;
