@@ -3,365 +3,586 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { installSettingsViewCommonModuleMocks, resetSettingsViewCommonModuleMockState } from '../settingsViewTestHelpers';
-import { createUseSettingMock, createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
 import {
-    createMachineAdministrationTargetSelectionMock,
-    installMachineAdministrationTargetSelectionBoundary,
+  installSettingsViewCommonModuleMocks,
+  resetSettingsViewCommonModuleMockState,
+} from '../settingsViewTestHelpers';
+import {
+  createUseSettingMock,
+  createUseSettingMutableMockFromReader,
+} from '@/dev/testkit/mocks/storage';
+import {
+  createMachineAdministrationTargetSelectionMock,
+  installMachineAdministrationTargetSelectionBoundary,
 } from '@/dev/testkit/mocks/machineAdministrationTargetSelection';
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 const capture = vi.hoisted(() => ({
-    items: [] as Array<Record<string, unknown>>,
-    searchHeaders: [] as Array<Record<string, unknown>>,
-    statusTexts: [] as Array<Record<string, unknown>>,
-    groupTitles: [] as Array<unknown>,
-    windowWidth: 800,
-    setRawSettings: vi.fn(),
-    routerPush: vi.fn(),
-    reset() {
-        this.items = [];
-        this.searchHeaders = [];
-        this.statusTexts = [];
-        this.groupTitles = [];
-        this.windowWidth = 800;
-        this.setRawSettings.mockReset();
-        this.routerPush.mockReset();
-    },
+  items: [] as Array<Record<string, unknown>>,
+  searchHeaders: [] as Array<Record<string, unknown>>,
+  statusTexts: [] as Array<Record<string, unknown>>,
+  groupTitles: [] as Array<unknown>,
+  virtualizedListProps: null as Record<string, unknown> | null,
+  windowWidth: 800,
+  setRawSettings: vi.fn(),
+  routerPush: vi.fn(),
+  reset() {
+    this.items = [];
+    this.searchHeaders = [];
+    this.statusTexts = [];
+    this.groupTitles = [];
+    this.virtualizedListProps = null;
+    this.windowWidth = 800;
+    this.setRawSettings.mockReset();
+    this.routerPush.mockReset();
+  },
 }));
 
-const administrationTargetSelection = createMachineAdministrationTargetSelectionMock({
+const administrationTargetSelection =
+  createMachineAdministrationTargetSelectionMock({
     selectedMachineId: null,
     machines: [
-        { machineId: 'machine-a', displayName: 'Machine A' },
-        { machineId: 'machine-b', displayName: 'Machine B' },
+      { machineId: 'machine-a', displayName: 'Machine A' },
+      { machineId: 'machine-b', displayName: 'Machine B' },
     ],
-});
-installMachineAdministrationTargetSelectionBoundary(administrationTargetSelection);
-const administrationSelectionCalls: Array<Readonly<{
+  });
+installMachineAdministrationTargetSelectionBoundary(
+  administrationTargetSelection,
+);
+const administrationSelectionCalls: Array<
+  Readonly<{
     selectionKey: string;
     options: unknown;
-}>> = [];
+  }>
+> = [];
 vi.doMock('@/sync/domains/machines/administration/useTargetSelection', () => ({
-    ...administrationTargetSelection.module,
-    useMachineAdministrationTargetSelection: (selectionKey: string, options: unknown) => {
-        administrationSelectionCalls.push({ selectionKey, options });
-        return administrationTargetSelection.module.useMachineAdministrationTargetSelection(selectionKey);
-    },
+  ...administrationTargetSelection.module,
+  useMachineAdministrationTargetSelection: (
+    selectionKey: string,
+    options: unknown,
+  ) => {
+    administrationSelectionCalls.push({ selectionKey, options });
+    return administrationTargetSelection.module.useMachineAdministrationTargetSelection(
+      selectionKey,
+    );
+  },
 }));
 
 const daemonProjection = vi.hoisted(() => ({
-    calls: [] as Array<Readonly<{ machineId?: unknown; serverId?: unknown; enabled?: unknown }>>,
-    byMachineId: {} as Record<string, unknown>,
-    reset() {
-        this.calls = [];
-        this.byMachineId = {};
-    },
+  calls: [] as Array<
+    Readonly<{ machineId?: unknown; serverId?: unknown; enabled?: unknown }>
+  >,
+  byMachineId: {} as Record<string, unknown>,
+  reset() {
+    this.calls = [];
+    this.byMachineId = {};
+  },
 }));
 
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+  const { createCapturingLegendListMock } =
+    await import('@/dev/testkit/mocks/legendList');
+  const legendList = createCapturingLegendListMock({
+    original: await importOriginal<Record<string, unknown>>(),
+    renderItems: true,
+  });
+  return {
+    ...legendList.module,
+    LegendList: (props: Record<string, unknown>) => {
+      capture.virtualizedListProps = props;
+      return React.createElement(legendList.module.LegendList, props);
+    },
+  };
+});
+
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => true,
+  useFeatureEnabled: () => true,
 }));
 
 vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: (params: Readonly<{ machineId?: unknown; serverId?: unknown; enabled?: unknown }>) => {
-        daemonProjection.calls.push(params);
-        const machineId = typeof params.machineId === 'string' ? params.machineId : '';
-        return daemonProjection.byMachineId[machineId] ?? { phase: 'idle', inputs: null };
-    },
+  useDaemonMergedProjectionInputs: (
+    params: Readonly<{
+      machineId?: unknown;
+      serverId?: unknown;
+      enabled?: unknown;
+    }>,
+  ) => {
+    daemonProjection.calls.push(params);
+    const machineId =
+      typeof params.machineId === 'string' ? params.machineId : '';
+    return (
+      daemonProjection.byMachineId[machineId] ?? { phase: 'idle', inputs: null }
+    );
+  },
 }));
 
 installSettingsViewCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            useWindowDimensions: () => ({
-                width: capture.windowWidth,
-                height: 844,
-                scale: 2,
-                fontScale: 1,
-            }),
-        });
-    },
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        return createExpoRouterMock({
-            router: {
-                push: capture.routerPush,
-            },
-        }).module;
-    },
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSettingMutable: createUseSettingMutableMockFromReader(() => [{ v: 1, actions: {} }, capture.setRawSettings] as const),
-                useSetting: createUseSettingMock({ fallback: () => ({ privacy: { shareDeviceInventory: true } }) }),
-            },
-        });
-    },
+  reactNative: async () => {
+    const { createReactNativeWebMock } =
+      await import('@/dev/testkit/mocks/reactNative');
+    const { createCapturingFlatListMock } =
+      await import('@/dev/testkit/mocks/virtualizedList');
+    const flatList = createCapturingFlatListMock({ renderItems: true });
+    return createReactNativeWebMock({
+      FlatList: (props: Record<string, unknown>) => {
+        capture.virtualizedListProps = props;
+        return flatList.module.FlatList(props);
+      },
+      useWindowDimensions: () => ({
+        width: capture.windowWidth,
+        height: 844,
+        scale: 2,
+        fontScale: 1,
+      }),
+    });
+  },
+  router: async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock({
+      router: {
+        push: capture.routerPush,
+      },
+    }).module;
+  },
+  storage: async (importOriginal) => {
+    const { createStorageModuleMock } =
+      await import('@/dev/testkit/mocks/storage');
+    return createStorageModuleMock({
+      importOriginal,
+      overrides: {
+        useSettingMutable: createUseSettingMutableMockFromReader(
+          () => [{ v: 1, actions: {} }, capture.setRawSettings] as const,
+        ),
+        useSetting: createUseSettingMock({
+          fallback: () => ({ privacy: { shareDeviceInventory: true } }),
+        }),
+      },
+    });
+  },
 });
 
 vi.mock('@/components/ui/forms/SearchHeader', () => ({
-    SearchHeader: (props: Record<string, unknown>) => {
-        capture.searchHeaders.push(props);
-        return null;
-    },
+  SearchHeader: (props: Record<string, unknown>) => {
+    capture.searchHeaders.push(props);
+    return null;
+  },
 }));
 
 vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: Record<string, unknown>) => React.createElement('Switch', props),
+  Switch: (props: Record<string, unknown>) =>
+    React.createElement('Switch', props),
 }));
 
 vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
+  ItemList: ({ children }: { children?: React.ReactNode }) =>
+    React.createElement(React.Fragment, null, children),
 }));
 
 vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children, title }: { children?: React.ReactNode; title?: unknown }) => {
-        if (title !== undefined) {
-            capture.groupTitles.push(title);
-        }
-        return React.createElement(React.Fragment, null, children);
-    },
+  ItemGroup: ({
+    children,
+    title,
+  }: {
+    children?: React.ReactNode;
+    title?: unknown;
+  }) => {
+    if (title !== undefined) {
+      capture.groupTitles.push(title);
+    }
+    return React.createElement(React.Fragment, null, children);
+  },
 }));
 
 vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown> & { children?: React.ReactNode }) => {
-        capture.items.push(props);
-        return React.createElement(
-            React.Fragment,
-            null,
-            props.children,
-            props.subtitleAccessory as React.ReactNode,
-            props.rightElement as React.ReactNode,
-        );
-    },
+  Item: (props: Record<string, unknown> & { children?: React.ReactNode }) => {
+    capture.items.push(props);
+    return React.createElement(
+      React.Fragment,
+      null,
+      props.children,
+      props.subtitleAccessory as React.ReactNode,
+      props.rightElement as React.ReactNode,
+    );
+  },
 }));
 
 vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: { children?: React.ReactNode; testID?: string }) => {
-        if (props.testID?.endsWith(':status')) {
-            capture.statusTexts.push(props as Record<string, unknown>);
-        }
-        return React.createElement('TextMock', { testID: props.testID }, props.children);
-    },
+  Text: (props: { children?: React.ReactNode; testID?: string }) => {
+    if (props.testID?.endsWith(':status')) {
+      capture.statusTexts.push(props as Record<string, unknown>);
+    }
+    return React.createElement(
+      'TextMock',
+      { testID: props.testID },
+      props.children,
+    );
+  },
 }));
 
 afterEach(() => {
-    standardCleanup();
-    capture.reset();
-    administrationTargetSelection.controller.reset();
-    administrationSelectionCalls.length = 0;
-    daemonProjection.reset();
-    resetSettingsViewCommonModuleMockState();
+  standardCleanup();
+  capture.reset();
+  administrationTargetSelection.controller.reset();
+  administrationSelectionCalls.length = 0;
+  daemonProjection.reset();
+  resetSettingsViewCommonModuleMockState();
 });
 
+// Resolve the catalog graph during collection, outside individual render-test deadlines.
+const { ActionsSettingsView } = await import('./ActionsSettingsView');
+
 describe('ActionsSettingsView', () => {
-    it('renders actions as a searchable list without inline target controls', async () => {
-        capture.reset();
-        const { ActionsSettingsView } = await import('./ActionsSettingsView');
+  it('virtualizes the full catalog as bounded family segments', async () => {
+    await renderScreen(<ActionsSettingsView />);
 
-        await renderScreen(<ActionsSettingsView />);
+    expect(capture.virtualizedListProps).toEqual(expect.objectContaining({
+      recycleItems: true,
+      estimatedItemSize: 560,
+    }));
+    const segments = capture.virtualizedListProps?.data as
+      | ReadonlyArray<{ items: readonly unknown[] }>
+      | undefined;
+    expect(segments?.length).toBeGreaterThan(1);
+    expect(Math.max(...(segments ?? []).map((segment) => segment.items.length))).toBeLessThanOrEqual(8);
+  });
 
-        expect(capture.searchHeaders).toHaveLength(1);
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:review.start')).toBe(true);
-        expect(capture.items.every((item) => String(item.testID).startsWith('settings-actions:action:'))).toBe(true);
-    });
+  it('shows separate Resources reading and changing sections', async () => {
+    await renderScreen(<ActionsSettingsView />);
 
-    it('uses the canonical machine selection for contributed-action scoping and never mixes daemon projections', async () => {
-        capture.reset();
-        daemonProjection.byMachineId = {
-            'machine-a': {
-                phase: 'ready',
-                inputs: {
-                    pluginProjectionById: {
-                        'com.acme.a': {
-                            pluginId: 'com.acme.a',
-                            actions: [{
-                                id: 'review/a',
-                                title: 'Action from machine A',
-                                description: null,
-                                icon: null,
-                                surfaces: ['plugin'],
-                                placementBindings: [],
-                            }],
-                        },
-                    },
+    expect(capture.groupTitles).toContain(
+      'settingsActions.families.resources.reading.title',
+    );
+    expect(capture.groupTitles).toContain(
+      'settingsActions.families.resources.changing.title',
+    );
+    expect(
+      capture.items.some(
+        (item) => item.testID === 'settings-actions:action:machines.vitals.get',
+      ),
+    ).toBe(true);
+    expect(
+      capture.items.some(
+        (item) =>
+          item.testID === 'settings-actions:action:machines.storage.trash.move',
+      ),
+    ).toBe(true);
+  });
+
+  it('links Resources · changing to the session stop Action that keeps its own family', async () => {
+    capture.reset();
+    await renderScreen(<ActionsSettingsView />);
+
+    const link = capture.items.find(
+      (item) => item.testID === 'settings-actions:related:session.stop',
+    );
+    expect(link).toBeTruthy();
+    (link?.onPress as undefined | (() => void))?.();
+    expect(capture.routerPush).toHaveBeenCalledWith(
+      '/settings/actions/session.stop',
+    );
+    // One membership per Action: the row itself stays in its own family.
+    expect(
+      capture.items.filter(
+        (item) => item.testID === 'settings-actions:action:session.stop',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('renders actions as a searchable list without inline target controls', async () => {
+    capture.reset();
+    const { ActionsSettingsView } = await import('./ActionsSettingsView');
+
+    await renderScreen(<ActionsSettingsView />);
+
+    expect(capture.searchHeaders).toHaveLength(1);
+    expect(
+      capture.items.some(
+        (item) => item.testID === 'settings-actions:action:review.start',
+      ),
+    ).toBe(true);
+    expect(
+      capture.items.every((item) =>
+        String(item.testID).startsWith('settings-actions:action:')
+        || String(item.testID).startsWith('settings-actions:related:'),
+      ),
+    ).toBe(true);
+  });
+
+  it('uses the canonical machine selection for contributed-action scoping and never mixes daemon projections', async () => {
+    capture.reset();
+    daemonProjection.byMachineId = {
+      'machine-a': {
+        phase: 'ready',
+        inputs: {
+          pluginProjectionById: {
+            'com.acme.a': {
+              pluginId: 'com.acme.a',
+              actions: [
+                {
+                  id: 'review/a',
+                  title: 'Action from machine A',
+                  description: null,
+                  icon: null,
+                  surfaces: ['plugin'],
+                  placementBindings: [],
                 },
+              ],
             },
-            'machine-b': {
-                phase: 'ready',
-                inputs: {
-                    pluginProjectionById: {
-                        'com.acme.b': {
-                            pluginId: 'com.acme.b',
-                            actions: [{
-                                id: 'review/b',
-                                title: 'Action from machine B',
-                                description: null,
-                                icon: null,
-                                surfaces: [],
-                                placementBindings: [],
-                            }],
-                        },
-                    },
+          },
+        },
+      },
+      'machine-b': {
+        phase: 'ready',
+        inputs: {
+          pluginProjectionById: {
+            'com.acme.b': {
+              pluginId: 'com.acme.b',
+              actions: [
+                {
+                  id: 'review/b',
+                  title: 'Action from machine B',
+                  description: null,
+                  icon: null,
+                  surfaces: [],
+                  placementBindings: [],
                 },
+              ],
             },
-        };
-        const { ActionsSettingsView } = await import('./ActionsSettingsView');
+          },
+        },
+      },
+    };
+    const { ActionsSettingsView } = await import('./ActionsSettingsView');
 
-        await renderScreen(<ActionsSettingsView />);
-        expect(administrationSelectionCalls).toContainEqual({
-            selectionKey: 'actions.settings',
-            options: undefined,
-        });
-        expect(capture.items.some((item) => (
-            item.testID === 'settings-actions:contributed:machine-selection-required'
-        ))).toBe(false);
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:com.acme.a/actions/review/a')).toBe(false);
+    await renderScreen(<ActionsSettingsView />);
+    expect(administrationSelectionCalls).toContainEqual({
+      selectionKey: 'actions.settings',
+      options: undefined,
+    });
+    expect(
+      capture.items.some(
+        (item) =>
+          item.testID ===
+          'settings-actions:contributed:machine-selection-required',
+      ),
+    ).toBe(false);
+    expect(
+      capture.items.some(
+        (item) =>
+          item.testID === 'settings-actions:action:com.acme.a/actions/review/a',
+      ),
+    ).toBe(false);
 
-        capture.items = [];
-        await act(async () => {
-            administrationTargetSelection.controller.select('machine-a');
-        });
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:com.acme.a/actions/review/a')).toBe(true);
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:com.acme.b/actions/review/b')).toBe(false);
+    capture.items = [];
+    await act(async () => {
+      administrationTargetSelection.controller.select('machine-a');
+    });
+    expect(
+      capture.items.some(
+        (item) =>
+          item.testID === 'settings-actions:action:com.acme.a/actions/review/a',
+      ),
+    ).toBe(true);
+    expect(
+      capture.items.some(
+        (item) =>
+          item.testID === 'settings-actions:action:com.acme.b/actions/review/b',
+      ),
+    ).toBe(false);
 
-        capture.items = [];
-        await act(async () => {
-            administrationTargetSelection.controller.select('machine-b');
-        });
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:com.acme.a/actions/review/a')).toBe(false);
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:com.acme.b/actions/review/b')).toBe(true);
+    capture.items = [];
+    await act(async () => {
+      administrationTargetSelection.controller.select('machine-b');
+    });
+    expect(
+      capture.items.some(
+        (item) =>
+          item.testID === 'settings-actions:action:com.acme.a/actions/review/a',
+      ),
+    ).toBe(false);
+    expect(
+      capture.items.some(
+        (item) =>
+          item.testID === 'settings-actions:action:com.acme.b/actions/review/b',
+      ),
+    ).toBe(true);
+  });
+
+  it('exposes browser recording attach in action settings now its executor is wired (§3.2)', async () => {
+    // FINALIZATION-PLAN §3.2/§3.3: `browser.recording.attachToComposer` has a real executor and
+    // is surfaced on ui/agent, so it is now a configurable settings row. The no-executor
+    // related executor-backed recording actions are configurable; unrelated families stay hidden.
+    capture.reset();
+    const { ActionsSettingsView } = await import('./ActionsSettingsView');
+
+    await renderScreen(<ActionsSettingsView />);
+
+    const searchHeader = capture.searchHeaders[0];
+    expect(typeof searchHeader?.onChangeText).toBe('function');
+
+    capture.items = [];
+    await act(async () => {
+      (searchHeader?.onChangeText as (value: string) => void)('browser');
     });
 
-    it('exposes browser recording attach in action settings now its executor is wired (§3.2)', async () => {
-        // FINALIZATION-PLAN §3.2/§3.3: `browser.recording.attachToComposer` has a real executor and
-        // is surfaced on ui/agent, so it is now a configurable settings row. The no-executor
-        // related executor-backed recording actions are configurable; unrelated families stay hidden.
-        capture.reset();
-        const { ActionsSettingsView } = await import('./ActionsSettingsView');
+    expect(
+      capture.items.some(
+        (item) =>
+          item.testID ===
+          'settings-actions:action:browser.recording.attachToComposer',
+      ),
+    ).toBe(true);
+    expect(
+      capture.items.some(
+        (item) =>
+          item.testID === 'settings-actions:action:browser.recording.start',
+      ),
+    ).toBe(true);
+    expect(
+      capture.items.some(
+        (item) => item.testID === 'settings-actions:action:review.start',
+      ),
+    ).toBe(false);
+  });
 
-        await renderScreen(<ActionsSettingsView />);
+  it('groups actions into runtime family sections with localized headers (§3.3)', async () => {
+    capture.reset();
+    const { ActionsSettingsView } = await import('./ActionsSettingsView');
 
-        const searchHeader = capture.searchHeaders[0];
-        expect(typeof searchHeader?.onChangeText).toBe('function');
+    await renderScreen(<ActionsSettingsView />);
 
-        capture.items = [];
-        await act(async () => {
-            (searchHeader?.onChangeText as (value: string) => void)('browser');
-        });
-
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:browser.recording.attachToComposer')).toBe(true);
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:browser.recording.start')).toBe(true);
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:review.start')).toBe(false);
+    const searchHeader = capture.searchHeaders[0];
+    capture.groupTitles = [];
+    capture.items = [];
+    await act(async () => {
+      (searchHeader?.onChangeText as (value: string) => void)('browser');
     });
 
-    it('groups actions into runtime family sections with localized headers (§3.3)', async () => {
-        capture.reset();
-        const { ActionsSettingsView } = await import('./ActionsSettingsView');
+    // A Browser family section header is rendered, and the grouped rows are browser actions.
+    expect(capture.groupTitles).toContain(
+      'settingsActions.families.browser.title',
+    );
+    expect(
+      capture.items.some(
+        (item) => item.testID === 'settings-actions:action:browser.navigate',
+      ),
+    ).toBe(true);
+  });
 
-        await renderScreen(<ActionsSettingsView />);
+  it('opens an action detail page from the action row without toggling action enablement', async () => {
+    capture.reset();
+    const { ActionsSettingsView } = await import('./ActionsSettingsView');
 
-        const searchHeader = capture.searchHeaders[0];
-        capture.groupTitles = [];
-        capture.items = [];
-        await act(async () => {
-            (searchHeader?.onChangeText as (value: string) => void)('browser');
-        });
+    await renderScreen(<ActionsSettingsView />);
 
-        // A Browser family section header is rendered, and the grouped rows are browser actions.
-        expect(capture.groupTitles).toContain('settingsActions.families.browser.title');
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:browser.navigate')).toBe(true);
-    });
+    const reviewRow = capture.items.find(
+      (item) => item.testID === 'settings-actions:action:review.start',
+    );
+    expect(reviewRow).toBeTruthy();
 
-    it('opens an action detail page from the action row without toggling action enablement', async () => {
-        capture.reset();
-        const { ActionsSettingsView } = await import('./ActionsSettingsView');
+    const onPress = reviewRow?.onPress as undefined | (() => void);
+    expect(typeof onPress).toBe('function');
+    onPress?.();
 
-        await renderScreen(<ActionsSettingsView />);
+    expect(capture.routerPush).toHaveBeenCalledWith(
+      '/settings/actions/review.start',
+    );
+    expect(capture.setRawSettings).not.toHaveBeenCalled();
+  });
 
-        const reviewRow = capture.items.find((item) => item.testID === 'settings-actions:action:review.start');
-        expect(reviewRow).toBeTruthy();
-
-        const onPress = reviewRow?.onPress as undefined | (() => void);
-        expect(typeof onPress).toBe('function');
-        onPress?.();
-
-        expect(capture.routerPush).toHaveBeenCalledWith('/settings/actions/review.start');
-        expect(capture.setRawSettings).not.toHaveBeenCalled();
-    });
-
-    it('percent-encodes a qualified contributed action id when opening its detail page', async () => {
-        daemonProjection.byMachineId = {
-            'machine-a': {
-                phase: 'ready',
-                inputs: {
-                    pluginProjectionById: {
-                        'happier.inspector': {
-                            pluginId: 'happier.inspector',
-                            actions: [{
-                                id: 'self-check',
-                                title: 'Run Inspector self-check',
-                                description: 'Checks the Inspector plugin.',
-                                icon: null,
-                                surfaces: ['ui'],
-                                placementBindings: ['toolbar'],
-                            }],
-                        },
-                    },
+  it('percent-encodes a qualified contributed action id when opening its detail page', async () => {
+    daemonProjection.byMachineId = {
+      'machine-a': {
+        phase: 'ready',
+        inputs: {
+          pluginProjectionById: {
+            'happier.inspector': {
+              pluginId: 'happier.inspector',
+              actions: [
+                {
+                  id: 'self-check',
+                  title: 'Run Inspector self-check',
+                  description: 'Checks the Inspector plugin.',
+                  icon: null,
+                  surfaces: ['ui'],
+                  placementBindings: ['toolbar'],
                 },
+              ],
             },
-        };
-        const { ActionsSettingsView } = await import('./ActionsSettingsView');
+          },
+        },
+      },
+    };
+    const { ActionsSettingsView } = await import('./ActionsSettingsView');
 
-        await renderScreen(<ActionsSettingsView />);
-        await act(async () => {
-            administrationTargetSelection.controller.select('machine-a');
-        });
-
-        const inspectorRow = capture.items.find((item) => (
-            item.testID === 'settings-actions:action:happier.inspector/actions/self-check'
-        ));
-        expect(inspectorRow).toBeTruthy();
-
-        (inspectorRow?.onPress as () => void)();
-
-        expect(capture.routerPush).toHaveBeenCalledWith(
-            '/settings/actions/happier.inspector%2Factions%2Fself-check',
-        );
+    await renderScreen(<ActionsSettingsView />);
+    await act(async () => {
+      administrationTargetSelection.controller.select('machine-a');
     });
 
-    it('shows a compact target status and settings affordance beside each action switch', async () => {
-        capture.reset();
-        const { ActionsSettingsView } = await import('./ActionsSettingsView');
+    const inspectorRow = capture.items.find(
+      (item) =>
+        item.testID ===
+        'settings-actions:action:happier.inspector/actions/self-check',
+    );
+    expect(inspectorRow).toBeTruthy();
 
-        const screen = await renderScreen(<ActionsSettingsView />);
+    (inspectorRow?.onPress as () => void)();
 
-        const reviewRow = capture.items.find((item) => item.testID === 'settings-actions:action:review.start');
-        expect(reviewRow).toBeTruthy();
-        expect(reviewRow?.showChevron).toBe(false);
-        expect(reviewRow?.rightElementOutsidePressable).toBe(true);
-        expect(await screen.findByTestId('settings-actions:action:review.start:status')).toBeTruthy();
-        expect(await screen.findByTestId('settings-actions:action:review.start:configure')).toBeTruthy();
-        expect((await screen.findByTestId('settings-actions:action:review.start:enabled'))?.props.accessibilityLabel).toBe(reviewRow?.title);
-    });
+    expect(capture.routerPush).toHaveBeenCalledWith(
+      '/settings/actions/happier.inspector%2Factions%2Fself-check',
+    );
+  });
 
-    it('moves compact status into the text column on narrow mobile widths', async () => {
-        capture.reset();
-        capture.windowWidth = 390;
-        const { ActionsSettingsView } = await import('./ActionsSettingsView');
+  it('shows a compact target status and settings affordance beside each action switch', async () => {
+    capture.reset();
+    const { ActionsSettingsView } = await import('./ActionsSettingsView');
 
-        await renderScreen(<ActionsSettingsView />);
+    const screen = await renderScreen(<ActionsSettingsView />);
 
-        const reviewRow = capture.items.find((item) => item.testID === 'settings-actions:action:review.start');
-        expect(reviewRow).toBeTruthy();
-        expect(reviewRow?.subtitleAccessory).toBeTruthy();
-        expect(capture.statusTexts.some((status) =>
-            status.testID === 'settings-actions:action:review.start:status',
-        )).toBe(true);
-    });
+    const reviewRow = capture.items.find(
+      (item) => item.testID === 'settings-actions:action:review.start',
+    );
+    expect(reviewRow).toBeTruthy();
+    expect(reviewRow?.showChevron).toBe(false);
+    expect(reviewRow?.rightElementOutsidePressable).toBe(true);
+    expect(
+      await screen.findByTestId('settings-actions:action:review.start:status'),
+    ).toBeTruthy();
+    expect(
+      await screen.findByTestId(
+        'settings-actions:action:review.start:configure',
+      ),
+    ).toBeTruthy();
+    expect(
+      (
+        await screen.findByTestId(
+          'settings-actions:action:review.start:enabled',
+        )
+      )?.props.accessibilityLabel,
+    ).toBe(reviewRow?.title);
+  });
+
+  it('moves compact status into the text column on narrow mobile widths', async () => {
+    capture.reset();
+    capture.windowWidth = 390;
+    const { ActionsSettingsView } = await import('./ActionsSettingsView');
+
+    await renderScreen(<ActionsSettingsView />);
+
+    const reviewRow = capture.items.find(
+      (item) => item.testID === 'settings-actions:action:review.start',
+    );
+    expect(reviewRow).toBeTruthy();
+    expect(reviewRow?.subtitleAccessory).toBeTruthy();
+    expect(
+      capture.statusTexts.some(
+        (status) =>
+          status.testID === 'settings-actions:action:review.start:status',
+      ),
+    ).toBe(true);
+  });
 });

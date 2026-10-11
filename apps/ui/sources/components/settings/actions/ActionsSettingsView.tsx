@@ -9,7 +9,8 @@ import { SearchHeader } from '@/components/ui/forms/SearchHeader';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { ItemList } from '@/components/ui/lists/ItemList';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { VirtualizedList } from '@/components/ui/lists/virtualized';
 import { Text } from '@/components/ui/text/Text';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
@@ -37,6 +38,50 @@ import {
 import { useActionSettingsNarrowLayout } from './useActionSettingsNarrowLayout';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
+
+const ACTION_SETTINGS_SEGMENT_SIZE = 8;
+
+type ActionSettingsVirtualizedItem =
+    | Readonly<{ kind: 'action'; entry: ActionSettingsEntry }>
+    | Readonly<{ kind: 'related'; entry: ActionSettingsEntry }>;
+
+type ActionSettingsVirtualizedSegment = Readonly<{
+    key: string;
+    titleKey: ReturnType<typeof groupActionSettingsEntriesByFamily>[number]['titleKey'];
+    descriptionKey?: ReturnType<typeof groupActionSettingsEntriesByFamily>[number]['descriptionKey'];
+    items: readonly ActionSettingsVirtualizedItem[];
+    first: boolean;
+    last: boolean;
+}>;
+
+function buildActionSettingsVirtualizedSegments(
+    sections: ReturnType<typeof groupActionSettingsEntriesByFamily>,
+    entries: readonly ActionSettingsEntry[],
+): readonly ActionSettingsVirtualizedSegment[] {
+    const entriesById = new Map(entries.map((entry) => [entry.actionId, entry]));
+    return sections.flatMap((section) => {
+        const items: ActionSettingsVirtualizedItem[] = section.entries.map((entry) => ({ kind: 'action', entry }));
+        for (const actionId of section.relatedActionIds ?? []) {
+            const related = entriesById.get(actionId);
+            if (related) items.push({ kind: 'related', entry: related });
+        }
+
+        const segments: ActionSettingsVirtualizedSegment[] = [];
+        for (let start = 0; start < items.length; start += ACTION_SETTINGS_SEGMENT_SIZE) {
+            const first = start === 0;
+            const last = start + ACTION_SETTINGS_SEGMENT_SIZE >= items.length;
+            segments.push({
+                key: `${section.titleKey}:${start}`,
+                titleKey: section.titleKey,
+                ...(section.descriptionKey ? { descriptionKey: section.descriptionKey } : {}),
+                items: items.slice(start, start + ACTION_SETTINGS_SEGMENT_SIZE),
+                first,
+                last,
+            });
+        }
+        return segments;
+    });
+}
 
 const stylesheet = StyleSheet.create((theme) => ({
     actionRightAccessory: {
@@ -122,6 +167,7 @@ function getActionSettingsEntryStatusText(
 
 export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
     const router = useRouter();
+    const { theme } = useUnistyles();
     const styles = stylesheet;
     const compactLayout = useActionSettingsNarrowLayout();
     const [searchQuery, setSearchQuery] = React.useState('');
@@ -181,6 +227,10 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
     // configure each family (browser, simulator, plugins, local services, …) together. The per-row
     // enable toggle + per-action approval controls (detail view) are unchanged.
     const familySections = React.useMemo(() => groupActionSettingsEntriesByFamily(entries), [entries]);
+    const virtualizedSegments = React.useMemo(
+        () => buildActionSettingsVirtualizedSegments(familySections, entries),
+        [entries, familySections],
+    );
 
     const commitSettings = React.useCallback((next: unknown) => {
         setRawSettings(normalizeActionsSettings(next));
@@ -229,40 +279,77 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
         );
     }, [compactLayout, handleActionEnabledChange, openActionDetails, settings, styles.actionStatusSubtitle]);
 
-    return (
-        <ItemList>
-            <SettingsPageHeader
-                description={t('settings.actionsSubtitle')}
-                actions={(
-                    <MachineAdministrationTargetSelector
-                        selection={administrationTargetSelection}
-                        testIDPrefix="settings.actions.administration.target"
-                        presentation="chip"
-                    />
-                )}
-            />
-            <SearchHeader
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                placeholder={t('settingsActions.searchPlaceholder')}
-            />
-
-            {familySections.length === 0 ? (
-                <ItemGroup>
+    const renderSegment = React.useCallback(({ item: segment }: Readonly<{ item: ActionSettingsVirtualizedSegment }>) => (
+        <ItemGroup
+            title={segment.first ? t(segment.titleKey) : undefined}
+            description={segment.first && segment.descriptionKey ? t(segment.descriptionKey) : undefined}
+            virtualizedSegment={{ first: segment.first, last: segment.last }}
+            selectableItemCountOverride={segment.items.length}
+        >
+            {segment.items.map((item) => item.kind === 'action'
+                ? renderEntryRow(item.entry)
+                : (
                     <Item
-                        testID="settings-actions:no-results"
-                        title={t('settingsActions.noResults')}
-                        mode="info"
-                        showChevron={false}
+                        key={`related:${item.entry.actionId}`}
+                        testID={`settings-actions:related:${item.entry.actionId}`}
+                        title={item.entry.title}
+                        subtitle={t('settingsActions.families.resources.related')}
+                        onPress={() => openActionDetails(item.entry.actionId)}
                     />
-                </ItemGroup>
-            ) : null}
+                ))}
+        </ItemGroup>
+    ), [openActionDetails, renderEntryRow]);
 
-            {familySections.map((section) => (
-                <ItemGroup key={section.family} title={t(section.titleKey)}>
-                    {section.entries.map((entry) => renderEntryRow(entry))}
-                </ItemGroup>
-            ))}
-        </ItemList>
+    return (
+        <ListPresentationProvider value="page">
+            <VirtualizedList
+                testID="settings-actions:virtualized-list"
+                data={virtualizedSegments}
+                keyExtractor={(segment) => segment.key}
+                renderItem={renderSegment}
+                ListHeaderComponent={(
+                    <>
+                        <SettingsPageHeader
+                            description={t('settings.actionsSubtitle')}
+                            actions={(
+                                <MachineAdministrationTargetSelector
+                                    selection={administrationTargetSelection}
+                                    testIDPrefix="settings.actions.administration.target"
+                                    presentation="chip"
+                                />
+                            )}
+                        />
+                        <SearchHeader
+                            value={searchQuery}
+                            onChangeText={setSearchQuery}
+                            placeholder={t('settingsActions.searchPlaceholder')}
+                        />
+                        {virtualizedSegments.length === 0 ? (
+                            <ItemGroup>
+                                <Item
+                                    testID="settings-actions:no-results"
+                                    title={t('settingsActions.noResults')}
+                                    mode="info"
+                                    showChevron={false}
+                                />
+                            </ItemGroup>
+                        ) : null}
+                    </>
+                )}
+                style={{
+                    flex: 1,
+                    backgroundColor: theme.colors.surface.base,
+                    ...(Platform.OS === 'web' ? { minHeight: 0 } : {}),
+                }}
+                contentContainerStyle={{ paddingBottom: Platform.OS === 'ios' ? 34 : 16 }}
+                backendPreference="auto"
+                initialNumToRender={6}
+                maxToRenderPerBatch={4}
+                windowSize={7}
+                estimatedItemSize={560}
+                recycleItems
+                maintainVisibleContentPosition
+            />
+        </ListPresentationProvider>
     );
 });
