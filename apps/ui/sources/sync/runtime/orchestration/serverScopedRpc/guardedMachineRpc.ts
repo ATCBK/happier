@@ -13,6 +13,7 @@ export async function callGuardedMachineRpcWithPolicy<R, A>(params: Readonly<{
     accountId?: string | null;
     method: string;
     payload: A;
+    requestId?: string;
     timeoutMs?: number;
     operationTimeoutMs?: null;
     signal?: AbortSignal;
@@ -31,6 +32,7 @@ export async function callGuardedMachineRpcWithPolicy<R, A>(params: Readonly<{
         accountId: params.accountId ?? undefined,
         method: params.method,
         payload: params.payload,
+        ...(params.requestId ? { requestId: params.requestId } : {}),
         timeoutMs: params.timeoutMs,
         ...(params.operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),
         signal: params.signal,

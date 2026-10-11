@@ -69,6 +69,7 @@ export function createUiFilesystemAction(account?: LazyActionAccountContext): No
         const result = await callGuardedMachineRpcWithPolicy<unknown, unknown>({
             machineId: target.machineId, serverId: account?.serverId ?? context.serverId,
             accountId: account?.accountId ?? context.runtimeAccountId, method, payload: input, signal: context.signal,
+            requestId: context.actionRequestId,
         });
         account?.assertResultCurrent(spec.sideEffectClass);
         return result;

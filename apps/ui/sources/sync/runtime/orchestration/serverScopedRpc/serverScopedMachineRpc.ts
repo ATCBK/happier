@@ -555,6 +555,7 @@ export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachin
                     timeoutMs: effectiveParams.timeoutMs,
                     operationTimeoutMs: effectiveParams.operationTimeoutMs,
                     authorization: effectiveParams.authorization,
+                    ...(effectiveParams.requestId ? { createRequestId: () => effectiveParams.requestId! } : {}),
                     signal: effectiveParams.signal,
                     onDispatched: effectiveParams.onDispatched,
                     resolveDirectRoute: async (input) => await resolveProductionMachineRpcDirectRoute({

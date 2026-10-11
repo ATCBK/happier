@@ -4,23 +4,40 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { act } from 'react-test-renderer';
+import { createElement } from 'react';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
-    spies: { prompt: async () => { filesystem.prompts += 1; await filesystem.promptGate; return 'b'; },
+    spies: { prompt: async () => { filesystem.prompts += 1; await filesystem.promptGate; return filesystem.promptValue; },
         confirm: async () => { filesystem.prompts += 1; await filesystem.promptGate; return true; } },
 }).module);
 const filesystem = vi.hoisted(() => ({ paths: new Set<string>(), calls: [] as unknown[],
-    response: { success: true } as unknown, error: null as unknown, prompts: 0, promptGate: null as Promise<void> | null }));
+    response: { success: true } as unknown, error: null as unknown, nativeAsk: false,
+    prompts: 0, promptValue: 'b', promptGate: null as Promise<void> | null }));
 // The machine filesystem is a genuine cross-process boundary; policy, schemas,
 // captured Account custody and approval Artifact replay remain real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc', () => ({
-    callGuardedMachineRpcWithPolicy: async (request: { method: string; payload: { path?: string; from?: string; to?: string } }) => {
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: async (request: { method: string; requestId?: string; serverId?: string; accountId?: string;
+        machineId: string; payload: { path?: string; from?: string; to?: string } }) => {
         filesystem.calls.push(request);
         if (filesystem.error) throw filesystem.error;
+        if (filesystem.nativeAsk) {
+            // This is the receiving Machine boundary. Keep its strict origin
+            // admission real: an uncorrelated RPC cannot create approval custody.
+            const { buildApprovalExecutionOriginV1 } = await import('@happier-dev/protocol/actions/actionExecutor');
+            const { ActionIdSchema } = await import('@happier-dev/protocol/actions/actionIds');
+            const origin = buildApprovalExecutionOriginV1({ actionId: ActionIdSchema.parse(request.method), input: request.payload,
+                targetSessionId: null, context: { surface: 'rpc', authority: 'present_user', serverId: request.serverId,
+                    runtimeAccountId: request.accountId, actionRequestId: request.requestId,
+                    externalActionTarget: { kind: 'machine', machineId: request.machineId } } });
+            return origin ? { kind: 'approval_request_created', artifactId: 'native-approval', actionId: request.method }
+                : { ok: false, errorCode: 'approval_origin_unavailable', error: 'approval_origin_unavailable' };
+        }
         if (request.method === 'daemon.filesystem.createDirectory' && request.payload.path) filesystem.paths.add(request.payload.path);
         if (request.method === 'daemon.filesystem.rename' && request.payload.from && request.payload.to) {
             filesystem.paths.delete(request.payload.from); filesystem.paths.add(request.payload.to);
@@ -50,8 +67,8 @@ beforeEach(async () => {
     await restoreConnectionToActiveServer({ token: homes.findByServerUrl('https://filesystem-action.test')!.token! });
     target = { serverId, machineId: 'machine-a', rootPath: '/repo' };
     filesystem.paths.clear(); filesystem.paths.add('/repo/a'); filesystem.calls.length = 0;
-    filesystem.response = { success: true }; filesystem.error = null;
-    filesystem.prompts = 0; filesystem.promptGate = null;
+    filesystem.response = { success: true }; filesystem.error = null; filesystem.nativeAsk = false;
+    filesystem.prompts = 0; filesystem.promptValue = 'b'; filesystem.promptGate = null;
 });
 afterEach(async () => {
     await standardCleanup();
@@ -60,6 +77,78 @@ afterEach(async () => {
 });
 
 describe('shared workspace filesystem Action admission', () => {
+    it('Project Open preserves native approval custody through its ordinary Machine RPC', async () => {
+        filesystem.nativeAsk = true;
+        homes.answer(serverId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: target.machineId, accountId: 'account-a' })] });
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const result = await createDefaultActionExecutor().execute('projects.open', {
+            serverId, machineId: target.machineId, source: { kind: 'folder', path: target.rootPath },
+            materialization: { kind: 'attach' },
+        }, { surface: 'ui', serverId });
+        expect(result, JSON.stringify({ result, calls: filesystem.calls })).toMatchObject({ ok: true, result: { kind: 'approval_request_created',
+            artifactId: 'native-approval', actionId: 'projects.open' } });
+        expect([...filesystem.paths]).toEqual(['/repo/a']);
+    });
+
+    it('the real New file control presents its retained approval instead of an error', async () => {
+        await homes.requireUiApproval(serverId, 'daemon.filesystem.writeFile');
+        const machine = createMachineFixture({ id: target.machineId, activeAt: Date.now() });
+        storage.setState({ machineListByServerId: { [serverId]: [machine] } });
+        filesystem.promptValue = 'created.txt';
+        filesystem.response = { success: true, entries: [] };
+        const alerts = vi.spyOn((await import('@/modal')).Modal, 'alert');
+        const opened: string[] = [];
+        const { WorkspaceRepositoryTreeBrowserView } = await import('@/components/projects/files/WorkspaceRepositoryTreeBrowserView');
+        const screen = await renderScreen(createElement(WorkspaceRepositoryTreeBrowserView, {
+            scope: { ...target, serverId }, onOpenFile: path => opened.push(path), scmSnapshot: null, transferEffectsEnabled: false,
+        }));
+        await act(async () => {
+            const menu = screen.findAllByTestId('repository-tree-create-menu').find(node => typeof node.props.onSelect === 'function');
+            expect(menu).toBeDefined();
+            menu!.props.onSelect('repository-tree-create-file');
+            await vi.waitFor(() => expect(homes.artifacts(serverId).list()).toHaveLength(1));
+        });
+        expect(alerts).not.toHaveBeenCalled();
+        expect(screen.findHostByTestId('repository-tree-action-approval')).not.toBeNull();
+        expect(filesystem.calls.filter(call => (call as { method: string }).method === 'daemon.filesystem.writeFile')).toEqual([]);
+        expect(opened).toEqual([]);
+        const artifactId = homes.artifacts(serverId).list()[0]!.id;
+        filesystem.response = { success: true, hash: 'sha256:created' };
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { captureActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        await act(async () => {
+            expect(await createDefaultActionExecutor().execute('approval.request.decide', { artifactId, decision: 'approve' },
+                { surface: 'ui', serverId })).toMatchObject({ ok: true, result: { status: 'executed' } });
+            const account = await captureActionAccountContext(serverId);
+            try {
+                const artifact = await account.fetchArtifact(artifactId);
+                if (!artifact) throw new Error('Approval Artifact disappeared');
+                // The Home change stream publishes this durable revision at the
+                // store boundary; the actual mounted continuation consumes it.
+                storage.getState().updateArtifact(artifact);
+            } finally { account.dispose(); }
+        });
+        await vi.waitFor(() => expect(opened).toEqual(['created.txt']));
+        expect(filesystem.calls.filter(call => (call as { method: string }).method === 'daemon.filesystem.writeFile'))
+            .toEqual([expect.objectContaining({ payload: { rootPath: '/repo', path: '/repo/created.txt', content: '', expectedHash: null } })]);
+        await screen.unmount();
+    });
+
+    it.each(operations)('$actionId retains native Ask-first custody without a cancellation signal', async operation => {
+        filesystem.nativeAsk = true;
+        const result = await operation.run(target);
+        expect(result, JSON.stringify(result)).toMatchObject({ success: false, errorCode: 'approval_required',
+            approvalArtifactId: 'native-approval' });
+        expect([...filesystem.paths]).toEqual(['/repo/a']);
+    });
+
+    it('inline write retains native Ask-first custody without a cancellation signal', async () => {
+        filesystem.nativeAsk = true;
+        expect(await workspaceWriteFile(target, 'created.txt', 'hello')).toMatchObject({ success: false,
+            errorCode: 'approval_required', approvalArtifactId: 'native-approval' });
+        expect([...filesystem.paths]).toEqual(['/repo/a']);
+    });
+
     it('opens a bounded file through the Action RPC when the machine is relay-only', async () => {
         filesystem.response = { success: true, content: 'IyBSRUFETUU=' };
         const controller = new AbortController();
