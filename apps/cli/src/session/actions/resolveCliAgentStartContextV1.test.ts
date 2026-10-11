@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountSettingsParse, admitAgentStartV1, buildBackendTargetKeyV2, BUILT_IN_ROLES_V1, createRoleSourceReaderV1 } from '@happier-dev/protocol';
+import { accountSettingsParse, admitAgentStartV1, buildBackendTargetKeyV2, BUILT_IN_ROLES_V1, ConnectedServiceBindingsV2Schema, createRoleSourceReaderV1 } from '@happier-dev/protocol';
 import { resolveCliAgentStartContextV1 } from './resolveCliAgentStartContextV1';
 
 const backendTarget = { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } as const;
@@ -26,11 +26,18 @@ describe('host agent-start snapshots', () => {
     const applied = { agentTargetKey, providerConnectionId: 'applied-provider', modelId: 'applied-model' };
     const pending = { agentTargetKey, providerConnectionId: 'pending-provider', modelId: 'pending-model' };
     const context = resolveCliAgentStartContextV1({ ...input,
-      metadata: { modelSelectionIntentV1: { v: 1, selection: pending, updatedAt: 10 } },
+      metadata: { modelSelectionIntentV1: { v: 1, selection: pending, updatedAt: 10 },
+        connectedServices: { v: 2, bindingsByServiceId: { 'example.accounts/service': { source: 'connected', profileId: 'pending' } } } },
       appliedChildSelection: { status: 'applied', backendTarget, modelId: applied.modelId, modelSelection: applied, connectedServices: null },
     });
     expect(context?.baseline.configuration?.modelSelection).toEqual(applied);
     expect(context?.roles.reviewer.engine).toMatchObject({ modelId: 'applied-model' });
+    expect(context?.baseline.configuration?.connectedServices).toBeUndefined();
+    const binding = ConnectedServiceBindingsV2Schema.parse({ v: 2,
+      bindingsByServiceId: { 'example.accounts/service': { source: 'connected', profileId: 'applied' } } });
+    const connected = resolveCliAgentStartContextV1({ ...input,
+      appliedChildSelection: { status: 'applied', backendTarget, modelId: applied.modelId, modelSelection: applied, connectedServices: binding } });
+    expect(connected?.baseline.configuration?.connectedServices).toEqual(binding);
   });
 
   it('does not project pending route into an explicit child when the live applied selection is unavailable', () => {

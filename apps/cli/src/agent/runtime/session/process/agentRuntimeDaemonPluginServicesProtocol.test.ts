@@ -126,6 +126,7 @@ const retainedRunnerOperationClassification = [
         kinds: [
             'plugin_services.managed_provider.start_v1',
             'plugin_services.managed_provider.materialize_agent_binding_v1',
+            'plugin_services.managed_provider.read_shared_gateway_access_v1',
             'external_session.follow.open',
             'external_session.follow.next',
             'external_session.follow.close',

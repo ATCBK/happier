@@ -104,6 +104,7 @@ type DaemonServiceId = Exclude<
     | 'logger'
     | 'sessions'
     | 'managedServices'
+    | 'machineProvisioners'
     | 'targetedContributions'
     | 'interactions'
     | 'composerContent'
@@ -446,6 +447,7 @@ export async function prepareRunnerDaemonPluginServices(
             | 'logger'
             | 'sessions'
             | 'managedServices'
+            | 'machineProvisioners'
             | 'targetedContributions'
             | 'interactions'
             | 'composerContent'
@@ -569,6 +571,7 @@ export async function prepareRunnerDaemonPluginServices(
             serviceId === 'logger'
             || serviceId === 'sessions'
             || serviceId === 'managedServices'
+            || serviceId === 'machineProvisioners'
             || serviceId === 'targetedContributions'
             || serviceId === 'interactions'
             || serviceId === 'composerContent'
@@ -3241,6 +3244,7 @@ export async function prepareRunnerDaemonPluginServices(
         exec,
         providers,
         managedServices,
+        machineProvisioners: input.local.machineProvisioners,
         sessions,
         resources,
         mcp,

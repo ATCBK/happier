@@ -364,6 +364,9 @@ jobs:
           echo "workers=$gate_workers" >> "$GITHUB_OUTPUT"
           echo "Gate runner reports $gate_workers available cores; independent CLI/Server/Protocol pools use that existing worker override."
           echo "Plugin packages retain their shared half-core pools because two package commands may run together."
+          echo "Gate unit host memory before preparation:"
+          free -h
+          cat /proc/self/cgroup
       - uses: ./.github/actions/install-yarn-dependencies
         id: gate-unit-install
       - name: Prepare Chromium for real UI geometry unit tests
@@ -424,6 +427,22 @@ jobs:
             esac
           done
           exit "$gate_status"
+      - name: Report Gate unit runner memory after termination
+        if: ${{ always() }}
+        run: |
+          echo "Gate unit host memory after termination (whole runner service, not Vitest-only RSS):"
+          free -h
+          cat /proc/self/cgroup
+          unit_cgroup_path="$(awk -F: '$1 == "0" && $2 == "" { print $3; exit }' /proc/self/cgroup)"
+          for observation in memory.events memory.max memory.peak memory.current; do
+            unit_observation_path="/sys/fs/cgroup$unit_cgroup_path/$observation"
+            echo "$unit_observation_path:"
+            if [ -r "$unit_observation_path" ]; then
+              cat "$unit_observation_path"
+            else
+              echo "Unavailable at current cgroup; no conclusion from the missing observation."
+            fi
+          done
       - name: Upload CLI unit bundled-plugin preparation diagnostics
         if: ${{ always() && contains(matrix.packages, 'cli') }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

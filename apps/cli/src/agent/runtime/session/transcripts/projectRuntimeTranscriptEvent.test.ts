@@ -50,7 +50,7 @@ describe('projectRuntimeTranscriptEvent', () => {
     await projectRuntimeTranscriptEvent({ session, provider: 'claude', event, mcpBindingIdentities: {
       'private-server-name': { serverId: 'server', bindingId: 'binding', serverRevision: 10, bindingRevision: 20, catalogRevision: 40 },
     } });
-    expect(capture.bodies).toMatchObject([{ type: 'event', data: { type: 'mcp-binding-usage', usage: {
+    expect(capture.bodies).toMatchObject([{ type: 'event', id: JSON.stringify([event.sessionId, event.turnId, event.sequence]), data: { type: 'mcp-binding-usage', usage: {
       sessionId: 'session-1', turnId: 'turn', coverage: 'complete', window: { startMs: 100, endMs: 200 },
       bindings: [{ serverId: 'server', bindingId: 'binding', serverRevision: 10, bindingRevision: 20, catalogRevision: 40,
         toolCallCount: 0, schemaBytes: null }],

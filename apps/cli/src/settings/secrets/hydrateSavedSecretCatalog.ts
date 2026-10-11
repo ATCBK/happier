@@ -1258,7 +1258,7 @@ export async function importLegacySavedSecretsForOperation(input: SavedSecretCat
           pending = { status: 'pending', reason: 'outcome-unknown' }; break;
         }
       }
-      if (inline?.kind !== 'chat') transfers.push(legacy ? { savedSecretId: legacy.id, resourceId, expectedRevision: 1 }
+      if (inline?.kind !== 'chat') transfers.push(identity.kind === 'personal-saved-secret' ? { savedSecretId: identity.secretId, resourceId, expectedRevision: 1 }
         : { source: identity, resourceId, expectedRevision: 1 });
     }
     if (await isCurrent()) {

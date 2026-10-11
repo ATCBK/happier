@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   ensureWorkspacePackagesBuiltByName,
   ensureWorkspacePackagesBuiltForComponent,
+  syncWorkspaceComponentBundledDependencies,
 } from './ensureWorkspacePackagesBuilt.mjs';
 
 const defaultRepoRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -44,16 +45,24 @@ export async function runWorkspacePackageBuild({
   }
 
   const results = [];
+  const preparedPackageNames = new Set();
+  const onPackageBuildResult = ({ packageName }) => preparedPackageNames.add(packageName);
+  const preparedComponents = [];
   if (normalizedPackageNames.length > 0) {
     results.push(await ensureWorkspacePackagesBuiltByNameImpl(repoRoot, normalizedPackageNames, {
       publicationMode: 'live',
+      env,
+      onPackageBuildResult,
     }));
   }
   for (const componentDir of normalizedComponentDirs) {
-    results.push(await ensureWorkspacePackagesBuiltForComponentImpl(
-      resolve(repoRoot, componentDir),
-      { publicationMode: 'live' },
-    ));
+    const resolvedComponentDir = resolve(repoRoot, componentDir);
+    const prepared = await ensureWorkspacePackagesBuiltForComponentImpl(
+      resolvedComponentDir,
+      { publicationMode: 'live', env, onPackageBuildResult, deferBundledWorkspaceSync: true },
+    );
+    results.push(prepared);
+    preparedComponents.push({ componentDir: resolvedComponentDir, pluginFailures: prepared.pluginFailures });
   }
   const result = {
     ok: results.every((result) => result.ok !== false),
@@ -63,9 +72,13 @@ export async function runWorkspacePackageBuild({
   const refreshed = [...new Set(results.flatMap((result) => result.refreshed ?? []))];
   if (refreshed.length > 0) result.refreshed = refreshed;
   if (result.ok) {
+    const workspaceNames = [...new Set([...preparedPackageNames, ...result.built, ...refreshed])];
     const published = await publishBundledPluginArtifactsAfterWorkspaceBuildImpl({
       repoRoot,
-      workspaceNames: [...new Set([...result.built, ...refreshed])],
+      // Successful admission includes current dist trees whose separately-owned
+      // plugin artifacts are absent. Compilation alone is not publication readiness.
+      workspaceNames,
+      pluginFailures: results.flatMap((prepared) => prepared.pluginFailures ?? []),
       env,
       // This adapter owns preparation of the current checkout. A remote replica
       // must publish projections for its target-local ignored dist bytes instead
@@ -82,8 +95,15 @@ export async function runWorkspacePackageBuild({
       // pass. Reuse the canonical invalidation owner before reporting success.
       await rebuildWorkspacesInvalidatedByBundledPluginPublicationImpl({
         repoRoot,
-        workspaceNames: [...new Set([...result.built, ...refreshed])],
+        workspaceNames,
         env,
+      });
+    }
+    // Generated-source repair and plugin publication must settle before strict
+    // copies can consume the package's complete declared runtime inventory.
+    for (const prepared of preparedComponents) {
+      await syncWorkspaceComponentBundledDependencies(prepared.componentDir, {
+        env, publicationMode: 'live', pluginFailures: prepared.pluginFailures,
       });
     }
   }

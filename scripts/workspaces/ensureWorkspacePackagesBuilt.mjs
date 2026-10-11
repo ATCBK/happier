@@ -1371,6 +1371,8 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
   maxConcurrentBuilds = DEFAULT_MAX_CONCURRENT_WORKSPACE_BUILDS,
   isolatePluginFailures = false,
   buildMode,
+  onPackageBuildResult = null,
+  deferBundledWorkspaceSync = false,
 } = {}) {
   const monorepoRoot = coerceHappyMonorepoRootFromPath(componentDir);
   if (!monorepoRoot) return { ok: true, built: [], skipped: ['not-monorepo'] };
@@ -1402,7 +1404,26 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
     buildMode: resolvedBuildMode,
     maxConcurrentBuilds,
     isolatePluginFailures,
+    onPackageBuildResult,
   });
+  if (!deferBundledWorkspaceSync) {
+    await syncWorkspaceComponentBundledDependencies(componentDir, {
+      env, publicationMode: resolvedPublicationMode, pluginFailures: result.pluginFailures,
+    });
+  }
+  return { ok: true, ...result, skipped: [] };
+}
+
+export async function syncWorkspaceComponentBundledDependencies(componentDir, {
+  env = process.env,
+  publicationMode = 'live',
+  pluginFailures = [],
+} = {}) {
+  const monorepoRoot = coerceHappyMonorepoRootFromPath(componentDir);
+  const componentPackageJsonPath = join(componentDir, 'package.json');
+  if (!monorepoRoot || !existsSync(componentPackageJsonPath)) return;
+  const componentPackageJson = await readJson(componentPackageJsonPath);
+  const resolvedPublicationMode = resolveWorkspaceBundlePublicationMode({ mode: publicationMode });
   if (hasBundledWorkspaceDependencies(componentPackageJson)) {
     await withWorkspaceBundleLock(
       async () => {
@@ -1410,7 +1431,7 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
           repoRoot: monorepoRoot,
           hostPackageDirs: [componentDir],
           packages: collectBundledWorkspaceDependencyNames(componentPackageJson)
-            .filter((packageName) => !result.pluginFailures?.some((failure) => failure.packageName === packageName))
+            .filter((packageName) => !pluginFailures.some((failure) => failure.packageName === packageName))
             .map((packageName) => packageName.split('/').at(-1))
             .filter(Boolean),
           replaceExisting: true,
@@ -1425,5 +1446,4 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
       },
     );
   }
-  return { ok: true, ...result, skipped: [] };
 }

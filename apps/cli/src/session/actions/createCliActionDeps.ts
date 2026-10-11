@@ -130,7 +130,8 @@ import { AcpConfigOptionOverridesV1Schema, buildAcpConfigOptionOverridesV1 } fro
 import { AccountSettingMutationV1Schema } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import { BackendTargetRefV2Schema, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { derivePluginSessionInputLocalIdV1, buildTrustedHostSessionInputAdmissionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
-import { isMemoryDocumentSearchHitV1, negotiateMemorySearchV1 } from '@happier-dev/protocol/memory/memorySearch';
+import { isMemorySessionSearchHitV1, negotiateMemorySearchV1 } from '@happier-dev/protocol/memory/memorySearch';
+import { MACHINE_TERMINAL_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/machineTerminal';
 import { MemoryStatusV1Schema } from '@happier-dev/protocol/memory/memoryStatus';
 import { MemorySettingsV1Schema } from '@happier-dev/protocol/memory/memorySettings';
 import { MemoryWindowV1Schema } from '@happier-dev/protocol/memory/memoryWindow';
@@ -3541,7 +3542,7 @@ export function createCliActionDeps(params: Readonly<{
       } else if (input.open?.kind === 'workflow_run') {
         if (!workflowAction) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
         const visible = await workflowAction({ actionId: 'workflow.run.get', input: { runId: input.open.runId }, context });
-        if ('ok' in visible && visible.ok === false) return visible;
+        if ('errorCode' in visible && visible.ok === false) return visible;
       }
       context.signal?.throwIfAborted();
       try {
@@ -4030,7 +4031,8 @@ export function createCliActionDeps(params: Readonly<{
       if (direct?.machineId === target.machineId) {
         return await direct.invoke(RPC_METHODS.DAEMON_EXECUTION_RUN_PERMISSION_RESPOND, request, {
           ...(context.signal ? { signal: context.signal } : {}),
-          localActionContext: context,
+          localActionContext: { ...context,
+            executionRunTargetMachineId: context.executionRunTargetMachineId ?? undefined },
         });
       }
       if (!params.credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
@@ -4144,7 +4146,7 @@ export function createCliActionDeps(params: Readonly<{
 
       const visibleThroughSeqBySessionId = new Map<string, number>();
       await Promise.all([...new Set(result.hits.flatMap((hit) =>
-        isMemoryDocumentSearchHitV1(hit) ? [] : [hit.sessionId],
+        isMemorySessionSearchHitV1(hit) ? [hit.sessionId] : [],
       ))].map(async (sessionId) => {
         try {
           const session = await fetchSessionById({
@@ -4166,9 +4168,9 @@ export function createCliActionDeps(params: Readonly<{
       return {
         ...result,
         hits: result.hits.filter((hit) => {
-          // The daemon Artifact owner authorizes qualified document hits; this
-          // Session read applies only to retained transcript ranges.
-          if (isMemoryDocumentSearchHitV1(hit)) return true;
+          // The daemon owns Artifact and native transcript admission; this
+          // Session read applies only to retained Happier transcript ranges.
+          if (!isMemorySessionSearchHitV1(hit)) return true;
           const visibleThroughSeq = visibleThroughSeqBySessionId.get(hit.sessionId);
           return visibleThroughSeq !== undefined
             && hit.seqFrom <= visibleThroughSeq
@@ -5832,7 +5834,7 @@ export function createCliActionDeps(params: Readonly<{
       const preparedCopy = actionId === 'daemon.filesystem.copy'
         && readRecord(input).kind === 'prepared_transfer';
       const execute = () => callMachineAction({
-        machineId, serverId: context.serverId, method, request: input, authority: context.authority,
+        machineId, serverId: context.serverId ?? undefined, method, request: input, authority: context.authority,
         context, effectActionId: actionId, exactMachine: true,
         ...(actionId === 'daemon.filesystem.upload' || actionId === 'daemon.filesystem.download' || preparedCopy
           ? { timeoutMs: null } : {}),
@@ -5973,7 +5975,7 @@ export function createCliActionDeps(params: Readonly<{
       const method = spec.bindings?.rpcMethod;
       if (!method) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
       try {
-        return spec.outputSchema.parse(await callMachineAction({
+        return MACHINE_TERMINAL_ACTION_OUTPUT_SCHEMAS[actionId].parse(await callMachineAction({
           machineId, serverId, method, request, context, effectActionId: actionId,
           authority: context.authority, exactMachine: true,
           ...(signal ? { signal } : {}),

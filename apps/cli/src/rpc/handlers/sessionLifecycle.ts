@@ -305,28 +305,29 @@ async function resolveProductionSessionSpawnNewActionExecutor(params: Readonly<{
             }),
         };
     }
-    return createCliActionExecutorFromCredentials({
+    const shared = {
         credentials,
-        ...(requester ? {
-            requesterSessionBootstrap: requester,
-            serverId: requester.attribution.serverId,
-            serverApiUrl: requester.serverHttpBaseUrl,
-            machineId: requester.attribution.machineId,
-            readCredentials: async () => await requester.isCurrent() ? requester.credentials : null,
-            actionsSettingsProvider: {
-                getActionsSettings: () => normalizeActionsSettingsV1(requester.savedSecretOperationContext.readSnapshot()?.settings.actionsSettingsV1),
-                getAccountSettings: () => requester.savedSecretOperationContext.readSnapshot()?.settings ?? null,
-                getAccountRoleOverrides: () => {
-                    const snapshot = requester.savedSecretOperationContext.readSnapshot();
-                    return snapshot ? readAccountRoleOverridesFromSnapshot(snapshot)
-                        : { status: 'unavailable', reason: 'source-unavailable' };
-                },
-            },
-        } : {}),
         ...(params.sessionSpawnDirectTargetTransport
             ? { sessionSpawnDirectTargetTransport: params.sessionSpawnDirectTargetTransport }
             : {}),
-    });
+    };
+    return createCliActionExecutorFromCredentials(requester ? {
+        ...shared,
+        requesterSessionBootstrap: requester,
+        serverId: requester.attribution.serverId,
+        serverApiUrl: requester.serverHttpBaseUrl,
+        machineId: requester.attribution.machineId,
+        readCredentials: async () => await requester.isCurrent() ? requester.credentials : null,
+        actionsSettingsProvider: {
+            getActionsSettings: () => normalizeActionsSettingsV1(requester.savedSecretOperationContext.readSnapshot()?.settings.actionsSettingsV1),
+            getAccountSettings: () => requester.savedSecretOperationContext.readSnapshot()?.settings ?? null,
+            getAccountRoleOverrides: () => {
+                const snapshot = requester.savedSecretOperationContext.readSnapshot();
+                return snapshot ? readAccountRoleOverridesFromSnapshot(snapshot)
+                    : { status: 'unavailable', reason: 'source-unavailable' };
+            },
+        },
+    } : shared);
 }
 
 /**

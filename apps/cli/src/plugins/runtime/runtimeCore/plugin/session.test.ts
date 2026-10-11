@@ -295,7 +295,7 @@ describe('plugin session runtime adapters', () => {
       v: 1,
       sessionCreationTag,
       recipe: {
-        execution: { machineId: 'machine-1', directory: '/tmp/plugin-backend' },
+        execution: { machineId: 'machine-1', directory: { kind: 'path', path: '/tmp/plugin-backend' } },
         organization: { folderId: null, tagIds: [] },
         agentTarget: {
           kind: 'agent',

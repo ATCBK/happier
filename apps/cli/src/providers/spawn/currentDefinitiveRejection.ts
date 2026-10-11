@@ -17,6 +17,7 @@ import {
 } from '@/plugins/runtime/reload/runtimeLease';
 
 import { resolveProviderSpawnDefinitiveRejection } from './resolve';
+import { readProviderSettingsForCli } from '../settings/read';
 
 export type ProviderLaunchSelectionInput = Readonly<{
   modelId?: unknown;
@@ -144,7 +145,7 @@ export async function resolveCurrentProviderSpawnDefinitiveRejection(input: Read
       selection: parsed.data,
       agentTargetKey: input.agentTargetKey,
       agentId: input.agentId,
-      accountSettings: snapshot.settings,
+      providerSettings: readProviderSettingsForCli(snapshot).settings,
       registry: lease.registry.contributes,
     });
     return definitive.ok ? { ok: true, ref: parsed.data } : { ok: false };

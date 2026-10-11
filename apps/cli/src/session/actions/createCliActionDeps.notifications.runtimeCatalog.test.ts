@@ -26,6 +26,7 @@ vi.mock('axios', async (importOriginal) => {
 });
 
 import { createCliActionDeps } from './createCliActionDeps';
+import { normalizeWorkflowActionThrownError } from './workflowActionExecutor';
 import { createCliActionExecutor } from './createCliActionExecutor';
 import { createDaemonSessionAccountActionExecutor } from '@/daemon/agentRuntime/createDaemonSessionAccountActionExecutor';
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests,
@@ -271,11 +272,15 @@ describe('CLI Notify me host composition', () => {
       normalizeAbsolutePath: (directory) => directory.startsWith('/') ? directory : null,
       randomBytes: () => { throw new Error('plain_account_does_not_need_keys'); },
     });
-    const executor = createActionExecutor(host(accountSettingsParse({}), async (args) => {
+    const workflowAction: NonNullable<ActionExecutorDeps['workflowAction']> = async (args) => {
       if (args.actionId !== 'workflow.run.get') throw new Error('unexpected_workflow_operation');
-      return await runOwner.execute(args);
-    }));
-    const input = { message: 'Panel finished', title: 'Review', channels: ['builtin:expo_push'] };
+      try { return await runOwner.execute(args); }
+      catch (error) { return normalizeWorkflowActionThrownError(error); }
+    };
+    const deps = host(accountSettingsParse({}), workflowAction);
+    const executor = createActionExecutor(deps);
+    const input = { message: 'Panel finished', title: 'Review', channels: ['builtin:expo_push'],
+      open: { kind: 'workflow_run' as const, runId } };
     const context = { surface: 'agent' as const, actionRequestId: 'notification-workflow-replay-1',
       actionCaller: { kind: 'workflowRun' as const, runId, authorization: {
         principal: { kind: 'host' as const }, admittedPermissionCeiling: 'read-only' as const,
@@ -285,6 +290,10 @@ describe('CLI Notify me host composition', () => {
     await expect(executor.execute('notifications.notify_me', input, context))
       .resolves.toEqual({ ok: true, result: { attemptedChannels: 0, deliveredChannels: 0 } });
     expect(boundary.send.mock.calls[0]?.[0]).toMatchObject([{ title: 'Review', body: 'Panel finished', data: { runId } }]);
+    expect(boundary.send).toHaveBeenCalledTimes(1);
+    await expect(deps.notificationsNotifyMe?.(input, { surface: 'cli',
+      externalActionTarget: { kind: 'machine', machineId: 'another-machine' } }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'target_unavailable' });
     expect(boundary.send).toHaveBeenCalledTimes(1);
   });
 

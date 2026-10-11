@@ -928,7 +928,7 @@ export type ResolvedContributionRegistry = Readonly<{
     scmBackends?: readonly ResolvedScmBackendContribution[];
     connectedAccountDescriptors?: readonly ResolvedConnectedAccountDescriptorContribution[];
     voiceModelPacks?: readonly ResolvedVoiceModelPackContribution[];
-    voiceProviders?: readonly ResolvedVoiceProviderContribution[];
+    voiceProviders: readonly ResolvedVoiceProviderContribution[];
     accountCollections?: readonly ResolvedAccountCollectionContribution[];
     pluginContributionPoints?: readonly ResolvedPluginContributionPointDeclaration[];
     targetedPluginContributions?: readonly ResolvedTargetedPluginContributionDeclaration[];

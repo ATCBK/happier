@@ -77,7 +77,7 @@ const {
   listSessions: vi.fn(),
   createSpawnedSession: vi.fn(),
   sendSessionMessage: vi.fn(),
-  createCliApprovalsArtifactStore: vi.fn(() => ({})),
+  createCliApprovalsArtifactStore: vi.fn((_params: Parameters<typeof import('./approvals/artifactStore')['createCliApprovalsArtifactStore']>[0]) => ({})),
   emitSessionLifecycleHookEvent: vi.fn(),
   resolveSessionTransportContext: vi.fn(),
   listExecutionRuns: vi.fn(),
@@ -785,13 +785,15 @@ describe('createCliActionDeps hook dispatch', () => {
     expect(callSessionRpc).not.toHaveBeenCalled();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     callExactMachineRpc.mockReset();
     createSpawnedSession.mockReset();
     lookupSessionsByTags.mockReset();
     validateStoredAuthTokenAgainstActiveServer.mockReset();
     sendSessionMessage.mockReset();
     createCliApprovalsArtifactStore.mockReset();
+    const approvals = await vi.importActual<typeof import('./approvals/artifactStore')>('./approvals/artifactStore');
+    createCliApprovalsArtifactStore.mockImplementation(approvals.createCliApprovalsArtifactStore);
     emitSessionLifecycleHookEvent.mockReset();
     resolveSessionTransportContext.mockReset();
     listExecutionRuns.mockReset();

@@ -402,10 +402,10 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
             ...(context?.requesterSessionBootstrap ? { requesterSessionBootstrap: context.requesterSessionBootstrap } : {}),
             ...(context?.beforeSessionRunnerLaunch ? { beforeSessionRunnerLaunch: context.beforeSessionRunnerLaunch } : {}),
             ...(requesterBootstrap || requesterAdmission ? {
-                requesterWorkAttributionV1: RequesterWorkAttributionV1Schema.parse(requesterBootstrap?.attribution ?? {
+                requesterWorkAttributionV1: RequesterWorkAttributionV1Schema.parse(requesterBootstrap?.attribution ?? (requesterAdmission ? {
                     serverId: params.serverId, accountId: requesterAdmission.actorAccountId,
                     machineId: requesterAdmission.machineId, installationId: requesterAdmission.installationId,
-                }),
+                } : undefined)),
                 verifyRequesterMachineAdmissionCurrent: requesterBootstrap
                     ? () => requesterBootstrap.isCurrent() : context!.verifyMachineAdmissionCurrent,
             } : {}),

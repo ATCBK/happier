@@ -1,10 +1,130 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { ensureWorkspacePackagesBuiltByName, ensureWorkspacePackagesBuiltForComponent } from './ensureWorkspacePackagesBuilt.mjs';
+import { copyDirDereferenceContainedSync, vendorRuntimeDependencyTree } from '../../packages/cli-common/workspaceRuntimeDependencies.mjs';
 
 import {
   parseWorkspaceBuildArgs,
   runWorkspacePackageBuild,
 } from './ensureWorkspacePackagesBuiltCli.mjs';
+
+for (const compiledAlready of [false, true]) {
+  test(`root preparation publishes a real packaged plugin before component copies (${compiledAlready ? 'current dist, missing artifacts' : 'cold compiler outputs'})`, async (t) => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'happier-root-plugin-publication-'));
+    t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+    const sourceRoot = fileURLToPath(new URL('../..', import.meta.url));
+    const copy = (relativePath) => {
+      mkdirSync(dirname(join(repoRoot, relativePath)), { recursive: true });
+      cpSync(join(sourceRoot, relativePath), join(repoRoot, relativePath), {
+        recursive: true,
+        filter: (candidate) => !candidate.split(/[\\/]/u).some((part) => part === 'node_modules' || part === 'dist'),
+      });
+    };
+    for (const relativePath of ['scripts', 'apps/stack/scripts', 'apps/cli/scripts', 'apps/cli/src', 'apps/cli/tsconfig.json']) copy(relativePath);
+    const dependencyPackages = ['agents', 'protocol', 'cli-common', 'plugin-sdk', 'release-runtime', 'brand', 'transfers', 'peer-mediation'];
+    for (const name of dependencyPackages) {
+      copy(`packages/${name}`);
+    }
+    // Physical package custody is part of the real copier's contract. Prepare
+    // declared external packages through its owner, not an out-of-root symlink.
+    const visited = new Set();
+    const vendor = (packageJsonPath, resolveFromPackageJsonPath = packageJsonPath) => vendorRuntimeDependencyTree({
+      packageJsonPath, resolveFromPackageJsonPath,
+      destNodeModulesDir: join(repoRoot, 'node_modules'), dereferenceRootDir: sourceRoot, visited,
+      copyResolvedPackage: ({ sourcePackageDir, destPackageDir, dereferenceRootDir }) => copyDirDereferenceContainedSync({
+        sourceDir: sourcePackageDir, destDir: destPackageDir, dereferenceRootDir,
+        shouldCopyPath: (candidate) => !relative(sourcePackageDir, candidate).split(/[\\/]/u).includes('node_modules'),
+      }),
+    });
+    for (const name of dependencyPackages) vendor(join(sourceRoot, 'packages', name, 'package.json'));
+    const toolchainOwnerPath = join(sourceRoot, 'apps/cli/package.json');
+    const toolchain = JSON.parse(readFileSync(toolchainOwnerPath, 'utf8'));
+    // The publisher's source loader uses jiti; its authoring input owner uses
+    // esbuild. Include their actual CLI declarations alongside the toolchain.
+    const dependencies = Object.fromEntries(['tsx', 'typescript', 'yaml', 'jiti', 'esbuild'].map((name) => {
+      const version = toolchain.dependencies?.[name] ?? toolchain.devDependencies?.[name];
+      assert.equal(typeof version, 'string', `Fixture toolchain ${name} must be declared`);
+      return [name, version];
+    }));
+    const toolchainPath = join(repoRoot, 'toolchain.json');
+    writeFileSync(toolchainPath, JSON.stringify({ dependencies }));
+    vendor(toolchainPath, toolchainOwnerPath);
+    writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'] }));
+    writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+    mkdirSync(join(repoRoot, 'apps/ui'), { recursive: true });
+    writeFileSync(join(repoRoot, 'apps/ui/package.json'), JSON.stringify({ name: '@happier-dev/ui' }));
+    const packageName = '@happier-dev/plugins-selected';
+    const hostDependencies = [...dependencyPackages.map((name) => `@happier-dev/${name}`), packageName];
+    for (const component of ['cli', 'server']) {
+      const componentDir = join(repoRoot, 'apps', component);
+      mkdirSync(componentDir, { recursive: true });
+      writeFileSync(join(componentDir, 'package.json'), JSON.stringify({
+        name: `@happier-dev/${component}`, type: 'module',
+        dependencies: Object.fromEntries(hostDependencies.map((name) => [name, '0.0.0'])),
+        bundledDependencies: hostDependencies,
+      }));
+    }
+    const packageDir = join(repoRoot, 'packages/plugins/selected');
+    mkdirSync(join(packageDir, 'src'), { recursive: true });
+    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
+      name: packageName, version: '0.0.0', type: 'module', main: './dist/index.js',
+      files: ['dist', '.happier-plugin', 'package.json'], scripts: { build: 'fixture-compiler' },
+    }));
+    const manifest = {
+      schemaVersion: 2, id: 'happier.selected', version: '0.0.0', displayName: 'Selected',
+      engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
+      entrypoints: { daemon: './.happier-plugin/daemon.js' },
+      hostAccess: { required: [], optional: [] }, contributes: {},
+    };
+    writeFileSync(join(packageDir, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify(manifest)};\n`);
+    const entrypoint = "export { PLUGIN_MANIFEST as manifest } from './manifest.js';\nexport function activate() {}\n";
+    writeFileSync(join(packageDir, 'src/index.ts'), entrypoint);
+    writeFileSync(join(packageDir, 'tsconfig.json'), JSON.stringify({ compilerOptions: { outDir: 'dist' }, include: ['src/**/*.ts'] }));
+    let compilerRuns = 0;
+    // Compilation is an external process boundary; retain real admission,
+    // fingerprints, publisher, manifest parsing and strict atomic package copies.
+    const workspaceBuildBoundary = {
+      async prepareEnv(_packageDir, env) { return { ...env }; },
+      async runPackageBuild(compiledPackageDir, { env }) {
+        if (compiledPackageDir !== packageDir) {
+          // Reuse genuine prepared public dependency outputs at the compiler
+          // boundary; this fixture never compiles or fakes the CLI application.
+          const name = JSON.parse(readFileSync(join(compiledPackageDir, 'package.json'), 'utf8')).name;
+          cpSync(join(sourceRoot, 'packages', name.slice('@happier-dev/'.length), 'dist'), env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, { recursive: true });
+          return;
+        }
+        compilerRuns += 1;
+        mkdirSync(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, { recursive: true });
+        writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), entrypoint);
+        writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'manifest.js'), `export const PLUGIN_MANIFEST = ${JSON.stringify(manifest)};\n`);
+      },
+    };
+    // A partial temporary plugin corpus prepares target-owned runtime artifacts,
+    // not the full checkout's generated native/legacy semantic projections.
+    const env = { ...process.env, HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_STACK_REPO_DIR: repoRoot, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: repoRoot };
+    if (compiledAlready) await ensureWorkspacePackagesBuiltByName(repoRoot, hostDependencies, { env, workspaceBuildBoundary });
+    assert.equal(existsSync(join(packageDir, '.happier-plugin')), false);
+    const result = await runWorkspacePackageBuild({
+      repoRoot, env, componentDirs: ['apps/cli', 'apps/server'],
+      ensureWorkspacePackagesBuiltForComponentImpl: (componentDir, options) => ensureWorkspacePackagesBuiltForComponent(componentDir, { ...options, env, workspaceBuildBoundary }),
+    });
+    assert.equal(result.ok, true);
+    assert.equal(compilerRuns, 1, 'current compiler output must not be confused with missing publisher output');
+    if (compiledAlready) assert.deepEqual(result.built, []);
+    for (const component of ['cli', 'server']) {
+      const installed = join(repoRoot, 'apps', component, 'node_modules', '@happier-dev/plugins-selected');
+      assert.equal(JSON.parse(readFileSync(join(installed, '.happier-plugin/plugin.json'), 'utf8')).id, manifest.id);
+      assert.equal(readFileSync(join(installed, '.happier-plugin/daemon.js'), 'utf8'), readFileSync(join(packageDir, '.happier-plugin/daemon.js'), 'utf8'));
+      const runtime = await import(pathToFileURL(join(installed, '.happier-plugin/daemon.js')).href);
+      assert.equal(typeof runtime.activate, 'function');
+    }
+  });
+}
 
 test('the root package-build adapter delegates one package set to the canonical currentness owner', async () => {
   const calls = [];
@@ -18,10 +138,11 @@ test('the root package-build adapter delegates one package set to the canonical 
     publishBundledPluginArtifactsAfterWorkspaceBuildImpl: async () => false,
   });
 
-  assert.deepEqual(calls, [{
+  assert.equal(typeof calls[0].options.onPackageBuildResult, 'function');
+  assert.deepEqual(calls.map(({ options: { onPackageBuildResult, ...options }, ...call }) => ({ ...call, options })), [{
     repoRoot: '/repo',
     packageNames: ['alpha', 'beta'],
-    options: { publicationMode: 'live' },
+    options: { publicationMode: 'live', env: process.env },
   }]);
   assert.deepEqual(result, { ok: true, built: ['beta'], skipped: [] });
 });
@@ -45,9 +166,10 @@ test('the root package-build adapter prepares component dependency closures thro
     publishBundledPluginArtifactsAfterWorkspaceBuildImpl: async () => false,
   });
 
-  assert.deepEqual(calls, [
-    { componentDir: '/repo/apps/cli', options: { publicationMode: 'live' } },
-    { componentDir: '/repo/apps/server', options: { publicationMode: 'live' } },
+  assert.ok(calls.every(({ options }) => typeof options.onPackageBuildResult === 'function'));
+  assert.deepEqual(calls.map(({ options: { onPackageBuildResult, ...options }, ...call }) => ({ ...call, options })), [
+    { componentDir: '/repo/apps/cli', options: { publicationMode: 'live', env: process.env, deferBundledWorkspaceSync: true } },
+    { componentDir: '/repo/apps/server', options: { publicationMode: 'live', env: process.env, deferBundledWorkspaceSync: true } },
   ]);
   assert.deepEqual(result, { ok: true, built: ['cli', 'server'], skipped: [] });
 });
@@ -94,6 +216,7 @@ test('the root package-build adapter publishes the deduplicated rebuilt union on
         '@happier-dev/plugins-triage',
       ],
       env,
+      pluginFailures: [],
       bundledPluginArtifactPublication: { mode: 'write', targetOwnedOnly: true },
     }],
     ['rebuild-generated', {
@@ -138,6 +261,7 @@ test('the authoritative root package-build adapter retains full publication', as
     repoRoot: '/repo',
     workspaceNames: ['@happier-dev/plugins-inspector'],
     env: {},
+    pluginFailures: [],
     bundledPluginArtifactPublication: { mode: 'write' },
   }]);
 });

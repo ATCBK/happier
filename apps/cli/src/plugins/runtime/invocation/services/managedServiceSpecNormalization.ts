@@ -90,6 +90,12 @@ type NormalizeManagedServiceVariant<Spec extends ManagedServiceSpec> =
 export type NormalizedManagedServiceSpec =
     NormalizeManagedServiceVariant<ManagedServiceSpec>;
 
+function isNativeManagedServiceSpec(
+    spec: ManagedServiceSpec,
+): spec is Extract<ManagedServiceSpec, { mode: { kind: 'native' } }> {
+    return spec.mode.kind === 'native';
+}
+
 function specInvalid(message: string): never {
     throw new PluginError({
         code: 'plugin_managed_service_spec_invalid',
@@ -302,7 +308,7 @@ export function normalizeManagedServiceSpec(
             ...(healthCheck ? { healthCheck } : {}),
         }) as NormalizedManagedServiceSpec;
     }
-    if (spec.mode.kind === 'native') {
+    if (isNativeManagedServiceSpec(spec)) {
         return Object.freeze({
             ...spec,
             mode: Object.freeze({
