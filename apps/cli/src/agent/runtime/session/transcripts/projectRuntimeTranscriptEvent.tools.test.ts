@@ -8,6 +8,7 @@ import {
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { NormalizedToolTurnChangeTracker } from '@/agent/tools/diff/normalizedToolTurnChangeTracker';
 import { createAcpToolIdentity } from '@/agent/acp/toolCalls';
+import { normalizeToolCallV2 } from '@/agent/tools/normalization';
 import type { EphemeralSendOutcome } from '@/api/session/client/transcript/ephemeralSendOutcome';
 
 let nextRuntimeEventSequence = 0;
@@ -188,6 +189,51 @@ describe('projectRuntimeTranscriptEvent tool lifecycle', () => {
       expect(fixture.durableRows.get('child-message-2')).toEqual({ type: 'message', message: 'Sibling', sidechainId: 'child-1' });
     } finally { vi.useRealTimers(); }
   });
+
+  it.each([undefined, null, ''])(
+    'keeps the snapshot title authoritative over user metadata when it is %s',
+    async (title) => {
+      const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
+      const fixture = createRuntimeToolProjectionFixture();
+      const rawInput = {
+        toolName: 'Bash',
+        params: { command: 'echo user-owned-data' },
+        _acp: { title: 'DeferExecuteTool' },
+      };
+
+      const progress: Record<string, unknown> = mergedToolProgress({
+        toolName: 'other', kind: 'other', title, rawInput,
+      });
+      if (title === undefined) delete progress.title;
+      await projectRuntimeTranscriptEvent({
+        session: fixture.session,
+        provider: 'codebuddy',
+        event: canonicalRuntimeEvent({
+          kind: 'tool-progress',
+          sessionId: 'session-1',
+          emittedAtMs: 101,
+          turnId: 'turn-1',
+          toolCallId: 'call-1',
+          progress,
+        }),
+      });
+      const body = fixture.session.sendAgentMessageEphemeral.mock.calls[0]?.[1];
+      if (!body) throw new Error('expected projected tool call');
+      const normalized = normalizeToolCallV2({
+        protocol: 'acp',
+        provider: 'codebuddy',
+        toolName: String(body.name),
+        rawInput: body.input,
+      });
+
+      expect(normalized.canonicalToolName).toBe('other');
+      expect(normalized.input).toMatchObject({
+        toolName: 'Bash',
+        params: rawInput.params,
+        _acp: { kind: 'other', title: null, rawInput },
+      });
+    },
+  );
 
   it('projects a fully merged tool-progress snapshot ephemerally without a durable write', async () => {
     const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
