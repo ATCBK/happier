@@ -128,6 +128,20 @@ describe('savedSecretCatalogSnapshot', () => {
         });
     });
 
+    it('retains metadata status during refresh without making stale credential material usable', () => {
+        const entry = sharedEntry();
+        applySavedSecretCatalogPage({ scope, entries: [entry], observedAt: 10 });
+        invalidateSavedSecretCatalog(scope);
+        beginSavedSecretCatalogLoad(scope);
+        expect(resolveSavedSecretReference(scope, [], entry.ref)).toMatchObject({
+            status: 'temporarily_unavailable', displayStatus: 'ready', secret: null,
+        });
+        applySavedSecretCatalogFailure({ scope, error: { kind: 'unreachable', retryable: true } });
+        const failed = resolveSavedSecretReference(scope, [], entry.ref);
+        expect(failed.status).toBe('temporarily_unavailable');
+        expect(failed.displayStatus ?? failed.status).toBe('temporarily_unavailable');
+    });
+
     it('removes only the deleted resource from its exact Account/Home catalog', () => {
         const otherAccount = { ...scope, accountId: 'account-b' };
         const otherHome = { ...scope, serverId: 'home-b' };

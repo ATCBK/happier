@@ -1,4 +1,5 @@
 import type { ProfileCatalogSnapshotV1, ProfileCatalogRecordV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
+import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
@@ -89,6 +90,30 @@ export function applyProfileCatalogSnapshot(scope: ServerAccountScope, catalog: 
         cleanup: previous && JSON.stringify(previous.cleanup) === JSON.stringify(cleanup) ? previous.cleanup : cleanup });
 }
 export function invalidateProfileCatalog(scope: ServerAccountScope): void { beginProfileCatalogLoad(scope); }
+/** A durable row receipt updates last-known display data, never census/runtime authority. */
+export function applyAcknowledgedProfileRecord(scope: ServerAccountScope,
+    input: Readonly<{ id: string; revision: number; record: ProfileRecordV1 | null }>, current: boolean): void {
+    const previous = getProfileCatalogSnapshot(scope);
+    if (!current || !previous?.data || previous.source !== 'destination') return;
+    const existing = previous.data.find(row => row.record.id === input.id);
+    if (existing && existing.revision >= input.revision) return;
+    const record = input.record;
+    const data = record ? previous.data.map(row => row.record.id === input.id ? { record, revision: input.revision } : row)
+        : previous.data.filter(row => row.record.id !== input.id);
+    if (record && !existing) data.push({ record, revision: input.revision });
+    publish({ ...previous, catalog: loading, data: Object.freeze(data), stale: true });
+}
+/** Body receipts use the same retained projection as row receipts. */
+export function applyAcknowledgedProfileArtifact(scope: ServerAccountScope, artifact: ArtifactSharingResourceV1, current: boolean): void {
+    const previous = getProfileCatalogSnapshot(scope);
+    const existing = previous?.artifactsById.get(artifact.artifactId);
+    if (!current || previous?.source !== 'destination' || !existing || !artifact.revision) return;
+    if (existing.revision && (existing.revision.headerVersion > artifact.revision.headerVersion
+        || existing.revision.bodyVersion > artifact.revision.bodyVersion)) return;
+    const artifactsById = new Map(previous.artifactsById);
+    artifactsById.set(artifact.artifactId, artifact);
+    publish({ ...previous, catalog: loading, artifactsById, stale: true });
+}
 export function invalidateProfileCatalogsForServer(serverId: string): void {
     for (const snapshot of snapshots.values()) if (snapshot.scope.serverId === serverId) beginProfileCatalogLoad(snapshot.scope);
 }

@@ -162,6 +162,8 @@ export type SavedSecretReferenceResolution = Readonly<{
     ref: string;
     kind: 'personal' | 'shared_resource';
     status: SavedSecretCatalogMaterialStatusV1;
+    /** Last-known metadata for display only; `status` and `secret` still govern material use. */
+    displayStatus?: SavedSecretCatalogMaterialStatusV1;
     entry: SavedSecretCatalogEntryV1 | null;
     secret: SavedSecret | null;
     revision: number | null;
@@ -233,6 +235,7 @@ export function resolveSavedSecretReference(
             status: entry?.materialStatus === 'access_removed' || entry?.materialStatus === 'deleted'
                 ? entry.materialStatus
                 : 'temporarily_unavailable',
+            ...(entry && snapshot?.status !== 'error' ? { displayStatus: entry.materialStatus } : {}),
             entry,
             secret: null,
             revision,

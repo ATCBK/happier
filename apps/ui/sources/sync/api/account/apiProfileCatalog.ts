@@ -26,6 +26,7 @@ import { parseSavedSecretCatalogReferenceV1 } from '@happier-dev/protocol/accoun
 import { readSavedSecretCatalogInContext } from './apiSavedSecretCatalog';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { getStorage } from '@/sync/domains/state/storageStore';
+import { applyAcknowledgedProfileRecord } from '@/sync/store/settings/profileCatalogSnapshot';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { PROFILE_TRANSFER_ROUTE_V1, ProfileTransferRowReadResponseV1Schema, ProfileTransferMutationV1Schema,
     ProfileTransferMutationResponseV1Schema, assertProfileTransferContentForModeV1,
@@ -138,6 +139,7 @@ export type ProfileCatalogProjection = Readonly<{
 type ProfileReadPublication = Readonly<{
     onReady?: (projection: ProfileCatalogProjection, isAccountCurrent: () => boolean) => void;
     hasPendingCleanup?: () => boolean;
+    deferCleanup?: boolean;
 }>;
 export async function readProfileCatalogProjection(scope: ServerAccountScope, signal?: AbortSignal,
     publication?: ProfileReadPublication): Promise<ProfileCatalogProjection> {
@@ -222,7 +224,7 @@ async function readCapturedProfileCatalogProjection(context: ProfileAccountConte
     // do not undo historical activation; the shared owner never rewrites those rows.
     if ((catalog.status === 'ready' || catalog.status === 'partial') && catalog.control?.record.phase === 'active') {
         if (publication?.onReady) publication.onReady(await project(), context.accountLifetime.isCurrent);
-        if (!publication?.hasPendingCleanup?.()) cleanup = await cleanupTransferredProfileSourcesV1({ control: catalog.control, assertCurrent: context.assertCurrent, signal,
+        if (!publication?.deferCleanup && !publication?.hasPendingCleanup?.()) cleanup = await cleanupTransferredProfileSourcesV1({ control: catalog.control, assertCurrent: context.assertCurrent, signal,
             reloadCatalog: () => readCapturedProfileCatalog(context, mode, material, signal),
             readSource: async () => (await readProfileTransferSourceInContext(context)).source,
             replaceSource: input => context.mutateRawSettings(() => ({ ...input.raw }), {
@@ -242,10 +244,15 @@ async function readCapturedProfileCatalogProjection(context: ProfileAccountConte
     return project();
 }
 
-async function mutateWithContext(context: ProfileAccountContext, mutation: ProfileRowMutationV1, signal?: AbortSignal): Promise<ProfileRowMutationResponseV1> {
+async function mutateWithContext(context: ProfileAccountContext, mutation: ProfileRowMutationV1, signal?: AbortSignal,
+    admittedRecord?: ProfileRecordV1 | null): Promise<ProfileRowMutationResponseV1> {
     const input = ProfileRowMutationV1Schema.parse(mutation);
     const result = await requestProfileMutation(context, PROFILE_RECORDS_ROUTE_V1, input,
         value => { const parsed = ProfileRowMutationResponseV1Schema.safeParse(value); return parsed.success ? parsed.data : null; }, signal);
+    if (result.status === 'updated' && admittedRecord !== undefined) {
+        applyAcknowledgedProfileRecord(context.accountLifetime.scope,
+            { id: input.id, revision: result.revision, record: admittedRecord }, context.accountLifetime.isCurrent());
+    }
     if (result.status === 'updated' && input.settingsCleanup && context.accountLifetime.isCurrent()
         && areAccountSettingsScopesEqual(getStorage().getState().settingsScope, context.accountLifetime.scope)) {
         try {
@@ -311,8 +318,9 @@ export async function readProfileCatalogInContext(context: ProfileAccountContext
         options?.readSourceBaseline ? async () => (await readProfileTransferSourceInContext(captured)).source.raw : undefined, options?.onPage)); }
     catch (error) { return catalogFailure(error, signal); }
 }
-export async function readProfileCatalogProjectionInContext(context: ProfileAccountContext, signal?: AbortSignal): Promise<ProfileCatalogProjection> {
-    try { return await admitProfileAccount(context, (captured, mode, material) => readCapturedProfileCatalogProjection(captured, mode, material, signal)); }
+export async function readProfileCatalogProjectionInContext(context: ProfileAccountContext, signal?: AbortSignal,
+    options?: Readonly<{ deferCleanup?: boolean }>): Promise<ProfileCatalogProjection> {
+    try { return await admitProfileAccount(context, (captured, mode, material) => readCapturedProfileCatalogProjection(captured, mode, material, signal, options)); }
     catch (error) { return { catalog: catalogFailure(error, signal), artifactsById: new Map(), source: null }; }
 }
 export function mutateProfileRowInContext(context: ProfileAccountContext, mutation: ProfileRowMutationV1, signal?: AbortSignal): Promise<ProfileRowMutationResponseV1> {
@@ -382,7 +390,7 @@ async function writeCapturedProfileRecord(context: ProfileAccountContext, mode: 
         || input.expectedArtifactRevision.bodyVersion !== references.artifactRevision.bodyVersion))
         throw new ProfileRowOperationError('reference-conflict');
     const savedSecretRevisions = await resolveProfileSecretRevisions(context, [references], input.savedSecretRevisions, false, false, signal);
-    return mutateWithContext(context, sealProfileMutation(mode, material, { ...input, record, settingsCleanup, savedSecretRevisions }, references), signal);
+    return mutateWithContext(context, sealProfileMutation(mode, material, { ...input, record, settingsCleanup, savedSecretRevisions }, references), signal, record);
 }
 /** The resource catalog owns reference decoding, usability and current revision admission. */
 async function resolveProfileSecretRevisions(context: ProfileAccountContext, references: readonly ProfileMutationReferences[],
@@ -488,7 +496,7 @@ async function deleteCapturedProfileRecord(context: ProfileAccountContext, mode:
         return mutateWithContext(context, {
             id: input.id, operation: 'remove', expectedRevision: input.expectedRevision, content: null,
             referencedSavedSecretIds: [], ...(settingsCleanup ? { settingsCleanup } : {}),
-        }, signal);
+        }, signal, null);
 }
 export function deleteProfileRecordInContext(context: ProfileAccountContext, input: ProfileDeleteInput, signal?: AbortSignal): Promise<ProfileRowMutationResponseV1> {
     return admitProfileAccount(context, (captured, mode, material) => deleteCapturedProfileRecord(captured, mode, material, input, signal));
