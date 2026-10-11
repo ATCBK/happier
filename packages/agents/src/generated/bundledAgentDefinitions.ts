@@ -136,6 +136,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "sessionListing": "unsupported",
       "sessionRollback": {
         "conversation": "unsupported"
+      },
+      "usageLimitRecovery": {
+        "checkNow": "supported"
       }
     },
     "sessionStorage": {

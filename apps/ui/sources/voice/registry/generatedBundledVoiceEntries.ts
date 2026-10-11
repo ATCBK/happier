@@ -432,6 +432,7 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
         "title": "Codex"
       }
     ],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -848,7 +849,7 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
           },
           "schemaVersion": 2
         },
-        "title": "Codex Realtime Voice — Experimental"
+        "title": "Codex Realtime Voice"
       }
     ],
     "webhooks": [],
@@ -973,6 +974,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "accountCollections": [],
     "actions": [],
     "agents": [],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -2448,6 +2450,7 @@ const GOOGLE_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "accountCollections": [],
     "actions": [],
     "agents": [],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -2876,6 +2879,7 @@ const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "accountCollections": [],
     "actions": [],
     "agents": [],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -3293,6 +3297,48 @@ const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
               {
                 "customIdAllowed": true,
                 "kind": "voice_catalog",
+                "options": [
+                  {
+                    "id": "alloy",
+                    "title": "Alloy"
+                  },
+                  {
+                    "id": "ash",
+                    "title": "Ash"
+                  },
+                  {
+                    "id": "ballad",
+                    "title": "Ballad"
+                  },
+                  {
+                    "id": "coral",
+                    "title": "Coral"
+                  },
+                  {
+                    "id": "echo",
+                    "title": "Echo"
+                  },
+                  {
+                    "id": "sage",
+                    "title": "Sage"
+                  },
+                  {
+                    "id": "shimmer",
+                    "title": "Shimmer"
+                  },
+                  {
+                    "id": "verse",
+                    "title": "Verse"
+                  },
+                  {
+                    "id": "marin",
+                    "title": "Marin"
+                  },
+                  {
+                    "id": "cedar",
+                    "title": "Cedar"
+                  }
+                ],
                 "path": "voice",
                 "subtitleKey": "settingsVoice.realtimeProviders.fields.voice.subtitle",
                 "titleKey": "settingsVoice.realtimeProviders.fields.voice.title",
@@ -3401,6 +3447,7 @@ const OPENAI_COMPAT_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "accountCollections": [],
     "actions": [],
     "agents": [],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -3902,6 +3949,7 @@ const XAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "accountCollections": [],
     "actions": [],
     "agents": [],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],

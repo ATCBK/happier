@@ -29,6 +29,18 @@ function emittedMapKeys(source: string, name: string): string[] {
 }
 
 describe('bundled Agent exclusion projections', () => {
+    it('publishes declared provisioner kinds and billing without activating their runtimes', () => {
+        const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(entry => entry.pluginId === 'happier.machine.lima');
+        const parsed = ingestPluginManifestV2(locator?.manifest);
+        if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
+        const pluginPackages: readonly BundledPluginPackage[] = [{ pluginPackageId: 'machine-lima', pluginId: parsed.manifest.id,
+            packageName: '@happier-dev/plugins-machine-lima', packageVersion: '0.0.0', manifest: parsed.manifest }];
+        const ui = renderUiBundledPluginEntriesTs({ packageNames: [], pluginPackages });
+        expect(emittedMapKeys(ui, 'BUNDLED_MACHINE_PROVISIONER_DECLARATIONS')).toEqual(
+            parsed.manifest.contributes.machineProvisioners!.map(descriptor => `${parsed.manifest.id}/${descriptor.id}`));
+        expect(ui).toContain(`"descriptor":${JSON.stringify(parsed.manifest.contributes.machineProvisioners![0])}`);
+        expect(ui).not.toContain('from "@happier-dev/plugins-machine-lima');
+    });
     it('projects the admitted contribution identity when its local id differs from the UI routing id', () => {
         const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find((entry) => entry.pluginId === 'happier.agent.qwen');
         const parsed = ingestPluginManifestV2(locator?.manifest);

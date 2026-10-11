@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import {
   createHomeGovernanceHarness,
@@ -33,6 +33,67 @@ function renderPicker(element: React.ReactElement) {
 }
 
 describe('provisioner picker demand', () => {
+  it('prefers this computer only while it is an installed online controller, without demanding local status', async () => {
+    const serverId = await harness.addHome({ name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true });
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { useManagedControllerScope } = await import('./useManagedControllerScope');
+    const { getSystemTasksRunner } = await import('@/components/systemTasks/systemTasksRuntime');
+    const { publishLocalDaemonStatus, readLocalDaemonSharedState } = await import('@/components/settings/machines/localControl/localDaemonSharedState');
+    const runner = getSystemTasksRunner();
+    const previous = readLocalDaemonSharedState(runner).status;
+    onTestFinished(() => publishLocalDaemonStatus(runner, previous));
+    publishLocalDaemonStatus(runner, { serviceInstalled: true, daemonRunning: true, needsAuth: false, machineId: 'z' });
+    const online = (id: string) => createMachineFixture({ id, installationId: `${id}-installation`, activeAt: Date.now() });
+    await act(async () => storage.setState({ machineListByServerId: { srv_build: [online('a'), online('z')] }, machineListStatusByServerId: { srv_build: 'idle' } }));
+    const local = await renderHook(() => useManagedControllerScope({ serverId, testIDPrefix: 'scope-probe' }));
+    expect(local.getCurrent().controller?.machineId).toBe('z');
+    await local.unmount();
+    await act(async () => storage.setState({ machineListByServerId: { srv_build: [online('a'), createMachineFixture({ id: 'z', installationId: 'z-installation', active: false, activeAt: 0 })] } }));
+    const remote = await renderHook(() => useManagedControllerScope({ serverId, testIDPrefix: 'scope-probe' }));
+    expect(remote.getCurrent().controller?.machineId).toBe('a');
+    await remote.unmount();
+  });
+  it('keeps a deterministic online controller across inventory order and presence changes, and retains explicit draft choice', async () => {
+    const serverId = await harness.addHome({ name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true });
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { useManagedControllerScope } = await import('./useManagedControllerScope');
+    const online = (id: string) => createMachineFixture({ id, installationId: `${id}-installation`, activeAt: Date.now(), metadata: null });
+    const asleep = createMachineFixture({ id: 'ghost', installationId: 'ghost-installation', active: false, activeAt: 0 });
+    const retired = createMachineFixture({ id: 'retired', installationId: 'retired-installation', activeAt: Date.now(), replacedByMachineId: 'a' });
+    await act(async () => storage.setState({ machineListByServerId: { srv_build: [asleep, retired, online('z'), online('a')] }, machineListStatusByServerId: { srv_build: 'idle' } }));
+    const onSelect = vi.fn();
+    const scope = await renderHook(() => useManagedControllerScope({ serverId, testIDPrefix: 'scope-probe', onSelect }));
+    expect(scope.getCurrent().controller?.machineId).toBe('a');
+    await act(async () => storage.setState({ machineListByServerId: { srv_build: [online('z'), asleep, online('a'), retired] } }));
+    expect(scope.getCurrent().controller?.machineId).toBe('a');
+    await act(async () => storage.setState({ machineListByServerId: { srv_build: [online('z'), asleep,
+      createMachineFixture({ id: 'a', installationId: 'a-installation', active: false, activeAt: 0 })] } }));
+    expect(scope.getCurrent().controller?.machineId).toBe('a');
+    const target = scope.getCurrent().selection?.pickerRows.find(row => row.candidate.target.machineId === 'z')?.candidate.target;
+    expect(target).toBeDefined();
+    await act(async () => scope.getCurrent().selection?.selectTarget(target!));
+    expect(onSelect).toHaveBeenCalledWith({ machineId: 'z', installationId: 'z-installation' });
+    await scope.rerender();
+    expect(scope.getCurrent().controller?.machineId).toBe('z');
+    await act(async () => storage.setState({ machineListByServerId: { srv_build: [online('a'),
+      createMachineFixture({ id: 'z', installationId: 'z-installation', activeAt: Date.now(), replacedByMachineId: 'a' })] } }));
+    expect(scope.getCurrent().controller?.machineId).toBe('z');
+    expect(scope.getCurrent().selection?.state.kind).toBe('replaced');
+    expect(scope.getCurrent().selection?.resolveExecutionTarget()).toBeNull();
+    await scope.unmount();
+  });
+  it('leaves automatic scope unselected when only offline or retired controllers exist', async () => {
+    const serverId = await harness.addHome({ name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true });
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { useManagedControllerScope } = await import('./useManagedControllerScope');
+    await act(async () => storage.setState({ machineListByServerId: { srv_build: [
+      createMachineFixture({ id: 'ghost', installationId: 'ghost-installation', active: false, activeAt: 0 }),
+      createMachineFixture({ id: 'retired', installationId: 'retired-installation', activeAt: Date.now(), replacedByMachineId: 'next' }),
+    ] }, machineListStatusByServerId: { srv_build: 'idle' } }));
+    const scope = await renderHook(() => useManagedControllerScope({ serverId, testIDPrefix: 'scope-probe' }));
+    expect(scope.getCurrent().controller).toBeUndefined();
+    await scope.unmount();
+  });
   it('identifies New preset before a Home is selected, without demanding a provisioner catalog', async () => {
     const homeId = await harness.addHome({ name: 'Build', serverUrl: 'https://preset-build.example', serverIdentityId: 'srv_preset_build', accountId: 'owner', currentAccount: true });
     const { NewMachinePresetRoute } = await import('@/app/(app)/settings/machines/presets/new');
@@ -312,7 +373,7 @@ describe('provisioner picker demand', () => {
     ).toBe(false);
     await screen.unmount();
   });
-  it.each(['profile', 'portable'] as const)('names an offline controller under its chip for a %s Home identifier, and offers setup when nothing can manage', async (identifierKind) => {
+  it.each(['profile', 'portable'] as const)('retains a draft\'s named offline controller under its chip for a %s Home identifier, and offers setup when nothing can manage', async (identifierKind) => {
     const serverId = await harness.addHome({
       name: 'Build',
       serverUrl: 'https://build.example',
@@ -341,7 +402,7 @@ describe('provisioner picker demand', () => {
     const { useManagedControllerScope } = await import('./useManagedControllerScope');
     const { useMachineListStatusForServer } = await import('@/sync/domains/state/storage');
     const controllerScope = await renderHook(() => ({
-      scope: useManagedControllerScope({ serverId: scopeId, testIDPrefix: 'scope-probe' }),
+      scope: useManagedControllerScope({ serverId: scopeId, preferred: { machineId: 'asleep', installationId: 'installation' }, testIDPrefix: 'scope-probe' }),
       status: useMachineListStatusForServer(scopeId),
     }));
     expect(controllerScope.getCurrent().status).toBe('loading');
@@ -349,9 +410,11 @@ describe('provisioner picker demand', () => {
     await act(async () => { storage.setState({ machineListStatusByServerId: { srv_build: 'idle' } }); });
     expect(controllerScope.getCurrent().status).toBe('idle');
     await controllerScope.unmount();
-    const screen = await renderPicker(
-      <MachineProvisionerPicker serverId={scopeId} />,
-    );
+    function NamedOfflinePicker() {
+      const scope = useManagedControllerScope({ serverId: scopeId, preferred: { machineId: 'asleep', installationId: 'installation' }, testIDPrefix: 'managed-picker.controller' });
+      return <>{scope.chip}<MachineProvisionerPicker serverId={scopeId} scope={scope} /></>;
+    }
+    const screen = await renderPicker(<NamedOfflinePicker />);
     expect(
       screen.findByTestId('managed-picker.controller.chip'),
     ).not.toBeNull();
@@ -414,6 +477,7 @@ describe('provisioner picker demand', () => {
     function PageWithHeaderScope() {
       const scope = useManagedControllerScope({
         serverId,
+        preferred: { machineId: 'asleep', installationId: 'installation' },
         testIDPrefix: 'page.controller',
       });
       return (

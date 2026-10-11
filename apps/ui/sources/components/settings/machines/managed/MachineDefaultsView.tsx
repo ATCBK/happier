@@ -14,7 +14,10 @@ import {
 import {
   SettingAnchor,
   SettingRow,
+  SettingSection,
 } from '@/components/settings/shell/SettingRow';
+import { APPEARANCE_SETTINGS } from '@/components/settings/appearance/appearanceSettings';
+import { MachineSummaryAppearanceSection } from '@/components/machines/summary/MachineSummaryAppearanceSection';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { useDeclaredSettingsWrite } from '@/components/settings/shell/useDeclaredSettingsWrite';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -27,7 +30,7 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Switch } from '@/components/ui/forms/Switch';
 import { useSetting } from '@/sync/domains/state/storage';
-import { useMachineListForServer } from '@/sync/domains/state/storage';
+import { BUNDLED_MACHINE_PROVISIONER_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
@@ -39,8 +42,6 @@ import {
   readMachineRetentionDefaultsModel,
 } from '../machinesDefaultsSettings';
 import { ManagedMachineKeepControl } from './ManagedMachineKeepControl';
-import { useManagedProvisioners } from './useManagedProvisioners';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { useManagedProvisionerPresentation } from './useManagedProvisionerPresentation';
 import { projectManagedRetentionProviders } from './managedRetentionProviders';
 import {
@@ -79,16 +80,9 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
   const router = useRouter();
   const execution = useMountedActionExecution(activeHome.serverId);
   const writeSetting = useDeclaredSettingsWrite(execution);
-  const machines = useMachineListForServer(activeHome.serverId);
-  // Only a controller that is online can answer; an offline one would hold every name until it returns.
-  const controllers = React.useMemo(() => (machines ?? []).flatMap(machine => machine.installationId && isMachineOnline(machine)
-    ? [{ machineId: machine.id, installationId: machine.installationId }] : []), [machines]);
-  const provisioners = useManagedProvisioners(activeHome.serverId, undefined, controllers);
   const { localized } = useManagedProvisionerPresentation({ serverId: activeHome.serverId });
-  const providerNames = React.useMemo(() => projectManagedRetentionProviders(provisioners.provisioners, localized), [provisioners.provisioners, localized]);
-  // Installed provisioners are per controller (no Home-global catalog), so names arrive after the
-  // controllers answer. While they load, each row holds its subtitle line so nothing moves on arrival.
-  const namesLoading = provisioners.loading;
+  const providerNames = React.useMemo(() => projectManagedRetentionProviders(
+    Object.values(BUNDLED_MACHINE_PROVISIONER_DECLARATIONS), localized), [localized]);
   const creationEnabled = useSetting(
     'managedMachineCreationEnabled',
   );
@@ -137,7 +131,7 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
           testID="settings.machineDefaults.category.header"
           alwaysShowTitle
           title={retentionCategoryTitle(focusedModel.category)}
-          description={providerList(providerNames[focusedModel.category], namesLoading)}
+          description={providerList(providerNames[focusedModel.category])}
         />
         <ItemGroup>
           <CategoryKeepControl model={focusedModel} write={write} disabled={disabled} />
@@ -168,19 +162,19 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
       >
         {categories.map((model) =>
           compact ? (
-            <CategoryPushRow key={model.category} model={model} providers={providerList(providerNames[model.category], namesLoading)} />
+            <CategoryPushRow key={model.category} model={model} providers={providerList(providerNames[model.category])} />
           ) : (
             <CategoryDisclosure
               key={model.category}
               model={model}
-              providers={providerList(providerNames[model.category], namesLoading)}
+              providers={providerList(providerNames[model.category])}
               write={write}
               disabled={disabled}
             />
           ),
         )}
       </ItemGroup>
-      {/* A rare, consequential switch: after the policies people tune, as the lab's last section. */}
+      {/* A rare, consequential switch: after the policies people tune (lab m-defaults). */}
       <ItemGroup title={t('managedMachines.creation.sectionTitle')}>
         <SettingRow
           testID="settings.machineDefaults.creationEnabled"
@@ -197,6 +191,11 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
           }
         />
       </ItemGroup>
+      {/* How every machine is summarized on this device (found from Appearance too): a
+          device-local display preference, after the Account's policies (lab m-defaults ends on Creating machines). */}
+      <SettingSection section={APPEARANCE_SETTINGS.sectionRefs.machineSummary}>
+        <MachineSummaryAppearanceSection phone={compact} />
+      </SettingSection>
     </ItemList>
   );
 });
@@ -301,8 +300,7 @@ function CategoryKeepControl(
   );
 }
 
-/** The providers a category covers, as a plain list ("Lima, Lume, Cua"); a held line while they load. */
-function providerList(names: readonly string[], loading: boolean): string | undefined {
-  if (names.length > 0) return names.join(', ');
-  return loading ? '\u00a0' : undefined;
+/** The declared machine kinds a category covers, independent of controller availability. */
+function providerList(names: readonly string[]): string | undefined {
+  return names.length > 0 ? names.join(', ') : undefined;
 }

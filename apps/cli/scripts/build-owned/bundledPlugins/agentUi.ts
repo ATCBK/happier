@@ -486,6 +486,7 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
   lines.push('import type { PluginAgentCliMetadata, PluginAgentContributionV2, PluginContributionIdentityV1 } from \'@happier-dev/protocol\';');
   lines.push('import type { PluginSettingsContributionV2 } from \'@happier-dev/protocol/plugins/contributions/settings\';');
   lines.push('import type { ProviderContributionV1 } from \'@happier-dev/protocol/providers/contributions\';');
+  lines.push('import type { MachineProvisionerContributionV1 } from \'@happier-dev/protocol/plugins/contributions/machineProvisioners\';');
   lines.push('import type { PluginConnectedAccountDescriptorContributionV2 } from \'@happier-dev/protocol\';');
   lines.push(usesGeneratedSvgIcons
     ? 'import type { AgentIconSvgXmlResolver, AgentUiConfig } from \'./registryUi\';'
@@ -585,6 +586,16 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
     for (const descriptor of entry.manifest.contributes.connectedAccountDescriptors ?? []) {
       const service = { pluginId: entry.pluginId, localId: descriptor.id };
       lines.push(`    ${renderTsStringLiteral(`${service.pluginId}/${service.localId}`)}: ${JSON.stringify({ service, descriptor })},`);
+    }
+  }
+  lines.push('});');
+  lines.push('');
+  lines.push('/** Declared machine kinds and billing; these facts do not grant controller availability or execution. */');
+  lines.push('export const BUNDLED_MACHINE_PROVISIONER_DECLARATIONS: Readonly<Record<string, Readonly<{ contribution: PluginContributionIdentityV1; descriptor: MachineProvisionerContributionV1 }>>> = Object.freeze({');
+  for (const entry of params.pluginPackages) {
+    for (const descriptor of entry.manifest.contributes.machineProvisioners ?? []) {
+      const contribution = { pluginId: entry.pluginId, localId: descriptor.id };
+      lines.push(`    ${renderTsStringLiteral(`${contribution.pluginId}/${contribution.localId}`)}: ${JSON.stringify({ contribution, descriptor })},`);
     }
   }
   lines.push('});');

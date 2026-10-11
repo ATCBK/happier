@@ -4,6 +4,7 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -26,6 +27,44 @@ const resource = { id: 'resource', homeId: 'srv_history', custodianAccountId: 'o
     retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false, archivedAt: 0 } as const;
 
 describe('preset collection and history through Actions', () => {
+    it('settles the Machines page preset inventory without a controller catalog or managed-resource answer', async () => {
+        const serverId = await harness.addHome({ name: 'History', serverUrl: 'https://history.example', serverIdentityId: 'srv_history', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { srv_history: [] }, machineListStatusByServerId: { srv_history: 'idle' } });
+        harness.answer(serverId, '/v1/actions/machines.provisioners.list', { respondAfter: new Promise<void>(() => {}) });
+        harness.answer(serverId, '/v1/machines/managed/actions/list', { respondAfter: new Promise<void>(() => {}) });
+        harness.answer(serverId, '/v1/machines/presets/list', { body: { kind: 'listed', presets: [preset] } });
+        const { useMachinesSettingsViewModel } = await import('../machinesSettingsViewModel');
+        const rendered = await renderHook(() => useMachinesSettingsViewModel());
+        await waitForHomeGovernance(() => expect(Object.values(rendered.getCurrent().presetsByServerId).flat()).toEqual([preset]));
+        expect(Object.values(rendered.getCurrent().presetInventory.statesByServerId)).toEqual([
+            expect.objectContaining({ loading: false, error: null, value: [preset] }),
+        ]);
+        expect(harness.requests.some(request => request.path.includes('/actions/machines.provisioners.'))).toBe(false);
+        await rendered.unmount();
+    });
+    it('settles a failed server preset read without waiting for a controller', async () => {
+        const serverId = await harness.addHome({ name: 'History', serverUrl: 'https://history.example', serverIdentityId: 'srv_history', accountId: 'owner', currentAccount: true });
+        harness.answer(serverId, '/v1/machines/presets/list', { status: 503, body: { kind: 'refused', code: 'unavailable' } });
+        const rendered = await renderHook(() => useMachinePresets([serverId]));
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().statesByServerId[serverId]).toMatchObject({ loading: false, value: null }));
+        expect(rendered.getCurrent().statesByServerId[serverId]?.error).toBeTruthy();
+        expect(harness.requests.some(request => request.path.includes('/actions/machines.provisioners.'))).toBe(false);
+        await rendered.unmount();
+    });
+    it.each(['profile', 'portable'] as const)('loads server presets with silent controllers through a %s Home identifier', async identifier => {
+        const serverId = await harness.addHome({ name: 'History', serverUrl: 'https://history.example', serverIdentityId: 'srv_history', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { srv_history: [createMachineFixture({ id: 'controller', installationId: 'installation', activeAt: Date.now() })] },
+            machineListStatusByServerId: { srv_history: 'idle' } });
+        harness.answer(serverId, '/v1/actions/machines.provisioners.list', { respondAfter: new Promise<void>(() => {}) });
+        harness.answer(serverId, '/v1/machines/presets/list', { body: { kind: 'listed', presets: [preset] } });
+        const scopeId = identifier === 'profile' ? serverId : 'srv_history';
+        const rendered = await renderHook(() => useMachinePresets([scopeId]));
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().statesByServerId[scopeId]).toMatchObject({ loading: false, error: null, value: [preset] }));
+        expect(harness.requests.some(request => request.path.includes('/actions/machines.provisioners.'))).toBe(false);
+        await rendered.unmount();
+    });
     it('settles a signed-out preset collection as unavailable rather than loading forever', async () => {
         const serverId = await harness.addHome({ name: 'History', serverUrl: 'https://history.example', serverIdentityId: 'srv_history', accountId: null });
         const rendered = await renderHook(() => useMachinePresets([serverId]));

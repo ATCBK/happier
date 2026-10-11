@@ -30,7 +30,7 @@ function provisioner(title: string, location: 'local' | 'cloud'): MachineProvisi
     } };
 }
 
-describe('Machine Defaults installed provisioner names', () => {
+describe('Machine Defaults declarations and controller-local availability', () => {
     it.each(['creation', 'retention'] as const)('honors the Account settings.set policy when changing %s', async (operation) => {
         const { storage } = await import('@/sync/domains/state/storage');
         const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/actionSettings');
@@ -116,7 +116,7 @@ describe('Machine Defaults installed provisioner names', () => {
         expect(getActiveServerSnapshot().serverId).toBe(focusedHome);
         storage.setState({ machineListByServerId: {
             [focusedHome]: [createMachineFixture({ id: 'local-controller', installationId: 'local-installation', activeAt: Date.now() }), createMachineFixture({ id: 'cloud-controller', installationId: 'cloud-installation', activeAt: Date.now() }), createMachineFixture({ id: 'guest-without-installation' }),
-                // An offline controller cannot answer, so Defaults does not wait on it; a failing one does not hide the rest.
+        // Installed availability is controller-local and remains separate from Defaults declarations.
                 createMachineFixture({ id: 'offline-controller', installationId: 'offline-installation', active: false, activeAt: 1 }),
                 createMachineFixture({ id: 'failing-controller', installationId: 'failing-installation', activeAt: Date.now() })],
             [otherHome]: [createMachineFixture({ id: 'other-controller', installationId: 'other-installation' })],
@@ -155,10 +155,9 @@ describe('Machine Defaults installed provisioner names', () => {
         await catalog.unmount();
         const { MachineDefaultsView } = await import('./MachineDefaultsView');
         const screen = await renderScreen(<MachineDefaultsView />);
-        await vi.waitFor(() => expect(home.requests.filter(request => request.path === '/v1/actions/machines.provisioners.list').length > 0
-            || screen.getTextContent().includes('Until I delete it')).toBe(true));
-        await vi.waitFor(() => expect(screen.getTextContent()).toContain('Local guest'));
-        expect(screen.getTextContent()).toContain('Cloud service');
+        expect(screen.getTextContent()).toContain('Lima');
+        expect(screen.getTextContent()).toContain('Hetzner');
+        expect(home.requests.filter(request => request.path === '/v1/actions/machines.provisioners.list')).toHaveLength(initialCatalogReads * 2 + 1);
         expect(home.requests.filter(request => request.path === '/v1/actions/machines.provisioners.list').map(request => request.body)).toEqual(expect.arrayContaining([
             expect.objectContaining({ target: { kind: 'machine', machineId: 'local-controller' }, input: { homeId: 'srv_build', controller: { machineId: 'local-controller', installationId: 'local-installation' } } }),
             expect.objectContaining({ target: { kind: 'machine', machineId: 'cloud-controller' }, input: { homeId: 'srv_build', controller: { machineId: 'cloud-controller', installationId: 'cloud-installation' } } }),
@@ -171,7 +170,7 @@ describe('Machine Defaults installed provisioner names', () => {
         await screen.unmount();
     });
 
-    it('shows the names of the controllers that answered while another online controller has not answered yet', async () => {
+    it('shows declared names without demanding any controller catalog, including silent online controllers', async () => {
         const { storage } = await import('@/sync/domains/state/storage');
         const previous = storage.getState();
         const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId: 'srv_slow' } } });
@@ -200,7 +199,8 @@ describe('Machine Defaults installed provisioner names', () => {
         ] } });
         const { MachineDefaultsView } = await import('./MachineDefaultsView');
         const screen = await renderScreen(<MachineDefaultsView />);
-        await vi.waitFor(() => expect(screen.getTextContent()).toContain('Local guest'));
+        expect(screen.getTextContent()).toContain('Lima');
+        expect(home.requests.filter(request => request.path === '/v1/actions/machines.provisioners.list')).toEqual([]);
         await screen.unmount();
     });
 });

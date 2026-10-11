@@ -137,6 +137,15 @@ function detailOf(screen: Awaited<ReturnType<typeof render>>, testID: string): u
 }
 
 describe('MachineDefaultsView', () => {
+  it('names declared provisioner kinds without a controller or a live catalog answer', async () => {
+    const screen = await render();
+    const local = screen.findAll(node => node.props?.testID === 'settings.machineDefaults.local.header'
+      && node.props?.subtitle !== undefined)[0]?.props.subtitle;
+    expect(local).toContain('Lima');
+    expect(local).toContain('Lume');
+    expect(local).toContain('Cua');
+    expect(harness.requests.some(request => request.path.includes('/machines.provisioners.'))).toBe(false);
+  });
   it('rebases a category choice after another client changes a different category', async () => {
     const screen = await render();
     await act(async () => { screen.pressByTestId('settings.machineDefaults.local.header'); });

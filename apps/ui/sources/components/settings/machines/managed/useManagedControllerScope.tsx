@@ -1,14 +1,10 @@
 import * as React from 'react';
 import type { ManagedControllerV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { isMachineReplaced } from '@happier-dev/protocol/machines/identity/canonicalMachineId';
 
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
-import {
-  readLocalDaemonSharedState,
-  subscribeLocalDaemonSharedState,
-} from '@/components/settings/machines/localControl/localDaemonSharedState';
-import type { LocalDaemonStatusData } from '@/components/settings/machines/localControl/useLocalDaemonControl';
-import { getSystemTasksRunner } from '@/components/systemTasks/systemTasksRuntime';
-import { resolveMachineAdministrationTargetState } from '@/sync/domains/machines/administration/targetSelection';
+import { useThisComputerMachineId } from '@/components/machines/add/useMachineAddPaths';
+import { isMachineAdministrationCandidateSelectable, resolveMachineAdministrationTargetState } from '@/sync/domains/machines/administration/targetSelection';
 import {
   useMachineAdministrationTargetPickerRows,
   resolveFreshMachineAdministrationExecutionTarget,
@@ -38,12 +34,12 @@ export type ManagedControllerScope = Readonly<{
  * (lab `m-add` / `m-config`). It is shown through the canonical header chip
  * (`MachineAdministrationTargetSelector presentation="chip"`), offering only machines that can manage,
  * and starts on a sensible machine so the first frame is the catalog: this computer when it can
- * manage, else the first online candidate, else the first candidate. The choice is page-local, as the
+ * manage online, else a deterministic online candidate. The choice is page-local, as the
  * draft it scopes is.
  */
-/** A machine that can run provider calls for this Home: it has an installation and is not revoked. */
+/** Installed controllers, including asleep ones, but never retired identities. */
 export function isManagedControllerCandidate(machine: Machine): boolean {
-  return !!machine.installationId && !machine.revokedAt;
+  return !!machine.installationId && !machine.revokedAt && !isMachineReplaced(machine);
 }
 
 export function useManagedControllerScope(
@@ -60,7 +56,16 @@ export function useManagedControllerScope(
   const activeAccountScope = useActiveServerAccountScope();
   const rows = useMachineAdministrationTargetPickerRows();
   const thisMachineId = useThisComputerMachineId();
-  const [chosen, setChosen] = React.useState<ManagedControllerV1 | undefined>();
+  const [chosen, setChosen] = React.useState<Readonly<{
+    serverId: string; accountId: string | undefined; controller: ManagedControllerV1; explicit: boolean;
+  }>>();
+  const accountId = activeAccountScope?.accountId;
+  const scopedChoice = chosen && chosen.accountId === accountId && areServerProfileIdentifiersEquivalent(chosen.serverId, input.serverId)
+    ? chosen : undefined;
+  const preferredMachineId = input.preferred?.machineId;
+  const preferredInstallationId = input.preferred?.installationId;
+  const retained = scopedChoice?.explicit ? scopedChoice.controller
+    : preferredMachineId && preferredInstallationId ? input.preferred : scopedChoice?.controller;
   const { onSelect } = input;
 
   const eligible = React.useMemo(
@@ -73,43 +78,29 @@ export function useManagedControllerScope(
       rows.filter(
         (row) =>
           areServerProfileIdentifiersEquivalent(row.serverId, input.serverId) &&
-          eligible.some(
+          (row.candidate.target.machineId === retained?.machineId || eligible.some(
             (machine) => machine.id === row.candidate.target.machineId,
-          ),
+          )),
       ),
-    [eligible, input.serverId, rows],
+    [eligible, input.serverId, rows, retained?.machineId],
   );
   // Kept identity-stable by its ids: presence updates must not restart the reads it scopes.
-  const preferredMachineId = input.preferred?.machineId;
-  const preferredInstallationId = input.preferred?.installationId;
   const preferred = React.useMemo(() => {
-    const named = (candidate: ManagedControllerV1 | undefined) =>
-      candidate &&
-      eligible.find(
-        (machine) =>
-          machine.id === candidate.machineId &&
-          machine.installationId === candidate.installationId,
-      );
-    const machine =
-      named(chosen) ||
-      named(
-        preferredMachineId && preferredInstallationId
-          ? { machineId: preferredMachineId, installationId: preferredInstallationId }
-          : undefined,
-      ) ||
-      eligible.find((candidate) => candidate.id === thisMachineId) ||
-      eligible.find((candidate) =>
+    // A draft keeps its exact installation even when asleep, missing or replaced; fresh execution
+    // admission decides whether it can run. Inventory churn must never silently redirect it.
+    if (retained) return retained;
+    const online = eligible.filter((candidate) =>
         scopedRows.some(
           (row) =>
             row.candidate.target.machineId === candidate.id &&
-            row.candidate.availability === 'online',
+            isMachineAdministrationCandidateSelectable(row.candidate),
         ),
-      ) ||
-      eligible[0];
+    ).sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+    const machine = online.find((candidate) => candidate.id === thisMachineId) ?? online[0];
     return machine?.installationId
       ? { machineId: machine.id, installationId: machine.installationId }
       : undefined;
-  }, [chosen, eligible, preferredInstallationId, preferredMachineId, scopedRows, thisMachineId]);
+  }, [retained?.machineId, retained?.installationId, eligible, scopedRows, thisMachineId]);
   const controllerMachineId = preferred?.machineId;
   const controllerInstallationId = preferred?.installationId;
   const controller = React.useMemo(
@@ -119,6 +110,9 @@ export function useManagedControllerScope(
         : undefined,
     [controllerMachineId, controllerInstallationId],
   );
+  React.useEffect(() => {
+    if (!retained && controller) setChosen({ serverId: input.serverId, accountId, controller, explicit: false });
+  }, [retained?.machineId, retained?.installationId, controller, input.serverId, accountId]);
 
   const selection =
     React.useMemo((): MachineAdministrationTargetSelectionV1 => {
@@ -145,6 +139,9 @@ export function useManagedControllerScope(
         selectedTargetServerMatchesActiveAccount: matchesAccount,
         canExecute: resolveExecutionTarget() !== null,
         selectTarget: (target) => {
+          if (!scopedRows.some(row => row.candidate.target.machineId === target.machineId
+            && row.candidate.target.serverIdentityId === target.serverIdentityId
+            && isMachineAdministrationCandidateSelectable(row.candidate))) return;
           const machine = eligible.find(
             (candidate) => candidate.id === target.machineId,
           );
@@ -153,13 +150,13 @@ export function useManagedControllerScope(
             machineId: machine.id,
             installationId: machine.installationId,
           };
-          setChosen(next);
+          setChosen({ serverId: input.serverId, accountId, controller: next, explicit: true });
           onSelect?.(next);
         },
         clearTarget: () => {},
         resolveExecutionTarget,
       };
-    }, [controller?.machineId, controller?.installationId, eligible, onSelect, scopedRows, activeAccountScope?.serverId]);
+    }, [controller?.machineId, controller?.installationId, eligible, onSelect, scopedRows, activeAccountScope?.serverId, input.serverId, accountId]);
 
   const chip =
     scopedRows.length > 0 ? (
@@ -173,25 +170,9 @@ export function useManagedControllerScope(
     ) : null;
   return {
     controller,
-    machine: eligible.find((machine) => machine.id === controller?.machineId),
+    machine: machines?.find((machine) => machine.id === controller?.machineId),
     hasCandidates: eligible.length > 0,
     chip,
     selection,
   };
-}
-
-/** This computer's machine id, from the one shared local daemon status (no read of its own). */
-function useThisComputerMachineId(): string | null {
-  const runner = getSystemTasksRunner();
-  const subscribe = React.useCallback(
-    (listener: () => void) => subscribeLocalDaemonSharedState(runner, listener),
-    [runner],
-  );
-  const read = React.useCallback(
-    () => readLocalDaemonSharedState<LocalDaemonStatusData>(runner),
-    [runner],
-  );
-  return (
-    React.useSyncExternalStore(subscribe, read, read).status?.machineId ?? null
-  );
 }
