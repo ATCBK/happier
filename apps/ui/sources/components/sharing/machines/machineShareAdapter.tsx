@@ -64,18 +64,25 @@ export function createMachineShareAdapter(input: Readonly<{
             </Text>) : null}
         </View>,
         sections: context => {
+            // The trust fact is said to whoever reads it: the owner learns what sharing exposes of their
+            // operating-system user; someone it is shared with learns whose user their work runs as.
+            const own = controller.viewerRow;
             const leading: SelectionListSectionDescriptor[] = [{ kind: 'static', id: 'machine-trust', options: [{
-                id: 'machine-trust', label: t('machines.sharing.description', { machine }), disabled: true,
+                id: 'machine-trust', label: t(own ? 'machines.sharing.recipientDescription' : 'machines.sharing.description', { machine }), disabled: true,
                 content: <MachineShareTrustDisclosure idPrefix={context.idPrefix}
-                    lead={t('machines.sharing.trustedOsLead', { machine })}
-                    detail={t('machines.sharing.trustedOsDetail', { machine })}
-                    legend={[{ label: t('machines.sharing.manage'), text: t('machines.sharing.manageHelp', { machine }) }]}
+                    lead={t(own ? 'machines.sharing.recipientTrustLead' : 'machines.sharing.trustedOsLead', { machine })}
+                    detail={t(own ? 'machines.sharing.recipientTrustDetail' : 'machines.sharing.trustedOsDetail', { machine })}
+                    // What Manage adds matters only to someone who can give it.
+                    legend={controller.response?.canManage ? [{ label: t('machines.sharing.manage'), text: t('machines.sharing.manageHelp', { machine }) }] : []}
                     notes={controller.response?.access.resourceMode === 'plain' ? [t('machines.sharing.plain')] : []} />,
             }] }];
-            const own = controller.viewerRow;
+            // Access that comes through a Team or Group names it; direct access needs no line.
+            const through = own ? controller.inherited[0] : undefined;
             if (own && !context.directoryKind) leading.push({ kind: 'static', id: 'machine-own-access', title: t('machines.sharing.yourAccess'), options: [{
                 id: 'machine-viewer-access', testID: `${context.idPrefix}machine-share-your-access`, label: own.principal.displayName,
-                subtitle: t('machines.sharing.ownHistory', { machine }), onSelect: () => context.onExpand('machine-viewer-access'),
+                ...(through ? { subtitle: t('machines.sharing.through', { audience: through.displayName
+                    ?? t(through.principal.kind === 'group' ? 'shareSheet.group' : 'shareSheet.team') }) } : {}),
+                onSelect: () => context.onExpand('machine-viewer-access'),
                 rightAccessoryOutsidePressable: true,
                 rightAccessory: () => <ShareLevelControl row={own} adapter={adapter} actions={controller.actions}
                     onExpand={() => context.onExpand('machine-viewer-access')} editable={false}
