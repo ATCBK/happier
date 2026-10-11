@@ -6,6 +6,8 @@ import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/proto
 import { sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { openExternalActionResponseV2, sealExternalActionRequestV2, type ExternalActionEncryptionBindingV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/metadata';
+import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import { readAuthTokenProvenance } from '@happier-dev/protocol/auth/authToken';
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { parseTokenPayload } from '@/utils/auth/parseToken';
@@ -55,6 +57,7 @@ export async function executeOriginalAccountActionTransport(params: Readonly<{
     account: LazyActionAccountContext;
     binding: ExternalActionEncryptionBindingV2;
     input: unknown;
+    authority?: ActionRequiredAuthority;
     material?: Material;
     managedAdmission?: ExternalActionRequestEnvelopeV2['managedAdmission'];
     handoffAdmission?: ExternalActionRequestEnvelopeV2['handoffAdmission'];
@@ -65,6 +68,8 @@ export async function executeOriginalAccountActionTransport(params: Readonly<{
     machineCustody?: MachineCustody;
 }>): Promise<ActionExecuteResult> {
     const { account, binding, material } = params;
+    const headers = { 'Content-Type': 'application/json',
+        ...(params.authority === 'account_automation' ? { [AUTHORITY_CEILING_HEADER_V1]: params.authority } : {}) };
     account.assertCurrent();
     const invalid = params.invalidResponseCode ?? 'invalid_action_output';
     const custody = params.machineCustody;
@@ -88,7 +93,7 @@ export async function executeOriginalAccountActionTransport(params: Readonly<{
     if (custody && (foreignGuest || finite)) {
         if (binding.target.kind !== 'machine' || !('authentication' in binding)) return failure('admission_unavailable');
         const mint = await account.request(bindExternalActionExecutionAuthorizationHttpPathV1(binding.actionId), {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers,
             body: JSON.stringify(ExternalActionExecutionAuthorizationRequestV1Schema.parse({ v: 1,
                 machineId: binding.target.machineId, envelope })),
             ...(params.signal ? { signal: params.signal } : {}),
@@ -146,7 +151,7 @@ export async function executeOriginalAccountActionTransport(params: Readonly<{
         params.signal?.throwIfAborted();
     }
     const response = await account.request(`/v1/actions/${binding.actionId}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request),
+        method: 'POST', headers, body: JSON.stringify(request),
         ...(params.signal ? { signal: params.signal } : {}),
     }, { includeAuth: true, retry: 'none' });
     let payload: unknown;
@@ -173,6 +178,7 @@ type OriginalAccountMachineActionParams = Readonly<{
     requestId: string;
     machineId: string;
     input: unknown;
+    authority?: ActionRequiredAuthority;
     handoffAdmission?: ExternalActionRequestEnvelopeV2['handoffAdmission'];
     signal?: AbortSignal;
 }>;
@@ -198,7 +204,7 @@ export async function executeOriginalAccountMachineAction(params: OriginalAccoun
     if ((foreignCustody || finite) && !row.installationId) return failure('content_unavailable');
     if (foreignCustody && !row.installationPublicKey) return failure('content_unavailable');
     if (accountMode === 'e2ee' && !encryption) return failure('content_unavailable');
-    return await executeOriginalAccountActionTransport({ account, input: params.input,
+    return await executeOriginalAccountActionTransport({ account, input: params.input, authority: params.authority,
         // Open owns checkout effects; an untrusted post-dispatch response cannot
         // authorize a fresh materialization. Read Actions keep their output errors.
         ...(params.actionId === 'projects.open' ? { invalidResponseCode: 'outcome_unknown' } : {}),

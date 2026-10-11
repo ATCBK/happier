@@ -15,7 +15,7 @@ describe('verified invocation authority', () => {
     expect(resolveInvocationAuthority({ credential: 'terminal', surface: 'rpc', terminalPolicy: 'disallowed' })).toBe('account_automation');
     expect(resolveInvocationAuthority({ credential: 'terminal', surface: 'cli' })).toBe('account_automation');
     expect(resolveInvocationAuthority({ credential: 'account', surface: 'ui' })).toBe('present_user');
-    expect(resolveInvocationAuthority({ credential: 'account', surface: 'voice' })).toBe('present_user');
+    expect(resolveInvocationAuthority({ credential: 'account', surface: 'voice' })).toBe('account_automation');
     for (const surface of ['plugin', 'api'] as const) expect(resolveInvocationAuthority({ credential: 'account', surface })).toBe('account_automation');
     for (const credential of ['terminal', 'api_token', 'plugin', 'agent', 'none'] as const) {
       expect(resolveInvocationAuthority({ credential, surface: 'voice', terminalPolicy: 'allowed' })).toBe('account_automation');

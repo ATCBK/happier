@@ -3,6 +3,7 @@ import { ManagedAdmissionComputeInputV1Schema, ManagedMachineActionInputSchemasV
 import type { ExternalActionEncryptionBindingV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
+import { resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { createManagedMachineActionClient, ManagedMachineActionError } from './managedMachineActions';
 import { executeOriginalAccountActionTransport, executeOriginalAccountMachineAction, readOriginalAccountActionAuthentication,
@@ -22,7 +23,7 @@ export async function executeManagedMachineNativeAction(params: Readonly<{
     account.assertCurrent();
     // The ordinary ingress has no producer for the outer UI approval Artifact's replay custody.
     if (context.bypassApprovals || (context.surface !== 'ui' && context.surface !== 'voice')
-        || context.authority !== 'present_user') return failure('admission_unavailable');
+        || context.authority !== resolveInvocationAuthority({ credential: 'account', surface: context.surface })) return failure('admission_unavailable');
     if (!account.serverIdentityId || !context.actionRequestId) return failure('admission_unavailable');
     const authentication = readOriginalAccountActionAuthentication(account.credentials.token);
     if (!authentication) return failure('admission_unavailable');
@@ -43,7 +44,7 @@ export async function executeManagedMachineNativeAction(params: Readonly<{
     if (actionId === 'machines.environment.apply') {
         const selected = ManagedMachineActionInputSchemasV1['machines.environment.apply'].parse(input);
         return validateExecution(await executeOriginalAccountMachineAction({ account, actionId, input: selected,
-            machineId: selected.machineId, requestId: context.actionRequestId,
+            machineId: selected.machineId, requestId: context.actionRequestId, authority: context.authority,
             ...(params.signal ? { signal: params.signal } : {}) }));
     }
     let controller = review?.controller ?? ('controller' in input ? input.controller : undefined);
@@ -99,7 +100,9 @@ export async function executeManagedMachineNativeAction(params: Readonly<{
         const { agentStart, ...compute } = acquire;
         return { actionId: 'machines.managed.acquire' as const, input: ManagedAdmissionComputeInputV1Schema.parse(compute), continuationPresent: Boolean(agentStart) };
     })() : undefined;
-    const execution = await executeOriginalAccountActionTransport({ account, binding, input,
+    // Narrow the authenticated Account carrier before the installed daemon's
+    // canonical Action policy creates the Ask. Human replay stays with that owner.
+    const execution = await executeOriginalAccountActionTransport({ account, binding, input, authority: context.authority,
         ...(material ? { material } : {}), ...(managedAdmission ? { managedAdmission } : {}),
         ...(machineCustody ? { machineCustody } : {}),
         ...(params.signal ? { signal: params.signal } : {}),

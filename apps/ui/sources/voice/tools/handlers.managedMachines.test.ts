@@ -17,6 +17,7 @@ import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeature
 import { resetScopedMachineTransportCacheForTests } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool';
 import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
 import { createVoiceToolHandlers } from './handlers';
+import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 
 vi.mock('socket.io-client', async original =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
@@ -177,7 +178,7 @@ describe('Machines advertised UI and eligible Voice execution', () => {
   });
 
   it.each(['machines.provisioners.options', 'machines.managed.acquire', 'machines.managed.power.set'] as const)(
-    'invokes managed Voice %s through captured present-user native Account admission', async actionId => {
+    'requests managed Voice %s with automation authority at the native approval owner', async actionId => {
       const homeId = `srv_voice_${actionId.replaceAll('.', '_')}`;
       const controller = { machineId: 'controller', installationId: 'installation' };
       const contribution = { pluginId: 'happier.machine.lima', localId: 'lima' };
@@ -210,6 +211,7 @@ describe('Machines advertised UI and eligible Voice execution', () => {
         if (request.path === '/v1/machines') return Response.json([{ ...createPlainMachineRowFixture({ id: controller.machineId,
           accountId: 'owner' }), installationId: controller.installationId }]);
         if (request.path !== `/v1/actions/${actionId}`) return undefined;
+        expect(request.headers.get(AUTHORITY_CEILING_HEADER_V1)).toBe('account_automation');
         const envelope = request.body as { requestId: string };
         return Response.json({ v: 1, actionId, requestId: envelope.requestId, execution: { ok: true, result: output } });
       } });
@@ -219,7 +221,7 @@ describe('Machines advertised UI and eligible Voice execution', () => {
         const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
         const toolName = actionId.replaceAll('.', '_');
         expect(handlers[toolName]).toBeTypeOf('function');
-        const policyContext = { surface: 'voice' as const, authority: 'present_user' as const };
+        const policyContext = { surface: 'voice' as const, authority: 'account_automation' as const };
         expect(isApprovalRequiredByActionsSettings(actionId, { v: 1, actions: {} }, policyContext))
           .toBe(actionId !== 'machines.provisioners.options');
         expect(JSON.parse(await handlers[toolName]!(input, { serverId: homeId }))).toEqual({ ok: true, ...output });

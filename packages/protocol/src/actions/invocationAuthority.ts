@@ -19,7 +19,7 @@ export function resolveInvocationAuthority(input: Readonly<{
   surface: keyof ActionSurfaces;
   terminalPolicy?: TerminalPresentUserPolicy;
 }>): ActionRequiredAuthority {
-  if (input.credential === 'account' && (input.surface === 'ui' || input.surface === 'voice' || input.surface === 'rpc')) return 'present_user';
+  if (input.credential === 'account' && (input.surface === 'ui' || input.surface === 'rpc')) return 'present_user';
   if (input.credential === 'terminal'
     && input.terminalPolicy === 'allowed'
     && (input.surface === 'cli' || input.surface === 'rpc')) return 'present_user';
