@@ -10,6 +10,7 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { listServerProfiles } from '@/sync/domains/server/serverProfiles';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
@@ -43,7 +44,7 @@ export function MachineProvisionerPicker(props: MachineProvisionerPickerProps) {
     useServerProfilesGeneration();
     const [selectedHome, setSelectedHome] = React.useState(props.serverId);
     if (!selectedHome) return <View testID="managed-picker"><ItemGroup title={t('managedMachines.receipt.joins')}>
-        {listServerProfiles().map(home => <Item key={home.id} testID={`managed-picker.home:${home.id}`} title={home.name} onPress={() => setSelectedHome(home.id)} />)}
+        {listServerProfiles().map(home => <Item key={home.id} testID={`managed-picker.home:${home.id}`} title={resolveHomeDisplayLabel(home, home.id)} onPress={() => setSelectedHome(home.id)} />)}
     </ItemGroup></View>;
     const shared = { serverId: selectedHome, presetOnly: props.presetOnly, onSelectProvisioner: props.onSelectProvisioner,
         onSetUpThisComputer: props.onSetUpThisComputer };
@@ -167,7 +168,7 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
     </ItemGroup> : null;
     const setUpThisComputer = props.onSetUpThisComputer ?? (() => router.push('/settings/machines/add?path=thisComputer' as never));
     return <View testID="managed-picker">
-        {approval.approvalId ? <AttentionBanner title={t('approvals.title')} description={t('approvals.status.open')}
+        {approval.approvalId ? <AttentionBanner testID="managed-picker.approval" title={t('approvals.title')} description={t('approvals.status.open')}
             action={{ label: t('approvals.details'), onPress: () => router.push(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(props.serverId)}` as never) }} /> : null}
         {!scope.hasCandidates && catalog.error ? <SurfaceStateCard testID="managed-picker.unavailable" kind="error"
             title={t('managedMachines.providers.unavailable')} diagnosticCode={catalog.error} action={{ label: t('common.retry'), onPress: catalog.refresh }} />

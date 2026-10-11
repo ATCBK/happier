@@ -46,6 +46,16 @@ describe('provisioner picker demand', () => {
       .some(node => node.props.children === t('machinePresets.newPreset'))).toBe(true);
     expect(screen.findByTestId(`managed-picker.home:${homeId}`)).not.toBeNull();
   });
+  it('names each Home through the Home label owner, never by its address', async () => {
+    const homeId = await harness.addHome({ name: 'preset-home.example:3011', serverUrl: 'https://preset-home.example:3011', serverIdentityId: 'srv_preset_home', accountId: 'owner', currentAccount: true });
+    const { MachineProvisionerPicker } = await import('./MachineProvisionerPicker');
+    const { resolveHomeDisplayLabel } = await import('@/components/settings/server/homeDisplayName');
+    const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+    const screen = await renderPicker(<MachineProvisionerPicker serverId="" presetOnly />);
+    const row = screen.root.findAll(node => node.props.testID === `managed-picker.home:${homeId}` && node.props.title !== undefined)[0];
+    expect(row?.props.title).toBe(resolveHomeDisplayLabel(getServerProfileById(homeId), homeId));
+    expect(String(row?.props.title)).not.toContain('preset-home.example');
+  });
   it.each([
     { location: 'cloud', credentialFailure: false },
     { location: 'unknown', credentialFailure: false },
