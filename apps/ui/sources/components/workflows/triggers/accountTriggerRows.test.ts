@@ -7,6 +7,7 @@ vi.mock('@/text', async () => {
 });
 
 const { projectAccountTriggerRows } = await import('./accountTriggerRows');
+const { formatClockTime } = await import('./triggerSchedule');
 
 function daily(id: string, scheduleExpr: string, enabled = true) {
     return {
@@ -27,8 +28,8 @@ function set(automationId: string, overrides: Record<string, unknown>): Workflow
 
 describe('projectAccountTriggerRows', () => {
     it('names an inline document with declared inputs without flattening it to a form preset', () => {
-        const base = inline([{ kind: 'step', id: 'digest',
-            document: { text: 'Morning digest\nInclude open issues', references: [], attachments: [] },
+        const base = inline([{ kind: 'step', id: 'digest', name: 'Morning digest',
+            document: { text: 'Summarize project activity and include open issues.', references: [], attachments: [] },
             input: [], result: { kind: 'text' } }]);
         const target = { ...base, definition: { ...base.definition,
             inputs: [{ name: 'topic', valueType: 'string' as const, required: false }] } };
@@ -52,7 +53,9 @@ describe('projectAccountTriggerRows', () => {
         const rows = projectAccountTriggerRows({
             resolveWorkflowTitle: () => null,
             sets: [
-                set('digest', { target: inline(['Morning digest']), triggers: [daily('t1', '0 7 * * *'), daily('t2', '0 19 * * *')] }),
+                set('digest', { target: inline([{ kind: 'step', id: 'digest', name: 'Morning digest',
+                    document: { text: 'Summarize project activity and include open issues.' } }]),
+                    triggers: [daily('t1', '0 7 * * *'), daily('t2', '0 19 * * *')] }),
                 set('off', { target: inline(['Weekly report']), triggers: [daily('t3', '0 9 * * 1', false)] }),
                 set('gone', { health: 'source_unavailable', triggers: [daily('t4', '0 8 * * *')] }),
             ],
@@ -61,12 +64,12 @@ describe('projectAccountTriggerRows', () => {
             {
                 automationId: 'digest',
                 triggerId: 't1',
-                title: 'workflows.triggers.summary.everyDayAt(time=07:00)',
+                title: `workflows.triggers.summary.everyDayAt(time=${formatClockTime({ hour: 7, minute: 0 })})`,
                 glyph: 'clock',
                 subtitle: 'Morning digest',
                 off: false,
             },
-            expect.objectContaining({ automationId: 'digest', triggerId: 't2', title: 'workflows.triggers.summary.everyDayAt(time=19:00)' }),
+            expect.objectContaining({ automationId: 'digest', triggerId: 't2', title: `workflows.triggers.summary.everyDayAt(time=${formatClockTime({ hour: 19, minute: 0 })})` }),
             // Off when every trigger of the set is off, not only when the set is.
             expect.objectContaining({ automationId: 'off', off: true }),
             expect.objectContaining({ automationId: 'gone', subtitle: 'workflows.triggers.row.workflowDeleted' }),

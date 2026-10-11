@@ -6,7 +6,7 @@ import type { TriggerRowOutcome } from './TriggerRow';
 import { readTriggerThen } from './sessionTriggerForm';
 import { resolveTriggerEventGroup, type TriggerEventGroup } from './triggerEventGroups';
 import { formatTriggerSetSummary, formatNextScheduledRun, formatNextScheduledRunAccessibilityLabel, formatTriggerLastOutcome, type ScheduledRunQualifierTime } from './formatTriggerSummary';
-import { workflowBlockReferenceLabel, workflowDefinitionPromptTitle } from '@/sync/domains/workflows/workflowBlockLabel';
+import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
 import { describeWorkflowRunState } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 
@@ -47,20 +47,20 @@ function groupRank(group: TriggerEventGroup): number {
 export function describeTriggerTarget(target: TriggerTargetV1 | undefined, resolveWorkflowTitle: (ref: string) => string | null): string {
     if (target === undefined) return t('workflows.triggers.row.workflowDeleted');
     const then = readTriggerThen(target);
+    const firstBlock = target.kind === 'inline' ? target.definition.blocks[0] : undefined;
     switch (then.kind) {
         case 'runWorkflow':
             return then.ref === null ? t('workflows.triggers.then.runWorkflow') : resolveWorkflowTitle(then.ref) ?? then.ref;
         case 'sendPrompt':
-            return then.prompt.split('\n')[0]!.trim() || t('workflows.triggers.then.sendPrompt');
+            return firstBlock ? workflowBlockReferenceLabel(firstBlock, t('workflows.triggers.then.sendPrompt'))
+                : t('workflows.triggers.then.sendPrompt');
         case 'notifyMe':
             return t('workflows.triggers.then.notifyMe');
         case 'doAction':
             return t('workflows.triggers.then.doAction');
         case 'kept':
-            if (target.kind !== 'inline') return t('workflows.triggers.then.runWorkflow');
-            return workflowDefinitionPromptTitle(target.definition)
-                ?? (target.definition.blocks[0] ? workflowBlockReferenceLabel(target.definition.blocks[0])
-                    : t('workflows.triggers.row.steps', { count: 0 }));
+            return firstBlock ? workflowBlockReferenceLabel(firstBlock)
+                : t('workflows.triggers.row.steps', { count: 0 });
     }
 }
 

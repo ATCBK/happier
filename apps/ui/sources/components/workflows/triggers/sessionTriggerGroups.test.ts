@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { normalizeWorkflowIngress, type WorkflowTriggerSetV1 } from '@happier-dev/protocol';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { WORKFLOW_STARTER_EXAMPLES_V1, materializeWorkflowStarterExample } from '@happier-dev/protocol/workflows/builtins/examples';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -9,6 +10,7 @@ vi.mock('@/text', async () => {
 
 const { projectSessionTriggerGroups, describeLegacyTriggerSet } = await import('./sessionTriggerGroups');
 const { formatClockTime } = await import('./triggerSchedule');
+const { buildTriggerTarget, readTriggerThen } = await import('./sessionTriggerForm');
 
 function inline(blocks: unknown[]) {
     const outcome = normalizeWorkflowIngress({ version: 1, blocks });
@@ -36,6 +38,32 @@ function set(automationId: string, overrides: Record<string, unknown>): Workflow
 }
 
 describe('projectSessionTriggerGroups', () => {
+    it('keeps an upkeep example named separately from its complete prompt through compact trigger editing', () => {
+        const example = WORKFLOW_STARTER_EXAMPLES_V1.find((entry) => entry.key === 'memory-upkeep-in-session')!;
+        const selection = materializeWorkflowStarterExample(example, {
+            session: { sessionId: 'session-1', machineId: 'machine-1' }, timezone: 'Europe/Amsterdam',
+        });
+        if (selection.status !== 'ready') throw new Error('upkeep example must materialize');
+        const target = buildTriggerTarget(readTriggerThen({ kind: 'inline', definition: selection.example.definition }));
+        if (target?.kind !== 'inline') throw new Error('upkeep target must remain inline');
+        const groups = projectSessionTriggerGroups({
+            sets: [set('upkeep', { target, enabled: false, triggers: [daily('weekly', '0 9 * * 0')] })],
+            lastRunAtByAutomationId: {}, resolveWorkflowTitle: () => null, formatAge: String,
+        });
+        expect(groups[0]?.rows[0]).toMatchObject({ title: 'Memory upkeep', enabled: false });
+        expect(groups[0]?.title).toContain('workflows.triggers.summary.weeklyAt');
+        expect(readTriggerThen(target)).toMatchObject({ kind: 'sendPrompt', prompt: example.definition.blocks[0]?.kind === 'step'
+            ? example.definition.blocks[0].document.text : undefined });
+    });
+    it('uses authored prompt names and a generic title for unnamed prompts without deriving a title from the body', () => {
+        const groups = projectSessionTriggerGroups({
+            sets: [set('named', { target: inline([{ kind: 'step', id: 'prompt', name: '  Release review  ',
+                document: { text: 'Review all release changes and produce a detailed report.' } }]), triggers: [daily('named', '0 9 * * *')] }),
+            set('unnamed', { target: inline(['Review all release changes and produce a detailed report.']), triggers: [daily('unnamed', '0 9 * * *')] })],
+            lastRunAtByAutomationId: {}, resolveWorkflowTitle: () => null, formatAge: String,
+        });
+        expect(groups[0]?.rows.map((row) => row.title)).toEqual(['Release review', 'workflows.triggers.then.sendPrompt']);
+    });
     it('shows the real failed last result rather than treating the last firing as success', () => {
         const groups = projectSessionTriggerGroups({ sets: [set('habit', { target: inline(['Digest']), triggers: [daily('daily', '0 9 * * *')] })],
             lastRunAtByAutomationId: { habit: 1000 }, lastRunsByAutomationId: { habit: createWorkflowRunSummaryFixture({ state: 'failed' }) },
@@ -132,7 +160,7 @@ describe('projectSessionTriggerGroups', () => {
         ]);
         expect(groups[1]!.rows[0]).toMatchObject({ title: 'workflows.triggers.row.workflowDeleted', sourceUnavailable: true });
         expect(groups[2]!.rows[0]).toMatchObject({
-            key: 'ci:t-ci', triggerId: 't-ci', title: 'Summarize overnight CI',
+            key: 'ci:t-ci', triggerId: 't-ci', title: 'workflows.triggers.then.sendPrompt',
             outcome: { text: 'workflows.triggers.row.ran(age=age:1000)', tone: 'neutral' },
         });
     });

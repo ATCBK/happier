@@ -31,7 +31,7 @@ describe('Scheduled Work rows', () => {
     });
     it('opens the scheduled workflow separately from its Session destination, retaining authored step context', async () => {
         const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'habit', revision: 1, enabled: true, health: 'available',
-            target: { kind: 'inline', definition: { version: 1, inputs: [], blocks: [{ kind: 'step', id: 'review', name: 'Review',
+            target: { kind: 'inline', definition: { version: 1, inputs: [], blocks: [{ kind: 'step', id: 'review', name: 'Release review',
                 document: { text: 'Review code', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] } },
             destinations: { targetSessionIds: ['session-one'], usesOriginSession: false, unresolvedWorkflowRefs: [],
                 leaves: [{ sourceKey: '$root', blockId: 'review', sessionIds: ['session-one'], ordinal: 1, name: 'Review' }] },
@@ -41,6 +41,7 @@ describe('Scheduled Work rows', () => {
         const rows = projectScheduledWorkflowRows([set]);
         const open = vi.fn();
         const screen = await renderScreen(<ScheduledWorkflowSectionView rows={rows} onOpen={open} />);
+        expect(screen.getTextContent()).toContain('Release review');
         expect(screen.getTextContent()).toContain('sessionWork.scheduled.step(ordinal=1,title=Review)');
         expect(screen.findByTestId('scheduled-workflow:habit:timer-destination:session-one')).not.toBeNull();
         expect(screen.findByTestId('scheduled-workflow:habit:timer-destination:session-one')?.props.accessibilityRole).toBe('link');
@@ -53,8 +54,8 @@ describe('Scheduled Work rows', () => {
         screen.pressByTestId('scheduled-workflow:habit:timer');
         expect(open).toHaveBeenCalledTimes(2);
         expect(open).toHaveBeenLastCalledWith(rows[0]);
-        // An inline prompt is already the row title; repeating it as a step hides the next occurrence.
-        const sameTitle = { ...set, destinations: { ...set.destinations!, leaves: [{ ...set.destinations!.leaves[0]!, name: 'Review code' }] } };
+        // An authored name is already the row title; repeating it as a step hides the next occurrence.
+        const sameTitle = { ...set, destinations: { ...set.destinations!, leaves: [{ ...set.destinations!.leaves[0]!, name: 'Release review' }] } };
         await screen.update(<ScheduledWorkflowSectionView rows={projectScheduledWorkflowRows([sameTitle])} onOpen={open} />);
         expect(screen.getTextContent()).not.toContain('sessionWork.scheduled.step');
     });
