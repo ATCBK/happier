@@ -170,4 +170,37 @@ describe('Machine Defaults installed provisioner names', () => {
         expect(home.requests.some(request => request.path.endsWith('/acquire'))).toBe(false);
         await screen.unmount();
     });
+
+    it('shows the names of the controllers that answered while another online controller has not answered yet', async () => {
+        const { storage } = await import('@/sync/domains/state/storage');
+        const previous = storage.getState();
+        const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId: 'srv_slow' } } });
+        // A controller marked online whose catalog read has not come back (live: stale presence on a busy Home).
+        const silent = new Promise<Response>(() => {});
+        const home = await serveActionHomes({ homes: [
+            { key: 'build', serverUrl: 'https://par-defaults-slow.test', accountId: 'owner', currentAccount: true },
+        ], route: request => {
+            if (request.path === '/v1/features' || request.path === '/v1/features/authenticated') return Response.json(features);
+            if (request.path !== '/v1/actions/machines.provisioners.list') return undefined;
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.body);
+            if (envelope.target.kind === 'machine' && envelope.target.machineId === 'silent-controller') return silent;
+            return Response.json({ v: 1, actionId: 'machines.provisioners.list', requestId: envelope.requestId,
+                execution: { ok: true, result: { provisioners: [provisioner('Local guest', 'local')] } } });
+        } });
+        onTestFinished(() => {
+            storage.setState({ settings: previous.settings, settingsScope: previous.settingsScope,
+                profileScope: previous.profileScope, machineListByServerId: previous.machineListByServerId });
+            home.dispose();
+        });
+        expect(await getServerFeaturesSnapshot({ serverId: home.homes.build!.id })).toMatchObject({ status: 'ready' });
+        const focusedHome = resolveServerProfileScopeIdForIdentifier(home.homes.build!.id);
+        storage.setState({ machineListByServerId: { [focusedHome]: [
+            createMachineFixture({ id: 'silent-controller', installationId: 'silent-installation', activeAt: Date.now() }),
+            createMachineFixture({ id: 'local-controller', installationId: 'local-installation', activeAt: Date.now() }),
+        ] } });
+        const { MachineDefaultsView } = await import('./MachineDefaultsView');
+        const screen = await renderScreen(<MachineDefaultsView />);
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('Local guest'));
+        await screen.unmount();
+    });
 });

@@ -34,20 +34,31 @@ export function useManagedProvisioners(serverId: string, onApprovalPending?: (re
             setState(current => current.binding === binding ? { binding: null, requestKey: '', provisioners: [], error: null, loading: false } : current);
         });
         setState(current => ({ binding, requestKey, provisioners: current.binding === binding && current.requestKey === requestKey ? current.provisioners : [], error: null, loading: true }));
-        void Promise.all(selectedControllers.map(selected => client.read('machines.provisioners.list', { homeId, controller: selected },
-            { signal: abort.signal, onApprovalPending: registration => approvalRef.current?.(registration) }))).then(results => {
+        // Each controller answers for its own installs, as soon as it answers: one that is slow, cannot answer or
+        // fails does not hold back or hide the others'. Until one answers, the last-known list stays.
+        type Settled = { kind: 'succeeded'; provisioners: MachineProvisionersListResultV1['provisioners'] } | { kind: 'failed'; code: string };
+        const settled: (Settled | undefined)[] = selectedControllers.map(() => undefined);
+        const publish = () => {
             if (abort.signal.aborted || !binding.isCurrent()) return;
-            // Each controller answers for its own installs: one that cannot answer does not hide the others'.
-            const failure = results.find(result => result.kind === 'failed');
-            const answered = results.some(result => result.kind === 'succeeded');
+            const answered = settled.filter(result => result?.kind === 'succeeded');
+            const done = settled.every(result => result !== undefined);
+            const failure = settled.find(result => result?.kind === 'failed');
             setState(current => current.binding !== binding || current.requestKey !== requestKey ? current : {
-                ...current, loading: false,
-                provisioners: answered ? results.flatMap(result => result.kind === 'succeeded' ? result.value.provisioners : []) : current.provisioners,
-                error: !answered && failure?.kind === 'failed' ? failure.code : null,
+                ...current, loading: !done,
+                provisioners: answered.length > 0 ? settled.flatMap(result => result?.kind === 'succeeded' ? result.provisioners : []) : current.provisioners,
+                error: done && answered.length === 0 && failure?.kind === 'failed' ? failure.code : null,
             });
-        }).catch(() => {
-            if (!abort.signal.aborted && binding.isCurrent()) setState(current => current.binding === binding && current.requestKey === requestKey
-                ? { ...current, loading: false, error: 'unavailable' } : current);
+        };
+        selectedControllers.forEach((selected, index) => {
+            void client.read('machines.provisioners.list', { homeId, controller: selected },
+                { signal: abort.signal, onApprovalPending: registration => approvalRef.current?.(registration) }).then(result => {
+                settled[index] = result.kind === 'succeeded' ? { kind: 'succeeded', provisioners: result.value.provisioners }
+                    : { kind: 'failed', code: result.code };
+                publish();
+            }, () => {
+                settled[index] = { kind: 'failed', code: 'unavailable' };
+                publish();
+            });
         });
         return () => { abort.abort(); retirement.dispose(); };
     }, [binding, client, homeId, requestKey, refreshRevision]);
