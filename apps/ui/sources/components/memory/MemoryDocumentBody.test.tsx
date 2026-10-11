@@ -12,6 +12,9 @@ import {
     ProjectAccountOrganizationV1Schema, ProjectAccountRowMutationRequestV1Schema, PROJECT_ACCOUNT_ROWS_ROUTE_V1,
 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { V2SessionRecordSchema } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
@@ -39,6 +42,9 @@ import { memoryDocumentActions } from '@/sync/ops/promptLibrary/memoryDocuments'
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
+// Machine RPC is the external daemon transport; selection, custody and summary logic stay real.
+const machineRpc = vi.hoisted(() => vi.fn());
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: navigation }).module;
@@ -93,6 +99,7 @@ beforeEach(async ({ signal }) => {
     storage.getState().activateProfileScope(scope);
 });
 afterEach(async () => {
+    machineRpc.mockReset();
     setReducedMotionPreferenceOverride(null);
     standardCleanup();
     await connection?.dispose();
@@ -105,6 +112,30 @@ afterEach(async () => {
 });
 
 const fact = (id: string, text: string): MemoryFactV1 => ({ id, text, createdAtMs: 1_000, sourceSessionRef: null });
+
+function selectSummaryDaemon(homeId: string, serverIdentityId: string) {
+    const machine = createMachineFixture({ id: 'memory-machine', activeAt: Date.now() });
+    storage.setState(state => ({ isDataReady: true,
+        ...(homeId === serverId ? { machines: { [machine.id]: machine } } : {}),
+        machineListByServerId: { ...state.machineListByServerId, [homeId]: [machine] },
+        machineListStatusByServerId: { ...state.machineListStatusByServerId, [homeId]: 'idle' },
+        settings: { ...state.settings, machineAdministrationTargetsLocalV1: {
+            'memory.settings': { serverIdentityId, machineId: machine.id },
+        } },
+    }));
+}
+
+function summaryStatus(ref: PromptDocArtifactRefV1, revision: { headerVersion: number; bodyVersion: number }) {
+    return { v: 1, enabled: true, indexMode: 'deep', hintsIndexReady: false, deepIndexReady: true, activeIndexReady: true,
+        embeddingsEnabled: false, embeddingsMode: 'disabled', embeddingsPresetId: null, embeddingsProviderKind: null,
+        embeddingsModelId: null, embeddingsRuntimeState: 'unavailable', embeddingsUsingFallback: false,
+        tier1DbPath: null, deepDbPath: '/memory/deep.sqlite', tier1DbBytes: null, deepDbBytes: 1,
+        documents: { state: 'ready', facts: [
+            // Same-id ambient coverage must never replace the qualified document's counts.
+            { ref: { ...ref, serverId }, revision, loadedFactCount: 99, indexedFactCount: 99 },
+            { ref, revision, loadedFactCount: 2, indexedFactCount: 7 },
+        ] } };
+}
 
 async function seedDocument(body: MemoryDocBodyV1): Promise<PromptDocArtifactRefV1> {
     const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Account memory' }, JSON.stringify(body));
@@ -293,7 +324,8 @@ describe('MemoryDocumentBody', () => {
         { remoteAccess: 'owner' as const, localAccess: 'view' as const, readOnly: false, shared: false },
     ])('Work uses qualified memory access $remoteAccess instead of ambient $localAccess', async ({ remoteAccess, localAccess, readOnly, shared }) => {
         const original = await seedDocument({ v: 1, index: [fact('foreign-fact', 'Qualified fact')], topics: [] });
-        const foreignHome = await homes.addHome({ name: 'Foreign memory', serverUrl: 'https://foreign-memory.test', accountId: 'foreign-a', active: false });
+        await setServerProfileIdentityForUrl('https://memory-body.test', 'srv_memory_body');
+        const foreignHome = await homes.addHome({ name: 'Foreign memory', serverUrl: 'https://foreign-memory.test', serverIdentityId: 'srv_foreign_memory', accountId: 'foreign-a', active: false });
         homes.answer(foreignHome, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         const stored = homes.artifacts(serverId).read(original.artifactId)!;
         await homes.artifacts(foreignHome).handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({
@@ -316,20 +348,37 @@ describe('MemoryDocumentBody', () => {
         const session = createSessionFixture({ id: 's1', serverId, metadataVersion: 9,
             metadata: { ...base.metadata, work: { memoryEnabled: true } } });
         storage.getState().applySessions([session]);
+        selectSummaryDaemon(serverId, 'srv_memory_body');
+        machineRpc.mockResolvedValue(summaryStatus(ref, { headerVersion: stored.headerVersion, bodyVersion: stored.bodyVersion }));
         const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
         setRuntimeFetch(homes.request);
         const screen = await renderScreen(<InjectedAuthProvider credentials={connection.credentials}>
             <SessionMemorySection session={session} serverId={serverId} />
         </InjectedAuthProvider>);
         await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
+        expect(machineRpc).toHaveBeenCalled();
+        machineRpc.mock.calls.forEach(([request]) => expect(request).toMatchObject({
+            serverId: 'srv_memory_body', accountId: 'account-a', machineId: 'memory-machine', method: RPC_METHODS.DAEMON_MEMORY_STATUS,
+            payload: { scope: { type: 'session', sessionId: 's1' } },
+        }));
+        await settled(() => expect(screen.getTextContent()).toContain('7 facts'));
+        expect(screen.getTextContent()).toContain('2 facts');
+        expect(screen.getTextContent()).not.toContain('99 facts');
         expect(screen.findByType(MemoryDocumentBody).props.readOnly).toBe(readOnly);
         expect(Boolean(screen.findByTestId('session-work-memory.remember'))).toBe(!readOnly);
         expect(screen.findByType(MemoryDocumentBody).props.footer).toContain(shared
             ? 'memoryContext.memory.writesAskFirst' : 'memoryContext.memory.writesWithoutAsking');
+        await screen.unmount();
+        machineRpc.mockClear();
+        selectSummaryDaemon(foreignHome, 'srv_foreign_memory');
         const page = await renderScreen(<InjectedAuthProvider credentials={connection.credentials}>
             <MemoryDocumentScreen artifactId={ref.artifactId} serverId={foreignHome} />
         </InjectedAuthProvider>);
         await settled(() => expect(page.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
+        expect(machineRpc).toHaveBeenCalled();
+        machineRpc.mock.calls.forEach(([request]) => expect(request).toMatchObject({ serverId: 'srv_foreign_memory',
+            accountId: 'foreign-a', payload: { scope: { type: 'global' } } }));
+        await settled(() => expect(page.getTextContent()).toContain('7 facts'));
         expect(page.findByType(MemoryDocumentBody).props.readOnly).toBe(readOnly);
         expect(Boolean(page.findByTestId('memory-document.remember'))).toBe(!readOnly);
     });

@@ -22,15 +22,18 @@ export function useMemoryDocumentSummary(params: Readonly<{
 }>): MemoryDocumentSummary {
   const { source, serverId } = params;
   const view = source.view;
-  const account = useActiveServerAccountScope(view?.ref.serverId ?? serverId);
+  const sessionId = params.scope?.type === 'session' ? params.scope.sessionId : null;
+  const originAccount = useActiveServerAccountScope(serverId);
+  const custody = source.draftCustody;
+  // A Session id belongs to its origin Home, even when its prepared document is foreign.
+  // A document page instead uses the Account admitted by its qualified read.
+  const account = sessionId ? originAccount : custody?.scope;
   const enabled = params.enabled !== false && source.status === 'ready' && !source.stale && view !== null;
-  const provider = useMemorySearchProvider({ kind: 'exact', serverId: view?.ref.serverId ?? serverId },
+  const provider = useMemorySearchProvider({ kind: 'exact', serverId: account?.serverId ?? serverId },
     { enabled, corpora: DOCUMENTS });
   const target = provider.daemonTarget;
-  const sessionId = params.scope?.type === 'session' ? params.scope.sessionId : null;
-  const key = JSON.stringify([account?.accountId, target?.serverId, target?.machineId,
+  const key = JSON.stringify([account?.serverId, account?.accountId, target?.serverId, target?.machineId,
     view?.ref, view?.revision, sessionId, params.preparationBasis, source.status, source.stale]);
-  const custody = source.draftCustody;
   const [loaded, setLoaded] = React.useState<Readonly<{ key: string; summary: MemoryDocumentSummary }> | null>(null);
   React.useEffect(() => {
     if (!enabled || !view || !target || !account || custody?.isCurrent() !== true) return;

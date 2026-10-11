@@ -51,7 +51,12 @@ export type MemoryDocumentSource = Readonly<{
   /** The reviewed write target for exactly the version on screen. */
   target: MemoryDocumentTarget | null;
   /** Unpublished drafts belong to this admitted Account and document, across revision refreshes. */
-  draftCustody: Readonly<{ key: string; isCurrent: () => boolean }> | null;
+  draftCustody: Readonly<{
+    key: string;
+    /** The qualified read's admitted Account, including read-only foreign documents. */
+    scope: Readonly<{ serverId: string; accountId: string }>;
+    isCurrent: () => boolean;
+  }> | null;
   /** Returns only the freshly admitted write target, never a retained display snapshot. */
   refresh: () => Promise<MemoryDocumentTarget | null>;
 }>;
@@ -271,6 +276,7 @@ export function useMemoryDocument(
         target: null,
         draftCustody: activeLifetime ? {
           key: JSON.stringify([identity, activeLifetime.scope.accountId]),
+          scope: activeLifetime.scope,
           isCurrent: activeLifetime.isCurrent,
         } : null,
         refresh: NO_REFRESH,
@@ -286,8 +292,9 @@ export function useMemoryDocument(
       status: current.status,
       view,
       stale: current.stale,
-      draftCustody: view && loaded ? {
+      draftCustody: view && loaded?.accountId ? {
         key: JSON.stringify([identity, loaded.accountId]),
+        scope: { serverId: homeId, accountId: loaded.accountId },
         isCurrent: loaded.isCurrent,
       } : null,
       target:
