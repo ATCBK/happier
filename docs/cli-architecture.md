@@ -2507,7 +2507,11 @@ Publication presence shares authenticated control probing for PIDs hidden from t
 Transient control failures remain unverified. After observing a hidden owner through
 authenticated ping or accepted authenticated stop, stop confirmation requires release of its previously captured lifecycle-lock snapshot, because control closes
 before shutdown cleanup completes. Ordinary exited publications remain absent when no hidden
-owner was observed. Persistence owns lock parsing and inspection; control transport retains
+owner was observed. Stop asks persistence to reclaim their unchanged state and matching lock,
+using its exact-owner file primitive. Reclamation requires proven process absence and captured
+lock bytes, accepts structured and predecessor PID-only locks through the canonical parser, and
+preserves changed state/lock publications. Live, inaccessible, unverified and hidden owners are
+not reclaimed by the observer. Persistence owns lock parsing and inspection; control transport retains
 its canonical token headers. Initial startup-only locks with no observable PID or endpoint
 remain outside this namespace proof. Status output preserves unverified publication presence.
 `persistence.inspectDaemonLockOwner` classifies startup locks through the same lifecycle
@@ -2519,9 +2523,11 @@ including removed profiles and every release-ring filename. Stop-all opts into s
 lock discovery, while direct Action ingress retains its published-state-only inventory.
 Stop-all attempts siblings after failures, counts only confirmed stopped owners, and repeats
 that inventory after shutdown to reject live successors or startup locks before
-`auth logout --all` deletes the home. Publication cleanup remains owned by the lifecycle
-holder. Hidden successor uncertainty is scoped to the exact observed publication and lock
-path; unrelated stale release-ring siblings retain ordinary absence. An empty inventory reports `not_running`, and incomplete stop preserves the home.
+`auth logout --all` deletes the home. Normal publication cleanup remains owned by the lifecycle
+holder; persistence owns narrowly scoped departed-publication reclamation for both stop paths.
+Hidden successor uncertainty is scoped to the exact observed publication and lock
+path; unrelated proven-dead release-ring siblings can be reclaimed with the same owner checks.
+An empty inventory reports `not_running`, and incomplete stop preserves the home.
 
 ```mermaid
 graph TB

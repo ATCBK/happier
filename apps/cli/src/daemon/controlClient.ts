@@ -19,6 +19,7 @@ import {
   readDaemonLockPid,
   readDaemonLockSnapshot,
   readDaemonState,
+  reclaimDeadDaemonPublication,
 } from '@/persistence';
 import {
   daemonProcessMatchesCurrentScope,
@@ -1363,8 +1364,12 @@ function isProcessNotFound(error: unknown): boolean {
   return errno?.code === 'ESRCH' || /\bESRCH\b/u.test(errno?.message ?? '');
 }
 
-async function confirmedForceStop(pid: number): Promise<DaemonStopResult> {
-  await cleanupDaemonState();
+async function confirmedForceStop(pid: number, observation?: PublishedDaemonOwnerObservation): Promise<DaemonStopResult> {
+  if (observation) await observation.reclaimIfDead();
+  else {
+    const state = await readDaemonState();
+    if (!state || state.pid === pid) await reclaimDeadDaemonPublication({ expectedState: state, expectedPid: pid });
+  }
   logger.debug('Force killed daemon (SIGTERM/SIGKILL)');
   return { status: 'stopped', method: 'force' };
 }
@@ -1507,6 +1512,7 @@ async function forceKillKnownDaemonPid(
 ): Promise<DaemonStopResult> {
   if (observation && !isPidPresent(pid)) {
     if (await observation.isPresent()) throw new DaemonStopIncompleteError({ reason: 'process_identity_unverified', pid });
+    await observation.reclaimIfDead();
     return { status: 'stopped', method: 'graceful' };
   }
   // A recorded lifecycle owner that is PROVABLY gone is a completed stop, not an identity
@@ -1516,11 +1522,10 @@ async function forceKillKnownDaemonPid(
   // and left `happier daemon restart` reporting a failed stop for a daemon it had already
   // stopped. Only proven absence short-circuits here: `isPidProvablyAbsent` requires ESRCH, so
   // access-denied and unreadable-inventory verdicts stay inconclusive and still refuse below.
-  // `confirmedForceStop`'s cleanup is itself ownership-guarded (it only reclaims a *replaceable*
-  // lock), so a successor daemon that already took the lock is never disturbed.
+  // Departed-publication cleanup is exact-owner guarded, so a replacement state or lock survives.
   if (isPidProvablyAbsent(pid)) {
     logger.debug(`[CONTROL CLIENT] Daemon PID ${pid} has already exited; recording the stop as complete`);
-    return await confirmedForceStop(pid);
+    return await confirmedForceStop(pid, observation);
   }
 
   const forceState = await assertForceStopIdentity(pid, expectedState);
@@ -1529,7 +1534,7 @@ async function forceKillKnownDaemonPid(
     process.kill(pid, 'SIGTERM');
   } catch (error) {
     if (isProcessNotFound(error)) {
-      return await confirmedForceStop(pid);
+      return await confirmedForceStop(pid, observation);
     }
     logger.debug('[CONTROL CLIENT] SIGTERM could not stop daemon', error);
     throw new DaemonStopIncompleteError({ reason: 'force_kill_unconfirmed', pid });
@@ -1537,7 +1542,7 @@ async function forceKillKnownDaemonPid(
 
   try {
     await waitForProcessDeath(pid, 2000);
-    return await confirmedForceStop(pid);
+    return await confirmedForceStop(pid, observation);
   } catch (error) {
     logger.debug('[CONTROL CLIENT] Daemon remained live after SIGTERM; escalating to SIGKILL', error);
   }
@@ -1547,7 +1552,7 @@ async function forceKillKnownDaemonPid(
   // refusal this function opens by rejecting.
   if (isPidProvablyAbsent(pid)) {
     logger.debug(`[CONTROL CLIENT] Daemon PID ${pid} exited after SIGTERM; recording the stop as complete`);
-    return await confirmedForceStop(pid);
+    return await confirmedForceStop(pid, observation);
   }
 
   await assertForceStopIdentity(pid, forceState);
@@ -1556,7 +1561,7 @@ async function forceKillKnownDaemonPid(
     process.kill(pid, 'SIGKILL');
   } catch (error) {
     if (isProcessNotFound(error)) {
-      return await confirmedForceStop(pid);
+      return await confirmedForceStop(pid, observation);
     }
     logger.debug('[CONTROL CLIENT] SIGKILL could not stop daemon', error);
     throw new DaemonStopIncompleteError({ reason: 'force_kill_unconfirmed', pid });
@@ -1564,7 +1569,7 @@ async function forceKillKnownDaemonPid(
 
   try {
     await waitForProcessDeath(pid, 2000);
-    return await confirmedForceStop(pid);
+    return await confirmedForceStop(pid, observation);
   } catch (error) {
     logger.debug('[CONTROL CLIENT] Daemon remained live after SIGKILL', error);
     throw new DaemonStopIncompleteError({ reason: 'force_kill_unconfirmed', pid });
@@ -1598,7 +1603,10 @@ export async function stopDaemon(params: {
     }
 
     const observation = observePublishedDaemonOwner(state);
-    if (!await observation.isPresent()) return { status: 'not_running' };
+    if (!await observation.isPresent()) {
+      await observation.reclaimIfDead();
+      return { status: 'not_running' };
+    }
     logger.debug(`Stopping daemon with PID ${state.pid}`);
 
     // Try HTTP graceful stop
@@ -1610,7 +1618,7 @@ export async function stopDaemon(params: {
       observation.acknowledgeStop();
       // Wait for daemon to die
       await waitForProcessDeath(state.pid, resolveDaemonStopWaitForDeathTimeoutMs(), observation);
-      if (!observation.hasHiddenPid()) await cleanupDaemonState();
+      await observation.reclaimIfDead();
       logger.debug('Daemon stopped gracefully via HTTP');
       return { status: 'stopped', method: 'graceful' };
     } catch (error) {
@@ -1635,19 +1643,22 @@ export type PublishedDaemonOwnerObservation = Readonly<{
   isPresent: () => Promise<boolean>;
   hasHiddenPid: () => boolean;
   acknowledgeStop: () => void;
+  reclaimIfDead: () => Promise<void>;
 }>;
 
-/** Stop observes the existing lock before requesting shutdown; it never owns cleanup. */
+/** Stop captures exact publication ownership before requesting shutdown. */
 export function observePublishedDaemonOwner(
-  state: Readonly<{ pid: number; httpPort: number; controlToken?: string }>,
+  state: Readonly<{ pid: number; httpPort: number; startedAt?: number; controlToken?: string }>,
   lockFile = configuration.daemonLockFile,
   options: Readonly<{ unobservablePidIsUnverified?: boolean }> = {},
 ): PublishedDaemonOwnerObservation {
   let observedLock: ReturnType<typeof readDaemonLockSnapshot> = null;
+  let observedLockRaw: string | null | undefined;
   let hiddenPid = false;
   let unobservablePid = false;
   try {
     const snapshot = readDaemonLockSnapshot(lockFile, true);
+    observedLockRaw = snapshot?.raw ?? null;
     if (snapshot?.pid === state.pid) observedLock = snapshot;
   } catch {
     // No readable matching lifecycle lock means hidden-process exit cannot be confirmed.
@@ -1655,6 +1666,14 @@ export function observePublishedDaemonOwner(
   return {
     hasHiddenPid: () => hiddenPid,
     acknowledgeStop: () => { if (unobservablePid) hiddenPid = true; },
+    async reclaimIfDead() {
+      if (hiddenPid || observedLockRaw === undefined || options.unobservablePidIsUnverified) return;
+      await reclaimDeadDaemonPublication({
+        stateFile: lockFile.slice(0, -'.lock'.length),
+        expectedState: state,
+        expectedLockRaw: observedLockRaw,
+      });
+    },
     async isPresent() {
       const inspection = await inspectPublishedDaemonPresence(state);
       if (inspection.status === 'running') {
