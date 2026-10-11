@@ -7912,6 +7912,8 @@ const sessionFollowTranslations: Pick<Record<
         },
         "preferences": {
             "title": "Seguir automaticamente",
+            anyAgent: 'Qualquer agente',
+            variableCount: ({ count }: { count: number }) => (count === 1 ? `${count} variável` : `${count} variáveis`),
             "assigned": "Sessões atribuídas a mim",
             "direct": "Sessões partilhadas diretamente",
             "team": "Sessões partilhadas através de equipas",

@@ -7912,6 +7912,8 @@ const sessionFollowTranslations: Pick<Record<
             "sourceKeyWaiting": "Esperando el acceso cifrado.",
             "sourceKeyUnavailable": "Este equipo no puede proporcionar acceso cifrado.",
             "sourceSessionKeyUnavailable": "El acceso cifrado de esta sesión no está disponible aquí.",
+            anyAgent: 'Cualquier agente',
+            variableCount: ({ count }: { count: number }) => (count === 1 ? `${count} variable` : `${count} variables`),
             "catchUpPending": "Actualización pendiente"
         },
         "preferences": {

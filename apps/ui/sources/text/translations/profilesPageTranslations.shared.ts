@@ -26,6 +26,8 @@ export const english = {
         descriptionTitle: 'Description',
         descriptionHint: 'Optional. Shown when you pick this profile.',
         modelRequiresAgent: 'Choose a preferred agent first to choose its model.',
+        anyAgent: 'Any agent',
+        variableCount: ({ count }: { count: number }) => (count === 1 ? `${count} variable` : `${count} variables`),
     },
 };
 

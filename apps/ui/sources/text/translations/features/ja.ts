@@ -7906,6 +7906,8 @@ const sessionFollowTranslations: Pick<Record<
             "direct": "直接共有されたセッション",
             "team": "チームを通じて共有されたセッション",
             "group": "グループを通じて共有されたセッション",
+            anyAgent: 'すべてのエージェント',
+            variableCount: ({ count }: { count: number }) => `${count}個の変数`,
             "help": "新しい割り当てと新たにアクセス可能になったセッションに適用されます。既存の設定は変わりません。"
         }
     } };

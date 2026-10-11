@@ -7908,6 +7908,8 @@ const sessionFollowTranslations: Pick<Record<
             "sourceKeyPreparing": "Préparation de l’accès chiffré…",
             "sourceKeyWaiting": "En attente de l’accès chiffré.",
             "sourceKeyUnavailable": "Cet ordinateur ne peut pas fournir d’accès chiffré.",
+            anyAgent: 'N\'importe quel agent',
+            variableCount: ({ count }: { count: number }) => (count === 1 ? `${count} variable` : `${count} variables`),
             "sourceSessionKeyUnavailable": "L’accès chiffré de cette session n’est pas disponible ici.",
             "catchUpPending": "Rattrapage en attente"
         },

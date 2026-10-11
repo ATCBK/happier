@@ -7901,6 +7901,8 @@ const sessionFollowTranslations: Pick<Record<
             "direct": "直接共享的会话",
             "team": "通过团队共享的会话",
             "group": "通过群组共享的会话",
+            anyAgent: '任意智能体',
+            variableCount: ({ count }: { count: number }) => `${count}个变量`,
             "help": "适用于新的分配和新获得访问权限的会话。现有选择保持不变。"
         }
     } };

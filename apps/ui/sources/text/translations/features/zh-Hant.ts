@@ -7901,6 +7901,8 @@ const sessionFollowTranslations: Pick<Record<
             "direct": "直接共用的工作階段",
             "team": "透過團隊共用的工作階段",
             "group": "透過群組共用的工作階段",
+            anyAgent: '任何代理',
+            variableCount: ({ count }: { count: number }) => `${count}個變數`,
             "help": "適用於新的指派及新取得存取權的工作階段。現有選擇保持不變。"
         }
     } };

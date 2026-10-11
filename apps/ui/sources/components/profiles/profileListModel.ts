@@ -14,6 +14,9 @@ export interface ProfileListBackendEntry {
 export interface ProfileListStrings {
     builtInLabel: string;
     customLabel: string;
+    /** A profile every enabled Agent can run. */
+    anyAgentLabel: string;
+    variableCount: (count: number) => string;
     /** Labels for the Agents currently enabled; an open Agent id may be absent. */
     agentLabelById: Readonly<Partial<Record<AgentId, string>>>;
 }
@@ -27,17 +30,20 @@ export function getDefaultProfileListStrings(enabledAgentIds: readonly AgentId[]
     return {
         builtInLabel: t('profiles.builtIn'),
         customLabel: t('profiles.custom'),
+        anyAgentLabel: t('profilesPage.anyAgent'),
+        variableCount: (count) => t('profilesPage.variableCount', { count }),
         agentLabelById,
     };
 }
 
-export function getProfileBackendSubtitle(params: {
+/** The titles of the enabled Agents this profile runs on, and how many enabled Agents there are. */
+function collectCompatibleAgentTitles(params: {
     profile: ProfileCompatibilitySummary;
     enabledAgentIds: readonly AgentId[];
     backendEntries?: readonly ProfileListBackendEntry[];
     strings: ProfileListStrings;
-}): string {
-    const parts: string[] = [];
+}): Readonly<{ titles: string[]; candidates: number }> {
+    const titles: string[] = [];
     const backendEntries = params.backendEntries ?? [];
     if (backendEntries.length > 0) {
         for (const entry of backendEntries) {
@@ -48,36 +54,56 @@ export function getProfileBackendSubtitle(params: {
                 continue;
             }
             if (entry.title) {
-                parts.push(entry.title);
+                titles.push(entry.title);
             }
         }
-    } else for (const agentId of params.enabledAgentIds) {
+        return { titles, candidates: backendEntries.length };
+    }
+    for (const agentId of params.enabledAgentIds) {
         if (isProfileCompatibleWithAgent(params.profile, agentId)) {
             const label = params.strings.agentLabelById[agentId];
-            if (label) parts.push(label);
+            if (label) titles.push(label);
         }
     }
+    return { titles, candidates: params.enabledAgentIds.length };
+}
+
+export function getProfileBackendSubtitle(params: {
+    profile: ProfileCompatibilitySummary;
+    enabledAgentIds: readonly AgentId[];
+    backendEntries?: readonly ProfileListBackendEntry[];
+    strings: ProfileListStrings;
+}): string {
+    const parts = collectCompatibleAgentTitles(params).titles;
     // The identity line names two compatible Agents, then counts the rest. Keep both catalog
     // paths under this owner so the rail and Share subtitle cannot drift into long inventories.
     return [...parts.slice(0, 2), ...(parts.length > 2
         ? [t('shareSheet.profileAgentsMore', { count: parts.length - 2 })] : [])].join(' · ');
 }
 
+/**
+ * A profile's one-line meta: what tells it apart from its neighbours. The person's own description
+ * leads; otherwise which Agents it is limited to ("Any agent" when it runs on all of them) and how
+ * many variables it sets. Built-in and custom are said by the list's groups, not repeated per row.
+ */
 export function getProfileSubtitle(params: {
-    profile: ProfileCompatibilitySummary;
+    profile: ProfileCompatibilitySummary & Partial<Pick<AIBackendProfile, 'description' | 'environmentVariables'>>;
     enabledAgentIds: readonly AgentId[];
     backendEntries?: readonly ProfileListBackendEntry[];
     strings: ProfileListStrings;
 }): string {
-    const backend = getProfileBackendSubtitle({
-        profile: params.profile,
-        enabledAgentIds: params.enabledAgentIds,
-        backendEntries: params.backendEntries,
-        strings: params.strings,
-    });
+    const description = params.profile.description?.trim();
+    if (description) return description;
 
-    const label = params.profile.isBuiltIn ? params.strings.builtInLabel : params.strings.customLabel;
-    return backend ? `${label} · ${backend}` : label;
+    const { titles, candidates } = collectCompatibleAgentTitles(params);
+    const facts: string[] = [];
+    if (titles.length > 0) {
+        facts.push(titles.length >= candidates ? params.strings.anyAgentLabel : getProfileBackendSubtitle(params));
+    }
+    const variables = params.profile.environmentVariables?.length ?? 0;
+    if (variables > 0) facts.push(params.strings.variableCount(variables));
+    if (facts.length > 0) return facts.join(' · ');
+    return params.profile.isBuiltIn ? params.strings.builtInLabel : params.strings.customLabel;
 }
 
 export function buildProfilesListGroups(params: {

@@ -7923,6 +7923,8 @@ const sessionFollowTranslations: Pick<Record<
             "title": "Obserwuj automatycznie",
             "assigned": "Sesje przypisane do mnie",
             "direct": "Sesje udostępnione bezpośrednio",
+            anyAgent: 'Dowolny agent',
+            variableCount: ({ count }: { count: number }) => `${count} ${count === 1 ? 'zmienna' : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? 'zmienne' : 'zmiennych'}`,
             "team": "Sesje udostępnione przez zespoły",
             "group": "Sesje udostępnione przez grupy",
             "help": "Dotyczy nowych przypisań i nowo dostępnych sesji. Istniejące wybory pozostają bez zmian."

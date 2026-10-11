@@ -7913,6 +7913,8 @@ const de: typeof en = {
     layout: 'Layout',
     layoutUnified: 'Vereint',
     layoutTabs: 'Tabs',
+            anyAgent: 'Jeder Agent',
+            variableCount: ({ count }: { count: number }) => (count === 1 ? `${count} Variable` : `${count} Variablen`),
     layoutDescription: 'Eine Ansicht von den Änderungen bis zum Verlauf, oder Änderungen und Verlauf als zwei Ansichten.',
     showAs: 'Anzeigen als',
     showAsList: 'Liste',

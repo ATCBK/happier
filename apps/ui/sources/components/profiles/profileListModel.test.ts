@@ -10,6 +10,8 @@ describe('profileListModel', () => {
     const strings: ProfileListStrings = {
         builtInLabel: 'Built-in',
         customLabel: 'Custom',
+        anyAgentLabel: 'Any agent',
+        variableCount: (count) => `${count} variable${count === 1 ? '' : 's'}`,
         agentLabelById: {
             claude: 'Claude',
             codex: 'Codex',
@@ -83,7 +85,7 @@ describe('profileListModel', () => {
             isBuiltIn: true,
             compatibility: { claude: true, codex: false, opencode: false, gemini: false, auggie: false, qwen: false, kimi: false },
         });
-        expect(getProfileSubtitle({ profile, enabledAgentIds: ['claude', 'codex'], strings })).toBe('Built-in · Claude');
+        expect(getProfileSubtitle({ profile, enabledAgentIds: ['claude', 'codex'], strings })).toBe('Claude');
     });
 
     it('includes configured ACP backend titles when profile compatibility is target-keyed', () => {
@@ -103,7 +105,7 @@ describe('profileListModel', () => {
                 { backendTargetKey: 'backend:custom-backend:configured:custom-backend', title: 'Custom Backend' },
             ],
             strings,
-        })).toBe('Custom · Custom Backend');
+        })).toBe('Custom Backend');
     });
 
     it('builds custom subtitle without backend', () => {
@@ -111,5 +113,24 @@ describe('profileListModel', () => {
             compatibility: { claude: false, codex: false, opencode: false, gemini: false, auggie: false, qwen: false, kimi: false },
         });
         expect(getProfileSubtitle({ profile, enabledAgentIds: ['claude', 'codex', 'gemini'], strings })).toBe('Custom');
+    });
+
+    it('says what distinguishes a profile instead of repeating the same agent inventory', () => {
+        const everyAgent = { claude: true, codex: true, gemini: true };
+        const enabledAgentIds: AgentId[] = ['claude', 'codex', 'gemini'];
+        const describe = (profile: Parameters<typeof getProfileSubtitle>[0]['profile']) =>
+            getProfileSubtitle({ profile, enabledAgentIds, strings });
+
+        // The person's own description leads when there is one.
+        expect(describe({ ...buildProfile({ compatibility: everyAgent }), description: '  Reviews frontend PRs with Playwright  ' }))
+            .toBe('Reviews frontend PRs with Playwright');
+        // An agent list appears only when the profile is limited to some agents; what it sets follows.
+        expect(describe({ ...buildProfile({ compatibility: { claude: true, codex: false, gemini: false } }),
+            environmentVariables: [{ name: 'ANTHROPIC_BASE_URL', value: 'https://proxy.internal' }] }))
+            .toBe('Claude · 1 variable');
+        expect(describe({ ...buildProfile({ compatibility: everyAgent }), environmentVariables: [
+            { name: 'NODE_ENV', value: 'test' }, { name: 'CI', value: '1' }] }))
+            .toBe('Any agent · 2 variables');
+        expect(describe(buildProfile({ compatibility: everyAgent }))).toBe('Any agent');
     });
 });
