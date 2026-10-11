@@ -2570,6 +2570,7 @@ export const ru: TranslationStructure = {
       },
     },
     quota: {
+      refreshing: "Обновление использования…",
       loading: "Загрузка…",
       error: ({ message }: { message: string }) => `Ошибка: ${message}`,
       lastUpdated: ({ time }: { time: string }) => `Обновлено: ${time}`,
