@@ -50,6 +50,8 @@ export type MemoryDocumentSource = Readonly<{
   stale: boolean;
   /** The reviewed write target for exactly the version on screen. */
   target: MemoryDocumentTarget | null;
+  /** Unpublished drafts belong to this admitted Account and document, across revision refreshes. */
+  draftCustody: Readonly<{ key: string; isCurrent: () => boolean }> | null;
   /** Returns only the freshly admitted write target, never a retained display snapshot. */
   refresh: () => Promise<MemoryDocumentTarget | null>;
 }>;
@@ -267,6 +269,10 @@ export function useMemoryDocument(
         view: null,
         stale: false,
         target: null,
+        draftCustody: activeLifetime ? {
+          key: JSON.stringify([identity, activeLifetime.scope.accountId]),
+          isCurrent: activeLifetime.isCurrent,
+        } : null,
         refresh: NO_REFRESH,
       };
     const current = loaded?.identity === identity && loaded.isCurrent() ? loaded : {
@@ -280,6 +286,10 @@ export function useMemoryDocument(
       status: current.status,
       view,
       stale: current.stale,
+      draftCustody: view && loaded ? {
+        key: JSON.stringify([identity, loaded.accountId]),
+        isCurrent: loaded.isCurrent,
+      } : null,
       target:
         view && loaded && current.status === 'ready' && current.key === key
           ? reviewedWriteTarget(view, homeId, loaded, topic)

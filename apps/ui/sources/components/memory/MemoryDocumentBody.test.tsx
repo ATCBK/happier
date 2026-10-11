@@ -28,6 +28,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
+import { InlineAddExpander } from '@/components/ui/forms/InlineAddExpander';
 import { HappierDisclosure } from '@happier-dev/plugin-ui/presentation';
 import { readPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
@@ -376,6 +377,75 @@ describe('MemoryDocumentBody', () => {
         expect(screen.findByType(MemoryDocumentBody).props.source.view).toBeNull();
         expect(screen.findByType(MemoryDocumentBody).props.source.target).toBeNull();
         expect(Boolean(screen.findByTestId('memory.draft'))).toBe(false);
+    });
+
+    it.each(['same-fact', 'missing-fact'] as const)('retires Account A private draft when Account B can edit the same shared document (%s)', async (replacement) => {
+        const original = fact('shared-fact', 'Published shared fact.');
+        const ref = await seedDocument({ v: 1, index: [original], topics: [] });
+        if (!connection) throw new Error('Missing admitted Account fixture');
+        const screen = await renderScreen(<InjectedAuthProvider credentials={connection.credentials}>
+            <MemoryDocumentScreen artifactId={ref.artifactId} serverId={serverId} />
+        </InjectedAuthProvider>);
+        await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
+        const mountedBody = screen.findByType(MemoryDocumentBody);
+        const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
+        await React.act(async () => { actions.find(action => action.id === 'edit')!.onPress(); });
+        await React.act(async () => { screen.changeTextByTestId('memory-document.draft', 'Account A unpublished private draft'); });
+        const retiredSave: () => void = screen.findByType(InlineAddExpander).props.onSave;
+        if (replacement === 'missing-fact') {
+            const target = screen.findByType(MemoryDocumentBody).props.source.target;
+            expect(await memoryDocumentActions.forget(target, original.id)).toMatchObject({ ok: true });
+        }
+        const published = storedBody(ref);
+        await connection?.dispose();
+        connection = null;
+        await homes.switchAccount(serverId, 'account-b');
+        // B really reads and can edit A's shared document. Neither an unavailable read nor
+        // shared-memory approval may hide reuse of A's unpublished draft under B's writer.
+        homes.answer(serverId, 'GET /v1/artifacts/' + ref.artifactId, { select: () => ({ body: {
+            ...homes.artifacts(serverId).read(ref.artifactId), ownerAccountId: 'account-a', access: 'edit',
+        } }) });
+        homes.answer(serverId, '/v1/artifacts?limit=500', { select: () => {
+            const { body: _body, ...header } = homes.artifacts(serverId).read(ref.artifactId)!;
+            return { body: [{ ...header, ownerAccountId: 'account-a', access: 'edit' }] };
+        } });
+        homes.answer(serverId, '/v1/artifacts/' + ref.artifactId + '/access/grants', { body: {
+            artifactId: ref.artifactId, ownerAccountId: 'account-a', access: 'edit', grants: [],
+        } });
+        const replacementSettings = { ...baseline.settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, approvalWaivedSurfaces: { 'memory.update': ['ui'], 'memory.remember': ['ui'] },
+        }) };
+        homes.answer(serverId, 'GET /v2/account/settings', { body: {
+            content: { t: 'plain', v: replacementSettings }, version: 2,
+        } });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://memory-body.test', accountId: 'account-b', request: homes.request });
+        installHomeGovernanceBoundaries(homes);
+        const replacementConnection = connection;
+        await React.act(async () => {
+            const scope = { serverId, accountId: 'account-b' };
+            storage.getState().applySettingsForScope(scope, replacementSettings, 2);
+            storage.getState().activateProfileScope(scope);
+            screen.update(<InjectedAuthProvider credentials={replacementConnection.credentials}>
+                <MemoryDocumentScreen artifactId={ref.artifactId} serverId={serverId} />
+            </InjectedAuthProvider>);
+        });
+        await settled(() => {
+            const source = screen.findByType(MemoryDocumentBody).props.source;
+            expect(source.status).toBe('ready');
+            expect(source.view.access).toBe('edit');
+            expect(source.target.accountId).toBe('account-b');
+        });
+        expect(screen.findByType(MemoryDocumentBody)).toBe(mountedBody);
+        expect(Boolean(screen.findByTestId('memory-document.draft'))).toBe(false);
+        const requestIndex = homes.requests.length;
+        await React.act(async () => { retiredSave(); });
+        await flushHookEffects();
+        expect(homes.requests.slice(requestIndex).filter(request => request.path === '/v1/artifacts/' + ref.artifactId
+            && request.input !== null), boundaryDiagnostic()).toEqual([]);
+        expect(storedBody(ref)).toEqual(published);
+        await screen.pressByTestIdAsync('memory-document.remember');
+        expect(screen.findByTestId('memory-document.draft')?.props.value).toBe('');
+        await screen.pressByTestIdAsync('memory-document.draft.cancel');
     });
 
     it('retires a foreign Home memory view when its credentials change without changing the focused Account', async () => {

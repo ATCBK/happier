@@ -152,9 +152,15 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   const writable = !props.readOnly && !archive;
   const [busy, setBusy] = React.useState(false);
   const [notice, setNotice] = React.useState<Notice>(null);
-  const [editingId, setEditingId] = React.useState<string | null>(null);
-  const [draft, setDraft] = React.useState('');
-  const [draftTopic, setDraftTopic] = React.useState('');
+  const [storedEditingId, setEditingId] = React.useState<string | null>(null);
+  const [storedDraft, setDraft] = React.useState('');
+  const [storedDraftTopic, setDraftTopic] = React.useState('');
+  const [draftCustody, setDraftCustody] = React.useState<MemoryDocumentSource['draftCustody']>(null);
+  const draftCurrent = draftCustody !== null && draftCustody.isCurrent()
+    && draftCustody.key === source.draftCustody?.key;
+  const editingId = draftCurrent ? storedEditingId : null;
+  const draft = draftCurrent ? storedDraft : '';
+  const draftTopic = draftCurrent ? storedDraftTopic : '';
   const draftRef = React.useRef<React.ElementRef<typeof FieldTextInput>>(null);
   const reducedMotion = useReducedMotionPreference();
   // A forgotten fact keeps its place while its row collapses (lab `c-mem` Motion), then leaves.
@@ -190,16 +196,34 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   );
 
   const closeDraft = React.useCallback(() => {
+    setDraftCustody(null);
     setEditingId(null);
     setDraft('');
     setDraftTopic('');
     onComposingChange(false);
   }, [onComposingChange]);
 
+  React.useEffect(() => {
+    if (draftCustody && !draftCurrent) closeDraft();
+  }, [closeDraft, draftCurrent, draftCustody]);
+
+  const changeDraft = React.useCallback((text: string) => {
+    if (!source.draftCustody?.isCurrent()) return;
+    setDraftCustody(source.draftCustody);
+    setDraft(text);
+  }, [source.draftCustody]);
+  const changeDraftTopic = React.useCallback((text: string) => {
+    if (!source.draftCustody?.isCurrent()) return;
+    setDraftCustody(source.draftCustody);
+    setDraftTopic(text);
+  }, [source.draftCustody]);
+
   const sessionTarget = props.sessionTarget ?? null;
   const scopeTarget = props.scopeTarget;
   const canCreate = source.status === 'none' && view === null && Boolean(scopeTarget || sessionTarget);
   const save = React.useCallback(() => {
+    // A retained handler cannot submit unpublished text after its Account has retired.
+    if (!draftCustody?.isCurrent() || draftCustody.key !== source.draftCustody?.key) return;
     const text = draft.trim();
     if (!text) return;
     const named = draftTopic.trim();
@@ -238,6 +262,8 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     closeDraft,
     draft,
     draftTopic,
+    draftCustody,
+    source.draftCustody,
     editingId,
     canCreate,
     scopeTarget,
@@ -324,11 +350,13 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
 
   const startEdit = React.useCallback(
     (fact: MemoryFactV1) => {
+      if (!source.draftCustody?.isCurrent()) return;
       onComposingChange(false);
+      setDraftCustody(source.draftCustody);
       setEditingId(fact.id);
       setDraft(fact.text);
     },
-    [onComposingChange],
+    [onComposingChange, source.draftCustody],
   );
 
   const openTopic = React.useCallback(
@@ -382,7 +410,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
         ref={draftRef}
         testID={`${testID}.draft`}
         value={draft}
-        onChangeText={setDraft}
+        onChangeText={changeDraft}
         accessibilityLabel={t('memoryContext.memory.remember')}
         placeholder={t('memoryContext.memory.rememberPlaceholder')}
         multiline
@@ -393,7 +421,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
           testID={`${testID}.draftTopic`}
           style={styles.topicField}
           value={draftTopic}
-          onChangeText={setDraftTopic}
+          onChangeText={changeDraftTopic}
           accessibilityLabel={t('memoryContext.memory.topicPlaceholder')}
           placeholder={t('memoryContext.memory.topicPlaceholder')}
           onSubmitEditing={save}
