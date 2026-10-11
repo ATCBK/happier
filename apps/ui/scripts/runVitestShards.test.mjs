@@ -21,21 +21,24 @@ const runnerPath = join(scriptsDir, 'runVitestShards.mjs');
 
 for (const scenario of [
   { name: 'legacy UI budget', env: { VITEST_UI_MAX_FORKS: '1' }, args: [], workers: 1 },
-  { name: 'caller worker arguments', env: {}, args: ['--maxWorkers=1', '--minWorkers=1'], workers: 1 },
+  { name: 'caller worker arguments', env: { HAPPIER_VITEST_MAX_WORKERS: '2' }, args: ['--maxWorkers=1', '--minWorkers=1'], workers: 1 },
+  { name: 'native percentage worker arguments', env: {}, args: ['--maxWorkers=50%', '--minWorkers=1'], workers: Math.max(1, Math.floor(availableParallelism() / 2)) },
+  { name: 'caller minimum worker arguments', env: {}, args: ['--maxWorkers=2', '--minWorkers=2'], workers: 2, minWorkers: 2 },
   { name: 'shared override precedence', env: { HAPPIER_VITEST_MAX_WORKERS: '2', VITEST_UI_MAX_FORKS: '1' }, args: [], workers: 2 },
   { name: 'canonical legacy cap', env: { VITEST_UI_MAX_FORKS: '9' }, args: [], workers: 6 },
   { name: 'invalid supplied budget through canonical config', env: { HAPPIER_VITEST_MAX_WORKERS: 'invalid' }, args: [], workers: Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2))) },
+  { name: 'selected-file worker budget', partition: false, env: { HAPPIER_VITEST_MAX_WORKERS: '2', VITEST_UI_MAX_FORKS: '1' }, args: [], workers: 2 },
 ]) {
-  test(`Gate honors ${scenario.name}`, async () => {
+  test(`${scenario.partition === false ? 'ordinary UI' : 'Gate'} honors ${scenario.name}`, async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'happier-ui-vitest-budget-'));
     try {
       const configPath = join(tempRoot, 'vitest.config.mjs');
       const reporterPath = join(tempRoot, 'reporter.mjs');
       const recordPath = join(tempRoot, 'pool.json');
-      await writeFile(reporterPath, `import { writeFileSync } from 'node:fs'; export default class { onInit(ctx) { writeFileSync(${JSON.stringify(recordPath)}, JSON.stringify({ maxWorkers: ctx.config.maxWorkers, minWorkers: ctx.config.minWorkers })); } }\n`);
+      await writeFile(reporterPath, `import { writeFileSync } from 'node:fs'; export default class { onInit(ctx) { writeFileSync(${JSON.stringify(recordPath)}, JSON.stringify({ maxWorkers: ctx.config.poolOptions?.forks?.maxForks ?? ctx.config.maxWorkers, minWorkers: ctx.config.poolOptions?.forks?.minForks ?? ctx.config.minWorkers })); } }\n`);
       await writeFile(configPath, `import { resolveVitestWorkers } from ${JSON.stringify(join(packageRoot, '../../scripts/testing/vitestWorkers.ts'))}; export default { root: ${JSON.stringify(tempRoot)}, test: { include: ['*.test.js'], pool: 'forks', ...resolveVitestWorkers({ legacyUiOverride: true }), reporters: [${JSON.stringify(reporterPath)}] } };\n`);
       await writeFile(join(tempRoot, 'pool.test.js'), "import { test, expect } from 'vitest'; test('real pool admission', () => expect(true).toBe(true));\n");
-      const env = { ...process.env, CI: 'true', HAPPIER_UI_VITEST_PART: '1', HAPPIER_UI_VITEST_PARTS: '1' };
+      const env = { ...process.env, CI: 'true', HAPPIER_UI_VITEST_PART: scenario.partition === false ? '' : '1', HAPPIER_UI_VITEST_PARTS: scenario.partition === false ? '' : '1', HAPPIER_UI_VITEST_SHARDS: '1', VITEST_MAX_FORKS: '13', VITEST_MAX_THREADS: '13', VITEST_MIN_FORKS: '1', VITEST_MIN_THREADS: '1' };
       delete env.HAPPIER_VITEST_MAX_WORKERS;
       delete env.VITEST_UI_MAX_FORKS;
       Object.assign(env, scenario.env);
@@ -45,7 +48,7 @@ for (const scenario of [
       child.stderr.on('data', chunk => { output += chunk; });
       const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
       assert.equal(code, 0, output);
-      assert.deepEqual(JSON.parse(await readFile(recordPath, 'utf8')), { maxWorkers: scenario.workers, minWorkers: 1 });
+      assert.deepEqual(JSON.parse(await readFile(recordPath, 'utf8')), { maxWorkers: scenario.workers, minWorkers: scenario.minWorkers ?? 1 });
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
@@ -94,7 +97,7 @@ test('executes exactly once', () => appendFileSync(${JSON.stringify(executedPath
     assert.equal(runs.length, 4, 'each selected Gate partition must launch one Vitest run');
     assert.equal(new Set(runs.map(run => run.pid)).size, 4);
     for (const [index, run] of runs.entries()) {
-      assert.equal(run.maxWorkers, index === 3 ? 2 : availableParallelism());
+      assert.equal(run.maxWorkers, index === 3 ? 2 : Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2))));
       assert.equal(run.minWorkers, 1);
       assert.equal(run.fileParallelism, true);
       assert.equal(run.isolate, true);

@@ -812,9 +812,13 @@ async function ensureWorkspacePackageBuiltUnderLock({
   buildMode,
   trailingPass,
   dependencyDirs,
+  preparedInputFingerprint,
 }) {
   const packageJson = await readJson(packageJsonPath);
   let inputFingerprint = readWorkspacePackageInputFingerprint({ packageDir, dependencyDirs, env });
+  if (preparedInputFingerprint && inputFingerprint !== preparedInputFingerprint) {
+    throw new BuildInputDriftError(`[workspace-build] inputs changed after preparing the UI manifest for ${packageJson.name ?? packageDir}; retained the last coherent output; rerun the phase`);
+  }
   let builtDependencies = readWorkspaceBuiltDependencies({ monorepoRoot, dependencyDirs });
   const state = await inspectWorkspacePackageOutput(packageDir, packageJson, {
     env,
@@ -876,6 +880,11 @@ async function ensureWorkspacePackageBuiltUnderLock({
     builtDependencies = capture.builtDependencies;
   }
   const publishOutputs = async (tmpDistDir) => {
+    // Capture may legitimately converge to newer authored source. Its staged
+    // UI input must not be the manifest prepared from an earlier source basis.
+    if (preparedInputFingerprint && inputFingerprint !== preparedInputFingerprint) {
+      throw new BuildInputDriftError(`[workspace-build] inputs changed while capturing the UI manifest for ${packageJson.name ?? packageDir}; retained the last coherent output; rerun the phase`);
+    }
     const buildEnv = {
       ...(capture?.env ?? env),
       HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue,
@@ -1039,6 +1048,25 @@ async function ensureWorkspacePackageBuilt(packageDir, {
   if (!force && initial.complete) return { built: false, reason: 'already-built' };
 
   const env = await workspaceBuildBoundary.prepareEnv(packageDir, envIn);
+  const packageName = String(packageJson.name ?? '');
+  let preparedInputFingerprint = null;
+  if (packageName.startsWith('@happier-dev/plugins-')
+    && typeof packageJson.scripts?.['build:ui'] === 'string'
+    && packageJson.scripts['build:ui'].trim()
+    && resolve(packageDir) === resolve(monorepoRoot, 'packages/plugins', packageName.slice('@happier-dev/plugins-'.length))) {
+    // Dependencies have settled, but no package lock/capture is held yet.
+    // The real UI producer reads package-root plugin.json even when its output
+    // is staged, so the canonical manifest writer must run before that capture.
+    const { prepareBundledPluginUiManifestForWorkspaceBuild } = await import(
+      '../../apps/cli/scripts/build-owned/generateBundledPluginEntries.ts'
+    );
+    const manifestInputFingerprint = readWorkspacePackageInputFingerprint({ packageDir, dependencyDirs, env });
+    const prepared = await prepareBundledPluginUiManifestForWorkspaceBuild({
+      repoRoot: monorepoRoot, packageName,
+      heldLockValue: env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD,
+    });
+    if (prepared) preparedInputFingerprint = manifestInputFingerprint;
+  }
   const lockPath = resolveWorkspacePackageBuildLockPath(packageDir, packageJson);
   const workspaceBundleLockPath = buildEntersWorkspaceBundleLock(packageJson)
     ? resolveWorkspaceBundleLockPath(monorepoRoot)
@@ -1092,6 +1120,7 @@ async function ensureWorkspacePackageBuilt(packageDir, {
         buildMode,
         trailingPass,
         dependencyDirs,
+        preparedInputFingerprint,
       }),
       { lockPath, env, onWait: reportLockWait, tryResolveWaiter },
     )

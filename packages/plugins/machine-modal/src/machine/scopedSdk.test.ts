@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import { invokeScopedModalRole } from './scopedSdk.js';
 import { MODAL_ACCOUNT_PURPOSE, MODAL_ENV_KEYS } from './connectedAccount.js';
@@ -97,4 +102,59 @@ describe('Modal scoped SDK construction', () => {
       workerBoundary.holdCompletion = false;
     }
   });
+});
+
+it('prepares the native worker once and reuses unchanged shared preparation', () => {
+  const repoRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
+  const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'happier-modal-unit-prepare-'));
+  const packageRoot = join(fixtureRoot, 'packages/plugins/machine-modal');
+  const write = (path: string, content: string) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+  };
+  try {
+    write(join(fixtureRoot, 'package.json'), JSON.stringify({ private: true,
+      workspaces: ['apps/*', 'packages/plugins/*'] }));
+    for (const app of ['cli', 'ui', 'server']) {
+      write(join(fixtureRoot, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
+    }
+    // Replace only the package compiler process. The real package hook, graph,
+    // input/output admission, locks and currentness owner all execute unchanged.
+    write(join(packageRoot, 'package.json'), JSON.stringify({ name: manifest.name, type: 'module',
+      main: manifest.main, types: manifest.types, imports: manifest.imports,
+      scripts: { build: 'node ../../../fixture-build.mjs',
+        'test:unit:prepare': manifest.scripts['test:unit:prepare'] } }));
+    const sourcePath = join(packageRoot, 'src/machine/sdkWorker.ts');
+    write(sourcePath, 'export const workerVersion = 1;');
+    const eventsPath = join(fixtureRoot, 'compiler-events');
+    write(join(fixtureRoot, 'fixture-build.mjs'), `import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+appendFileSync(process.env.FIXTURE_COMPILER_EVENTS, 'build\\n');
+const output = process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR || join(process.cwd(), 'dist');
+mkdirSync(join(output, 'machine'), { recursive: true });
+writeFileSync(join(output, 'index.js'), 'export const ready = true;');
+writeFileSync(join(output, 'index.d.ts'), 'export declare const ready: true;');
+writeFileSync(join(output, 'machine/sdkWorker.js'), readFileSync('src/machine/sdkWorker.ts'));`);
+    for (const directory of ['scripts', 'node_modules']) {
+      symlinkSync(join(repoRoot, directory), join(fixtureRoot, directory), process.platform === 'win32' ? 'junction' : 'dir');
+    }
+    const prepare = () => {
+      const result = spawnSync(manifest.scripts['test:unit:prepare'], { shell: true, cwd: packageRoot,
+        encoding: 'utf8', env: { ...process.env, FIXTURE_COMPILER_EVENTS: eventsPath,
+          HAPPIER_STACK_REPO_DIR: fixtureRoot, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: fixtureRoot } });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    };
+    prepare();
+    expect(readFileSync(join(packageRoot, 'dist/machine/sdkWorker.js'), 'utf8')).toContain('workerVersion = 1');
+    prepare();
+    expect(readFileSync(eventsPath, 'utf8')).toBe('build\n');
+    write(sourcePath, 'export const workerVersion = 2;');
+    prepare();
+    expect(readFileSync(eventsPath, 'utf8')).toBe('build\nbuild\n');
+    expect(readFileSync(join(packageRoot, 'dist/machine/sdkWorker.js'), 'utf8')).toContain('workerVersion = 2');
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
 });

@@ -9,7 +9,7 @@ export function resolveMachineAgentState(input: Pick<MachineAgent, 'installed' |
     requireSignedIn?: boolean;
     /** Selected Provider authorization and compatibility, when that route is used. */
     credentialRouteReady?: boolean;
-    /** False only when the admitted Provider replaces the Agent's authentication. */
+    /** False for executable selection, or when an admitted Provider replaces launch authentication. */
     authenticationRequired?: boolean;
 }>): MachineAgentState {
     if (input.job?.outcome === null) return 'installing';

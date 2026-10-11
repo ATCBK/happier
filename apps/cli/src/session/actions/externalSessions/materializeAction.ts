@@ -39,6 +39,9 @@ import {
   readExternalSessionOperationSharedPresentation,
 } from './operationProgressPublisher';
 
+import { ExternalSessionPersistedTakeoverPreflightError } from './persistedTakeoverPreflightError';
+export { ExternalSessionPersistedTakeoverPreflightError } from './persistedTakeoverPreflightError';
+
 export type ExternalSessionMaterializePage = Readonly<{
   groupId: string;
   items: readonly unknown[];
@@ -78,25 +81,6 @@ export class ExternalSessionMaterializeSourceInterruptionError
   constructor(code: ExternalSessionMaterializeSourceInterruptionCode, message: string) {
     super(code, message);
     this.name = 'ExternalSessionMaterializeSourceInterruptionError';
-  }
-}
-
-export class ExternalSessionPersistedTakeoverPreflightError extends Error {
-  readonly actionCode:
-    | 'source_unavailable'
-    | 'not_allowed'
-    | 'reconciliation_required';
-
-  constructor(
-    actionCode:
-      | 'source_unavailable'
-      | 'not_allowed'
-      | 'reconciliation_required',
-    message: string,
-  ) {
-    super(message);
-    this.name = 'ExternalSessionPersistedTakeoverPreflightError';
-    this.actionCode = actionCode;
   }
 }
 

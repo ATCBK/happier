@@ -152,7 +152,7 @@ import { createMachineSessionStopLifecycleActionExecutor } from '@/session/actio
 import type { SessionLifecycleMachineDeps } from '@/session/actions/lifecycle/sessionLifecycleTypes';
 import { registerTransferRelayV2DownloadSessionResponder } from '@/machines/transfer/transferRelayV2DownloadSessionTransport';
 import type { TransferRelayV2DownloadSessionOwner } from '@/machines/transfer/transferRelayV2DownloadSessionTransport';
-import { runReplaySummaryForDialog } from '@/session/replay/summary/runReplaySummaryForDialog';
+import type { runReplaySummaryForDialog } from '@/session/replay/summary/runReplaySummaryForDialog';
 import { configuration } from '@/configuration';
 import type { TransientSessionMediaReadAllowance } from '@/session/media/readAllowance';
 import type {

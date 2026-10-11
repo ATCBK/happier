@@ -193,9 +193,8 @@ export function buildNewSessionAgentPickerOptions(
                 },
             } : undefined),
             resolveBehavior: ({ entry, presentation, favorite }) => {
-                // Not ready on this machine: the row shows its setup in the right pane and is never
-                // applied as the session's agent (no immediate select, no apply); once the inventory
-                // says ready, the row turns back into its models and can be chosen.
+                // Ineligible executables open setup. Credential choice stays in
+                // model/source detail and is admitted separately at Start.
                 const setup = resolveMachineAgentSetupOption(params, entry);
                 if (setup && params.renderMachineAgentSetup) {
                     const renderSetup = params.renderMachineAgentSetup;
@@ -234,10 +233,10 @@ export function buildNewSessionAgentPickerOptions(
 }
 
 function resolveMachineAgentSetupOption(
-    params: Pick<BuildNewSessionAgentPickerOptionsParams, 'getBackendEntryMachineAgent' | 'renderMachineAgentSetup'>,
+    params: Pick<BuildNewSessionAgentPickerOptionsParams, 'getBackendEntryMachineAgent' | 'renderMachineAgentSetup' | 'isBackendEntrySelectable'>,
     entry: ResolvedBackendCatalogEntry,
 ): Readonly<{ agent: MachineAgent; placement: MachineAgentPickerPlacement }> | null {
-    if (!params.renderMachineAgentSetup) return null;
+    if (!params.renderMachineAgentSetup || params.isBackendEntrySelectable(entry)) return null;
     const agent = params.getBackendEntryMachineAgent?.(entry) ?? null;
     const placement = resolveMachineAgentPickerPlacement(agent);
     return agent && placement.opensSetup ? { agent, placement } : null;

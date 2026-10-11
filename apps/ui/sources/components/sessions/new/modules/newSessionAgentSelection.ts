@@ -1,7 +1,7 @@
 import type { AgentId } from '@/agents/catalog/catalog';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
-import { isMachineAgentReady } from '@/agents/machineAgents/resolveMachineAgentState';
+import { isMachineAgentReady, resolveMachineAgentState } from '@/agents/machineAgents/resolveMachineAgentState';
 
 export type NewSessionSelectableBackendEntry = Pick<
     ResolvedBackendCatalogEntry,
@@ -21,11 +21,18 @@ export type NewSessionProfileAvailabilityReason =
     | 'logged-out:any'
     | `logged-out:${AgentId}`;
 
+/** Choosing an executable is not credential admission; Start checks the exact binding. */
+function isAgentExecutableSelectable(agent: MachineAgent | undefined): boolean {
+    if (isMachineAgentReady(agent)) return true;
+    if (!agent || agent.stale || agent.state !== 'needsSignIn') return false;
+    return isMachineAgentReady({ ...agent, state: resolveMachineAgentState({ ...agent, authenticationRequired: false }) });
+}
+
 function resolveAgentUnavailabilityReasonForNewSession(
     params: BaseSelectionParams & Readonly<{ agentId: AgentId }>,
 ): Exclude<NewSessionProfileAvailabilityReason, 'no-supported-cli' | 'cli-not-detected:any' | 'agent-not-ready:any' | 'logged-out:any'> | null {
     const agent = params.machineAgentsById[params.agentId];
-    if (isMachineAgentReady(agent)) return null;
+    if (isAgentExecutableSelectable(agent)) return null;
     if (!agent || agent.stale) return `agent-not-ready:${params.agentId}`;
     if (agent.state === 'needsSignIn') return `logged-out:${params.agentId}`;
     return agent.state === 'notInstalled' && !agent.installed
@@ -47,7 +54,7 @@ export function resolveBackendEntryUnavailabilityReasonForNewSession(
 export function isAgentSelectableForNewSession(
     params: BaseSelectionParams & Readonly<{ agentId: AgentId }>,
 ): boolean {
-    return isMachineAgentReady(params.machineAgentsById[params.agentId]);
+    return isAgentExecutableSelectable(params.machineAgentsById[params.agentId]);
 }
 
 export function getSelectableAgentIdsForNewSession(

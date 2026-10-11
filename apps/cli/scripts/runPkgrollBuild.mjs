@@ -9,7 +9,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import ts from 'typescript';
 import { run } from '../../stack/scripts/utils/proc/proc.mjs';
 import { resolveWorkspaceBuildMode } from '../../../scripts/workspaces/workspaceChildBuildEnv.mjs';
 
@@ -222,6 +223,37 @@ function isDeclarationOutputPath(inputPath) {
   return /\.d\.(?:c|m)?ts$/i.test(inputPath);
 }
 
+function prepareDeclarationBundlerConfig(packageRoot, sourceDir, declarationSourceDir) {
+  const configPath = join(packageRoot, 'tsconfig.json');
+  let paths = {};
+  if (existsSync(configPath)) {
+    const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
+      ...ts.sys,
+      onUnRecoverableConfigFileDiagnostic(diagnostic) {
+        throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+      },
+    });
+    if (parsed.errors.length > 0) {
+      throw new Error(parsed.errors.map(error => ts.flattenDiagnosticMessageText(error.messageText, '\n')).join('\n'));
+    }
+    const pathsBase = parsed.options.baseUrl ?? parsed.options.pathsBasePath ?? packageRoot;
+    paths = Object.fromEntries(Object.entries(parsed.options.paths ?? {}).map(([name, targets]) => [name,
+      targets.map(target => {
+        const sourceTarget = resolve(pathsBase, target);
+        const localTarget = relative(sourceDir, sourceTarget);
+        return localTarget === '..' || localTarget.startsWith(`..${sep}`) || isAbsolute(localTarget)
+          ? sourceTarget : resolve(declarationSourceDir, localTarget);
+      }),
+    ]));
+  }
+  // Keep authored aliases within the checked declaration graph. Passing the
+  // source tsconfig would let Pkgroll resolve aliases back into TypeScript and
+  // reconstruct the source compiler program we already checked natively.
+  const declarationConfigPath = join(declarationSourceDir, 'tsconfig.pkgroll.json');
+  writeFileSync(declarationConfigPath, `${JSON.stringify({ compilerOptions: { paths } }, null, 2)}\n`);
+  return declarationConfigPath;
+}
+
 function supplyEsmCommonJsDirname(outputDirectory, includeJs) {
   const prelude = [
     "import { dirname as __happierPkgrollPathDirname } from 'node:path';",
@@ -333,31 +365,46 @@ async function runPkgrollBuildInStage(options = {}) {
   const esmInputs = bundlesPasswordSodium ? runtimeInputs.filter((inputPath) =>
     inputPath.endsWith('.mjs') || (inputPath.endsWith('.js') && buildManifest.type === 'module'),
   ) : [];
+  const declarationInputs = resolveWorkspaceBuildMode({ env }) === 'strict'
+    ? inputPaths.filter(isDeclarationOutputPath) : [];
+  const declarationSourceDir = declarationInputs.length > 0
+    ? resolve(String(options.declarationSourceDir ?? '')) : null;
+  if (declarationInputs.length > 0 && (!options.declarationSourceDir || !existsSync(declarationSourceDir))) {
+    throw new Error('Public pkgroll declarations require the native-checked declaration source directory');
+  }
   const inputGroups = [
     ...(bundlesPasswordSodium
-      ? [esmInputs, runtimeInputs.filter((inputPath) => !esmInputs.includes(inputPath))]
-      : [runtimeInputs]),
+      ? [{ kind: 'runtime-esm', inputs: esmInputs }, { kind: 'runtime', inputs: runtimeInputs.filter((inputPath) => !esmInputs.includes(inputPath)) }]
+      : [{ kind: 'runtime', inputs: runtimeInputs }]),
     // Runtime consumers need executable bytes. Public package publication retains declarations.
-    ...(resolveWorkspaceBuildMode({ env }) === 'strict'
-      ? [inputPaths.filter(isDeclarationOutputPath)]
+    ...(declarationInputs.length > 0
+      ? [{ kind: 'declarations', inputs: declarationInputs }]
       : []),
-  ].filter((group) => group.length > 0);
+  ].filter((group) => group.inputs.length > 0);
 
   let manifestWritten = false;
   try {
     writeFileSync(stageManifestPath, stageManifestRaw, { encoding: 'utf8', flag: 'wx' });
     manifestWritten = true;
     for (const inputGroup of inputGroups) {
-      const pkgrollArgs = [pkgrollCliPath, '--packagejson=false', '--srcdist', srcdist];
-      if (inputGroup === esmInputs) {
+      const declarationGroup = inputGroup.kind === 'declarations';
+      const groupSrcdist = declarationGroup
+        ? `${toSlashNormalizedRelativePath(physicalStagingDir, declarationSourceDir)}:.`
+        : srcdist;
+      const pkgrollArgs = [pkgrollCliPath, '--packagejson=false', '--srcdist', groupSrcdist];
+      if (declarationGroup) {
+        pkgrollArgs.push('--tsconfig', prepareDeclarationBundlerConfig(packageRoot, sourceDir, declarationSourceDir));
+      }
+      if (inputGroup.kind === 'runtime-esm') {
         // Inlined sodium uses CommonJS's module-local directory. Pkgroll
         // already shims require, but leaves this global unresolved in ESM.
         // Keep CJS's native directory semantics untouched.
         pkgrollArgs.push('--define.__dirname=__happierPkgrollDirname');
       }
-      for (const inputPath of inputGroup) {
+      for (const inputPath of inputGroup.inputs) {
         pkgrollArgs.push('--input', inputPath);
       }
+      process.stderr.write(`[cli-build] pkgroll group=${inputGroup.kind} inputs=${inputGroup.inputs.join(',')}\n`);
       const result = await spawn(nodeExecutable, pkgrollArgs, {
         cwd: physicalStagingDir,
         env: childEnv,
@@ -379,7 +426,7 @@ async function runPkgrollBuildInStage(options = {}) {
       if (result.status !== 0) {
         throw new Error(`pkgroll exited without success (status=${result.status ?? 'null'})`);
       }
-      if (inputGroup === esmInputs) {
+      if (inputGroup.kind === 'runtime-esm') {
         supplyEsmCommonJsDirname(physicalStagingDir, buildManifest.type === 'module');
       }
     }

@@ -1,5 +1,4 @@
 import { readStoredCredentials } from '@/persistence';
-import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 
 import {
@@ -16,14 +15,16 @@ export function createProductionPluginApprovalQueueOwner(params?: Readonly<{
     return createStablePluginApprovalQueueOwner({
         async resolveExecutor() {
             const credentials = await readCredentials().catch(() => null);
-            return credentials
-                ? createCliActionExecutorFromCredentials({
-                    credentials,
-                    ...(params?.actionsSettingsProvider
-                        ? { actionsSettingsProvider: params.actionsSettingsProvider }
-                        : {}),
-                })
-                : null;
+            if (!credentials) return null;
+            // Runner services are installed before an approval needs an Action
+            // executor; admission resolves that enclosing runtime on demand.
+            const { createCliActionExecutorFromCredentials } = await import('@/session/actions/createCliActionExecutorFromCredentials');
+            return createCliActionExecutorFromCredentials({
+                credentials,
+                ...(params?.actionsSettingsProvider
+                    ? { actionsSettingsProvider: params.actionsSettingsProvider }
+                    : {}),
+            });
         },
         ...(params?.recordDiagnostic ? { recordDiagnostic: params.recordDiagnostic } : {}),
     });

@@ -43,6 +43,44 @@ exit 2
   return root;
 }
 
+for (const shell of shells) test(`yarn-install-with-retry defaults Redis prefetch off while preserving explicit configuration and required postinstall (${shell})`, (t) => {
+  for (const override of [undefined, '0', '']) {
+    // Yarn is an external process boundary. Observe its actual child environment
+    // and a required postinstall output without downloading or compiling Redis.
+    const root = createFakeYarnWorkspace({
+      installBody: `  printf '%s' "\${REDISMS_DISABLE_POSTINSTALL-unset}" > "\${FAKE_REDIS_POSTINSTALL_CONFIG_PATH:?}"
+  printf 'required postinstall completed' > "\${FAKE_REQUIRED_POSTINSTALL_PATH:?}"
+  exit 0`,
+    });
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const configPath = path.join(root, 'redis-postinstall-config');
+    const requiredOutputPath = path.join(root, 'required-postinstall-output');
+    const env = {
+      ...process.env,
+      PATH: `${path.join(root, 'bin')}:${process.env.PATH ?? ''}`,
+      FAKE_YARN_STATE_FILE: path.join(root, 'state.log'),
+      YARN_INSTALL_LOG_PATH: path.join(root, 'install.log'),
+      FAKE_REDIS_POSTINSTALL_CONFIG_PATH: configPath,
+      FAKE_REQUIRED_POSTINSTALL_PATH: requiredOutputPath,
+    };
+    delete env.REDISMS_DISABLE_POSTINSTALL;
+    if (override !== undefined) env.REDISMS_DISABLE_POSTINSTALL = override;
+    const res = spawnSync(shell, [scriptPath, '--frozen-lockfile'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env,
+    });
+
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(readFileSync(configPath, 'utf8'), override ?? '1');
+    assert.equal(readFileSync(requiredOutputPath, 'utf8'), 'required postinstall completed');
+    assert.deepEqual(readFileSync(path.join(root, 'state.log'), 'utf8').trim().split('\n'), [
+      'config set registry https://registry.npmjs.org/',
+      'install --frozen-lockfile',
+    ]);
+  }
+});
+
 for (const shell of shells) test(`yarn-install-with-retry streams and retains successful install stdout and stderr (${shell})`, async (t) => {
   const root = createFakeYarnWorkspace({
     installBody: `  echo '[1/4] Resolving packages...'

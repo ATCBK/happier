@@ -55,7 +55,7 @@ export function resolveVitestForwardArgs(argv) {
   for (let index = 2; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--config') { index += 1; continue; }
-    if (arg.startsWith('--config=') || arg === '--unit-checks') continue;
+    if (arg.startsWith('--config=') || arg === '--unit-checks' || arg === '--unit-checks-only') continue;
     forwarded.push(arg);
   }
   if (forwarded[0] === '--') forwarded.shift();
@@ -176,6 +176,10 @@ export async function runCliVitestShardRuns({ shardCount, startShard = 1, endSha
 }
 
 async function main(argv) {
+  if (argv.includes('--unit-checks-only')) {
+    await runCliUnitChecks();
+    return;
+  }
   const configPath = resolveVitestConfigPath(argv);
   if (!configPath) {
     // eslint-disable-next-line no-console
@@ -240,16 +244,20 @@ async function main(argv) {
   if (argv.includes('--unit-checks')) {
     // These are the existing unit lane's post-suite checks. Keeping them with
     // the runner lets Yarn append caller filters to one command on every OS.
-    for (const invocation of [
-      { command: process.execPath, args: ['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs'] },
-      resolveYarnCommandInvocation(['-s', 'test:import-cycles']),
-    ]) {
-      const { windowsVerbatimArguments, ...command } = invocation;
-      const result = await runManagedChildCommand({ ...command, spawnOptions: { stdio: 'inherit', windowsVerbatimArguments } });
-      if (!result.ok) throw result.error;
-      process.exitCode = classifyVitestShardTermination(result).exitCode;
-      if (process.exitCode !== 0) return;
-    }
+    await runCliUnitChecks();
+  }
+}
+
+export async function runCliUnitChecks() {
+  for (const invocation of [
+    { command: process.execPath, args: ['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs'] },
+    resolveYarnCommandInvocation(['-s', 'test:import-cycles']),
+  ]) {
+    const { windowsVerbatimArguments, ...command } = invocation;
+    const result = await runManagedChildCommand({ ...command, spawnOptions: { stdio: 'inherit', windowsVerbatimArguments } });
+    if (!result.ok) throw result.error;
+    process.exitCode = classifyVitestShardTermination(result).exitCode;
+    if (process.exitCode !== 0) return;
   }
 }
 

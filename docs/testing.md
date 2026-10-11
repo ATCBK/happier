@@ -72,12 +72,18 @@ Use shared boundary fixtures and real internal owners. A changed internal export
 
 Root unit and integration commands collect failures across independent workspaces instead of stopping at the first red package. Package preparation remains a prerequisite; aggregate failure collection cannot expose behavior behind an unavailable build, database, or candidate. Do not call an unexecuted lane successful.
 
+The development push Gate runs each non-UI partition through `yarn test:gate-unit cli protocol server plugins` (or its selected subset). One Vitest instance composes the existing package-owned projects, retaining aliases, setup, exclusions and package working directories. Non-Vitest prerequisites and post-suite checks remain package-owned `test:unit:prepare` and `test:unit:checks` scripts shared with standalone commands; their failures fail the partition. `yarn test:plugin-workspaces` uses the same project runner. UI partitions retain their existing public wrapper and file selection. Focused Gate reruns accept `--filter=<file substring>`; they do not establish full-partition coverage.
+
 In 0.3 development, runtime worker bootstrap, validation preparation, local `hstack` bundled-workspace preflight and the Stack unit runner prepare emitted workspace prerequisites in `source-dev` mode by default. Their package compilers use the existing `package-dist` envelope, reusing an authenticated parent admission when present. Explicit strict mode, typecheck preparation and public packing/publication still check semantics; public `typecheck` remains independent. Both UI patch stages request patch-package's `--error-on-fail`, so a mixed previously patched tree reaches the existing dependency owner's pristine re-extraction and retry rather than being admitted as ready.
 
 Package-artifact publication admits its selected plugin compiler outputs through the existing
 workspace dependency build owner before the generator consumes them. This also prepares missing
 `dist` on a cold AUTO replica; check-only projections and compiler-input generation do not compile
 plugin packages. Existing optional-build isolation and required-plugin failure policy still apply.
+Cold bundled-plugin UI builds prepare the SDK's serialized manifest input through the same
+canonical manifest writer before package compilation. The existing package-input fingerprint
+also binds that preparation to the admitted live or captured source basis; a changed basis uses
+the existing single trailing pass instead of admitting a new manifest with an old UI graph.
 
 Both `source-dev` and `qa-runtime` package builds compile captured inputs, so edits during compilation do not require a quiet checkout. The output record identifies the captured inputs; later edits demand a subsequent build rather than being marked current by the completed build. Strict builds retain their live-input drift fence.
 
@@ -356,26 +362,40 @@ single-thread and non-parallel lanes retain their stronger isolation contract.
 No test selection, assertions or coverage settings change with this budget.
 
 Automatic v0.3 Gate UI partitions use one native Vitest invocation per partition,
-with disjoint file-count-balanced selection rather than repeated 16-file processes.
-The partition defaults to the runner's available cores; explicit worker flags and
-the existing shared/UI-only overrides retain their precedence. CLI unit runs also
-use one invocation, or one native invocation per configured nightly partition;
-integration runs and explicit diagnostic sharding retain their existing defaults.
-The Gate forwards its observed core count through the shared worker override for
-CLI, Server and Protocol, while concurrent plugin-package commands retain their
-shared half-core budgets. Unit partitions target at most 20 minutes and have a
+with disjoint native selection rather than repeated 16-file processes. The non-UI
+Gate partition runs CLI, Protocol, Server and plugin projects in one Vitest instance,
+retaining package configs and running their non-Vitest checks after that instance closes.
+The Gate supplies its observed core count through the shared worker override;
+without an override, partitions use the same canonical default described above.
+Gate and UI unit entry points project that resolved budget into Vitest's native
+pool environment, so inherited pool variables cannot select a competing budget.
+Explicit UI CLI worker flags, including percentages, retain native Vitest precedence;
+the Gate restores its previous environment before package adjunct checks.
+CLI nightly partitions, integration runs and explicit diagnostic sharding retain
+their existing invocation policies. Unit partitions target at most 20 minutes and have a
 30-minute job deadline including current-run artifact restoration/headroom, not
 shared preparation. The existing Gate selector also owns one shared preparation
 job: canonical frozen installation, native preparation and CLI/workspace closure
 publication run there before compiler, unit and artifact jobs consume its exact-run
-artifact. Dependency caching contains third-party dependencies only; a cache hit
-still runs the canonical frozen installer and postinstall. Successful installer
-output remains in the job log. Cache-hit installation and prepared-artifact restore
+artifact. `prepare:typecheck:workspaces` combines the root package set and all
+component prerequisites in one canonical workspace-build invocation, then generates
+the UI artifact projection. Root typecheck and the Gate call this combined preparation
+without a separate `build:packages` pass, so plugin publication happens once for that
+combined scope. The Gate then uses `build:shared --source-dev` to finish CLI runtime
+custody and verify readiness while reusing current plugin runtimes; the compiler
+consumer still checks source semantics. Dependency caching contains third-party dependencies only; a cache hit
+still runs the canonical frozen installer and required postinstalls. The installer
+defaults `REDISMS_DISABLE_POSTINSTALL=1` to skip the optional Redis `stable` prefetch,
+preserving explicit overrides; Redis adapter validation uses `REDIS_URL` or lazily
+resolves its pinned runtime version instead. Successful installer output remains
+in the job log. Cache-hit installation and prepared-artifact restore
 are different measurements and must not be reported interchangeably.
 
 The shared tar contains an explicit prepared-output inventory: dependency and
 compiled/native directories, runtime tools, web assets, the existing ignored
 generated compile inputs, and the CLI's exact public preparation-state files.
+Dependencies nested under those prepared roots are included only through their
+owning output directory, not archived again as separate dependency roots.
 It does not classify Git changes or copy changed authored sources. Tracked
 generated sources remain the responsibility of their generator and committed
 checkout; they are not admitted through a workflow allowlist. Dependency cache
@@ -385,7 +405,7 @@ Cache keys retain dependency, toolchain and postinstall inputs, but exclude test
 and spec files and `__tests__` directories; changing a keeper alone must not
 invalidate installed dependencies.
 
-Shared preparation currently has an interim 45-minute deadline. The latest cold
+Shared preparation currently has an interim 45-minute deadline. An observed cold
 hosted preparation, including prerequisite builds and artifact transport, took
 approximately 44 minutes 52 seconds and nearly exhausted that guard. Compiler
 and artifact jobs retain interim 90/95-minute deadlines. These are bounded execution guards,
@@ -403,8 +423,10 @@ The repository deliberately separates the compiler from the programmatic TypeScr
 
 CLI typechecks run `tsconfig.source.json` and `tsconfig.test.json` sequentially
 through that runner. UI checks its dependency-ordered `tsconfig.foundation.json`,
-`tsconfig.core.json`, `tsconfig.source.json`, then `tsconfig.test.json`, including
-the root source-workspace lane. Source partitions own their complete imported
+`tsconfig.core.json`, `tsconfig.source.json`, then `tsconfig.test-components.json`
+and `tsconfig.test-other.json`, including the root source-workspace lane. The two
+test projects inherit `tsconfig.test.json` and share its explicit fixture/config
+and ambient roots; each test/spec root belongs to only one group. Source partitions own their complete imported
 implementation graph; recursive components must not cross project boundaries.
 All retain the original strictness, aliases and ambient declarations, with
 separate incremental caches. The original
@@ -415,6 +437,13 @@ return a nonzero result if any project fails; cancellation or launch failure
 stops the sequence. These large app programs explicitly use `--singleThreaded`
 to avoid retaining duplicate native checker state. Use the public package
 `typecheck` entry point to check every project, not only the source config.
+
+The development 0.3 compiler-only Gate divides the root's existing compiler owners between
+`--compiler-partition=ui` and `--compiler-partition=host` in its existing compiler
+and artifact jobs. Both use `--prepared-workspaces` after the shared preparation;
+neither repeats the complete compiler suite. The standalone root command still
+checks every owner. Validate the partitions against the measured approximately
+16 GB hosted memory boundary; parsed coverage alone is not memory-fit evidence.
 
 Ordinary CLI builds also use one native checker. Under the existing CLI
 publication lock, `apps/cli/scripts/build.mjs` reuses the source-generation path

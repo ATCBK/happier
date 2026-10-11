@@ -6,6 +6,11 @@ MAX_ATTEMPTS="${YARN_INSTALL_MAX_ATTEMPTS:-3}"
 SLEEP_SECONDS="${YARN_INSTALL_RETRY_SLEEP_SECONDS:-5}"
 DEFAULT_REGISTRY="${YARN_INSTALL_REGISTRY:-https://registry.npmjs.org}"
 
+# Redis adapter validation uses REDIS_URL or fetches its pinned version at runtime.
+# Avoid compiling an unrelated latest Redis during dependency installation.
+REDISMS_DISABLE_POSTINSTALL="${REDISMS_DISABLE_POSTINSTALL-1}"
+export REDISMS_DISABLE_POSTINSTALL
+
 is_transient_yarn_error() {
     log_path="$1"
     # Retry only when the failure is very likely transient (registry/network throttling).

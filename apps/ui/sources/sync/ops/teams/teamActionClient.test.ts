@@ -79,17 +79,20 @@ afterEach(() => {
 });
 
 describe('runTeamAction', () => {
-    it('checks credential preparation through the registered read Action without requesting the recipient census', async () => {
+    it('reads the material-safe recipient census through the captured Home transport', async () => {
         const serverId = (await upsertServerProfile({ serverUrl: 'https://home-a.example', name: 'A' })).id;
         await setActiveServerId(serverId, { scope: 'device' });
-        const observation = { status: 'not_ready', reason: 'preparation_pending', counts: { ready: 2, pending: 1 } };
+        const observation = { resourceRevision: 2, sourceOwner: true, recipients: [
+            { recipientAccountId: 'ready-account', readiness: 'ready' },
+            { recipientAccountId: 'pending-account', readiness: 'preparing' },
+        ], nextCursor: 'next-page' };
         runtimeFetchMock.mockResolvedValue(json(observation));
         const outcome = await listTeamCredentialDirectMaterialPreparation({
             scope: createServerAccountScope(serverId, 'account')!, teamId: 'team /1', resourceId: 'resource?/1',
         });
         expect(outcome).toEqual({ kind: 'succeeded', value: observation });
         expect(runtimeFetchMock.mock.calls.map(([input]) => String(input?.url))).toEqual([
-            'https://home-a.example/v2/teams/team%20%2F1/credential-resources/resource%3F%2F1/direct-material?view=readiness',
+            'https://home-a.example/v2/teams/team%20%2F1/credential-resources/resource%3F%2F1/direct-material?view=census',
         ]);
     });
     it('carries a Team intent to the path its Action row declares, naming no path itself', async () => {
@@ -263,11 +266,11 @@ describe('Home domain Action failure decoding', () => {
         expect(homeDomainFailureFromActionFailure({
             errorCode: 'provider_endpoint_unavailable',
             details,
-        })).toEqual({ kind: 'unknown', retryable: false, code: null });
+        })).toEqual({ kind: 'unknown', retryable: false, code: 'provider_endpoint_unavailable' });
         expect(homeDomainFailureFromActionFailure({
             errorCode: 'provider_endpoint_rate_limited',
             details: { code: 'provider_endpoint_rate_limited', bearer: 'must-not-pass' },
-        })).toEqual({ kind: 'unknown', retryable: false, code: null });
+        })).toEqual({ kind: 'unknown', retryable: false, code: 'provider_endpoint_rate_limited' });
 
         const authenticationDetails = {
             error: 'team_authentication_policy_unavailable',

@@ -136,6 +136,7 @@ describe('identityAdministrationFailure', () => {
             directory_source_in_use: 'directory',
             external_group_binding_in_use: 'group_mappings',
             managed_membership_in_use: 'none',
+            identity_connection_in_use: 'none',
         });
         for (const code of TeamIdentityConnectionRemovalBlockerV1Schema.options) {
             const message = identityAdministrationFailureMessage(code);

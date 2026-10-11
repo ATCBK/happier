@@ -3,6 +3,8 @@ import { pathToFileURL } from 'node:url';
 
 import { runCommandSuite } from './lib/runCommandSuite.ts';
 import { runYarnCommand } from './lib/runYarnCommand.ts';
+import { discoverWorkspaceManifests } from './lib/workspaceManifests.ts';
+import { runWorkspaceUnitProjects } from './runWorkspaceUnitProjects.ts';
 
 import {
   buildPluginWorkspaceTestInvocations,
@@ -42,6 +44,13 @@ export async function runPluginWorkspaceTests(
   const invocations = buildPluginWorkspaceTestInvocations(report.packages, scriptName);
   if (invocations.length === 0) {
     throw new Error(`Plugin workspace ${scriptName} selection failed: no executable plugin workspace packages were selected.`);
+  }
+
+  if (scriptName === 'test') {
+    const selected = new Set(report.packages.map((workspace) => workspace.workspaceDirectory));
+    const workspaces = (await discoverWorkspaceManifests(rootDir)).filter((workspace) => selected.has(workspace.workspaceDirectory));
+    await runWorkspaceUnitProjects({ rootDir, workspaces });
+    return invocations;
   }
 
   const runInvocation = options.runInvocation

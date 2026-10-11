@@ -1221,7 +1221,7 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_PACKAGE_NAMES: readonly string[] = Objec
   "@happier-dev/plugins-zai",
 ]);
 
-export const BUNDLED_CANONICAL_AGENTS_CORE: Readonly<Record<CanonicalAgentId, AgentCoreConfig>> = Object.freeze({
+export const BUNDLED_CANONICAL_AGENTS_CORE: Readonly<Partial<Record<CanonicalAgentId, AgentCoreConfig>>> = Object.freeze({
     claude: CLAUDE_CORE,
     codex: CODEX_CORE,
     cursor: CURSOR_CORE,
@@ -1243,9 +1243,9 @@ export const BUNDLED_CANONICAL_AGENTS_CORE: Readonly<Record<CanonicalAgentId, Ag
     copilot: COPILOT_CORE,
     coderabbit: CODERABBIT_CORE,
     deepsec: DEEPSEC_CORE,
-} satisfies Readonly<Record<CanonicalAgentId, AgentCoreConfig>>);
+} satisfies Readonly<Partial<Record<CanonicalAgentId, AgentCoreConfig>>>);
 
-export const BUNDLED_CANONICAL_AGENTS_UI: Readonly<Record<CanonicalAgentId, AgentUiConfig>> = Object.freeze({
+export const BUNDLED_CANONICAL_AGENTS_UI: Readonly<Partial<Record<CanonicalAgentId, AgentUiConfig>>> = Object.freeze({
     claude: CLAUDE_UI,
     codex: CODEX_UI,
     cursor: CURSOR_UI,
@@ -1267,7 +1267,7 @@ export const BUNDLED_CANONICAL_AGENTS_UI: Readonly<Record<CanonicalAgentId, Agen
     copilot: COPILOT_UI,
     coderabbit: CODERABBIT_UI,
     deepsec: DEEPSEC_UI,
-} satisfies Readonly<Record<CanonicalAgentId, AgentUiConfig>>);
+} satisfies Readonly<Partial<Record<CanonicalAgentId, AgentUiConfig>>>);
 
 /** Admitted bundled declarations only; no installed version, runtime generation or activation authority. */
 export type BundledAgentDeclaration = Readonly<{

@@ -46,9 +46,9 @@ function publicFiniteCompiler(packageDir, fixtureDir, write, invocation) {
     const cp = require('node:child_process');
     const spawn = cp.spawn;
     cp.spawn = function(command, args, options) {
-      const compilerArgs = command === process.execPath && args[0] === ${JSON.stringify(invocation.argsPrefix[0])}
+      const compilerArgs = command === process.execPath && args[0] === ${JSON.stringify(invocation.compilerPath)}
         ? args.slice(1)
-        : command === 'python3' && args[3] === ${JSON.stringify(invocation.argsPrefix[0])}
+        : command === 'python3' && args[3] === ${JSON.stringify(invocation.compilerPath)}
           ? args.slice(4) : null;
       if (compilerArgs) require('node:fs').appendFileSync(${JSON.stringify(spawnLog)}, JSON.stringify(compilerArgs) + '\\n');
       return spawn(command, args, options);
@@ -77,12 +77,14 @@ function assertOneCheckerInvocations(nativeCalls, projects) {
   }
 }
 
-function assertProjectCoverage(packageDir, sourceNames) {
+function assertProjectCoverage(packageDir, sourceNames, testNames = ['tsconfig.test.json']) {
   const original = readProject('tsconfig.json', packageDir);
   const sources = sourceNames.map((name) => readProject(name, packageDir));
-  const tests = readProject('tsconfig.test.json', packageDir);
+  const tests = testNames.map((name) => readProject(name, packageDir));
+  const commonTestRoots = new Set(ts.readConfigFile(join(packageDir, 'tsconfig.test.json'), ts.sys.readFile)
+    .config.files?.map((file) => resolve(packageDir, file)) ?? []);
   const originalRoots = new Set(original.fileNames);
-  const projects = [...sources, tests];
+  const projects = [...sources, ...tests];
   const counts = new Map();
   for (const project of projects) {
     for (const file of project.fileNames.filter((file) => originalRoots.has(file))) {
@@ -95,19 +97,46 @@ function assertProjectCoverage(packageDir, sourceNames) {
     assert.deepEqual(strictOptions(project.options), strictOptions(original.options));
   }
   assert.deepEqual([...counts.keys()].sort(), [...originalRoots].sort());
-  for (const [file, count] of counts) assert.equal(count, isSharedDeclaration(file) ? projects.length : 1, file);
+  for (const [file, count] of counts) {
+    const expected = isSharedDeclaration(file) ? projects.length : commonTestRoots.has(file) ? tests.length : 1;
+    assert.equal(count, expected, file);
+  }
   for (const source of sources) {
     assert.equal(source.options.composite, true);
     assert.equal(source.options.emitDeclarationOnly, true);
     assert.equal(source.options.noEmit, false);
   }
-  assert.equal(tests.options.noEmit, true);
-  assert.equal(tests.options.disableSourceOfProjectReferenceRedirect, true);
-  assert.deepEqual(tests.projectReferences.map(({ path }) => path), [join(packageDir, 'tsconfig.source.json')]);
+  for (const project of tests) {
+    assert.equal(project.options.noEmit, true);
+    assert.equal(project.options.disableSourceOfProjectReferenceRedirect, true);
+    assert.deepEqual(project.projectReferences.map(({ path }) => path), [join(packageDir, 'tsconfig.source.json')]);
+    assert.ok([...commonTestRoots].every((file) => project.fileNames.includes(file)),
+      'each test partition retains the common explicit fixtures and configuration roots');
+  }
+  assert.equal(new Set(tests.map((project) => project.options.tsBuildInfoFile)).size, tests.length);
 }
 
-test('UI projects preserve every original root exactly once, except shared declarations', () => {
-  assertProjectCoverage(uiDir, ['tsconfig.foundation.json', 'tsconfig.core.json', 'tsconfig.source.json']);
+test('UI projects preserve every original root across complementary test partitions', () => {
+  const pkg = JSON.parse(readFileSync(join(uiDir, 'package.json'), 'utf8'));
+  const args = pkg.scripts['typecheck:source:finite'].trim().split(/\s+/u);
+  const projects = args.filter((arg, index) => ['--project', '-p'].includes(args[index - 1]));
+  const sources = ['tsconfig.foundation.json', 'tsconfig.core.json', 'tsconfig.source.json'];
+  const tests = ['tsconfig.test-components.json', 'tsconfig.test-other.json'];
+  assert.deepEqual(projects, [...sources, ...tests], 'public typecheck must check both test groups instead of the monolithic project');
+  assertProjectCoverage(uiDir, sources, tests);
+  const baseline = readProject('tsconfig.test.json');
+  const groups = tests.map((name) => readProject(name));
+  const isTest = (file) => /\.(?:test|spec)\.tsx?$/u.test(file);
+  const originalTests = baseline.fileNames.filter(isTest);
+  const groupTests = groups.map((project) => project.fileNames.filter(isTest));
+  assert.deepEqual(groupTests.flat().sort(), originalTests.sort(), 'every original test/spec root is checked exactly once');
+  assert.ok(groupTests.every((files) => files.length > 0));
+  assert.ok(groupTests[0].every((file) => file.replaceAll('\\', '/').includes('/sources/components/')));
+  assert.ok(groupTests[1].every((file) => !file.replaceAll('\\', '/').includes('/sources/components/')));
+  for (const project of groups) {
+    assert.ok(project.fileNames.every((file) => !file.replaceAll('\\', '/').includes('/sources/trash/')
+      && !file.replaceAll('\\', '/').includes('/node_modules/')));
+  }
 });
 
 test('native UI source emission leaves test-only Protocol and SDK fixtures in the noEmit project', () => {
@@ -138,7 +167,7 @@ test('native UI source emission leaves test-only Protocol and SDK fixtures in th
     'sources/dev/testkit/fixtures/pluginWidgetProjectionFixtures.ts',
   ].map((file) => join(uiDir, file));
   assert.ok(testOnlyRoots.every((file) => !sourceInputs.includes(file)));
-  const testInputs = inputs('test');
+  const testInputs = [...new Set(['test-components', 'test-other'].flatMap(inputs))];
   assert.ok(testOnlyRoots.every((file) => testInputs.includes(file)),
     'each original test/configuration root must still be checked');
   assert.ok(testInputs.some((file) => file.startsWith(protocolDir)));
@@ -246,6 +275,16 @@ test('CLI projects preserve every original root and compiler strictness', () => 
     assert.ok(tests.fileNames.includes(file), `CLI test project lost ${file}`);
   }
   assert.notEqual(tests.options.tsBuildInfoFile, source.options.tsBuildInfoFile);
+  const invocation = resolveTypeScriptCliInvocation({ repoRoot: resolve('.'), workspaceDir: packageDir });
+  const inputs = spawnSync(invocation.command, [...invocation.argsPrefix,
+    '--project', join(packageDir, 'tsconfig.source.json'), '--listFilesOnly'],
+  { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  assert.equal(inputs.status, 0, inputs.stdout + inputs.stderr);
+  const roots = new Set(source.fileNames.map((file) => resolve(file)));
+  const unlisted = inputs.stdout.trim().split(/\r?\n/u).map((file) => resolve(file.trim()))
+    .filter((file) => /\.[cm]?tsx?$/u.test(file) && !/\.d\.[cm]?ts$/u.test(file) && !roots.has(file));
+  assert.deepEqual(unlisted, [],
+    'CLI source must explicitly own every authored source it declaration-emits');
 });
 
 function assertNativeProjectBoundary(packageDir) {
@@ -347,25 +386,27 @@ test('native UI projects redirect direct and transitive imports across the compl
     [...invocation.argsPrefix, '--project', join(fixtureDir, `tsconfig.${name}.json`),
       '--pretty', 'false', ...extra], { encoding: 'utf8', cwd: fixtureDir });
   try {
-    const names = ['foundation', 'core', 'source', 'test'];
+    const names = ['foundation', 'core', 'source', 'test-components', 'test-other'];
     const moduleDeclaration = 'sources/activity/adapters/desktop/runtime/desktopActivityOverlayQaFixtures.d.ts';
     const downstreamImplementation = 'sources/activity/adapters/desktop/runtime/desktopActivityOverlayBridge.ts';
     const files = { foundation: ['foundation.ts', 'flags.json', 'sources/theme.ts'], core: ['left.ts', 'right.ts', downstreamImplementation],
-      source: ['entry.ts'], test: ['entry.test.ts'] };
+      source: ['entry.ts'], 'test-components': [], 'test-other': [] };
+    const commonTestOptions = ts.readConfigFile(join(uiDir, 'tsconfig.test.json'), ts.sys.readFile).config.compilerOptions;
     for (let index = 0; index < names.length; index++) {
       const name = names[index];
       const actual = ts.readConfigFile(join(uiDir, `tsconfig.${name}.json`), ts.sys.readFile).config;
       write(`tsconfig.${name}.json`, JSON.stringify({
         extends: join(uiDir, 'tsconfig.json'),
-        compilerOptions: { ...actual.compilerOptions, types: [], paths: {
+        compilerOptions: { ...(name.startsWith('test-') ? commonTestOptions : {}), ...actual.compilerOptions, types: [], paths: {
           'react-native-unistyles': ['./node_modules/fixture-unistyles/index.d.ts'],
           '@/theme': ['./sources/theme.ts'],
         }, rootDir: '.',
           outDir: `./cache/${name}`, tsBuildInfoFile: `./cache/${name}.tsbuildinfo` },
-        ...(index ? { references: [{ path: `./tsconfig.${names[index - 1]}.json` }] } : {}),
+        ...(index ? { references: [{ path: `./tsconfig.${name.startsWith('test-') ? 'source' : names[index - 1]}.json` }] } : {}),
         files: [...files[name], 'ambient.d.ts'],
         include: name === 'foundation' || name === 'core' ? actual.include
-          : name === 'source' ? [moduleDeclaration] : [], exclude: [],
+          : name === 'source' ? [moduleDeclaration] : actual.include,
+        exclude: name.startsWith('test-') ? actual.exclude : [],
       }));
     }
     write('ambient.d.ts', 'declare const fixtureAmbient: string;\n');
@@ -383,11 +424,17 @@ test('native UI projects redirect direct and transitive imports across the compl
     write('left.ts', "import { label } from './foundation'; import { right } from './right'; export function left(): string { return label + right; }\n");
     write('right.ts', "import { left } from './left'; export const right: number = 'bad'; export const invoke = () => left();\n");
     write('entry.ts', "import { left } from './left'; import { label } from './foundation'; import { fixtureBridge } from './sources/activity/adapters/desktop/runtime/desktopActivityOverlayQaFixtures'; export const value = left() + label + fixtureAmbient + fixtureBridge();\n");
-    write('entry.test.ts', "import { value } from './entry'; import { left } from './left'; import { label } from './foundation'; const result: number = value + left() + label;\n");
+    const testInputs = {
+      'test-components': ['sources/components/entry.test.ts', "import { value } from '../../entry'; import { left } from '../../left'; import { label } from '../../foundation'; const result: string = value + left() + label;\n"],
+      'test-other': ['sources/dev/entry.spec.ts', "import { value } from '../../entry'; import { left } from '../../left'; import { label } from '../../foundation'; const result: string = value + left() + label;\n"],
+    };
+    for (const [file, content] of Object.values(testInputs)) write(file, content);
+    write('sources/trash/ignored.test.ts', 'export const ignored: number = "bad";\n');
+    write('node_modules/ignored/fixture.spec.ts', 'export const ignored: number = "bad";\n');
     const foundation = run('foundation');
     assert.equal(foundation.status, 0, foundation.stdout + foundation.stderr);
     const foundationText = readFileSync(join(fixtureDir, 'foundation.ts'), 'utf8');
-    write('foundation.ts', foundationText.replace("themeColor(theme: UnistylesThemes['light']): string", "themeColor(theme: UnistylesThemes['light']): number"));
+    write('foundation.ts', foundationText.replace('themeColor(theme: Theme): string', 'themeColor(theme: Theme): number'));
     const themeRed = run('foundation');
     assert.notEqual(themeRed.status, 0, themeRed.stdout + themeRed.stderr);
     assert.match(themeRed.stdout + themeRed.stderr, /foundation\.ts.*TS2322/u);
@@ -409,31 +456,44 @@ test('native UI projects redirect direct and transitive imports across the compl
         assert.ok(!inputs.includes(join(fixtureDir, 'left.ts')));
       }
     }
-    const testRed = run('test');
-    assert.notEqual(testRed.status, 0);
-    assert.match(testRed.stdout + testRed.stderr, /entry\.test\.ts.*TS2322/u);
-    write('entry.test.ts', "import { value } from './entry'; import { left } from './left'; import { label } from './foundation'; const result: string = value + left() + label;\n");
+    for (const [name, [file, content]] of Object.entries(testInputs)) {
+      write(file, content.replace('result: string', 'result: number'));
+      const testRed = run(name);
+      assert.notEqual(testRed.status, 0);
+      assert.match(testRed.stdout + testRed.stderr, /entry\.(?:test|spec)\.ts.*TS2322/u);
+      write(file, content);
+    }
     const publicCompiler = publicFiniteCompiler(uiDir, fixtureDir, write, invocation);
     assert.deepEqual(publicCompiler.projects, names.map((name) => `tsconfig.${name}.json`));
     write('right.ts', "import { left } from './left'; export const right: number = 'bad'; export const invoke = () => left();\n");
-    write('entry.test.ts', "import { value } from './entry'; import { left } from './left'; import { label } from './foundation'; const result: number = value + left() + label;\n");
+    for (const [file, content] of Object.values(testInputs)) write(file, content.replace('result: string', 'result: number'));
     const publicRed = publicCompiler.run();
     assert.notEqual(publicRed.status, 0);
     assert.match(publicRed.stdout + publicRed.stderr, /right\.ts.*TS2322/u);
     assert.match(publicRed.stdout + publicRed.stderr, /entry\.test\.ts.*TS2322/u);
+    assert.match(publicRed.stdout + publicRed.stderr, /entry\.spec\.ts.*TS2322/u);
     write('right.ts', "import { left } from './left'; export const right: string = 'ok'; export const invoke = () => left();\n");
-    write('entry.test.ts', "import { value } from './entry'; import { left } from './left'; import { label } from './foundation'; const result: string = value + left() + label;\n");
+    for (const [file, content] of Object.values(testInputs)) write(file, content);
     write('compiler-spawns.jsonl', '');
     const serial = publicCompiler.run();
     assert.equal(serial.status, 0, serial.stdout + serial.stderr);
     assertOneCheckerInvocations(publicCompiler.nativeCalls(),
       publicCompiler.projects.map((project) => join(fixtureDir, project)));
-    const testGreen = run('test', ['--listFiles']);
-    assert.equal(testGreen.status, 0, testGreen.stdout + testGreen.stderr);
-    const inputs = testGreen.stdout.split(/\r?\n/u).map((file) => resolve(file.trim()));
-    for (const [name, file] of [['foundation', 'foundation'], ['core', 'left'], ['source', 'entry']]) {
-      assert.ok(inputs.includes(join(fixtureDir, `cache/${name}/${file}.d.ts`)));
-      assert.ok(!inputs.includes(join(fixtureDir, `${file}.ts`)));
+    for (const [testName, [testFile]] of Object.entries(testInputs)) {
+      const testGreen = run(testName, ['--listFiles']);
+      assert.equal(testGreen.status, 0, testGreen.stdout + testGreen.stderr);
+      const inputs = testGreen.stdout.split(/\r?\n/u).map((file) => resolve(file.trim()));
+      assert.ok(inputs.includes(join(fixtureDir, testFile)));
+      assert.ok(inputs.includes(join(fixtureDir, 'ambient.d.ts')));
+      assert.ok(!inputs.includes(join(fixtureDir, 'sources/trash/ignored.test.ts')));
+      assert.ok(!inputs.includes(join(fixtureDir, 'node_modules/ignored/fixture.spec.ts')));
+      for (const [otherName, [otherFile]] of Object.entries(testInputs)) {
+        if (testName !== otherName) assert.ok(!inputs.includes(join(fixtureDir, otherFile)));
+      }
+      for (const [name, file] of [['foundation', 'foundation'], ['core', 'left'], ['source', 'entry']]) {
+        assert.ok(inputs.includes(join(fixtureDir, `cache/${name}/${file}.d.ts`)));
+        assert.ok(!inputs.includes(join(fixtureDir, `${file}.ts`)));
+      }
     }
     if (process.platform === 'linux') {
       const reports = serial.stderr.split('\n').filter((line) => line.startsWith('[typescript] {'))

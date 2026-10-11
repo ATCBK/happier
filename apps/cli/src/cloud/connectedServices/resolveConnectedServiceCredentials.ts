@@ -13,25 +13,14 @@ import { resolveQualifiedConnectedServiceCredentialSource } from './resolveQuali
 import { ConnectedServiceStoredContentUnavailableError } from './connectedServiceStoredContentUnavailable';
 import { resolveConnectedServiceAccountMode, type ConnectedServiceAccountMode } from './resolveConnectedServiceAccountMode';
 
-type ConnectedServiceCredentialBinding = Readonly<{ serviceId: ConnectedServiceId; profileId: string }>;
+import { ConnectedServiceCredentialResolutionError } from './connectedServiceCredentialResolutionErrors';
+import type { ConnectedServiceCredentialBinding } from './connectedServiceCredentialResolutionErrors';
+export { ConnectedServiceCredentialResolutionError } from './connectedServiceCredentialResolutionErrors';
 type ConnectedServiceCredentialResolutionApi = Partial<Pick<ConnectedServiceCredentialApi, 'getAccountEncryptionMode'>>;
 
 export type ConnectedServiceCredentialResolution = Readonly<{
   record: ConnectedServiceCredentialRecordV1;
 }> & ConnectedServiceCredentialRevisionBoundaryV1;
-
-export class ConnectedServiceCredentialResolutionError extends Error {
-  readonly name = 'ConnectedServiceCredentialResolutionError';
-  readonly kind = 'missing_credential' as const;
-  readonly serviceId: ConnectedServiceId;
-  readonly profileId: string;
-
-  constructor(binding: ConnectedServiceCredentialBinding & Readonly<{ kind?: 'missing_credential' }>) {
-    super(`Missing connected service credential (${binding.serviceId}/${binding.profileId})`);
-    this.serviceId = binding.serviceId;
-    this.profileId = binding.profileId;
-  }
-}
 
 export class ConnectedServiceCredentialEncryptionMaterialUnavailableError extends ConnectedServiceStoredContentUnavailableError {
   readonly name = 'ConnectedServiceCredentialEncryptionMaterialUnavailableError';

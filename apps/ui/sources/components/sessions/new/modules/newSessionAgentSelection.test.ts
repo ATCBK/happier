@@ -56,7 +56,6 @@ describe('newSessionAgentSelection', () => {
     });
 
     it.each([
-        ['signed out', { signIn: { status: 'signedOut', via: null, nativeLogin: 'terminal', connectedServices: [] } }],
         ['missing dependency', { dependencies: [{ key: 'dep.acp', title: 'ACP server', installed: false, version: null }] }],
         ['stale', { stale: true }],
         ['checking', { state: 'checking' }],
@@ -134,17 +133,35 @@ describe('newSessionAgentSelection', () => {
         })).toBe('cli-not-detected:codex');
     });
 
-    it('preserves profile sign-in failure reasons from inventory state', () => {
+    it('allows choosing installed signed-out Agents and compatible Profiles before admitting launch credentials', () => {
         const machineAgentsById = {
             claude: createMachineAgent('claude', { state: 'needsSignIn' }),
             codex: createMachineAgent('codex', { state: 'needsSignIn' }),
         };
+        expect(isAgentSelectableForNewSession({ agentId: 'claude', machineAgentsById })).toBe(true);
+        expect(getSelectableBackendEntriesForNewSession({
+            candidateBackendEntries: [claudeEntry, codexEntry], machineAgentsById,
+        })).toEqual([claudeEntry, codexEntry]);
+        expect(resolveNextSelectableBackendEntryForNewSession({
+            candidateBackendEntries: [claudeEntry, codexEntry], currentTargetKey: claudeEntry.backendTargetKey, machineAgentsById,
+        })).toEqual(codexEntry);
         expect(resolveProfileAvailabilityForNewSession({
             candidateBackendEntries: [codexEntry], machineAgentsById,
-        })).toEqual({ available: false, reason: 'logged-out:codex' });
+        })).toEqual({ available: true });
         expect(resolveProfileAvailabilityForNewSession({
             candidateBackendEntries: [claudeEntry, codexEntry], machineAgentsById,
-        })).toEqual({ available: false, reason: 'logged-out:any' });
+        })).toEqual({ available: true });
+    });
+
+    it.each([
+        { installed: false },
+        { dependencies: [{ key: 'dep.acp', title: 'ACP server', installed: false, version: null }] },
+        { platform: { supported: false, reason: 'arch' } },
+        { stale: true },
+    ] satisfies ReadonlyArray<Partial<MachineAgent>>)('never treats sign-out as a bypass for executable eligibility (%j)', (overrides) => {
+        expect(isBackendEntrySelectableForNewSession({ entry: claudeEntry,
+            machineAgentsById: { claude: createMachineAgent('claude', { ...overrides, state: 'needsSignIn' }) },
+        })).toBe(false);
     });
 
     it('keeps configured ACP targets selectable without Agent inventory', () => {

@@ -22,6 +22,8 @@ describe('Artifact store HTTP boundary', () => {
             provenanceDataEncryptionKey, callerProvenanceDataEncryptionKey: provenanceDataEncryptionKey,
             recipients: [{ recipientAccountId: 'account-a', contentKey: { status: 'unavailable', reason: 'encryption_setup_required' } }],
         });
+        expect(await (await boundary.handle('/v1/artifacts/artifact-a?accessProjectionVersion=1'))!.json())
+            .toMatchObject({ id: 'artifact-a', ownerAccountId: 'account-a', access: 'owner' });
         expect((await boundary.handle('/v1/artifacts/missing/access/recipients'))?.status).toBe(404);
         accountId = 'account-b';
         expect((await boundary.handle('/v1/artifacts/artifact-a/access/recipients'))?.status).toBe(404);

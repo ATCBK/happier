@@ -284,23 +284,28 @@ jobs:
         run: yarn workspace @happier-dev/iroh-native build:native
       - name: Prepare canonical compiler and unit workspace prerequisites
         run: |
-          yarn -s build:packages
           yarn -s prepare:typecheck:workspaces
       - name: Prepare the canonical CLI runtime closure
-        run: yarn workspace @happier-dev/cli build:shared
+        # The root preparation has already published current plugin runtimes.
+        # Reuse the canonical currentness scan and finish physical runtime custody.
+        run: yarn workspace @happier-dev/cli build:shared --source-dev
       - name: Load the prepared Iroh native runtime
         run: yarn workspace @happier-dev/iroh-native verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
       - name: Archive the current run's coherent preparation
         run: |
           set -euo pipefail
           archive_paths="$RUNNER_TEMP/gate-prepared-paths"
+          archive_prunes=()
+          : > "$archive_paths"
           # These are the canonical package/compiler, plugin publisher, native,
           # unpacker and UI postinstall outputs; never archive a whole checkout.
-          find node_modules apps packages -type d -name node_modules -prune -print0 > "$archive_paths"
           for package in apps/* packages/* packages/plugins/*; do
             [ -f "$package/package.json" ] || continue
             for output in dist .happier-plugin; do
-              [ ! -d "$package/$output" ] || printf '%s\0' "$package/$output" >> "$archive_paths"
+              if [ -d "$package/$output" ]; then
+                printf '%s\0' "$package/$output" >> "$archive_paths"
+                archive_prunes+=(-path "$package/$output" -prune -o)
+              fi
             done
           done
           for output in \
@@ -311,11 +316,16 @@ jobs:
             apps/ui/public/happier-password-kdf-worker.js \
             apps/ui/sources/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts.js \
             packages/protocol/src/features/embeddedFeaturePolicies.generated.ts; do
-            [ ! -e "$output" ] || printf '%s\0' "$output" >> "$archive_paths"
+            if [ -e "$output" ]; then
+              printf '%s\0' "$output" >> "$archive_paths"
+              archive_prunes+=(-path "$output" -prune -o)
+            fi
           done
           for output in apps/cli/tools/archives/happier-cliproxyapi-managed-* apps/cli/tools/archives/checksums.runtime-assets.sha256 apps/ui/public/pierre-diff-worker*.js; do
             [ ! -f "$output" ] || printf '%s\0' "$output" >> "$archive_paths"
           done
+          # Nested dependencies are already inside the explicit prepared roots.
+          find node_modules apps packages "${archive_prunes[@]}" -type d -name node_modules -prune -print0 >> "$archive_paths"
           test -f .project/tmp/cli-source-dev-shared-deps-sync.json
           tar --create --file "$RUNNER_TEMP/gate-prepared-workspace.tar" \
             --exclude='.env' --exclude='.env.*' --exclude='.happier' \
@@ -344,7 +354,7 @@ jobs:
           include-hidden-files: true
 
   gate-compiler:
-    name: Gate — compiler diagnostics
+    name: Gate — UI compiler diagnostics
     needs: [gate-prepare]
     runs-on: ubuntu-latest
     # Successful compiler plus preparation: 42m33s; more than twice that sample.
@@ -385,7 +395,7 @@ jobs:
           else
             echo "Current cgroup memory.events unavailable; kernel evidence remains necessary."
           fi
-          yarn -s typecheck:compiler --prepared-workspaces
+          yarn -s typecheck:compiler --prepared-workspaces --compiler-partition=ui
       - name: Report host evidence after compiler termination
         if: ${{ failure() && steps.gate-compiler.outcome == 'failure' }}
         run: |
@@ -439,8 +449,7 @@ jobs:
         run: |
           gate_workers="$(node -p 'require("node:os").availableParallelism()')"
           echo "workers=$gate_workers" >> "$GITHUB_OUTPUT"
-          echo "Gate runner reports $gate_workers available cores; independent CLI/Server/Protocol pools use that existing worker override."
-          echo "Plugin packages retain their shared half-core pools because two package commands may run together."
+          echo "Gate runner reports $gate_workers available cores; one selected-project pool uses that existing worker override."
           echo "Gate unit host memory before preparation:"
           free -h
           cat /proc/self/cgroup
@@ -465,25 +474,23 @@ jobs:
         run: |
           set -euo pipefail
           gate_status=0
-          for gate_package in $GATE_PACKAGES; do
-            case "$gate_package" in
-              cli)
-                if [ "$CLI_PREPARATION_OUTCOMES" = 'success success' ]; then
-                  HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" yarn workspace @happier-dev/cli test:unit || gate_status=1
-                else
+          if [ "$GATE_PACKAGES" = 'ui' ]; then
+            # Preserve the UI wrapper's existing file-partition selection.
+            HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" yarn workspace @happier-dev/app test:unit || gate_status=1
+          else
+            gate_projects=()
+            for gate_package in $GATE_PACKAGES; do
+              if [ "$gate_package" = 'cli' ] && [ "$CLI_PREPARATION_OUTCOMES" != 'success success' ]; then
                   echo "::error::CLI preparation failed or is unavailable: $CLI_PREPARATION_OUTCOMES"
                   gate_status=1
-                fi
-                ;;
-              ui) yarn workspace @happier-dev/app test:unit || gate_status=1 ;;
-              server) HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" yarn --cwd apps/server test:unit || gate_status=1 ;;
-              protocol) HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" yarn workspace @happier-dev/protocol test || gate_status=1 ;;
-              plugins)
-                yarn test:plugin-workspaces || gate_status=1
-                ;;
-              *) echo "::error::Unknown gate package: $gate_package"; gate_status=1 ;;
-            esac
-          done
+              else
+                gate_projects+=("$gate_package")
+              fi
+            done
+            if [ "${#gate_projects[@]}" -gt 0 ]; then
+              HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" yarn test:gate-unit "${gate_projects[@]}" || gate_status=1
+            fi
+          fi
           exit "$gate_status"
       - name: Report Gate unit runner memory after termination
         if: ${{ always() }}
@@ -542,8 +549,15 @@ jobs:
         with:
           toolchain: 1.94.1
           targets: wasm32-unknown-unknown
+      - name: Check non-UI compiler projects from the shared preparation
+        env:
+          HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS: "1"
+        # Divide the compiler owners across the two existing compiler/build jobs.
+        # Each native project is a separate process; neither job replays the suite.
+        run: yarn -s typecheck:compiler --prepared-workspaces --compiler-partition=host
       - name: Build the CLI distribution
-        run: yarn workspace @happier-dev/cli build
+        # The shared producer already prepared the physical runtime closure.
+        run: yarn workspace @happier-dev/cli build:prepared
       - name: Load the prepared Iroh native runtime
         run: yarn workspace @happier-dev/iroh-native verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
       - name: Probe the staged CLI runtime through its canonical owner

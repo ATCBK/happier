@@ -9,6 +9,15 @@ import {
 
 const gatePackages = ['cli', 'plugins', 'protocol', 'server', 'ui'];
 
+export function resolveGatePackageForWorkspaceDirectory(directory) {
+  if (directory.startsWith('packages/plugins/')) return 'plugins';
+  if (directory === 'packages/protocol') return 'protocol';
+  if (directory === 'apps/cli') return 'cli';
+  if (directory === 'apps/ui') return 'ui';
+  if (directory === 'apps/server') return 'server';
+  return null;
+}
+
 export async function selectAffectedGatePackages({ rootDir = process.cwd(), changedPaths }) {
   const paths = await collectWorkspacePackageJsonPaths(rootDir);
   const workspaces = await Promise.all(paths.map(async (path) => ({
@@ -49,11 +58,8 @@ export async function selectAffectedGatePackages({ rootDir = process.cwd(), chan
   }
   for (const { directory, manifest } of workspaces) {
     if (!affected.has(manifest.name)) continue;
-    if (directory.startsWith('packages/plugins/')) selected.add('plugins');
-    else if (directory === 'packages/protocol') selected.add('protocol');
-    else if (directory === 'apps/cli') selected.add('cli');
-    else if (directory === 'apps/ui') selected.add('ui');
-    else if (directory === 'apps/server') selected.add('server');
+    const gatePackage = resolveGatePackageForWorkspaceDirectory(directory);
+    if (gatePackage) selected.add(gatePackage);
   }
   return [...selected].sort();
 }

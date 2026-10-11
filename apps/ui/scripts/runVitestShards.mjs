@@ -20,6 +20,7 @@ import {
   summarizeVitestShardOutcomes,
 } from '../../../scripts/testing/vitestShardOutcomes.mjs';
 import { resolveMaxOldSpaceSizeMb, upsertMaxOldSpaceSize } from './withNodeHeapLimit.mjs';
+import { resolveVitestPoolEnv, resolveVitestWorkers } from '../../../scripts/testing/vitestWorkers.ts';
 
 export {
   classifyVitestShardTermination,
@@ -148,16 +149,10 @@ export function buildVitestShardRunArgs({ configPath, passthroughArgs, positiona
     // Native sharding hashes and slices the filtered inventory deterministically.
     // It avoids both repeated list/transform passes and large file-path argv on Windows.
     const options = partition.options;
-    // Supplied budgets belong to the CLI parser and canonical UI config, including
-    // the legacy cap and invalid-value policy. Only replace the unsized default.
-    const hasConfiguredWorkers = process.env.HAPPIER_VITEST_MAX_WORKERS !== undefined
-      || process.env.VITEST_UI_MAX_FORKS !== undefined;
     return [
       'run', '--config', configPath, ...passthroughArgs,
       `--shard=${partition.part}/${partition.parts}`,
       ...(options.fileParallelism === undefined ? ['--file-parallelism'] : []),
-      ...(options.maxWorkers === undefined && !hasConfiguredWorkers ? [`--maxWorkers=${os.availableParallelism()}`] : []),
-      ...(options.minWorkers === undefined ? ['--minWorkers=1'] : []),
     ];
   }
   const droppable = new Map();
@@ -230,7 +225,7 @@ function resolveVitestNodeCommand() {
   };
 }
 
-async function resolveVitestTestFiles({ vitestCommand, configPath, nodeOptions, passthroughArgs }) {
+async function resolveVitestTestFiles({ vitestCommand, configPath, env, passthroughArgs }) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'happier-ui-vitest-list-'));
   const jsonPath = path.join(tmpDir, 'vitest-files.json');
   let operatorSignal = null;
@@ -248,10 +243,7 @@ async function resolveVitestTestFiles({ vitestCommand, configPath, nodeOptions, 
       ...passthroughArgs,
     ],
     spawnOptions: {
-      env: {
-        ...process.env,
-        NODE_OPTIONS: nodeOptions,
-      },
+      env,
       stdio: 'inherit',
     },
     cleanupPollMs: 25,
@@ -283,7 +275,7 @@ async function resolveVitestTestFiles({ vitestCommand, configPath, nodeOptions, 
   }
 }
 
-async function spawnVitestRun({ vitestCommand, configPath, nodeOptions, passthroughArgs, positionalFilters, files, partition, timeoutMs, onTimeout }) {
+async function spawnVitestRun({ vitestCommand, configPath, env, passthroughArgs, positionalFilters, files, partition, timeoutMs, onTimeout }) {
   let operatorSignal = null;
   const result = await runManagedChildCommand({
     command: vitestCommand.command,
@@ -292,10 +284,7 @@ async function spawnVitestRun({ vitestCommand, configPath, nodeOptions, passthro
       ...buildVitestShardRunArgs({ configPath, passthroughArgs, positionalFilters, files, partition }),
     ],
     spawnOptions: {
-      env: {
-        ...process.env,
-        NODE_OPTIONS: nodeOptions,
-      },
+      env,
       stdio: 'inherit',
     },
     cleanupPollMs: 25,
@@ -311,7 +300,7 @@ async function spawnVitestRun({ vitestCommand, configPath, nodeOptions, passthro
   return operatorSignal ? { ...result, signal: operatorSignal, timedOut: false } : result;
 }
 
-function startVitestRun({ vitestCommand, configPath, nodeOptions, passthroughArgs, positionalFilters, files, timeoutMs, onTimeout }) {
+function startVitestRun({ vitestCommand, configPath, env, passthroughArgs, positionalFilters, files, timeoutMs, onTimeout }) {
   let operatorSignal = null;
   const child = spawn(
     vitestCommand.command,
@@ -320,10 +309,7 @@ function startVitestRun({ vitestCommand, configPath, nodeOptions, passthroughArg
       ...buildVitestShardRunArgs({ configPath, passthroughArgs, positionalFilters, files }),
     ],
     {
-      env: {
-        ...process.env,
-        NODE_OPTIONS: nodeOptions,
-      },
+      env,
       stdio: 'inherit',
       detached: process.platform !== 'win32',
     },
@@ -450,16 +436,30 @@ async function main(argv) {
   const sizeMb = resolveMaxOldSpaceSizeMb(process.env);
   const nodeOptions = upsertMaxOldSpaceSize(process.env.NODE_OPTIONS, sizeMb);
   const passthroughArgs = resolveVitestPassthroughArgs(argv);
+  const { parseCLI } = await import('vitest/node');
+  const { options } = parseCLI(['vitest', 'run', ...passthroughArgs]);
+  const vitestEnv = {
+    ...process.env,
+    ...resolveVitestPoolEnv(resolveVitestWorkers({ legacyUiOverride: true })),
+    NODE_OPTIONS: nodeOptions,
+  };
+  // Native CLI arguments, including percentages, retain Vitest's own resolution.
+  if (options.maxWorkers !== undefined) {
+    delete vitestEnv.VITEST_MAX_FORKS;
+    delete vitestEnv.VITEST_MAX_THREADS;
+  }
+  if (options.minWorkers !== undefined) {
+    delete vitestEnv.VITEST_MIN_FORKS;
+    delete vitestEnv.VITEST_MIN_THREADS;
+  }
   const part = parsePositiveInt(process.env.HAPPIER_UI_VITEST_PART);
   const parts = parsePositiveInt(process.env.HAPPIER_UI_VITEST_PARTS);
   const vitestCommand = resolveVitestNodeCommand();
   if (part !== null && parts !== null && part <= parts) {
-    const { parseCLI } = await import('vitest/node');
-    const { options } = parseCLI(['vitest', 'run', ...passthroughArgs]);
     const shardSpec = `${part}/${parts}`;
     console.log(`[vitest] partition ${shardSpec}`);
     const result = await spawnVitestRun({
-      vitestCommand, configPath, nodeOptions, passthroughArgs,
+      vitestCommand, configPath, env: vitestEnv, passthroughArgs,
       partition: { part, parts, options }, timeoutMs: shardTimeoutMs,
       onTimeout: () => console.error(`[vitest] partition ${shardSpec} timed out after ${shardTimeoutMs}ms; terminating its process tree`),
     });
@@ -474,7 +474,7 @@ async function main(argv) {
   // drop exactly those filters, because the resolved file list already carries them.
   const positionalFilters = await resolveVitestPositionalFilters(passthroughArgs);
 
-  const allFiles = await resolveVitestTestFiles({ vitestCommand, configPath, nodeOptions, passthroughArgs });
+  const allFiles = await resolveVitestTestFiles({ vitestCommand, configPath, env: vitestEnv, passthroughArgs });
   if (!shouldVitestShardRunProceedWithoutFiles({ fileCount: allFiles.length, passthroughArgs })) {
     // `vitest run` itself exits non-zero when a filter matches nothing. Sharding must not be
     // more permissive than the tool it wraps: a mistyped path filter that silently exits 0 is
@@ -506,7 +506,7 @@ async function main(argv) {
         promise: spawnVitestRun({
           vitestCommand,
           configPath,
-          nodeOptions,
+          env: vitestEnv,
           passthroughArgs,
           positionalFilters,
           files: entry.files,
@@ -520,7 +520,7 @@ async function main(argv) {
     return startVitestRun({
       vitestCommand,
       configPath,
-      nodeOptions,
+      env: vitestEnv,
       passthroughArgs,
       positionalFilters,
       files: entry.files,

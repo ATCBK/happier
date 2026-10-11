@@ -20,6 +20,9 @@ import { AcquireResultV1Schema, type AcquireResultV1 } from '@happier-dev/protoc
 import { reconcileManagedMachine, resolveManagedRoleCredentialAuthorizations } from './reconcile';
 import { reconcileManagedIntent, prepareManagedRetentionPolicy, type ManagedGuestActivityTransport } from './managedIntentReconciler';
 
+import { ManagedMachineControllerError, ManagedMachineNativeRefusal } from './controllerErrors';
+export { ManagedMachineControllerError, ManagedMachineNativeRefusal, ManagedMachineNativeEffectGuardRefusal } from './controllerErrors';
+
 export type ManagedMachineAcquisitionDriverInput = Readonly<{
     token: string;
     serverUrl: string;
@@ -49,16 +52,6 @@ export type ManagedMachineExecutionOptions = Readonly<{
     /** Content-free installed Account socket; every wake re-reads the signed row. */
     subscribeEnvironmentSetupChanges?: (callbacks: Readonly<{ onChange(): void; onError(error: unknown): void }>) => Promise<{ dispose(): void | Promise<void> }>;
 }>;
-export class ManagedMachineControllerError extends Error {
-    constructor(readonly code: string) {
-        super(code);
-        this.name = 'ManagedMachineControllerError';
-    }
-}
-/** Definite provider refusal, distinct from policy, cancellation and uncertain IO. */
-export class ManagedMachineNativeRefusal extends ManagedMachineControllerError {}
-/** A private pre-handler guard prevented native IO, not an unknown delivery. */
-export class ManagedMachineNativeEffectGuardRefusal extends ManagedMachineControllerError {}
 
 /** The controller transport consumes the server's row/currentness authority. */
 export function createManagedMachineControllerClient(input: ManagedMachineAcquisitionDriverInput, options: ManagedMachineExecutionOptions, action: ManagedMachineActionIdV1) {

@@ -1911,6 +1911,35 @@ async function synchronizeSerializedPluginManifest(params: Readonly<{
   writeFileAtomic(manifestPath, serializedManifest);
 }
 
+/**
+ * The staged UI compiler reads the installed manifest before package-artifact
+ * publication can consume its output. Prepare that input through this same
+ * writer, without publishing catalogs, executable runtimes or generated source.
+ */
+export async function prepareBundledPluginUiManifestForWorkspaceBuild(params: Readonly<{
+  repoRoot: string;
+  packageName: string;
+  heldLockValue?: string;
+}>): Promise<boolean> {
+  if (!readBundledPluginPackageNames(params.repoRoot).includes(params.packageName)) return false;
+  const pluginPackageId = pluginPackageNameToPackageId(params.packageName);
+  const packageRoot = resolve(params.repoRoot, 'packages/plugins', pluginPackageId);
+  const packageJson = readJson(resolve(packageRoot, 'package.json')) as { scripts?: Record<string, unknown> };
+  if (typeof packageJson.scripts?.['build:ui'] !== 'string' || !packageJson.scripts['build:ui'].trim()) return false;
+  await withWorkspaceBundleLock(async () => {
+    await withTypescriptModuleInspectionSession(async () => {
+      const dependencies = await loadGeneratorWorkspaceDependencies();
+      const manifest = await loadPluginManifest(params.repoRoot, pluginPackageId, dependencies);
+      await synchronizeSerializedPluginManifest({ packageRoot, manifest, mode: 'write', dependencies });
+    });
+  }, {
+    lockPath: resolveWorkspaceBundleLockPath(params.repoRoot),
+    heldLockValue: params.heldLockValue,
+    errorLabel: 'bundled plugin manifest preparation',
+  });
+  return true;
+}
+
 function manifestDeclaresAgentRuntime(
   manifest: JsonValue,
   dependencies: GeneratorWorkspaceDependencies,

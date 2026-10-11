@@ -27,7 +27,7 @@ import {
   isDaemonProcessForCurrentRuntimeRoot,
 } from '@/daemon/ownership/daemonProcessScopeIdentity';
 import { readProcessIdentityByPid } from '@/daemon/processIdentity';
-import { classifyDaemonLifecycleProcessByPid } from '@/daemon/doctor';
+import { classifyDaemonLifecycleProcessByPid } from '@/daemon/processInspection';
 import { Metadata, type SessionCreationOutcome } from '@/api/types';
 import { projectPath, projectPathFromModuleUrl } from '@/projectPath';
 import { pathToFileURL } from 'node:url';

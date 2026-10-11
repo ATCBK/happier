@@ -67,7 +67,7 @@ describe('buildCliDist', () => {
       mkdirSync(join(packageRoot, 'src'));
       writeFileSync(join(packageRoot, 'src', 'index.ts'), 'export const invalid: string = 42;\n');
       writeFileSync(join(packageRoot, 'tsconfig.build.json'), JSON.stringify({
-        compilerOptions: { strict: true, noEmit: true, types: [], skipLibCheck: true },
+        compilerOptions: { strict: true, declaration: true, noEmit: true, rootDir: 'src', types: [], skipLibCheck: true },
         include: ['src/index.ts'],
       }));
       let diagnostics = '';
@@ -91,7 +91,7 @@ describe('buildCliDist', () => {
           writeFileSync(join(output, 'index.mjs'), 'export const runtime = 42;\n');
         },
       };
-      await expect(buildCliDist(options)).rejects.toThrow('exited with status 1');
+      await expect(buildCliDist(options)).rejects.toThrow(/exited with status [12]/u);
       expect(diagnostics).toContain('TS2322');
       expect(existsSync(join(packageRoot, 'dist'))).toBe(false);
     } finally { rmSync(packageRoot, { recursive: true, force: true }); }
@@ -121,7 +121,7 @@ describe('buildCliDist', () => {
         'export const MachineMetadataSchema = StoredMachinePublishedMetadataV1Schema;',
       ].join('\n'));
       const authoredConfig = JSON.stringify({
-        compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'Bundler',
+        compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'Bundler', rootDir: 'src',
           strict: true, declaration: true, noEmit: true, skipLibCheck: true, types: [], paths },
         include: ['src/index.ts'],
       });
@@ -296,6 +296,8 @@ describe('buildCliDist', () => {
           module: 'ESNext',
           moduleResolution: 'bundler',
           incremental: true,
+          declaration: true,
+          rootDir: 'src',
           noEmit: true,
         },
         include: ['src/**/*.ts'],
@@ -333,8 +335,8 @@ describe('buildCliDist', () => {
       expect(compiledRoots[1]).toBe(compiledRoots[0]);
 
       writeFileSync(sourcePath, 'export const runtime: string = 42;\n');
-      await expect(buildCliDist(options)).rejects.toThrow('exited with status 1');
-      await expect(buildCliDist(options)).rejects.toThrow('exited with status 1');
+      await expect(buildCliDist(options)).rejects.toThrow(/exited with status [12]/u);
+      await expect(buildCliDist(options)).rejects.toThrow(/exited with status [12]/u);
       expect(compiledRoots).toHaveLength(2);
       expect(existsSync(join(packageRoot, 'dist', 'index.mjs'))).toBe(true);
 
@@ -361,6 +363,7 @@ describe('buildCliDist', () => {
       const eventsPath = join(packageRoot, 'events.txt');
       const typecheckInvocations: unknown[][] = [];
       let wrapperOutputDir = '';
+      let checkedDeclarationSourceDir = '';
 
       await buildCliDist({
         packageRoot,
@@ -379,9 +382,11 @@ describe('buildCliDist', () => {
           typecheckInvocations.push(args);
           writeFileSync(eventsPath, 'typecheck\n', { flag: 'a' });
         },
-        runPkgrollBuildImpl: ({ outputDir }: { outputDir: string }) => {
+        runPkgrollBuildImpl: ({ outputDir, declarationSourceDir }: { outputDir: string; declarationSourceDir: string }) => {
           wrapperOutputDir = outputDir;
+          checkedDeclarationSourceDir = declarationSourceDir;
           expect(existsSync(lockPath)).toBe(true);
+          expect(existsSync(declarationSourceDir)).toBe(true);
           writeFileSync(eventsPath, 'bundle\n', { flag: 'a' });
         },
         finalizeDistImpl: () => {
@@ -395,10 +400,11 @@ describe('buildCliDist', () => {
       expect(typecheckInvocations).toEqual([
         [
           '/canonical/runTypeScriptCli.mjs',
-          ['-p', 'tsconfig.build.json', '--noEmit', '--singleThreaded'],
+          ['-p', 'tsconfig.build.json', '--noEmit', 'false', '--emitDeclarationOnly', '--outDir', checkedDeclarationSourceDir, '--singleThreaded'],
           expect.objectContaining({ cwd: realpathSync.native(packageRoot) }),
         ],
       ]);
+      expect(existsSync(checkedDeclarationSourceDir)).toBe(false);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -507,8 +513,22 @@ describe('buildCliDist', () => {
   it('refuses to publish when the workspace runtime changes during bundling', async () => {
     const packageRoot = createTempDirSync('happier-cli-build-workspace-runtime-race-');
     try {
-      writeBuildPackageManifest(packageRoot);
-      let identityReadCount = 0;
+      const dependencyName = '@happier-dev/build-dependency';
+      writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
+        name: '@happier-dev/build-fixture', version: '0.0.0', main: './dist/index.cjs',
+        dependencies: { [dependencyName]: '0.0.0' }, bundledDependencies: [dependencyName],
+      }));
+      const dependencyRoots = [
+        join(packageRoot, 'packages', 'build-dependency'),
+        join(packageRoot, 'node_modules', '@happier-dev', 'build-dependency'),
+      ];
+      for (const root of dependencyRoots) {
+        mkdirSync(join(root, 'dist'), { recursive: true });
+        writeFileSync(join(root, 'package.json'), JSON.stringify({
+          name: dependencyName, version: '0.0.0', type: 'module', exports: './dist/index.js',
+        }));
+        writeFileSync(join(root, 'dist', 'index.js'), 'export const generation = "admitted";\n');
+      }
       await expect(buildCliDist({
         packageRoot,
         repoRoot: packageRoot,
@@ -518,14 +538,14 @@ describe('buildCliDist', () => {
           argsPrefix: ['/canonical/runTypeScriptCli.mjs'],
         }),
         runTypecheckImpl: () => {},
-        runPkgrollBuildImpl: () => {},
+        runPkgrollBuildImpl: () => {
+          // A real external bundler process can overlap prepared publication.
+          // Keep the physical dependency reader and refusal fence real.
+          writeFileSync(join(dependencyRoots[1], 'dist', 'index.js'), 'export const generation = "newer";\n');
+        },
         readRuntimeInputFreshnessImpl: async () => ({
           fingerprint: 'c'.repeat(64),
           newestMtimeNs: 1n,
-        }),
-        readWorkspaceRuntimeIdentityImpl: () => ({
-          fingerprint: (identityReadCount++ === 0 ? 'a' : 'b').repeat(64),
-          packageCount: 1,
         }),
         finalizeDistImpl: () => {
           throw new Error('mixed workspace runtime must not be finalized');

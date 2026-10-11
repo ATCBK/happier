@@ -38,6 +38,31 @@ function runShellStep(step, workspace, runnerTemp, env = {}) {
   });
 }
 
+test('Gate unit shell invokes one selected project suite and fails closed on native preparation', (t) => {
+  const { root, workspace, runnerTemp } = fixture(t);
+  const workflow = yaml.load(fs.readFileSync(path.join(workflowsDir, 'tests.yml'), 'utf8'));
+  const step = workflow.jobs['gate-unit'].steps.find((entry) => entry.name === 'Run affected package unit suite');
+  const calls = path.join(root, 'calls');
+  // Yarn is the process boundary; execute the real workflow shell unchanged.
+  write(root, 'bin/yarn', '#!/bin/sh\nprintf "%s|%s\\n" "${HAPPIER_VITEST_MAX_WORKERS-}" "$*" >> "$GATE_CALLS"\nexit "${GATE_CHILD_STATUS:-0}"\n', 0o755);
+  const env = { PATH: `${path.join(root, 'bin')}:${process.env.PATH}`, GATE_CALLS: calls,
+    GATE_PACKAGES: 'cli protocol server plugins', GATE_VITEST_MAX_WORKERS: '2',
+    HAPPIER_VITEST_MAX_WORKERS: '1', CLI_PREPARATION_OUTCOMES: 'success success' };
+  const succeeded = runShellStep(step, workspace, runnerTemp, env);
+  assert.equal(succeeded.status, 0, succeeded.stderr);
+  assert.deepEqual(fs.readFileSync(calls, 'utf8').trim().split('\n'), ['2|test:gate-unit cli protocol server plugins']);
+  fs.unlinkSync(calls);
+  const refused = runShellStep(step, workspace, runnerTemp, { ...env, CLI_PREPARATION_OUTCOMES: 'success failure' });
+  assert.notEqual(refused.status, 0);
+  assert.deepEqual(fs.readFileSync(calls, 'utf8').trim().split('\n'), ['2|test:gate-unit protocol server plugins']);
+  fs.unlinkSync(calls);
+  const failed = runShellStep(step, workspace, runnerTemp, { ...env, GATE_CHILD_STATUS: '7' });
+  assert.notEqual(failed.status, 0);
+  const ui = runShellStep(step, workspace, runnerTemp, { ...env, GATE_PACKAGES: 'ui' });
+  assert.equal(ui.status, 0, ui.stderr);
+  assert.equal(fs.readFileSync(calls, 'utf8').trim().split('\n').at(-1), '2|workspace @happier-dev/app test:unit');
+});
+
 test('dependency cache inputs retain installation sources without test-only churn', (t) => {
   const { workspace } = fixture(t);
   const action = yaml.load(fs.readFileSync(installActionPath, 'utf8'));
@@ -88,6 +113,8 @@ test('the current-run preparation archive restores prepared outputs and readines
   write(workspace, 'packages/plugins/example/.happier-plugin/plugin.json', '{"current":true}');
   const untrackedRuntime = 'packages/plugins/example/.happier-plugin/agent/runtime/factory.js';
   write(workspace, untrackedRuntime, 'current published plugin runtime');
+  const publishedDependency = 'packages/plugins/example/.happier-plugin/node_modules/external/index.js';
+  write(workspace, publishedDependency, 'current published plugin dependency');
   write(workspace, 'packages/plugins/example/.happier-plugin/.env.local', 'private plugin state');
   write(workspace, 'packages/iroh-native/native/iroh.node', 'native-output', 0o755);
   write(workspace, 'apps/cli/tools/unpacked/helper', '#!/bin/sh\nexit 0\n', 0o755);
@@ -128,6 +155,10 @@ test('the current-run preparation archive restores prepared outputs and readines
   write(root, 'bin/git', '#!/bin/sh\necho "unexpected Git inventory invocation" >&2\nexit 42\n', 0o755);
   const result = runShellStep(archive, workspace, runnerTemp, { PATH: `${path.join(root, 'bin')}:${process.env.PATH}` });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const archiveEntries = spawnSync('tar', ['--list', '--file', path.join(runnerTemp, 'gate-prepared-workspace.tar')], { encoding: 'utf8' });
+  assert.equal(archiveEntries.status, 0, archiveEntries.stderr);
+  assert.equal(archiveEntries.stdout.split('\n').filter((entry) => entry === publishedDependency).length, 1,
+    'published dependency belongs to its prepared output, not a second dependency archive root');
   const consumer = path.join(root, 'consumer');
   fs.mkdirSync(consumer);
   write(consumer, generated, 'stale checkout projection');
@@ -152,6 +183,7 @@ test('the current-run preparation archive restores prepared outputs and readines
   assert.equal(fs.readFileSync(path.join(consumer, 'apps/cli/node_modules/@happier-dev/protocol/dist/index.js'), 'utf8'), 'current physical copy');
   assert.equal(fs.readFileSync(path.join(consumer, 'packages/plugins/example/.happier-plugin/plugin.json'), 'utf8'), '{"current":true}');
   assert.equal(fs.readFileSync(path.join(consumer, untrackedRuntime), 'utf8'), 'current published plugin runtime');
+  assert.equal(fs.readFileSync(path.join(consumer, publishedDependency), 'utf8'), 'current published plugin dependency');
   for (const file of ['packages/iroh-native/native/iroh.node', 'apps/cli/tools/unpacked/helper']) {
     assert.equal(fs.statSync(path.join(consumer, file)).mode & 0o777, 0o755);
   }

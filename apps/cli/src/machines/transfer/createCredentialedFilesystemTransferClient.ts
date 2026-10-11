@@ -4,7 +4,6 @@ import { mintFiniteAccountClientTransferHandshake } from '@happier-dev/sync-clie
 import { readMachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import type { ActionExecuteResult, ActionExecutorContext } from '@happier-dev/protocol/actions';
 import type { FilesystemTransferActionId } from '@happier-dev/protocol/actions/filesystemActionFamily';
-import { ApiClient } from '@/api/api';
 import { fetchAccountProfile } from '@/api/accountProfile';
 import { listCurrentAccountMachines } from '@/api/machine/resolveCurrentAccountMachineTarget';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -30,6 +29,8 @@ export async function createCredentialedFilesystemTransferClient(input: Readonly
   ]));
   if (features.status !== 'ready' || features.provenance !== 'authenticated') throw new Error('Authenticated finite transfer trust is unavailable');
   const trustRoots = features.features.capabilities.machines.peerMediation.grantSigningKeys;
+  // The enclosing API also registers Actions that consume this transfer client.
+  const { ApiClient } = await import('@/api/api');
   const api = await ApiClient.create(input.credentials);
   const runtime = await createDaemonMachineIrohRuntime({ happyHomeDir: configuration.happyHomeDir,
     identity: 'ephemeral', relayConfig: readIrohRelayConfigFromEnv(process.env) });

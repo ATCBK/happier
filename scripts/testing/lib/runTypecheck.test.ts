@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
@@ -22,7 +23,6 @@ test('root typecheck delegates to the phase runner without replacing the heartbe
 
 test('root typecheck plan preserves prerequisite order and every Turbo workspace owner', () => {
   assert.deepEqual(ROOT_TYPECHECK_COMMANDS.map((command) => command.args), [
-    ['-s', 'build:packages'],
     ['-s', 'prepare:typecheck:workspaces'],
     [
       'turbo',
@@ -84,18 +84,16 @@ test('root typecheck attempts every phase sequentially before reporting complete
   assert.equal(maximumActive, 1);
 });
 
-test('compiler-only typecheck stops before consumers when package preparation fails', async () => {
-  for (const failedPrerequisite of ['build-packages', 'prepare-workspaces']) {
-    const executed: string[] = [];
-    await assert.rejects(runRootTypecheck({
-      compilerOnly: true,
-      runCommand: async (command) => {
-        executed.push(command.id);
-        if (command.id === failedPrerequisite) throw new Error('current declarations unavailable');
-      },
-    }), /current declarations unavailable/u);
-    assert.deepEqual(executed, ['build-packages', 'prepare-workspaces']);
-  }
+test('compiler-only typecheck stops before consumers when combined package preparation fails', async () => {
+  const executed: string[] = [];
+  await assert.rejects(runRootTypecheck({
+    compilerOnly: true,
+    runCommand: async (command) => {
+      executed.push(command.id);
+      if (command.id === 'prepare-workspaces') throw new Error('current declarations unavailable');
+    },
+  }), /current declarations unavailable/u);
+  assert.deepEqual(executed, ['prepare-workspaces']);
 });
 
 test('compiler-only typecheck executes compilers after preparation and reports compiler failures', async () => {
@@ -126,9 +124,10 @@ test('compiler-only typecheck executes compilers after preparation and reports c
   assert.equal(executable, 'node');
   assert.equal(resolve('apps/ui', owner), resolve('scripts/workspaces/runTypeScriptCli.mjs'));
   assert.deepEqual(compilerArgs.filter((_, index) => compilerArgs[index - 1] === '--project'), [
-    'tsconfig.foundation.json', 'tsconfig.core.json', 'tsconfig.source.json', 'tsconfig.test.json',
+    'tsconfig.foundation.json', 'tsconfig.core.json', 'tsconfig.source.json',
+    'tsconfig.test-components.json', 'tsconfig.test-other.json',
   ]);
-  for (const args of executed.slice(2)) {
+  for (const args of executed.slice(1)) {
     if (!uiCommands.includes(args) && !cliCommands.includes(args) && !serverCommands.includes(args) && !testsCommands.includes(args)) {
       assert.equal(args[0], 'tsc');
       assert.ok(args.includes('--noEmit'));
@@ -162,10 +161,10 @@ test('current-run prepared compiler mode omits only preparation and retains ever
     runCommand: async ({ args }) => { prepared.push([...args]); },
   });
 
-  assert.deepEqual(ordinary.slice(0, 2), [
-    ['-s', 'build:packages'], ['-s', 'prepare:typecheck:workspaces'],
+  assert.deepEqual(ordinary.slice(0, 1), [
+    ['-s', 'prepare:typecheck:workspaces'],
   ]);
-  assert.deepEqual(prepared, ordinary.slice(2));
+  assert.deepEqual(prepared, ordinary.slice(1));
   assert.ok(prepared.some((args) => args.includes('packages/protocol/tsconfig.json')));
   for (const workspace of ['apps/ui', 'apps/cli', 'apps/server', 'packages/tests']) {
     assert.deepEqual(prepared.filter((args) => args.includes(workspace)), [
@@ -203,4 +202,43 @@ test('prepared workspaces are refused outside compiler-only mode before running 
     runCommand: async ({ id }) => { executed.push(id); },
   }), /prepared workspaces require compiler-only mode/u);
   assert.deepEqual(executed, []);
+});
+
+test('prepared compiler partitions check every owner exactly once without a whole-suite replay', async () => {
+  const complete: string[] = [];
+  const ui: string[] = [];
+  const host: string[] = [];
+  for (const [compilerPartition, executed] of [[undefined, complete], ['ui', ui], ['host', host]] as const) {
+    await runRootTypecheck({
+      compilerOnly: true,
+      preparedWorkspaces: true,
+      compilerPartition,
+      runCommand: async ({ id }) => { executed.push(id); },
+    });
+  }
+  assert.deepEqual(ui, ['apps/ui/tsconfig.json']);
+  assert.deepEqual(host, complete.filter((id) => id !== 'apps/ui/tsconfig.json'));
+  assert.equal(new Set([...ui, ...host]).size, complete.length);
+  assert.equal(ui.length + host.length, complete.length);
+});
+
+test('compiler partition selection is rejected outside compiler-only mode before execution', async () => {
+  const executed: string[] = [];
+  await assert.rejects(runRootTypecheck({
+    compilerPartition: 'ui',
+    runCommand: async ({ id }) => { executed.push(id); },
+  }), /compiler partition requires compiler-only mode/u);
+  assert.deepEqual(executed, []);
+});
+
+test('public compiler entry refuses malformed partition selection instead of loading every graph', () => {
+  for (const argument of ['--compiler-partition=unknown', '--compiler-partition=', '--compiler-partition']) {
+    const result = spawnSync(process.execPath, [
+      '--experimental-strip-types', 'scripts/testing/runTypecheck.ts',
+      '--compiler-only', '--prepared-workspaces', argument,
+    ], { encoding: 'utf8' });
+    assert.ifError(result.error);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /compiler partition must be ui or host/u);
+  }
 });

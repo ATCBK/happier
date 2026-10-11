@@ -520,7 +520,7 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
   }
   lines.push(']);');
   lines.push('');
-  lines.push('export const BUNDLED_CANONICAL_AGENTS_CORE: Readonly<Record<CanonicalAgentId, AgentCoreConfig>> = Object.freeze({');
+  lines.push('export const BUNDLED_CANONICAL_AGENTS_CORE: Readonly<Partial<Record<CanonicalAgentId, AgentCoreConfig>>> = Object.freeze({');
   for (const agentId of AGENT_UI_PROJECTION_ORDER) {
     const valueName = selectedProjectionSourcesByAgentId.get(agentId)?.coreConst;
     if (!valueName) {
@@ -529,9 +529,9 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
     }
     lines.push(`    ${agentId}: ${valueName},`);
   }
-  lines.push('} satisfies Readonly<Record<CanonicalAgentId, AgentCoreConfig>>);');
+  lines.push('} satisfies Readonly<Partial<Record<CanonicalAgentId, AgentCoreConfig>>>);');
   lines.push('');
-  lines.push('export const BUNDLED_CANONICAL_AGENTS_UI: Readonly<Record<CanonicalAgentId, AgentUiConfig>> = Object.freeze({');
+  lines.push('export const BUNDLED_CANONICAL_AGENTS_UI: Readonly<Partial<Record<CanonicalAgentId, AgentUiConfig>>> = Object.freeze({');
   for (const agentId of AGENT_UI_PROJECTION_ORDER) {
     const valueName = selectedProjectionSourcesByAgentId.get(agentId)?.uiConst;
     if (!valueName) {
@@ -540,7 +540,7 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
     }
     lines.push(`    ${agentId}: ${valueName},`);
   }
-  lines.push('} satisfies Readonly<Record<CanonicalAgentId, AgentUiConfig>>);');
+  lines.push('} satisfies Readonly<Partial<Record<CanonicalAgentId, AgentUiConfig>>>);');
   lines.push('');
   lines.push('/** Admitted bundled declarations only; no installed version, runtime generation or activation authority. */');
   lines.push('export type BundledAgentDeclaration = Readonly<{');

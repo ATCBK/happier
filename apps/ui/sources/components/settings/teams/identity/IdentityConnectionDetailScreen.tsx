@@ -576,7 +576,7 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
     const chosenCandidate = workosCandidates.find((candidate) => candidate.connectionId === chosenWorkosCandidateId) ?? null;
     const controlsDisabled = mutationBusy || !props.mutationsAvailable;
     const candidatePicker = workosCandidates.length > 0 ? (
-        <SettingAnchor setting={TEAM_IDENTITY_CONNECTION_SETTINGS.settings.workosConnection}><ItemGroup accessibilityRole="radiogroup">
+        <SettingAnchor setting={TEAM_IDENTITY_CONNECTION_SETTINGS.settings.workosConnection}><ItemGroup accessibilityRole="radiogroup" accessibilityLabel={t('identityAdministration.workosChooseConnection')}>
             {workosCandidates.map((candidate) => {
                 const draft = isWorkosDraftCandidate(candidate);
                 const detail = draft ? t('identityAdministration.workosCandidateDraft') : workosCandidateSummary(candidate);

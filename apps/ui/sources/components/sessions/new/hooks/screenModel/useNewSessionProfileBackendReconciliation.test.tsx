@@ -302,7 +302,7 @@ describe('useNewSessionProfileBackendReconciliation', () => {
         { stale: true, state: 'ready' },
         { stale: false, state: 'needsSignIn' },
     ] satisfies ReadonlyArray<Pick<MachineAgent, 'stale' | 'state'>>)(
-        'reconciles away from an unavailable inventory row (%s) when another compatible backend remains ready', async (unavailable) => {
+        'reconciles stale inventory but retains an installed signed-out target for credential selection (%s)', async (unavailable) => {
         const applyPermissionModeSpy = vi.fn<(mode: PermissionMode, source: 'user' | 'auto') => void>();
         const prepareSecretPromptForProfileSelectionSpy = vi.fn<(prevProfileId: string | null) => void>();
         const profile = createProfile('profile-a');
@@ -340,6 +340,6 @@ describe('useNewSessionProfileBackendReconciliation', () => {
             },
         });
 
-        expect(hook.getCurrent().backendTarget).toEqual({ kind: 'backend', backendId: 'codex' });
+        expect(hook.getCurrent().backendTarget).toEqual({ kind: 'backend', backendId: unavailable.stale ? 'codex' : 'claude' });
     });
 });

@@ -120,6 +120,8 @@ export const DEV_TARGET_MUTAGEN_IGNORE_PATHS = [
   'apps/ui/src-tauri/integrations',
   // Native preparation generates these resources from the target's resolved Cargo graph.
   // A source flush must neither delete them nor overwrite them with another host's output.
+  'packages/iroh-native/native',
+  'packages/iroh-native/native-test',
   'packages/iroh-native/release-evidence',
   'apps/ui/android/app/build',
   'apps/ui/android/build',

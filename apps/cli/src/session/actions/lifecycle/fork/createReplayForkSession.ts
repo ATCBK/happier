@@ -4,7 +4,7 @@ import {
     type SpawnSessionOptions,
 } from '@/session/shared/spawnSessionContract';
 import { buildReplaySeededSpawnRecipe } from '@/session/replay/buildReplaySeededSpawnRecipe';
-import { resolveReplaySeedDraft } from '@/session/replay/resolveReplaySeedDraft';
+import type { resolveReplaySeedDraft } from '@/session/replay/resolveReplaySeedDraft';
 import { createSpawnedSession } from '@/session/services/createSpawnedSession';
 import { createConnectedServiceForkLaunchContext } from '@/session/fork/connectedServiceForkLaunchContext';
 import { logger } from '@/ui/logger';

@@ -14,7 +14,6 @@ const ROOT_TYPE_TEST_COMMAND = {
 } as const satisfies CommandSuiteEntry;
 
 const ROOT_TYPECHECK_PREPARATION_COMMANDS = [
-  { id: 'build-packages', args: ['-s', 'build:packages'] },
   { id: 'prepare-workspaces', args: ['-s', 'prepare:typecheck:workspaces'] },
 ] as const satisfies readonly CommandSuiteEntry[];
 
@@ -80,6 +79,7 @@ export interface RunRootTypecheckOptions {
   rootDir?: string;
   commands?: readonly CommandSuiteEntry[];
   compilerOnly?: boolean;
+  compilerPartition?: 'ui' | 'host';
   // The caller must have restored this run's successful canonical preparation,
   // including generated sources and physical workspace dependency outputs.
   preparedWorkspaces?: boolean;
@@ -92,8 +92,14 @@ export async function runRootTypecheck(
   if (options.preparedWorkspaces && !options.compilerOnly) {
     throw new Error('prepared workspaces require compiler-only mode');
   }
+  if (options.compilerPartition && !options.compilerOnly) {
+    throw new Error('compiler partition requires compiler-only mode');
+  }
   const rootDir = options.rootDir ?? process.cwd();
-  const commands = options.commands ?? (options.compilerOnly ? ROOT_COMPILER_TYPECHECK_COMMANDS : ROOT_TYPECHECK_COMMANDS);
+  const selectedCommands = options.commands ?? (options.compilerOnly ? ROOT_COMPILER_TYPECHECK_COMMANDS : ROOT_TYPECHECK_COMMANDS);
+  const commands = options.compilerPartition
+    ? selectedCommands.filter(({ id }) => (id === 'apps/ui/tsconfig.json') === (options.compilerPartition === 'ui'))
+    : selectedCommands;
   const runCommand = options.runCommand ?? ((command) => runYarnCommand(command, rootDir));
   const prepared = options.compilerOnly && !options.commands && !options.preparedWorkspaces
     ? await runCommandSuite({
@@ -115,10 +121,17 @@ export async function runRootTypecheck(
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  void runRootTypecheck({
-    compilerOnly: process.argv.includes('--compiler-only'),
-    preparedWorkspaces: process.argv.includes('--prepared-workspaces'),
-  }).catch((error: unknown) => {
+  void (async () => {
+    const compilerPartition = process.argv.find((arg) => arg.startsWith('--compiler-partition='))?.slice('--compiler-partition='.length);
+    if (process.argv.includes('--compiler-partition') || (compilerPartition !== undefined && compilerPartition !== 'ui' && compilerPartition !== 'host')) {
+      throw new Error('compiler partition must be ui or host');
+    }
+    return await runRootTypecheck({
+      compilerOnly: process.argv.includes('--compiler-only'),
+      preparedWorkspaces: process.argv.includes('--prepared-workspaces'),
+      compilerPartition,
+    });
+  })().catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   });

@@ -1365,7 +1365,7 @@ async function inspectDaemonLockSnapshotOwner(snapshot: DaemonLockSnapshot, opti
     return { status: 'replaceable', pid, reason: 'unrelated' };
   }
 
-  const { classifyDaemonLifecycleProcessByPid } = await import('@/daemon/doctor');
+  const { classifyDaemonLifecycleProcessByPid } = await import('@/daemon/processInspection');
   const ownerProcess = await classifyDaemonLifecycleProcessByPid(pid)
     .catch(() => ({ kind: 'unknown' as const }));
   if (ownerProcess.kind === 'daemon') {

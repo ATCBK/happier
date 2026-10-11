@@ -208,6 +208,7 @@ async function buildCliDistUnlocked(options = {}) {
         reuseCompilerCache: options.skipLock !== true,
       });
 
+  let declarationSourceDir;
   try {
     await (options.rmDistImpl ?? rmDist)(['node', 'rmDist.mjs', outputDir], {
       env,
@@ -228,6 +229,7 @@ async function buildCliDistUnlocked(options = {}) {
       packageJsonPath: immutableSource.packageJsonPath,
       outputDir,
       env,
+      declarationSourceDir,
     }));
     // Executable preparation does not consume a semantic check. Strict npm
     // publication retains checking, including lifecycle-forced strict mode.
@@ -235,7 +237,11 @@ async function buildCliDistUnlocked(options = {}) {
       const typeScriptInvocation = (options.resolveTypeScriptCliInvocationImpl ?? resolveTypeScriptCliInvocation)({
         processExecPath: process.execPath,
       });
-      await measure('typecheck', () => (options.runTypecheckImpl ?? runNodeScript)(typeScriptInvocation.argsPrefix[0], [...typeScriptInvocation.argsPrefix.slice(1), '-p', 'tsconfig.build.json', '--noEmit', '--singleThreaded'], {
+      declarationSourceDir = mkdtempSync(join(immutableSource.packageRoot, '.tmp.hstack-cli-declarations.'));
+      // Emit checked declarations with the canonical native compiler once.
+      // Pkgroll still bundles public types, but no longer builds another TS5
+      // source program after this strict compile has succeeded.
+      await measure('typecheck', () => (options.runTypecheckImpl ?? runNodeScript)(typeScriptInvocation.argsPrefix[0], [...typeScriptInvocation.argsPrefix.slice(1), '-p', 'tsconfig.build.json', '--noEmit', 'false', '--emitDeclarationOnly', '--outDir', declarationSourceDir, '--singleThreaded'], {
         command: typeScriptInvocation.command,
         cwd: immutableSource.packageRoot,
         env,
@@ -266,6 +272,13 @@ async function buildCliDistUnlocked(options = {}) {
         : {}),
     });
   } finally {
+    if (declarationSourceDir) {
+      try {
+        rmDirSafeSync(declarationSourceDir);
+      } catch {
+        // Best effort: preserve the build result if declaration cleanup fails.
+      }
+    }
     try {
       immutableSource.cleanup();
     } catch {

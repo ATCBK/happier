@@ -317,8 +317,7 @@ describe('IdentityConnectionDetailScreen test return', () => {
         />);
 
         expect(screen.findByTestId('identity-connection-provider')).toBeNull();
-        expect(screen.findByTestId('identity-connection-header')?.props.description)
-            .toBe(t('identityAdministration.providerWorkosSso'));
+        expect(screen.getTextContent()).toContain(t('identityAdministration.providerWorkosSso'));
         expect(screen.findByTestId('identity-workos-current-connection')?.props.subtitle)
             .toBe(`Ok · ${t('identityAdministration.workosStrategySaml')} · ${t('identityAdministration.active')}`);
 
@@ -850,7 +849,7 @@ describe('IdentityConnectionDetailScreen test return', () => {
             lastObservation: null,
             enabled: false,
             firstEnabledAt: null,
-            allowedActions: ['teams.identity.workos.reconcile'],
+            allowedActions: ['teams.identity.workos.reconcile', 'teams.identity.workos.connection.set'],
         };
         executeMock.mockResolvedValue({
             ok: true,

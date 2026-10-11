@@ -5,7 +5,7 @@ import type { PluginProjectNativeCommandResultV1 } from '@happier-dev/plugin-sdk
 import { preserveUnconfirmedNativeProcess, type ProjectNativeAdapterProductionV1 } from '@/plugins/runtime/lifecycle/contributions/targetProjectNativeAdapters';
 import { readProjectDefinitionFile, readProjectDefinitionFileBytes } from './nativeDefinitionFiles';
 import { getPathRemainderWithinBase } from '@/session/handoff/paths/sessionHandoffPathNormalization';
-import { inspectProjectDefinitionFacts } from './projectDefinitionInspection';
+import { inspectProjectDefinitionFacts } from './nativeDefinitionInspection';
 import { parseNativePackage, resolveNativePackageManager, type NativePackageManagerSelection } from './nativePackageScripts';
 
 export type ProjectNativeRefusal = Readonly<{ kind: 'refused'; reason: 'missing' | 'outside_root' | 'invalid' | 'dynamic_unsupported' | 'unavailable' | 'unsupported' | 'cancelled'; code: string }>;

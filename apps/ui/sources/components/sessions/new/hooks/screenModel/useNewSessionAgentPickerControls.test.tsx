@@ -10,6 +10,8 @@ import { useNewSessionAgentPickerControls } from './useNewSessionAgentPickerCont
 import { useNewSessionAgentAuthoringOptionsState } from './useNewSessionAgentAuthoringOptionsState';
 import { formatBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
+import { resolveAgentCatalogTitle } from '@/agents/backendCatalog/agentCatalogProjection';
+import { t } from '@/text';
 import type { AgentId } from '@/agents/catalog/catalog';
 import { FavoriteModelSelectionV1Schema } from '@/sync/domains/models/favoriteModelSelections';
 import { SessionModelSelectionV1Schema, type PersistedBackendTargetRefV2 } from '@happier-dev/protocol';
@@ -556,7 +558,7 @@ describe('useNewSessionAgentPickerControls', () => {
                 id: codexEntry.backendTargetKey,
                 disabled: true,
                 muted: true,
-                subtitle: 'newSession.aiBackendCliNotDetectedOnMachine(cli=agentInput.agent.codex)',
+                subtitle: t('newSession.aiBackendCliNotDetectedOnMachine', { cli: resolveAgentCatalogTitle('codex') }),
             },
         ]);
 

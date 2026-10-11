@@ -74,7 +74,6 @@ import type { WorkspaceSyncTargetPhaseDescriptor } from '@/workspaces/sync/works
 import { registerSessionHandlers } from '@/rpc/handlers/registerSessionHandlers';
 import { registerAutomationReplyHandoffRpcHandler } from '@/rpc/handlers/automationReplyHandoff';
 import { createWorkflowRunStorageClient } from '@/daemon/workflows/workflowRunStorageClient';
-import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import {
     resolveExternalSessionOperationAccountScope,
     type ExternalSessionOperationAccountScope,

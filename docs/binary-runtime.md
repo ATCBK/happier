@@ -141,7 +141,10 @@ Public npm/SDK publication retains the workspace package-build owner, dependency
 graph admission, captured package inputs, compiler state, currentness records and
 publication locks. Strict packing/publishing still requires checked declarations
 and valid runtime outputs. The public CLI package keeps CommonJS/ESM exports with
-matching declarations; pkgroll remains an npm-publication tool, not a prerequisite
+matching declarations. Its strict native compiler emits the checked declaration
+graph once; pkgroll bundles that graph into public CommonJS/ESM declarations,
+with internal aliases resolving inside the checked graph rather than reopening
+TypeScript source. Pkgroll remains an npm-publication tool, not a prerequisite
 for native executables or source QA.
 
 Remaining workspace dist consumers share build-mode selection and compiler
