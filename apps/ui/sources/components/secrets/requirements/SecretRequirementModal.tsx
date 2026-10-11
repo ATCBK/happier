@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Pressable, Platform, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
+import type { AiLaunchProfile } from '@happier-dev/protocol/profiles/read';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { Typography } from '@/constants/Typography';
@@ -41,10 +41,10 @@ export type SecretRequirementModalResult =
 export type SecretRequirementModalVariant = 'requirement' | 'defaultForProfile';
 
 export type SecretRequirementModalProps = CustomModalInjectedProps & Readonly<{
-    profile: AIBackendProfile;
+    profile: Pick<AiLaunchProfile, 'id' | 'name'>;
     /**
      * The specific secret environment variable name this modal is resolving (e.g. OPENAI_API_KEY).
-     * This must correspond to a `profile.envVarRequirements[]` entry with `kind='secret'`.
+     * The caller owns its `envVarRequirements[]` admission with `kind='secret'`.
      */
     secretEnvVarName: string;
     /**

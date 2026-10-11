@@ -47,6 +47,7 @@ import { ProfileNameSection } from '../ProfileNameSection';
 import { ProfileEditActions } from '../ProfileEditActions';
 import { Icon } from '@/components/ui/icons/Icon';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import type { ProfileRecordV1, ProfileLegacyCloneSourceV1 } from '@happier-dev/protocol/profiles/profileRecordSchemaV1';
 
 export interface LegacyProfileEditFormProps {
     profile: AIBackendProfile;
@@ -54,7 +55,9 @@ export interface LegacyProfileEditFormProps {
     /**
      * Resolve true when the profile was acknowledged, or false when saving failed.
      */
-    onSave: (profile: AIBackendProfile, secretBindings: Readonly<Record<string, string>>) => boolean | Promise<boolean>;
+    onSave: (profile: AIBackendProfile, secretBindings: ProfileRecordV1['secretBindings']) => boolean | Promise<boolean>;
+    draftSecretBindings?: ProfileRecordV1['secretBindings'];
+    legacyCloneSource?: ProfileLegacyCloneSourceV1;
     onCancel: () => void;
     onDirtyChange?: (isDirty: boolean) => void;
     containerStyle?: ViewStyle;
@@ -102,6 +105,8 @@ function LegacyProfileEditFormReady({
     header,
     onNameChange,
     sourcePreservingClone = false,
+    draftSecretBindings,
+    legacyCloneSource,
     acpCatalogSnapshot,
 }: LegacyProfileEditFormProps & Readonly<{ acpCatalogSnapshot: AcpCatalogSnapshotV1 | undefined }>) {
     const { theme, rt } = useUnistyles();
@@ -258,10 +263,13 @@ function LegacyProfileEditFormReady({
         sourceRequirementsByName,
         derivedEnvVarRequirements,
         profileSecretBindings,
+        readPrivateSecretBindingsForSave,
+        notifySaveUnavailable,
         getDefaultSecretNameForSourceVar,
         openDefaultSecretModalForSourceVar,
         updateSourceRequirement,
-    } = useLegacyProfileSecretRequirements({ profile, profileName: name, environmentVariables, preserveSourceDefinition: sourcePreservingClone });
+    } = useLegacyProfileSecretRequirements({ profile, profileName: name, environmentVariables,
+        preserveSourceDefinition: sourcePreservingClone, draftSecretBindings, legacyCloneSource });
     const sessionDefaultPermissionModeByTargetKey = useSetting('sessionDefaultPermissionModeByTargetKey');
     const newSessionDefaultPersistenceModeV1 = useSetting('newSessionDefaultPersistenceModeV1');
     const newSessionDefaultPersistenceModeByTargetKeyV1 = useSetting('newSessionDefaultPersistenceModeByTargetKeyV1');
@@ -497,6 +505,11 @@ function LegacyProfileEditFormReady({
 
     const handleSave = React.useCallback((): boolean | Promise<boolean> => {
         if (!backendCatalogAvailable) return false;
+        const secretBindings = readPrivateSecretBindingsForSave();
+        if (secretBindings === null) {
+            notifySaveUnavailable();
+            return false;
+        }
         if (!name.trim()) {
             Modal.alert(t('common.error'), t('profiles.nameRequired'));
             return false;
@@ -515,7 +528,7 @@ function LegacyProfileEditFormReady({
             compatibilityByTargetKey: compatibilityByTargetKeyState,
             updatedAt: Date.now(),
             preserveSourceDefinition: sourcePreservingClone && bodyUnchanged,
-        }), profileSecretBindings);
+        }), secretBindings);
     }, [
         compatibilityByTargetKeyState,
         defaultPermissionModesByTargetKey,
@@ -527,7 +540,8 @@ function LegacyProfileEditFormReady({
         name,
         onSave,
         profile,
-        profileSecretBindings,
+        readPrivateSecretBindingsForSave,
+        notifySaveUnavailable,
         resolvedBackendEntries,
         supportedDirectBackendEntries,
         sourcePreservingClone,

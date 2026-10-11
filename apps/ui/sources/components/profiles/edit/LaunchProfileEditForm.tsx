@@ -1,12 +1,13 @@
 import * as React from 'react';
 import { isLaunchProfileV2, type AiLaunchProfile } from '@happier-dev/protocol/profiles/read';
+import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordSchemaV1';
 
 import { ProfileEditForm, type ProfileEditFormProps } from './ProfileEditForm';
 import { SlimProfileEditForm } from './SlimProfileEditForm';
 
 export type LaunchProfileEditFormProps = Omit<ProfileEditFormProps, 'profile' | 'onSave'> & Readonly<{
     profile: AiLaunchProfile;
-    onSave: (profile: AiLaunchProfile, secretBindings?: Readonly<Record<string, string>>) => boolean | Promise<boolean>;
+    onSave: (profile: AiLaunchProfile, secretBindings?: ProfileRecordV1['secretBindings']) => boolean | Promise<boolean>;
     /** Optional exact server context for V2 machine-scoped previews. */
     serverId?: string | null;
 }>;

@@ -8,6 +8,7 @@ export type SlimProfileEditableDraft = Readonly<{
     name: string;
     description: string;
     extraEnvironmentVariables: LaunchProfileV2['extraEnvironmentVariables'];
+    envVarRequirements?: LaunchProfileV2['envVarRequirements'];
     defaultPermissionModeByTargetKey?: LaunchProfileV2['defaultPermissionModeByTargetKey'];
     defaultPersistenceModeByTargetKey?: LaunchProfileV2['defaultPersistenceModeByTargetKey'];
     preferredAgentTargetKey?: LaunchProfileV2['preferredAgentTargetKey'];
@@ -47,7 +48,9 @@ export function buildSlimProfileSave(
     reservedEnvironmentAuthorityReady = true,
 ): SlimProfileSaveResult {
     if (!reservedEnvironmentAuthorityReady
-        && JSON.stringify(draft.extraEnvironmentVariables) !== JSON.stringify(profile.extraEnvironmentVariables)) {
+        && (JSON.stringify(draft.extraEnvironmentVariables) !== JSON.stringify(profile.extraEnvironmentVariables)
+            || (draft.envVarRequirements !== undefined
+                && JSON.stringify(draft.envVarRequirements) !== JSON.stringify(profile.envVarRequirements ?? [])))) {
         return {
             status: 'error',
             field: 'extraEnvironmentVariables',
@@ -62,6 +65,7 @@ export function buildSlimProfileSave(
         name: draft.name.trim(),
         ...(draft.description.trim().length > 0 ? { description: draft.description.trim() } : { description: undefined }),
         extraEnvironmentVariables: draft.extraEnvironmentVariables,
+        ...(draft.envVarRequirements === undefined ? {} : { envVarRequirements: draft.envVarRequirements }),
         defaultPermissionModeByTargetKey: draft.defaultPermissionModeByTargetKey ?? profile.defaultPermissionModeByTargetKey,
         defaultPersistenceModeByTargetKey: draft.defaultPersistenceModeByTargetKey ?? profile.defaultPersistenceModeByTargetKey,
         ...(draft.preferredAgentTargetKey
@@ -90,6 +94,7 @@ export function buildSlimProfileSave(
     }
     const issue = parsed.error.issues[0];
     const root = issue?.path[0];
-    const field = root === 'description' || root === 'extraEnvironmentVariables' ? root : 'name';
+    const field = root === 'envVarRequirements' ? 'extraEnvironmentVariables'
+        : root === 'description' || root === 'extraEnvironmentVariables' ? root : 'name';
     return { status: 'error', field, message: issue?.message ?? 'Invalid profile' };
 }

@@ -1,6 +1,8 @@
 import * as React from 'react';
 import type { ViewStyle } from 'react-native';
 import type { LaunchProfileV2 } from '@happier-dev/protocol';
+import type { AiLaunchProfileSourceV1 } from '@happier-dev/protocol/profiles/read';
+import type { ProfileRecordV1, ProfileLegacyCloneSourceV1 } from '@happier-dev/protocol/profiles/profileRecordSchemaV1';
 
 import { EnvironmentVariablesList } from '@/components/profiles/environmentVariables/EnvironmentVariablesList';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -15,12 +17,15 @@ import { SlimProfileRoutingFields } from './SlimProfileRoutingFields';
 import { useSlimProfileAgentEntries } from './useSlimProfileAgentEntries';
 import { ProfileEditActions } from './ProfileEditActions';
 import { ProfileNameSection } from './ProfileNameSection';
+import { useLegacyProfileSecretRequirements } from './legacy/useLegacyProfileSecretRequirements';
 
 export type SlimProfileEditFormProps = Readonly<{
-    profile: LaunchProfileV2;
+    profile: LaunchProfileV2 & AiLaunchProfileSourceV1;
     machineId: string | null;
     serverId?: string | null;
-    onSave: (profile: LaunchProfileV2) => boolean | Promise<boolean>;
+    onSave: (profile: LaunchProfileV2, secretBindings: ProfileRecordV1['secretBindings']) => boolean | Promise<boolean>;
+    draftSecretBindings?: ProfileRecordV1['secretBindings'];
+    legacyCloneSource?: ProfileLegacyCloneSourceV1;
     onCancel: () => void;
     onDirtyChange?: (isDirty: boolean) => void;
     containerStyle?: ViewStyle;
@@ -44,6 +49,14 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
     const [extraEnvironmentVariables, setExtraEnvironmentVariables] = React.useState(
         [...props.profile.extraEnvironmentVariables],
     );
+    const requirements = useLegacyProfileSecretRequirements({
+        profile: props.profile, profileName: name, environmentVariables: extraEnvironmentVariables,
+        draftSecretBindings: props.draftSecretBindings, legacyCloneSource: props.legacyCloneSource,
+    });
+    const initialRequirements = React.useRef(JSON.stringify({
+        envVarRequirements: requirements.derivedEnvVarRequirements,
+        secretBindings: requirements.profileSecretBindings,
+    }));
     const [defaultPermissionModeByTargetKey, setDefaultPermissionModeByTargetKey] = React.useState({
         ...props.profile.defaultPermissionModeByTargetKey,
     });
@@ -96,7 +109,10 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
             placement,
             checkout,
             codingPromptBehaviorOverrides,
-        }) !== initialSnapshot.current);
+        }) !== initialSnapshot.current || JSON.stringify({
+            envVarRequirements: requirements.derivedEnvVarRequirements,
+            secretBindings: requirements.profileSecretBindings,
+        }) !== initialRequirements.current);
     }, [
         checkout,
         codingPromptBehaviorOverrides,
@@ -109,15 +125,23 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
         preferredAgentTargetKey,
         preferredModelSelection,
         props.onDirtyChange,
+        requirements.derivedEnvVarRequirements,
+        requirements.profileSecretBindings,
     ]);
 
     const handleSave = React.useCallback(() => {
+        const secretBindings = requirements.readPrivateSecretBindingsForSave();
+        if (secretBindings === null) {
+            requirements.notifySaveUnavailable();
+            return false;
+        }
         const result = buildSlimProfileSave(
             props.profile,
             {
                 name,
                 description,
                 extraEnvironmentVariables,
+                envVarRequirements: requirements.derivedEnvVarRequirements,
                 defaultPermissionModeByTargetKey,
                 defaultPersistenceModeByTargetKey,
                 preferredAgentTargetKey,
@@ -141,7 +165,7 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
             );
             return false;
         }
-        return props.onSave(result.profile);
+        return props.onSave(result.profile, secretBindings);
     }, [
         checkout,
         codingPromptBehaviorOverrides,
@@ -156,6 +180,9 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
         props,
         reservedEnvironmentAuthorityReady,
         reservedEnvironmentVariableNames,
+        requirements.derivedEnvVarRequirements,
+        requirements.readPrivateSecretBindingsForSave,
+        requirements.notifySaveUnavailable,
     ]);
 
     React.useEffect(() => {
@@ -180,11 +207,11 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
                 serverId={serverId}
                 profileDocs={null}
                 onChange={setExtraEnvironmentVariables}
-                sourceRequirementsByName={{}}
-                onUpdateSourceRequirement={() => {}}
-                getDefaultSecretNameForSourceVar={() => null}
-                onPickDefaultSecretForSourceVar={() => {}}
-                allowSourceRequirements={false}
+                sourceRequirementsByName={requirements.sourceRequirementsByName}
+                onUpdateSourceRequirement={requirements.updateSourceRequirement}
+                getDefaultSecretNameForSourceVar={requirements.getDefaultSecretNameForSourceVar}
+                onPickDefaultSecretForSourceVar={requirements.openDefaultSecretModalForSourceVar}
+                allowSourceRequirements
             />
 
             <SlimProfileRoutingFields

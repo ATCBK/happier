@@ -102,6 +102,33 @@ describe('buildSlimProfileSave', () => {
         })).toMatchObject({ status: 'error', field: 'extraEnvironmentVariables' });
     });
 
+    it('round-trips authored non-provider secret requirements and permits clearing them', () => {
+        const draft = { name: 'Deploy', description: '',
+            extraEnvironmentVariables: [{ name: 'DEPLOY_TOKEN', value: '', isSecret: true }],
+            envVarRequirements: [{ name: 'DEPLOY_TOKEN', kind: 'secret' as const, required: true }] };
+        const saved = buildSlimProfileSave(base, draft, () => 10);
+        expect(saved).toMatchObject({ status: 'success', profile: { envVarRequirements: draft.envVarRequirements } });
+        if (saved.status !== 'success') throw new Error(saved.message);
+        expect(buildSlimProfileSave(saved.profile, { ...draft, envVarRequirements: [] }, () => 11))
+            .toMatchObject({ status: 'success', profile: { envVarRequirements: [] } });
+    });
+
+    it('refuses requirement-only changes without current reserved-key authority', () => {
+        const draft = { name: 'Deploy', description: '', extraEnvironmentVariables: [],
+            envVarRequirements: [{ name: 'DEPLOY_TOKEN', kind: 'secret' as const, required: true }] };
+        expect(buildSlimProfileSave(base, draft, Date.now, new Set(), false))
+            .toMatchObject({ status: 'error', field: 'extraEnvironmentVariables' });
+    });
+
+    it('rejects static and dynamically reserved secret requirements without an environment row', () => {
+        for (const name of ['ANTHROPIC_API_KEY', 'ADAPTER_AUTH_TOKEN']) {
+            const draft = { name: 'Unsafe', description: '', extraEnvironmentVariables: [],
+                envVarRequirements: [{ name, kind: 'secret' as const, required: true }] };
+            expect(buildSlimProfileSave(base, draft, Date.now, new Set(['ADAPTER_AUTH_TOKEN'])))
+                .toMatchObject({ status: 'error', field: 'extraEnvironmentVariables' });
+        }
+    });
+
     it('rejects dynamically projected adapter-owned keys omitted by the static migration minimum', () => {
         expect(buildSlimProfileSave(base, {
             name: 'Unsafe', description: '',

@@ -7,9 +7,30 @@ import type { SecretRequirementModalResult } from '@/components/secrets/requirem
 import { useLegacyProfileSecretRequirements } from './useLegacyProfileSecretRequirements';
 import { storage } from '@/sync/domains/state/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
+import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
+import { SavedSecretCatalogEntryV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
+import { applyProfileCatalogSnapshot, beginProfileCatalogLoad, resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
+import { applySavedSecretCatalogPage, resetSavedSecretCatalogSnapshotsForTests } from '@/sync/store/settings/savedSecretCatalogSnapshot';
+import { readAiLaunchProfileRecords, type AiLaunchProfile } from '@happier-dev/protocol/profiles/read';
+import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordSchemaV1';
+import { createEmptyCustomProfile } from '@/sync/domains/profiles/profileMutations';
 
 const previousSettings = storage.getState().settings;
-afterEach(() => storage.setState({ settings: previousSettings }));
+const previousScope = storage.getState().settingsScope;
+const scope: AccountSettingsScope = { serverId: 'home', accountId: 'account' };
+afterEach(() => {
+    storage.setState({ settings: previousSettings, settingsScope: previousScope });
+    resetProfileCatalogSnapshotsForTests();
+    resetSavedSecretCatalogSnapshotsForTests();
+});
+
+function publishProfile(profile: AiLaunchProfile, secretBindings: ProfileRecordV1['secretBindings']) {
+    storage.setState({ settingsScope: scope });
+    applyProfileCatalogSnapshot(scope, { status: 'ready', source: 'destination', authority: 'active', control: null,
+        controlRevision: 1, referenceGuardRevision: 1, diagnostics: [], records: [{ revision: 7,
+            record: { v: 1, id: profile.id, definition: { kind: 'legacy', profile: AIBackendProfileSchema.parse(profile) },
+                enabled: false, promptStack: [], secretBindings } }] }, true);
+}
 
 const capture = vi.hoisted(() => ({
     modalShow: vi.fn(),
@@ -37,7 +58,7 @@ describe('useLegacyProfileSecretRequirements', () => {
             }],
         }) });
         const bindingsBefore = storage.getState().settings.currentSecretBindingsByProfileId;
-        const profile = AIBackendProfileSchema.parse({
+        const profile = { ...AIBackendProfileSchema.parse({
             id: 'profile-1',
             name: 'OpenRouter profile',
             environmentVariables: [{ name: 'TEST_API_KEY', value: '', isSecret: true }],
@@ -46,7 +67,12 @@ describe('useLegacyProfileSecretRequirements', () => {
             createdAt: 1,
             updatedAt: 1,
             version: '1.0.0',
-        });
+        }), profileRecordRevision: 7 };
+        publishProfile(profile, {});
+        applySavedSecretCatalogPage({ scope, entries: [SavedSecretCatalogEntryV1Schema.parse({ ref: 'secret-1', name: 'OpenRouter', kind: 'apiKey', source: 'personal',
+            relationship: 'owner', revision: 1, materialStatus: 'ready', capabilities: {
+                rename: true, rotate: true, delete: true, use: true, manageAccess: false,
+            } })], observedAt: 1 });
         const hook = await renderHook(() => useLegacyProfileSecretRequirements({
             profile,
             profileName: profile.name,
@@ -69,5 +95,97 @@ describe('useLegacyProfileSecretRequirements', () => {
         expect(hook.getCurrent().getDefaultSecretNameForSourceVar('TEST_API_KEY')).toBe('OpenRouter');
         expect(hook.getCurrent().profileSecretBindings).toEqual({ TEST_API_KEY: 'secret-1' });
         expect(storage.getState().settings.currentSecretBindingsByProfileId).toEqual(bindingsBefore);
+    });
+
+    it('selects None against inherited defaults without pinning other defaults or losing private tombstones', async () => {
+        capture.modalShow.mockReset();
+        const inherited = 'happier:shared-secret:v1:inherited';
+        const privateReference = 'happier:shared-secret:v1:private';
+        const definition = AIBackendProfileSchema.parse({ id: 'profile-1', name: 'Deploy',
+            environmentVariables: [],
+            envVarRequirements: [{ name: 'DEPLOY_TOKEN', kind: 'secret', required: true }],
+            isBuiltIn: false, createdAt: 1, updatedAt: 1 });
+        const artifact = { artifactId: 'deploy-profile', header: { kind: 'launch-profile.v1', profileId: definition.id, name: definition.name },
+            body: JSON.stringify({ kind: 'launch-profile.v1', profile: definition,
+                secretBindings: { DEPLOY_TOKEN: inherited, OTHER: 'happier:shared-secret:v1:other-inherited' } }),
+            access: 'owner' as const, revision: { headerVersion: 2, bodyVersion: 3 } };
+        const record: ProfileRecordV1 = { v: 1, id: definition.id, definition: { kind: 'artifact', artifactId: artifact.artifactId },
+            enabled: false, promptStack: [], secretBindings: { MASKED: null, PRIVATE: privateReference } };
+        const artifactsById = new Map([[artifact.artifactId, artifact]]);
+        const catalog = { status: 'ready' as const, source: 'destination' as const, authority: 'active' as const, control: null,
+            controlRevision: 1, referenceGuardRevision: 1, diagnostics: [], records: [{ record, revision: 7 }] };
+        storage.setState({ settingsScope: scope });
+        applyProfileCatalogSnapshot(scope, catalog, true, artifactsById);
+        const opened = readAiLaunchProfileRecords([record], { artifactsById, recordRevisionsById: new Map([[record.id, 7]]) }).entries[0];
+        if (!opened || opened.kind === 'opaque') throw new Error('Expected readable Artifact profile');
+        const profile = opened.profile;
+        const hook = await renderHook(() => useLegacyProfileSecretRequirements({ profile, profileName: profile.name,
+            environmentVariables: [{ name: 'DEPLOY_TOKEN', value: '', isSecret: true }] }));
+        expect(hook.getCurrent().profileSecretBindings).toEqual({ MASKED: null, PRIVATE: privateReference });
+        act(() => hook.getCurrent().openDefaultSecretModalForSourceVar('DEPLOY_TOKEN'));
+        const modalConfig = capture.modalShow.mock.calls.at(-1)?.[0] as Readonly<{ props: Readonly<{
+            defaultSecretId: string | null; onSetDefaultSecretId: (id: string | null) => void;
+        }> }>;
+        expect(modalConfig.props.defaultSecretId).toBe(inherited);
+        act(() => modalConfig.props.onSetDefaultSecretId(null));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toEqual({ MASKED: null, PRIVATE: privateReference, DEPLOY_TOKEN: null });
+        act(() => applyProfileCatalogSnapshot(scope, catalog, true, new Map([[artifact.artifactId,
+            { ...artifact, revision: { headerVersion: 2, bodyVersion: 4 } }]])));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
+        act(() => applyProfileCatalogSnapshot(scope, catalog, true, artifactsById));
+        act(() => storage.setState({ settingsScope: { serverId: 'other-home', accountId: scope.accountId } }));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
+        act(() => storage.setState({ settingsScope: scope }));
+        act(() => beginProfileCatalogLoad(scope));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
+    });
+
+    it('authors a new V2 inline draft without a row and preserves captured clone overrides', async () => {
+        storage.setState({ settingsScope: scope });
+        const profile = { v: 2 as const, id: '93cc32f2-1811-4661-b62a-e9a99b7d7eec', name: 'Deploy',
+            extraEnvironmentVariables: [{ name: 'DEPLOY_TOKEN', value: '', isSecret: true }],
+            defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {},
+            createdAt: 1, updatedAt: 1 };
+        const inline = await renderHook(() => useLegacyProfileSecretRequirements({ profile, profileName: profile.name,
+            environmentVariables: profile.extraEnvironmentVariables }));
+        expect(inline.getCurrent().readPrivateSecretBindingsForSave()).toEqual({});
+        const hook = await renderHook(() => useLegacyProfileSecretRequirements({ profile, profileName: profile.name,
+            environmentVariables: profile.extraEnvironmentVariables, draftSecretBindings: { MASKED: null } }));
+        act(() => hook.getCurrent().updateSourceRequirement('DEPLOY_TOKEN', { required: true, useSecretVault: true }));
+        expect(hook.getCurrent().derivedEnvVarRequirements).toEqual([{ name: 'DEPLOY_TOKEN', kind: 'secret', required: true }]);
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toEqual({ MASKED: null });
+    });
+
+    it('retains source-preserving clone private bindings only while its captured source revision remains current', async () => {
+        const source = { ...AIBackendProfileSchema.parse({ id: 'legacy-source', name: 'Login', authMode: 'machineLogin',
+            isBuiltIn: false, createdAt: 1, updatedAt: 1 }), profileRecordRevision: 7 };
+        publishProfile(source, { MASKED: null });
+        const profile = { ...source, id: '93cc32f2-1811-4661-b62a-e9a99b7d7eec', profileRecordRevision: undefined };
+        const hook = await renderHook(() => useLegacyProfileSecretRequirements({ profile, profileName: profile.name,
+            environmentVariables: profile.environmentVariables, preserveSourceDefinition: true,
+            draftSecretBindings: { MASKED: null }, legacyCloneSource: { id: source.id, revision: 7 } }));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toEqual({ MASKED: null });
+        act(() => applyProfileCatalogSnapshot(scope, { status: 'ready', source: 'destination', authority: 'active', control: null,
+            controlRevision: 1, referenceGuardRevision: 1, diagnostics: [], records: [{ revision: 8,
+                record: { v: 1, id: source.id, definition: { kind: 'legacy', profile: source },
+                    enabled: false, promptStack: [], secretBindings: { MASKED: null } } }] }, true));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
+    });
+
+    it('admits an unnamed V2 authoring draft and its requirement picker without fabricating a name', async () => {
+        capture.modalShow.mockReset();
+        storage.setState({ settingsScope: scope });
+        const profile = { ...createEmptyCustomProfile(),
+            extraEnvironmentVariables: [{ name: 'DEPLOY_TOKEN', value: '', isSecret: true }],
+            envVarRequirements: [{ name: 'DEPLOY_TOKEN', kind: 'secret' as const, required: true }],
+        };
+        const hook = await renderHook(() => useLegacyProfileSecretRequirements({ profile, profileName: profile.name,
+            environmentVariables: profile.extraEnvironmentVariables }));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toEqual({});
+        expect(hook.getCurrent().derivedEnvVarRequirements).toEqual(profile.envVarRequirements);
+        act(() => hook.getCurrent().openDefaultSecretModalForSourceVar('DEPLOY_TOKEN'));
+        expect(capture.modalShow.mock.calls.at(-1)?.[0]).toMatchObject({ props: {
+            profile: { id: profile.id, name: '' }, defaultSecretId: null,
+        } });
     });
 });

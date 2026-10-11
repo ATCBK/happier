@@ -1,11 +1,13 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import type { IModal } from '@/modal';
+import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { applyProfileCatalogSnapshot, resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
 import {
     createNavigationMock, createRouterMock, createStackOptionsCapture,
     enableReactActEnvironment, installPickerCommonModuleMocks,
@@ -19,6 +21,7 @@ const navigationMock = {
 const stackOptionsCapture = createStackOptionsCapture();
 const alertSpy = vi.fn<IModal['alert']>();
 let profileData = '';
+let profileId: string | undefined;
 
 vi.mock('expo-constants', () => ({ default: { statusBarHeight: 0 } }));
 vi.mock('@react-navigation/elements', () => ({ useHeaderHeight: () => 0 }));
@@ -33,7 +36,7 @@ installPickerCommonModuleMocks({
     },
     expoRouter: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
         navigation: navigationMock,
-        params: () => ({ profileData }),
+        params: () => ({ profileData, profileId }),
         router: { push: routerMock.push, back: routerMock.back, replace: routerMock.replace, setParams: routerMock.setParams },
         stackOptionsCapture,
     }).module,
@@ -47,6 +50,7 @@ const runtime = installSessionPaneRuntimeTestHarness();
 beforeEach(async () => {
     const { createEmptyCustomProfile } = await import('@/sync/domains/profiles/profileMutations');
     profileData = JSON.stringify({ ...createEmptyCustomProfile(), id: 'p1', name: 'Test profile' });
+    profileId = undefined;
     storage.getState().applySettingsLocal({ profiles: [] });
     stackOptionsCapture.reset();
     alertSpy.mockClear();
@@ -56,6 +60,7 @@ beforeEach(async () => {
     routerMock.back.mockClear();
     routerMock.replace.mockClear();
 });
+afterEach(() => resetProfileCatalogSnapshotsForTests());
 
 async function renderProfileEditor() {
     const ProfileEditScreen = (await import('@/app/(app)/new/pick/profile-edit')).default;
@@ -104,6 +109,37 @@ describe('ProfileEditScreen (header buttons)', () => {
         await renderProfileEditor();
         expect(typeof stackOptionsCapture.getResolved()?.headerRight).toBe('function');
         expect(stackOptionsCapture.getResolved()?.headerRight?.()?.props.disabled).toBe(true);
+    });
+
+    it('explains a same-Home stale row refusal through the actual save header but stays silent after leaving Home', async () => {
+        const { createEmptyCustomProfile } = await import('@/sync/domains/profiles/profileMutations');
+        const scope = storage.getState().settingsScope;
+        if (!scope) throw new Error('Expected connected runtime Home');
+        const record: ProfileRecordV1 = { v: 1, id: 'p1', definition: { kind: 'inline',
+            profile: { ...createEmptyCustomProfile(), id: 'p1', name: 'Test profile' } },
+            enabled: true, promptStack: [], secretBindings: { MASKED: null } };
+        const publish = (revision: number) => applyProfileCatalogSnapshot(scope, {
+            status: 'ready', source: 'destination', authority: 'active', control: null,
+            controlRevision: 1, referenceGuardRevision: 1, diagnostics: [], records: [{ record, revision }],
+        }, true);
+        publish(7);
+        profileData = '';
+        profileId = 'p1';
+        const screen = await renderProfileEditor();
+        await editName(screen);
+        await act(async () => publish(8));
+        const save = stackOptionsCapture.getResolved()?.headerRight?.()?.props.onPress;
+        if (!save) throw new Error('Expected actual header save action');
+        await act(async () => save());
+        expect(alertSpy).toHaveBeenCalledWith('common.error', 'profile_editor_revision_unavailable');
+        expect(routerMock.replace).not.toHaveBeenCalled();
+        expect(navigationMock.goBack).not.toHaveBeenCalled();
+
+        alertSpy.mockClear();
+        await act(async () => storage.setState({ settingsScope: { ...scope, accountId: 'other-account' } }));
+        await act(async () => save());
+        expect(alertSpy).not.toHaveBeenCalled();
+        expect(routerMock.replace).not.toHaveBeenCalled();
     });
 
     it('serializes repeated dirty closes into one presented prompt and discarded continuation', async () => {

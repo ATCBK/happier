@@ -27,6 +27,7 @@ import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaem
 import { resolveSpawnServerRouteParam } from '@/components/sessions/new/navigation/spawnServerRouteParam';
 import { useNewSessionPickerRoutePresentation } from '@/components/sessions/new/navigation/newSessionContainedModalScreen';
 import { readAiLaunchProfileCollection, type AiLaunchProfile } from '@happier-dev/protocol/profiles/read';
+import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordSchemaV1';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useProfileCatalog } from '@/sync/store/useProfileCatalog';
@@ -190,10 +191,11 @@ export default React.memo(function ProfileEditScreen() {
     });
 
     const saveLaunchProfile = useSaveLaunchProfile();
-    const handleSave = async (savedProfile: AiLaunchProfile, secretBindings?: Readonly<Record<string, string>>): Promise<boolean> => {
+    const handleSave = async (savedProfile: AiLaunchProfile, secretBindings?: ProfileRecordV1['secretBindings']): Promise<boolean> => {
         if (!profile) return false;
         const lifetime = captureActiveServerAccountScopeLifetime();
-        const saved = await saveLaunchProfile(savedProfile, secretBindings ?? draftSecretBindings);
+        const saved = await saveLaunchProfile(savedProfile, secretBindings ?? draftSecretBindings,
+            draft.status === 'ready' ? draft.legacyCloneSource : undefined);
         if (!saved || !mountedRef.current || !lifetime?.isCurrent()
             || !areServerAccountScopesEqual(lifetime.scope, profileScope)) return false;
         // Prevent the unsaved-changes guard from triggering on a successful save.
@@ -301,6 +303,9 @@ export default React.memo(function ProfileEditScreen() {
                             action={loading ? undefined : { label: t('common.back'), onPress: handleCancel }}
                         /> : <LaunchProfileEditForm
                             profile={profile}
+                            draftSecretBindings={draftSecretBindings}
+                            legacyCloneSource={draft.status === 'ready' ? draft.legacyCloneSource : undefined}
+                            sourcePreservingClone={draft.status === 'ready' && draft.legacyCloneSource !== undefined}
                             machineId={machineIdParam || null}
                             onSave={handleSave}
                             onCancel={handleCancel}

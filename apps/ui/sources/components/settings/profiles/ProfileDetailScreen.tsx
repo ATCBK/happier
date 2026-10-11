@@ -281,7 +281,7 @@ const ProfileDetail = React.memo(function ProfileDetail(props: Readonly<{
         });
     }, [accountScope, artifactRevision, discardEditorDraft, draftId, profile.artifactId, profile.id, rowRevision]);
 
-    const handleSave = React.useCallback(async (next: AiLaunchProfile, secretBindings?: Readonly<Record<string, string>>): Promise<boolean> => {
+    const handleSave = React.useCallback(async (next: AiLaunchProfile, secretBindings?: ProfileRecordV1['secretBindings']): Promise<boolean> => {
         const lifetime = captureActiveServerAccountScopeLifetime();
         const savingForExit = savingForExitRef.current;
         const bindings = secretBindings === undefined ? props.draftSecretBindings : {
@@ -464,6 +464,8 @@ const ProfileDetail = React.memo(function ProfileDetail(props: Readonly<{
             key={saveGeneration}
             profile={profile}
             sourcePreservingClone={props.legacyCloneSource !== undefined}
+            draftSecretBindings={props.draftSecretBindings}
+            legacyCloneSource={props.legacyCloneSource}
             machineId={scopedToMachine ? collection.executionTarget?.machine.id ?? null : null}
             serverId={scopedToMachine ? collection.executionTarget?.serverId ?? null : null}
             onSave={handleSave}
