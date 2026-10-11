@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
+import fastify from 'fastify';
+import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
+import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createActionOperationStore } from '@/daemon/actionOperations/actionOperationStore';
 import { createLiveWorkProducerGroup, createManagedActivityInventory } from '@/daemon/lifecycle/managedActivity';
 import { createSessionLiveWorkProducer } from '@/daemon/lifecycle/sessionLiveWorkProducer';
@@ -21,27 +24,45 @@ describe('current Machine work summary ingress', () => {
     it('answers its custodian whatever id the caller\'s device gives this Home', async () => {
         // A Home id in the input is the caller's own server-profile id (a browser's differs from the
         // daemon's). The server-admitted machine admission, not that local id, says which machine is asked.
-        const unavailableOwner = createLiveWorkProducerGroup(() => null);
-        const activity = createManagedActivityInventory({ producers: [unavailableOwner] });
+        const app = fastify();
+        onTestFinished(() => app.close());
+        // The Home HTTP response is the network boundary; use the same real
+        // access adapter as ApiMachineClient rather than a ready-access stub.
+        let readiness: 'ready' | 'key_pending' = 'ready';
+        app.get('/v1/machines/machine/access', async request => {
+            expect(request.headers.authorization).toBe('Bearer custodian-token');
+            return { machineId: target.machineId, custodian,
+                access: { custodian, role: 'manage', resourceMode: 'plain', accessState: readiness },
+                canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [], currentRequesterDisplayIdentities: [] };
+        });
+        await app.ready();
+        onTestFinished(installAxiosFastifyAdapter({ app, origin: 'http://work-summary.test' }));
+        const access = createAccountServerActionDeps({ token: 'custodian-token', serverId: target.serverId,
+            serverHttpBaseUrl: 'http://work-summary.test' });
+        const operations = createActionOperationStore();
+        const activity = createManagedActivityInventory({ producers: [{ read: operations.readLiveWork, subscribe: operations.subscribe }] });
         const handlers = new Map<string, RpcHandler<unknown, unknown>>();
         registerMachineWorkSummaryRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
             target, custodianAccountId: custodian.accountId, activity,
-            readAccess: async () => ({ machineId: target.machineId, custodian,
-                access: { custodian, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-                canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [], currentRequesterDisplayIdentities: [] }),
+            readAccess: signal => access.machineAccessAction!({ actionId: 'machines.access.grants.list',
+                input: { serverId: target.serverId, machineId: target.machineId },
+                context: { surface: 'cli', serverId: target.serverId }, signal }),
         });
         const owner: RpcHandlerContext = { signal: new AbortController().signal,
             machineAdmission: { actorAccountId: 'alice', custodianAccountId: 'alice', machineId: target.machineId,
                 installationId: target.installationId, role: 'manage', encryptionMode: 'plain' },
             verifyMachineAdmissionCurrent: async () => true };
         try {
-            const result = await handlers.get('machines.work.summary.get')!({ serverId: 'browser-profile-for-home', machineId: target.machineId }, owner);
-            expect(result).not.toEqual({ kind: 'refused', code: 'access_denied' });
+            const call = () => handlers.get('machines.work.summary.get')!({ serverId: 'browser-profile-for-home', machineId: target.machineId }, owner);
+            expect(await call()).toEqual({ kind: 'current', requesters: [], finiteLoad: { kind: 'unknown' } });
+            readiness = 'key_pending';
+            expect(await call()).toEqual({ kind: 'unavailable' });
+            readiness = 'ready';
+            expect(await call()).toEqual({ kind: 'current', requesters: [], finiteLoad: { kind: 'unknown' } });
             expect(await handlers.get('machines.work.summary.get')!({ serverId: 'browser-profile-for-home', machineId: 'another-machine' }, owner))
                 .toEqual({ kind: 'refused', code: 'access_denied' });
         } finally {
             activity.dispose();
-            unavailableOwner.dispose();
         }
     });
 
