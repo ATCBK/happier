@@ -465,6 +465,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
         />
       ) : null}
       {props.composing && !editingId && writable && (target || canCreate) ? draftForm : null}
+      {editingId && view && !rows.some(({ fact }) => fact.id === editingId) ? draftForm : null}
       {rows.map(({ fact, leaving }) =>
         editingId === fact.id ? (
           <React.Fragment key={fact.id}>{draftForm}</React.Fragment>

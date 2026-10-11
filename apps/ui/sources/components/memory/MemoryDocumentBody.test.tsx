@@ -351,6 +351,13 @@ describe('MemoryDocumentBody', () => {
         const ref = await seedDocument({ v: 1, index: [fact('account-a-fact', 'Private to Account A.')], topics: [] });
         const hook = await renderHook(() => useMemoryDocument({ ref, serverId }));
         await settled(() => expect(hook.getCurrent().status).toBe('ready'));
+        const screen = await renderDocument(ref);
+        const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
+        await React.act(async () => {
+            actions.find(action => action.id === 'edit')!.onPress();
+        });
+        await React.act(async () => { screen.changeTextByTestId('memory.draft', 'Account A private draft'); });
+        expect(screen.findByTestId('memory.draft')?.props.value).toBe('Account A private draft');
         await connection?.dispose();
         connection = null;
         await homes.switchAccount(serverId, 'account-b');
@@ -366,6 +373,9 @@ describe('MemoryDocumentBody', () => {
         expect(hook.getCurrent().view).toBeNull();
         expect(hook.getCurrent().target).toBeNull();
         await settled(() => expect(hook.getCurrent().status).toBe('unavailable'));
+        expect(screen.findByType(MemoryDocumentBody).props.source.view).toBeNull();
+        expect(screen.findByType(MemoryDocumentBody).props.source.target).toBeNull();
+        expect(Boolean(screen.findByTestId('memory.draft'))).toBe(false);
     });
 
     it('retires a foreign Home memory view when its credentials change without changing the focused Account', async () => {
@@ -598,20 +608,36 @@ describe('MemoryDocumentBody', () => {
         expect(storedBody(attached.ref)).toMatchObject({ index: [{ text: 'Prefers short commits.' }] });
     });
 
-    it('a real Artifact CAS conflict refreshes the current version and keeps what was typed', async () => {
+    it.each(['remember', 'edit'] as const)('a real Artifact CAS conflict refreshes the current version and keeps what was typed (%s)', async (operation) => {
         const ref = await seedDocument({ v: 1, index: [fact('f1', 'Old fact')], topics: [] });
-        const screen = await renderDocument(ref, { composing: true });
+        const screen = await renderDocument(ref, { composing: operation === 'remember' });
+        if (operation === 'edit') {
+            const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
+            await React.act(async () => { actions.find(action => action.id === 'edit')!.onPress(); });
+        }
+        const target = screen.findByType(MemoryDocumentBody).props.source.target;
+        if (!target) throw new Error('Missing reviewed Memory target');
         homes.artifacts(serverId).beforeNextUpdate(async () => {
-            // This competing client keeps the strict memory header valid; null title would corrupt the fixture.
-            await sync.updateArtifactWithHeader(ref.artifactId, { v: 1, kind: 'memory_doc.v1', title: 'Account memory' },
-                JSON.stringify({ v: 1, index: [fact('f1', 'Concurrent fact')], topics: [] }));
+            // A normal competing Edit replaces the active ID and archives the original.
+            // Exercise that canonical Action rather than manually keeping the original active ID.
+            expect(await memoryDocumentActions.update(target, { factId: 'f1', text: 'Concurrent fact' })).toMatchObject({ ok: true });
         });
         await React.act(async () => { screen.changeTextByTestId('memory.draft', 'A newer fact'); });
         await screen.pressByTestIdAsync('memory.draft.save');
-        await settled(() => expect(Boolean(screen.findByTestId('memory.conflict'))).toBe(true));
+        await settled(() => {
+            expect(Boolean(screen.findByTestId('memory.conflict'))).toBe(true);
+            expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready');
+            expect(screen.findByType(MemoryDocumentBody).props.source.view.facts[0]?.text).toBe('Concurrent fact');
+        });
+        const current = storedBody(ref);
+        expect(current.index).toEqual([expect.objectContaining({ text: 'Concurrent fact', supersedes: 'f1' })]);
+        expect(current.index[0]?.id).not.toBe('f1');
+        expect(current.topics.find(section => section.title === 'archive')?.facts).toEqual([fact('f1', 'Old fact')]);
+        expect(Boolean(screen.findByTestId(`memory.fact.${current.index[0]!.id}`))).toBe(true);
         expect(screen.findByTestId('memory.draft')?.props.value).toBe('A newer fact');
-        await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.view.facts[0]?.text).toBe('Concurrent fact'));
-        expect(storedBody(ref).index).toEqual([fact('f1', 'Concurrent fact')]);
+        await screen.pressByTestIdAsync('memory.draft.cancel');
+        expect(Boolean(screen.findByTestId('memory.draft'))).toBe(false);
+        expect(storedBody(ref)).toEqual(current);
     });
 
     it('archived facts are read-only', async () => {
