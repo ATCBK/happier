@@ -5,6 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { SurfaceAsOfLabel } from '@/components/ui/surfaces/SurfaceAsOfLabel';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { groupUsageByProvider, type UsageAccountRow } from '@/components/hub/usage/usageByProvider';
 import { useUsageSummary, type UsageSummary } from '@/components/hub/usage/useUsageSummary';
 import { ConnectedAccountIdentityText } from '@/components/settings/connectedServices/ConnectedAccountIdentityText';
@@ -349,6 +350,9 @@ export function SidebarUsagePopoverView(props: Readonly<{
                     />
                 </View>
             </View>
+            {refreshing ? (
+                <SurfaceStateCard testID="sidebar-usage-refresh-status" size="line" kind="loading" title={t('connectedServices.quota.refreshing')} />
+            ) : null}
             {refreshError ? (
                 <SurfaceFreshnessLine testID="sidebar-usage-refresh-error" reason={refreshError} tone="warning" />
             ) : null}

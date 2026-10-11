@@ -39,7 +39,7 @@ export type UseConnectedServiceQuotaSnapshotResult = Readonly<{
     recoveryCreditMachineId: string | null;
     /** False when this hook is displaying a provider-account-usage projection without a source-correct refresh path. */
     canRefresh: boolean;
-    /** True while a force-refresh (server refresh + reload poll) is in flight. */
+    /** True until a requested refresh produces a newer snapshot, fails, or is cancelled. */
     isRefreshing: boolean;
     refresh: () => Promise<void>;
     /**

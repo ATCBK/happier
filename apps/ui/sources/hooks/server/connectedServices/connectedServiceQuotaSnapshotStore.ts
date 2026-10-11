@@ -44,7 +44,7 @@ export type QuotaSnapshotStoreEntry = Readonly<{
     snapshot: ConnectedServiceQuotaSnapshotV1 | null;
     loading: boolean;
     error: string | null;
-    /** True for the lifetime of a `refreshQuotaSnapshot` (server refresh + poll). */
+    /** True until the requested refresh produces a newer snapshot, fails, or is cancelled. */
     refreshing: boolean;
     /** A read has completed (with or without a snapshot): "no snapshot" is then an answer, not a wait. */
     read: boolean;
@@ -87,6 +87,7 @@ type InternalEntry = {
     consecutiveErrors: number;
     loadPromise: Promise<ConnectedServiceQuotaSnapshotV1 | null> | null;
     refreshPromise: Promise<void> | null;
+    refreshSinceFetchedAt: number | null;
     pollRetainCount: number;
     pollTimer: ReturnType<typeof setTimeout> | null;
     pollContext: QuotaSnapshotLoadContext | null;
@@ -94,7 +95,6 @@ type InternalEntry = {
     view: QuotaSnapshotStoreEntry;
 };
 
-const REFRESH_RELOAD_DELAYS_MS = [0, 250, 500, 1_000, 2_000, 3_000, 4_000] as const;
 const QUOTA_SNAPSHOT_POLL_MS = 30_000;
 const QUOTA_SNAPSHOT_MISS_RETRY_MS = 30_000;
 
@@ -127,6 +127,7 @@ function getOrCreateEntry(key: string): InternalEntry {
         consecutiveErrors: 0,
         loadPromise: null,
         refreshPromise: null,
+        refreshSinceFetchedAt: null,
         pollRetainCount: 0,
         pollTimer: null,
         pollContext: null,
@@ -176,15 +177,15 @@ function retainCredentialScope(credentialScope: string): () => void {
     };
 }
 
-function sleep(ms: number): Promise<void> {
-    if (!Number.isFinite(ms) || ms <= 0) return Promise.resolve();
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function clearPollTimer(entry: InternalEntry): void {
     if (!entry.pollTimer) return;
     clearTimeout(entry.pollTimer);
     entry.pollTimer = null;
+}
+
+function hasPollingDemand(key: string, entry: InternalEntry): boolean {
+    // Cached surfaces do not poll normally; an explicit refresh stays live while observed.
+    return entry.pollRetainCount > 0 || (entry.refreshing && (listenersByKey.get(key)?.size ?? 0) > 0);
 }
 
 /**
@@ -198,7 +199,7 @@ function clearPollTimer(entry: InternalEntry): void {
  */
 function evictEntriesOutsideCredentialScope(activeCredentialScope: string): void {
     for (const [key, entry] of entries) {
-        if (entry.pollRetainCount > 0) continue;
+        if (hasPollingDemand(key, entry)) continue;
         if (entry.credentialScope === activeCredentialScope) continue;
         clearPollTimer(entry);
         entries.delete(key);
@@ -229,7 +230,7 @@ function schedulePolling(key: string): void {
     const entry = entries.get(key);
     if (!entry) return;
     clearPollTimer(entry);
-    if (entry.pollRetainCount <= 0 || entry.loadPromise || entry.refreshPromise) return;
+    if (!hasPollingDemand(key, entry) || entry.loadPromise || entry.refreshPromise) return;
     if (!entry.pollContext || !isScopeActive(entry.pollContext.credentialScope)) return;
     ensureRuntimeActiveResumeWatcher();
     if (!isRuntimeActive()) return;
@@ -238,7 +239,7 @@ function schedulePolling(key: string): void {
     entry.pollTimer = setTimeout(() => {
         entry.pollTimer = null;
         const latest = entries.get(key);
-        if (!latest || latest.pollRetainCount <= 0 || latest.loadPromise || latest.refreshPromise) return;
+        if (!latest || !hasPollingDemand(key, latest) || latest.loadPromise || latest.refreshPromise) return;
         const ctx = latest.pollContext;
         if (!ctx || !isScopeActive(ctx.credentialScope)) return;
         if (!isRuntimeActive()) {
@@ -266,6 +267,13 @@ export function subscribeQuotaSnapshotEntry(key: string | null, listener: () => 
     return () => {
         listeners?.delete(listener);
         if (listeners && listeners.size === 0) listenersByKey.delete(key);
+        const entry = entries.get(key);
+        if (entry && !hasPollingDemand(key, entry)) {
+            clearPollTimer(entry);
+            entry.refreshSinceFetchedAt = null;
+            entry.refreshing = false;
+            publish(key, entry);
+        }
     };
 }
 
@@ -293,7 +301,7 @@ async function runLoad(key: string, ctx: QuotaSnapshotLoadContext): Promise<Conn
                     expectedActiveServer: ctx.serverBasis,
                 });
                 if (!isScopeActive(ctx.credentialScope)) return null;
-                entry.snapshot = opened;
+                entry.snapshot = opened ?? (entry.refreshing ? entry.snapshot : null);
                 entry.consecutiveErrors = 0;
                 entry.nextFetchAtMs = Date.now() + (opened
                     ? Math.max(
@@ -317,7 +325,7 @@ async function runLoad(key: string, ctx: QuotaSnapshotLoadContext): Promise<Conn
                 })
                 : null;
             if (!isScopeActive(ctx.credentialScope)) return null;
-            entry.snapshot = opened;
+            entry.snapshot = opened ?? (entry.refreshing ? entry.snapshot : null);
             entry.consecutiveErrors = 0;
             entry.nextFetchAtMs = Date.now() + (opened
                 ? Math.max(
@@ -337,6 +345,14 @@ async function runLoad(key: string, ctx: QuotaSnapshotLoadContext): Promise<Conn
         } finally {
             if (isScopeActive(ctx.credentialScope)) {
                 entry.loading = false;
+                if (entry.refreshSinceFetchedAt !== null) {
+                    if (entry.error || (entry.snapshot && entry.snapshot.fetchedAt > entry.refreshSinceFetchedAt)) {
+                        entry.refreshing = false;
+                        entry.refreshSinceFetchedAt = null;
+                    } else {
+                        entry.nextFetchAtMs = Date.now() + QUOTA_SNAPSHOT_POLL_MS;
+                    }
+                }
             }
             entry.loadPromise = null;
             publish(key, entry);
@@ -387,9 +403,12 @@ export function retainQuotaSnapshotPolling(key: string, ctx: QuotaSnapshotLoadCo
         const current = entries.get(key);
         if (current !== entry) return;
         current.pollRetainCount = Math.max(0, current.pollRetainCount - 1);
-        if (current.pollRetainCount === 0) {
+        if (!hasPollingDemand(key, current)) {
             current.pollContext = null;
             clearPollTimer(current);
+            current.refreshSinceFetchedAt = null;
+            current.refreshing = false;
+            publish(key, current);
         }
     };
 }
@@ -401,32 +420,25 @@ export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadCo
         await entry.refreshPromise;
         return;
     }
+    if (entry.refreshing) return;
 
     if (!isScopeActive(ctx.credentialScope)) return;
+    entry.pollContext = ctx;
     entry.refreshing = true;
+    entry.error = null;
     publish(key, entry);
     const promise = (async () => {
         const inFlightFetchedAt = (await entry.loadPromise
             ?.then((snapshot) => snapshot?.fetchedAt ?? 0)
             .catch(() => 0)) ?? 0;
-        if (!isScopeActive(ctx.credentialScope)) return;
-        const sinceFetchedAt = Math.max(entry.snapshot?.fetchedAt ?? 0, inFlightFetchedAt);
+        if (!isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
+        entry.refreshSinceFetchedAt = Math.max(entry.snapshot?.fetchedAt ?? 0, inFlightFetchedAt);
         try {
             const mode = await ctx.resolveAccountMode();
             if (!isScopeActive(ctx.credentialScope)) return;
-            try {
-                await ctx.assertOperationAllowed('quota_refresh');
-            } catch (error) {
-                if (isScopeActive(ctx.credentialScope)) {
-                    entry.error =
-                        sanitizeEndpointErrorMessage(error)
-                        ?? t('common.error');
-                    publish(key, entry);
-                }
-                return;
-            }
+            await ctx.assertOperationAllowed('quota_refresh');
             if (!isScopeActive(ctx.credentialScope)) return;
-            await (mode === 'plain'
+            const ok = await (mode === 'plain'
                 ? requestConnectedServiceQuotaSnapshotRefreshV3(
                     ctx.credentials,
                     {
@@ -443,14 +455,14 @@ export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadCo
                     },
                     { expectedActiveServer: ctx.serverBasis },
                 ));
-        } catch {
-            // Best-effort only.
-        }
-        for (const delayMs of REFRESH_RELOAD_DELAYS_MS) {
-            await sleep(delayMs);
-            if (!isScopeActive(ctx.credentialScope)) break;
-            const opened = await runLoad(key, ctx);
-            if (opened && opened.fetchedAt > sinceFetchedAt) break;
+            if (!ok) throw new Error(t('common.error'));
+            if (!isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
+            await runLoad(key, ctx);
+        } catch (error) {
+            if (!isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
+            entry.error = sanitizeEndpointErrorMessage(error) ?? t('common.error');
+            entry.refreshSinceFetchedAt = null;
+            entry.refreshing = false;
         }
     })();
 
@@ -459,7 +471,10 @@ export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadCo
         await promise;
     } finally {
         if (entry.refreshPromise === promise) entry.refreshPromise = null;
-        entry.refreshing = false;
+        if (!isScopeActive(ctx.credentialScope) || !hasPollingDemand(key, entry)) {
+            entry.refreshSinceFetchedAt = null;
+            entry.refreshing = false;
+        }
         publish(key, entry);
         schedulePolling(key);
     }

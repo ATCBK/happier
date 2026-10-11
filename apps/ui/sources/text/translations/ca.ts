@@ -4196,6 +4196,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             },
         },
         quota: {
+            refreshing: 'Actualitzant l’ús…',
             loading: 'Carregant…',
             error: ({ message }: { message: string }) => `Error: ${message}`,
             lastUpdated: ({ time }: { time: string }) => `Última actualització: ${time}`,

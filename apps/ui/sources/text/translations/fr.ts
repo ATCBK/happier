@@ -4345,6 +4345,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       },
     },
     quota: {
+      refreshing: "Actualisation de l’utilisation…",
       loading: "Chargement…",
       error: ({ message }: { message: string }) => `Erreur : ${message}`,
       lastUpdated: ({ time }: { time: string }) =>

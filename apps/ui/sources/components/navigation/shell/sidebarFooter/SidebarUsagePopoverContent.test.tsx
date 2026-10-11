@@ -307,6 +307,16 @@ describe('SidebarUsagePopoverContent', () => {
             expect(screen.getTextContent()).toContain('other_account_failed');
         });
 
+        it('shows pending usage without replacing the last-updated timestamp or meters', async () => {
+            const screen = await renderView({ refresh: {
+                keys: ['claude:work'], refreshingByKey: { 'claude:work': true }, errorsByKey: {}, run: async () => {},
+            } });
+            expect(screen.findByTestId('sidebar-usage-refresh-status')).toBeTruthy();
+            expect(screen.findByTestId('sidebar-usage-as-of')).toBeTruthy();
+            expect(screen.getTextContent()).toContain('connectedServices.quota.remaining(percent=42%)');
+            expect(screen.findByTestId('sidebar-usage-refresh')?.props.disabled).toBe(true);
+        });
+
         it('shows emails and ids as they are until the device hides them; names people gave stay', async () => {
             const shown = (await renderView()).getTextContent();
             expect(shown).toContain('leeroy@company.com');
