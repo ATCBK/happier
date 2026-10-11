@@ -270,6 +270,21 @@ describe('DetectedLocalServicesPane', () => {
         expect(screen.findByTestId('local-services-pane-error-diagnostic-scanner_permission_denied')).toBeTruthy();
     });
 
+    it('names the scan failure cause on the whole-pane error state', async () => {
+        const screen = await renderScreen(
+            <DetectedLocalServicesPane
+                inventoryState={buildLocalServiceInventoryState({
+                    rows: [],
+                    refreshState: 'error',
+                    diagnostics: [{ code: 'linux_procfs_scan_failed', severity: 'error' }],
+                })}
+                testID="local-services-pane"
+            />,
+        );
+        expect(screen.getTextContent()).toContain("This machine couldn't list its running processes");
+        expect(screen.getTextContent()).not.toContain('linux_procfs_scan_failed');
+    });
+
     it('renders error diagnostics without clearing cached row state', async () => {
         const screen = await renderScreen(
             <DetectedLocalServicesPane

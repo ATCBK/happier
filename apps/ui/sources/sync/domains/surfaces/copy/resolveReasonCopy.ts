@@ -171,6 +171,18 @@ const LOCAL_SERVICE_LAUNCHER_KEYS = {
     managed_service_native_cleanup_unconfirmed: 'localServices.launcher.unavailableReason.nativeCleanupUnconfirmed',
 } as const satisfies Record<string, LocalServiceLauncherMessageKey>;
 
+const LOCAL_SERVICE_INVENTORY_KEYS = {
+    local_services_accepted_workspaces_unavailable: 'localServices.inventory.scanCause.workspacesUnavailable',
+    linux_procfs_scan_deadline_exceeded: 'localServices.inventory.scanCause.partial',
+    darwin_lsof_scan_partial: 'localServices.inventory.scanCause.partial',
+    linux_procfs_scan_failed: 'localServices.inventory.scanCause.failed',
+    linux_process_fact_scan_failed: 'localServices.inventory.scanCause.failed',
+    darwin_lsof_scan_failed: 'localServices.inventory.scanCause.failed',
+    darwin_process_fact_scan_failed: 'localServices.inventory.scanCause.failed',
+    windows_netstat_scan_failed: 'localServices.inventory.scanCause.failed',
+    windows_process_fact_scan_failed: 'localServices.inventory.scanCause.failed',
+} as const;
+
 /**
  * Daemon `LocalServiceActionResultV1.reasonCode` → the one sentence the user can act on.
  *
@@ -487,10 +499,10 @@ function resolveKnownMessage(kind: ReasonCopyKind, reasonCode: string): string |
             const key = LOCAL_SERVICE_LAUNCHER_KEYS[reasonCode as keyof typeof LOCAL_SERVICE_LAUNCHER_KEYS];
             return key ? t(key) : null;
         }
-        case 'localServiceInventory':
-            // No per-code inventory copy today: every scan diagnostic resolves to the
-            // neutral generic, keeping the raw code on diagnosticCode for diagnostics.
-            return null;
+        case 'localServiceInventory': {
+            const key = LOCAL_SERVICE_INVENTORY_KEYS[reasonCode as keyof typeof LOCAL_SERVICE_INVENTORY_KEYS];
+            return key ? t(key) : null;
+        }
         case 'localServiceAction': {
             const key = LOCAL_SERVICE_ACTION_KEYS[reasonCode as keyof typeof LOCAL_SERVICE_ACTION_KEYS];
             return key ? t(key) : null;

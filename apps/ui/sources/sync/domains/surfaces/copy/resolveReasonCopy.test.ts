@@ -166,6 +166,15 @@ describe('resolveReasonCopy', () => {
         }
     });
 
+    it('names each inventory scan diagnostic family without exposing its raw code', () => {
+        const workspaces = resolveReasonCopy({ reasonCode: 'local_services_accepted_workspaces_unavailable', kind: 'localServiceInventory' });
+        const partial = resolveReasonCopy({ reasonCode: 'linux_procfs_scan_deadline_exceeded', kind: 'localServiceInventory' });
+        const failed = resolveReasonCopy({ reasonCode: 'linux_procfs_scan_failed', kind: 'localServiceInventory' });
+        expect(new Set([workspaces.body, partial.body, failed.body]).size).toBe(3);
+        expect(resolveReasonCopy({ reasonCode: 'darwin_lsof_scan_partial', kind: 'localServiceInventory' }).body).toBe(partial.body);
+        expect(resolveReasonCopy({ reasonCode: 'windows_netstat_scan_failed', kind: 'localServiceInventory' }).body).toBe(failed.body);
+    });
+
     it('never returns the raw code as the message for any kind', () => {
         const unknownByKind = [
             resolveReasonCopy({ reasonCode: 'raw_leak_probe', kind: 'browserFrame' }),

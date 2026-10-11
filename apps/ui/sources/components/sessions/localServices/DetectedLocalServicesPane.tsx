@@ -567,6 +567,7 @@ export function DetectedLocalServicesPane(props: Readonly<{
                 testID={`${testID}-error`}
                 kind="error"
                 title={t('localServices.inventory.errorTitle')}
+                {...(diagnosticCopy && diagnosticCopy.body !== diagnosticCopy.title ? { reason: diagnosticCopy.body } : {})}
                 diagnosticCode={diagnosticCopy?.diagnosticCode}
                 {...(onRefresh
                     ? { action: { label: t('common.retry'), onPress: onRefresh } }
