@@ -28,6 +28,7 @@ import {
 import { resolveConfiguredClaudeConfigDir } from './utils/resolveConfiguredClaudeConfigDir';
 import type { TerminalRuntimeFlags } from '@/terminal/runtime/terminalRuntimeFlags';
 import { resolveSessionCriticalMetadataDrainTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
+import { canPublishSessionResumeIdentity } from '@/session/metadata/sessionIdentityPublication';
 import { getProjectPath } from './utils/path';
 import { readExplicitClaudeResumeSessionIdFromArgs } from './utils/claudeResumeArgs';
 import {
@@ -906,9 +907,12 @@ export class Session {
             && typeof metadataTranscriptPath === 'string'
             && prevTranscriptPath !== metadataTranscriptPath;
 
-        // Update metadata with the Claude-reported session ID immediately. Transcript
-        // proof only decides whether the path/direct-session source is resumable yet.
-        if (didSessionIdChange) {
+        // Hooks need the observed identity immediately, but allocation alone does not
+        // establish a native session that a later inactive resume can load.
+        if (canPublishSessionResumeIdentity({
+            isExistingResume: false,
+            hasResumeEvidence: Boolean(resumableTranscriptPath),
+        })) {
             this.trackCriticalMetadataWrite(
                 async () => {
                     let updatedMetadata: Metadata | null = null;
@@ -917,7 +921,7 @@ export class Session {
                             metadata,
                             sessionId,
                             transcriptPath: metadataTranscriptPath,
-                            shouldClearAssistantResumeAnchor: true,
+                            shouldClearAssistantResumeAnchor: metadata.claudeSessionId !== sessionId || didKnownTranscriptPathChange,
                         });
                         return updatedMetadata;
                     });
@@ -932,29 +936,6 @@ export class Session {
             );
             logger.debug(`[Session] Claude Code session ID ${sessionId} added to metadata`);
 
-        } else if (resumableTranscriptPath || didKnownTranscriptPathChange) {
-            // Same session, but we learned a more precise transcript path from hooks.
-            this.trackCriticalMetadataWrite(
-                async () => {
-                    let updatedMetadata: Metadata | null = null;
-                    await this.client.updateMetadata((metadata) => {
-                        updatedMetadata = buildClaudeReportedSessionMetadata({
-                            metadata,
-                            sessionId,
-                            transcriptPath: metadataTranscriptPath,
-                            shouldClearAssistantResumeAnchor: didKnownTranscriptPathChange,
-                        });
-                        return updatedMetadata;
-                    });
-                    if (updatedMetadata) {
-                        await this.reportSessionMetadataToDaemon?.({
-                            sessionId: this.client.sessionId,
-                            metadata: updatedMetadata,
-                        });
-                    }
-                },
-                'claude_transcript_path_found',
-            );
         } else if (observedTranscriptPath) {
             logger.debug(`[Session] Claude Code transcript path for session ID ${sessionId} observed but not promoted to metadata because it is not proven resumable`);
         }
