@@ -360,9 +360,8 @@ export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadCo
     entry.refreshing = true;
     entry.error = null;
     publish(key, entry);
-    const promise = (async () => {
+    const promise = Promise.resolve(previousRefresh).then(async () => {
         // A new intent waits for the cancelled request without inheriting its completion.
-        await previousRefresh;
         if (entry.refreshPromise !== promise || !entry.refreshing || !isScopeActive(ctx.credentialScope)) return;
         const inFlightFetchedAt = (await entry.loadPromise
             ?.then((snapshot) => snapshot?.fetchedAt ?? 0)
@@ -387,7 +386,7 @@ export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadCo
             entry.refreshSinceFetchedAt = null;
             entry.refreshing = false;
         }
-    })();
+    });
 
     entry.refreshPromise = promise;
     try {
