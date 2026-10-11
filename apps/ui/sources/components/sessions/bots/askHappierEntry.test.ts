@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderHook, standardCleanup } from '@/dev/testkit';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { readNewSessionDraftFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import {
   isAskHappierStatusOfferState,
   startAskHappier,
@@ -29,6 +31,7 @@ let home:
   | Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>
   | undefined;
 afterEach(() => {
+  standardCleanup();
   home?.dispose();
   home = undefined;
   resetSessionDraftRepositoryForTests();
@@ -48,21 +51,24 @@ async function prepareUnavailableGuide() {
           : await catalog.handle(path, init),
     },
   );
+  await home.hydrateAccountSettings();
   const lifetime = captureActiveServerAccountScopeLifetime();
   if (!lifetime) throw new Error('Expected admitted Account');
-  return lifetime;
+  const mounted = await renderHook(() => useMountedActionExecution(lifetime.scope));
+  await expect.poll(() => mounted.getCurrent().ready).toBe(true);
+  return { lifetime, executeAction: mounted.getCurrent().execute };
 }
 
 describe('Ask Happier entry owner', () => {
   it('offers the explicit blank bot when the guide cannot be prepared and opens it only on that choice', async () => {
-    const lifetime = await prepareUnavailableGuide();
+    const { lifetime, executeAction } = await prepareUnavailableGuide();
     boundary.confirm.mockResolvedValueOnce(false);
-    await startAskHappier({ lifetime });
+    await startAskHappier({ lifetime, executeAction });
     expect(boundary.confirm).toHaveBeenCalledTimes(1);
     expect(boundary.push).not.toHaveBeenCalled();
 
     boundary.confirm.mockResolvedValueOnce(true);
-    await startAskHappier({ lifetime });
+    await startAskHappier({ lifetime, executeAction });
     expect(boundary.push).toHaveBeenCalledTimes(1);
     const route = boundary.push.mock.calls[0]?.[0] as {
       params: { draftId: string };

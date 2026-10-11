@@ -27,7 +27,7 @@ vi.mock('@/agents/registry/AgentIcon', () => ({
     AgentIcon: (props: Record<string, unknown>) => React.createElement('AgentIcon', props),
 }));
 vi.mock('expo-image', () => ({ Image: 'Image' }));
-vi.mock('react-native-svg', () => ({ SvgXml: 'SvgXml', Svg: 'Svg', Circle: 'Circle' }));
+vi.mock('react-native-svg', async () => await import('@/dev/testkit/mocks/reactNativeSvg'));
 
 const { AgentInput } = await import('./AgentInput');
 const { getPermissionModeBadgeLabelForAgentType } = await import('@/sync/domains/permissions/permissionModeOptions');
@@ -72,10 +72,9 @@ describe('AgentInput armed continuation controls', () => {
             agentType: 'codex',
             metadata: {
                 path: '/repo', host: 'host', flavor: 'codex',
-                sessionModesV1: { v: 1, updatedAt: 1, agentId: 'codex', currentModeId: 'build', availableModes: [
-                    { id: 'build', name: 'Build' }, { id: 'plan', name: 'Plan' },
-                ] },
             },
+            acpSessionModeOptionsOverride: [{ id: 'build', name: 'Build' }, { id: 'plan', name: 'Plan' }],
+            acpSessionModeSelectedIdOverride: 'build',
             permissionMode: 'yolo', onPermissionModeChange: () => {}, onAcpSessionModeChange: onModeChange,
             autocompleteKinds: [], autocompleteSuggestions: async () => [],
         };

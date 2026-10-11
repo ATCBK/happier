@@ -70,8 +70,14 @@ function useProjectNavigation(workspace: WorkspaceAddressV1, checkout: Workspace
     const router = useRouter();
     const routeParams = useLocalSearchParams<Record<string, string | string[] | undefined>>();
     const currentRoute = resolveProjectCockpitRouteFromPathname(usePathname());
-    const currentCheckout = useWorkspaceRefById(currentRoute?.workspaceRefId ?? '', readProjectRouteStringParam(routeParams.serverId));
-    const admittedRouteParams = currentCheckout && sameWorkspaceProject(currentCheckout, checkout) ? routeParams : undefined;
+    const routeWorkspaceRefId = readProjectRouteStringParam(routeParams.workspaceRefId) ?? currentRoute?.workspaceRefId ?? '';
+    const currentCheckout = useWorkspaceRefById(routeWorkspaceRefId, readProjectRouteStringParam(routeParams.serverId));
+    const routeServerId = readProjectRouteStringParam(routeParams.serverId);
+    const routeIsExactCheckout = routeWorkspaceRefId === checkout.id
+        && routeServerId !== null
+        && areServerProfileIdentifiersEquivalent(routeServerId, checkout.serverId);
+    const admittedRouteParams = routeIsExactCheckout || (currentCheckout && sameWorkspaceProject(currentCheckout, checkout))
+        ? routeParams : undefined;
     const storedCheckout = useWorkspaceRefById(workspace.workspaceId, workspace.serverId);
     const scope = useScope(workspace);
     const snapshot = useWorkspaceScmSnapshot(scope);

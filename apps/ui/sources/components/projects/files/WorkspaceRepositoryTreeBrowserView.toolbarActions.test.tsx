@@ -3,12 +3,14 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCapturingLegendListMock, createModalModuleMock, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import type { StorageState } from '@/sync/store/types';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const storageSpies = vi.hoisted(() => ({
     setWorkspaceRepositoryTreeExpandedPaths: vi.fn(),
 }));
+let previousMachineState: Pick<StorageState, 'machines' | 'machineListByServerId' | 'machineListStatusByServerId'> | null = null;
 
 const promptSpy = vi.fn(async (..._args: any[]) => null as any);
 const alertSpy = vi.fn((..._args: any[]) => {});
@@ -114,11 +116,6 @@ vi.mock('@/modal', () => {
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
     const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
     return createPartialStorageModuleMock(importOriginal, {
-        storage: {
-            getState: () => ({
-                setWorkspaceRepositoryTreeExpandedPaths: storageSpies.setWorkspaceRepositoryTreeExpandedPaths,
-            }),
-        } as any,
         useWorkspaceRepositoryTreeExpandedPaths: () => ['src'],
         useMachine: () => machineState.current,
         useServerScopedMachine: () => machineState.current,
@@ -238,9 +235,39 @@ describe('WorkspaceRepositoryTreeBrowserView (toolbar actions)', () => {
         transferHookState.uploadState = { status: 'idle' } as any;
         transferHookState.downloadState = { status: 'idle' } as any;
         machineState.current = { id: 'm1', active: true, activeAt: Date.now() } as any;
+        const { getStorage } = await import('@/sync/domains/state/storage');
+        const fixtureStore = getStorage();
+        previousMachineState = {
+            machines: fixtureStore.getState().machines,
+            machineListByServerId: fixtureStore.getState().machineListByServerId,
+            machineListStatusByServerId: fixtureStore.getState().machineListStatusByServerId,
+        };
+        await act(async () => {
+            fixtureStore.setState({
+                machines: { m1: machineState.current },
+                machineListByServerId: {
+                    [serverId]: [machineState.current],
+                    [secondServerId]: [machineState.current],
+                },
+                machineListStatusByServerId: { [serverId]: 'idle', [secondServerId]: 'idle' },
+            });
+        });
+        const fixtureState = getStorage().getState();
+        expect(fixtureState.machines.m1).toBe(machineState.current);
+        expect(fixtureState.machineListByServerId[serverId]?.[0]).toBe(machineState.current);
+        const { resolveServerScopedMachine } = await import('@/sync/domains/machines/resolveServerScopedMachine');
+        expect(resolveServerScopedMachine(fixtureState, serverId, 'm1')).toBe(machineState.current);
     });
 
-    afterEach(() => {
+    afterEach(async () => {
+        if (previousMachineState) {
+            const { getStorage } = await import('@/sync/domains/state/storage');
+            const machineStateToRestore = previousMachineState;
+            await act(async () => {
+                getStorage().setState(machineStateToRestore);
+            });
+            previousMachineState = null;
+        }
         standardCleanup();
     });
 

@@ -52,8 +52,11 @@ installNewSessionComponentsCommonModuleMocks({
         return createModalModuleMock().module;
     },
     storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
+        const { createPartialStorageModuleMock, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
+        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
         return createPartialStorageModuleMock(importOriginal, {
+            storage: createStorageStoreMock({ settings: settingsDefaults }),
+            useActiveServerAccountScope: () => null,
             useSetting: (key: string) => {
                 if (key === 'profiles') return [];
                 if (key === 'agentInputEnterToSend') return true;
