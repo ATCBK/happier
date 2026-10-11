@@ -8,6 +8,7 @@ import { listSessionsForAccount } from "./service";
 import { createV2SessionListServerTiming } from "./timing";
 import { withAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
 import { registerSessionListingRoutes } from "@/app/api/routes/session/registerSessionListingRoutes";
+import { withSqliteReadSnapshot } from "@/storage/prisma";
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -34,6 +35,92 @@ describe("Reports-to listing (SQLite)", () => {
             audiences: [], tagIds: [], limit: 50, underSessionId,
         } },
         rowRepresentabilityWhere: {}, timing: createV2SessionListServerTiming({}),
+    });
+
+    it('refreshes captured list capabilities after an Admin grant becomes View', async () => {
+        const { owner: viewer } = await fixture();
+        const { owner, lead } = await fixture();
+        const share = await db.sessionShare.create({ data: { sessionId: lead.id, sharedByUserId: owner.id,
+            sharedWithUserId: viewer.id, accessLevel: 'admin', canApprovePermissions: true } });
+        expect((await list(viewer.id, lead.id))?.sessions[0]?.effectiveAccess).toMatchObject({ level: 'admin' });
+        const reader = await withSqliteReadSnapshot(async tx => tx);
+        const delegate = reader.session;
+        const original = delegate.findMany.bind(delegate);
+        let enter!: () => void;
+        let resume!: () => void;
+        const reached = new Promise<void>(resolve => { enter = resolve; });
+        const release = new Promise<void>(resolve => { resume = resolve; });
+        let paused = false;
+        Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true,
+            value: async (...args: Parameters<typeof original>) => {
+                const rows = await original(...args);
+                if (!paused && args[0]?.select?.metadata) { paused = true; enter(); await release; }
+                return rows;
+            } });
+        const response = list(viewer.id, lead.id);
+        try {
+            expect(await Promise.race([reached.then(() => 'barrier'), response.then(() => 'response')])).toBe('barrier');
+            await db.sessionShare.update({ where: { id: share.id }, data: { accessLevel: 'view', canApprovePermissions: false } });
+            resume();
+            const captured = await response;
+            const current = (await list(viewer.id, lead.id))?.sessions[0];
+            expect(current?.effectiveAccess).toMatchObject({ level: 'view', capabilities: { manageAccess: false } });
+            expect(current?.share).toEqual({ accessLevel: 'view', canApprovePermissions: false });
+            expect(captured?.sessions[0]?.effectiveAccess).toMatchObject({ level: 'view', capabilities: { manageAccess: false } });
+            expect(captured?.sessions[0]?.share).toEqual({ accessLevel: 'view', canApprovePermissions: false });
+        } finally {
+            resume(); await response;
+            Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true, value: original });
+        }
+    });
+
+    it('redacts a revoked report contribution while preserving the readable lead captured detail', async () => {
+        const { owner, lead } = await fixture();
+        const foreign = await fixture();
+        await db.sessionShare.create({ data: { sessionId: foreign.lead.id, sharedByUserId: foreign.owner.id,
+            sharedWithUserId: owner.id, accessLevel: 'view' } });
+        await db.session.update({ where: { id: foreign.lead.id }, data: { active: true,
+            pendingPermissionRequestCount: 1, pendingRequestObservedAt: new Date() } });
+        await db.sessionReportsTo.create({ data: { sessionId: foreign.lead.id, leadSessionId: lead.id } });
+        await withAuthenticatedTestApp(registerSessionListingRoutes, async app => {
+            const request = { method: 'GET' as const, url: `/v2/sessions/${lead.id}?accessProjectionVersion=1`,
+                headers: { 'x-test-user-id': owner.id, 'x-happier-account-stored-content-protocol': '4' } };
+            const warm = await app.inject(request);
+            expect(warm.statusCode, warm.body).toBe(200);
+            expect(warm.json().session).toMatchObject({ reports: { total: 1, needsYou: 1 } });
+            const reader = await withSqliteReadSnapshot(async tx => tx);
+            const delegate = reader.session;
+            const original = delegate.findMany.bind(delegate);
+            let enter!: () => void;
+            let resume!: () => void;
+            const reached = new Promise<void>(resolve => { enter = resolve; });
+            const release = new Promise<void>(resolve => { resume = resolve; });
+            let paused = false;
+            Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof original>) => {
+                    const rows = await original(...args);
+                    if (!paused && args[0]?.select?.runtimeActivityState && !args[0]?.select?.metadata) {
+                        paused = true; enter(); await release;
+                    }
+                    return rows;
+                } });
+            const response = app.inject(request);
+            try {
+                expect(await Promise.race([reached.then(() => 'barrier'), response.then(() => 'response')])).toBe('barrier');
+                await db.sessionShare.delete({ where: { sessionId_sharedWithUserId: {
+                    sessionId: foreign.lead.id, sharedWithUserId: owner.id } } });
+                resume();
+                const captured = await response;
+                const current = await app.inject(request);
+                expect(current.statusCode, current.body).toBe(200);
+                expect(current.json().session).toMatchObject({ id: lead.id, reports: { total: 0, needsYou: 0 } });
+                expect(captured.statusCode, captured.body).toBe(200);
+                expect(captured.json().session).toMatchObject({ id: lead.id, reports: { total: 0, needsYou: 0 } });
+            } finally {
+                resume(); await response;
+                Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true, value: original });
+            }
+        });
     });
 
     it("restricts the public listing to a readable root instead of every accessible session", async () => {

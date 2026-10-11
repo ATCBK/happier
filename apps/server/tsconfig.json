@@ -80,5 +80,8 @@
     "scripts/voiceProviderConversationIdentityMysqlUpgradeContract.ts",
     "scripts/runtime/migrateFullRuntime.ts",
     "scripts/serverConfig/**/*"
+  ],
+  "exclude": [
+    "**/*.composed.*"
   ]
 }

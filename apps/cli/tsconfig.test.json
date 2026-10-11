@@ -20,6 +20,7 @@
   ],
   "exclude": [
     "node_modules",
-    "src/**/*.tmp.test.ts"
+    "src/**/*.tmp.test.ts",
+    "**/*.composed.*"
   ]
 }

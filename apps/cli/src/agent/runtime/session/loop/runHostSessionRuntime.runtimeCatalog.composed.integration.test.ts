@@ -41,6 +41,7 @@ import {
 } from '@happier-dev/protocol';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SessionModelMutationReversalV1Schema } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
+import { SESSION_MESSAGE_PROVENANCE_META_KEY } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type {
   AgentSessionRealtimeConversation,
   AgentSessionRealtimeHandle,
@@ -111,15 +112,18 @@ import {
   ApiSessionClient,
   type ApiSessionClientOptions,
 } from '@/api/session/sessionClient';
-import { createPlainSessionFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createMutableApiSessionClientFixture, createPlainSessionFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { DeferredApiSessionClient } from '@/agent/runtime/startup/DeferredApiSessionClient';
+import { createMachineContentCodec } from '@/api/machine/machineStoredContent';
+import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 // The composed Follow gate below runs the real prompt loop over the real admitted
 // permission-mode queue, so this is the production owner rather than a test double.
 import { runPermissionModePromptLoop } from '@/agent/runtime/runPermissionModePromptLoop';
 import { publishSessionFollowWakeInvalidation } from '@/agent/runtime/session/follow/sessionFollowWakeSignal';
 import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from '@/agent/runtime/permissions/queuedPrompt';
 import type { HostProviderInputOutcomeEvidence } from '@/agent/runtime/session/input/providerInputOutcome';
+import type { RuntimeConfigUpdateOutcomeV1, RuntimeTurnConfigUpdate } from '@/agent/runtime/turns/runtimeTurnOperations';
 import {
   CONNECTED_SERVICE_APPLIED_PARENT_SELECTION_PATH,
   ConnectedServiceAppliedParentSelectionRequestSchema,
@@ -346,9 +350,20 @@ async function loadAgentSessionRealtimeService(): Promise<CreateAgentSessionReal
   return loaded.createAgentSessionRealtimeService as CreateAgentSessionRealtimeService;
 }
 
+async function unsupportedRuntimeConfigUpdate(): Promise<RuntimeConfigUpdateOutcomeV1> {
+  return { status: 'unsupported', timing: 'not_applicable', reason: 'native_agent_configuration_unsupported' };
+}
+
 function createSessionFixture(sessionId: string) {
   const handlers = new Map<string, (payload?: unknown) => unknown>();
+  // The offline Session transport is substituted; mutable metadata, Agent state
+  // and their event delivery remain owned by the canonical Session testkit.
+  const sessionBoundary = createMutableApiSessionClientFixture({
+    sessionId,
+    metadata: createTestMetadata({ path: '/tmp/workspace', permissionMode: 'default' }),
+  });
   const session: any = {
+    ...sessionBoundary,
     sessionId,
     rpcHandlerManager: {
       sessionId,
@@ -361,12 +376,16 @@ function createSessionFixture(sessionId: string) {
     sendAgentMessage: vi.fn(),
     enqueueAgentMessageCommitted: vi.fn(async () => undefined),
     sendSessionEvent: vi.fn(),
+    // The transcript transport admits Ready into durable custody before notification.
+    enqueueSessionEventCommitted: vi.fn(async (): ReturnType<ApiSessionClient['enqueueSessionEventCommitted']> => ({
+      persisted: true,
+      delivered: false,
+    })),
     keepAlive: vi.fn(),
-    getMetadataSnapshot: () => ({ path: '/tmp/workspace', permissionMode: 'default' }),
     // Session boundary projection: this server fixture has no reports-to link or origin.
     readRolePromptOrganization: vi.fn(async (): ReturnType<ApiSessionClient['readRolePromptOrganization']> => ({})),
     fetchLatestUserPermissionIntentFromTranscript: vi.fn(async () => null),
-    waitForMetadataUpdate: vi.fn(async () => false),
+    waitForMetadataUpdate: vi.fn(sessionBoundary.waitForMetadataUpdate),
     hasPendingProviderInput: vi.fn(() => true),
     getPendingQueueState: () => ({
       known: true,
@@ -376,15 +395,15 @@ function createSessionFixture(sessionId: string) {
     }),
     observeProviderInputSettlement: vi.fn(),
     confirmUserMessageLocallyConsumed: vi.fn(),
-    updateMetadata: vi.fn(),
+    updateMetadata: vi.fn(sessionBoundary.updateMetadata),
     updateMetadataAsCurrentPublisher: vi.fn(
       async (update: (metadata: Metadata) => Metadata) =>
         await session.updateMetadata(update),
     ),
     checkCurrentPublisherAuthority: vi.fn(async () => true),
     hasOwnerMetadataAuthority: vi.fn(() => true),
-    on: vi.fn(),
-    off: vi.fn(),
+    on: vi.fn(sessionBoundary.on.bind(sessionBoundary)),
+    off: vi.fn(sessionBoundary.off.bind(sessionBoundary)),
     onUserMessage: vi.fn(),
     refreshSessionSnapshotFromServerRequired: vi.fn(async () => undefined),
     enqueueSessionTurnMutation: vi.fn(async () => undefined),
@@ -404,7 +423,7 @@ function createSessionFixture(sessionId: string) {
     flushDurableMutationDelivery: vi.fn(async () => undefined),
     flush: vi.fn(async () => undefined),
     endSessionAndClose: vi.fn(async () => undefined),
-    close: vi.fn(async () => undefined),
+    close: vi.fn(sessionBoundary.close),
   };
 
   return {
@@ -491,11 +510,12 @@ function createHarness() {
     setSessionModel: vi.fn(async () => undefined),
     updateSessionRuntimeConfig: vi.fn(async function (
       this: unknown,
-      update: { modeId?: string | null; modelId?: string | null; configOption?: { id: string; value: string | number | boolean | null } | null },
-    ) {
+      update: RuntimeTurnConfigUpdate,
+    ): Promise<RuntimeConfigUpdateOutcomeV1 | void> {
       if (this !== runtime) {
         throw new Error('updateSessionRuntimeConfig called with wrong receiver');
       }
+      if (update.workspaceWrites !== undefined) return await unsupportedRuntimeConfigUpdate();
       if (typeof update.modeId === 'string') {
         await runtime.setSessionMode(update.modeId);
       }
@@ -822,6 +842,76 @@ describe('runHostSessionRuntime', () => {
     await runtimeRegistryLease?.release();
     runtimeRegistryLease = null;
     await pluginReloadController.shutdown({ timeoutMs: 5_000 });
+  });
+
+  it.each(['ordinary', 'deferred', 'session-scoped'] as const)('reads manual-start tool policy only with Account authority through a %s push-only loop port', async (startup) => {
+    const harness = createHarness();
+    harness.opts.startedBy = 'terminal';
+    harness.opts.credentials = {
+      token: `header.${Buffer.from(JSON.stringify({ sub: 'manual-policy-account' })).toString('base64url')}.signature`,
+      encryption: null,
+    };
+    let inheritedTimeout: string | undefined;
+    const startupHookFailure = new Error('Startup contribution stopped before Agent admission');
+    const stopAtStartupContribution = async () => {
+      inheritedTimeout = process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS;
+      throw startupHookFailure;
+    };
+    if (startup === 'session-scoped') {
+      harness.config.runtimeAuthority = {
+        scope: 'session', sessionCredentials: { token: 'runner-session-token', encryption: null }, accountCredentials: null,
+      };
+    }
+    if (startup === 'deferred') {
+      harness.config.startupBootstrap = {
+        create: async () => ({
+          api: { push: () => null },
+          session: harness.session,
+          machineId: 'machine-1',
+          metadata: createTestMetadata({ path: '/tmp/workspace' }),
+          attachedToExistingSession: false,
+          reconnectionHandle: null,
+          start: stopAtStartupContribution,
+        }),
+      };
+    }
+    const scope = createEnvKeyScope(['AGENT_BROWSER_IDLE_TIMEOUT_MS', 'HAPPIER_PROCESS_OWNER']);
+    scope.patch({ AGENT_BROWSER_IDLE_TIMEOUT_MS: undefined });
+    const requests: string[] = [];
+    const policy = MachineResourcesPolicyV1Schema.parse({ v: 1, processes: { toolIdleCloseMs: 1250 } });
+    const codec = createMachineContentCodec({ encryptionMode: 'plain' });
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? '');
+      response.setHeader('Content-Type', 'application/json');
+      if (request.url === '/v1/account/encryption') {
+        response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
+      } else if (request.url === '/v1/machines/machine-1') {
+        response.end(JSON.stringify({ machine: {
+          id: 'machine-1', storageMode: 'plain', dataEncryptionKey: null,
+          metadata: codec.encodeStored({ ...harness.config.machineMetadata, resourcesPolicyV1: policy }),
+          metadataVersion: 7, daemonState: null, daemonStateVersion: 0,
+        } }));
+      } else {
+        response.statusCode = 404;
+        response.end('{}');
+      }
+    });
+    try {
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Machine fixture did not bind');
+      harness.config.lifecycleHooks = {
+        ...harness.config.lifecycleHooks,
+        onSessionInitialized: stopAtStartupContribution,
+      };
+      await expect(runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, () =>
+        runHostSessionRuntime(harness.opts, harness.config, harness.deps))).rejects.toBe(startupHookFailure);
+      expect(inheritedTimeout).toBe(startup === 'session-scoped' ? undefined : '1250');
+      expect(requests).toEqual(startup === 'session-scoped' ? [] : ['/v1/account/encryption', '/v1/machines/machine-1']);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      scope.restore();
+    }
   });
 
   it('starts an Account-scoped queued prompt with the canonical Agent identity at the daemon auth boundary', async () => {
@@ -1174,7 +1264,7 @@ describe('runHostSessionRuntime', () => {
       v: 1,
       sessionCreationTag,
       recipe: {
-        execution: { machineId: 'machine-1', directory: '/workspace/project' },
+        execution: { machineId: 'machine-1', directory: { kind: 'path', path: '/workspace/project' } },
         organization: { folderId: 'folder-1', tagIds: ['tag-1'] },
         agentTarget: {
           kind: 'agent',
@@ -1963,7 +2053,7 @@ describe('runHostSessionRuntime', () => {
       v: 1,
       sessionCreationTag,
       recipe: {
-        execution: { machineId: 'machine-1', directory: '/tmp/workspace' },
+        execution: { machineId: 'machine-1', directory: { kind: 'path', path: '/tmp/workspace' } },
         organization: { folderId: null, tagIds: [] },
         agentTarget: {
           kind: 'agent',
@@ -2762,7 +2852,7 @@ describe('runHostSessionRuntime', () => {
         v: 1,
         sessionCreationTag,
         recipe: {
-          execution: { machineId: 'machine-1', directory: '/tmp/workspace' },
+          execution: { machineId: 'machine-1', directory: { kind: 'path', path: '/tmp/workspace' } },
           organization: { folderId: null, tagIds: [] },
           agentTarget: {
             kind: 'agent',
@@ -3637,16 +3727,7 @@ describe('runHostSessionRuntime', () => {
 
   it('observes canonical display.title metadata updates through the host session-state engine', async () => {
     const harness = createHarness();
-    let metadata: Record<string, unknown> = { path: '/tmp/workspace', permissionMode: 'default' };
-    const metadataUpdateResolvers: Array<(value: boolean) => void> = [];
     const applied: string[] = [];
-    harness.session.getMetadataSnapshot = () => metadata;
-    harness.session.updateMetadata = vi.fn(async (updater: (current: Record<string, unknown>) => Record<string, unknown>) => {
-      metadata = updater(metadata);
-    });
-    harness.session.waitForMetadataUpdate = vi.fn(() => new Promise<boolean>((resolve) => {
-      metadataUpdateResolvers.push(resolve);
-    }));
     harness.config.sessionState = {
       facet: {
         capabilities: {
@@ -3669,7 +3750,6 @@ describe('runHostSessionRuntime', () => {
         ...current,
         summary: { text: 'Host bridge title', updatedAt: 123 },
       }));
-      metadataUpdateResolvers.shift()?.(true);
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
 
@@ -4872,7 +4952,7 @@ describe('runHostSessionRuntime', () => {
         v: 1,
         sessionCreationTag,
         recipe: {
-          execution: { machineId: 'machine-1', directory: '/tmp/workspace' },
+          execution: { machineId: 'machine-1', directory: { kind: 'path', path: '/tmp/workspace' } },
           organization: { folderId: null, tagIds: [] },
           agentTarget: {
             kind: 'agent',
@@ -4968,7 +5048,7 @@ describe('runHostSessionRuntime', () => {
         v: 1,
         sessionCreationTag,
         recipe: {
-          execution: { machineId: 'machine-1', directory: '/tmp/workspace' },
+          execution: { machineId: 'machine-1', directory: { kind: 'path', path: '/tmp/workspace' } },
           organization: { folderId: null, tagIds: [] },
           agentTarget: {
             kind: 'agent',
@@ -7433,7 +7513,7 @@ describe('runHostSessionRuntime', () => {
     }
   });
 
-  it('trims the initial resume id before enabling strict resume mode', async () => {
+  it('preserves the opaque initial resume id before enabling strict resume mode', async () => {
     const harness = createHarness();
     harness.opts.resume = '  resume-id  ';
 
@@ -7448,7 +7528,7 @@ describe('runHostSessionRuntime', () => {
 
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
 
-    expect(receivedInitialResumeId).toBe('resume-id');
+    expect(receivedInitialResumeId).toBe('  resume-id  ');
     expect(receivedStrictInitialResume).toBe(true);
   });
 
@@ -9510,14 +9590,17 @@ describe('runHostSessionRuntime', () => {
     harness.session.observePendingSessionFollow = observePendingSessionFollow;
     const publishHostRuntimeEvent = vi.fn();
     harness.config.publishHostRuntimeEvent = publishHostRuntimeEvent;
-    harness.deps.runPermissionModePromptLoopFn = async (params: any) => {
-      const prepare = params.runtime.prepareHostContext;
+    harness.deps.runPermissionModePromptLoopFn = async (params: Parameters<typeof runPermissionModePromptLoop>[0]) => {
+      const prepare = params.prepareHostContext;
       expect(prepare).toEqual(expect.any(Function));
+      if (!prepare) throw new Error('Expected the host context owner');
 
       await prepare({ signal: new AbortController().signal, requiredPrompt: 'required' });
       expect(observePendingSessionFollow).toHaveBeenCalledTimes(1);
 
-      const modelId = params.readActiveModelSelection().modelId;
+      const readActiveModelSelection = params.readActiveModelSelection;
+      if (!readActiveModelSelection) throw new Error('Expected the active model-selection reader');
+      const modelId = readActiveModelSelection().modelId;
       harness.runtime.emitRuntimeMessage({
         kind: 'usage-observed',
         sequence: 1,
@@ -9726,6 +9809,7 @@ describe('runHostSessionRuntime', () => {
 
   it('withdraws a Follow wake at the final recheck without committing a host event or sending a provider prompt', async () => {
     const harness = createHarness();
+    harness.opts.credentials = { token: 'follow-token', encryption: null };
     harness.session.hasPendingProviderInput = vi.fn(() => false);
     const wakeQueue = new MessageQueue2(() => 'default', { batcher: (messages) => messages[0]! });
     harness.deps.createPermissionModeQueueStateFn = () => ({
@@ -9740,7 +9824,8 @@ describe('runHostSessionRuntime', () => {
     const observed = { transcriptSeq: 2, readyEventSeq: 0, agentStateVersion: 0, turn: null };
     let shouldExit = false;
     harness.session.observePendingSessionFollow = vi.fn(async () => {
-      const withdrawn = harness.session.observePendingSessionFollow.mock.calls.length > 1;
+      // Initial admission and post-hydration admission succeed; withdraw at dispatch.
+      const withdrawn = harness.session.observePendingSessionFollow.mock.calls.length > 2;
       if (withdrawn) shouldExit = true;
       return {
         ok: true as const,
@@ -9759,35 +9844,44 @@ describe('runHostSessionRuntime', () => {
     });
     harness.session.acknowledgeSessionFollow = vi.fn();
     harness.session.enqueueAgentMessageCommitted = vi.fn(async () => ({ persisted: true, delivered: false }));
-    harness.deps.createSessionFollowSourceHydratorFn = vi.fn(() => vi.fn(async () => ({
-      v: 1 as const,
-      kind: 'session_follow_update' as const,
-      edge: { sourceSessionId: 'source-session', destinationSessionId: 'session-1' },
-      reason: 'source_changed' as const,
-      deliveryIntent: 'context_only' as const,
-      observed,
-      awareness: {
-        v: 1 as const,
-        sessionId: 'source-session',
-        lifecycle: 'ready' as const,
-        runtime: 'idle' as const,
-        freshness: 'live' as const,
-        operational: { primary: 'ready' as const, reasons: ['ready' as const] },
-        encryption: 'plain' as const,
-        availability: 'complete' as const,
+    const source = createSessionRecordFixture({
+      id: 'source-session', encryptionMode: 'plain', seq: observed.transcriptSeq,
+      metadata: JSON.stringify({ path: '/workspace/source', host: 'source-host' }),
+      active: true, activeAt: 9_000, updatedAt: 9_000,
+      agentStateVersion: observed.agentStateVersion,
+    });
+    // Mock HTTP, not hydration/admission: the final recheck must withdraw a real hydrated wake.
+    const get = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+      const request = new URL(String(url));
+      if (request.origin !== 'https://follow-home.example') throw new Error('Follow source read escaped the destination Home');
+      if (request.pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      if (request.pathname === '/v2/sessions/source-session') return { status: 200, data: { session: source } };
+      if (request.pathname === '/v1/sessions/source-session/messages') return { status: 200, data: {
+        messages: [{
+          id: 'source-human-2', seq: 2, localId: null, createdAt: 2_000, updatedAt: 2_000,
+          content: { t: 'plain', v: {
+            role: 'user', content: { type: 'text', text: 'Context withdrawn before delivery' },
+            meta: { [SESSION_MESSAGE_PROVENANCE_META_KEY]: { v: 1, kind: 'cli' } },
+          } },
+        }],
+        hasMore: false, nextBeforeSeq: null, nextAfterSeq: null,
+      } };
+      throw new Error(`Unexpected Follow source request: ${request.pathname}`);
+    });
+    const sourceHome = new ApiSessionClient(harness.opts.credentials.token, createPlainSessionFixture({ id: 'session-1' }), {
+      metadataAuthority: { kind: 'owner', credentials: harness.opts.credentials },
+      transport: {
+        serverId: 'follow-home', serverUrl: 'https://follow-home.example',
+        createSessionSocketTransport: () => { throw new Error('Session socket is supplied by the network boundary fixture'); },
       },
-      recentMessages: [{
-        messageId: 'source-human-2',
-        seq: 2,
-        text: 'Context withdrawn before delivery',
-        provenance: { v: 1 as const, kind: 'cli' as const },
-      }],
-      truncated: false,
-    })));
+    });
+    harness.session.runSessionFollowSourceRequest = sourceHome.runSessionFollowSourceRequest.bind(sourceHome);
     const runtime = {
       ...harness.runtime,
       readSessionIdentity: vi.fn(() => ({ sessionId: null })),
-      updateSessionRuntimeConfig: vi.fn(async () => undefined),
+      updateSessionRuntimeConfig: vi.fn(unsupportedRuntimeConfigUpdate),
       beginTurnLifecycle: vi.fn(),
       waitForTurnCompletion: vi.fn(async () => undefined),
       sendTurnPrompt: vi.fn(async () => undefined),
@@ -9797,9 +9891,17 @@ describe('runHostSessionRuntime', () => {
       await runPermissionModePromptLoop({ ...params, shouldExit: () => shouldExit });
     };
 
-    await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    try {
+      await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    } finally {
+      try {
+        await sourceHome.close();
+      } finally {
+        get.mockRestore();
+      }
+    }
 
-    expect(harness.session.observePendingSessionFollow).toHaveBeenCalledTimes(2);
+    expect(harness.session.observePendingSessionFollow).toHaveBeenCalledTimes(3);
     expect(harness.session.enqueueAgentMessageCommitted).not.toHaveBeenCalled();
     expect(runtime.sendTurnPrompt).not.toHaveBeenCalled();
     expect(runtime.beginTurnLifecycle).not.toHaveBeenCalled();
@@ -9810,7 +9912,7 @@ describe('runHostSessionRuntime', () => {
     const harness = createHarness();
     const accountId = 'origin-account';
     harness.opts.credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
-    const run: WorkflowRunSummaryV1 = { sourceArtifactId: null, ownerAccountId: 'account-1', visibleTeamId: null,
+    const run: WorkflowRunSummaryV1 = { sourceArtifactId: null, ownerAccountId: accountId, visibleTeamId: null,
       id: 'origin-run', origin: { kind: 'direct', originSessionId: 'session-1' }, machineId: 'machine-1',
       state: 'succeeded', revision: 3, workflowCustodyState: 'settled', originDeliveryAckRevision: 0,
       attentionRequired: false, createdAt: '2026-09-30T00:00:00.000Z', updatedAt: '2026-09-30T00:00:00.000Z',
@@ -9909,7 +10011,7 @@ describe('runHostSessionRuntime', () => {
     const prompts: string[] = [];
     const runtime = {
       ...harness.runtime, readSessionIdentity: vi.fn(() => ({ sessionId: null })),
-      updateSessionRuntimeConfig: vi.fn(async () => undefined), beginTurnLifecycle: vi.fn(),
+      updateSessionRuntimeConfig: vi.fn(unsupportedRuntimeConfigUpdate), beginTurnLifecycle: vi.fn(),
       sendTurnPrompt: vi.fn(async (prompt: string) => { prompts.push(prompt); }),
       waitForTurnCompletion: vi.fn(async () => undefined),
     };
@@ -9982,7 +10084,7 @@ describe('runHostSessionRuntime', () => {
       const prompts: string[] = [];
       const runtime = {
         ...harness.runtime, readSessionIdentity: vi.fn(() => ({ sessionId: null })),
-        updateSessionRuntimeConfig: vi.fn(async () => undefined), beginTurnLifecycle: vi.fn(),
+        updateSessionRuntimeConfig: vi.fn(unsupportedRuntimeConfigUpdate), beginTurnLifecycle: vi.fn(),
         sendTurnPrompt: vi.fn(async (prompt: string) => { prompts.push(prompt); }),
         waitForTurnCompletion: vi.fn(async () => undefined),
       };
@@ -10046,7 +10148,7 @@ describe('runHostSessionRuntime', () => {
     const runtime = {
       ...harness.runtime,
       readSessionIdentity: vi.fn(() => ({ sessionId: null })),
-      updateSessionRuntimeConfig: vi.fn(async () => undefined),
+      updateSessionRuntimeConfig: vi.fn(unsupportedRuntimeConfigUpdate),
       beginTurnLifecycle: vi.fn(),
       supportsInFlightSteer: () => true,
       canSteerPrompt: () => true,
@@ -10123,7 +10225,7 @@ describe('runHostSessionRuntime', () => {
     const runtime = harness.runtime;
     // This Agent boundary starts fresh and completes each dispatched turn immediately.
     runtime.readSessionIdentity = vi.fn(() => ({ sessionId: null }));
-    runtime.updateSessionRuntimeConfig = vi.fn(async () => undefined);
+    runtime.updateSessionRuntimeConfig = vi.fn(unsupportedRuntimeConfigUpdate);
     runtime.beginTurnLifecycle = vi.fn();
     runtime.waitForTurnCompletion = vi.fn(async () => undefined);
     const prompts: string[] = [];
@@ -10221,7 +10323,7 @@ describe('runHostSessionRuntime', () => {
     const runtime = {
       ...harness.runtime,
       readSessionIdentity: vi.fn(() => ({ sessionId: null })),
-      updateSessionRuntimeConfig: vi.fn(async () => undefined),
+      updateSessionRuntimeConfig: vi.fn(unsupportedRuntimeConfigUpdate),
       beginTurnLifecycle: vi.fn(),
       waitForTurnCompletion: vi.fn(async () => undefined),
       setOnPromptDeliveryOutcome: vi.fn((handler: ((outcome: any) => void) | null) => {
@@ -10315,8 +10417,9 @@ describe('runHostSessionRuntime', () => {
         attachedToExistingSession: false,
       };
     };
-    harness.deps.runPermissionModePromptLoopFn = async (params: any) => {
-      const prepare = params.runtime.prepareHostContext;
+    harness.deps.runPermissionModePromptLoopFn = async (params: Parameters<typeof runPermissionModePromptLoop>[0]) => {
+      const prepare = params.prepareHostContext;
+      if (!prepare) throw new Error('Expected the host context owner');
       const signal = new AbortController().signal;
       await prepare({ signal, requiredPrompt: 'before handoff' });
       await swapSession?.(replacementFixture.session);

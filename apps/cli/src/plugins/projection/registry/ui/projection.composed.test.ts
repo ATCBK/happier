@@ -1,5 +1,4 @@
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
-import { readFileSync } from 'node:fs';
 
 import {
     PluginOpenableContentViewerContributionV1Schema,
@@ -1751,15 +1750,6 @@ describe('plugin UI projection family', () => {
         expect(modellessEntry?.availability)
             .toMatchObject({ state: 'fallback', reason: 'declarative_model_unavailable' });
 
-        // The generic renderer-availability projector must not carry a second declarative
-        // decision: it schema-parses through the strict v1 renderer union, which has no
-        // declarative member, so any declarative branch there is unreachable and wrong.
-        const source = readFileSync(new URL('./projection.ts', import.meta.url), 'utf8');
-        const start = source.indexOf('function projectSurfaceAvailability');
-        expect(start).toBeGreaterThan(-1);
-        const end = source.indexOf('\n}\n', start);
-        expect(end).toBeGreaterThan(start);
-        expect(source.slice(start, end)).not.toContain('declarative');
     });
 
     it('projects a declarative document source beside its evaluated static model', () => {

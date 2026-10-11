@@ -14,6 +14,7 @@ import { createMachineDataEncryptionKeyV1 } from '@happier-dev/protocol/machines
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { decodeBase64 } from 'privacy-kit';
+import { startHttpRequestRecordingProxy } from '../../../../../packages/tests/src/testkit/httpRequestRecordingProxy';
 
 import { createServerBackedSessionTranscriptStore } from '../../../../cli/src/api/session/createServerBackedSessionTranscriptStore';
 import { createSessionTranscriptFollowLeaseRegistry } from '../../../../cli/src/api/session/followSessionTranscript';
@@ -27,6 +28,8 @@ import type { Fastify as AppFastify } from '@/app/api/types';
 import { enableAuthentication } from '@/app/api/utils/enableAuthentication';
 import { registerExternalActionRoutes } from '@/app/api/routes/actions/registerExternalActionRoutes';
 import { registerSessionMessageRoutes } from '@/app/api/routes/session/registerSessionMessageRoutes';
+import { registerSessionListingRoutes } from '@/app/api/routes/session/registerSessionListingRoutes';
+import { registerAccountEncryptionRoutes } from '@/app/api/routes/account/registerAccountEncryptionRoutes';
 import { createExternalActionDaemonDispatcher } from '@/app/api/socket/externalActionDispatcher';
 import { buildRpcMethodRoom } from '@/app/api/socket/rpc/rpcMethodRoom';
 import { qualifyCurrentAccountStoredContentSocket, currentAccountStoredContentCompatibilityHeaders } from '@/app/api/testkit/accountStoredContentCompatibility';
@@ -47,8 +50,9 @@ import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lig
 import { eventRouter } from './connectionEventRouter';
 import { buildNewMessageUpdate } from './eventPayloadBuilders';
 
-export function registerTranscriptFollowTimingTests(provider: 'sqlite' | 'postgres'): void {
-describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${provider}`, () => {
+export function registerTranscriptFollowTimingTests(provider: 'sqlite' | 'postgres',
+    httpRoundTripDelayMs = 0): void {
+describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${provider}, HTTP delay ${httpRoundTripDelayMs}ms`, () => {
     let harness: LightSqliteHarness;
     const originalEnv = snapshotEnv();
     beforeAll(async () => {
@@ -81,7 +85,8 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
         const owner = await db.account.create({ data: contentPublicKey
             ? { ...createSignedAccountContentBinding(contentPublicKey), encryptionMode: 'e2ee' }
             : { publicKey: crypto.randomUUID(), encryptionMode: 'plain' } });
-        const sessionKey = material ? createMachineDataEncryptionKeyV1({ material, randomBytes: tweetnacl.randomBytes }) : null;
+        const sessionKey = material && contentPublicKey ? createMachineDataEncryptionKeyV1({ material,
+            dataKeyPublicKey: contentPublicKey, randomBytes: tweetnacl.randomBytes }) : null;
         const contentContext: SessionStoredContentCryptoContext = sessionKey
             ? { mode: 'e2ee', ctx: sessionKey } : { mode: 'plain', ctx: null };
         const machineMetadata = { host: 'test', platform: 'linux', happyCliVersion: 'test',
@@ -94,10 +99,15 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
             installationId: crypto.randomUUID(), installationPublicKey: keyPair.publicKey,
             active: true, lastActiveAt: new Date(),
             operationProtocolCapabilitiesRevision: 1,
-            operationProtocolCapabilities: { externalActionExecutionAuthorization: { protocolVersions: [1] } } } });
+            operationProtocolCapabilities: { externalActionExecutionAuthorization: { protocolVersions: [1] },
+                sessionInputAdmission: { protocolVersions: [1, 2] } } } });
+        const sessionMetadata = sealSessionStoredContent({ ...contentContext,
+            payload: { ...machineMetadata, machineId: machine.id, path: '/tmp' } });
         const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(),
-            encryptionMode: contentContext.mode, dataEncryptionKey: sessionKey?.dataEncryptionKey,
-            metadata: sealedMetadata.t === 'encrypted' ? sealedMetadata.c : JSON.stringify({ t: 'plain', v: {} }) } });
+            encryptionMode: contentContext.mode,
+            ...(sessionKey ? { dataKeyEnvelopes: { create: { recipientAccountId: owner.id,
+                encryptedDataKey: sessionKey.dataEncryptionKey } } } : {}),
+            metadata: sessionMetadata.t === 'encrypted' ? sessionMetadata.c : JSON.stringify(sessionMetadata.v) } });
         await db.accessKey.create({ data: { accountId: owner.id, sessionId: session.id, machineId: machine.id, data: 'test' } });
         const token = await auth.createToken(owner.id, undefined, { kind: 'account', authority: 'present_user' });
         const pat = await auth.createApiToken({ accountId: owner.id, tokenId: crypto.randomUUID(), label: 'follow harness' });
@@ -110,18 +120,23 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
         eventRouter.setIo(io);
         let observerConnections = 0;
         const stamps: Record<string, number> = {};
-        const pages: { start: number; end?: number }[] = [];
+        const pages: { url: string; start: number; end?: number }[] = [];
+        let baselineRead: (() => void) | undefined;
         let receivedRunner!: (socket: Socket) => void;
         const runnerSocket = new Promise<Socket>(resolve => { receivedRunner = resolve; });
         app.addHook('onRequest', async request => {
-            if (request.url.startsWith(`/v1/sessions/${session.id}/messages`)) pages.push({ start: performance.now() });
+            if (request.url.startsWith(`/v1/sessions/${session.id}/messages`)) pages.push({ url: request.url, start: performance.now() });
         });
         app.addHook('onResponse', async request => {
             if (request.url.startsWith(`/v1/sessions/${session.id}/messages`)) pages.at(-1)!.end = performance.now();
         });
         enableAuthentication(app);
         registerSessionMessageRoutes(app);
-        registerExternalActionRoutes(app, { dispatch: createExternalActionDaemonDispatcher({ io }) });
+        registerSessionListingRoutes(app);
+        registerAccountEncryptionRoutes(app);
+        const presence = createSessionPublisherPresence();
+        registerExternalActionRoutes(app, { dispatch: createExternalActionDaemonDispatcher({ io,
+            sessionPublisherPresence: presence }) });
         io.on('connection', socket => {
             // Socket authentication/installation stamping is the only substituted boundary.
             // HTTP auth, grant admission, placement, RPC and event qualification remain real.
@@ -135,18 +150,33 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                 if (socket.handshake.auth.runner !== true) observerConnections++;
                 Object.assign(socket.data, { userId: owner.id, clientType: 'session-scoped', sessionId: session.id,
                     authAuthority: 'present_user', authTokenAuthenticationEvidence: [] });
+                socket.onAnyOutgoing((event, payload: unknown) => {
+                    if (socket.handshake.auth.runner !== true && event === 'update'
+                        && payload && typeof payload === 'object' && 'body' in payload
+                        && payload.body && typeof payload.body === 'object' && 't' in payload.body
+                        && payload.body.t === 'new-message') stamps.socketEmit = performance.now();
+                });
                 void socket.join(`session:${session.id}:${owner.id}`);
                 if (socket.handshake.auth.runner === true) receivedRunner(socket);
             }
         });
-        const endpoint = await app.listen({ host: '127.0.0.1', port: 0 });
+        const upstream = await app.listen({ host: '127.0.0.1', port: 0 });
+        // Existing network-boundary proxy models finite HTTP RTT only. Socket
+        // frames remain real loopback delivery, with no simulated frame delay.
+        const network = httpRoundTripDelayMs > 0 ? await startHttpRequestRecordingProxy({
+            targetBaseUrl: upstream, delayRequestMs: () => httpRoundTripDelayMs,
+        }) : null;
+        const endpoint = network?.baseUrl ?? upstream;
         const registry = createSessionTranscriptFollowLeaseRegistry({ idleTtlMs: 600_000 });
         const store = createServerBackedSessionTranscriptStore({ token, sessionId: session.id, ...contentContext });
         const observedStore = { ...store,
             readAfter: async (input?: unknown) => {
+                if (stamps.waiterSignalled !== undefined) stamps.waiterResumed = performance.now();
                 stamps.pageStart = performance.now();
                 const page = await store.readAfter(input);
                 stamps.pageEnd = performance.now();
+                baselineRead?.();
+                baselineRead = undefined;
                 return page;
             },
             observeChanges: (listener: Parameters<NonNullable<typeof store.observeChanges>>[0],
@@ -173,7 +203,8 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                 currentInstallationId: machine.installationId!, externalActionMachineRequestPrivateKey: keyPair.secretKey,
                 verifyExecutionAuthorization: async ({ authorization }) => Boolean(await verifyCurrentExternalActionPrincipal(authorization.binding)),
                 ...(material ? { resolveEncryption: async () => ({ serverIdentityId, material }) } : {}),
-                resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token, encryption: null },
+                resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token,
+                    encryption: material && contentPublicKey ? { ...material, publicKey: contentPublicKey } : null },
                     serverApiUrl: endpoint }), executor, signal: abort.signal,
             }));
             stamps.daemonReturn = performance.now();
@@ -182,12 +213,12 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
         daemon.on(SOCKET_RPC_EVENTS.CANCEL, () => abort.abort());
         let releaseWriter: (() => void) | undefined;
         let writer: Promise<void> | undefined;
-        const headers = { authorization: `Bearer ${material ? token : pat.token}`, 'content-type': 'application/json',
+        const headers = { authorization: `Bearer ${pat.token}`, 'content-type': 'application/json',
             ...currentAccountStoredContentCompatibilityHeaders };
         const follow = (cursor: string) => {
             const binding = { serverIdentityId, accountId: owner.id, actionId: 'transcript.follow' as const,
                 requestId: crypto.randomUUID(), target: { kind: 'machine' as const, machineId: machine.id },
-                authentication: { kind: 'account' as const, tokenEpoch: owner.tokenEpoch } };
+                credentialId: pat.tokenId };
             const input = { sessionId: session.id, cursor, leaseId: 'home-follow', waitForChanges: true };
             const envelope = material ? sealExternalActionRequestV2({ binding, input, material, randomBytes: tweetnacl.randomBytes })
                 : { v: 1 as const, requestId: binding.requestId, target: binding.target, input };
@@ -199,15 +230,15 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                     const execution = material && envelope.v === 2
                         ? openExternalActionResponseV2({ binding, material, request: envelope, envelope: body })
                         : parseExternalActionResponseEnvelopeV1(body)?.execution;
-                    if (!execution?.ok) throw new Error(`Home Action failed: ${JSON.stringify(body)}`);
+                    if (!execution?.ok) throw new Error(`Home Action failed: ${JSON.stringify(execution ?? { status: http.status })}`);
                     const result = getActionSpec('transcript.follow').outputSchema.parse(execution.result);
+                    stamps.responseOpened = performance.now();
                     return { status: http.status, body: { execution: { ok: true, result } } };
                 });
         };
         try {
             await new Promise<void>((resolve, reject) => { daemon.once('connect', resolve); daemon.once('connect_error', reject); });
             const binding = { accountId: owner.id, machineId: machine.id, sessionId: session.id };
-            const presence = createSessionPublisherPresence();
             const registration = await presence.registerPublisher({ socket: await runnerSocket, binding,
                 completeActivitySnapshot: { state: 'idle', activeCount: 0 } });
             if (registration.status !== 'registered') throw new Error('Runner publisher claim failed');
@@ -215,29 +246,48 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
             let cursor = 'tail';
             for (let index = 1; index <= 2; index++) {
                 if (index === 1) {
-                    expect(await enqueuePendingMessage({ actorUserId: owner.id,
+                    const enqueued = await enqueuePendingMessage({ actorUserId: owner.id,
                         authentication: createPresentUserSessionAccessAuthentication(), sessionId: session.id,
                         localId: 'follow-1', targetMachineId: machine.id, requestedAction: { v: 1, kind: 'send_now' },
                         content: sealSessionStoredContent({ ...contentContext,
-                            payload: { role: 'user', content: { type: 'text', text: 'row-1' } } }) })).toMatchObject({ ok: true });
+                            payload: { role: 'user', content: { type: 'text', text: 'row-1' } } }) });
+                    if (!enqueued.ok) throw new Error(`Canonical pending admission failed: ${JSON.stringify(enqueued)}`);
                     expect(await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: session.id,
                         deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready', publisherAuthority }))
                         .toMatchObject({ ok: true, didMaterialize: true });
                 }
-                const priorPages = pages.length;
+                const baseline = new Promise<void>(resolve => { baselineRead = resolve; });
                 for (const key of Object.keys(stamps)) delete stamps[key];
                 const response = follow(cursor);
-                void response.catch(() => undefined);
-                // Wait for a real baseline response. This is test readiness, not product polling.
-                await expect.poll(() => pages.length > priorPages && pages.at(-1)?.end !== undefined).toBe(true);
+                // Observe completion or admission failure directly; never poll readiness.
+                await Promise.race([baseline, response.then(() => {
+                    throw new Error('Home follow returned before a transcript baseline was read');
+                })]);
                 stamps.appendStart = performance.now();
-                const written = index === 1
-                    ? await resolveAcceptedPendingDelivery({ actorUserId: owner.id, sessionId: session.id, localId: 'follow-1', publisherAuthority })
-                    : await createSessionMessage({ inputAdmission: 'transcriptOnly', actorUserId: owner.id, publisherAuthority,
-                        sessionId: session.id, localId: `follow-${index}`, messageRole: 'agent',
-                        content: sealSessionStoredContent({ ...contentContext,
-                            payload: { role: 'agent', content: { type: 'text', text: `row-${index}` } } }) });
-                stamps.commit = performance.now();
+                const transaction = db.$transaction;
+                // Instrument the database adapter without substituting its
+                // callback or result. Observe the real transaction promise's
+                // fulfillment before inTx runs production post-commit callbacks;
+                // this is COMMIT acknowledgement, not the disk instant.
+                db.$transaction = new Proxy(transaction, { apply(target, thisArg, args: unknown[]) {
+                    const committed: unknown = Reflect.apply(target, thisArg, args);
+                    if (!(committed instanceof Promise)) throw new Error('Database transaction must return a promise');
+                    return committed.then((result: unknown) => {
+                        stamps.commitAcknowledged = performance.now();
+                        return result;
+                    });
+                } });
+                const written = await (async () => {
+                    try {
+                        return index === 1
+                            ? await resolveAcceptedPendingDelivery({ actorUserId: owner.id, sessionId: session.id, localId: 'follow-1', publisherAuthority })
+                            : await createSessionMessage({ inputAdmission: 'transcriptOnly', actorUserId: owner.id, publisherAuthority,
+                                sessionId: session.id, localId: `follow-${index}`, messageRole: 'agent',
+                                content: sealSessionStoredContent({ ...contentContext,
+                                    payload: { role: 'agent', content: { type: 'text', text: `row-${index}` } } }) });
+                    } finally { db.$transaction = transaction; }
+                })();
+                stamps.writeServiceReturn = performance.now();
                 if (!written.ok) throw new Error(`Append failed: ${written.error}`);
                 const message = written.message;
                 if (!message) throw new Error('Runner append returned no row');
@@ -262,10 +312,24 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                 try {
                     const observed = await Promise.race([response,
                         new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 1000); })]);
-                    console.info('WAKE2_HOME_TIMING', JSON.stringify({ provider, version, index, stamps: { ...stamps },
-                        commitToResponseMs: observed ? stamps.httpReturn! - stamps.commit! : null, writerHeld: true,
+                    const hopMs = (from: string, to: string) => stamps[from] === undefined || stamps[to] === undefined
+                        ? null : stamps[to]! - stamps[from]!;
+                    console.info('WAKE3_HOME_TIMING', JSON.stringify({ provider, version, index, httpRoundTripDelayMs,
+                        stamps: { ...stamps }, hops: {
+                            appendToCommitAcknowledged: hopMs('appendStart', 'commitAcknowledged'),
+                            commitToChangeEmit: hopMs('commitAcknowledged', 'emit'),
+                            changeEmitToSocketEmit: hopMs('emit', 'socketEmit'),
+                            socketEmitToConsumer: hopMs('socketEmit', 'consumer'),
+                            consumerToWaiterSignal: hopMs('consumer', 'waiterSignalled'),
+                            waiterSignalToResume: hopMs('waiterSignalled', 'waiterResumed'),
+                            pageRead: hopMs('pageStart', 'pageEnd'),
+                            pageToDaemonReturn: hopMs('pageEnd', 'daemonReturn'),
+                            daemonToHttpHeaders: hopMs('daemonReturn', 'httpReturn'),
+                            responseOpen: hopMs('httpReturn', 'responseOpened'),
+                        }, commitToResponseMs: observed ? hopMs('commitAcknowledged', 'responseOpened') : null, writerHeld: true,
                         observerConnections, pages: [...pages] }));
                     expect(observed, 'Home follow must return before the next writer releases').not.toBeNull();
+                    expect(stamps.responseOpened! - stamps.commitAcknowledged!).toBeLessThan(1000);
                     expect(observed).toMatchObject({ status: 200, body: { execution: { ok: true,
                         result: { items: [{ seq: message.seq }], nextCursor: String(message.seq) } } } });
                     const items = observed!.body.execution.result.items;
@@ -290,6 +354,7 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
             runner.disconnect();
             eventRouter.clearIo();
             await new Promise<void>(resolve => io.close(() => resolve()));
+            await network?.stop();
             await app.close();
             if (provider === 'postgres') {
                 await db.session.delete({ where: { id: session.id } });
