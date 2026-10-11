@@ -787,34 +787,37 @@ function SegmentedTabOverflowMore<T extends string>(props: Readonly<{
     })), [props.activeTabId, props.tabs, props.testID]);
     const activeTab = props.tabs.find((tab) => isHappierTabSelected(props.activeTabId, tab.id)) ?? null;
     return (
-        <DropdownMenu
-            open={open}
-            onOpenChange={setOpen}
-            items={items}
-            selectedId={activeTab?.id ?? null}
-            onSelect={(id) => { setOpen(false); props.onSelectTab(id as T); }}
-            placement="bottom"
-            matchTriggerWidth={false}
-            trigger={({ toggle }) => (
-                <Pressable
-                    testID={props.testID}
-                    disabled={props.disabled}
-                    onPress={toggle}
-                    onLayout={props.onLayout}
-                    onFocus={(event) => setFocusVisible(isHappierFocusVisible(event?.target))}
-                    onBlur={() => setFocusVisible(false)}
-                    style={[styles.tabFrameContent, HAPPIER_FOCUS_RING_DELEGATED_STYLE]}
-                    accessibilityRole="button"
-                    accessibilityLabel={activeTab ? `${props.label}, ${activeTab.label}` : props.label}
-                    accessibilityState={{ expanded: open, selected: props.active }}
-                    {...(Platform.OS === 'web' ? ({ 'aria-haspopup': 'menu', 'aria-expanded': open } as Record<string, unknown>) : {})}
-                >
-                    <View style={[styles.tabSurface, styles.plainSurface, happierFocusRingStyle({ visible: focusVisible, color: theme.colors.border.focus })]}>
-                        <PlainTabCaption tab={{ id: OVERFLOW_KEY, label: props.label }} icon={false} active={props.active} more />
-                    </View>
-                </Pressable>
-            )}
-        />
+        // Measure in the track's coordinate space, like the visible tabs. DropdownMenu's
+        // anchoring host wraps its trigger, whose own onLayout x is only host-relative.
+        <View onLayout={props.onLayout}>
+            <DropdownMenu
+                open={open}
+                onOpenChange={setOpen}
+                items={items}
+                selectedId={activeTab?.id ?? null}
+                onSelect={(id) => { setOpen(false); props.onSelectTab(id as T); }}
+                placement="bottom"
+                matchTriggerWidth={false}
+                trigger={({ toggle }) => (
+                    <Pressable
+                        testID={props.testID}
+                        disabled={props.disabled}
+                        onPress={toggle}
+                        onFocus={(event) => setFocusVisible(isHappierFocusVisible(event?.target))}
+                        onBlur={() => setFocusVisible(false)}
+                        style={[styles.tabFrameContent, HAPPIER_FOCUS_RING_DELEGATED_STYLE]}
+                        accessibilityRole="button"
+                        accessibilityLabel={activeTab ? `${props.label}, ${activeTab.label}` : props.label}
+                        accessibilityState={{ expanded: open, selected: props.active }}
+                        {...(Platform.OS === 'web' ? ({ 'aria-haspopup': 'menu', 'aria-expanded': open } as Record<string, unknown>) : {})}
+                    >
+                        <View style={[styles.tabSurface, styles.plainSurface, happierFocusRingStyle({ visible: focusVisible, color: theme.colors.border.focus })]}>
+                            <PlainTabCaption tab={{ id: OVERFLOW_KEY, label: props.label }} icon={false} active={props.active} more />
+                        </View>
+                    </Pressable>
+                )}
+            />
+        </View>
     );
 }
 

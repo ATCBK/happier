@@ -834,6 +834,63 @@ function layOut(screen: RenderedScreen, rowWidth: number) {
 }
 
 describe('SegmentedTabBar measured overflow', () => {
+    it('positions the selected hidden page at More in track coordinates across route and width changes', async () => {
+        const { SegmentedTabBar } = await import('./SegmentedTabBar');
+        const onSelectTab = vi.fn();
+        const scene = (activeTabId: (typeof PAGE_TABS)[number]['id']) => (
+            <SegmentedTabBar presentation="plain" overflow={{ label: 'More' }} tabs={PAGE_TABS}
+                activeTabId={activeTabId} onSelectTab={onSelectTab} testIDPrefix="page" />
+        );
+        const screen = await renderScreen(scene('context'));
+        const layoutEvent = (x: number, width: number) => ({ nativeEvent: { layout: { x, y: 0, width, height: 30 } } });
+        const layoutMore = (x: number, width: number) => {
+            const more = requireTab(screen, 'page:more');
+            const track = requireTrack(screen, 'page:overview');
+            // Native onLayout reports coordinates in the immediate host parent's space.
+            // The real DropdownMenu keeps its anchoring host around the trigger.
+            act(() => {
+                let node: typeof more | null = more;
+                while (node && node !== track) {
+                    if (typeof node.type === 'string' && typeof node.props.onLayout === 'function') {
+                        let hostParent = node.parent;
+                        while (hostParent && typeof hostParent.type !== 'string') hostParent = hostParent.parent;
+                        node.props.onLayout(layoutEvent(hostParent === track ? x : 0, width));
+                    }
+                    node = node.parent;
+                }
+            });
+        };
+        // Read the geometry passed to the native animation boundary; its spring is not
+        // simulated by the host renderer, but it must receive the currently selected box.
+        const selectedRect = () => screen.root.findAll((node) =>
+            node.props.testID === 'page:thumb' && node.props.rect !== undefined)[0]?.props.rect;
+
+        layOut(screen, 260);
+        layoutMore(180, 70);
+        expect(requireTab(screen, 'page:more').props.accessibilityState.selected).toBe(true);
+        expect(requireTab(screen, 'page:overview').props.accessibilityState.selected).toBe(false);
+        expect(selectedRect()).toEqual({ x: 180, width: 70 });
+
+        await act(async () => screen.tree.update(scene('overview')));
+        act(() => requireTab(screen, 'page:overview').props.onLayout(layoutEvent(0, 86)));
+        expect(selectedRect()).toEqual({ x: 0, width: 86 });
+        await act(async () => screen.tree.update(scene('context')));
+        expect(selectedRect()).toEqual({ x: 180, width: 70 });
+
+        layOut(screen, 1200);
+        expect(screen.findHostByTestId('page:more')).toBeNull();
+        act(() => requireTab(screen, 'page:context').props.onLayout(layoutEvent(620, 100)));
+        expect(selectedRect()).toEqual({ x: 620, width: 100 });
+
+        layOut(screen, 260);
+        layoutMore(180, 70);
+        expect(selectedRect()).toEqual({ x: 180, width: 70 });
+        layOut(screen, 180);
+        layoutMore(92, 70);
+        expect(selectedRect()).toEqual({ x: 92, width: 70 });
+        expect(onSelectTab).not.toHaveBeenCalled();
+    });
+
     it('keeps every page tab in a wide row and offers no More', async () => {
         const { SegmentedTabBar } = await import('./SegmentedTabBar');
         const screen = await renderScreen(
