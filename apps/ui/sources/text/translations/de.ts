@@ -3822,6 +3822,10 @@ export const de: TranslationStructure = {
                             }
                         }
                     },
+                    claudeCodeIncludeInNativeHistory: {
+                        title: "Sitzungen in Claude Code anzeigen",
+                        subtitle: "Happier-Zuordnung für neue Claude-Sitzungen verwenden, auch mit dem Agent SDK. Aus behält die Laufzeitstandards bei."
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "Agent Teams erzwingen",
                         subtitle: "Die experimentellen Agent Teams von Claude Code (Agent-Schwarm) in allen von Happier gestarteten Claude-Sessions aktivieren."

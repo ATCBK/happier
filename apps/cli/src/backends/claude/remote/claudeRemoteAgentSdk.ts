@@ -27,7 +27,7 @@ import { getClaudeRemoteSystemPrompt } from '@/backends/claude/utils/remoteSyste
 import { parseClaudeSdkFlagOverridesFromArgs } from '@/backends/claude/remote/sdkFlagOverrides';
 import { resolveClaudeRemoteSessionStartPlan } from '@/backends/claude/remote/sessionStartPlan';
 import { resolveClaudeConfigDirOverride } from '@/backends/claude/utils/resolveClaudeConfigDirOverride';
-import { resolveClaudeCodeExperimentalEnvOverlay } from '@/backends/claude/spawn/resolveClaudeCodeExperimentalEnvOverlay';
+import { resolveClaudeSessionEnvOverlay } from '@/backends/claude/spawn/resolveClaudeSessionEnvOverlay';
 import { buildClaudeSubprocessEnv } from '@/backends/claude/spawn/buildClaudeSubprocessEnv';
 import { logClaudeRuntimeAuthEnvDiagnostic } from '@/backends/claude/spawn/logClaudeRuntimeAuthEnvDiagnostic';
 import { isCompactHookLocalCommandStdout } from '@/backends/claude/utils/isCompactHookLocalCommandStdout';
@@ -686,8 +686,9 @@ export async function claudeRemoteAgentSdk(opts: {
     };
 
         const mappedPermissionMode = resolveClaudeSdkPermissionModeFromEnhancedMode(mode);
-        const experimentalEnvOverlay = resolveClaudeCodeExperimentalEnvOverlay({
+        const sessionEnvOverlay = resolveClaudeSessionEnvOverlay({
             claudeCodeExperimentalAgentTeamsEnabled: mode.claudeCodeExperimentalAgentTeamsEnabled,
+            claudeCodeIncludeInNativeHistory: mode.claudeCodeIncludeInNativeHistory,
         });
         const xdgIsolationEnv = resolveClaudeCodeXdgIsolation({
             backendId: 'claude',
@@ -726,8 +727,7 @@ export async function claudeRemoteAgentSdk(opts: {
         })();
         const claudeSubprocessEnv = withCurrentHappierSessionId({
             ...xdgIsolationEnv,
-            ...buildClaudeSubprocessEnv(),
-            ...experimentalEnvOverlay,
+            ...buildClaudeSubprocessEnv({ envOverlay: sessionEnvOverlay }),
         }, opts.happySessionId ?? '');
         logClaudeRuntimeAuthEnvDiagnostic({
             logPrefix: 'claudeRemoteAgentSdk',

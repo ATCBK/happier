@@ -380,6 +380,7 @@ export class Session {
      * Applied on the next Claude subprocess spawn (local + remote).
      */
     claudeCodeExperimentalAgentTeamsEnabled: boolean = false;
+    claudeCodeIncludeInNativeHistory: boolean = false;
 
     /**
      * Timestamp of the most recent user-initiated abort request (UI abort, Ctrl-C exit,

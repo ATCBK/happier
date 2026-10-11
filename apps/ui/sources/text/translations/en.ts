@@ -3823,6 +3823,10 @@ export const en = {
                             }
                         }
                     },
+                    claudeCodeIncludeInNativeHistory: {
+                        title: "Show sessions in Claude Code",
+                        subtitle: "Use Happier attribution for new Claude sessions, including Agent SDK runs. Off keeps runtime defaults."
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "Force-enable Agent Teams",
                         subtitle: "Enable Claude Code experimental Agent Teams (agent swarm) in all Claude sessions started by Happier."

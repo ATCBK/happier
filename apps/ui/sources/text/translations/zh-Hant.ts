@@ -3746,6 +3746,10 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                             }
                         }
                     },
+                    claudeCodeIncludeInNativeHistory: {
+                        title: "在 Claude Code 中顯示工作階段",
+                        subtitle: "將新的 Claude 工作階段標記為 Happier 來源，包括 Agent SDK 工作階段。關閉時保留執行環境預設值。"
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "強制啟用 Agent Teams",
                         subtitle: "在所有由 Happier 啟動的 Claude 工作階段中啟用 Claude Code 的實驗性 Agent Teams（代理群）功能。"

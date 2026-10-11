@@ -4056,6 +4056,10 @@ export const ru: TranslationStructure = {
                             }
                         }
                     },
+                    claudeCodeIncludeInNativeHistory: {
+                        title: "Показывать сессии в Claude Code",
+                        subtitle: "Использовать идентификацию Happier для новых сессий Claude, включая Agent SDK. При отключении сохраняются настройки среды по умолчанию."
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "Принудительно включить Agent Teams",
                         subtitle: "Включает экспериментальный Agent Teams в Claude Code (рой агентов) во всех сессиях Claude, запущенных из Happier."
