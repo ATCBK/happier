@@ -1318,7 +1318,8 @@ export function createAcpRuntime(params: {
 
       switch (msg.type) {
         case 'model-output': {
-          const deltaRaw = reconcileModelOutput(modelOutputState, msg);
+          const change = reconcileModelOutput(modelOutputState, msg);
+          const deltaRaw = change.kind === 'append' ? change.text : '';
           if (acpTraceMarkersEnabled && sessionId && deltaRaw.includes('ACP_STUB_')) {
             // Trace only deterministic stub markers (never arbitrary assistant text) so provider harness
             // can coordinate mid-turn steer without requiring tool-calls or vendor credentials.
@@ -1340,7 +1341,12 @@ export function createAcpRuntime(params: {
           });
           params.turnAssistantPreviewTracker?.replace(modelOutputState.turnText);
 
-          if (deltaRaw) {
+          if (change.kind === 'replace') {
+            params.messageBuffer.updateLastMessage(modelOutputState.turnText, 'assistant', { replace: true });
+            if (!streamedTranscriptWriter.overrideAssistantText(modelOutputState.segmentText)) {
+              streamedTranscriptWriter.appendAssistantDelta(modelOutputState.segmentText);
+            }
+          } else if (deltaRaw) {
             streamedTranscriptWriter.appendAssistantDelta(deltaRaw);
           }
           break;
