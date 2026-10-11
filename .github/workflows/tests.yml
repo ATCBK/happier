@@ -229,8 +229,8 @@ jobs:
     name: Gate — select and prepare shared workspace
     if: ${{ !inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')) }}
     runs-on: ubuntu-latest
-    # Observed cold install/native/CLI preparation: 29m; 16m interim headroom
-    # covers merged prerequisites and archive transport. The 15m target is unmet.
+    # Current cold preparation including artifact transport took 44m52s.
+    # Keep the interim guard; preparation still misses the 15m Gate target.
     timeout-minutes: 45
     permissions:
       contents: read
@@ -244,7 +244,7 @@ jobs:
       HAPPIER_UI_VENDOR_WEB_ASSETS: "1"
     steps:
       - name: Gate deadline — 45 minutes (interim shared preparation)
-        run: echo "Shared preparation has an interim 45-minute deadline, derived from 29 minutes observed cold preparation plus 16 minutes transport/prerequisite headroom; the 15-minute target remains unmet."
+        run: echo "Shared preparation retains its interim 45-minute deadline. Current cold preparation including artifact transport took 44 minutes 52 seconds and nearly exhausted it; the 15-minute Gate target remains unmet."
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
