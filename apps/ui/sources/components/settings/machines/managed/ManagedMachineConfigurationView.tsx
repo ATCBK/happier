@@ -7,7 +7,7 @@ import type { ExternalActionManagedAdmissionReceiptV1 } from '@happier-dev/proto
 import { ManagedAcquireInputV1Schema, type ManagedMachineActionOutputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { isMachineProvisionerCredentialPurposeRequiredV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
-import { QualifiedConnectedAccountRefSchema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountPersistence';
+import { QualifiedConnectedAccountRefSchema, type QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountPersistence';
 import { qualifiedPurposeKey } from '@happier-dev/protocol/connect/connectedAccountPurposeBindings';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { isMachineRetainedWakeEligibleV1, resolveMachineRetentionPolicyV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
@@ -55,12 +55,16 @@ import { describeRetentionConsequence, retentionCategoryTitle } from './managedR
 import { countryName, formatProviderAmount, formatPriceUnit } from './managedMachineDisplay';
 import { ManagedImagePreview, useManagedImagePreviews } from './useManagedImagePreviews';
 import { ManagedSizeTable, ManagedImageTiles, ManagedLocationGroup } from './ManagedChoiceSections';
-import { formatByteCapacity } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { managedConfiguratorDimensionChoices, managedConfiguratorDimensionSelection, selectManagedConfiguratorDimension } from './managedConfiguratorModel';
 import { createManagedMachineSelectionDraft, type ManagedMachineSelectionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
 import type { ManagedPrerequisiteV1 } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { formatRetentionDuration } from './managedRetentionPresentation';
+import { ConnectedServiceSetupPage } from '../../connectedServices/setup/ConnectedServiceSetupPage';
+import type { ConnectedServiceSetupTarget } from '../../connectedServices/setup/ConnectedServiceSetupPanel';
+import type { ConnectedAccountPurposeSetupRequest } from '@/sync/domains/connectedServices/connectedAccountPurposeSetup';
+import type { MachineProvisionersListResultV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 
 const MORE_TEAMS = '__more-teams';
 
@@ -68,6 +72,7 @@ export type ManagedMachineConfigurationViewProps = Readonly<{
     serverId: string; provisioner: string; presetId?: string; presetOnly?: boolean; initialController?: ManagedControllerV1;
     /** Exact caller-supplied native query; never inferred from the viewing device's filesystem. */
     initialOptionsSelectors?: Readonly<Record<string, unknown>>;
+    initialConnectPurpose?: string;
     /** Composer review commits local intent; only its explicit Send admits an acquisition. */
     onUse?: (draft: ManagedMachineSelectionDraft) => void;
 }>;
@@ -84,6 +89,14 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const [preset, setPreset] = React.useState<ManagedMachinePresetV1 | null>(null);
     const loadedPreset = React.useRef<ManagedMachinePresetV1 | null>(null);
     const [busy, setBusy] = React.useState(false);
+    const [accountSetup, setAccountSetup] = React.useState<Readonly<{
+        request: ConnectedAccountPurposeSetupRequest; controller: ManagedControllerV1; occurrenceId: string;
+        selected: QualifiedConnectedAccountRef | null; target: ConnectedServiceSetupTarget;
+    }> | null>(null);
+    const [pendingCredential, setPendingCredential] = React.useState<Readonly<{
+        setup: NonNullable<typeof accountSetup>; account: QualifiedConnectedAccountRef;
+        basis: MachineProvisionersListResultV1['provisioners'][number];
+    }> | null>(null);
     // "Managed from" is the page's scope: the header chip, starting on the handed-off or preset controller.
     const scope = useManagedControllerScope({ serverId: props.serverId, preferred: props.initialController ?? preset?.controller,
         disabled: busy, testIDPrefix: 'managed-config.controller',
@@ -106,6 +119,22 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const optionsAbort = React.useRef<AbortController | null>(null);
     const reviewed = React.useRef<ManagedConfigurationFactsV1 | null>(null);
     const catalogProvisioner = catalog.provisioners.find(row => buildQualifiedPluginContributionKey(row.contribution) === props.provisioner);
+    const openAccountSetup = (purposeId: string) => {
+        const binding = catalog.binding;
+        const purpose = catalogProvisioner?.credentialPurposes?.find(entry => entry.purpose.purpose === purposeId)?.purpose;
+        if (!draft || !binding?.isCurrent() || !catalogController || !catalogProvisioner || !purpose || busy) return;
+        const selected = draft.credentials?.find(entry => qualifiedPurposeKey(entry.purpose) === qualifiedPurposeKey(purpose))?.account ?? null;
+        setAccountSetup({ request: { scope: binding.scope, machineId: catalogController.machineId, purpose },
+            controller: catalogController, occurrenceId: catalogProvisioner.occurrenceId, selected,
+            target: selected ? { kind: 'reconnect', serviceKey: buildQualifiedPluginContributionKey(selected.service), accountId: selected.accountId }
+                : { kind: 'catalog' } });
+    };
+    const initialConnectConsumed = React.useRef(false);
+    React.useEffect(() => {
+        if (initialConnectConsumed.current || !props.initialConnectPurpose || !draft || !catalogProvisioner) return;
+        initialConnectConsumed.current = true;
+        openAccountSetup(props.initialConnectPurpose);
+    }, [props.initialConnectPurpose, draft, catalogProvisioner, catalogController]);
     // Only this occurrence's controller-qualified catalog authorizes purpose choices. Account inventory is display-only.
     const credentialPurposes = React.useMemo(() => catalogProvisioner?.credentialPurposes?.filter(({ purpose }) =>
         isMachineProvisionerCredentialPurposeRequiredV1(catalogProvisioner.descriptor, purpose.purpose,
@@ -161,6 +190,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const clearProtectedPreset = React.useCallback((code: string) => {
         retirePending(); reviewed.current = null; loadedPreset.current = null;
         setDraft(null); setPreset(null); setLimit(undefined); setSaved(null); setError(code);
+        setAccountSetup(null); setPendingCredential(null);
     }, [retirePending]);
     const readPreset = React.useMemo(() => presetClient && catalog.homeId && props.presetId
         ? async (options: MachinePresetCollectionOptions<ManagedMachinePresetV1>): Promise<MachinePresetCollectionSettledResult<ManagedMachinePresetV1>> => {
@@ -206,6 +236,22 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
                 controller: next.controller, name: next.name }).choicesSchema, optionStatus: 'loading', check: undefined };
         });
     }, [catalogProvisioner, catalogController, draft?.credentials, draft?.provisioner]);
+
+    React.useEffect(() => {
+        if (!pendingCredential || catalog.loading || catalogProvisioner === pendingCredential.basis && !catalog.error) return;
+        const { setup, account } = pendingCredential;
+        const current = !catalog.error && catalog.binding?.isCurrent() && catalog.binding.scope.accountId === setup.request.scope.accountId
+            && catalog.binding.scope.serverId === setup.request.scope.serverId
+            && catalogController?.machineId === setup.controller.machineId
+            && catalogController.installationId === setup.controller.installationId
+            && catalogProvisioner?.occurrenceId === setup.occurrenceId;
+        const selection = current && catalogProvisioner ? managedConfiguratorCredentialSelections({ credentials: [{ purpose: setup.request.purpose, account }] }, catalogProvisioner) : [];
+        if (selection.length && catalogProvisioner) setDraft(value => value ? setManagedConfiguratorCredentials({ ...value, provisioner: catalogProvisioner }, [
+            ...(value.credentials ?? []).filter(entry => qualifiedPurposeKey(entry.purpose) !== qualifiedPurposeKey(setup.request.purpose)), ...selection,
+        ]) : value);
+        else setError('credential_unavailable');
+        setPendingCredential(null);
+    }, [pendingCredential, catalog.loading, catalog.error, catalog.binding, catalogProvisioner, catalogController]);
 
     // Credential retirement removes both presentation data and mutation custody, including open approvals.
     React.useEffect(() => {
@@ -441,6 +487,26 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const summaryFacts = receiptFacts ? describeManagedConfigurationSummary(receiptFacts,
         value => localized(receiptFacts.launch.provider.pluginId, value)) : null;
     const summarySpec = [summaryLabel, summaryFacts ?? selectedTitle].filter(Boolean).join(' · ');
+    if (accountSetup && !scope.selection) return <SurfaceStateCard kind="unavailable" title={t('managedMachines.providers.unavailable')}
+        action={{ label: t('common.cancel'), onPress: () => setAccountSetup(null) }} />;
+    if (accountSetup && scope.selection) return <ConnectedServiceSetupPage purposeRequest={accountSetup.request}
+        selectedTarget={accountSetup.selected ? { kind: 'account', account: accountSetup.selected } : null}
+        initialTarget={accountSetup.target} targetSelection={{ ...scope.selection,
+            resolveExecutionTarget: () => {
+                const target = scope.selection?.resolveExecutionTarget();
+                return catalog.binding?.isCurrent() && target?.machine.id === accountSetup.controller.machineId
+                    && target.machine.installationId === accountSetup.controller.installationId
+                    && catalogProvisioner?.occurrenceId === accountSetup.occurrenceId ? target : null;
+            },
+        }}
+        onClose={() => setAccountSetup(null)} onSelected={account => {
+            if (!catalog.binding?.isCurrent() || !catalogProvisioner || catalogProvisioner.occurrenceId !== accountSetup.occurrenceId
+                || catalogController?.machineId !== accountSetup.controller.machineId
+                || catalogController.installationId !== accountSetup.controller.installationId)
+                throw new Error('connected_account_purpose_unavailable');
+            setPendingCredential({ setup: accountSetup, account, basis: catalogProvisioner });
+            setAccountSetup(null); catalog.refresh();
+        }} />;
     if (props.presetId && (teamDenied || presetQuery.state.error && isMachinePresetAccessLost(presetQuery.state.error)))
         return <SurfaceStateCard kind="denied" title={t('machinePresets.accessLost')} testID="managed-config.error"
             action={{ label: t('managedMachines.actions.tryAgain'), onPress: retry }} />;
@@ -488,6 +554,12 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
                     setDraft(current => current ? setManagedConfiguratorCredentials(current,
                         managedConfiguratorCredentialSelections({ credentials: selections }, catalogProvisioner)) : current);
                 }} />
+            {credentialPurposes?.map(({ purpose }) => <Item key={qualifiedPurposeKey(purpose)}
+                testID={`managed-config.connect:${purpose.purpose}`} title={t(credentialSelections.some(entry =>
+                    qualifiedPurposeKey(entry.purpose) === qualifiedPurposeKey(purpose)) ? 'connectedServices.detail.actions.reconnect' : 'managedMachines.add.action.connect')}
+                subtitle={`${t('connectedServices.title')} · ${purpose.purpose}`}
+                disabled={!catalogController || !catalogProvisioner || busy || !!preset && !props.presetOnly}
+                onPress={() => openAccountSetup(purpose.purpose)} />)}
         </ItemGroup> : null}
         {draft && !credentialsReady ? <SurfaceStateCard kind="warning" size="line" title={t('managedMachines.credential.required')}
             testID="managed-config.credential-required" /> : null}
@@ -559,7 +631,7 @@ function ManagedConfiguratorNativeChoices(props: Readonly<{
         const hourly = choice.prices?.find(price => price.unit === 'hour');
         const monthly = choice.prices?.find(price => price.unit === 'month');
         return [{ id: size.id, name: props.localized(pluginId, size.title), cpu: size.cpuCores === undefined ? '' : String(size.cpuCores),
-            memory: size.memoryBytes === undefined ? '' : formatByteCapacity(size.memoryBytes), disk: size.diskBytes === undefined ? '' : formatByteCapacity(size.diskBytes),
+            memory: size.memoryBytes === undefined ? '' : formatHappierDataBytes(size.memoryBytes, { kind: 'memory' }), disk: size.diskBytes === undefined ? '' : formatHappierDataBytes(size.diskBytes, { kind: 'storage' }),
             spec: props.localized(pluginId, size.title), ...(hourly ? { hourly: formatProviderAmount(hourly) } : {}),
             ...(monthly ? { monthly: formatProviderAmount(monthly) } : {}),
             headroom: draft.provisioner.descriptor.billing.location === 'local' ? describeLocalHeadroom(size, draft.check?.localResources) : undefined,

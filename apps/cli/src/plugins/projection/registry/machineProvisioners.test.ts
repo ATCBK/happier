@@ -5,8 +5,40 @@ import { projectLoadedPluginContributes } from './resolvePluginContributions';
 import { createResolvedContributionRegistry } from './createResolvedContributionRegistry';
 import { buildPluginProjectionV2 } from './projection/v2';
 import { createLoadedMachineProvisionerFixture } from './machineProvisioners.testkit';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
+import { readDeclaredConnectedAccountResourcePurposeV1, readDeclaredConnectedAccountPurposeV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeSelectionV1';
 
 describe('machine provisioner projection', () => {
+    it('projects the acquire Action credential purposes under the provisioner identity without inventing a Resource', () => {
+        const pluginId = 'com.acme.cloud';
+        const loaded = createLoadedMachineProvisionerFixture(pluginId);
+        const service = { pluginId, localId: 'cloud' };
+        const manifest = normalizePluginManifestV2({ ...loaded.manifest,
+            hostAccess: { required: [{ id: 'cloud-account', capability: 'connectedAccounts', reason: 'Use the selected cloud account',
+                scope: { serviceRefs: [service], operations: ['use'], materializationKinds: ['httpHeaders'] } }], optional: [] },
+            contributes: { ...loaded.manifest.contributes, connectedAccountDescriptors: [{ id: 'cloud', title: 'Cloud account',
+                authentication: { defaultModeId: 'token', modes: [{ id: 'token', kind: 'manual', outcomeReconciliation: 'none',
+                    fields: [{ id: 'token', title: 'Token', schema: { type: 'string' }, secret: true }] }] } }],
+                actions: loaded.manifest.contributes.actions.map(action =>
+                action.id === 'acquire' ? { ...action, hostAccess: ['cloud-account'] } : action) },
+        });
+        const registry = createResolvedContributionRegistry({ ...projectLoadedPluginContributes({
+            loadResult: { loadedPlugins: [{ ...loaded, manifest }], diagnosticsByPluginId: {} }, provenance: 'external',
+        }), occurrenceIdsByPluginId: { [pluginId]: createPluginRuntimeOccurrenceId(pluginId) } });
+        const projection = buildPluginProjectionV2({ registry, generation: 1 });
+        expect(PluginProjectionV2Schema.safeParse(projection).success).toBe(true);
+        const entry = projection.familiesById.machineProvisioners?.entriesById[`${pluginId}/guest`];
+        expect(entry).toMatchObject({ connectedAccountPurposes: [{ purpose: 'cloud-account', serviceRefs: [service] }] });
+        expect(projection.resourcesById).toEqual({});
+        const purpose = { consumer: { pluginId, localId: 'guest' }, purpose: 'cloud-account' };
+        const setupProjection = { ...projection, machineProvisionersById: projection.familiesById.machineProvisioners!.entriesById };
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection: setupProjection })).toMatchObject({ consumerKind: 'machineProvisioner', serviceRefs: [service] });
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection: { ...setupProjection, installedPackagesById: {} } })).toBeNull();
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose: { ...purpose, purpose: 'other' }, projection: setupProjection })).toBeNull();
+        // Resource defaults are a separate operation: a provisioner must never acquire that authority.
+        expect(readDeclaredConnectedAccountResourcePurposeV1({ projection,
+            purpose: { consumer: { pluginId, localId: 'guest' }, purpose: 'cloud-account' } })).toBeNull();
+    });
     it('projects qualified safe descriptors with exact source and occurrence and withdraws retired leaves', () => {
         const ids = ['com.acme.one', 'com.acme.two'];
         const inputs = projectLoadedPluginContributes({

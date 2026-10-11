@@ -22,7 +22,7 @@ import { t } from '@/text';
 import { ConnectedAccountSetupController } from '../account/ConnectedAccountServiceView';
 import { ConnectedServiceMark, formatAgentNames } from '../ConnectedServiceMark';
 import type { ConnectedServicesIndexSection } from '../model/buildConnectedServicesIndexModel';
-import type { ConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import type { ConnectedServiceRegistryEntry, ConnectedServiceRegistrySnapshot } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { ConnectedServiceCatalogBlock } from './ConnectedServiceCatalogBlock';
 import { signsInWithAnAccount } from './connectMoreBlocks';
 
@@ -61,6 +61,9 @@ export type ConnectedServiceSetupPanelProps = Readonly<{
     renderServiceFlow?: (entry: ConnectedServiceSetupCatalogEntry, target: ConnectedServiceSetupTarget) => React.ReactNode;
     /** A host's canonical selection input (dev frames supply a non-executable presentation fixture). */
     targetSelection?: MachineAdministrationTargetSelectionV1;
+    registry?: ConnectedServiceRegistrySnapshot;
+    /** Consumer-scoped setup must finish on its captured controller. */
+    targetLocked?: boolean;
     /**
      * `frame` (default): the set-up block's frame is the paper (Connected services, Home).
      * `card`: the panel brings its own (the modal, where there is no block to grow from).
@@ -153,6 +156,7 @@ export const ConnectedServiceSetupPanel = React.memo(function ConnectedServiceSe
                     service={entry.service}
                     panel={controllerPanel}
                     targetSelection={targetSelection}
+                    registry={props.registry}
                 />
             )}
             <View style={styles.trust}>
@@ -217,6 +221,7 @@ export const ConnectedServiceSetupPanel = React.memo(function ConnectedServiceSe
             <View style={styles.headActions}>
                 <MachineAdministrationTargetSelector
                     selection={targetSelection}
+                    disabled={props.targetLocked}
                     presentation="chip"
                     testIDPrefix="connected-service-setup-target"
                 />
@@ -289,8 +294,9 @@ export const ConnectedServiceSetupPanel = React.memo(function ConnectedServiceSe
             accessibilityLabel={title}
         >
             {props.chrome === 'page' ? <PageHeader title={title} description={purpose} alwaysShowTitle
+                cancelAction={props.targetLocked ? { label: t('common.cancel'), onPress: onClose, testID: 'connected-service-setup:close' } : undefined}
                 leading={selected ? <ConnectedServiceMark legacyServiceId={selected.legacyServiceId} size="row" /> : <Icon name="plug" size={24} />}
-                actions={<MachineAdministrationTargetSelector selection={targetSelection} presentation="chip" testIDPrefix="connected-service-setup-target" />} /> : head}
+                actions={<MachineAdministrationTargetSelector selection={targetSelection} disabled={props.targetLocked} presentation="chip" testIDPrefix="connected-service-setup-target" />} /> : head}
             <View style={styles.body}>
                 {body}
                 {!selected && scope === 'home' ? (

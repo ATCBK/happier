@@ -52,6 +52,8 @@ Private native exec carries the containing task's `timeoutMs` unchanged; `null` 
 
 Each declared credential purpose uses the existing qualified Connected Account owner. The launch's `credentials` array selects one Account per distinct purpose; BYOC can therefore select its cloud and Cua Accounts without a composite connection. Before durable acquisition submission, the controller captures each selection's configuration revision. The managed row retains those individual bases with the first submitted allocation; replay cannot replace them. Subsequent native admission checks each configuration rather than a rotating bearer-token revision, so changing a selected coordinator cannot redirect an old resource. An already-issued acquisition can still report its validated paid identity for cleanup after configuration withdrawal, without authorizing another native effect. Configuration bases are retained-row state, not public launch choices or receipt fields.
 
+In development source, the machine-provisioner projection publishes the acquire Action's Connected Account HostAccess purposes under the provisioner's qualified contribution identity. The existing Connected accounts setup reads those declarations on the captured Home/controller, uses its manual/OAuth descriptor owner, and returns an explicitly selected active account to the same configurator draft. Cancel preserves that draft; Reconnect uses the exact existing account. The configurator refreshes the controller's purpose options before admitting the returned reference. This flow does not write a Resource default or introduce a provisioner credential store. Agents use the existing Connected account authentication Actions and pass the selected qualified references to the existing provisioner/preset/acquire Actions.
+
 A contribution can qualify a purpose with `credentialPurposeRequirements` and
 the existing launch-input predicate grammar. Only a positively observed
 `optionalWhen` selector waives that purpose; missing selectors keep it required.
@@ -272,7 +274,11 @@ target set before waiting for Artifact preparation or foreign plugin cleanup.
 Equivalent inventory publications preserve a committed executable and its pending
 Actions. Cancellation of a superseded preparation request still prevents unfinished
 adoption; committed execution instead follows its exact composition controller,
-Account lifetime and Artifact lease. Machine currentness, occurrence, bytes or
+Account lifetime and Artifact lease. A host-created replacement scope claims its
+activation and controller before commit checks retained leases. It is fresh
+preparation even for unchanged bytes, as when the Voice runtime host is replaced;
+only an actual host reuse keeps the incumbent scope and its pending Actions.
+Machine currentness, occurrence, bytes or
 registration-rights withdrawal fences the incumbent immediately, even while the
 next queued update is blocked. This is 0.3 development source behavior, not a claim
 about an already-loaded client.
@@ -289,6 +295,26 @@ still advance immediately; failed preparation retains rows and the incumbent
 writer. Same-version/different-digest claims remain refused, lagging claims
 cannot lower versions, and portable Account release selections still outrank
 daemon claims. This adds neither a migration registry nor a second executor.
+
+Portable Collection migration artifacts use the same captured canonical manifest
+that the Plugin UI build reads for artifact discovery. The build binds it around
+the authored zero-argument `collectionMigrations()` export, which returns only
+the Collection-id-keyed callback map. Collection definitions and that entry share
+pure migration modules; the artifact does not import the daemon plugin definition.
+The resulting payload remains `{ manifest, collectionMigrations }`, validated by
+the existing candidate loader. The universal compiler still rejects Node built-ins
+in callback dependencies. This is 0.3 development source behavior, not a released
+authoring contract or proof that an already-loaded artifact has been rebuilt.
+
+The CLI Account Data claim owner retains a typed
+`plugin_collection_contract_conflict` for the exact admitted manifest digest,
+Account lifetime, plugin occurrence and Availability change cursor. Repeated
+Collection operations return that refusal with a schema-version/migration remedy,
+without resending the manifest or presenting the Collection as empty. A changed
+declaration, occurrence, Account or Availability hint (including a changes-feed
+reset) permits a fresh claim; the hint grants no writer authority. Network and
+5xx failures retain the existing next-operation retry behavior. Dependency-owned
+JSON Schema changes are contract changes too and require versioned migrations.
 
 App-scoped plugin UI does not use `plugins.home` as catalog authority. That named
 Administration target remains responsible for install, installation settings,
@@ -345,12 +371,35 @@ contribution disappears, the atmosphere resolver shows the Home default. Authors
 must provide image hosts usable by the client, including browser CORS support,
 and credit the picture's licence; no Happier image proxy is added.
 
-Plugin UI scenes keep their existing `planetAt` declaration. Its optional
-`style`, `fullness`, and `digits` fields describe the same host-rendered brand
-planet; omitted fields preserve the scene's existing defaults. Rendering stays
-with the host scene/planet owner rather than an additional SDK planet component.
+Plugin UI scenes use their existing `planetAt` declaration for placement (`x`,
+`y`, `r`, and `rise`) and optional `style: 'airy' | 'balanced' | 'rich'`,
+`fullness`, and `digits`. The host's
+[SceneArt](../apps/ui/sources/components/ui/surfaces/SceneArt.tsx) renders authored
+looks through PlanetCanvas's Brand scene core, preserving explicit `0` and
+`false`. Omitting all look fields retains the existing scene mark calibration.
+Placement, ground clipping and the one-shot rise remain scene-owned; rendering
+stays with the same host canvas, with no additional SDK planet component.
 
 ## Public seam and authority
+
+In 0.3 development, SDK `fs#createSecureTempDirectorySync({ prefix, tmpDir? })`
+keeps its existing `{ path, cleanup }` contract and delegates to
+`@happier-dev/cli-common/tempDirs`. Runtime temporary directories live beneath
+the caller's root (or OS temporary directory) in a private `happier-<uid>`
+parent; Windows uses a user-home identity hash where no numeric UID exists.
+The existing trusted temp parent is resolved to its physical filesystem path
+(including macOS's `/var` alias), while the private user-root leaf still rejects
+symlinks. An unavailable parent remains unresolved until creation makes it available.
+Each directory has a private sibling `.owner.json` marker containing its
+purpose, creator PID and the canonical process-start fingerprint. The marker
+does not alter payload contents. The returned directory handle's cleanup removes
+both directory and marker. Existing string-returning secure file writers keep
+their established payload cleanup contract; sibling markers left by those
+callers remain non-collectable own data pending the storage maintenance owner,
+not evidence of a collectable temporary directory.
+An unavailable fingerprint means unknown ownership, never proof that the
+creator has exited; retained recovery payloads also require their lifecycle
+owner's facts before storage cleanup can consider them disposable.
 
 Development Connected Account manual modes may have no credential fields when
 they select existing native setup through configuration. Cua's native setup path
@@ -476,7 +525,9 @@ An installed widget whose plugin projection is still establishing also remains l
 
 The existing Summary, Plan, Changes and Local Services metadata/body owners project into that same catalog and admission path as native definitions, without fabricated plugin identities or a parallel creation registry. Configured copies retain independent bindings. Their native bodies use the selected Session's existing data/action owners; a configured Summary's work destination opens that Session's Agents view rather than borrowing the visible Session's local status popover.
 
-In unreleased 0.3 source, native definitions declare Session and Workspace values
+The Home atmosphere's "Your Home" widget (`your_home`) is a native App definition with no inputs: it reads the active Home's machines and the Activity summary's session classification. It is also an atmosphere moment, so the widget catalog's one decision, `isBuiltinWidgetSwitchedOff` in `apps/ui/sources/components/widgets/widgetCatalog.ts`, follows its `homeAtmosphere.moments.yourHome` switch: while off, no creation path offers it, and Home and widget areas leave a placed copy undrawn without changing its layout. A body can also lend its one live header fact to the frame's meta slot (`useWidgetFrameBodyMeta`), next to the existing caption lending.
+
+In unreleased 0.3 source, native definitions declare Session, Machine and Workspace values
 through the shared field `inputType` host reference. `readWidgetInputTargetV1`
 derives target admission from those declarations; installed/authored declarations
 retain their existing explicit Session-path ABI. A declaration describes a value,
@@ -484,6 +535,19 @@ not a read grant: Session admission still resolves the exact qualified Session,
 and Workspace admission requires the host-admitted checkout. An app-read definition
 requires neither a fabricated Session nor machine/credential material. Account or
 containing-document retirement removes its admitted content.
+
+Machine inputs carry the strict Home-qualified `{ serverId, machineId }` target.
+Their UI choices reuse the current Home machine inventory, including offline machines,
+and remain separate from spawn-ready choices. Voice discovery uses the existing
+privacy-controlled inventory projection, including through typed widget options.
+Companion and Session Board fill the `machine` context slot from the readable
+Session owner metadata; an unavailable owner view does not guess a launch target.
+`machines.volumes.available` depends on the selected `machine` and reads its
+volumes through the existing vitals Action. These values do not extend the public
+plugin host-read enum or grant machine access. Native machine definitions and
+their per-id supported sizes live in the shared
+[`builtinWidgetDescriptorV1`](../packages/protocol/src/widgets/builtinWidgetDescriptorV1.ts)
+owner; placement and native bodies consume that declaration.
 
 The shared field `contextMode` defaults to follow-able; `own` fields retain only
 their ordinary bindings or declared defaults and reject context bindings. Group
@@ -674,6 +738,14 @@ Declarative metric, table and single-series chart nodes use [typed data-source r
 The development public `@happier-dev/plugin-ui/presentation` palette also exposes finite neutral series, grids, intervals, capacity, composition, ranked rows and outcome forms from that same data owner. Callers supply identities, exact values, labels, units and any qualified projections; charts do not fetch Usage, infer accounting totals or decide status. A missing observation remains distinct from zero. Compact presentation retains exact accessible values rather than truncating the dataset. Composition takes an explicit whole, so overlapping categories retain their supplied denominator instead of becoming a misleading stacked total. App tooltip and scrolling-frame adapters may wrap shared visuals, but own no second plot geometry. Capacity and row proportions reuse the existing progress primitive; ledgers remain `DataTable`. The existing declarative one-series `Chart` is the widgets-owned consumer for the subsequent AR-2 renderer consolidation. Visible ink may be compacted through a caller formatter (`317M`, `$1,555`) while assistive technology keeps the exact value: `Metric` adds `hero`/`stat` sizes with a visible label and caption, `RankedRows` takes an explicit whole for share chips and leading identity marks, and a series takes one labelled reference level (a typical day) drawn as a quiet rule. Stacked areas part on a thin paper seam rather than an outline.
 
 In development source, `StackedSeriesChart` line appearance and `BurnUpChart` can fill a band between two caller-supplied series on the same scale. Missing, non-finite or inverted bounds break the fill; an isolated point has no area. Bounds retain their exact values in the chart's accessible readout and table. The caller supplies any range meaning and sample-count disclosure; the renderer does not infer confidence or forecast facts.
+
+In 0.3 development, byte readouts share
+[`formatHappierDataBytes` / `formatHappierDataBytesParts`](../packages/plugin-ui/src/presentation/data/dataModel.ts).
+Callers must declare the quantity kind: file, disk and transfer sizes use decimal
+`storage`; RAM, process memory and swap use binary `memory`, labelled GB rather
+than GiB. Values at or above one unit retain three significant figures, with
+trailing zeroes omitted. Consumer-specific sentences compose these readouts;
+they do not implement another byte formatter.
 
 The unreleased machine-vitals forms extend this same neutral owner rather than
 adding app-owned chart geometry. `StackedSeriesChart` accepts a caller-labelled
@@ -888,6 +960,13 @@ composition, not public layout APIs. Universal Search sources use the existing
 manifest `searchProviders` Action contribution and SDK search-result schema;
 Find registration is not a new search contribution family.
 
+`HappierTextLinkButton` owns the shared inline note-and-action presentation used
+by Find notes and core's `TextLinkButton` adapter. Hosts bind their text renderer,
+theme ink and pointer target floor through the public presentation props. A note
+and its action share one wrapping text run; physical vertical padding, with
+compensating margins, expands a touch target without enlarging the text line.
+The keyboard focus ring stays on the action's ink rather than its hit frame.
+
 ### External Session content search (0.3 development)
 
 External Session source declarations opt into transcript search with
@@ -1046,6 +1125,18 @@ through `action.invoke`, or mounted semantic commands published with
 `publishCurrentUiContext`. `VoiceClientToolDefinition` describes the sanitized,
 attempt-bound host tools supplied to providers; it is not an author registration
 owner, and effects still deliver canonical `tool_calls` through the Action barrier.
+In development, the shared realtime host publishes only Voice hot-path Action
+schemas, discovery (`searchActionSpecs`/`getActionSpec`), and the transport tool
+`action_execute`. Built-in non-hot-path Actions remain reachable as
+`{actionId, input}` through the same Voice handlers and Action executor. This is
+not a new Action id or a replacement for contributed `action.invoke`. Generic
+results retain the MCP executor envelope (`{ok:true,result}` or
+`{ok:false,errorCode,error}`), with target-specific Voice privacy redaction.
+Current-UI and contributed invocation remain hot-path tools. Providers without
+stable effect custody, and all direct SDK callbacks, remain read-only; attached
+Agents receive only current-UI tools, never this generic executor. No transport
+budget is increased. OpenAI, xAI, Codex and ElevenLabs consume this host projection.
+
 The client-local `ui.voice_global.*` conversation and Brief Action family is
 consumed through the public typed `executeAction` Host API. Its microphone/Brief
 approvals, captured attempt identities and typed unavailability are unchanged.
@@ -1294,6 +1385,28 @@ derive placement;
 the host remains the filesystem-policy owner. Policy refusal returns
 `INVALID_PATH` and does not mutate the rejected target.
 
+The development storage catalog consumes this same SCM contribution's optional
+`worktree.retire` / `worktree.reinstate` handlers and `worktreeRetention` capability.
+Git retirement moves a registered checkout and locks it with its Trash entry
+identity; restore unlocks and moves it without replacing an occupied destination.
+Submodule worktrees support Delete now only. Nested registered checkouts settle
+child-first, each with its own Trash entry. The host-only
+`context.beforeFilesystemMutation` callback revalidates captured facts inside the
+repository's mutation queue immediately before the filesystem effect.
+Interrupted Trash moves and deletions complete only through this trusted guard
+and the exact current worktree registration; recovery does not broadly prune
+registrations. Ordinary
+`scm.worktree.remove` approval and request semantics remain unchanged. Optional
+`read.ignoredPaths` supplies Git ignore evidence through the same contribution,
+and additive worktree enrichment supplies cleanup facts; older contributions
+that omit these operations remain unsupported or unknown, never implicitly safe.
+Draft reviews retain their open-review protection; an unknown review state stays
+unknown rather than becoming evidence that no review exists.
+The host's private `scmWorktreeMutationActivity` projects accepted worktree and
+checkout-creation handlers through settlement, including their native queue wait.
+Maintenance consumes its idle read and subscription; the projection neither
+serializes operations nor interrupts Git, and adds no plugin SDK contract.
+
 The [SCM comparison contract](scm-diff-summary.md) keeps Git mutation and hosting
 evidence at their contributed owners. Git's ordinary, stacked and accepted-plan
 consumers share one writer and advertised capabilities; the public SCM backend
@@ -1516,6 +1629,11 @@ tool resolution, secret materialization, effect review, final authorization and
 process custody. Native service lifecycle uses the existing managed-services
 contract rather than another supervisor.
 
+In 0.3 development, the exec host applies `HAPPIER_PROCESS_OWNER` after all
+plugin/native/Provider environment layers. Plugins cannot override or unset this
+host-private marker; child ownership is resolved by the canonical daemon process
+owner, not a plugin process registry. See [machine processes](cli-architecture.md#machine-processes-03-development).
+
 A resolved native command can return `nativeInstance` using the existing
 managed-services `{adapter, nativeResourceId}` shape. The selected adapter must
 declare and register `nativeServiceLifecycle`, and the identity must match that
@@ -1662,21 +1780,34 @@ development source contracts, not evidence of publication or live visual parity.
 Caller-authored HTML in 0.3 development uses only `ArtifactHtmlBundleV1`,
 including the Session Board's `hostedHtml` source and its entrypoint editor.
 The protocol's `artifactHtmlDocumentV1` owner resolves declared local resources
-and builds the document and closed-network CSP for both hosted surfaces and
+and builds the document and admitted-policy CSP for both hosted surfaces and
 Artifact readers. The app wrappers provide mount bootstrap facts; they do not
 maintain another HTML parser or document policy. Legacy `text/html` Artifact
 ingress normalizes to a one-file bundle at publication. Directory publication
 declares an entrypoint and uses the existing workspace-file acquisition owner,
 with confinement, symlink refusal and cancellation. Native frame transport
 loads process-local bytes through an isolated URL rather than submitting an
-expanded document to a WebView2 HTML-string API. Network requests remain closed
-until the admitted caller policy is connected; a requested origin is not a grant.
+expanded document to a WebView2 HTML-string API. Network requests use the admitted
+effective policy (none, exact origins or open); a requested origin is not a grant.
 Caller native responses carry `Content-Security-Policy: sandbox allow-scripts`;
 the guest's opaque origin does not grant bridge admission. Android admits only
 the current registered document URL in the active view's main frame, then the
 existing host bridge validates the mount nonce and identity. Its caller-only
 wildcard injection leaves installed-plugin origin policy unchanged. Native
 WebView enforcement and callbacks still require device validation.
+
+Public authors consume `ArtifactHtmlBundleV1`, the bundle convenience/document
+helpers and producer-derived `PluginUiActionInputFor` through
+`@happier-dev/plugin-sdk/ui`. Session visual creation uses the existing
+`session.board.item.upsert` Action (transcript by default); Pin/Unpin uses the
+same item through layout operations. The external-author source fixture at
+`packages/plugin-ui/fixtures/external-authoring/src/sessionVisuals.ts` exercises
+these contracts without host imports. Shared presentation remains in public
+Plugin UI: U4 owns `StackedSeriesChart`, U5 owns Usage widgets and `usage.query`,
+and the widgets platform owns declarative chart admission/freezing. Multi-series
+declarative authoring is not yet available; authors consume the current public
+schema rather than inventing a local arm. These are current
+0.3 development contracts, not publication or loaded-platform QA evidence.
 
 Notification channel authors must account for the development sender signature's
 [optional-category migration](compatibility.md#notification-channel-sender-source-migration-development)
@@ -1755,6 +1886,32 @@ breadcrumbs and the decision bar. Core binds identity lookup, localization,
 navigation and Action handlers to those same components; it does not redraw
 their generic anatomy. The role-mark adapter retains the host Agent catalog
 lookup and delegates portable glyph presentation to `HappierRoleMark`.
+
+In 0.3 development source, trigger rows and Badge-based provenance chips also
+share neutral Plugin UI presenters. Trigger callers supply qualified summaries,
+status, accessible labels and callbacks; the app adapter retains schedule clocks,
+event projection, Item/column bindings and trigger writes. Provenance callers
+supply the source label and optional destination; Account reads, transcript
+isolation and scoped routes stay with their existing host owners. These are
+presentation exports, not new trigger or sharing contribution families. Exact
+names and props come from the generated Plugin UI API reports.
+
+Share sheets, expanded grants, level controls and their help legend also use
+neutral Plugin UI presentation in 0.3 development source. Callers supply the
+roster body, supported levels in their domain order, translated labels,
+confirmation facts and callbacks. The app's sharing adapters bind these
+presenters for Sessions, documents, Saved Secrets, machines and project sources;
+their existing SelectionList retains search, directory steps, keyboard selection
+and focus recovery. The shared pressable owns keyboard activation and visible
+focus for level and grant actions. Directory reads, permission decisions,
+mutation/confirmation state, modal lifetime, clipboard and scoped routes remain
+with the caller. The sheet keeps its content mounted as its footer recomposes
+on phones. This adds public presentation composition, not a share-adapter
+contribution family or a new access authority.
+
+Work page sections pass event groups directly to the shared page sheet, which
+draws the group boundaries. Trigger rows suppress their own dividers so the
+section has one separator between events and none between triggers in an event.
 
 `HappierWorkSectionEmptyLine` is a section-description invitation at the Work
 text edge, optionally actionable as a whole sentence. The generic `EmptyState`

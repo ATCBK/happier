@@ -19,7 +19,7 @@ import {
   useProjectedConnectedServicesRegistry,
   useProjectedPluginLocalizedTextResolver,
 } from '@/components/appShell/plugins/AppShellPluginUiProjection';
-import { getConnectedAccountAuthentication } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { getConnectedAccountAuthentication, type ConnectedServiceRegistrySnapshot } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { resolveQualifiedConnectedServiceRegistryDisplayName } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
 import { resolveConnectedAccountUiNegotiation } from '@/sync/domains/connectedServices/resolveConnectedAccountUiNegotiation';
 import { useServerFeaturesRuntimeSnapshot } from '@/sync/domains/features/featureDecisionRuntime';
@@ -70,6 +70,7 @@ function ConnectedAccountPurposeTargetPickerModalContent(
 
 export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
   testID: string;
+  registry?: ConnectedServiceRegistrySnapshot;
   /** Plugin that authored the localized purpose title. */
   localizedTextPluginId: string;
   declaration: Readonly<{
@@ -113,7 +114,8 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
   const locale = getPreferredLanguage();
   const labelsByKey = useConnectedMetadataCatalog(undefined, selectConnectedMetadataLabels);
   const pathname = usePathname();
-  const registry = useProjectedConnectedServicesRegistry();
+  const focusedRegistry = useProjectedConnectedServicesRegistry();
+  const registry = props.registry ?? focusedRegistry;
   const localizePluginText = useProjectedPluginLocalizedTextResolver();
   const serverFeatures = useServerFeaturesRuntimeSnapshot({ enabled: true });
   const accountTransport = resolveConnectedAccountUiNegotiation(serverFeatures);
@@ -158,7 +160,7 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
     serviceTitle,
     sourceNegotiation: effectiveAccountTransport,
     presentIdentity: present,
-    resolveAuthentication: getConnectedAccountAuthentication,
+    resolveAuthentication: service => getConnectedAccountAuthentication(service, registry),
     teamResources,
     teamResourceCurrentKeys: teamCatalog?.currentResourceKeys,
     ...(teamCatalog ? { teamNameById: teamCatalog.teamNameById } : {}),

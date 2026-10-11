@@ -113,6 +113,7 @@ describe('provisioner picker demand', () => {
             destroy: 'destroy',
           },
         },
+        credentialPurposes: [{ purpose: { consumer: contribution, purpose: 'cloud-account' }, options: [] }],
       };
       const { MachineProvisionersListResultV1Schema } =
         await import('@happier-dev/protocol/plugins/contributions/machineProvisioners');
@@ -190,6 +191,7 @@ describe('provisioner picker demand', () => {
       if (credentialFailure) {
         const cards = screen.tree.findAll(node => Array.isArray(node.props.cards)).flatMap(node => node.props.cards);
         expect(cards[0].status.label).toBe(t('managedMachines.add.status.noAccount'));
+        expect(cards[0].action.label).toBe(t('managedMachines.add.action.connect'));
       }
       expect(screen.findByTestId('managed-picker.unavailable')?.props.diagnosticCode).toBeUndefined();
       await act(async () =>
@@ -201,6 +203,7 @@ describe('provisioner picker demand', () => {
         serverId,
         provisioner: buildQualifiedPluginContributionKey(contribution),
         controller: { machineId: 'controller', installationId: 'installation' },
+        ...(credentialFailure ? { connectPurpose: 'cloud-account' } : {}),
       });
       expect(
         harness.requests.some((request) =>

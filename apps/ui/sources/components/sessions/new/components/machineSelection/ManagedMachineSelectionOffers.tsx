@@ -94,6 +94,7 @@ function ManagedMachineSelectionConfigurationModal(props: CustomModalInjectedPro
         dimensions: { size: 'lg' }, phonePresentation: 'sheet', bodyScroll: 'auto', closeButtonTestID: 'managed-selection.back' }); }, [props.setChrome]);
     return selected ? <ManagedMachineConfigurationView serverId={selected.serverId} provisioner={selected.provisioner}
         initialController={selected.controller} presetId={props.preset?.id}
+        initialConnectPurpose={selected.connectPurpose}
         initialOptionsSelectors={!props.preset && selected === props.initialConfiguration ? props.initialConfiguration?.optionsSelectors : undefined}
         onUse={draft => { props.onClose(); props.onUse(draft); }} />
         : <MachineProvisionerPicker serverId={props.serverId} onSelectProvisioner={setSelected} />;

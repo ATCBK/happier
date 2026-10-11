@@ -25,7 +25,7 @@ import type { ManagedProvisionerCard } from './managedMachineDisplay';
 import { useManagedControllerScope, type ManagedControllerScope } from './useManagedControllerScope';
 import type { MachinePresetCollectionSettledResult } from './machinePresetCollectionClient';
 
-export type ManagedProvisionerSelection = Readonly<{ serverId: string; provisioner: string; controller: ManagedControllerV1 }>;
+export type ManagedProvisionerSelection = Readonly<{ serverId: string; provisioner: string; controller: ManagedControllerV1; connectPurpose?: string }>;
 type MachineProvisionerPickerProps = Readonly<{
     serverId: string; presetOnly?: boolean;
     /** Where "Set up this computer" leads when no machine here can manage yet (the Add form switches its own path). */
@@ -90,12 +90,14 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
         }).catch(() => { if (!abort.signal.aborted && binding.isCurrent()) setError('unavailable'); });
         return () => { abort.abort(); retirement.dispose(); };
     }, [catalog.binding, catalog.homeId, catalog.client, catalog.provisioners, controller, onApprovalPending]);
-    const open = (contribution: string) => {
+    const open = (contribution: string, connectPurpose?: string) => {
         if (props.onSelectProvisioner) {
-            if (controller && catalog.binding?.isCurrent()) props.onSelectProvisioner({ serverId: props.serverId, provisioner: contribution, controller });
+            if (controller && catalog.binding?.isCurrent()) props.onSelectProvisioner({ serverId: props.serverId, provisioner: contribution, controller,
+                ...(connectPurpose ? { connectPurpose } : {}) });
             return;
         }
         const params = new URLSearchParams({ serverId: props.serverId });
+        if (connectPurpose) params.set('connectPurpose', connectPurpose);
         if (props.presetOnly) params.set('presetOnly', 'true');
         if (controller) { params.set('machineId', controller.machineId); params.set('installationId', controller.installationId); }
         router.push(`/settings/machines/add/${encodeURIComponent(contribution)}?${params.toString()}` as never);
@@ -130,7 +132,8 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
                     if (abort.signal.aborted || !binding.isCurrent()) return;
                     if (outcome.ok) catalog.refresh(); else setError(outcome.reason);
                 }).catch(() => { if (!abort.signal.aborted && binding.isCurrent()) setError('unavailable'); });
-            } } : { kind: 'choose', label: t('managedMachines.add.action.choose'), onPress: () => open(id) } }];
+            } } : { kind: 'choose', label: t(noAccount ? 'managedMachines.add.action.connect' : 'managedMachines.add.action.choose'),
+                onPress: () => open(id, noAccount ? provisioner.credentialPurposes?.[0]?.purpose.purpose : undefined) } }];
     });
     const controllerName = scope.machine ? getMachineDisplayName(scope.machine) ?? scope.machine.id : '';
     const controllerOnline = scope.machine ? resolveMachinePickerPresence(scope.machine).status === 'online' : false;

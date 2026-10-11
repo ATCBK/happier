@@ -11,11 +11,13 @@ import { getSystemTasksRunner } from '@/components/systemTasks/systemTasksRuntim
 import { resolveMachineAdministrationTargetState } from '@/sync/domains/machines/administration/targetSelection';
 import {
   useMachineAdministrationTargetPickerRows,
+  resolveFreshMachineAdministrationExecutionTarget,
+  doesMachineAdministrationTargetMatchActiveAccount,
   type MachineAdministrationTargetSelectionV1,
 } from '@/sync/domains/machines/administration/useTargetSelection';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { useMachineListForServer } from '@/sync/domains/state/storage';
+import { useMachineListForServer, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
 export type ManagedControllerScope = Readonly<{
@@ -27,6 +29,8 @@ export type ManagedControllerScope = Readonly<{
   hasCandidates: boolean;
   /** The canonical machine-scope chip, for the page header (or the section that owns the scope). */
   chip: React.ReactElement | null;
+  /** The same chosen controller, revalidated by the Administration execution owner. */
+  selection?: MachineAdministrationTargetSelectionV1;
 }>;
 
 /**
@@ -53,6 +57,7 @@ export function useManagedControllerScope(
   }>,
 ): ManagedControllerScope {
   const machines = useMachineListForServer(input.serverId);
+  const activeAccountScope = useActiveServerAccountScope();
   const rows = useMachineAdministrationTargetPickerRows();
   const thisMachineId = useThisComputerMachineId();
   const [chosen, setChosen] = React.useState<ManagedControllerV1 | undefined>();
@@ -122,6 +127,12 @@ export function useManagedControllerScope(
         scopedRows.find(
           (row) => row.candidate.target.machineId === controller?.machineId,
         )?.candidate.target ?? null;
+      const matchesAccount = doesMachineAdministrationTargetMatchActiveAccount({ target: selectedTarget, activeAccountServerId: activeAccountScope?.serverId });
+      const resolveExecutionTarget = () => {
+        if (!matchesAccount || !selectedTarget || !controller) return null;
+        const current = resolveFreshMachineAdministrationExecutionTarget(selectedTarget);
+        return current?.machine.installationId === controller.installationId ? current : null;
+      };
       return {
         candidates,
         pickerRows: scopedRows,
@@ -131,8 +142,8 @@ export function useManagedControllerScope(
           allowSoleCandidate: false,
         }),
         selectedTarget,
-        selectedTargetServerMatchesActiveAccount: true,
-        canExecute: false,
+        selectedTargetServerMatchesActiveAccount: matchesAccount,
+        canExecute: resolveExecutionTarget() !== null,
         selectTarget: (target) => {
           const machine = eligible.find(
             (candidate) => candidate.id === target.machineId,
@@ -146,9 +157,9 @@ export function useManagedControllerScope(
           onSelect?.(next);
         },
         clearTarget: () => {},
-        resolveExecutionTarget: () => null,
+        resolveExecutionTarget,
       };
-    }, [controller?.machineId, eligible, onSelect, scopedRows]);
+    }, [controller?.machineId, controller?.installationId, eligible, onSelect, scopedRows, activeAccountScope?.serverId]);
 
   const chip =
     scopedRows.length > 0 ? (
@@ -165,6 +176,7 @@ export function useManagedControllerScope(
     machine: eligible.find((machine) => machine.id === controller?.machineId),
     hasCandidates: eligible.length > 0,
     chip,
+    selection,
   };
 }
 

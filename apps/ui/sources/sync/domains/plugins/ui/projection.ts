@@ -35,6 +35,7 @@ type UnknownRecord = Readonly<Record<string, unknown>>;
 export type PluginUiDragSourceProjection = PluginProjectedDragSourceEntryV1 & UnknownRecord;
 export type PluginUiDropTargetProjection = PluginProjectedDropTargetEntryV1 & UnknownRecord;
 export type PluginUiInputTypeProjection = NonNullable<DaemonContributionRegistryProjection['familiesById']['inputTypes']>['entriesById'][string];
+export type PluginUiAtmospherePictureProjection = NonNullable<DaemonContributionRegistryProjection['familiesById']['atmospherePictures']>['entriesById'][string];
 
 /**
  * The OS-level platform every plugin UI projection is normalized for.
@@ -358,7 +359,9 @@ export type PluginUiProjectionModel = Readonly<{
     actionsById: Readonly<Record<string, PluginUiActionProjection>>;
     /** Exact current Resource declarations for host-owned qualified consumers. */
     resourcesById: Readonly<Record<string, PluginUiResourceProjection>>;
+    machineProvisionersById: NonNullable<DaemonContributionRegistryProjection['familiesById']['machineProvisioners']>['entriesById'];
     inputTypesById: Readonly<Record<string, PluginUiInputTypeProjection>>;
+    atmospherePicturesById: Readonly<Record<string, PluginUiAtmospherePictureProjection>>;
     voiceProvidersById: Readonly<Record<string, PluginVoiceProviderProjection>>;
     dragSourcesById: Readonly<Record<string, PluginUiDragSourceProjection>>;
     dropTargetsById: Readonly<Record<string, PluginUiDropTargetProjection>>;
@@ -384,7 +387,9 @@ export const EMPTY_PLUGIN_UI_PROJECTION: PluginUiProjectionModel = Object.freeze
     composerRegionsById: Object.freeze({}),
     actionsById: Object.freeze({}),
     resourcesById: Object.freeze({}),
+    machineProvisionersById: Object.freeze({}),
     inputTypesById: Object.freeze({}),
+    atmospherePicturesById: Object.freeze({}),
     voiceProvidersById: Object.freeze({}),
     dragSourcesById: Object.freeze({}),
     dropTargetsById: Object.freeze({}),
@@ -847,7 +852,9 @@ export function normalizePluginUiProjection(
     // from a feature-local declaration family.
     const actionsById = Object.freeze({ ...projection.actionsById });
     const resourcesById = Object.freeze({ ...projection.resourcesById });
+    const machineProvisionersById = Object.freeze({ ...(projection.familiesById.machineProvisioners?.entriesById ?? {}) });
     const inputTypesById = Object.freeze({ ...(projection.familiesById.inputTypes?.entriesById ?? {}) });
+    const atmospherePicturesById = Object.freeze({ ...(projection.familiesById.atmospherePictures?.entriesById ?? {}) });
     const dragSourcesById: Record<string, PluginUiDragSourceProjection> = {};
     for (const [id, entry] of Object.entries(projection.familiesById.dragSources?.entriesById ?? {})) {
         const parsed = PluginProjectedDragSourceEntryV1Schema.safeParse(entry);
@@ -920,7 +927,9 @@ export function normalizePluginUiProjection(
             composerRegionsById,
             actionsById,
             resourcesById,
+            machineProvisionersById,
             inputTypesById,
+            atmospherePicturesById,
             voiceProvidersById: Object.freeze(voiceProvidersById),
             dragSourcesById: Object.freeze(dragSourcesById),
             dropTargetsById: Object.freeze(dropTargetsById),
@@ -1073,7 +1082,9 @@ export function normalizePluginUiProjection(
         composerRegionsById,
         actionsById,
         resourcesById,
+        machineProvisionersById,
         inputTypesById,
+        atmospherePicturesById,
         voiceProvidersById: Object.freeze(voiceProvidersById),
         dragSourcesById: Object.freeze(dragSourcesById),
         dropTargetsById: Object.freeze(dropTargetsById),

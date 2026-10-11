@@ -70,6 +70,7 @@ import {
   PluginResourceKindV2Schema,
   PluginWorkflowContributionV1Schema,
   PluginInputTypeContributionV1Schema,
+  PluginAtmospherePictureContributionV1Schema,
   PluginDragSourceContributionV1Schema,
   PluginDropTargetContributionV1Schema,
 } from '../plugins/contributions/v2.js';
@@ -1263,6 +1264,10 @@ export const PluginProjectedCommandV2Schema = lazyZodSchema(() => PluginProjecte
 }).strict());
 export type PluginProjectedCommandV2 = z.infer<typeof PluginProjectedCommandV2Schema>;
 
+export const PluginProjectedConnectedAccountPurposeDeclarationV1Schema = lazyZodSchema(() => z.object({
+  purpose: z.string().trim().min(1), serviceRefs: z.array(PluginContributionIdentityV1Schema).min(1),
+}).strict());
+
 export const PluginProjectedResourceV2Schema = lazyZodSchema(() => z.object({
   id: z.string().trim().min(1),
   pluginId: z.string().trim().min(1),
@@ -1277,9 +1282,7 @@ export const PluginProjectedResourceV2Schema = lazyZodSchema(() => z.object({
   /** Current declaration fact; absent older rows cannot serve contextual refresh. */
   scope: PluginDynamicResourceScopeV1Schema.optional(),
   /** Exact admitted Resource HostAccess, never a widget-owned credential choice. */
-  connectedAccountPurposes: z.array(z.object({
-    purpose: z.string().trim().min(1), serviceRefs: z.array(PluginContributionIdentityV1Schema).min(1),
-  }).strict()).optional(),
+  connectedAccountPurposes: z.array(PluginProjectedConnectedAccountPurposeDeclarationV1Schema).optional(),
   digest: PluginOptionalStringSchema,
   contentType: PluginOptionalStringSchema,
 }).strict().superRefine((resource, context) => {
@@ -2445,6 +2448,18 @@ export function readDaemonPluginUiTargetedSurfaceMountV1<
     : null;
 }
 
+const PluginProjectedAtmospherePictureEntryV1Schema = lazyZodSchema(() => z.object({
+  id: z.string().min(1), pluginId: PluginIdSchema, pluginVersion: z.string().min(1), occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema.optional(),
+  serverIdentityId: PluginMachineMaterializationExecutionOriginV1Schema.shape.serverIdentityId.optional(),
+  materializationRef: PluginMachineMaterializationExecutionOriginV1Schema.shape.materializationRef.optional(),
+  definition: PluginAtmospherePictureContributionV1Schema,
+}).strict().superRefine((entry, context) => {
+  if (entry.id !== `${entry.pluginId}/${entry.definition.id}`) context.addIssue({ code: 'custom', path: ['id'], message: 'Picture identity must match its descriptor' });
+  const hasOrigin = entry.serverIdentityId !== undefined || entry.materializationRef !== undefined;
+  if (hasOrigin && (!entry.serverIdentityId || !entry.materializationRef || !entry.occurrenceId)) context.addIssue({ code: 'custom', message: 'Picture origin requires both exact origin fields and its serving occurrence' });
+  if (entry.materializationRef && entry.materializationRef.pluginId !== entry.pluginId) context.addIssue({ code: 'custom', path: ['materializationRef', 'pluginId'], message: 'Picture origin must match its pluginId' });
+}));
+
 const PluginProjectedInputTypeEntryV1Schema = lazyZodSchema(() => z.object({
   id: z.string().min(1), pluginId: PluginIdSchema, pluginVersion: z.string().min(1), occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema.optional(),
   serverIdentityId: PluginMachineMaterializationExecutionOriginV1Schema.shape.serverIdentityId.optional(),
@@ -2490,6 +2505,8 @@ export const PluginProjectedMachineProvisionerEntryV1Schema = lazyZodSchema(() =
   serverIdentityId: PluginMachineMaterializationExecutionOriginV1Schema.shape.serverIdentityId.optional(),
   materializationRef: PluginMachineMaterializationExecutionOriginV1Schema.shape.materializationRef.optional(),
   definition: MachineProvisionerContributionV1Schema,
+  /** Credential-use declarations of the acquire Action, qualified to this consumer. */
+  connectedAccountPurposes: z.array(PluginProjectedConnectedAccountPurposeDeclarationV1Schema).optional(),
 }).strict().superRefine((entry, context) => {
   if (entry.id !== `${entry.pluginId}/${entry.definition.id}`) {
     context.addIssue({ code: 'custom', path: ['id'], message: 'Machine provisioner identity must match its descriptor' });
@@ -2524,6 +2541,7 @@ export const PluginProjectedFamilyEntryV2Schema = lazyZodSchema(() => z.union([
   PluginProjectedDragSourceEntryV1Schema,
   PluginProjectedDropTargetEntryV1Schema,
   PluginProjectedInputTypeEntryV1Schema,
+  PluginProjectedAtmospherePictureEntryV1Schema,
   PluginProjectedDefinitionEntryV2Schema,
   PluginProjectedWorkflowEntryV1Schema,
   PluginProjectedVoiceProviderEntryV2Schema,
@@ -2567,6 +2585,7 @@ const PluginProjectedVoiceModelPacksFamilyV2Schema = lazyZodSchema(() => project
 const PluginProjectedRolesFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('roles', PluginProjectedDefinitionEntryV2Schema));
 const PluginProjectedWorkflowsFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('workflows', PluginProjectedWorkflowEntryV1Schema));
 const PluginProjectedInputTypesFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('inputTypes', PluginProjectedInputTypeEntryV1Schema));
+const PluginProjectedAtmospherePicturesFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('atmospherePictures', PluginProjectedAtmospherePictureEntryV1Schema));
 const PluginProjectedMachineProvisionersFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('machineProvisioners', PluginProjectedMachineProvisionerEntryV1Schema));
 const PluginProjectedDragSourcesFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('dragSources', PluginProjectedDragSourceEntryV1Schema));
 const PluginProjectedDropTargetsFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('dropTargets', PluginProjectedDropTargetEntryV1Schema));
@@ -2589,6 +2608,7 @@ const PluginProjectedFamiliesByIdV2Schema = lazyZodSchema(() => z.object({
   roles: PluginProjectedRolesFamilyV1Schema.optional(),
   workflows: PluginProjectedWorkflowsFamilyV1Schema.optional(),
   inputTypes: PluginProjectedInputTypesFamilyV1Schema.optional(),
+  atmospherePictures: PluginProjectedAtmospherePicturesFamilyV1Schema.optional(),
   machineProvisioners: PluginProjectedMachineProvisionersFamilyV1Schema.optional(),
   dragSources: PluginProjectedDragSourcesFamilyV1Schema.optional(),
   dropTargets: PluginProjectedDropTargetsFamilyV1Schema.optional(),
@@ -2613,6 +2633,7 @@ export const PluginProjectedFamilyV2Schema = lazyZodSchema(() => z.union([
   PluginProjectedRolesFamilyV1Schema,
   PluginProjectedWorkflowsFamilyV1Schema,
   PluginProjectedInputTypesFamilyV1Schema,
+  PluginProjectedAtmospherePicturesFamilyV1Schema,
   PluginProjectedMachineProvisionersFamilyV1Schema,
   PluginProjectedDragSourcesFamilyV1Schema,
   PluginProjectedDropTargetsFamilyV1Schema,

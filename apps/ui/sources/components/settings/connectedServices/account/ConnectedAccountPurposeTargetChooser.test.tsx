@@ -73,19 +73,16 @@ function seedAccountProfile() {
         status: 'connected',
         authenticationModeId: 'oauth',
         revisionSemantics: 'revisioned',
-        credentialRevision: 'cred-1',
+        credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
         configurationReady: true,
         configurationRevision: null,
-        displayName: undefined,
+        displayName: 'Personal OpenAI',
         scopes: [],
       }, ...connectedAccountState.additionalAccounts],
       connectedAccountGroupsV4: [],
     }),
     settings: {
       ...settingsDefaults,
-      connectedServicesProfileLabelByKey: {
-        'acme.managed.provider%2Fgateway/35f1d8ec-633c-4bda-9e0d-7055ac95b8af': 'Personal OpenAI',
-      },
     },
   });
 }
@@ -486,7 +483,7 @@ describe('ConnectedAccountPurposeTargetChooser', () => {
       status: 'connected',
       authenticationModeId: 'oauth',
       revisionSemantics: 'revisioned',
-      credentialRevision: `cred-${index}`,
+      credentialRevision: `csr_${String(index).padStart(22, '0')}`,
       configurationReady: true,
       configurationRevision: null,
       displayName: `Scale account ${index}`,

@@ -459,8 +459,10 @@ export function getConnectedAccountAuthenticationMode(
  */
 export function getConnectedAccountAuthentication(
   service: Readonly<{ pluginId: string; localId: string }>,
+  snapshot?: ConnectedServiceRegistrySnapshot,
 ): PluginConnectedAccountAuthenticationV2 | null {
-  const entry = getQualifiedConnectedServiceRegistryEntry(service);
+  const entry = snapshot ? snapshot.entries.find(candidate => candidate.service && sameService(candidate.service, service))
+    : getQualifiedConnectedServiceRegistryEntry(service);
   if (!entry || (entry.projectedDescriptorCandidates?.length ?? 0) > 1) return null;
   return entry.projectedDescriptor?.authentication ?? null;
 }

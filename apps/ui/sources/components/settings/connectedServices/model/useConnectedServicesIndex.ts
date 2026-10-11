@@ -11,6 +11,7 @@ import {
 import {
     getGeneratedLegacyConnectedServiceRegistryFallback,
     getLegacyConnectedServiceRegistryEntry,
+    type ConnectedServiceRegistrySnapshot,
 } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { resolveConnectedAccountUiNegotiation } from '@/sync/domains/connectedServices/resolveConnectedAccountUiNegotiation';
 import { useServerFeaturesRuntimeSnapshot } from '@/sync/domains/features/featureDecisionRuntime';
@@ -44,7 +45,7 @@ import { resolveConnectedServiceRegistryEntryDisplayName } from './resolveConnec
  */
 const NO_GATEWAYS: readonly ProviderGatewayCollectionRow[] = Object.freeze([]);
 
-export function useConnectedServicesIndex(options: Readonly<{ agents: 'load' | 'cached'; gateways?: boolean }>) {
+export function useConnectedServicesIndex(options: Readonly<{ agents: 'load' | 'cached'; gateways?: boolean; registry?: ConnectedServiceRegistrySnapshot }>) {
     const profile = useProfile();
     const scope = useActiveServerAccountScope();
     // The Account catalog is the saved payload authority, independent of Machine admission.
@@ -57,20 +58,18 @@ export function useConnectedServicesIndex(options: Readonly<{ agents: 'load' | '
     const sourceMachineId = options.agents === 'load' ? projectionMachineId : null;
     // Listing gateways is a Settings request of its own: the rail asks for it while it only reads
     // cached agents, so the Gateways group does not depend on which detail is open beside it.
-    const gatewayMachineId = options.gateways ? projectionMachineId : null;
     const gatewayDeclarations = useProviderConnections({
-        enabled: Boolean(options.gateways && gatewayMachineId && gatewayCatalog?.status === 'ready' && !gatewayCatalog.stale
+        enabled: Boolean(options.gateways && scope && gatewayCatalog?.status === 'ready' && !gatewayCatalog.stale
             && gatewayCatalog.data?.connections.some(connection => connection.deployment.kind === 'managedLocal')),
-        machineId: gatewayMachineId,
-        serverId: appShellProjection.serverId,
+        machineId: null,
+        serverId: scope?.serverId ?? null,
     });
     const gateways = React.useMemo(() => {
         if (!gatewayCatalog?.data || gatewayCatalog.status !== 'ready' || gatewayCatalog.stale) return null;
         const connections = gatewayCatalog.data.connections;
         const views = gatewayDeclarations.data?.connections ?? null;
-        if (!areProviderGatewayDeclarationsKnown({ connections, views })) return null;
-        return connections.some(connection => connection.deployment.kind === 'managedLocal')
-            ? buildProviderGatewayCollection({ connections, views: views ?? [] }) : NO_GATEWAYS;
+        if (!connections.some(connection => connection.deployment.kind === 'managedLocal')) return NO_GATEWAYS;
+        return views ? buildProviderGatewayCollection({ connections, views }) : null;
     }, [gatewayCatalog?.data, gatewayCatalog?.status, gatewayCatalog?.stale, gatewayDeclarations.data]);
     const purposeCatalog = useConnectedAccountCatalog('purposes', scope, { sourceMachineId });
     const settings = useSettingsSelector((settings) => ({
@@ -78,7 +77,8 @@ export function useConnectedServicesIndex(options: Readonly<{ agents: 'load' | '
         connectedServicesAdditionalDefaultAuthByAgentIdV1: settings.connectedServicesAdditionalDefaultAuthByAgentIdV1,
         connectedServicesDefaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId,
     }));
-    const registrySnapshot = useProjectedConnectedServicesRegistry();
+    const focusedRegistry = useProjectedConnectedServicesRegistry();
+    const registrySnapshot = options.registry ?? focusedRegistry;
     const localizePluginText = useProjectedPluginLocalizedTextResolver();
     const locale = getPreferredLanguage();
     const serverFeatures = useServerFeaturesRuntimeSnapshot({ enabled: true });
@@ -188,7 +188,10 @@ export function useConnectedServicesIndex(options: Readonly<{ agents: 'load' | '
     return {
         indexModel,
         gateways,
-        gatewaysKnown: gateways !== null,
+        gatewaysKnown: gateways !== null && areProviderGatewayDeclarationsKnown({
+            connections: gatewayCatalog?.data?.connections ?? [],
+            views: gatewayDeclarations.data?.connections ?? null,
+        }),
         gatewayDeclarations,
         gatewayCatalog,
         purposeCatalog,
