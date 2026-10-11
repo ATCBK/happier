@@ -967,7 +967,8 @@ We do **not** runtime-probe ACP `loadSession` support in normal UI/CLI flows.
 Instead:
 - resumability is driven by the static agents catalog + the selected backend (e.g. `codexBackendMode`)
 - explicit “resume inactive session” is **fail-closed**: if `loadSession` fails, we surface the error instead of silently starting a fresh vendor session
-- any ACP capability probing (e.g. `includeAcpCapabilities`) is reserved for opt-in diagnostics / e2e probes, not day-to-day UX
+- ACP capability probing is reserved for opt-in diagnostics, not day-to-day UX
+- the development provider harness `acp_probe_capabilities` scenario validates the negotiated runtime capabilities published by the active session
 
 After an ACP connection initializes, runtime-only list, fork, close, and delete operations fail closed
 against the capabilities negotiated on that exact connection. Two of them have product consumers.

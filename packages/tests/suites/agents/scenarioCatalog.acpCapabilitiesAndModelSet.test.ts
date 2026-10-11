@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -39,31 +39,31 @@ describe('scenarioCatalog: ACP capability/model-set scenarios', () => {
     expect(geminiScenario.postSatisfy?.timeoutMs).toBeGreaterThan(qwenScenario.postSatisfy?.timeoutMs ?? 0);
   });
 
-  it('allows degraded ACP capability probe for gemini when CLI detect times out', async () => {
-    const build = (scenarioCatalog as Record<string, any>).acp_probe_capabilities;
-    expect(typeof build).toBe('function');
-    const scenario = build(acpProvider('gemini'));
-
-    const workspaceDir = await mkdtemp(join(tmpdir(), 'happier-acp-cap-gemini-'));
-    const payload = {
-      protocolVersion: 1,
-      results: {
-        'cli.gemini': {
-          ok: true,
-          data: {
-            available: true,
-            acp: {
-              ok: false,
-              checkedAt: Date.now(),
-              error: { message: 'ACP initialize timeout after 30000ms' },
-            },
+  it('accepts the negotiated runtime capability publication of the active session', async () => {
+    const scenario = scenarioCatalog.acp_probe_capabilities(acpProvider('codebuddy'));
+    const workspaceDir = await mkdtemp(join(tmpdir(), 'happier-acp-cap-publication-'));
+    const context = {
+      workspaceDir, fixtures: { examples: {} }, traceEvents: [],
+      baseUrl: 'http://127.0.0.1:1', token: 'token', sessionId: 'session',
+      resumeSessionId: null, secret: new Uint8Array(32), resumeId: null,
+    };
+    try {
+      await writeFile(join(workspaceDir, 'e2e-probe-capabilities.json'), JSON.stringify({
+        runtimeCapabilities: {
+          localControl: null,
+          sessionCapabilities: {
+            sessionListing: 'unsupported',
+            sessionFork: { conversation: 'unsupported', fromMessage: 'unsupported', protocol: 'acp' },
+            sessionRollback: { conversation: 'unsupported' },
           },
         },
-      },
-    };
-    await writeFile(join(workspaceDir, 'e2e-probe-capabilities.json'), JSON.stringify(payload), 'utf8');
-
-    await expect(scenario.verify({ workspaceDir })).resolves.toBeUndefined();
+      }), 'utf8');
+      await expect(scenario.verify?.(context)).resolves.toBeUndefined();
+      await writeFile(join(workspaceDir, 'e2e-probe-capabilities.json'), '{}', 'utf8');
+      await expect(scenario.verify?.(context)).rejects.toThrow();
+    } finally {
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it('defines acp_set_model_dynamic for dynamic ACP providers', () => {
