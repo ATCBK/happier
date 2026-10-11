@@ -5,6 +5,7 @@ import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 import { createProviderActionExecuteV1 } from '../providers/executeProviderActionV1.js';
 import { createProviderErrorV1 } from '../providers/errors.js';
 import { applyProviderDefaultModelSelectionV1, SessionModelSelectionV1Schema } from '../providers/selection/v1.js';
+import { DaemonProviderConnectionMutationResponseV1Schema } from '../rpc/providers.js';
 
 const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
 
@@ -111,7 +112,19 @@ describe('Provider Settings Actions', () => {
   it('keeps a dispatched mutation ACK after retirement, but refuses a retired read and malformed mutation ACK', async () => {
     const { createActionExecutor } = await import('./actionExecutor.js');
     let current = true;
-    let reply: unknown = { status: 'success', action: 'setEnabled', connectionId: 'connection' };
+    let reply: unknown = DaemonProviderConnectionMutationResponseV1Schema.parse({
+      status: 'success', action: 'setEnabled',
+      connection: {
+        connectionId: 'connection', contributionKey: null,
+        displayName: 'Connection', providerName: 'Provider', icon: null,
+        role: 'named', displayNameMode: 'custom', sourceStatus: 'available',
+        probeCapability: 'none', manualModelPolicy: 'allowed', compatibility: [],
+        grants: { accountEnabled: false, enabledMachineIds: ['machine'] },
+        credential: null, endpoints: [], scope: 'machine', authorized: true,
+        authorizationError: null, revision: 1,
+        runtime: { health: 'not_checked', modelCount: null, checkedAt: null },
+      },
+    });
     const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: {},
       approvalWaivedSurfaces: { 'providers.connections.enabled.set': ['ui'] } });
     const executor = createActionExecutor({

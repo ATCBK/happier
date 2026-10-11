@@ -87,8 +87,11 @@ describe('usage recap Action composition', () => {
       },
     } as unknown as ActionExecutorDeps);
     expect(await executor.execute('usage.recap.export', { query, selectedFields: ['tokens'] },
-      { surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' } })).toMatchObject({ ok: true,
+      { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' } })).toMatchObject({ ok: true,
       result: { kind: 'unavailable', reason: 'render_target_unavailable', compose: { kind: 'composed', facts: { tokens: { total: 12 } } } } });
+    expect(await executor.execute('usage.recap.export', { query, selectedFields: ['tokens'] },
+      { surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' } }))
+      .toMatchObject({ ok: false, errorCode: 'action_disabled' });
   });
   it('retains denied and uncertain client dispatch outcomes instead of falling back to another read', async () => {
     for (const errorCode of ['denied', 'outcome_uncertain']) {

@@ -19,7 +19,7 @@ describe('Provider Action placement declarations', () => {
       ['providers.models.projection', { agentTargetKey: 'agent:com.acme.agent/acme' }, 'account'],
       ['providers.models.projection', { agentTargetKey: 'agent:com.acme.agent/acme', machineId: 'machine' }, 'machine'],
       ['providers.models.manual.remove', { action: 'manualRemove', connectionId: 'connection', modelId: 'model', expectedConnectionRevision: 1 }, 'account'],
-      ['providers.models.visibility.set', { action: 'setVisibility', ref: { agentTargetKey: 'agent:com.acme.agent/acme', providerConnectionId: 'connection', modelId: 'model' }, hidden: true }, 'account'],
+      ['providers.models.visibility.set', { action: 'setVisibility', ref: { scope: 'agent', agentTargetKey: 'agent:com.acme.agent/acme', providerConnectionId: 'connection', modelId: 'model' }, hidden: true }, 'account'],
       ['providers.models.source_visibility.set', { action: 'setConnectionVisibility', connectionId: 'connection', shown: false }, 'account'],
       ['providers.defaults.set', { agentTargetKey: 'agent:codex', selection: null }, 'account'],
       ['providers.connections.start_local', { action: 'startLocal', machineId: 'machine', contributionKey: 'example.gateway/gateway' }, 'machine'],

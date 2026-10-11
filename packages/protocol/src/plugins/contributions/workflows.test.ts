@@ -19,8 +19,12 @@ describe('declarative plugin workflows', () => {
       body: [{ kind: 'parallel', id: 'fanout', failurePolicy: 'fail_stop', branches: [{ id: 'lane', blocks: [{
         kind: 'if', id: 'choice', when: { kind: 'exists', value: { kind: 'literal', value: true } },
         then: [{ kind: 'action', id: 'local', actionId: 'post', input: {} },
-          { kind: 'action', id: 'host', actionId: 'notifications.notify_me', input: {} },
-          { kind: 'action', id: 'plain-host', actionId: 'wait', input: {} },
+          { kind: 'action', id: 'host', actionId: 'notifications.notify_me',
+            input: { message: { kind: 'literal', value: 'Review is ready' } } },
+          { kind: 'action', id: 'plain-host', actionId: 'wait', input: {
+            target: { kind: 'literal', value: { kind: 'session', serverId: 'home', sessionId: 'session' } },
+            condition: { kind: 'literal', value: { kind: 'ready' } },
+          } },
           { kind: 'action', id: 'nested-local', actionId: 'wait/check', input: {} }],
         otherwise: [{ kind: 'action', id: 'foreign', actionId: 'com.other.plugin/post', input: {} },
           { kind: 'action', id: 'unavailable', actionId: 'com.missing.plugin/post', input: {} }],

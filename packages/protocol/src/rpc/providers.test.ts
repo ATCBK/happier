@@ -454,7 +454,7 @@ describe('provider machine RPC contracts', () => {
       manualModels: [{ id: 'anthropic/model-a', name: 'Model A' }],
     };
     expect(DaemonProviderConnectionMutationRequestV1Schema.parse(custom)).toEqual(custom);
-    const editCustom = { action: 'update', connectionId: custom.connectionId, expectedRevision: 2, template: custom.template };
+    const editCustom = { action: 'update', machineId: custom.machineId, connectionId: custom.connectionId, expectedRevision: 2, template: custom.template };
     expect(DaemonProviderConnectionMutationRequestV1Schema.parse(editCustom)).toEqual(editCustom);
     expect(DaemonProviderConnectionMutationRequestV1Schema.safeParse({ ...editCustom,
       template: { ...custom.template, trustedCapabilities: true } }).success).toBe(false);

@@ -402,7 +402,7 @@ import type { SessionContinueWithReplayRpcParams } from '../sessions/continueWit
 import { SessionForkRpcParamsSchema } from '../sessions/fork.js';
 import { SpawnSessionErrorCodeSchema } from '../sessions/spawnSession.js';
 import { SessionControlErrorCodeSchema } from '../sessions/control/contract.js';
-import { readRpcErrorCode, RPC_ERROR_CODES } from '../rpc/errors.js';
+import { isRpcError, readRpcErrorCode, RPC_ERROR_CODES } from '../rpc/errors.js';
 import {
   deriveSessionCreationTagV1,
   SessionCreationKeyV1Schema,
@@ -2015,7 +2015,7 @@ function normalizeActionExecutorThrownError(error: unknown): Readonly<{ errorCod
     || value === 'version_mismatch'
   )) ?? '';
   const rpcErrorCode = readRpcErrorCode(error);
-  const typedRpcErrorCode = rpcErrorCode && RPC_ERROR_CODE_SET.has(rpcErrorCode)
+  const typedRpcErrorCode = rpcErrorCode && (isRpcError(error) || RPC_ERROR_CODE_SET.has(rpcErrorCode))
     ? rpcErrorCode
     : '';
   const normalizedCode = protocolCode || typedRpcErrorCode;

@@ -6,6 +6,8 @@ import { bindHomeDomainActionHttpRequestV1, readHomeDomainActionErrorV1 } from '
 import { ActionIdSchema } from './actionIds.js';
 import { getActionSpec } from './actionSpecs.js';
 import { AgentStartSessionCallerV1Schema, type AgentStartContextV1 } from '../account/settings/admitAgentStartV1.js';
+import { ActionsSettingsV1Schema } from './actionSettings.js';
+import { RpcError, RPC_ERROR_CODES } from '../rpc/errors.js';
 
 function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
   return createActionExecutor({
@@ -57,6 +59,21 @@ const canonicalSessionSpawnInput = {
 } as const;
 
 describe('createActionExecutor (session control)', () => {
+  it.each([
+    { kind: 'typed domain refusal', failure: new RpcError('native refused', 'permission_request_not_found'), expectedCode: 'permission_request_not_found' },
+    { kind: 'untyped domain carrier', failure: { rpcErrorCode: 'permission_request_not_found', message: 'native refused', details: { private: 'do-not-publish' } }, expectedCode: 'action_failed' },
+    { kind: 'transport carrier', failure: { rpcErrorCode: RPC_ERROR_CODES.FORBIDDEN, message: 'native refused' }, expectedCode: RPC_ERROR_CODES.FORBIDDEN },
+  ])('preserves admitted Session RPC refusal identity for $kind', async ({ failure, expectedCode }) => {
+    // Only the declared host's Session delivery boundary is replaced; Action
+    // input, caller authority, approval and thrown-result admission stay real.
+    const executor = createActionExecutor({ sessionPermissionRespond: async () => { throw failure; } });
+    const result = await executor.execute('session.permission.respond', {
+      sessionId: 's1', requestId: 'permission-1', decision: 'deny',
+    }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+      actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'session.permission.respond': ['ui'] } }),
+    });
+    expect(result).toEqual({ ok: false, errorCode: expectedCode, error: 'native refused' });
+  });
   it.each([
     { error: 'Session not found or not owned by user', code: 'session_absent' },
     { error: 'Session delete condition was lost', code: 'session_delete_conflict' },
