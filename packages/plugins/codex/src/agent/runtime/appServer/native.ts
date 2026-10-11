@@ -486,6 +486,7 @@ function mapCodexAppServerEvent(event: CodexAppServerEvent): NativeSessionEventI
         ? {
             kind: 'transcript-message-committed',
             messageId: event.localId,
+            ...(event.turnId ? { turnId: event.turnId } : {}),
             ...(event.sidechainId ? { sidechainId: event.sidechainId } : {}),
             role: message.role,
             text: message.text,

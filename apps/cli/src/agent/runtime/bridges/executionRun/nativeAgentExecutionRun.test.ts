@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import type {
     AgentExecutionRunEvent,
@@ -32,6 +35,12 @@ import { createRetainedExecutionRunInputDelivery } from './pending/retainedExecu
 import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import { createVoiceSessionContextLease, createVoiceSessionRuntimeThroughNativeFactory } from './testkit/nativeSessionContext';
 import { logger } from '@/ui/logger';
+import { reloadConfiguration } from '@/configuration';
+import { readRetainedExecutionRunRecords } from '@/daemon/executionRunRegistry';
+import type { ExecutionRunState } from './executionRunTypes';
+import { finishExecutionRun } from './finishExecutionRun';
+import { createExecutionRunControllerMessageHandler } from './messages/sessionStateEmission';
+import { createPiRuntimeEventProjector } from '@happier-dev/plugins-pi/agent/runtime/rpc/events';
 
 import {
     createNativeAgentExecutionRunHostRuntime,
@@ -47,6 +56,102 @@ import {
 afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+});
+
+it.each(['finite', 'retained'] as const)('persists the corrected Pi artifact through the %s native Run adapter', async (kind) => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-pi-corrected-artifact-'));
+    vi.stubEnv('HAPPIER_HOME_DIR', root);
+    reloadConfiguration();
+    const runId = `pi-artifact-${kind}`;
+    const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
+    let sequence = 0;
+    const projector = createPiRuntimeEventProjector();
+    const runtime: AgentRuntime = { sessions: { async open() { return {
+        watch(listener) { listeners.add(listener); return { dispose() { listeners.delete(listener); } }; },
+        async send(request) {
+            const turnId = request.delivery.turnId;
+            const publish = (event: UnsequencedSessionEvent<AgentSessionRuntimeEvent>) => {
+                for (const listener of listeners) listener({ ...event, sequence: ++sequence,
+                    sessionId: 'session-parent', emittedAtMs: sequence } as AgentSessionRuntimeEvent);
+            };
+            publish({ kind: 'input-accepted', inputIds: request.inputIds, delivery: request.delivery });
+            publish({ kind: 'turn-start', turnId, startedBy: 'host' });
+            for (const record of [
+                { type: 'message_start', message: { role: 'assistant', content: [] } },
+                { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Earlier result.\n' }] } },
+                { type: 'tool_execution_start', toolCallId: 'read-1', toolName: 'Read', args: {} },
+                { type: 'message_start', message: { role: 'assistant', content: [] } },
+                { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Draft report' } },
+                { type: 'message_update', assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: 'Corrected report.\n' },
+                    message: { role: 'assistant', content: [{ type: 'text', text: 'Corrected report.\n' }] } },
+                { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Corrected report.\n' }] } },
+                { type: 'message_start', message: { role: 'assistant', content: [] } },
+                { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Artifact delivered.' }] } },
+            ]) {
+                for (const event of projector.project(record, { turnId, agentSessionId: 'native-pi', nowMs: () => sequence + 1 })) {
+                    const { emittedAtMs: _nativeTime, ...fact } = event;
+                    publish(fact);
+                }
+            }
+            publish({ kind: 'turn-complete', turnId });
+            return { status: 'admitted' as const };
+        },
+        async dispose() {},
+    }; } } };
+    const common = {
+        runtime,
+        lease: { pluginId: 'acme.pi', pluginVersion: '1.0.0', agentId: 'acme.pi/default',
+            localAgentId: 'default', occurrenceId: 'pi-artifact-fixture', isCurrent: () => true },
+        options: { cwd: '/repo', runId, scope: 'session_owned' as const, backendId: 'acme.pi/default',
+            permissionMode: 'read_only', start: { intent: 'memory_hints' as const, profileId: 'memory-hints', runClass: 'bounded' as const,
+                retentionPolicy: 'ephemeral' as const } },
+        createSessionContext: ({ services, signal }: Parameters<NativeAgentSessionContextLeaseFactory>[0]) =>
+            createVoiceSessionContextLease({ services, signal, async dispose() {} }),
+    };
+    const host = kind === 'finite'
+        ? createNativeAgentSessionExecutionRunHostRuntime({ ...common, supportsResume: false })
+        : createNativeAgentSessionInteractionHostRuntime({ ...common, sessionCapabilities: { open: ['create'], delivery: ['newTurn'], cancel: false } });
+    const { runtimeId } = await host.provisionRuntime();
+    const ctrl: ExecutionRunBackendController = {
+        kind: 'backend', controllerOccurrenceId: 'pi-artifact-controller', backend: host, backendSupportsResume: false, runtimeId,
+        buffer: '', sidechainStreamBuffer: '', sidechainStreamKey: '', streamWriter: null, cancelled: false,
+        turnCount: 0, turnEpoch: 0, turnInFlight: false, turnCancelReason: null, turnCancelEpoch: null,
+        admittedLiveInterventions: [], admittedLiveInterventionsSignal: null, lastMarkerWriteAtMs: 0,
+        terminalPromise: Promise.resolve(), resolveTerminal() {},
+    };
+    const state: ExecutionRunState = { runId, callId: 'original-call', sidechainId: 'original-sidechain',
+        sessionId: 'session-parent', depth: 1, intent: 'memory_hints', backendTarget: { kind: 'builtInAgent', agentId: 'pi' },
+        backendId: 'pi', instructions: 'Produce the report', permissionMode: 'read_only', retentionPolicy: 'ephemeral',
+        runClass: 'bounded', ioMode: 'request_response', status: 'running', startedAtMs: 1 };
+    const runs = new Map([[runId, state]]);
+    const controllers = new Map([[runId, ctrl]]);
+    const unsubscribe = host.subscribeMessages(createExecutionRunControllerMessageHandler({
+        ctrl, runId, sidechainId: state.sidechainId, ioMode: state.ioMode, computeSidechainStreamText: (text) => text,
+        sendAcp: async () => {}, parentProvider: 'pi', runs, backendSupportsResume: false,
+        writeActivityMarker: async () => {}, getNowMs: () => 2,
+    }));
+    try {
+        await executeBoundedBackendRun({ runId, callId: state.callId, sidechainId: state.sidechainId, startedAtMs: 1,
+            params: state, controllers, runs, sendAcp: async () => {}, parentProvider: 'pi', getNowMs: () => 2, boundedTimeoutMs: null,
+            finishRun: async (id, next, toolResult, structuredMeta) => {
+                await finishExecutionRun({ runId: id, next, toolResult, structuredMeta, runs, controllers,
+                    budgetRegistry: null, parentProvider: 'pi', sendAcp: async () => {}, enqueueMarkerWrite: (_id, write) => write(),
+                    terminalMarkerWritePromises: new Map() });
+            },
+        });
+        const expected = 'Earlier result.\nCorrected report.\nArtifact delivered.';
+        expect(runs.get(runId)).toMatchObject({ status: 'succeeded', latestToolResult: expected });
+        const retained = await readRetainedExecutionRunRecords();
+        expect(retained.find((record) => record.state.runId === runId)?.state).toMatchObject({
+            runId, callId: state.callId, sidechainId: state.sidechainId, latestToolResult: expected,
+        });
+    } finally {
+        unsubscribe();
+        await host.dispose();
+        vi.unstubAllEnvs();
+        reloadConfiguration();
+        await rm(root, { recursive: true, force: true });
+    }
 });
 
 async function createUnexpectedAgentRuntimeSurfaceInvocationContext(): Promise<never> {

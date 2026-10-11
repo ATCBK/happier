@@ -96,6 +96,7 @@ export type CodexAppServerEvent =
       kind: 'transcript-agent-message-committed';
       agentId: string;
       localId: string;
+      turnId?: string;
       body: unknown;
       meta?: Readonly<Record<string, unknown>>;
     }>)

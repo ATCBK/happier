@@ -40,6 +40,45 @@ function canonicalRuntimeEvent(input: Readonly<Record<string, unknown>>): AgentS
 }
 
 describe('projectRuntimeTranscriptEvent', () => {
+  it('durably replaces a Pi draft by identity without dropping an earlier artifact or adding the draft prefix', async () => {
+    const { createPiRuntimeEventProjector } = await import('@happier-dev/plugins-pi/agent/runtime/rpc/events');
+    const { createKeyedStreamedTranscriptBridge } = await import('@/api/session/createKeyedStreamedTranscriptBridge');
+    const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
+    const rows = new Map<string, CommittedAgentMessageBody>();
+    const session = {
+      sessionId: 'session-1',
+      enqueueAgentMessageCommitted: async (_provider: unknown, body: CommittedAgentMessageBody, options: { localId: string }) => {
+        rows.set(options.localId, body);
+        return { persisted: true, delivered: false };
+      },
+    };
+    const bridge = createKeyedStreamedTranscriptBridge({ provider: 'pi', createSessionForStream: () => session });
+    const projector = createPiRuntimeEventProjector();
+    const context = { turnId: 'turn-1', agentSessionId: 'native-pi-session', nowMs: () => 1 };
+    const project = async (record: unknown, turnId = context.turnId) => {
+      for (const event of projector.project(record, { ...context, turnId })) {
+        await projectRuntimeTranscriptEvent({ session, provider: 'pi', runtimeMessageDeltaBridge: bridge,
+          event: canonicalRuntimeEvent({ ...event, sessionId: session.sessionId }) });
+      }
+    };
+    await project({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Earlier artifact. ' }] } });
+    await project({ type: 'tool_execution_start', toolCallId: 'read-1', toolName: 'Read', args: {} });
+    await project({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Draft' } });
+    await project({ type: 'message_update', assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: 'Corrected' },
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Corrected' }] } });
+    await project({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Corrected' }] } });
+    await projectRuntimeTranscriptEvent({ session, provider: 'pi', runtimeMessageDeltaBridge: bridge,
+      event: canonicalRuntimeEvent({ kind: 'turn-complete', turnId: 'turn-1', sessionId: session.sessionId, emittedAtMs: 2 }) });
+    projector.resetTurn();
+    await project({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Next turn artifact' }] } }, 'turn-2');
+    expect([...rows.values()].filter((body) => body.type === 'message')).toEqual([
+      { type: 'message', message: 'Earlier artifact. ' },
+      { type: 'message', message: 'Corrected' },
+      { type: 'message', message: 'Next turn artifact' },
+    ]);
+    bridge.clear();
+  });
+
   it('retains native MCP counts only with the host selected binding identities and removes native names', async () => {
     const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
     const capture = createCommittedAgentMessageCapture();
