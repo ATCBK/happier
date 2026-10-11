@@ -143,6 +143,23 @@ Checklist ids are treated as stable API between daemon and app:
 - `machine-details`
 - `resume.<agentId>`
 
+### Native resume identity publication (development source)
+
+A newly allocated native id is not necessarily a resumable session. Claude's
+`SessionStart` can precede its transcript, and Codex's `thread/start` can precede
+native rollout materialization. The CLI's shared
+`session/metadata/sessionIdentityPublication.ts` rule preserves explicit existing
+resumes but publishes fresh identities only with Agent-native resume evidence:
+a matching Claude transcript, or an accepted Codex turn/native attachment
+materialization. Observed ids remain available inside the live runner for hook
+and transcript correlation while provisional.
+
+This changes publication timing, not the recorded identity format or resume
+failure policy. Established identities are retained; unavailable native state
+still fails closed without starting a replacement conversation or consuming the
+queued prompt. These are development-source contracts, not loaded-runtime or
+release validation claims.
+
 ### ACP resume (static policy, runtime negotiation)
 
 We do **not** launch an ACP subprocess merely to probe `loadSession` support in normal UI/CLI flows.

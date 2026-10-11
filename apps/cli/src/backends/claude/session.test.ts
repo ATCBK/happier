@@ -642,7 +642,7 @@ describe('Session', () => {
     }
   });
 
-  it('persists an initial Claude-reported session id before its transcript is reachable', async () => {
+  it('keeps a fresh Claude session id provisional until its transcript is reachable', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'happier-claude-session-'));
     vi.stubEnv('CLAUDE_CONFIG_DIR', tempDir);
     const transcriptDir = join(tempDir, 'projects', 'project-a');
@@ -674,26 +674,32 @@ describe('Session', () => {
       session.onSessionFound('sess_missing_initial', hookWithTranscript(transcriptPath));
       await session.drainCriticalMetadataWrites({ timeoutMs: 500 });
 
-      expect(updateMetadata).toHaveBeenCalledTimes(1);
-      expect(metadata).toEqual(expect.objectContaining({
-        claudeSessionId: 'sess_missing_initial',
-      }));
+      expect(metadata.claudeSessionId).toBeUndefined();
       expect(metadata.claudeTranscriptPath).toBeUndefined();
-      expect(reportSessionMetadataToDaemon).toHaveBeenCalledWith({
-        sessionId: 'happy-session-1',
-        metadata: expect.objectContaining({
-          claudeSessionId: 'sess_missing_initial',
-        }),
-      });
+      expect(reportSessionMetadataToDaemon).not.toHaveBeenCalled();
       expect(session.sessionId).toBe('sess_missing_initial');
       expect(session.transcriptPath).toBe(transcriptPath);
+
+      writeFileSync(transcriptPath, '', 'utf8');
+      session.onSessionFound('sess_missing_initial', hookWithTranscript(transcriptPath));
+      await session.drainCriticalMetadataWrites({ timeoutMs: 500 });
+      expect(metadata.claudeSessionId).toBeUndefined();
+
+      writeClaudeTranscriptInit(transcriptPath, 'sess_missing_initial');
+      session.onSessionFound('sess_missing_initial', hookWithTranscript(transcriptPath));
+      await session.drainCriticalMetadataWrites({ timeoutMs: 500 });
+      expect(metadata.claudeSessionId).toBe('sess_missing_initial');
+      expect(metadata.claudeTranscriptPath).toBe(transcriptPath);
+      expect(reportSessionMetadataToDaemon).toHaveBeenCalledWith({
+        sessionId: 'happy-session-1', metadata,
+      });
     } finally {
       session.cleanup();
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  it('persists a changed Claude-reported session id and clears stale transcript metadata until the new transcript is reachable', async () => {
+  it('preserves the established resume identity while a changed Claude session remains provisional', async () => {
     let metadata: Metadata = createMetadataStub({
       startedBy: 'daemon',
       claudeSessionId: 'sess_reachable',
@@ -737,19 +743,11 @@ describe('Session', () => {
       session.onSessionFound('sess_missing', hookWithTranscript('/tmp/sess_missing.jsonl'));
       await session.drainCriticalMetadataWrites({ timeoutMs: 500 });
 
-      expect(updateMetadata).toHaveBeenCalledTimes(1);
-      expect(metadata).toEqual(expect.objectContaining({
-        claudeSessionId: 'sess_missing',
-      }));
-      expect(metadata).not.toHaveProperty('claudeTranscriptPath');
-      expect(metadata).not.toHaveProperty('claudeLastAssistantUuid');
-      expect(metadata).not.toHaveProperty('directSessionV1');
-      expect(reportSessionMetadataToDaemon).toHaveBeenCalledWith({
-        sessionId: 'happy-session-1',
-        metadata: expect.objectContaining({
-          claudeSessionId: 'sess_missing',
-        }),
-      });
+      expect(metadata.claudeSessionId).toBe('sess_reachable');
+      expect(metadata.claudeTranscriptPath).toBe('/tmp/sess_reachable.jsonl');
+      expect(metadata.claudeLastAssistantUuid).toBe('asst_stale');
+      expect(metadata.directSessionV1?.remoteSessionId).toBe('sess_reachable');
+      expect(reportSessionMetadataToDaemon).not.toHaveBeenCalled();
       expect(session.sessionId).toBe('sess_missing');
       expect(session.transcriptPath).toBe('/tmp/sess_missing.jsonl');
     } finally {
@@ -794,17 +792,9 @@ describe('Session', () => {
       session.onSessionFound('sess_candidate', hookWithTranscript(transcriptPath));
       await session.drainCriticalMetadataWrites({ timeoutMs: 500 });
 
-      expect(updateMetadata).toHaveBeenCalledTimes(1);
-      expect(metadata).toEqual(expect.objectContaining({
-        claudeSessionId: 'sess_candidate',
-      }));
-      expect(metadata).not.toHaveProperty('claudeTranscriptPath');
-      expect(reportSessionMetadataToDaemon).toHaveBeenCalledWith({
-        sessionId: 'happy-session-1',
-        metadata: expect.objectContaining({
-          claudeSessionId: 'sess_candidate',
-        }),
-      });
+      expect(metadata.claudeSessionId).toBe('sess_reachable');
+      expect(metadata.claudeTranscriptPath).toBe('/tmp/sess_reachable.jsonl');
+      expect(reportSessionMetadataToDaemon).not.toHaveBeenCalled();
       expect(session.sessionId).toBe('sess_candidate');
       expect(session.transcriptPath).toBe(transcriptPath);
     } finally {
@@ -845,17 +835,9 @@ describe('Session', () => {
       session.onSessionFound('sess_candidate', hookWithTranscript(transcript.transcriptPath));
       await session.drainCriticalMetadataWrites({ timeoutMs: 500 });
 
-      expect(updateMetadata).toHaveBeenCalledTimes(1);
-      expect(metadata).toEqual(expect.objectContaining({
-        claudeSessionId: 'sess_candidate',
-      }));
-      expect(metadata).not.toHaveProperty('claudeTranscriptPath');
-      expect(reportSessionMetadataToDaemon).toHaveBeenCalledWith({
-        sessionId: 'happy-session-1',
-        metadata: expect.objectContaining({
-          claudeSessionId: 'sess_candidate',
-        }),
-      });
+      expect(metadata.claudeSessionId).toBe('sess_reachable');
+      expect(metadata.claudeTranscriptPath).toBe('/tmp/sess_reachable.jsonl');
+      expect(reportSessionMetadataToDaemon).not.toHaveBeenCalled();
       expect(session.sessionId).toBe('sess_candidate');
       expect(session.transcriptPath).toBe(transcript.transcriptPath);
     } finally {
@@ -901,17 +883,9 @@ describe('Session', () => {
       session.onSessionFound('sess_candidate', hookWithTranscript(transcriptPath));
       await session.drainCriticalMetadataWrites({ timeoutMs: 500 });
 
-      expect(updateMetadata).toHaveBeenCalledTimes(1);
-      expect(metadata).toEqual(expect.objectContaining({
-        claudeSessionId: 'sess_candidate',
-      }));
-      expect(metadata).not.toHaveProperty('claudeTranscriptPath');
-      expect(reportSessionMetadataToDaemon).toHaveBeenCalledWith({
-        sessionId: 'happy-session-1',
-        metadata: expect.objectContaining({
-          claudeSessionId: 'sess_candidate',
-        }),
-      });
+      expect(metadata.claudeSessionId).toBe('sess_reachable');
+      expect(metadata.claudeTranscriptPath).toBe('/tmp/sess_reachable.jsonl');
+      expect(reportSessionMetadataToDaemon).not.toHaveBeenCalled();
     } finally {
       session.cleanup();
       rmSync(tempDir, { recursive: true, force: true });
@@ -956,17 +930,9 @@ describe('Session', () => {
       session.onSessionFound('sess_candidate', hookWithTranscript(transcriptPath));
       await session.drainCriticalMetadataWrites({ timeoutMs: 500 });
 
-      expect(updateMetadata).toHaveBeenCalledTimes(1);
-      expect(metadata).toEqual(expect.objectContaining({
-        claudeSessionId: 'sess_candidate',
-      }));
-      expect(metadata).not.toHaveProperty('claudeTranscriptPath');
-      expect(reportSessionMetadataToDaemon).toHaveBeenCalledWith({
-        sessionId: 'happy-session-1',
-        metadata: expect.objectContaining({
-          claudeSessionId: 'sess_candidate',
-        }),
-      });
+      expect(metadata.claudeSessionId).toBe('sess_reachable');
+      expect(metadata.claudeTranscriptPath).toBe('/tmp/sess_reachable.jsonl');
+      expect(reportSessionMetadataToDaemon).not.toHaveBeenCalled();
       expect(session.sessionId).toBe('sess_candidate');
       expect(session.transcriptPath).toBe(transcriptPath);
     } finally {
@@ -1026,7 +992,7 @@ describe('Session', () => {
     }
   });
 
-  it('persists id-only Claude-reported session ids without trusting a native transcript path before the file exists', async () => {
+  it('keeps id-only Claude discoveries provisional before the native transcript exists', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'happier-claude-session-'));
     vi.stubEnv('CLAUDE_CONFIG_DIR', tempDir);
     const transcriptPath = join(getProjectPath('/tmp', tempDir), 'sess_legacy_early.jsonl');
@@ -1056,16 +1022,9 @@ describe('Session', () => {
       session.onSessionFound('sess_legacy_early');
       await session.drainCriticalMetadataWrites({ timeoutMs: 500 });
 
-      expect(metadata).toEqual(expect.objectContaining({
-        claudeSessionId: 'sess_legacy_early',
-      }));
+      expect(metadata.claudeSessionId).toBeUndefined();
       expect(metadata.claudeTranscriptPath).toBeUndefined();
-      expect(reportSessionMetadataToDaemon).toHaveBeenCalledWith({
-        sessionId: 'happy-session-1',
-        metadata: expect.objectContaining({
-          claudeSessionId: 'sess_legacy_early',
-        }),
-      });
+      expect(reportSessionMetadataToDaemon).not.toHaveBeenCalled();
       expect(session.transcriptPath).toBe(transcriptPath);
     } finally {
       session.cleanup();
@@ -1201,6 +1160,7 @@ describe('Session', () => {
       startedBy: 'daemon',
       claudeSessionId: 'sess_reachable',
       claudeTranscriptPath: '/tmp/sess_reachable.jsonl',
+      claudeLastAssistantUuid: 'previous-session-anchor',
     });
     const reportSessionMetadataToDaemon = vi.fn(async () => {});
     const updateMetadata = vi.fn(async (updater: (metadata: Metadata) => Metadata) => {
@@ -1226,21 +1186,22 @@ describe('Session', () => {
     try {
       session.onSessionFound('sess_delayed', hookWithTranscript(transcriptPath));
       await session.drainCriticalMetadataWrites({ timeoutMs: 500 });
-      expect(updateMetadata).toHaveBeenCalledTimes(1);
       expect(metadata).toEqual(expect.objectContaining({
-        claudeSessionId: 'sess_delayed',
+        claudeSessionId: 'sess_reachable',
       }));
-      expect(metadata.claudeTranscriptPath).toBeUndefined();
+      expect(metadata.claudeTranscriptPath).toBe('/tmp/sess_reachable.jsonl');
+      expect(metadata.claudeLastAssistantUuid).toBe('previous-session-anchor');
 
       writeClaudeTranscriptInit(transcriptPath, 'sess_delayed');
       session.onSessionFound('sess_delayed', hookWithTranscript(transcriptPath));
       await session.drainCriticalMetadataWrites({ timeoutMs: 500 });
 
-      expect(updateMetadata).toHaveBeenCalledTimes(2);
+      expect(updateMetadata).toHaveBeenCalledTimes(1);
       expect(metadata).toEqual(expect.objectContaining({
         claudeSessionId: 'sess_delayed',
         claudeTranscriptPath: transcriptPath,
       }));
+      expect(metadata.claudeLastAssistantUuid).toBeUndefined();
       expect(reportSessionMetadataToDaemon).toHaveBeenCalledWith({
         sessionId: 'happy-session-1',
         metadata: expect.objectContaining({
