@@ -6,6 +6,7 @@ import { Typography } from '@/constants/Typography';
 import type { SelectionListOption, SelectionListSectionDescriptor } from '@/components/ui/selectionList';
 import { Text } from '@/components/ui/text/Text';
 import { SurfaceStateCard, type SurfaceStateKind } from '@/components/ui/surfaces/SurfaceStateCard';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { t } from '@/text';
 import { ShareGrantRow, ShareLevelControl, ShareRowAction } from '../ShareGrantRow';
 import type { ShareSheetAdapter } from '../shareSheetTypes';
@@ -69,12 +70,14 @@ export function createMachineShareAdapter(input: Readonly<{
             const own = controller.viewerRow;
             const leading: SelectionListSectionDescriptor[] = [{ kind: 'static', id: 'machine-trust', options: [{
                 id: 'machine-trust', label: t(own ? 'machines.sharing.recipientDescription' : 'machines.sharing.description', { machine }), disabled: true,
-                content: <MachineShareTrustDisclosure idPrefix={context.idPrefix}
+                // The block sits at the rows' inset, so its edge lines up with the people under it in the
+                // page section and in the sheet alike (lab m-share A/S), never flush with the sheet's edge.
+                content: <SectionContentRow showDivider={false}><MachineShareTrustDisclosure idPrefix={context.idPrefix}
                     lead={t(own ? 'machines.sharing.recipientTrustLead' : 'machines.sharing.trustedOsLead', { machine })}
                     detail={t(own ? 'machines.sharing.recipientTrustDetail' : 'machines.sharing.trustedOsDetail', { machine })}
                     // What Manage adds matters only to someone who can give it.
                     legend={controller.response?.canManage ? [{ label: t('machines.sharing.manage'), text: t('machines.sharing.manageHelp', { machine }) }] : []}
-                    notes={controller.response?.access.resourceMode === 'plain' ? [t('machines.sharing.plain')] : []} />,
+                    notes={controller.response?.access.resourceMode === 'plain' ? [t('machines.sharing.plain')] : []} /></SectionContentRow>,
             }] }];
             // Access that comes through a Team or Group names it; direct access needs no line.
             const through = own ? controller.inherited[0] : undefined;
