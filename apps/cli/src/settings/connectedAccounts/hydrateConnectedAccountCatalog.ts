@@ -41,7 +41,7 @@ export function refreshActiveConnectedAccountCatalog(input: Readonly<{
     }
   }
   let work!: Promise<ConnectedAccountCatalogSnapshotV1>;
-  work = (async () => {
+  work = (async (): Promise<ConnectedAccountCatalogSnapshotV1> => {
     while (true) {
       if (!context) reloadAfterPending.delete(workKey);
       let catalog: ConnectedAccountCatalogSnapshotV1;

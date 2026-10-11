@@ -280,6 +280,13 @@ it.each(['applied', 'conflict'] as const)('cleans transferred source and retaine
     if (path.endsWith('/transfer')) return { status: 200, data: control };
     if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: raw }, version: settingsVersion } };
     if (path === '/v1/account/entity-rows/prompt-library') return { status: 404, data: {} };
+    // History admission captures every private catalog before deciding which
+    // retained roots may be removed. This fixture has only transferred Profiles.
+    if (['/v1/account/entity-rows/provider-connections', '/v1/account/entity-rows/acp',
+      '/v1/account/entity-rows/mcp', '/v1/account/entity-rows/connected-accounts/configurations',
+      '/v1/account/entity-rows/connected-accounts/purposes', '/v1/account/entity-rows/connected-metadata/presentation',
+      '/v1/account/entity-rows/connected-metadata/acknowledgements', '/v1/account/entity-rows/notification-channels',
+      '/v1/account/entity-rows/remote-hosts'].includes(path)) return { status: 404, data: {} };
     if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [{
       version: 7, contentKind: 'plain', byteLength: 100, createdAt: '2026-01-01T00:00:00.000Z' }] } };
     if (path === '/v2/account/settings/history/7') return { status: 200, data: {

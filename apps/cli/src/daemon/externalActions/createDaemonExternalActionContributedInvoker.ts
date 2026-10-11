@@ -285,12 +285,13 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
       ) {
         executionResult = targetActionReplayFailure('approval_stale');
       } else {
+        const grant = origin.externalActionExecutionAuthorization.binding.grant;
         const authorization = origin.externalActionExecutionAuthorization;
         const externalActionCredential = Object.freeze({
           accountId: origin.accountId,
           principalId: origin.principalId,
           credentialId: origin.credentialId,
-          grant: authorization.binding.grant,
+          grant,
         });
         const authorizedTarget = Object.freeze({ ...authorization.binding.target });
         const externalActionExecutionAuthorization = Object.freeze({

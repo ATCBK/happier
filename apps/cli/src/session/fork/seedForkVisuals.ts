@@ -115,19 +115,23 @@ export async function seedForkVisualCopies(params: SeedParams): Promise<readonly
     const mutation = createSessionBoardActionDeps({ credentials: params.credentials }).sessionBoardAction;
     const copiedByOrigin = new Map<string, { entry: SessionForkVisualCopyV1; revision: string | null }>();
     const lineageIndexBySessionId = new Map(segments.map((segment, index) => [segment.sessionId, index]));
-    const importRows = new Map<string, { lineageIndex: number; sourceSeq: number; item: {
+    const importRows = new Map<string, { lineageIndex: number; sourceSeq: number; originKey: string;
+        sourceAddress: { serverId: string; sessionId: string }; item: {
         id: string; content: ReturnType<typeof sealSessionStoredContent>;
         surfaceItemReference?: { v: 1; itemId: string; itemRevision: string; sourceAddress: { serverId: string; sessionId: string } } } }>();
     for (const { message, rows, segment, crypto: sourceCrypto } of candidates) {
         const originMeta = SessionForkVisualOriginV1Schema.safeParse(message.meta?.forkVisualOriginV1);
-        const originAddress = originMeta.success ? originMeta.data : { serverId: configuration.activeServerId, sessionId: segment.sessionId };
+        const originAddress = originMeta.success
+            ? { serverId: originMeta.data.serverId, sessionId: originMeta.data.sessionId }
+            : { serverId: configuration.activeServerId, sessionId: segment.sessionId };
         const reference = resolveTranscriptSessionBoardItemReferenceV1({ toolName: message.tool.name, state: message.tool.state,
             input: message.tool.input, result: message.tool.result, address: originAddress });
         if (!reference) continue;
         const origin = { originServerId: reference.address.serverId, originSessionId: reference.address.sessionId, originItemId: reference.itemId };
         const key = JSON.stringify(origin);
         let settled = copiedByOrigin.get(key);
-        if (!settled) {
+        if (!settled || settled.entry.status === 'not_copied') {
+            const existingCopyIndex = settled ? copies.indexOf(settled.entry) : -1;
             const itemId = createStableSpawnNonce('session.fork.visual', { childSessionId: params.childSessionId, ...origin });
             let entry: SessionForkVisualCopyV1 = { ...origin, status: 'not_copied' };
             let revision: string | null = null;
@@ -167,7 +171,8 @@ export async function seedForkVisualCopies(params: SeedParams): Promise<readonly
             }
             settled = { entry, revision };
             copiedByOrigin.set(key, settled);
-            copies.push(entry);
+            if (existingCopyIndex >= 0) copies[existingCopyIndex] = entry;
+            else copies.push(entry);
         }
         for (const row of rows) {
             const original = SessionForkVisualOriginV1Schema.safeParse(record(row.raw.meta)?.forkVisualOriginV1);
@@ -180,17 +185,20 @@ export async function seedForkVisualCopies(params: SeedParams): Promise<readonly
             const lineageIndex = (forkVisualOriginV1.serverId === configuration.activeServerId
                 ? lineageIndexBySessionId.get(forkVisualOriginV1.sessionId) : undefined)
                 ?? lineageIndexBySessionId.get(segment.sessionId)!;
-            importRows.set(id, { lineageIndex, sourceSeq: forkVisualOriginV1.sourceSeq, item: { id, content: sealSessionStoredContent({ ...childCrypto, idempotencyKey: id,
+            importRows.set(id, { lineageIndex, sourceSeq: forkVisualOriginV1.sourceSeq, originKey: key,
+                sourceAddress: reference.address, item: { id, content: sealSessionStoredContent({ ...childCrypto, idempotencyKey: id,
                 payload: StrictJsonValueSchema.parse({ ...row.raw, meta: { ...record(row.raw.meta), forkVisualOriginV1 } }) }),
-                ...(settled.entry.status === 'copied' && settled.revision ? { surfaceItemReference: {
-                    v: 1 as const, itemId: settled.entry.itemId, itemRevision: settled.revision, sourceAddress: reference.address,
-                } } : {}),
             } });
         }
     }
     try {
         // Historical imports already own local-id deduplication and never dispatch a turn.
-        const items = [...importRows.values()].sort((a, b) => b.lineageIndex - a.lineageIndex || a.sourceSeq - b.sourceSeq).map(row => row.item);
+        const items = [...importRows.values()].sort((a, b) => b.lineageIndex - a.lineageIndex || a.sourceSeq - b.sourceSeq).map(row => {
+            const settled = copiedByOrigin.get(row.originKey)!;
+            return { ...row.item, ...(settled.entry.status === 'copied' && settled.revision ? { surfaceItemReference: {
+                v: 1 as const, itemId: settled.entry.itemId, itemRevision: settled.revision, sourceAddress: row.sourceAddress,
+            } } : {}) };
+        });
         await importHistoricalSessionTranscript({ token: params.credentials.token, sessionId: params.childSessionId, items });
     } catch (error) {
         logger.debug('[fork] Visual transcript seed unavailable', { childSessionId: params.childSessionId, error });
@@ -228,7 +236,7 @@ export async function seedForkVisualsBestEffort(params: Readonly<{
             cutoffSeqInclusive: typeof fork.parentCutoffSeqInclusive === 'number' ? fork.parentCutoffSeqInclusive : params.cutoffSeqInclusive });
         await updateSessionMetadataWithRetry({ token: params.credentials.token, credentials: params.credentials, sessionId: params.childSessionId,
             rawSession: childRaw, accountEncryptionCurrentness: currentness, updater: current => {
-                const existingFork = current.forkV1;
+                const existingFork = record(current.forkV1);
                 if (!existingFork || existingFork.parentSessionId !== params.sourceSessionId || Array.isArray(existingFork.visualCopies)) return current;
                 return { ...current, forkV1: { ...existingFork, visualCopies: [...copies] } };
             } });

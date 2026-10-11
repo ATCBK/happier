@@ -34,7 +34,7 @@ function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = 
   entry.refreshing = true;
   beginActiveMcpServerCatalogRefresh({ scopeKey, lifetimeToken });
   let work!: Promise<McpServerCatalogSnapshotV1>;
-  work = (async () => {
+  work = (async (): Promise<McpServerCatalogSnapshotV1> => {
     let requestInput: RefreshInput = afterChange ? { credentials: input.credentials } : input;
     while (true) {
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };

@@ -305,7 +305,7 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
     // HTTP projection retains this exact private Account facet. Its symbol is
     // not an authorization input and never enters the public carrier schema.
     const projection = { ...authorization.requesterAccountProjection! };
-    const carrier: ExternalActionExecutionAuthorizationV1 = Object.defineProperties({}, {
+    const carrier: ExternalActionExecutionAuthorizationV1 = Object.defineProperties({ ...authorization }, {
       ...Object.getOwnPropertyDescriptors(authorization),
       requesterAccountProjection: { value: projection, enumerable: false },
     });

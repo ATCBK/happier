@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,11 @@ import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 
 import { evaluatePluginAuthorRuntimeStagingSource } from './runtimeStagingSource';
+import { evaluatePluginDevelopmentCandidate } from './sourceModule';
+import { createPluginActivationSourceResolver } from '../runtime/pluginActivationSource';
+import { createBundledActivationSourceResolver } from '../runtime/bundledActivationSource';
+import { bindPluginRuntimeSourceAuthority } from '../runtime/sourceAuthority';
+import { activateContributionModule } from '../runtime/lifecycle/activation/activateContributionModule';
 
 function bundledPluginRoot(packageName: string): string {
   return resolve(
@@ -96,6 +101,54 @@ async function createSessionRunnerFixture(input: Readonly<{
 }
 
 describe('plugin author runtime staging authority', () => {
+  it('activates a development Session runner from the same admitted candidate scope', async () => {
+    const pluginId = 'example.development-agent';
+    const fixture = await createSessionRunnerFixture({ pluginId });
+    let activation: Awaited<ReturnType<typeof activateContributionModule>> | undefined;
+    try {
+      const rootPath = await realpath(fixture.rootPath);
+      const authority = bindPluginRuntimeSourceAuthority({
+        custody: { kind: 'development', registeredRootId: rootPath },
+        resolvedRoot: rootPath,
+        observedRevision: 1,
+      });
+      if (authority.kind !== 'development') throw new Error('Expected development source authority');
+      const owned = await evaluatePluginDevelopmentCandidate({ locator: rootPath, sourceAuthority: authority });
+      const graphs = new Map([[pluginId, owned.graph]]);
+      const resolveSource = createPluginActivationSourceResolver({
+        committed: null,
+        resolveBundledActivationSource: createBundledActivationSourceResolver({ bundledPackageNames: [] }),
+        preparedDevelopmentActivationGraphsByPluginId: graphs,
+        activatedManifestAuthorityByPluginId: new Map(),
+      });
+      const source = resolveSource({
+        provenance: 'external', source: { kind: 'path' }, pluginId,
+        manifestPath: fixture.entryPath, daemonEntryPath: fixture.entryPath,
+        sourceSpec: { kind: 'path', locator: rootPath, trustPolicy: 'local_trusted', installPolicy: 'link' },
+        manifest: owned.evaluated.manifest,
+      });
+      if (source?.kind !== 'prepared') throw new Error('Expected the admitted development source');
+      expect(source.sourceAuthority).toBe(authority);
+      activation = await activateContributionModule({
+        pluginId, occurrenceId: 'development-agent:1', manifest: owned.evaluated.manifest,
+        moduleNamespace: source.module,
+        isOccurrenceCurrent: () => graphs.get(pluginId) === owned.graph,
+        forceActivation: true,
+        resolveRelativeModule: source.resolveRelativeModule,
+      });
+      expect(activation.status).toBe('active');
+      expect(activation.diagnostics).toEqual([]);
+      expect(activation.validatedAgentSessionRunnerFactories).toEqual([expect.objectContaining({
+        localAgentId: 'claude', normalizedModulePath: 'src/runner.ts', loadMode: 'source-ts',
+        locator: expect.objectContaining({ module: './runner', export: 'createClaudeAgentRuntime' }),
+      })]);
+      expect(source.sourceAuthority).not.toHaveProperty('immutableGenerationId');
+    } finally {
+      await activation?.dispose();
+      await fixture.dispose();
+    }
+  });
+
   it('stages the real Antigravity source graph through the source importer when its installed SDK dist lacks the OAuth profile', async () => {
     const rootPath = await mkdtemp(join(tmpdir(), 'happier-antigravity-source-staging-'));
     const sdkRoot = resolve(ANTIGRAVITY_PLUGIN_ROOT, '../../plugin-sdk');

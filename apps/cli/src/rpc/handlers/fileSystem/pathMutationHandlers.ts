@@ -57,7 +57,7 @@ export type FilesystemMutationDeps = Readonly<{
 export type FilesystemMutationActionIngress = Readonly<{
   actionExecutor?: RpcActionExecutor;
   /** Late binding to the daemon's current full Action admission owner. */
-  resolveMutationActionExecutor?: () => RpcActionExecutor | null;
+  resolveMutationActionExecutor?: () => RpcActionExecutor<FilesystemMutationActionId> | null;
   mutationMachineId?: string;
 }>;
 
@@ -317,7 +317,7 @@ export function registerFilesystemMutationActionHandlers(
       return { ok: false, errorCode: 'filesystem_action_owner_unavailable', error: 'The current filesystem Action owner is unavailable' };
     },
   };
-  registerActionSpecRpcHandlers({
+  registerActionSpecRpcHandlers<FilesystemMutationActionId>({
     rpcHandlerManager, actionIds,
     ...(deps.mutationMachineId ? { targetMachineId: deps.mutationMachineId, defaultMachineTarget: true } : {}),
     resolveActionExecutor: ({ actionId, isAlias, input }) => {

@@ -34,16 +34,16 @@ export function projectWorkspaceSyncPhysicalContextFromActionContext(context: Rp
     });
 }
 
-export type RpcActionExecutor = Readonly<{
+export type RpcActionExecutor<TActionId extends ActionId = ActionId> = Readonly<{
     execute: (
-        actionId: ActionId,
+        actionId: TActionId,
         input: unknown,
         context?: RpcActionExecutorContext,
     ) => Promise<ActionExecuteResult>;
 }>;
 
-export type RpcActionDispatchRequest = HostRequesterContext & Readonly<{
-    actionId: ActionId;
+export type RpcActionDispatchRequest<TActionId extends ActionId = ActionId> = HostRequesterContext & Readonly<{
+    actionId: TActionId;
     input: unknown;
     defaultSessionId?: string | null;
     serverId?: string | null;
@@ -55,7 +55,7 @@ export type RpcActionDispatchRequest = HostRequesterContext & Readonly<{
     rpcSessionAuthorization?: ActionExecutorContext['rpcSessionAuthorization'];
     runtimeAccountId?: ActionExecutorContext['runtimeAccountId'];
     externalActionExecutionAuthorization?: ActionExecutorContext['externalActionExecutionAuthorization'];
-    executor?: RpcActionExecutor;
+    executor?: RpcActionExecutor<TActionId>;
     executorParams?: CliActionExecutorParams;
 }>;
 
@@ -237,7 +237,7 @@ export function buildActionExecutorDepsForRpc(
     return params.executorParams;
 }
 
-async function resolveRpcActionExecutor(params: RpcActionDispatchRequest): Promise<RpcActionExecutor> {
+async function resolveRpcActionExecutor<TActionId extends ActionId>(params: RpcActionDispatchRequest<TActionId>): Promise<RpcActionExecutor<TActionId>> {
     const requester = params.callerInputAuthorization?.requesterAccountExecutor;
     if (requester) return requester;
     if (params.executor) {
@@ -250,8 +250,8 @@ async function resolveRpcActionExecutor(params: RpcActionDispatchRequest): Promi
     return module.createCliActionExecutor(buildActionExecutorDepsForRpc({ executorParams: params.executorParams }));
 }
 
-export async function dispatchActionFromRpc(
-    params: RpcActionDispatchRequest,
+export async function dispatchActionFromRpc<TActionId extends ActionId>(
+    params: RpcActionDispatchRequest<TActionId>,
 ): Promise<ActionExecuteResult> {
     const executor = await resolveRpcActionExecutor(params);
     return await executor.execute(

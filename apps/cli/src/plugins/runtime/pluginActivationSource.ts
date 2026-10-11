@@ -18,6 +18,7 @@ import type { PluginActivationSource } from './activationSources';
 import type { ActivationTarget } from './lifecycle/activation/targets';
 import {
     loadPluginModule,
+    loadVerifiedPluginModule,
     resolvePluginModuleCandidatePaths,
     resolvePluginModuleLoadMode,
 } from './loadPluginModule';
@@ -62,7 +63,11 @@ export function createPluginActivationSourceResolver(deps: Readonly<{
                     graph: {
                         rootPath: development.rootPath,
                         entryPath: development.entryPath,
-                        generationScope: development.candidateScope,
+                        loadModule: (entryPath) => loadVerifiedPluginModule({
+                            entryPath,
+                            loadMode: 'source-ts',
+                            generationScope: development.candidateScope,
+                        }),
                     },
                     module,
                 }),

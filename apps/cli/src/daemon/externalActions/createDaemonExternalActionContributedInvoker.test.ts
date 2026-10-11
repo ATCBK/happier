@@ -1511,6 +1511,8 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       binding: {
         serverIdentityId: 'server-external',
         accountId: 'account-1',
+        custodianAccountId: 'account-1',
+        installationId: 'machine-installation-1',
         principalId: 'principal-1',
         credentialId: '11111111-1111-4111-8111-111111111111',
         machineId: 'machine-local',

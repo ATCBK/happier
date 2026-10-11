@@ -53,7 +53,7 @@ function refreshCapturedProfileCatalog(input: Parameters<typeof refreshActivePro
       : commitActiveProfileCatalog({ scopeKey, lifetimeToken, catalog });
   };
   let work!: Promise<ProfileCatalogSnapshotV1>;
-  work = (async () => {
+  work = (async (): Promise<ProfileCatalogSnapshotV1> => {
     while (true) {
       if (!context) reloadAfterPending.delete(key);
       let catalog: ProfileCatalogSnapshotV1;

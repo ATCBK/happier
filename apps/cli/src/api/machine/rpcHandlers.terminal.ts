@@ -56,7 +56,7 @@ type TerminalByteStreamBridge = Readonly<{
 }>;
 
 type TerminalBridgeSessionManager = TerminalPtySessionManager & TerminalByteStreamBridge;
-type ProjectTerminalRuntime = ProjectFiniteActionRuntime & Readonly<{
+export type ProjectTerminalRuntime = ProjectFiniteActionRuntime & Readonly<{
   operationRuntime: Pick<HostActionOperationRuntime, 'observeExecution' | 'waitForProjectTerminalAttachment'> & Readonly<{
     runner: Pick<HostActionOperationRuntime['runner'], 'waitForTerminal'>;
   }>;
@@ -414,7 +414,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
       }
       const plan = prepared.plan;
       const base = launchProcess ?? resolveTerminalShell(runtime.hostEnvironment ?? env, platform);
-      const hostEnvironment: NodeJS.ProcessEnv = { ...(runtime.hostEnvironment ?? env), ...('env' in base ? base.env : {}), ...plan.configEnvironment };
+      const hostEnvironment: NodeJS.ProcessEnv = { ...(runtime.hostEnvironment ?? env), ...launchProcess?.env, ...plan.configEnvironment };
       const launchEnv: Record<string, string> = {};
       for (const [key, value] of Object.entries(hostEnvironment)) if (value !== undefined) launchEnv[key] = value;
       const projectLaunch = createProjectNativeLaunchAdmission({ preparation, hostEnvironment, platform,

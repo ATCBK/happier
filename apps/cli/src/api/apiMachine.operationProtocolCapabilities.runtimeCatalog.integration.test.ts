@@ -5,6 +5,9 @@ import { createMachineContentCodec } from '@/api/machine/machineStoredContent';
 
 import { ApiMachineClient } from './apiMachine';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
+import { MachineUpdateStateRequestSchema } from '@happier-dev/protocol/machines/metadataUpdate';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 
 function createMachine(): Machine {
   return {
@@ -445,13 +448,15 @@ describe('ApiMachineClient operation protocol capability publication', () => {
     };
     const client = new ApiMachineClient('token', machine);
     expect(machine.daemonState?.peerMediation?.iroh).toBeUndefined();
-    const emitWithAck = vi.fn(async (event: string, payload: { daemonState?: string }) => event === 'machine-update-state'
-      ? { result: 'success', version: 1, daemonState: payload.daemonState }
+    const emitWithAck = vi.fn(async (event: string, payload: unknown) => event === 'machine-update-state'
+      ? { result: 'success', version: 1, daemonState: MachineUpdateStateRequestSchema.parse(payload).daemonState }
       : { v: 1, result: 'success', revision: 4 });
-    (client as unknown as { socket: unknown }).socket = {
-      connected: true,
-      timeout: vi.fn(() => ({ emitWithAck })),
-    };
+    const socket = createApiSessionSocketStub({ connected: true,
+      emitWithAck: (event, payload) => emitWithAck(event, payload),
+    });
+    Reflect.set(client, 'socket', socket);
+    Reflect.set(client, 'activeTransportGeneration', 1);
+    Reflect.apply(Reflect.get(client, 'installSocketEventHandlers'), client, [socket, 1]);
 
     await expect(client.updateDaemonState((state) => ({
       ...state!,
@@ -462,6 +467,29 @@ describe('ApiMachineClient operation protocol capability publication', () => {
       'machine-update-operation-protocol-capabilities',
       { machineId: 'machine-1', capabilities: {} },
     );
+
+    // Home may clear the stored state in the successful CAS acknowledgement.
+    // That is an endpoint withdrawal, not a failed publication or stale state.
+    emitWithAck.mockImplementation(async (event: string) => event === 'machine-update-state'
+      ? { result: 'success', version: 2, daemonState: null }
+      : { v: 1, result: 'success', revision: 5 });
+    await expect(client.updateDaemonState(() => ({ status: 'running' }))).resolves.toBe('published');
+    expect(machine.daemonState).toBeNull();
+    expect(machine.daemonStateVersion).toBe(2);
+    // A newer canonical Home echo also represents absence, without decoding
+    // null as ciphertext or letting an older retained endpoint resurrect.
+    const update = (version: number, value: string | null) => UpdateContainerSchema.parse({
+      id: `state-${version}`, seq: version, createdAt: version,
+      body: { t: 'update-machine', machineId: machine.id, daemonState: { version, value } },
+    });
+    expect(() => socket.trigger('update', update(3, null))).not.toThrow();
+    expect(machine.daemonState).toBeNull();
+    expect(machine.daemonStateVersion).toBe(3);
+    socket.trigger('update', update(1, createMachineContentCodec(machine).encodeStored({
+      status: 'running', peerMediation: { iroh: { endpoint: { endpointId: 'b'.repeat(64) } } },
+    })));
+    expect(machine.daemonState).toBeNull();
+    expect(machine.daemonStateVersion).toBe(3);
   });
 
   it('keeps a freshly installed endpoint after discarding a persisted endpoint', async () => {
