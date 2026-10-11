@@ -714,7 +714,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       const backendTargetKey = readBackendTargetKey(args as { backendTargetKey?: unknown });
       const backendTarget = readBackendTargetFromKey(backendTargetKey);
       const captured = backendTarget?.sourceKind === 'configured' || backendTarget?.configuredBackendId
-        ? await readAcpInventorySnapshot(args.signal) : null;
+        ? await readAcpInventorySnapshot() : null;
       const probeResult = await probeActionModesBestEffort({
         args,
         agentId: normalizedAgentId,
@@ -740,7 +740,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       const backendTargetKey = readBackendTargetKey(args as { backendTargetKey?: unknown });
       const backendTarget = readBackendTargetFromKey(backendTargetKey);
       const captured = backendTarget?.sourceKind === 'configured' || backendTarget?.configuredBackendId
-        ? await readAcpInventorySnapshot(args.signal) : null;
+        ? await readAcpInventorySnapshot() : null;
       const probeResult = await probeActionConfigOptionsBestEffort({
         args,
         agentId: normalizedAgentId,

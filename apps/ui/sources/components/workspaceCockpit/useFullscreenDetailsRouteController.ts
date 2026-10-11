@@ -21,7 +21,7 @@ export type UseFullscreenDetailsRouteControllerInput = Readonly<{
 export function useFullscreenDetailsRouteController(
     input: UseFullscreenDetailsRouteControllerInput,
 ): FullscreenDetailsRouteController {
-    const lastDismissalSignatureRef = React.useRef<string | null>(null);
+    const dismissedRef = React.useRef(false);
     const previousDetailsIsOpenRef = React.useRef(input.detailsIsOpen);
     const onUnmountRef = React.useRef(input.onUnmount);
 
@@ -30,7 +30,7 @@ export function useFullscreenDetailsRouteController(
     }, [input.onUnmount]);
 
     React.useEffect(() => {
-        lastDismissalSignatureRef.current = null;
+        dismissedRef.current = false;
         previousDetailsIsOpenRef.current = input.detailsIsOpen;
     }, [input.resetKey]);
 
@@ -41,27 +41,15 @@ export function useFullscreenDetailsRouteController(
     }, []);
 
     const dismissRoute = React.useCallback(() => {
-        const signature = [
-            input.resetKey ?? '',
-            input.keepRouteWhenEmpty === true ? 'keep-empty' : 'drop-empty',
-            input.keepRouteWhenDetailsClose === true ? 'keep-close' : 'drop-close',
-            input.detailsIsOpen ? 'open' : 'closed',
-            input.hasDetails ? 'has-details' : 'no-details',
-        ].join('|');
-
-        if (lastDismissalSignatureRef.current === signature) {
+        if (dismissedRef.current) {
             return;
         }
-
-        lastDismissalSignatureRef.current = signature;
+        // Closing the pane and its resulting state transition dismiss one route,
+        // not two different states of that route.
+        dismissedRef.current = true;
         input.onDismissRoute();
     }, [
-        input.detailsIsOpen,
-        input.hasDetails,
-        input.keepRouteWhenDetailsClose,
-        input.keepRouteWhenEmpty,
         input.onDismissRoute,
-        input.resetKey,
     ]);
 
     React.useEffect(() => {
@@ -98,6 +86,7 @@ export function useFullscreenDetailsRouteController(
         input.isFocused,
         input.keepRouteWhenDetailsClose,
         input.keepRouteWhenEmpty,
+        input.resetKey,
     ]);
 
     const onRequestClose = React.useCallback(() => {

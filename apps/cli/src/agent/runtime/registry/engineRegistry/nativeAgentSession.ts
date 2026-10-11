@@ -5441,7 +5441,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     );
                 }
                 const sessionFactory = sessions;
-                if (params.createRuntime && params.backend.provenance !== 'configured') {
+                if (params.createRuntime) {
                     const diagnostics: Parameters<
                         typeof resolveBackendExecutionSurfacesFromNativeAgentRuntime
                     >[0]['diagnostics'] = [];

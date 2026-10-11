@@ -821,6 +821,8 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
     eventKind: event.kind,
     ...(params.admission === undefined ? {} : { admission: params.admission }),
   });
-  params.runtimeMessageDeltaBridge?.discardStream(buildRuntimeMessageStreamArgs(event, event.role));
+  if (event.role !== 'user') {
+    params.runtimeMessageDeltaBridge?.discardStream(buildRuntimeMessageStreamArgs(event, event.role));
+  }
   return { projected: true, kind: event.kind };
 }

@@ -109,7 +109,7 @@ function managedTarget(handle: ProjectManagedServiceHandle): LocalServiceLaunchT
     };
 }
 
-function sortTargets(targets: readonly LocalServiceLaunchTargetV1[]): readonly LocalServiceLaunchTargetV1[] {
+function sortTargets(targets: readonly LocalServiceLaunchTargetV1[]): LocalServiceLaunchTargetV1[] {
     return [...targets].sort((a, b) => (
         sourcePriority(a) - sourcePriority(b)
         || a.title.localeCompare(b.title)

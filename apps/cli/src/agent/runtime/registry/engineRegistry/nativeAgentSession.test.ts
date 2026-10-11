@@ -80,6 +80,7 @@ import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/erro
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createProviderCliAttachSurface } from '@/session/attach/providerCliAttach';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
 import { runTerminalRemoteSessionModeLoop } from '@/agent/runtime/session/loop/runTerminalRemoteSessionModeLoop';
 import { bindProcessLogger, Logger, logger } from '@/ui/logger';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
@@ -1835,17 +1836,21 @@ describe('native Agent session host adapter', () => {
         }
 
         const turnMutations: SessionTurnMutationV1[] = [];
+        const session = createMutableApiSessionClientFixture({
+            sessionId: 'session-runner-owned-runtime',
+            overrides: {
+                getLastObservedMessageSeq: () => 42,
+                enqueueSessionTurnMutation: async (mutation: SessionTurnMutationV1) => {
+                    turnMutations.push(mutation);
+                },
+            },
+        });
 
         const created = await plan.config.createSessionRuntime({
             directory: '/tmp/acme-runner-owned-runtime',
             metadata: {},
             machineId: 'machine-1',
-            session: createNativeSessionClientTestPort('session-runner-owned-runtime', {
-                getLastObservedMessageSeq: () => 42,
-                enqueueSessionTurnMutation: async (mutation: SessionTurnMutationV1) => {
-                    turnMutations.push(mutation);
-                },
-            }),
+            session,
             transcriptSession: {},
             messageBuffer: {},
             messageQueue: new MessageQueue2<
@@ -1853,9 +1858,10 @@ describe('native Agent session host adapter', () => {
                 { text: string }
             >((mode) => mode.permissionMode),
             mcpServers: {},
-            permissionHandler: {
-                cancelByPlugin: vi.fn(async () => undefined),
-            },
+            permissionHandler: createProviderEnforcedPermissionHandler({
+                session,
+                logPrefix: '[runner-owned runtime test]',
+            }),
             getPermissionMode: () => currentPermissionMode,
             setThinking: () => undefined,
             memoryRecallGuidanceEnabled: false,

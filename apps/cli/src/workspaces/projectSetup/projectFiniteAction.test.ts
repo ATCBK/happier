@@ -10,6 +10,7 @@ import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import * as machineRpcTransport from '@/session/transport/rpc/machineRpc';
 import { createProjectWorkerAction } from '@/workspaces/execution/projectWorkerAction';
+import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import { WORKSPACE_EXECUTION_CONFIG_ROUTE_V1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1, ProjectSetupConsentFailureDetailsV1Schema } from '@happier-dev/protocol/actions/projectActionFamily';
@@ -984,10 +985,15 @@ describe('authenticated finite Project Action owner', () => {
                 active: true, revokedAt: null, replacedByMachineId: null, kind: 'persistent',
                 access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
             });
+            const machineRows = [installed, { ...installed, id: 'source-machine', installationId: 'source-installation' }]
+                .map(machine => MachinePublishedRowV1Schema.parse({ ...machine, metadata: null, metadataVersion: 0,
+                    daemonState: null, daemonStateVersion: 0, storageMode: 'plain' }));
             h.get.mockImplementation(async url => {
                 if (String(url) === 'https://home.example/v1/machines') return { status: 200, data: [installed] };
-                if (String(url) === 'https://home.example/v1/machines/machine') return { status: 200, data: { machine: installed } };
-                return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+                const machine = machineRows.find(row => String(url) === `https://home.example/v1/machines/${row.id}`);
+                if (machine) return { status: 200, data: { machine } };
+                if (String(url) === 'https://home.example/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+                throw new Error(`Unexpected pool Home read: ${url}`);
             });
             const homePost = h.post.getMockImplementation();
             if (!homePost) throw new Error('Expected existing Home HTTP fixture');

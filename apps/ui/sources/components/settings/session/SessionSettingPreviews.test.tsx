@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installMessageViewCommonModuleMocks } from '@/components/sessions/transcript/messageViewTestHelpers';
@@ -8,11 +9,10 @@ import { installMessageViewCommonModuleMocks } from '@/components/sessions/trans
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
- * The settings store is the boundary: every settings hook a preview mounts is recorded here, with the
- * real store hooks still answering underneath.
+ * Observe settings-hook work without replacing the real store hooks or their answers.
  *
  * A preview may read only the rendering environment every real component honours: the text scale
- * (the app `Text` primitive), the content width (row max width) and the syntax-tokenization budget
+ * (the app `Text` primitive), locale, the content width (row max width) and the syntax-tokenization budget
  * (a size cap that never changes a short sample). Any other setting would make the tile follow the
  * account's live choices instead of the option it shows.
  */
@@ -38,6 +38,7 @@ function recordingSettingsHooks<T extends Record<string, any>>(actual: T): Parti
 }
 
 installMessageViewCommonModuleMocks({
+    text: () => vi.importActual<typeof import('@/text')>('@/text'),
     storage: async (importOriginal) => {
         const actual = await importOriginal<Record<string, any>>();
         return { ...actual, ...recordingSettingsHooks(actual) };
@@ -53,6 +54,8 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 // Keep the existing full preview graph's import order before list-only cases;
 // its real storage graph contains reciprocal facade imports.
 await import('./SessionSettingPreviews');
@@ -63,6 +66,77 @@ afterEach(() => {
 });
 
 describe('Session settings previews', () => {
+    it('updates the mounted Session settings choices after the admitted Account language changes without a parent rerender', async () => {
+        const { createSecretSettingsTestHarness } = await import('@/components/settings/secrets/secretSettingsTestHarness');
+        const { settingsParse } = await import('@/sync/domains/settings/settings');
+        const { getStorage } = await import('@/sync/domains/state/storage');
+        const { getPreferredLanguage, t } = await import('@/text');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+        const { renderSettingsView } = await import('@/dev/testkit/harness/settingsViewHarness');
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ preferredLanguage: 'en' }), sharedEnabled: false });
+        const serve = account.request.getMockImplementation();
+        if (!serve) throw new Error('The Account HTTP fixture must have its canonical handler');
+        let releaseAck!: () => void;
+        let languageWriteIssued = false;
+        const ackHeld = new Promise<void>(resolve => { releaseAck = resolve; });
+        try {
+            const { WorkspaceRouteBody } = await import('@/app/(app)/settings/session');
+            const wrapper = ({ children }: React.PropsWithChildren) => <InjectedAuthProvider credentials={account.credentials}>{children}</InjectedAuthProvider>;
+            const screen = await renderSettingsView(<WorkspaceRouteBody />, { wrapper });
+            const paintedText = () => screen.getTextContent();
+            const english = t('settingsAppearance.sessionListDensity.detailed');
+            expect(paintedText()).toContain(english);
+            const { sync } = await import('@/sync/sync');
+            await sync.prepareAccountSettingsForDaemonSpawn();
+            account.request.mockImplementation(async (input, init) => {
+                if (new URL(String(input)).pathname === '/v2/account/settings' && init?.method === 'POST') {
+                    languageWriteIssued = true;
+                    await ackHeld;
+                }
+                return serve(input, init);
+            });
+            await act(async () => { sync.applySettings({ preferredLanguage: 'fr' }, { expectedSettingsScope: getStorage().getState().settingsScope }); });
+            await vi.waitFor(() => expect(getPreferredLanguage()).toBe('fr'));
+            await vi.waitFor(() => expect(languageWriteIssued).toBe(true));
+            expect(account.persistedSettings.preferredLanguage).toBe('en');
+            const french = t('settingsAppearance.sessionListDensity.detailed');
+            expect(french).not.toBe(english);
+            await vi.waitFor(() => expect(paintedText()).toContain(french));
+            expect(paintedText()).not.toContain(english);
+            releaseAck();
+            await act(async () => { await sync.prepareAccountSettingsForDaemonSpawn(); });
+            expect(account.persistedSettings.preferredLanguage).toBe('fr');
+        } finally {
+            releaseAck();
+            standardCleanup();
+            await account.dispose();
+        }
+    });
+
+    it.each(['density', 'layout'] as const)('updates the mounted %s preview after the canonical preferred language changes without a parent rerender', async kind => {
+        const { SessionListDensityPreview, SessionListLayoutPreview } = await import('./SessionListPreview');
+        const { getStorage } = await import('@/sync/domains/state/storage');
+        const { getPreferredLanguage, t } = await import('@/text');
+        const store = getStorage();
+        const previous = store.getState().settings.preferredLanguage;
+        try {
+            await act(async () => { store.getState().applySettingsLocal({ preferredLanguage: 'en' }); });
+            const screen = await renderScreen(kind === 'density'
+                ? <SessionListDensityPreview density="detailed" />
+                : <SessionListLayoutPreview layout="layout:projects" />);
+            const english = t('settingsSessionPages.preview.userMessage');
+            expect(screen.getTextContent()).toContain(english);
+            await act(async () => { store.getState().applySettingsLocal({ preferredLanguage: 'fr' }); });
+            await vi.waitFor(() => expect(getPreferredLanguage()).toBe('fr'));
+            const french = t('settingsSessionPages.preview.userMessage');
+            expect(french).not.toBe(english);
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain(french));
+            expect(screen.getTextContent()).not.toContain(english);
+        } finally {
+            await act(async () => { store.getState().applySettingsLocal({ preferredLanguage: previous }); });
+        }
+    });
+
     it.each(['density', 'layout'] as const)('does not repeat real %s preview work when a parent recreates unchanged tile props', async (kind) => {
         const { SessionListDensityPreview, SessionListLayoutPreview } = await import('./SessionListPreview');
         // A selection-ring update recreates JSX at both real callers. Observe

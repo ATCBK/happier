@@ -11,8 +11,7 @@ import { createCliProviderConnectionsStore } from './catalogStore';
 import { composeProviderSettingsV1, splitProviderSettingsV1, sealProviderConnectionsContentV1,
   listProviderConnectionsCatalogSavedSecretRefsV1, ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import type { ProviderSettingsV1 } from '@happier-dev/protocol/providers/settings/v1';
-import { loadAiLaunchProfileArtifacts, prepareLegacyProfileRecordsV1, readLegacyProfileRecordsV1,
-  readAiLaunchProfileEnabledV1 } from '@happier-dev/protocol/profiles/read';
+import { loadAiLaunchProfileArtifacts, prepareLegacyProfileRecordsV1, readLegacyProfileRecordsV1 } from '@happier-dev/protocol/profiles/read';
 import { AccountSettingsSavedSecretMutationError, promoteProfileEnvironmentVariableSavedSecretReferenceV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { formatSharedSavedSecretRefV1, parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
@@ -55,11 +54,7 @@ async function readActiveMigrationSource(credentials: StoredCredentials, include
     profiles: catalog.records.map(({ record }) => record.definition.kind === 'artifact'
       ? { id: record.id, artifactId: record.definition.artifactId } : record.definition.profile),
     secretBindingsByProfileId: Object.fromEntries(catalog.records.map(({ record }) => [record.id, record.secretBindings])),
-    profileEnabledById: { ...ordinaryEnabledById, ...Object.fromEntries(catalog.records.map(({ record }) => {
-      const profile = record.definition.kind === 'artifact' ? { id: record.id, artifactId: record.definition.artifactId }
-        : record.definition.profile;
-      return [record.id, readAiLaunchProfileEnabledV1({ ...profile, enabled: record.enabled }, ordinaryEnabledById)];
-    })) },
+    profileEnabledById: { ...ordinaryEnabledById, ...Object.fromEntries(catalog.records.map(({ record }) => [record.id, record.enabled])) },
   }, recordContext: catalog.source === 'destination'
     ? { profileRecordIds: catalog.records.map(({ record }) => record.id), records: catalog.records } : undefined };
 }
@@ -138,7 +133,7 @@ async function prepareCapturedLegacyProfileMigrationSource(params: Readonly<{
       return { artifactId: artifact.artifactId, ...artifact.revision };
     });
     const sharedRefs = [...new Set(catalog.records.flatMap(({ record }) => Object.values(record.secretBindings)))]
-      .filter(ref => parseSavedSecretRefV1(ref).kind === 'shared_resource');
+      .filter((ref): ref is string => ref !== null && parseSavedSecretRefV1(ref).kind === 'shared_resource');
     const referenceCatalogs = await captureSavedSecretReferenceCatalogsForOperation({ credentials: params.credentials,
       operationContext, signal: params.signal });
     const secretCapture = await captureSavedSecretReferencesForOperation({ expectedScopeKey: scopeKey,

@@ -3101,13 +3101,15 @@ export function createCliActionDeps(params: Readonly<{
       const spec = getActionSpec(args.actionId);
       const admittedInput = spec.inputSchema.safeParse(args.input);
       if (!admittedInput.success) return executionRunActionFailure('invalid_parameters');
+      const parsedStart = !domainRpc && isStart
+        ? DaemonLocalServiceLauncherStartRequestV1Schema.safeParse(admittedInput.data) : null;
       const parsed = domainRpc ? parseLocalServiceDomainActionRpcRequest(args.actionId, admittedInput.data) : isStart
-        ? DaemonLocalServiceLauncherStartRequestV1Schema.safeParse(admittedInput.data)
+        ? parsedStart
         : LocalServiceActionRequestV1Schema.safeParse(admittedInput.data);
       if (!parsed?.success) return executionRunActionFailure('invalid_parameters');
       const request = parsed.data;
       const machineId = 'target' in request ? request.target.machineId : request.machineId;
-      const denied = projectHomeAdmission('workspace' in request ? request.workspace?.serverId : undefined, args.context);
+      const denied = projectHomeAdmission(parsedStart?.success ? parsedStart.data.workspace?.serverId : undefined, args.context);
       if (denied) return denied;
       const method = spec.bindings?.rpcMethod;
       if (!method) return executionRunActionFailure('runtime_action_disabled');

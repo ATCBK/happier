@@ -4,6 +4,8 @@ import { vi } from 'vitest';
 
 import type { StoredCredentials } from '@/persistence';
 import * as persistenceBoundary from '@/persistence';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { getHistoricalBuiltInAiLaunchProfileV1 } from '@happier-dev/protocol/profiles/historicalCompatibilityV1';
 import { buildLegacyProfileMigrationContext } from '../migrations/buildContext';
 import { readLegacyProfileMigrationContributionMap } from '../migrations/coordinator';
@@ -245,8 +247,13 @@ describe('migrateProviderSettings', () => {
       .rejects.toMatchObject({ reason: 'legacy_profile_source_changed' });
     expect(released).toBe(2);
   });
-  it('promotes a descriptor-classified literal before preparing transferable records', async () => {
+  it.each([true, false])('promotes a descriptor-classified literal before preparing transferable records (retained material available: %s)', async retainedMaterialAvailable => {
     const capturedCredentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature` };
+    const profileOnlyReference = formatSharedSavedSecretRefV1('secret-profile-only');
+    const retainedProfile = ProfileRecordV1Schema.parse({ v: 1, id: 'retained-mask', enabled: false,
+      definition: { kind: 'legacy', profile: { id: 'retained-mask', name: 'Retained private attachments',
+        environmentVariables: [], createdAt: 1, updatedAt: 1 } }, promptStack: [],
+      secretBindings: { MASKED_TOKEN: null, OTHER_TOKEN: profileOnlyReference } });
     const remoteHostCatalog = RemoteHostCatalogRecordV1Schema.parse({ v: 1, hosts: [{ id: 'host', name: 'Private host',
       createdAt: 1, updatedAt: 1, lastUsedAt: null,
       ssh: { target: 'user@host.example', authMode: 'password', passwordSecretRef: sharedSecretRef } }] });
@@ -265,6 +272,10 @@ describe('migrateProviderSettings', () => {
     const baselineGet = vi.mocked(axios.get).getMockImplementation()!;
     vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
       const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/entity-rows/profiles') return { status: 200, data: { status: 'listed', complete: true,
+        nextCursor: null, diagnostics: [], referenceGuardRevision: 9, transferControl: { status: 'absent' },
+        rows: [{ id: retainedProfile.id, revision: 2, content: { t: 'plain', v: retainedProfile } }] } };
+      if (path === '/v1/account/entity-rows/profiles/reference-guard') return { status: 200, data: { status: 'ready', revision: 9 } };
       if (path === REMOTE_HOST_ROWS_ROUTE_V1) return { status: 200, data: { status: 'present', revision: 8,
         content: { t: 'plain', v: remoteHostCatalog } } };
       if (path === NOTIFICATION_CHANNELS_ROUTE_V1) return { status: 200, data: { status: 'present', revision: 9,
@@ -274,7 +285,9 @@ describe('migrateProviderSettings', () => {
         mode: 'plain', version: 1, settingsVersion: version, signingKeyFingerprint: null, contentKeyFingerprint: null,
         updatedAt: 1, recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
       } };
-      if (String(url).endsWith('/saved-secrets/resources/materials')) return { status: 200, data: { resources: ['secret-a', 'secret-private'].map(resourceId => ({
+      if (String(url).endsWith('/saved-secrets/resources/materials')) return { status: 200, data: { resources: [
+        'secret-a', 'secret-private', ...(retainedMaterialAvailable ? ['secret-profile-only'] : []),
+      ].map(resourceId => ({
         resourceId, encryptionMode: 'plain', recipientEnvelope: null,
         storedContent: { t: 'plain', v: { v: 1, name: 'Retained credential', kind: 'apiKey', value: 'retained-private' } },
         entry: { ref: formatSharedSavedSecretRefV1(resourceId), source: 'shared_resource', relationship: 'owner',
@@ -293,20 +306,36 @@ describe('migrateProviderSettings', () => {
       version += 1;
       return { status: 200, data: { resourceId: mutation.resourceId, settingsVersion: version } };
     });
-    const result = await prepareLegacyProfileMigrationSource({ credentials: capturedCredentials, expectedSettingsVersion: 7,
-      acquireRegistryLease: async () => ({ registry: { contributes: { providersByContributionKey: new Map([
-        ['happier.provider.deepseek/deepseek', { definition: credentialSourceContribution() }]]) } }, release: async () => undefined }) });
-    expect(result).toMatchObject({ status: 'ready', settingsVersion: 8, records: [{ id: 'company', definition: { kind: 'legacy',
-      profile: { environmentVariables: [{ name: 'DEEPSEEK_AUTH_TOKEN', value: '${DEEPSEEK_AUTH_TOKEN}' }, { name: 'TEAM_FLAG', value: 'public' }] } } }] });
-    expect(mutations).toHaveLength(1);
-    expect(mutations[0]).toMatchObject({ expectedSettingsVersion: 7, encryptionMode: 'plain', storedContent: { t: 'plain', v: { value: 'private-literal' } },
-      referenceCensus: { accountMode: 'plain', profiles: { referenceGuardRevision: 'absent', rows: [] },
-        catalogs: { mcp: 'absent', acp: 'absent', providerConnections: 1, connectedConfigurations: 'absent', connectedPurposes: 'absent' },
-        remoteHosts: { revision: 8, resourceRefs: [sharedSecretRef] },
-        notificationChannels: { revision: 9, resourceRefs: [retainedPrivateSecretRef] } },
-      profileMutations: [] });
-    expect(JSON.stringify(result)).not.toContain('private-literal');
-    expect(raw.unknown).toEqual({ keep: true });
+    const runtime = await createAuthoredAdmittedPluginRuntimeFixture({ plugins: [{
+      manifest: createPluginManifestV2Fixture({ id: 'example.provider-migration',
+        contributes: { providers: [credentialSourceContribution()] } }),
+      files: { 'daemon.mjs': 'export function activate() {}' },
+    }] });
+    try {
+      const preparation = prepareLegacyProfileMigrationSource({ credentials: capturedCredentials, expectedSettingsVersion: 7,
+        acquireRegistryLease: () => runtime.controller.acquireRuntimeRegistry() });
+      if (!retainedMaterialAvailable) {
+        await expect(preparation).rejects.toMatchObject({ name: 'SavedSecretOperationAdmissionError',
+          reason: 'reference_forbidden', reference: profileOnlyReference });
+        expect(mutations).toEqual([]);
+        expect(version).toBe(7);
+        expect(retainedProfile.secretBindings).toEqual({ MASKED_TOKEN: null, OTHER_TOKEN: profileOnlyReference });
+        return;
+      }
+      const result = await preparation;
+      expect(result).toMatchObject({ status: 'ready', settingsVersion: 8, records: [{ id: 'company', definition: { kind: 'legacy',
+        profile: { environmentVariables: [{ name: 'DEEPSEEK_AUTH_TOKEN', value: '${DEEPSEEK_AUTH_TOKEN}' }, { name: 'TEAM_FLAG', value: 'public' }] } } }] });
+      expect(mutations).toHaveLength(1);
+      expect(mutations[0]).toMatchObject({ expectedSettingsVersion: 7, encryptionMode: 'plain', storedContent: { t: 'plain', v: { value: 'private-literal' } },
+        referenceCensus: { accountMode: 'plain', profiles: { referenceGuardRevision: 9, rows: [{ id: retainedProfile.id, revision: 2 }] },
+          catalogs: { mcp: 'absent', acp: 'absent', providerConnections: 1, connectedConfigurations: 'absent', connectedPurposes: 'absent' },
+          remoteHosts: { revision: 8, resourceRefs: [sharedSecretRef] },
+          notificationChannels: { revision: 9, resourceRefs: [retainedPrivateSecretRef] } },
+        profileMutations: [] });
+      expect(JSON.stringify(result)).not.toContain('private-literal');
+      expect(raw.unknown).toEqual({ keep: true });
+      expect(retainedProfile.secretBindings).toEqual({ MASKED_TOKEN: null, OTHER_TOKEN: profileOnlyReference });
+    } finally { await runtime.dispose(); }
   });
   it('preserves disabled ordinary builtin preferences while converting a different private Provider profile', async () => {
     const providerRow = ProfileRecordV1Schema.parse({ v: 1, id: 'deepseek', enabled: true,

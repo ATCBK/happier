@@ -969,7 +969,7 @@ export type ResolvedContributionRegistry = Readonly<{
     connectedAccountDescriptorsById: ReadonlyMap<string, ResolvedConnectedAccountDescriptorContribution>;
     catalogEntriesById: Readonly<Record<string, ResolvedCatalogEntry>>;
     agentDefinitionsById: ReadonlyMap<string, ResolvedAgentContribution>;
-    providersByContributionKey?: ReadonlyMap<string, ResolvedProviderContribution>;
+    providersByContributionKey: ReadonlyMap<string, ResolvedProviderContribution>;
     machineProvisionersByContributionKey?: ReadonlyMap<string, ResolvedMachineProvisionerContribution>;
     pluginDiagnosticsByPluginId: Readonly<Record<string, readonly PluginCompatibilityDiagnostic[]>>;
 }>;

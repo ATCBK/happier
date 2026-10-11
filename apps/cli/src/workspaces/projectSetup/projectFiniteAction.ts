@@ -310,7 +310,7 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
             }
         } else if (sourceAssociation.workspace.machineId !== runtime.machineId) return failure('target_not_local');
         const readWorkerExecutionBasis = async (definition: typeof initialSourceDefinition) => {
-            const manifest = definition.document?.manifest;
+            const manifest = definition.document?.status === 'valid' ? definition.document.manifest : undefined;
             const declaredEffect = selectedExecutionDeclaration(definition);
             const inspection = sourceAssociation.workspace.machineId === runtime.machineId
                 ? await inspectProjectDefinitionExecutionFacts({ root: sourceAssociation.workspace.rootPath,

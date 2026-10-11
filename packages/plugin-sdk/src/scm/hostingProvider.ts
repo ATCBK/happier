@@ -324,7 +324,7 @@ export type HostingProviderRepositoryDescribeCloneTargetsInput = Readonly<{
         cloneUrl?: string;
         sshUrl?: string;
         defaultBranch?: string | null;
-        visibility: ScmHostingRepositoryVisibility;
+        visibility?: ScmHostingRepositoryVisibility;
     }>;
 }>;
 

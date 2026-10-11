@@ -1666,7 +1666,7 @@ export async function runPermissionModePromptLoop(opts: {
           ? opts.runtime.sendTurnPrompt(dispatchPrompt)
           : opts.runtime.sendTurnPrompt(dispatchPrompt, promptDeliveryMeta);
         void preparedDispatch.retainComposition({ deliveryKind: 'newTurn', observedAtMs: Date.now(),
-          turnId: promptDeliveryMeta.turnId ?? null });
+          turnId: null });
         // Runtime adapters update exact steerability synchronously when provider dispatch
         // acquires a live turn. Re-check only at that lifecycle edge; no cadence or inferred
         // turn-in-flight state is allowed to start the Pending pump.

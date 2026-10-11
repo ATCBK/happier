@@ -10,7 +10,7 @@ import { ApiMachineClient } from './apiMachine';
 import { createMachineEnvironmentAction } from '@/workspaces/environment/machineEnvironmentAction';
 import { ExternalActionExecutionAuthorizationV1Schema, EXTERNAL_ACTION_EFFECT_ACTION_HEADER, EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER } from '@happier-dev/protocol/actions/externalActionApi';
 import { MachineEnvironmentReportInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
-import type { ActionExecutorContext } from '@happier-dev/protocol';
+import type { RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
 import { projectRequesterAccountActionAuthorization } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
 import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
 
@@ -150,7 +150,7 @@ describe('ApiMachine own Session Account read custody', () => {
       machineId: machine.id, installationId: osStore.identity.installationId, serverIdentityId: input.homeId,
       actionId: 'machines.environment.apply', requestId: 'setup-request', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'machine', machineId: machine.id },
     } });
-    const context: ActionExecutorContext = { surface: 'rpc', actionRequestId: 'setup-request', signal: new AbortController().signal,
+    const context: RpcActionExecutorContext = { surface: 'rpc', actionRequestId: 'setup-request', signal: new AbortController().signal,
       externalActionExecutionAuthorization: authorization, externalActionTarget: authorization.binding.target,
       machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'alice', machineId: machine.id,
         installationId: osStore.identity.installationId, role: 'manage', encryptionMode: 'plain' }, verifyMachineAdmissionCurrent: async () => true };
