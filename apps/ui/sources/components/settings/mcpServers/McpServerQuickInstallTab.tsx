@@ -85,7 +85,7 @@ export const McpServerQuickInstallTab = React.memo(function McpServerQuickInstal
                             />
 
                             {mappingIssues.length > 0 ? (
-                                <ItemGroup title={t('settings.mcpServersImportJsonWarningsTitle')}>
+                                <ItemGroup>
                                     {mappingIssues.map((warning) => (
                                         <Item
                                             key={`${draft.preset.id}:${warning}`}

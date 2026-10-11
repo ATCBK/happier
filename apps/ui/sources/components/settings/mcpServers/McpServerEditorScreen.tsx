@@ -628,9 +628,11 @@ export const McpServerEditorScreen = React.memo(function McpServerEditorScreen()
             ) : null}
 
             {approval.approvalId && approvalScope ? (
-                <ActionApprovalPendingNotice testID="mcp.server.editor.approval"
-                    message={t('secrets.catalog.approvalPending')}
-                    onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(approvalScope.serverId)}`)} />
+                <ItemGroup>
+                    <ActionApprovalPendingNotice testID="mcp.server.editor.approval"
+                        message={t('secrets.catalog.approvalPending')}
+                        onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(approvalScope.serverId)}`)} />
+                </ItemGroup>
             ) : null}
 
             {activeTab === 'configure' ? (
