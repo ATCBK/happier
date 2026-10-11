@@ -51,8 +51,6 @@ import {
   RestartSessionRunnerResultV1Schema,
   SessionRunnerRuntimeStateV1Schema,
   SessionRunnerStatusGetRequestV1Schema,
-  SPAWN_SESSION_ERROR_CODES,
-  isSpawnSessionErrorDetail,
   type ConnectedServiceBindingsV1,
   type ConnectedServiceId,
   type RestartAllSessionRunnersRequestV1,
@@ -70,6 +68,7 @@ import {
 } from './sessions/stopSessionContract';
 import { isPidAliveBySignal, readProcessRunState } from './processRunState';
 import { classifyDaemonLifecycleProcessByPid } from './doctor';
+import { readSpawnSessionNonceResolution } from '@/session/services/awaitSpawnedSessionId';
 
 export type DaemonControlRequestOptions = {
   /** `null` leaves a local control request owned by caller/daemon lifecycle. */
@@ -863,34 +862,14 @@ export async function resolveDaemonSpawnSessionByNonce(spawnNonce: string): Prom
   const result = await daemonPost('/spawn-session/resolve', { spawnNonce: normalizedSpawnNonce });
   if (result && typeof result === 'object' && typeof (result as { status?: unknown }).status === 'string') {
     const status = (result as { status: string }).status;
-    if (status === 'pending') return { status: 'pending' };
-    if (status === 'not_found') return { status: 'not_found' };
-    if (status === 'error') {
-      const errorCode = typeof (result as { errorCode?: unknown }).errorCode === 'string'
-        ? (result as { errorCode: string }).errorCode
-        : '';
-      const errorMessage = typeof (result as { errorMessage?: unknown }).errorMessage === 'string'
-        ? (result as { errorMessage: string }).errorMessage.trim()
-        : '';
-      if ((Object.values(SPAWN_SESSION_ERROR_CODES) as string[]).includes(errorCode) && errorMessage) {
-        const errorDetailRaw = (result as { errorDetail?: unknown }).errorDetail;
-        return {
-          status: 'error',
-          errorCode: errorCode as (typeof SPAWN_SESSION_ERROR_CODES)[keyof typeof SPAWN_SESSION_ERROR_CODES],
-          errorMessage,
-          ...(isSpawnSessionErrorDetail(errorDetailRaw) ? { errorDetail: errorDetailRaw } : {}),
-        };
+    if (status === 'pending' || status === 'not_found' || status === 'error' || status === 'success') {
+      const resolution = readSpawnSessionNonceResolution(result);
+      // The released local-control adapter treats malformed replies as absent,
+      // unlike machine RPC, where missing capability remains distinguishable.
+      if (resolution.status === 'unsupported' || (status === 'success' && resolution.status === 'pending')) {
+        return { status: 'not_found' };
       }
-      return { status: 'not_found' };
-    }
-    if (status === 'success') {
-      const sessionId = typeof (result as { sessionId?: unknown }).sessionId === 'string'
-        ? (result as { sessionId: string }).sessionId.trim()
-        : '';
-      if (sessionId) {
-        return { status: 'success', sessionId };
-      }
-      return { status: 'not_found' };
+      return resolution;
     }
   }
 
