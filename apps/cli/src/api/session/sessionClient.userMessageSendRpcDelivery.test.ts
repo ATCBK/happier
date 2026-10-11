@@ -811,6 +811,7 @@ describe('ApiSessionClient session.userMessage.send delivery', () => {
     });
     const daemonCheck = vi.spyOn(machineRpc, 'callMachineRpc').mockResolvedValue({ ok: true, status: 'waiting' });
     try {
+      await waitForCurrentPendingInputContract(client);
       // Use the real registered control through its RPC boundary; no recovery owner is mocked.
       const result = await client.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW, {
         sessionId: 's1', provider: 'codex', resumePromptMode: 'custom',
@@ -829,8 +830,12 @@ describe('ApiSessionClient session.userMessage.send delivery', () => {
       const prompt = await client.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND, {
         text: 'explicit retry', localId: 'owned-retry', meta: { source: 'ui' },
       });
-      expect(prompt).toMatchObject({ ok: false, errorCode: 'session_user_message_recovery_pending' });
-      expect(received).toHaveLength(0);
+      expect(prompt).toMatchObject({ ok: true, providerAcceptancePending: true });
+      expect(enqueuePendingQueueV2MessageViaHttpMock).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 's1', body: expect.objectContaining({ localId: 'owned-retry' }),
+      }));
+      expect(daemonCheck).toHaveBeenCalledTimes(1);
+      expect(received).toHaveLength(1);
       expect(localControl).not.toHaveBeenCalled();
 
       daemonCheck.mockRejectedValueOnce(new Error('daemon unavailable'));

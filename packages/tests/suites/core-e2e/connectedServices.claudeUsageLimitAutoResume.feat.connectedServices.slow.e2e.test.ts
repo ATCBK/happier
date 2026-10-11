@@ -274,8 +274,9 @@ describe('core e2e: Claude due usage-limit continuation', () => {
     const { sessionId, runnerPid } = await startLimitedSession({ resumePromptMode: 'off' });
     await connectRpc();
     const live = record(await callRpc(sessionId, SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW, sessionId));
-    expect(live?.ok).toBe(false);
-    expect(['unsupported_session_runtime_method', 'RPC_METHOD_NOT_AVAILABLE', 'RPC_METHOD_NOT_FOUND']).toContain(live?.errorCode ?? live?.error);
+    expect(live).toMatchObject({ ok: true, status: 'waiting' });
+    expect((await readIntent(sessionId))?.resumePromptMode).toBe('off');
+    await expectNoSyntheticAdmission(sessionId);
     await deferTimerPastManualObservation(sessionId);
     await waitPastReset(sessionId);
     expect((await readIntent(sessionId))?.status).toBe('waiting');
@@ -324,6 +325,32 @@ describe('core e2e: Claude due usage-limit continuation', () => {
     } else {
       await expectContinued(sessionId);
     }
+    process.kill(runnerPid, 0);
+  }, 360_000);
+
+  it('admits fresh explicit instructions after reset without waking an obsolete continuation first', async () => {
+    const { sessionId, runnerPid } = await startLimitedSession({ resetDelayMs: 30_000 });
+    const current = fixture!;
+    await deferTimerPastManualObservation(sessionId);
+    await waitPastReset(sessionId);
+    await connectRpc();
+    const text = `NEWER_EXPLICIT_WORK_${randomUUID()}`;
+    const localId = randomUUID();
+    const sent = await callRpc(sessionId, SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND, sessionId, {
+      text, localId, meta: { source: 'ui' },
+    });
+    expect(sent).toMatchObject({ ok: true, providerAcceptancePending: true });
+    await waitFor(async () => (await providerEvents(current.fakeClaudeLogPath)).some((event) =>
+      event.type === 'sdk_stdin' && event.userTextPreview === text), {
+      timeoutMs: providerAcceptTimeoutMs, context: 'fresh explicit instructions reach the provider once',
+    });
+    await writeFile(`${current.fakeClaudeLogPath}.accept`, 'accept');
+    await waitFor(async () => (await fetchSessionV2(current.serverBaseUrl, current.auth.token, sessionId)).latestTurnStatus === 'completed', {
+      timeoutMs: providerAcceptTimeoutMs, context: 'explicit instructions settle normally',
+    });
+    expect((await providerEvents(current.fakeClaudeLogPath)).filter((event) =>
+      event.type === 'sdk_stdin' && event.userTextPreview === text)).toHaveLength(1);
+    await expectNoSyntheticAdmission(sessionId);
     process.kill(runnerPid, 0);
   }, 360_000);
 

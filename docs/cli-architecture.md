@@ -1458,11 +1458,14 @@ quota probes use the same continuation owner when they confirm readiness.
 Admission and provider acceptance are not recovery proof; the existing outcome
 proof must observe successful execution under the selected credential.
 
-Active Session RPC checks, direct prompt revalidation, and CLI/MCP checks route
+Active Session RPC checks and CLI/MCP checks route
 daemon-owned attempts to that same scheduler. Provider-local checks remain for
 attempts without daemon ownership; account-switch and reset-credit controls keep
 their existing owners. A failed daemon check does not fall back to a competing
-provider-local scheduler. Cancellation, newer user input, and disabled automatic
+provider-local scheduler. Explicit user input is admitted through Pending rather
+than waking an automatic continuation during pre-admission revalidation; the
+existing dispatcher suppresses obsolete continuation when newer input is queued.
+Cancellation, newer user input, and disabled automatic
 resume take precedence, and the original interrupted input is never replayed.
 
 ### Model-capacity recovery (development)

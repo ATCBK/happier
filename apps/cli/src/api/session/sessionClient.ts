@@ -2483,6 +2483,15 @@ export class ApiSessionClient extends EventEmitter {
             if (hasClearedConnectedServiceTransitionConstraint(this.metadata)) {
                 return { status: 'ready' };
             }
+            const recovery = SessionUsageLimitRecoveryV1Schema.safeParse(
+                this.metadata?.[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY],
+            );
+            if (recovery.success && recovery.data.runtimeAuthRecoveryAttemptId) {
+                // Explicit input belongs in Pending before the daemon can decide
+                // whether an automatic continuation still has work to resume.
+                // Waking recovery here can enqueue old work and reject the new input.
+                return { status: 'ready' };
+            }
             const checkNow = this.resolveUsageLimitRecoveryCheckNow();
             if (typeof checkNow !== 'function') {
                 return hasBlockingExplicitUserRecoveryEvidence(this.metadata)
