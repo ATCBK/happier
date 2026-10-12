@@ -109,6 +109,14 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
         fontVariant: ['tabular-nums'],
         ...Typography.default(),
     },
+    /** The group's machine on the label's line: quiet and shrinking first, the label keeps its room. */
+    groupHeaderMachine: {
+        fontSize: 12,
+        color: theme.colors.text.tertiary,
+        flexShrink: 2,
+        minWidth: 0,
+        ...Typography.default(),
+    },
     groupHeaderSubtitle: {
         fontSize: 11,
         color: theme.colors.text.secondary,
@@ -255,11 +263,12 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
         color: theme.colors.text.tertiary,
         ...Typography.default(),
     },
+    // The quiet meta line under the list's controls (its filter summary, a search's status): the row-meta role.
     searchChromeStatusText: {
         flex: 1,
         minWidth: 0,
         color: theme.colors.text.tertiary,
-        ...Typography.default(),
+        ...Typography.rowMeta(),
     },
     searchChromeStatusRetry: {
         alignItems: 'center' as const,
@@ -269,6 +278,15 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
     searchChromeStatusRetryText: {
         color: theme.colors.accent.blue,
         ...Typography.default('semiBold'),
+    },
+    // Reset sits on that meta line as a quiet control in ink; blue is for links and focus.
+    searchChromeStatusActionText: {
+        color: theme.colors.text.secondary,
+        ...Typography.variant('meta', 'semiBold'),
+    },
+    /** The Runs-only list has no title: its summary line, search and Reset share one compact row. */
+    searchChromeSummaryRow: {
+        minHeight: SESSION_LIST_COLUMN_METRICS.iconButtonSizePx,
     },
     searchChromeEscalationRow: {
         flexDirection: 'row' as const,
