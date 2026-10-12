@@ -20,20 +20,20 @@ import { useConnectedAccountDraftNavigationGuard } from './useConnectedAccountDr
 
 const stylesheet = StyleSheet.create((theme) => ({
     page: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
         gap: 14,
     },
     embedded: {
         gap: 14,
     },
     openBlock: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     pasteBlock: {
         flex: 1,
         minWidth: 0,
-        gap: 6,
+        gap: theme.space.s6,
     },
     description: {
         fontSize: 12.5,
@@ -43,7 +43,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     fieldRow: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 8,
+        gap: theme.space.s8,
     },
     field: {
         flex: 1,
@@ -61,6 +61,7 @@ type ConnectedAccountOAuthFormProps = Readonly<{
     embedded?: boolean;
     authorizationUrl: string;
     callbackUrl: string;
+    allowRawAuthorizationCode?: boolean;
     submitting: boolean;
     navigation?: unknown;
     /** In a setup panel: Cancel (local) beside Connect. */
@@ -90,24 +91,31 @@ function ConnectedAccountOAuthFormBody(props: ConnectedAccountOAuthFormProps) {
         invalidFieldIds: callbackInvalidFieldIds,
         announcement: t('connectedServices.oauthPaste.invalidConfig'),
     });
+    const authorizationState = React.useMemo(() => {
+        try { return new URL(props.authorizationUrl).searchParams.get('state') || null; }
+        catch { return null; }
+    }, [props.authorizationUrl]);
     const parsed = React.useMemo(() => parseOauthCallbackUrl({
         url: callbackInput,
         redirectUri: props.callbackUrl,
-    }), [callbackInput, props.callbackUrl]);
-    const shapeOk = Boolean(parsed.code && parsed.state && !parsed.error);
+        allowRawAuthorizationCode: props.allowRawAuthorizationCode,
+    }), [callbackInput, props.callbackUrl, props.allowRawAuthorizationCode]);
+    const returnedState = parsed.rawAuthorizationCode ? authorizationState : parsed.state;
+    const shapeOk = Boolean(parsed.code && returnedState && !parsed.error
+        && (!authorizationState || returnedState === authorizationState));
 
     const submit = React.useCallback(async () => {
-        if (!shapeOk || !parsed.code || !parsed.state) {
+        if (!shapeOk || !parsed.code || !returnedState) {
             setValidationFailed(true);
             return false;
         }
         const accepted = await props.onSubmit({
             code: parsed.code,
             callbackUrl: props.callbackUrl,
-            state: parsed.state,
+            state: returnedState,
         });
         return accepted !== false;
-    }, [parsed.code, parsed.state, props, shapeOk]);
+    }, [parsed.code, returnedState, props, shapeOk]);
     const discardDraft = React.useCallback(() => {
         setCallbackInput('');
         setValidationFailed(false);
@@ -138,6 +146,9 @@ function ConnectedAccountOAuthFormBody(props: ConnectedAccountOAuthFormProps) {
         setValidationFailed(false);
     }, []);
 
+    const callbackLabel = t(props.allowRawAuthorizationCode === true
+        ? 'connectedServicesSettings.oauthPastePlaceholder'
+        : 'connectedServices.oauthPaste.pasteRedirectUrl');
     const field = (
         <View style={styles.pasteBlock}>
             <View style={styles.fieldRow}>
@@ -146,8 +157,8 @@ function ConnectedAccountOAuthFormBody(props: ConnectedAccountOAuthFormProps) {
                         testID="connected-account-oauth:callback"
                         ref={registerInvalidFieldTarget('callback')}
                         accessibilityLabel={validationFailed
-                            ? `${t('connectedServices.oauthPaste.pasteRedirectUrl')}: ${t('connectedServices.oauthPaste.invalidConfig')}`
-                            : t('connectedServices.oauthPaste.pasteRedirectUrl')}
+                            ? `${callbackLabel}: ${t('connectedServices.oauthPaste.invalidConfig')}`
+                            : callbackLabel}
                         error={validationFailed ? t('connectedServices.oauthPaste.invalidConfig') : null}
                         value={callbackInput}
                         onChangeText={(value) => {

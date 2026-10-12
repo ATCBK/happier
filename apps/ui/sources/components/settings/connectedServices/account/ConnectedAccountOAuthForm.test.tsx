@@ -86,6 +86,8 @@ describe('ConnectedAccountOAuthForm', () => {
 
     it.each([
         { label: 'registered raw code', input: '4/0synthetic-code', allowRawAuthorizationCode: true, authorizationState: 'attempt-state', accepted: true },
+        { label: 'registered callback with current returned state', input: 'https://antigravity.google/oauth-callback?code=4%2F0synthetic-code&state=attempt-state', allowRawAuthorizationCode: true, authorizationState: 'attempt-state', accepted: true },
+        { label: 'code with current returned state', input: '4/0synthetic-code#attempt-state', allowRawAuthorizationCode: true, authorizationState: 'attempt-state', accepted: true },
         { label: 'raw code without provider permission', input: '4/0synthetic-code', allowRawAuthorizationCode: false, authorizationState: 'attempt-state', accepted: false },
         { label: 'raw code without current attempt state', input: '4/0synthetic-code', allowRawAuthorizationCode: true, authorizationState: null, accepted: false },
         { label: 'foreign callback', input: 'https://foreign.example.test/callback?code=synthetic-code&state=attempt-state', allowRawAuthorizationCode: true, authorizationState: 'attempt-state', accepted: false },
