@@ -32,7 +32,7 @@ describe('captured UI ACP Agent Actions', () => {
         const home = await upsertAndActivateServer({ serverUrl: 'https://acp-action-stale-draft.test', scope: 'tab' });
         const token = `e30.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
-        const backend = { id: 'row-review', name: 'row-review', title: 'Other writer title', command: 'review', createdAt: 1, updatedAt: 1 };
+        const backend = { id: 'row-review', name: 'row-review', title: 'Other writer title', launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 };
         let content: AcpCatalogContentV1 = { t: 'plain', v: { v: 1, definitions: [backend] } };
         let revision = 1;
         let posts = 0;
@@ -104,7 +104,7 @@ describe('captured UI ACP Agent Actions', () => {
         });
         const executor = createDefaultActionExecutor();
         const context = { serverId: home.id, surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
-        const backend = { id: 'row-review', name: 'row-review', title: 'Row review', command: 'review', createdAt: 1, updatedAt: 1 };
+        const backend = { id: 'row-review', name: 'row-review', title: 'Row review', launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 };
         const upsert = await executor.execute('agents.acp.backends.upsert', { backend }, context);
         if (!upsert.ok) throw new Error(JSON.stringify(upsert));
         expect(mutations[0]).toMatchObject({ expectedRevision: 'absent', source: 'fresh', sourceSettingsVersion: 7 });

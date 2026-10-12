@@ -23,7 +23,7 @@ beforeEach(() => {
       },
   } });
   applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 1, record: AcpCatalogRecordV1Schema.parse({
-    v: 1, definitions: [{ id: 'claude', name: 'configured-claude', title: 'Configured Claude', command: 'acp', createdAt: 1, updatedAt: 1 }],
+    v: 1, definitions: [{ id: 'claude', name: 'configured-claude', title: 'Configured Claude', launch: { kind: 'command' as const, command: 'acp', args: [] }, createdAt: 1, updatedAt: 1 }],
   }) }, true);
 });
 afterEach(async () => {

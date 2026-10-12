@@ -715,7 +715,7 @@ describe('PluginAgentSettingsIndexScreen', () => {
     it('lists custom ACP agents as their own group and opens the definition editor', async () => {
         const getResolvedAgentCatalogEntriesSpy = vi.spyOn(agentCatalogProjection, 'getResolvedAgentCatalogEntries');
         getResolvedAgentCatalogEntriesSpy.mockReturnValue([]);
-        acpCatalogState.backends = [{ id: 'acp-1', name: 'my-acp', title: 'My ACP agent', command: 'my-acp', args: ['--stdio'] }];
+        acpCatalogState.backends = [{ id: 'acp-1', name: 'my-acp', title: 'My ACP agent', launch: { kind: 'command' as const, command: 'my-acp', args: ['--stdio'] }, }];
 
         const Screen = (await import('@/app/(app)/settings/agents')).default;
         const screen = await renderSettingsView(React.createElement(Screen));

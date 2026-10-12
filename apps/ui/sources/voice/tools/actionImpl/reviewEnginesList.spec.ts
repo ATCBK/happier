@@ -143,7 +143,7 @@ describe('review engine voice tool', () => {
   });
 
   it('reads configured review engine labels from the row and refuses unavailable facts without a settings root', async () => {
-    const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review', command: 'review', createdAt: 1, updatedAt: 1 });
+    const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review', launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 });
     const targetKey = resolveBackendTargetKeyV2({
       kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: definition.id,
     });
@@ -162,7 +162,7 @@ describe('review engine voice tool', () => {
 
   it('offers both ready configured definitions without exposing the abstract contribution', async () => {
     const definitions = ['first', 'second'].map(id => AcpBackendDefinitionV1Schema.parse({
-      id, name: id, title: id, command: 'review', createdAt: 1, updatedAt: 1,
+      id, name: id, title: id, launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1,
     }));
     applyAcpCatalogSnapshot(state.settingsScope, { status: 'ready', revision: 4, record: { v: 1, definitions } }, true);
     getMachineCapabilitiesSnapshot.mockReturnValue(null);
@@ -211,7 +211,7 @@ describe('review engine voice tool', () => {
   it('offers a configured ACP review engine by its exact target key', async () => {
     const targetKey = 'backend:review-bot:configured:review-bot';
     applyAcpCatalogSnapshot(state.settingsScope, { status: 'ready', revision: 4, record: { v: 1, definitions: [AcpBackendDefinitionV1Schema.parse({
-      id: 'review-bot', name: 'review-bot', title: 'Review Bot', command: 'review-bot',
+      id: 'review-bot', name: 'review-bot', title: 'Review Bot', launch: { kind: 'command' as const, command: 'review-bot', args: [] },
       createdAt: 1, updatedAt: 1,
     })] } }, true);
     getMachineCapabilitiesSnapshot.mockReturnValue({ response: { results: {

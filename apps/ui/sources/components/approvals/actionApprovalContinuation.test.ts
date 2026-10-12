@@ -168,8 +168,8 @@ describe('createHomeActionApprovalContinuation', () => {
         // The mounted ACP editor explicitly sets auth to undefined for an agent without login.
         // The Home's JSON Artifact transport omits that optional native object member.
         const input = { backend: {
-            id: 'custom-agent', name: 'custom-agent', title: 'Custom agent', command: 'custom-agent',
-            args: [], env: {}, auth: undefined,
+            id: 'custom-agent', name: 'custom-agent', title: 'Custom agent', launch: { kind: 'command' as const, command: 'custom-agent', args: [] },
+             env: {}, auth: undefined,
         }, expectedRevision: 1 };
         const mutation = applyAcpBackendUpsertV1({ settings: { v: 2, backends: [] }, backend: input.backend, nowMs: 2 });
         if (!mutation.ok) throw new Error(mutation.code);
@@ -180,7 +180,7 @@ describe('createHomeActionApprovalContinuation', () => {
         if (terminal?.family !== 'built_in') throw new Error('Invalid stored approval fixture');
         expect(AgentsAcpBackendsUpsertOutputV1Schema.safeParse(terminal.request.execution?.result).success).toBe(true);
         expect(terminal.request.actionArgs).toEqual({ backend: {
-            id: 'custom-agent', name: 'custom-agent', title: 'Custom agent', command: 'custom-agent', args: [], env: {},
+            id: 'custom-agent', name: 'custom-agent', title: 'Custom agent', launch: { kind: 'command' as const, command: 'custom-agent', args: [] }, env: {},
         }, expectedRevision: 1 });
 
         const onSucceeded = vi.fn();

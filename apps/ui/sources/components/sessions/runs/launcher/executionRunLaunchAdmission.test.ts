@@ -261,7 +261,7 @@ describe('real execution Run launch admission', () => {
     it('admits the exact configured ACP target from a ready Account row', async () => {
         const { input } = await launchFixture();
         const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
-            id: 'review-bot', name: 'review-bot', title: 'Review Bot', command: 'acp', args: [], createdAt: 1, updatedAt: 1,
+            id: 'review-bot', name: 'review-bot', title: 'Review Bot', launch: { kind: 'command' as const, command: 'acp', args: [] }, createdAt: 1, updatedAt: 1,
         }] });
         applyAcpCatalogSnapshot(input.accountLifetime.scope, { status: 'ready', revision: 2, record }, true);
         await expect(admitExecutionRunLaunchTarget({ ...input, session: { ...input.session, active: true },

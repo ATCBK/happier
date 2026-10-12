@@ -262,7 +262,10 @@ export const AgentCollectionList = React.memo(function AgentCollectionList(props
             key={backend.id}
             testID={`settings-agents-collection.custom.${backend.id}`}
             title={backend.title || backend.name}
-            subtitle={formatAcpBackendCommand(backend.command, backend.args)}
+            subtitle={formatAcpBackendCommand(backend.launch.kind === 'command'
+                ? backend.launch.command
+                : backend.launch.kind === 'archive' ? backend.launch.version : `${backend.launch.package}@${backend.launch.version}`,
+            backend.launch.args)}
             icon={<CustomAcpAgentMark />}
             selected={rail ? customAcpRoute?.kind === 'saved' && customAcpRoute.backendId === backend.id : undefined}
             density={rail ? 'compact' : undefined}

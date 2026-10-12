@@ -969,8 +969,7 @@ describe('useNewSessionScreenModel (installables)', () => {
                     id: 'custom-preset',
                     name: 'custom-preset',
                     title: 'Custom Preset',
-                    command: 'custom-acp',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
                     capabilities: {
                         supportsLoadSession: false,
@@ -1034,8 +1033,7 @@ describe('useNewSessionScreenModel (installables)', () => {
                     id: 'custom-preset',
                     name: 'custom-preset',
                     title: 'Custom Preset',
-                    command: 'custom-acp',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
                     capabilities: {
                         supportsLoadSession: false,
@@ -1106,8 +1104,7 @@ describe('useNewSessionScreenModel (installables)', () => {
                     id: 'custom-preset',
                     name: 'custom-preset',
                     title: 'Custom Preset',
-                    command: 'custom-acp',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
                     capabilities: {
                         supportsLoadSession: false,
@@ -1165,8 +1162,7 @@ describe('useNewSessionScreenModel (installables)', () => {
                     id: 'custom-preset',
                     name: 'custom-preset',
                     title: 'Custom Preset',
-                    command: 'custom-acp',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
                     capabilities: {
                         supportsLoadSession: false,
@@ -1225,8 +1221,7 @@ describe('useNewSessionScreenModel (installables)', () => {
                     id: 'custom-preset',
                     name: 'custom-preset',
                     title: 'Custom Preset',
-                    command: 'custom-acp',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
                     capabilities: {
                         supportsLoadSession: false,
@@ -1365,8 +1360,7 @@ describe('useNewSessionScreenModel (installables)', () => {
                     id: 'custom-preset',
                     name: 'custom-preset',
                     title: 'Custom Preset',
-                    command: 'custom-acp',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
                     capabilities: {
                         supportsLoadSession: false,
@@ -1419,8 +1413,7 @@ describe('useNewSessionScreenModel (installables)', () => {
                     id: 'custom-preset',
                     name: 'custom-preset',
                     title: 'Custom Preset',
-                    command: 'custom-acp',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
                     capabilities: {
                         supportsLoadSession: false,
@@ -1464,8 +1457,7 @@ describe('useNewSessionScreenModel (installables)', () => {
                     id: 'custom-preset',
                     name: 'custom-preset',
                     title: 'Custom Preset',
-                    command: 'custom-acp',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
                     capabilities: {
                         supportsLoadSession: false,
@@ -1724,8 +1716,7 @@ describe('useNewSessionScreenModel (installables)', () => {
                     id: 'custom-preset-a',
                     name: 'custom-preset-a',
                     title: 'Custom Preset A',
-                    command: 'custom-acp-a',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp-a', args: ['serve'] },
                     env: {},
                     capabilities: {
                         supportsLoadSession: false,
@@ -1741,8 +1732,7 @@ describe('useNewSessionScreenModel (installables)', () => {
                     id: 'custom-preset-b',
                     name: 'custom-preset-b',
                     title: 'Custom Preset B',
-                    command: 'custom-acp-b',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp-b', args: ['serve'] },
                     env: {},
                     capabilities: {
                         supportsLoadSession: false,

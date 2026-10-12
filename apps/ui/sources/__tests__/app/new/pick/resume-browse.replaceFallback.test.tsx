@@ -306,8 +306,7 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
                         id: 'review-bot',
                         name: 'review-bot',
                         title: 'Review Bot',
-                        command: 'custom-acp',
-                        args: ['serve'],
+                        launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                         env: {},
                         transportProfile: 'generic',
                         capabilities: {
@@ -360,8 +359,7 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
                         id: 'review-bot',
                         name: 'review-bot',
                         title: 'Review Bot',
-                        command: 'custom-acp',
-                        args: ['serve'],
+                        launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                         env: {},
                         transportProfile: 'generic',
                         capabilities: {

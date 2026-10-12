@@ -5,8 +5,7 @@ export function createDraftAcpBackend(now = Date.now()): AcpBackendDefinitionV1 
         id: '',
         name: '',
         title: '',
-        command: '',
-        args: [],
+        launch: { kind: 'command', command: '', args: [] },
         env: {},
         auth: {
             support: 'unsupported',

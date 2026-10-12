@@ -18,7 +18,7 @@ beforeEach(() => {
     getStorage().setState({ settingsScope: scope, settings: settingsDefaults });
     applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 1, record: AcpCatalogRecordV1Schema.parse({
         v: 1, definitions: [{ id: 'custom-backend', name: 'custom-backend', title: 'Custom Backend',
-            command: 'custom-backend', createdAt: 1, updatedAt: 1 }],
+            launch: { kind: 'command' as const, command: 'custom-backend', args: [] }, createdAt: 1, updatedAt: 1 }],
     }) }, true);
 });
 afterEach(async () => {

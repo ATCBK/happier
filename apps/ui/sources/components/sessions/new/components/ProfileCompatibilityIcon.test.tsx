@@ -20,7 +20,7 @@ installNewSessionComponentsCommonModuleMocks({
 function configuredBackendEntries() {
     const record = AcpCatalogRecordV1Schema.parse({
         v: 1,
-        definitions: [{ id: 'custom-acp', name: 'custom-acp', title: 'Custom ACP', command: 'custom-acp', args: [], createdAt: 1, updatedAt: 1 }],
+        definitions: [{ id: 'custom-acp', name: 'custom-acp', title: 'Custom ACP', launch: { kind: 'command' as const, command: 'custom-acp', args: [] }, createdAt: 1, updatedAt: 1 }],
     });
     const entries = getResolvedBackendCatalogEntries({ enabledAgentIds: [], acpCatalogSnapshot: { status: 'ready', revision: 1, record } });
     expect(entries).toHaveLength(1);

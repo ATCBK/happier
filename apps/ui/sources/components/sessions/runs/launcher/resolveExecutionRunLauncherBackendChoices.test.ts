@@ -18,8 +18,7 @@ const record = AcpCatalogRecordV1Schema.parse({
             id: 'review-bot',
             name: 'review-bot',
             title: 'Review Bot',
-            command: 'acp',
-            args: [],
+            launch: { kind: 'command' as const, command: 'acp', args: [] },
             env: {},
             capabilities: {
                 supportsLoadSession: false as const,

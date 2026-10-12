@@ -22,7 +22,7 @@ const externalChoice = {
 describe('atomic Voice Agent selection', () => {
     it('selects the exact configured target without confusing two definitions of the same Agent', () => {
         const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: ['first', 'second'].map(id => ({
-            id, name: id, title: id, command: 'fixture-agent', createdAt: 0, updatedAt: 0,
+            id, name: id, title: id, launch: { kind: 'command' as const, command: 'fixture-agent', args: [] }, createdAt: 0, updatedAt: 0,
         })) });
         const entries = getResolvedBackendCatalogEntries({ enabledAgentIds: ['custom-acp'], acpCatalogSnapshot: {
             status: 'ready', record, revision: 1,

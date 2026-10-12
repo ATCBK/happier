@@ -11,7 +11,7 @@ describe('resolveVoiceToolSpawnBackendTarget (RU-02 customAcp ingress-only)', ()
     resetAcpCatalogSnapshotsForTests();
     const scope = { serverId: 'voice-tool-home', accountId: 'voice-tool-account' };
     const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review',
-      command: 'review', createdAt: 1, updatedAt: 1 });
+      launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 });
     applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 3, record: { v: 1, definitions: [definition] } }, true);
     expect(resolveSpawnBackendTargetFromState({ settingsScope: scope, settings: {
       lastUsedAgent: 'codex', lastUsedBackendTarget: { kind: 'backend', backendId: 'row-review', configuredBackendId: 'row-review' },

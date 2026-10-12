@@ -53,8 +53,7 @@ installSettingsViewCommonModuleMocks({
                     name: 'custom-review',
                     title: 'Custom Review Bot',
                     description: 'Custom ACP',
-                    command: 'custom-acp',
-                    args: [],
+                    launch: { kind: 'command' as const, command: 'custom-acp', args: [] },
                     env: {},
                     transportProfile: 'generic',
                     capabilities: {
