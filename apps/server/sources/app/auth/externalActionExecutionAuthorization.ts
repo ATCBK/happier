@@ -69,7 +69,9 @@ import { SessionSystemRecordAddressSchema } from '@happier-dev/protocol/sessions
 import { projectExternalActionPendingResetStartAdmissionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { SCM_REVIEWED_MARKS_KV_PREFIX, buildScmReviewedMarksKey } from '@happier-dev/protocol/scm/reviewedMarks';
 import { KvMutationRequestSchema } from '@/app/kv/kvMutate';
-import { bindHomeDomainActionHttpRequestV1, isHomeDomainActionIdV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { isHomeDomainActionIdV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { bindHomeDomainHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
+import { SessionOrganizationPinSetInputSchema } from '@happier-dev/protocol/actions/sessionOrganizationMoveAction';
 
 export type VerifiedExternalActionPrincipal = VerifiedApiTokenPrincipal
     | (Extract<ExternalActionServerPrincipalV1, { authentication: unknown }>
@@ -774,7 +776,7 @@ function isProjectAccountMetadataHttpPurpose(verified: VerifiedExternalActionExe
 /** Match the canonical schema and transport rather than a parallel route permission. */
 function isHomeDomainActionHttpOperation(actionId: string,
     proof: ExternalActionExecutionRequestProof): boolean {
-    if (!isHomeDomainActionIdV1(actionId)) return false;
+    if (!isHomeDomainActionIdV1(actionId) && actionId !== 'session.organization.pin.set') return false;
     const spec = getActionSpec(actionId);
     const transport = spec.serverTransport;
     if (spec.executionPlacement !== 'account' || !transport
@@ -787,15 +789,29 @@ function isHomeDomainActionHttpOperation(actionId: string,
         && input && typeof input === 'object' && !Array.isArray(input)
         ? spec.inputSchema.safeParse({ v: 1, ...input }) : parsed;
     if (!versioned.success) return false;
-    const expected = bindHomeDomainActionHttpRequestV1(actionId, versioned.data);
+    const expected = bindHomeDomainHttpRequestV1({ transport, inputSchema: spec.inputSchema, input: versioned.data });
     return expected.path === proof.path && sameManagedInput(expected.body, proof.body);
 }
 
-/** A signed Home-domain root spends only its catalog-declared HTTP operation. */
+/** A signed Account root spends its declared operation and required preparation reads. */
 function isHomeDomainActionHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
     proof: ExternalActionExecutionRequestProof): boolean {
-    return verified.effectActionId === verified.binding.actionId
-        && isHomeDomainActionHttpOperation(verified.binding.actionId, proof);
+    if (verified.effectActionId !== verified.binding.actionId) return false;
+    if (verified.binding.actionId === 'session.organization.pin.set'
+        && proof.method.toUpperCase() === 'GET' && proof.body === undefined) {
+        if (proof.path === '/v1/account/encryption/currentness') return true;
+        // Rail admission opens only a named authorized Session. The existing
+        // detail route retains access/projection policy; no list or Account
+        // content read is granted by the pin's installed-Machine signature.
+        const detail = /^\/v2\/sessions\/([^/?#]+)(\?accessProjectionVersion=1)?$/u.exec(proof.path);
+        if (detail) {
+            try {
+                const parsed = SessionOrganizationPinSetInputSchema.safeParse({ sessionId: decodeURIComponent(detail[1]), pinned: true });
+                return parsed.success && proof.path === `/v2/sessions/${encodeURIComponent(parsed.data.sessionId)}${detail[2] ?? ''}`;
+            } catch { return false; }
+        }
+    }
+    return isHomeDomainActionHttpOperation(verified.binding.actionId, proof);
 }
 
 export async function verifyExternalActionDomainExecutionRequest(

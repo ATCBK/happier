@@ -28,11 +28,19 @@ describe('session.organization.pin.set', () => {
     } }));
     const executor = createPinExecutor(sessionOrganizationPinSet);
     await expect(executor.execute('session.organization.pin.set',
-      { sessionId: 's1', pinned: true, surface: 'rail' }, { surface: 'cli', authority: 'account_automation', serverId: 'home1' }))
+      { sessionId: 's1', pinned: true, surface: 'rail', serverId: 'srv_home1' }, {
+        surface: 'cli', authority: 'account_automation', serverId: 'home1', serverIdentityId: 'srv_home1',
+      }))
       .resolves.toEqual({ ok: true, result: { pin: { sessionId: 's1', sortKey: 'a', pinnedAt: 10, listPinned: false, railPinned: true } } });
     expect(sessionOrganizationPinSet).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 's1', request: { pinned: true, surface: 'rail' }, serverId: 'home1',
+      sessionId: 's1', request: { pinned: true, surface: 'rail' }, serverId: 'srv_home1',
     }));
+    sessionOrganizationPinSet.mockClear();
+    await expect(executor.execute('session.organization.pin.set',
+      { sessionId: 's1', pinned: true, surface: 'rail', serverId: 'srv_foreign' }, {
+        surface: 'cli', authority: 'account_automation', serverId: 'home1', serverIdentityId: 'srv_home1',
+      })).resolves.toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    expect(sessionOrganizationPinSet).not.toHaveBeenCalled();
   });
 
   it('rejects unsupported surface input before the Account mutation', async () => {
