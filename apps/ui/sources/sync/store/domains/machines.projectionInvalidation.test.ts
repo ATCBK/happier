@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 
-import { createServerProfilesModuleMock } from '@/dev/testkit/mocks/serverProfiles';
+import { createPartialServerProfilesModuleMock } from '@/dev/testkit/mocks/serverProfiles';
 import type { Machine, MachineMetadata } from '../../domains/state/storageTypes';
 
 const applyWorkspaceSyncRuntimeEvent = vi.fn();
@@ -75,7 +75,7 @@ async function loadMachinesDomain() {
     vi.doMock('../../domains/server/serverRuntime', () => ({
         getActiveServerSnapshot: () => ({ serverId: 'server_a', serverUrl: 'http://server.local', generation: 0 }),
     }));
-    vi.doMock('../../domains/server/serverProfiles', () => createServerProfilesModuleMock({
+    vi.doMock('../../domains/server/serverProfiles', (importOriginal) => createPartialServerProfilesModuleMock(importOriginal, {
         profiles: [{ id: 'server_a', name: 'server_a', serverUrl: 'http://server_a.local' }],
     }));
     vi.doMock('../../domains/transfers/runtime/transferRouteCache', () => ({
