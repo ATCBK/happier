@@ -69,6 +69,7 @@ export const RoleCollectionRail = React.memo(function RoleCollectionRail() {
     return (
         <CollectionList
             testID="settings.roles.rail"
+            title={t('roles.rail.label')}
             count={catalog.status === 'ready' ? catalog.entries.length : undefined}
             headerAction={(
                 <IconButton

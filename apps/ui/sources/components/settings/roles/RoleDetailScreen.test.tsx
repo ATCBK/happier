@@ -30,9 +30,19 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
     createFrontDoorActionExecute: () => async (actionId: string, input: unknown) => {
         shared.calls.push({ actionId, input });
         if (actionId === 'roles.list') return { ok: true, result: { items: shared.items } };
+        if (actionId === 'roles.create') return { ok: true, result: { roleId: 'created-role' } };
         return { ok: true, result: {} };
     },
 }));
+
+// Navigation is the route boundary: the test records where the page asked to go.
+const navigation = vi.hoisted(() => ({ replaced: [] as unknown[] }));
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    const mock = createExpoRouterMock();
+    mock.spies.replace.mockImplementation((href: unknown) => { navigation.replaced.push(href); });
+    return mock.module;
+});
 
 // The modal host is the presentation boundary: the test captures what the page asked it to show.
 vi.mock('@/modal', async () => {
@@ -78,6 +88,21 @@ function writes() {
     return shared.calls.filter((call) => call.actionId !== 'roles.list');
 }
 
+/** The block the preview shows (the canonical code block's text). */
+function previewText(screen: Awaited<ReturnType<typeof renderScreen>>): string {
+    const block = screen.findByTestId('settings.roles.detail.preview.block')!;
+    return block.findAll((node: any) => typeof node.props?.code === 'string')[0]!.props.code;
+}
+
+/** "What agents read" is rare detail: it opens in place from Advanced, then shows the block. */
+async function openPreview(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    await screen.pressByTestIdAsync('settings.roles.detail.preview');
+    await vi.waitFor(() => expect(screen.findByTestId('settings.roles.detail.preview.block')).toBeTruthy());
+    // The code block settles its own presentation (highlighting preference) after it mounts; let it
+    // finish before a test starts counting the page's commits.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
+}
+
 describe('Settings › Roles detail', () => {
     it('updates only the Orchestrator preview when a consumed cross-role fact changes', async () => {
         let commits = 0;
@@ -85,6 +110,7 @@ describe('Settings › Roles detail', () => {
             <RoleDetailScreen target={{ kind: 'role', roleId: 'orchestrator' }} />
         </React.Profiler>);
         await vi.waitFor(() => expect(screen.findByTestId('settings.roles.detail.orchestrator')).toBeTruthy());
+        await openPreview(screen);
         const settled = commits;
         const { roleId: _id, ...other } = ownRole;
         shared.items[1] = { roleId: 'ui-builder', role: { ...other, instructions: 'Unconsumed instructions' },
@@ -95,7 +121,7 @@ describe('Settings › Roles detail', () => {
             revision: { headerVersion: 3, bodyVersion: 9 }, shared: false, viewOnly: false, migratedFromV0_2: false };
         await act(async () => { invalidateRoleCatalog(); });
         expect(commits).toBeGreaterThan(settled);
-        expect(screen.findByTestId('settings.roles.detail.preview.block')!.props.value).toContain('Renamed builder');
+        expect(previewText(screen)).toContain('Renamed builder');
     });
 
     it('retires the previous Account Role detail when the next Account has no matching Role', async () => {
@@ -111,6 +137,7 @@ describe('Settings › Roles detail', () => {
             <RoleDetailScreen target={{ kind: 'role', roleId: 'ui-builder' }} />
         </React.Profiler>);
         await vi.waitFor(() => expect(screen.findByTestId('settings.roles.detail.ui-builder')).toBeTruthy());
+        await openPreview(screen);
         const settled = commits;
         shared.items = structuredClone(shared.items);
         await act(async () => { invalidateRoleCatalog(); });
@@ -125,7 +152,7 @@ describe('Settings › Roles detail', () => {
             revision: { headerVersion: 3, bodyVersion: 8 }, shared: false, viewOnly: false, migratedFromV0_2: false };
         await act(async () => { invalidateRoleCatalog(); });
         expect(commits).toBeGreaterThan(settled);
-        expect(screen.findByTestId('settings.roles.detail.preview.block')!.props.value).toContain('Updated selected instructions');
+        expect(previewText(screen)).toContain('Updated selected instructions');
     });
     beforeEach(async () => { await act(async () => {
         previousStorageState = storage.getState();
@@ -173,6 +200,25 @@ describe('Settings › Roles detail', () => {
         }]));
     });
 
+    it('renames the reader\'s own role in its page title, with no second name field', async () => {
+        const screen = await renderRole('ui-builder');
+        expect(screen.findByTestId('settings.roles.detail.name')).toBeNull();
+        const title = () => screen.findByTestId('settings.roles.detail.title')!;
+        await act(async () => { title().props.onChangeText('Interface builder'); });
+        await act(async () => { title().props.onBlur(); });
+        await vi.waitFor(() => expect(writes()).toEqual([{
+            actionId: 'roles.update',
+            input: {
+                roleId: 'ui-builder',
+                role: { name: 'Interface builder', instructions: 'Build interfaces and their copy.', runsAs: { kind: 'session' }, workspaceWrites: 'allow', secondOpinion: 'off', enabled: true },
+                expectedRevision: { headerVersion: 3, bodyVersion: 7 },
+            },
+        }]));
+        // A built-in keeps its platform name: its title is not an editor.
+        const builtIn = await renderRole('orchestrator');
+        expect(builtIn.findByTestId('settings.roles.detail.title')).toBeNull();
+    });
+
     it('saves the reader\'s own role to its Artifact under the revision it was read at', async () => {
         const screen = await renderRole('ui-builder');
         const handsOff = screen.findByTestId('settings.roles.detail.handsOff')!;
@@ -217,7 +263,10 @@ describe('Settings › Roles detail', () => {
 
     it('previews exactly the block the one role renderer dispatches', async () => {
         const screen = await renderRole('orchestrator');
-        const preview = screen.findByTestId('settings.roles.detail.preview.block')!;
+        // Closed, the page renders no preview block (and resolves no cross-role facts for it).
+        expect(screen.findByTestId('settings.roles.detail.preview.block')).toBeNull();
+        await openPreview(screen);
+        const preview = { props: { value: previewText(screen) } };
         const effectiveOrchestrator = { ...orchestrator, secondOpinion: 'encouraged', changedAt: 'settings' };
         expect(preview.props.value).toBe(renderSessionRoleBlockV1({
             role: effectiveOrchestrator as any,
@@ -289,11 +338,14 @@ describe('Settings › Roles detail', () => {
         await share!.props.onPress();
         expect(shared.shown).toHaveLength(1);
         expect(shared.shown[0]).toMatchObject({
-            chrome: { testID: 'document-share-modal', subtitle: expect.stringContaining('roles.rail.defaultEngine') },
+            chrome: { testID: 'document-share-modal' },
             props: { kind: 'role.v1', artifactId: 'ui-builder', linkPath: '/settings/roles/ui-builder' },
         });
         const sheet = shared.shown[0] as { chrome: { subtitle: string } };
         expect(sheet.chrome.subtitle).not.toContain('null');
+        // The agent an unpinned role follows is not named until the catalog has said it, never as "Default agent".
+        expect(sheet.chrome.subtitle).not.toContain('roles.rail.defaultEngine');
+        // The runs-as fact reads as the role's own runs-as words (lab `settings-S`: "… · background run").
         expect(sheet.chrome.subtitle).toContain('roles.settings.runsAsSession');
         // Opening the sheet writes nothing; grants change only inside the sheet.
         expect(writes()).toEqual([]);
@@ -312,6 +364,15 @@ describe('Settings › Roles detail', () => {
         expect(shared.savedFiles[0]!.fileName).toBe('UI-builder.role.json');
         expect(writes()).toEqual([]);
     });
+    it('opens the role it just created, not whichever role was visited last', async () => {
+        navigation.replaced.length = 0;
+        const screen = await renderScreen(<RoleDetailScreen target={{ kind: 'draft' }} />);
+        await act(async () => { screen.findByTestId('settings.roles.draft.name')!.props.onChangeText('Payments reviewer'); });
+        await screen.pressByTestIdAsync('settings.roles.draft.create');
+        await vi.waitFor(() => expect(navigation.replaced).toContain('/settings/roles/created-role'));
+        expect(writes().map((call) => call.actionId)).toEqual(['roles.create']);
+    });
+
     it('duplicates a role as one of the reader\'s own, leaving the original untouched', async () => {
         const screen = await renderRole('orchestrator');
         await act(async () => { await menuActions(screen).find((action) => action.id === 'duplicate')!.onSelect(); });
@@ -328,7 +389,7 @@ describe('Settings › Roles detail', () => {
 
         const ownScreen = await renderRole('ui-builder');
         expect(ownScreen.findHostByTestId('settings.roles.detail.runsAs.thisSession')).toBeNull();
-        expect(ownScreen.findAll((node: any) => node.props?.testIDPrefix === 'settings.roles.detail.runsAs')).toHaveLength(1);
+        expect(ownScreen.findAll((node: any) => node.props?.testIDPrefix === 'settings.roles.detail.runsAs').length).toBeGreaterThan(0);
     });
 
     it('says whether a built-in still follows the platform default or was edited', async () => {

@@ -17,11 +17,13 @@ import {
   useRoleCatalogPromptPreview,
 } from '@/components/roles/catalog/useRoleCatalog';
 import { useRoleEnginePresentation } from '@/components/roles/catalog/useRoleEnginePresentation';
+import { useRoleSessionCount } from '@/components/roles/catalog/useRoleSessionCount';
 import { useRoleMark } from '@/components/roles/catalog/useRoleMark';
 import { describeRoleRunsAs, describeRoleSource } from '@/components/roles/catalog/rolePresentation';
 import { resolvedRoleToArtifact } from '@/sync/domains/roles/roleCatalog';
-import { HappierPressable, joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, HappierPressable, joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
 import { showDocumentShareSheet } from '@/components/sharing/documents/showDocumentShareSheet';
+import { CodeBlockView } from '@/components/ui/code/blocks/CodeBlockView';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Switch } from '@/components/ui/forms/Switch';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -34,6 +36,7 @@ import {
   PageHeaderMenu,
   type PageHeaderMenuAction,
 } from '@/components/ui/layout/PageHeaderEntityParts';
+import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -83,6 +86,12 @@ type RolePatch = Partial<
   >
 >;
 
+
+/** The id `roles.create` answers with, for opening the role it made. */
+function readCreatedRoleId(created: unknown): string | null {
+  return created && typeof created === 'object' && 'roleId' in created && typeof created.roleId === 'string'
+    ? created.roleId : null;
+}
 
 function leave(
   router: ReturnType<typeof useRouter>,
@@ -178,6 +187,14 @@ const RoleDetail = React.memo(function RoleDetail(
   const presentEngine = useRoleEnginePresentation();
   const engine = presentEngine(role.engine);
   const roleMark = useRoleMark();
+  const sessionCount = useRoleSessionCount(entry.roleId);
+  // The page title is the name, edited in place: a renamed own role commits when focus leaves it.
+  const [nameDraft, setNameDraft] = React.useState(role.name);
+  const lastNameRef = React.useRef(role.name);
+  if (lastNameRef.current !== role.name) {
+    lastNameRef.current = role.name;
+    setNameDraft(role.name);
+  }
   // Your own roles and roles shared with you to edit save to their Artifact; everything else is an override.
   const ownRole =
     (entry.source === 'user' || entry.source === 'shared') &&
@@ -224,8 +241,8 @@ const RoleDetail = React.memo(function RoleDetail(
             artifactId: entry.roleId,
             name: role.name,
             subtitle: joinHappierFacts(
-              engine.label ?? t('roles.rail.defaultEngine'),
-              t('shareSheet.roleRunsIn', { kind: describeRoleRunsAs(role.runsAs.kind) }),
+              engine.pending ? null : engine.label ?? t('roles.rail.defaultEngine'),
+              describeRoleRunsAs(role.runsAs.kind),
             ),
             linkPath: roleRoute(entry.roleId),
             onSendCopy: () => {
@@ -252,10 +269,8 @@ const RoleDetail = React.memo(function RoleDetail(
             name: t('roles.settings.duplicateName', { name: role.name }),
           });
           if (!(await reportFailure(result)) || !result.ok) return;
-          const created = result.result;
-          if (created && typeof created === 'object' && 'roleId' in created && typeof created.roleId === 'string') {
-            leave(router, roleRoute(created.roleId), 'RoleDetail.duplicated');
-          }
+          const createdRoleId = readCreatedRoleId(result.result);
+          if (createdRoleId) leave(router, roleRoute(createdRoleId), 'RoleDetail.duplicated');
         },
       },
       ...(ownRole && entry.source === 'user' && entry.revision
@@ -289,6 +304,9 @@ const RoleDetail = React.memo(function RoleDetail(
 
   const meta: PageHeaderMetaFact[] = [
     { key: 'source', text: describeRoleSource(entry) },
+    ...(sessionCount > 0
+      ? [{ key: 'usedBy', text: t('roles.settings.usedBySessions', { count: sessionCount }) }]
+      : []),
     ...(entry.viewOnly
       ? [{ key: 'readOnly', text: t('roles.settings.readOnly') }]
       : []),
@@ -301,6 +319,18 @@ const RoleDetail = React.memo(function RoleDetail(
     <ItemList testID={`settings.roles.detail.${entry.roleId}`}>
       <PageHeader
         title={role.name}
+        titleEditor={ownRole ? {
+          value: nameDraft,
+          placeholder: t('roles.settings.newRoleName'),
+          accessibilityLabel: t('roles.settings.nameTitle'),
+          testID: 'settings.roles.detail.title',
+          onChangeText: setNameDraft,
+          onCommit: () => {
+            const name = nameDraft.trim();
+            if (name && name !== role.name) void commit({ name });
+            else setNameDraft(role.name);
+          },
+        } : undefined}
         meta={meta}
         leading={<PageHeaderMarkSlot>{roleMark(role, 28, entry.roleId)}</PageHeaderMarkSlot>}
         actions={
@@ -321,18 +351,6 @@ const RoleDetail = React.memo(function RoleDetail(
         }
         alwaysShowTitle
       />
-      {ownRole ? (
-        <ItemGroup title={t('roles.settings.nameTitle')} surface="none">
-          <CommitOnBlurField
-            testID="settings.roles.detail.name"
-            value={role.name}
-            accessibilityLabel={t('roles.settings.nameTitle')}
-            onCommit={(name) => {
-              if (name.trim()) void commit({ name: name.trim() });
-            }}
-          />
-        </ItemGroup>
-      ) : null}
       <ItemGroup
         title={t('roles.settings.instructionsTitle')}
         description={
@@ -367,7 +385,8 @@ const RoleDetail = React.memo(function RoleDetail(
           testID="settings.roles.detail.instructions"
           value={role.instructions}
           multiline
-          minLines={6}
+          presentation="document"
+          minLines={4}
           accessibilityLabel={t('roles.settings.instructionsTitle')}
           onCommit={(instructions) => {
             void commit({ instructions });
@@ -395,6 +414,7 @@ const RoleDetail = React.memo(function RoleDetail(
               engine={role.engine}
               label={engine.label}
               leading={engine.icon}
+              pending={engine.pending}
               onChange={(next: RoleEngineV1) => {
                 void commit({ engine: next });
               }}
@@ -480,7 +500,6 @@ const RoleDetail = React.memo(function RoleDetail(
           />
         ) : null}
       </ItemGroup>
-      <RolePreview entry={entry} />
       <ItemGroup title={t('roles.settings.advancedTitle')}>
         <RoleLaunchProfileRow
           profileId={role.profileId ?? null}
@@ -489,6 +508,7 @@ const RoleDetail = React.memo(function RoleDetail(
             void commit({ profileId: profileId ?? undefined });
           }}
         />
+        <RolePreviewDisclosure entry={entry} />
       </ItemGroup>
     </ItemList>
   );
@@ -516,24 +536,39 @@ function RolePreview(props: Readonly<{ entry: RoleCatalogEntry }>) {
   );
 }
 
+/**
+ * "What agents read": rare, read-only detail, so it opens in place under Advanced. The block (and,
+ * for the Orchestrator, the cross-role facts it names) is resolved only while it is open.
+ */
+function RolePreviewDisclosure(props: Readonly<{ entry: RoleCatalogEntry }>) {
+  const [expanded, setExpanded] = React.useState(false);
+  return (
+    <ExpandableItem
+      testID="settings.roles.detail.preview.disclosure"
+      expanded={expanded}
+      onExpandedChange={setExpanded}
+      header={({ headerProps, expanded: open }) => (
+        <Item
+          {...(headerProps as Readonly<Record<string, unknown>>)}
+          testID="settings.roles.detail.preview"
+          title={t('roles.settings.previewTitle')}
+          subtitle={t('roles.settings.previewDescription')}
+          showChevron={false}
+          rightElement={<ExpandableItemCaret expanded={open} />}
+        />
+      )}
+    >
+      {expanded ? <RolePreview entry={props.entry} /> : null}
+    </ExpandableItem>
+  );
+}
+
+/** The whole block, read-only and selectable, in the canonical code block (it grows with the block). */
 function RolePreviewBlock(props: Readonly<{ block: string }>) {
   return (
-    <ItemGroup
-      title={t('roles.settings.previewTitle')}
-      description={t('roles.settings.previewDescription')}
-      surface="none"
-    >
-      <FieldTextInput
-        testID="settings.roles.detail.preview.block"
-        value={props.block}
-        onChangeText={() => {}}
-        accessibilityLabel={t('roles.settings.previewTitle')}
-        editable={false}
-        multiline
-        monospace
-        minLines={6}
-      />
-    </ItemGroup>
+    <View testID="settings.roles.detail.preview.block" style={styles.previewBody}>
+      <CodeBlockView code={props.block} wrap showCopyButton />
+    </View>
   );
 }
 
@@ -596,6 +631,7 @@ function CommitOnBlurField(
     placeholder?: string;
     testID?: string;
     onDraftChange?: (value: string) => void;
+    presentation?: 'field' | 'document';
   }>,
 ) {
   const [draft, setDraft] = React.useState(props.value);
@@ -620,6 +656,7 @@ function CommitOnBlurField(
       minLines={props.minLines}
       editable={props.editable}
       placeholder={props.placeholder}
+      presentation={props.presentation}
     />
   );
 }
@@ -647,8 +684,10 @@ const RoleDraft = React.memo(function RoleDraft() {
       enabled: true,
     });
     setSaving(false);
-    if (await reportFailure(result))
-      leave(router, ROLES_COLLECTION_ROOT, 'RoleDraft.created');
+    if (!(await reportFailure(result)) || !result.ok) return;
+    // The new role is what the reader goes on with: open it, not the role visited before the draft.
+    const createdRoleId = readCreatedRoleId(result.result);
+    leave(router, createdRoleId ? roleRoute(createdRoleId) : ROLES_COLLECTION_ROOT, 'RoleDraft.created');
   };
   return (
     <ItemList testID="settings.roles.draft">
@@ -691,7 +730,8 @@ const RoleDraft = React.memo(function RoleDraft() {
           onChangeText={setInstructions}
           accessibilityLabel={t('roles.settings.instructionsTitle')}
           multiline
-          minLines={6}
+          presentation="document"
+          minLines={4}
         />
       </ItemGroup>
     </ItemList>
@@ -699,15 +739,20 @@ const RoleDraft = React.memo(function RoleDraft() {
 });
 
 const styles = StyleSheet.create((theme) => ({
+  // The block sits on the row inset, under its header, inside the Advanced sheet.
+  previewBody: {
+    paddingHorizontal: HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx,
+    paddingBottom: HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx,
+  },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.margins.xs,
+    gap: theme.space.s4,
   },
   instructionsState: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
   },
   instructionsStateText: {
     ...Typography.rowMeta(),

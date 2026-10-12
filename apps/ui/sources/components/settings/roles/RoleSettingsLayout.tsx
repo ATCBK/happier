@@ -23,7 +23,8 @@ export const RoleSettingsLayout = React.memo(function RoleSettingsLayout() {
             railWidthPx={ROLE_RAIL_WIDTH_PX}
             detailMinWidthPx={ROLE_DETAIL_MIN_WIDTH_PX}
             testID="settings-roles"
-            collectionHeader={<SettingsPageHeader title={t('roles.rail.label')} description={t('roles.settings.description')} />}
+            // The list and detail below are full-bleed, so the header spans the pane and shares the rail's edge.
+            collectionHeader={<SettingsPageHeader columnWidth="pane" title={t('roles.rail.label')} description={t('roles.settings.description')} />}
         />
     );
 });

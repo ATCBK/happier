@@ -135,6 +135,8 @@ describe('Settings › Roles collection landing', () => {
         expect(commits).toHaveBeenCalledTimes(1);
         await act(async () => { pending.resolve({ ok: true, result: { items: [] } }); });
         expect(screen.findByType(CollectionList).props.count).toBe(0);
+        // The count is said with what it counts ("Roles 0"), as every other settings collection does.
+        expect(screen.findByType(CollectionList).props.title).toBe(t('roles.rail.label'));
         expect(screen.findByType(OptionPickerOverlay).props.emptyText).toBe(t('roles.rail.empty'));
         expect(commits).toHaveBeenCalledTimes(2);
     });
