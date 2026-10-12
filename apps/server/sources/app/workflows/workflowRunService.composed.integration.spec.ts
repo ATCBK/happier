@@ -1203,7 +1203,7 @@ describe("workflowRunService (integration)", () => {
         });
 
         const attention = await listWorkflowRuns({ accountId: seeded.accountId, attention: "required", pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES });
-        expect(attention.runs.map((run) => run.id)).toEqual([interruptedRunId]);
+        expect(attention.runs).toEqual([]);
         const all = await listWorkflowRuns({ accountId: seeded.accountId, pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES });
         expect(all.runs.map((run) => run.id)).toContain(settledRunId);
         const settledObservation = await waitWorkflowRun({
@@ -2399,7 +2399,7 @@ describe("workflowRunService (integration)", () => {
             .resolves.toMatchObject({ observation: "needs_attention", run: { id: runId } });
         await db.workflowRunInvocation.update({ where: { id: approvalId }, data: { lifecycle: "cancel_requested" } });
         await expect(waitWorkflowRun({ accountId: seeded.accountId, runId, timeoutSeconds: 0 }))
-            .resolves.toMatchObject({ observation: "needs_attention", run: { id: runId } });
+            .resolves.toMatchObject({ observation: "timeout", run: { id: runId, attentionRequired: false } });
         // Direct workflow states are broader than the incumbent Automation
         // state machine and must not be parsed by Automation success effects.
         await db.automationRun.update({ where: { id: runId }, data: { state: "interrupted" } });
@@ -3406,47 +3406,52 @@ describe("workflowRunService (integration)", () => {
             const observed = await observe(body);
             expect(observed.statusCode, observed.body).toBe(200);
             expect(observed.json()).toMatchObject({ id: invocationId, lifecycle, attempt: "0" });
+            const observedParentRevision: number = observed.json().parentRevision;
+            expect(observedParentRevision).toBe(parentBefore.revision + (lifecycle === "needs_attention" ? 0 : 1));
+            const parentAfterAttention = await db.automationRun.findUniqueOrThrow({ where: { id: runId } });
+            expect({ ...parentAfterAttention, revision: parentBefore.revision, updatedAt: parentBefore.updatedAt }).toEqual(parentBefore);
+            expect(parentAfterAttention.updatedAt.getTime()).toBeGreaterThanOrEqual(parentBefore.updatedAt.getTime());
             if (expectedLifecycle === "needs_attention") {
-                const rootBody = { ...body, invocationId: rootId, expectedLifecycle: "pending", lifecycle: "pending", resolution: "root_list_progress",
+                const rootBody = { ...body, expectedRevision: observedParentRevision, invocationId: rootId, expectedLifecycle: "pending", lifecycle: "pending", resolution: "root_list_progress",
                     contentEnvelope: progressEnvelope({ ...seeded, runId, id: rootId, sequence: 0n, parentRecordId: null, memberOrdinal: 0n,
                         stepProgress: { completed: 1, total: 1 } }) };
                 const rootPublished = await observe(rootBody);
                 expect(rootPublished.statusCode, rootPublished.body).toBe(200);
-                expect(rootPublished.json()).toMatchObject({ id: rootId, lifecycle: "pending", contentRevision: "1" });
+                expect(rootPublished.json()).toMatchObject({ id: rootId, lifecycle: "pending", contentRevision: "1", parentRevision: observedParentRevision });
                 expect((await observe({ ...rootBody, expectedContentRevision: "1", lifecycle: "completed" })).statusCode).toBe(422);
                 expect((await observe({ ...rootBody, invocationId, expectedLifecycle: lifecycle, lifecycle,
                     expectedContentRevision: "1", contentEnvelope: body.contentEnvelope })).statusCode).toBe(422);
             }
-            const freshBody = { ...body, expectedContentRevision: "1" };
-            const rejectedAdmission = await observe({ ...body, lifecycle: "admitting" });
+            const freshBody = { ...body, expectedRevision: observedParentRevision, expectedContentRevision: "1" };
+            const rejectedAdmission = await observe({ ...freshBody, lifecycle: "admitting" });
             expect(rejectedAdmission.statusCode, rejectedAdmission.body).toBe(422);
-            const stale = await observe({ ...body, expectedRevision: 0 });
+            const stale = await observe({ ...body, expectedRevision: observedParentRevision - 1, expectedContentRevision: "1" });
             expect(stale.statusCode, stale.body).toBe(409);
-            const ambiguousAuthority = await observe({ ...body, parentAttempt: 1 });
+            const ambiguousAuthority = await observe({ ...freshBody, parentAttempt: 1 });
             expect(ambiguousAuthority.statusCode, ambiguousAuthority.body).toBe(400);
-            const missingObservationProof = await observe({ ...body, resolution: undefined });
+            const missingObservationProof = await observe({ ...freshBody, resolution: undefined });
             expect(missingObservationProof.statusCode, missingObservationProof.body).toBe(400);
             const wrongBinding = await observe({ ...freshBody, contentEnvelope: progressEnvelope({ ...seeded, runId, id: rootId, sequence: 0n, parentRecordId: null, memberOrdinal: 0n }) });
             expect(wrongBinding.statusCode, wrongBinding.body).toBe(422);
-            expect((await observe(body)).statusCode).toBe(409);
+            expect((await observe({ ...body, expectedRevision: observedParentRevision })).statusCode).toBe(409);
             const rejoined = await observe(freshBody);
             expect(rejoined.statusCode, rejoined.body).toBe(200);
             expect(await db.workflowRunInvocation.count({ where: { runId } })).toBe(2);
-            expect(await db.automationRun.findUniqueOrThrow({ where: { id: runId } })).toEqual(parentBefore);
+            expect(await db.automationRun.findUniqueOrThrow({ where: { id: runId } })).toEqual(parentAfterAttention);
             await expect(db.workflowRunInvocation.findUniqueOrThrow({ where: { id: invocationId }, select: { lifecycle: true, contentEnvelope: true } }))
                 .resolves.toEqual({ lifecycle, contentEnvelope: body.contentEnvelope });
             for (const state of ["queued", "running", "paused", "succeeded"] as const) {
                 await db.automationRun.update({ where: { id: runId }, data: { state } });
-                const ineligible = await observe(body);
+                const ineligible = await observe(freshBody);
                 expect(ineligible.statusCode, ineligible.body).toBe(409);
             }
             await db.automationRun.update({ where: { id: runId }, data: { state: "interrupted", workflowCustodyState: "settled" } });
-            const settled = await observe(body);
+            const settled = await observe(freshBody);
             expect(settled.statusCode, settled.body).toBe(409);
             await db.automationRun.update({ where: { id: runId }, data: { workflowCustodyState: "pending" } });
             const otherMachine = await db.machine.create({ data: { id: randomUUID(), accountId: seeded.accountId, metadata: "{}" } });
             await db.automationRunAssignment.updateMany({ where: { runId }, data: { machineId: otherMachine.id } });
-            const wrongMachine = await observe(body);
+            const wrongMachine = await observe(freshBody);
             expect(wrongMachine.statusCode, wrongMachine.body).toBe(409);
             await db.automationRunAssignment.updateMany({ where: { runId }, data: { machineId: seeded.machineId } });
             const replacementId = randomUUID();
@@ -3454,7 +3459,7 @@ describe("workflowRunService (integration)", () => {
                 id: replacementId, runId, sequence: 2n, parentRecordId: rootId, memberOrdinal: 0n, attempt: 1n, lifecycle: "needs_attention",
                 contentEnvelope: progressEnvelope({ ...seeded, runId, id: replacementId, sequence: 2n, parentRecordId: rootId, memberOrdinal: 0n, attempt: 1n, previousAttemptRecordId: invocationId, logicalInvocationRecordId: invocationId }),
             } });
-            const staleAttempt = await observe(body);
+            const staleAttempt = await observe(freshBody);
             expect(staleAttempt.statusCode, staleAttempt.body).toBe(409);
             await expect(db.workflowRunInvocation.findUniqueOrThrow({ where: { id: invocationId }, select: { lifecycle: true, contentEnvelope: true } }))
                 .resolves.toEqual({ lifecycle, contentEnvelope: body.contentEnvelope });
