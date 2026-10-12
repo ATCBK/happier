@@ -1,4 +1,5 @@
 import { startFileWatcher } from '@/integrations/watcher/startFileWatcher';
+import type { StartFileWatcherOptions } from '@/integrations/watcher/startFileWatcher';
 
 import { JsonlFollower } from './followJsonlFile';
 import { emitJsonlFollowerMetric } from './followMetrics';
@@ -6,7 +7,7 @@ import type { JsonlFollowerMetrics } from './followMetrics';
 import { normalizeJsonlFollowPolicy } from './followPolicy';
 import type { JsonlFollowPolicyV1, JsonlFollowPolicyInputV1 } from './followPolicy';
 
-type WatchFile = (file: string, onFileChange: (file: string) => void) => () => void;
+type WatchFile = (file: string, onFileChange: (file: string) => void, options?: StartFileWatcherOptions) => () => void;
 
 export type JsonlFollowController = Readonly<{
     attach: (options?: Readonly<{ keepAlive?: boolean }>) => Promise<void>;
@@ -75,6 +76,13 @@ export function createJsonlFollowController(options: JsonlFollowControllerOption
             if (follower !== nextFollower || disposed) return;
             emitJsonlFollowerMetric(options.metrics, { type: 'watcher_wakeup' });
             void nextFollower.drainNow('watcher');
+        }, {
+            onWatcherAttached: () => {
+                if (follower === nextFollower && !disposed) nextFollower.setWatcherAvailable(true);
+            },
+            onWatcherUnavailable: () => {
+                if (follower === nextFollower && !disposed) nextFollower.setWatcherAvailable(false);
+            },
         });
 
         const started = (async () => {

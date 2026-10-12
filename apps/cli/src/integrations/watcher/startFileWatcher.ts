@@ -1,17 +1,11 @@
-import { logger } from "@/ui/logger";
-import { statSync } from "node:fs";
-import { stat, watch } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { on } from 'node:events';
+import { statSync, watch } from 'node:fs';
+import { lstat, stat } from 'node:fs/promises';
+import { basename, dirname, resolve } from 'node:path';
 
-const DEFAULT_MISSING_PARENT_RETRY_DELAY_MS = 1_000;
-const DEFAULT_MISSING_PARENT_TIMEOUT_MS = 30_000;
-const DEFAULT_WATCH_RESTART_DELAY_MS = 1_000;
+import { logger } from '@/ui/logger';
 
-interface StartFileWatcherPolicy {
-    missingParentRetryDelayMs: number;
-    missingParentTimeoutMs: number;
-    watchRestartDelayMs: number;
-}
+const WATCH_RECOVERY_DELAY_MS = 1_000;
 
 export type StartFileWatcherOptions = Readonly<{
     emitInitial?: boolean;
@@ -20,23 +14,14 @@ export type StartFileWatcherOptions = Readonly<{
     onWatcherUnavailable?: (error: Error) => void;
 }>;
 
-const DEFAULT_WATCHER_POLICY: StartFileWatcherPolicy = {
-    missingParentRetryDelayMs: DEFAULT_MISSING_PARENT_RETRY_DELAY_MS,
-    missingParentTimeoutMs: DEFAULT_MISSING_PARENT_TIMEOUT_MS,
-    watchRestartDelayMs: DEFAULT_WATCH_RESTART_DELAY_MS,
-};
-
 function hasErrorCode(error: unknown, code: string): boolean {
     return typeof error === 'object' && error !== null && 'code' in error && (error as NodeJS.ErrnoException).code === code;
 }
 
 function delayUnrefAbortable(ms: number, abortSignal: AbortSignal): Promise<void> {
-    if (abortSignal.aborted || ms <= 0) return Promise.resolve();
+    if (abortSignal.aborted) return Promise.resolve();
     return new Promise((resolve) => {
-        let settled = false;
         const finish = () => {
-            if (settled) return;
-            settled = true;
             clearTimeout(timer);
             abortSignal.removeEventListener('abort', finish);
             resolve();
@@ -47,181 +32,45 @@ function delayUnrefAbortable(ms: number, abortSignal: AbortSignal): Promise<void
     });
 }
 
-async function pathExists(path: string): Promise<boolean> {
+function version(entry: Awaited<ReturnType<typeof stat>>): string {
+    return `${entry.dev}:${entry.ino}:${entry.size}:${entry.mtimeMs}`;
+}
+
+function readRegistration(file: string): Readonly<{ version: string | null; isDirectory: boolean }> {
     try {
-        await stat(path);
-        return true;
+        const entry = statSync(file);
+        return { version: version(entry), isDirectory: entry.isDirectory() };
     } catch (error) {
-        if (hasErrorCode(error, 'ENOENT')) {
-            return false;
-        }
+        if (hasErrorCode(error, 'ENOENT')) return { version: null, isDirectory: false };
         throw error;
     }
 }
 
-async function readFileIdentity(path: string): Promise<string | null> {
+async function readEntry(file: string) {
     try {
-        const entry = await stat(path);
-        return `${entry.dev}:${entry.ino}`;
+        return await stat(file);
     } catch (error) {
-        if (hasErrorCode(error, 'ENOENT')) {
-            return null;
-        }
+        if (hasErrorCode(error, 'ENOENT')) return null;
         throw error;
     }
 }
 
-function readFileVersionAtRegistration(path: string): string | null {
-    try {
-        const entry = statSync(path);
-        return `${entry.dev}:${entry.ino}:${entry.size}:${entry.mtimeMs}`;
-    } catch (error) {
-        if (hasErrorCode(error, 'ENOENT')) {
-            return null;
-        }
-        throw error;
-    }
+async function readVersion(file: string): Promise<string | null> {
+    const entry = await readEntry(file);
+    return entry ? version(entry) : null;
 }
 
-function isDirectoryAtRegistration(path: string): boolean {
+function identity(fileVersion: string | null): string | null {
+    return fileVersion?.split(':', 2).join(':') ?? null;
+}
+
+async function isFileSymlink(file: string): Promise<boolean> {
     try {
-        return statSync(path).isDirectory();
+        return (await lstat(file)).isSymbolicLink();
     } catch (error) {
         if (hasErrorCode(error, 'ENOENT')) return false;
         throw error;
     }
-}
-
-async function readFileVersion(path: string): Promise<string | null> {
-    try {
-        const entry = await stat(path);
-        return `${entry.dev}:${entry.ino}:${entry.size}:${entry.mtimeMs}`;
-    } catch (error) {
-        if (hasErrorCode(error, 'ENOENT')) {
-            return null;
-        }
-        throw error;
-    }
-}
-
-async function waitForParentDirectory(
-    opts: {
-        file: string;
-        parentDir: string;
-        abortSignal: AbortSignal;
-        watcherPolicy: StartFileWatcherPolicy;
-    }
-): Promise<boolean> {
-    const { file, parentDir, abortSignal, watcherPolicy } = opts;
-    const startedAt = Date.now();
-    let attempts = 0;
-    let loggedMissingParent = false;
-
-    while (!abortSignal.aborted) {
-        if (await pathExists(parentDir)) {
-            return true;
-        }
-
-        attempts += 1;
-        const elapsedMs = Date.now() - startedAt;
-        if (elapsedMs >= watcherPolicy.missingParentTimeoutMs) {
-            logger.debug(
-                `[FILE_WATCHER] Parent directory still missing after ${attempts} attempts over ${elapsedMs}ms; stopping watcher`
-            );
-            return false;
-        }
-
-        if (!loggedMissingParent) {
-            loggedMissingParent = true;
-            logger.debug(
-                `[FILE_WATCHER] Parent directory missing; retrying for up to ${watcherPolicy.missingParentTimeoutMs}ms`
-            );
-        }
-
-        const remainingMs = watcherPolicy.missingParentTimeoutMs - elapsedMs;
-        await delayUnrefAbortable(Math.min(watcherPolicy.missingParentRetryDelayMs, remainingMs), abortSignal);
-    }
-
-    return false;
-}
-
-async function waitForFileToExist(
-    opts: {
-        file: string;
-        parentDir: string;
-        targetName: string;
-        abortSignal: AbortSignal;
-        watcherPolicy: StartFileWatcherPolicy;
-        onWatcherAttached?: () => void;
-    }
-): Promise<boolean> {
-    const {
-        file,
-        parentDir,
-        targetName,
-        abortSignal,
-        watcherPolicy,
-        onWatcherAttached,
-    } = opts;
-
-    if (await pathExists(file)) {
-        return true;
-    }
-
-    if (abortSignal.aborted) {
-        return false;
-    }
-
-    const parentExists = await waitForParentDirectory({ file, parentDir, abortSignal, watcherPolicy });
-    if (!parentExists || abortSignal.aborted) {
-        return false;
-    }
-
-    logger.debug('[FILE_WATCHER] Waiting for watched file to exist');
-
-    while (!abortSignal.aborted) {
-        let dirWatcher: AsyncIterable<unknown>;
-        try {
-            dirWatcher = watch(parentDir, { persistent: true, signal: abortSignal });
-            onWatcherAttached?.();
-        } catch (error) {
-            if (abortSignal.aborted) {
-                return false;
-            }
-            if (hasErrorCode(error, 'ENOENT')) {
-                const recovered = await waitForParentDirectory({ file, parentDir, abortSignal, watcherPolicy });
-                if (!recovered) {
-                    return false;
-                }
-                continue;
-            }
-            throw error;
-        }
-
-        if (await pathExists(file)) {
-            return true;
-        }
-
-        for await (const event of dirWatcher) {
-            if (abortSignal.aborted) {
-                return false;
-            }
-
-            const name = typeof (event as { filename?: unknown })?.filename === 'string'
-                ? String((event as { filename: string }).filename)
-                : null;
-            if (name && name !== targetName) {
-                continue;
-            }
-
-            if (await pathExists(file)) {
-                logger.debug('[FILE_WATCHER] Watched file appeared');
-                return true;
-            }
-        }
-    }
-
-    return false;
 }
 
 export function startFileWatcher(
@@ -230,82 +79,135 @@ export function startFileWatcher(
     options?: StartFileWatcherOptions,
 ) {
     const abortController = new AbortController();
-    const parentDir = dirname(file);
+    const registration = readRegistration(file);
     const targetName = basename(file);
-    const watcherPolicy = DEFAULT_WATCHER_POLICY;
-    const registrationVersion = readFileVersionAtRegistration(file);
-    const registeredAsDirectory = isDirectoryAtRegistration(file);
+    let isDirectory = registration.isDirectory;
     let attachmentCount = 0;
+    let unavailable = false;
+    const reportUnavailable = (error: unknown) => {
+        if (abortController.signal.aborted || unavailable) return;
+        unavailable = true;
+        options?.onWatcherUnavailable?.(error instanceof Error ? error : new Error('File watcher unavailable'));
+    };
 
     void (async () => {
-        while (true) {
+        while (!abortController.signal.aborted) {
+            let closeWatcher: (() => void) | undefined;
             try {
-                const fileExists = await waitForFileToExist({
-                    file,
-                    parentDir,
-                    targetName,
-                    abortSignal: abortController.signal,
-                    watcherPolicy,
-                    onWatcherAttached: options?.onWatcherAttached,
-                });
-                if (!fileExists) {
-                    if (!abortController.signal.aborted) {
-                        options?.onWatcherUnavailable?.(
-                            new Error('File watcher stopped before attachment'),
-                        );
-                    }
-                    return;
+                const currentEntry = await readEntry(file);
+                if (currentEntry) isDirectory = currentEntry.isDirectory();
+                const isSymlink = !isDirectory && await isFileSymlink(file);
+                const watchedDirectory = isDirectory ? file : dirname(file);
+                const directoryVersion = await readVersion(watchedDirectory);
+                if (directoryVersion === null) {
+                    if (!unavailable) logger.debug('[FILE_WATCHER] Parent directory missing; waiting for recovery');
+                    reportUnavailable(new Error('File watcher parent directory missing'));
+                    await delayUnrefAbortable(WATCH_RECOVERY_DELAY_MS, abortController.signal);
+                    continue;
                 }
 
-                logger.debug('[FILE_WATCHER] Starting watcher');
-                const watcher = watch(file, {
-                    persistent: true,
+                // Watch the parent of a file so replacement/deletion keeps the
+                // same native observation. fs.watch attaches synchronously;
+                // readiness must not be reported before native attachment.
+                const watcher = watch(watchedDirectory, { persistent: true });
+                closeWatcher = () => watcher.close();
+                const events = on(watcher, 'change', {
                     signal: abortController.signal,
+                    close: ['close'],
                 });
-                const watchedVersion = await readFileVersion(file);
-                const changedBeforeFirstAttachment = attachmentCount === 0
-                    && watchedVersion !== registrationVersion;
+                // Parent events cover the logical entry. A symlink's content
+                // can change outside that directory, so retain native target
+                // observation within this same attachment and recovery owner.
+                const targetWatcher = isSymlink ? watch(file, { persistent: true }) : null;
+                let closing = false;
+                closeWatcher = () => {
+                    closing = true;
+                    targetWatcher?.close();
+                    watcher.close();
+                };
+                targetWatcher?.on('change', (eventType) => {
+                    if (!closing) watcher.emit('change', eventType, targetName);
+                });
+                targetWatcher?.on('error', (error) => {
+                    if (!closing) watcher.emit('error', error);
+                });
+                targetWatcher?.on('close', () => {
+                    if (!closing) watcher.emit('close');
+                });
+                abortController.signal.addEventListener('abort', closeWatcher, { once: true });
+                if (abortController.signal.aborted) {
+                    watcher.close();
+                    return;
+                }
+                logger.debug('[FILE_WATCHER] Starting watcher');
+                const attachedEntry = await readEntry(file);
+                if (abortController.signal.aborted) return;
+                const currentVersion = attachedEntry ? version(attachedEntry) : null;
+                const changedBeforeFirstAttachment = attachmentCount === 0 && currentVersion !== registration.version;
                 if (
-                    options?.emitInitial !== false
+                    (options?.emitInitial !== false && currentVersion !== null)
                     || attachmentCount > 0
                     || changedBeforeFirstAttachment
                 ) {
-                    // Emit an initial callback once we know the file exists, even if it existed before we started watching.
-                    // This makes "watch + read once" consumers race-free.
                     await onFileChange(file);
                 }
+                if (abortController.signal.aborted) return;
+                if (!isDirectory && attachedEntry?.isDirectory()) {
+                    reportUnavailable(new Error('File watcher directory appeared'));
+                    continue;
+                }
+                if (!isDirectory && await isFileSymlink(file) !== isSymlink) {
+                    reportUnavailable(new Error('File watcher symlink changed during attachment'));
+                    continue;
+                }
+                if (abortController.signal.aborted) return;
                 attachmentCount += 1;
+                unavailable = false;
                 options?.onWatcherAttached?.();
-                for await (const event of watcher) {
-                    if (abortController.signal.aborted) {
-                        return;
+                for await (const rawEvent of events) {
+                    if (abortController.signal.aborted) return;
+                    // EventEmitter's untyped boundary is narrowed immediately.
+                    const event: readonly unknown[] = rawEvent;
+                    const name = typeof event[1] === 'string' ? event[1] : '';
+                    if (!isDirectory && name && name !== targetName && event[0] !== 'rename') continue;
+                    const currentDirectoryVersion = await readVersion(watchedDirectory);
+                    if (abortController.signal.aborted) return;
+                    if (identity(currentDirectoryVersion) !== identity(directoryVersion)) {
+                        reportUnavailable(new Error('File watcher directory replaced'));
+                        await onFileChange(file);
+                        break;
                     }
+                    if (!isDirectory && name && name !== targetName) continue;
                     logger.debug('[FILE_WATCHER] Watched file changed');
-                    const eventName = typeof event.filename === 'string'
-                        ? event.filename
-                        : '';
                     await onFileChange(
-                        options?.reportEventPath === true && registeredAsDirectory && eventName
-                            ? resolve(file, eventName)
+                        options?.reportEventPath === true && isDirectory && name
+                            ? resolve(file, name)
                             : file,
                     );
-                    const watchedIdentity = watchedVersion
-                        ?.split(':', 2)
-                        .join(':') ?? null;
-                    if (await readFileIdentity(file) !== watchedIdentity) {
-                        logger.debug('[FILE_WATCHER] Watched file identity changed');
+                    if (!isDirectory && event[0] === 'rename' && (await readEntry(file))?.isDirectory()) {
+                        reportUnavailable(new Error('File watcher directory appeared'));
+                        break;
+                    }
+                    if (!isDirectory && (
+                        (isSymlink && (event[0] === 'rename' || identity(await readVersion(file)) !== identity(currentVersion)))
+                        || (event[0] === 'rename' && await isFileSymlink(file) !== isSymlink)
+                    )) {
+                        reportUnavailable(new Error('File watcher symlink target changed'));
                         break;
                     }
                 }
-            } catch (e) {
-                if (abortController.signal.aborted) {
-                    return;
+                reportUnavailable(new Error('File watcher detached'));
+            } catch (error) {
+                if (abortController.signal.aborted) return;
+                reportUnavailable(error);
+                logger.debug(`[FILE_WATCHER] Watch error; restarting watcher in ${WATCH_RECOVERY_DELAY_MS}ms`);
+            } finally {
+                if (closeWatcher) {
+                    abortController.signal.removeEventListener('abort', closeWatcher);
+                    closeWatcher();
                 }
-                logger.debug(
-                    `[FILE_WATCHER] Watch error; restarting watcher in ${watcherPolicy.watchRestartDelayMs}ms`,
-                );
-                await delayUnrefAbortable(watcherPolicy.watchRestartDelayMs, abortController.signal);
             }
+            await delayUnrefAbortable(WATCH_RECOVERY_DELAY_MS, abortController.signal);
         }
     })();
 

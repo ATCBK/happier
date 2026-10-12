@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdtemp, rename, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { logger } from '@/ui/logger';
@@ -27,17 +27,6 @@ function missingParentOutputFile(): string {
 
 function watcherDebugMessages(debugSpy: ReturnType<typeof vi.spyOn>): string[] {
   return debugSpy.mock.calls.map(([message]) => String(message));
-}
-
-async function advanceMissingParentRetriesUntilExpired(debugSpy: ReturnType<typeof vi.spyOn>): Promise<void> {
-  for (let attempt = 0; attempt < 240; attempt += 1) {
-    if (watcherDebugMessages(debugSpy).some((message) => message.includes('Parent directory still missing'))) {
-      return;
-    }
-    await vi.advanceTimersByTimeAsync(1_000);
-    await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
-  }
-  throw new Error(`Timed out waiting for missing-parent watcher expiry. Logs:\n${watcherDebugMessages(debugSpy).join('\n')}`);
 }
 
 describe('startFileWatcher', () => {
@@ -154,23 +143,130 @@ describe('startFileWatcher', () => {
     const file = join(dir, 'session.jsonl');
     await writeFile(file, 'initial\n', 'utf8');
     let calls = 0;
+    const onWatcherUnavailable = vi.fn();
+    const onWatcherAttached = vi.fn();
     const stop = startFileWatcher(file, async () => {
       calls += 1;
       if (calls === 1) {
         throw new Error('listener rejected delivery');
       }
-    }, { emitInitial: false });
+    }, { emitInitial: false, onWatcherUnavailable, onWatcherAttached });
 
     await new Promise((resolve) => setTimeout(resolve, 150));
     await appendFile(file, 'retry-me\n', 'utf8');
     await waitFor(() => calls >= 2, { timeoutMs: 10_000 });
-
     stop();
+    expect(onWatcherUnavailable).toHaveBeenCalledWith(expect.any(Error));
+    expect(onWatcherAttached.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('expires missing-parent retries instead of looping forever', async () => {
+  it('reports loss and recovers when the watched parent is renamed and recreated', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happy-file-watcher-parent-replaced-'));
+    const parent = join(root, 'parent');
+    await mkdir(parent);
+    const file = join(parent, 'session.jsonl');
+    await writeFile(file, 'initial\n');
+    let calls = 0;
+    const onWatcherUnavailable = vi.fn();
+    const onWatcherAttached = vi.fn();
+    const stop = startFileWatcher(file, () => { calls += 1; }, {
+      emitInitial: false, onWatcherUnavailable, onWatcherAttached,
+    });
+    try {
+      await waitFor(() => onWatcherAttached.mock.calls.length > 0);
+      await rename(parent, join(root, 'moved'));
+      await mkdir(parent);
+      await writeFile(file, 'replacement\n');
+      await waitFor(() => calls > 0);
+      await waitFor(() => onWatcherAttached.mock.calls.length > 1);
+      expect(onWatcherUnavailable).toHaveBeenCalledWith(expect.any(Error));
+      const before = calls;
+      await appendFile(file, 'appended\n');
+      await waitFor(() => calls > before);
+    } finally {
+      stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('observes directory children even when the directory was missing at registration', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happy-file-watcher-created-dir-'));
+    const directory = join(root, 'plugins');
+    const changes: string[] = [];
+    const stop = startFileWatcher(directory, (path) => { changes.push(path); }, {
+      emitInitial: false, reportEventPath: true,
+    });
+    try {
+      await mkdir(directory);
+      await waitFor(() => changes.length > 0);
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      const child = join(directory, 'plugin.ts');
+      await writeFile(child, 'export const value = 1;\n');
+      await waitFor(() => changes.includes(child));
+    } finally {
+      stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports the changed child path to directory observers', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happy-file-watcher-dir-event-'));
+    const child = join(root, 'plugin.ts');
+    const changes: string[] = [];
+    let attached = false;
+    const stop = startFileWatcher(root, (path) => { changes.push(path); }, {
+      emitInitial: false, reportEventPath: true, onWatcherAttached: () => { attached = true; },
+    });
+    try {
+      await waitFor(() => attached);
+      await writeFile(child, 'export const value = 1;\n');
+      await waitFor(() => changes.includes(child));
+    } finally {
+      stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('observes writes to a file symlink target outside the watched parent and follows retargeting', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happy-file-watcher-symlink-'));
+    const logicalDirectory = join(root, 'logical');
+    const nativeDirectory = join(root, 'native');
+    await mkdir(logicalDirectory);
+    await mkdir(nativeDirectory);
+    const target = join(nativeDirectory, 'transcript.jsonl');
+    const file = join(logicalDirectory, 'session.jsonl');
+    await writeFile(target, 'initial\n');
+    await symlink(target, file);
+    let calls = 0;
+    let attached = false;
+    const stop = startFileWatcher(file, () => { calls += 1; }, {
+      emitInitial: false, onWatcherAttached: () => { attached = true; },
+    });
+    try {
+      await waitFor(() => attached);
+      await appendFile(target, 'external\n');
+      await waitFor(() => calls > 0);
+      const nextTarget = join(nativeDirectory, 'next.jsonl');
+      await writeFile(nextTarget, 'next\n');
+      const replacement = join(logicalDirectory, 'replacement');
+      await symlink(nextTarget, replacement);
+      const before = calls;
+      await rename(replacement, file);
+      await waitFor(() => calls > before);
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      const afterRetarget = calls;
+      await appendFile(nextTarget, 'retargeted\n');
+      await waitFor(() => calls > afterRetarget);
+    } finally {
+      stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers when a missing parent appears after the former attachment timeout', async () => {
     vi.useFakeTimers();
-    const file = missingParentOutputFile();
+    const root = await mkdtemp(join(tmpdir(), 'happy-file-watcher-late-parent-'));
+    const file = join(root, 'tasks', 'task.output');
     const debugSpy = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
     let calls = 0;
     const onWatcherUnavailable = vi.fn();
@@ -182,20 +278,21 @@ describe('startFileWatcher', () => {
     await vi.waitFor(() => {
       expect(vi.getTimerCount()).toBeGreaterThan(0);
     });
-    await advanceMissingParentRetriesUntilExpired(debugSpy);
-    expect(watcherDebugMessages(debugSpy).some((message) =>
-      message.includes('Parent directory still missing'))).toBe(true);
-    expect(onWatcherUnavailable).toHaveBeenCalledOnce();
-    const debugCountAfterExpiry = watcherDebugMessages(debugSpy).length;
-
-    await vi.advanceTimersByTimeAsync(120_000);
-
-    expect(calls).toBe(0);
-    expect(watcherDebugMessages(debugSpy)).toHaveLength(debugCountAfterExpiry);
-    expect(watcherDebugMessages(debugSpy).length).toBeLessThanOrEqual(3);
-
-    stop();
-    expect(vi.getTimerCount()).toBe(0);
+    try {
+      for (let attempt = 0; attempt < 35; attempt += 1) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
+      }
+      expect(onWatcherUnavailable).toHaveBeenCalledWith(expect.any(Error));
+      await mkdir(join(root, 'tasks'));
+      await writeFile(file, 'late creation\n');
+      await vi.advanceTimersByTimeAsync(1_000);
+      vi.useRealTimers();
+      await waitFor(() => calls > 0);
+    } finally {
+      stop();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('clears a missing-parent retry timer when stopped', async () => {
@@ -220,6 +317,6 @@ describe('startFileWatcher', () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(watcherDebugMessages(debugSpy)).toHaveLength(debugCountAfterStop);
-    expect(onWatcherUnavailable).not.toHaveBeenCalled();
+    expect(onWatcherUnavailable).toHaveBeenCalledOnce();
   });
 });

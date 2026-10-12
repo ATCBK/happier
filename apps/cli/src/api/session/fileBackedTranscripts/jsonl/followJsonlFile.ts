@@ -30,6 +30,7 @@ type JsonlFollowerDrainOutcome = Readonly<{
     hadError: boolean;
     hadReset: boolean;
     missingFile: boolean;
+    hasBacklog: boolean;
 }>;
 
 export class JsonlFollower {
@@ -48,6 +49,7 @@ export class JsonlFollower {
     private inFlight: Promise<void> | null = null;
     private drainQueued = false;
     private pollingActive = false;
+    private watcherAvailable = false;
     private lastActivityAtMs: number | null = null;
     private stopped = false;
     private lineCallbackDepth = 0;
@@ -120,6 +122,18 @@ export class JsonlFollower {
         await this.drain(source);
     }
 
+    setWatcherAvailable(available: boolean): void {
+        if (this.stopped) return;
+        this.watcherAvailable = available;
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
+        // Attachment catch-up closes the read/register gap. Loss resumes the
+        // existing follower recovery policy, not a second watcher retry owner.
+        void this.drain('watcher');
+    }
+
     private async drain(source: JsonlFollowerDrainSource = 'poll'): Promise<void> {
         if (this.stopped) return;
         this.emitMetric({ type: 'drain_requested', source });
@@ -184,6 +198,7 @@ export class JsonlFollower {
                 rowsEmitted: buffered.rowsEmitted,
                 hadError: buffered.hadError,
                 hadReset,
+                hasBacklog: this.buffer.includes('\n'),
             };
         }
 
@@ -214,14 +229,15 @@ export class JsonlFollower {
             }
         } catch (error) {
             this.onError?.(error);
-            return { bytesRead: bytesReadTotal, rowsEmitted, hadError: true, hadReset, missingFile: false };
+            return { bytesRead: bytesReadTotal, rowsEmitted, hadError: true, hadReset, missingFile: false, hasBacklog: true };
         }
 
         const emitted = await this.emitBufferedCompleteLines();
         rowsEmitted += emitted.rowsEmitted;
         hadError = hadError || emitted.hadError;
         this.emitMetric({ type: 'drain_finished', bytesRead: bytesReadTotal, rowsEmitted });
-        return { bytesRead: bytesReadTotal, rowsEmitted, hadError, hadReset, missingFile: false };
+        return { bytesRead: bytesReadTotal, rowsEmitted, hadError, hadReset, missingFile: false,
+            hasBacklog: this.offsetBytes < size || this.buffer.includes('\n') };
     }
 
     private async emitBufferedCompleteLines(): Promise<Readonly<{ rowsEmitted: number; hadError: boolean }>> {
@@ -306,6 +322,7 @@ export class JsonlFollower {
         if (lastDrainHadActivity) {
             this.lastActivityAtMs = Date.now();
         }
+        if (this.watcherAvailable && !outcome.hadError && !outcome.hasBacklog) return;
         const delayMs = resolveJsonlFollowPollDelayMs(this.pollPolicy, {
             nowMs: Date.now(),
             lastActivityAtMs: this.lastActivityAtMs,
@@ -334,6 +351,7 @@ function emptyDrainOutcome(): JsonlFollowerDrainOutcome {
         hadError: false,
         hadReset: false,
         missingFile: false,
+        hasBacklog: false,
     };
 }
 
@@ -347,5 +365,6 @@ function mergeDrainOutcome(
         hadError: left.hadError || right.hadError,
         hadReset: left.hadReset || right.hadReset,
         missingFile: left.missingFile || right.missingFile,
+        hasBacklog: right.hasBacklog,
     };
 }

@@ -1,11 +1,14 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { appendFile, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { describe, expect, it, vi } from 'vitest';
 
 import { createJsonlFollowController } from './createJsonlFollowController';
 import type { JsonlFollowerMetricEvent } from './followMetrics';
+import type { StartFileWatcherOptions } from '@/integrations/watcher/startFileWatcher';
 
 function delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -31,11 +34,130 @@ async function waitFor(assertion: () => void, opts?: { timeoutMs?: number; inter
 }
 
 describe('createJsonlFollowController', () => {
-    it('retries missing file discovery and emits complete lines after the file appears', async () => {
+    it('parks healthy native watches while preserving append, partial rows, truncation and replacement', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'jsonl-controller-native-'));
+        const filePath = join(root, 'session.jsonl');
+        await writeFile(filePath, 'initial\n');
+        const received: string[] = [];
+        const events: JsonlFollowerMetricEvent[] = [];
+        const controller = createJsonlFollowController({
+            filePath,
+            onLine: (line) => { received.push(line); },
+            metrics: { onEvent: (event) => { events.push(event); } },
+            policy: { activeBurstPollIntervalMs: 10, activeFallbackPollIntervalMs: 20, idleFallbackPollIntervalMs: 30 },
+        });
+        try {
+            await controller.attach();
+            await delay(150);
+            events.length = 0;
+            await delay(100);
+            expect(events.filter((event) => event.type === 'poll_wakeup')).toEqual([]);
+            await appendFile(filePath, 'partial');
+            await delay(50);
+            expect(received).toEqual(['initial']);
+            await appendFile(filePath, '-complete\n');
+            await waitFor(() => expect(received).toEqual(['initial', 'partial-complete']));
+            await writeFile(filePath, 'short\n');
+            await waitFor(() => expect(received).toEqual(['initial', 'partial-complete', 'short']));
+            const replacement = join(root, 'replacement.jsonl');
+            await writeFile(replacement, 'replacement\n');
+            await rename(replacement, filePath);
+            await waitFor(() => expect(received.at(-1)).toBe('replacement'));
+            await promisify(execFile)(process.execPath, [
+                '-e',
+                'require("node:fs").appendFileSync(process.argv[1], "after-replacement\\n")',
+                filePath,
+            ]);
+            await waitFor(() => expect(received.at(-1)).toBe('after-replacement'));
+            await controller.dispose();
+            await appendFile(filePath, 'after-disposal\n');
+            await delay(100);
+            expect(received.at(-1)).toBe('after-replacement');
+        } finally {
+            await controller.dispose();
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+
+    it('polls only during watch loss and catches up when attachment recovers', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'jsonl-controller-recovery-'));
+        const filePath = join(root, 'session.jsonl');
+        await writeFile(filePath, '');
+        let watcherOptions: StartFileWatcherOptions | undefined;
+        const received: string[] = [];
+        const events: JsonlFollowerMetricEvent[] = [];
+        const controller = createJsonlFollowController({
+            filePath,
+            onLine: (line) => { received.push(line); },
+            watchFile: (_file, _onChange, options) => { watcherOptions = options; return () => {}; },
+            metrics: { onEvent: (event) => { events.push(event); } },
+            policy: { activeBurstPollIntervalMs: 10 },
+        });
+        try {
+            await controller.attach();
+            watcherOptions?.onWatcherAttached?.();
+            await delay(50);
+            events.length = 0;
+            await delay(50);
+            expect(events.filter((event) => event.type === 'poll_wakeup')).toEqual([]);
+            watcherOptions?.onWatcherUnavailable?.(new Error('native watch failed'));
+            await appendFile(filePath, 'during-loss\n');
+            await waitFor(() => expect(received).toEqual(['during-loss']));
+            await appendFile(filePath, 'registration-gap\n');
+            watcherOptions?.onWatcherAttached?.();
+            await waitFor(() => expect(received).toEqual(['during-loss', 'registration-gap']));
+            events.length = 0;
+            await delay(60);
+            expect(events.filter((event) => event.type === 'poll_wakeup')).toEqual([]);
+        } finally {
+            await controller.dispose();
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+
+    it('continues draining a capped backlog without requiring another filesystem event', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'jsonl-controller-backlog-'));
+        const filePath = join(root, 'session.jsonl');
+        await writeFile(filePath, 'one\ntwo\nthree\n');
+        const received: string[] = [];
+        const controller = createJsonlFollowController({ filePath,
+            onLine: (line) => { received.push(line); },
+            policy: { maxDrainRowsPerTick: 1, maxDrainBytesPerTick: 5, activeBurstPollIntervalMs: 10 },
+        });
+        try {
+            await controller.attach();
+            await waitFor(() => expect(received).toEqual(['one', 'two', 'three']));
+        } finally {
+            await controller.dispose();
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+
+    it('recovers a missing parent and returns to native watching', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'jsonl-controller-parent-'));
+        const filePath = join(root, 'missing', 'session.jsonl');
+        const received: string[] = [];
+        const controller = createJsonlFollowController({ filePath,
+            onLine: (line) => { received.push(line); },
+            policy: { missingFileRetryIntervalMs: 10 },
+        });
+        try {
+            await controller.attach();
+            await mkdir(join(root, 'missing'));
+            await writeFile(filePath, 'created\n');
+            await waitFor(() => expect(received).toEqual(['created']));
+            await delay(1_100);
+            await appendFile(filePath, 'native-append\n');
+            await waitFor(() => expect(received).toEqual(['created', 'native-append']));
+        } finally {
+            await controller.dispose();
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+    it('observes missing file creation and emits complete lines after the file appears', async () => {
         const root = await mkdtemp(join(tmpdir(), 'jsonl-controller-missing-'));
         const filePath = join(root, 'session.jsonl');
         const received: string[] = [];
-        const metrics: string[] = [];
         const controller = createJsonlFollowController({
             filePath,
             onLine: (line) => {
@@ -48,9 +170,6 @@ describe('createJsonlFollowController', () => {
                 activeFallbackPollIntervalMs: 25,
                 idleFallbackPollIntervalMs: 50,
             },
-            metrics: {
-                onEvent: (event) => metrics.push(event.type),
-            },
         });
 
         try {
@@ -59,7 +178,6 @@ describe('createJsonlFollowController', () => {
             await waitFor(() => {
                 expect(received).toEqual(['{"created":true}']);
             });
-            expect(metrics).toContain('missing_file_retry_scheduled');
         } finally {
             await controller.dispose().catch(() => {});
             await rm(root, { recursive: true, force: true });
