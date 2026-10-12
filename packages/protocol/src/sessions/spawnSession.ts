@@ -12,6 +12,7 @@ import {
   type ConnectedServiceUxDiagnosticV1,
 } from '../connect/connectedServiceUxDiagnostics.js';
 import { ProviderErrorV1Schema, type ProviderErrorV1 } from '../providers/errors.js';
+import { SpawnFailureV1Schema } from '../machines/processes/spawnFailureV1.js';
 
 // Process launch accepts the existing daemon modes, not integrated UI authoring.
 export const SpawnSessionTerminalSchema = lazyZodSchema(() => SessionAuthoringTerminalV1Schema.pick({ mode: true, tmux: true, herdr: true }).extend({
@@ -94,6 +95,7 @@ export type SpawnSessionErrorCode = (typeof SPAWN_SESSION_ERROR_CODES)[keyof typ
  * result. Existing consumers that only read `errorCode`/`errorMessage` keep working unchanged.
  */
 export const SPAWN_SESSION_ERROR_DETAIL_KINDS = {
+  SPAWN_FAILURE: 'spawn_failure',
   TERMINAL_HOST_UNAVAILABLE: 'terminal_host_unavailable',
   /**
    * A connected-service auth switch/resume fail-closed because the resumed session could not be
@@ -230,7 +232,14 @@ export const TerminalHostUnavailableSpawnErrorDetailSchema = lazyZodSchema(() =>
 }).strict());
 export type TerminalHostUnavailableSpawnErrorDetail = z.infer<typeof TerminalHostUnavailableSpawnErrorDetailSchema>;
 
+/** Optional presentation diagnostic; the existing spawn outcome and error code remain authoritative. */
+export const SpawnFailureSpawnErrorDetailSchema = lazyZodSchema(() => SpawnFailureV1Schema.extend({
+  kind: z.literal(SPAWN_SESSION_ERROR_DETAIL_KINDS.SPAWN_FAILURE),
+}).strict());
+export type SpawnFailureSpawnErrorDetail = z.infer<typeof SpawnFailureSpawnErrorDetailSchema>;
+
 export type SpawnSessionErrorDetail =
+  | SpawnFailureSpawnErrorDetail
   | TerminalHostUnavailableSpawnErrorDetail
   | ConnectedServiceResumeUnreachableSpawnErrorDetail
   | ConnectedServiceUxDiagnosticSpawnErrorDetail
@@ -492,7 +501,8 @@ export function isSessionCreationTerminalSpawnErrorDetail(
 }
 
 export function isSpawnSessionErrorDetail(value: unknown): value is SpawnSessionErrorDetail {
-  return TerminalHostUnavailableSpawnErrorDetailSchema.safeParse(value).success
+  return SpawnFailureSpawnErrorDetailSchema.safeParse(value).success
+    || TerminalHostUnavailableSpawnErrorDetailSchema.safeParse(value).success
     || isConnectedServiceResumeUnreachableSpawnErrorDetail(value)
     || isConnectedServiceUxDiagnosticSpawnErrorDetail(value)
     || normalizeProviderSpawnErrorDetail(asRecord(value) ?? {}) !== undefined
@@ -502,7 +512,8 @@ export function isSpawnSessionErrorDetail(value: unknown): value is SpawnSession
 export function normalizeSpawnSessionErrorDetail(value: unknown): SpawnSessionErrorDetail | undefined {
   const detail = asRecord(value);
   if (!detail) return undefined;
-  return TerminalHostUnavailableSpawnErrorDetailSchema.safeParse(detail).data
+  return SpawnFailureSpawnErrorDetailSchema.safeParse(detail).data
+    ?? TerminalHostUnavailableSpawnErrorDetailSchema.safeParse(detail).data
     ?? normalizeConnectedServiceResumeUnreachableDetail(detail)
     ?? normalizeConnectedServiceUxDiagnosticDetail(detail)
     ?? normalizeProviderSpawnErrorDetail(detail)

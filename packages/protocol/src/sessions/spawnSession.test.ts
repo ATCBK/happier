@@ -67,6 +67,12 @@ describe('spawn-session execution authorization', () => {
 });
 
 describe('spawn-session error detail contract (D2 structured continuity)', () => {
+  it('preserves bounded launch diagnostics without accepting private paths or unknown causes', () => {
+    const detail = { kind: 'spawn_failure', reason: 'too_many_open_files', errno: 'EMFILE' };
+    expect(normalizeSpawnSessionErrorDetail(detail)).toEqual(detail);
+    expect(normalizeSpawnSessionErrorDetail({ ...detail, path: '/private' })).toBeUndefined();
+    expect(normalizeSpawnSessionErrorDetail({ ...detail, reason: 'guess' })).toBeUndefined();
+  });
   it('carries only typed initial-trigger birth refusals as terminal creation outcomes', () => {
     for (const code of ['invalid_input', 'target_unavailable', 'feature_disabled']) {
       const detail = { kind: 'session_creation_initial_trigger_refused', code };
