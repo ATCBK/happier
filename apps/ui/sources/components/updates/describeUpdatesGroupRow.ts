@@ -1,6 +1,6 @@
 import { t } from '@/text';
 import { planUpdateAll } from '@/updates/items/buildUpdatesSummary';
-import type { UpdateItem } from '@/updates/items/updateItem';
+import { isNewerVersion, type UpdateItem } from '@/updates/items/updateItem';
 import type { UpdatesGroup } from '@/updates/useUpdatesContentModel';
 import { formatLastSeen as formatLastSeenDefault } from '@/utils/sessions/sessionUtils';
 
@@ -22,7 +22,8 @@ export type UpdatesGroupRow = Readonly<{
     action: UpdatesGroupRowAction | null;
 }>;
 
-function groupTitle(group: UpdatesGroup): string {
+/** A group's name, the same on the page's section titles and the popover's rows. */
+export function updatesGroupTitle(group: UpdatesGroup): string {
     if (group.kind === 'app') return t('updates.sections.thisApp');
     if (group.machineName) return group.machineName;
     return group.kind === 'thisComputer' ? t('updates.sections.thisComputer') : t('updates.sections.machine');
@@ -49,7 +50,7 @@ export function describeUpdatesGroupRow(
     group: UpdatesGroup,
     options: Readonly<{ formatLastSeen?: (at: number) => string; sessionsRunningOn?: ReadonlySet<string> }> = {},
 ): UpdatesGroupRow {
-    const title = groupTitle(group);
+    const title = updatesGroupTitle(group);
     const formatLastSeen = options.formatLastSeen ?? ((at: number) => formatLastSeenDefault(at));
     const withSessionNote = (status: string, items: readonly UpdateItem[]) => {
         for (const item of items) {
@@ -116,4 +117,53 @@ export function describeUpdatesGroupRow(
         return { title, status: t('updates.summary.notCheckedYet'), tone: 'neutral', action: null };
     }
     return { title, status: t('updates.settingsSubtitle.upToDate'), tone: 'ok', action: null };
+}
+
+/** Nothing to do on this machine now: no update to run or install, nothing failed or in flight. */
+function isQuietMachineGroup(group: UpdatesGroup): boolean {
+    return group.items.every((item) => {
+        if (item.state === 'running' || item.state === 'failed' || item.state === 'ready' || item.state === 'checking') return false;
+        if ((item.state === 'available' || item.state === 'required') && !item.skipped) {
+            // An update Happier runs, or a newer version the person installs themselves, is something to do.
+            if (item.action.kind === 'run') return false;
+            if (item.action.kind === 'manual' && isNewerVersion(item.currentVersion, item.latestVersion)) return false;
+        }
+        return true;
+    });
+}
+
+/**
+ * The Updates page's sections: this app, this computer and every reachable machine with something to
+ * do each get a section of rows. Reachable machines with nothing to do, and machines that are offline,
+ * each share one quiet place instead of one identical section per machine. Order is kept (the owner's
+ * fixed order) so nothing jumps.
+ */
+export function partitionUpdatesPageGroups(groups: readonly UpdatesGroup[]): Readonly<{
+    sections: readonly UpdatesGroup[];
+    quiet: readonly UpdatesGroup[];
+    offline: readonly UpdatesGroup[];
+}> {
+    const sections: UpdatesGroup[] = [];
+    const quiet: UpdatesGroup[] = [];
+    const offline: UpdatesGroup[] = [];
+    for (const group of groups) {
+        if (group.kind === 'machine' && !group.online) offline.push(group);
+        else if (group.kind === 'machine' && isQuietMachineGroup(group)) quiet.push(group);
+        else sections.push(group);
+    }
+    return { sections, quiet, offline };
+}
+
+/**
+ * Within one machine's section: tools whose newer version could not be checked, with nothing the
+ * person can do about it, share one cause. Two or more of them fold into one row that opens to the
+ * list; anything actionable (retry, a manual command) and a single unchecked tool stay rows.
+ */
+export function partitionUncheckedItems(items: readonly UpdateItem[]): Readonly<{
+    rows: readonly UpdateItem[];
+    unchecked: readonly UpdateItem[];
+}> {
+    const unchecked = items.filter((item) => item.state === 'unknown' && item.action.kind === 'none');
+    if (unchecked.length < 2) return { rows: items, unchecked: [] };
+    return { rows: items.filter((item) => !unchecked.includes(item)), unchecked };
 }

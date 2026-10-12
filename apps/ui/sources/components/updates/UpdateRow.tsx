@@ -12,14 +12,15 @@ import { Item } from '@/components/ui/lists/Item';
 import { ITEM_ROW_PADDING_HORIZONTAL, resolveItemTextColumnInset } from '@/components/ui/lists/itemDensityMetrics';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
 import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
-import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { Text } from '@/components/ui/text/Text';
 import { hapticsLight } from '@/components/ui/theme/haptics';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import { invokeDesktopHost, isDesktopHost } from '@/utils/platform/desktopHost';
+import { isDesktopHost } from '@/utils/platform/desktopHost';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import type { UpdateItem } from '@/updates/items/updateItem';
 
 import { describeUpdateItem } from './describeUpdateItem';
@@ -61,6 +62,8 @@ export const UpdateRow = React.memo(function UpdateRow(props: Readonly<{
     sessionsRunning?: boolean;
 }>) {
     const { theme } = useUnistyles();
+    const serverId = useActiveServerSnapshot().serverId;
+    const { execute: executeAction } = useMountedActionExecution(serverId);
     const { item } = props;
     const compact = props.presentation === 'popover';
     const presentation = describeUpdateItem(item, { sessionsRunning: props.sessionsRunning });
@@ -86,13 +89,14 @@ export const UpdateRow = React.memo(function UpdateRow(props: Readonly<{
     const viewLog = React.useCallback(() => {
         if (!logPath) return;
         if (canOpenLog) {
-            fireAndForget(invokeDesktopHost<void>('system_tasks_open_log_path', { path: logPath }), { tag: 'UpdateRow.openLog' });
+            fireAndForget(executeAction('relay.runtime.open_path', { path: logPath }), { tag: 'UpdateRow.openLog' });
             return;
         }
-        fireAndForget(setClipboardStringSafe(logPath).then((copied) => {
-            if (copied) markCopied();
+        fireAndForget(executeAction('clipboard.write', { text: logPath }).then((result) => {
+            if (result.ok && typeof result.result === 'object' && result.result !== null
+                && 'status' in result.result && result.result.status === 'copied') markCopied(logPath);
         }), { tag: 'UpdateRow.copyLogPath' });
-    }, [canOpenLog, logPath, markCopied]);
+    }, [canOpenLog, executeAction, logPath, markCopied]);
     const showViewLog = !compact && item.state === 'failed' && logPath != null;
     const rowLabel = t('updates.a11y.rowOn', { title: item.title, where: props.where });
     const actionLabel = presentation.actionLabel;
@@ -144,7 +148,7 @@ export const UpdateRow = React.memo(function UpdateRow(props: Readonly<{
                 density={compact ? 'compact' : undefined}
                 rightElement={showViewLog ? (
                     <View style={styles.actions}>
-                        {copyFeedback.isCopied() ? (
+                        {copyFeedback.isCopied(logPath ?? '') ? (
                             <CopiedPill visible testID={`updates.row.${item.id}.viewLog.copied`} />
                         ) : (
                             <UpdatesTextButton

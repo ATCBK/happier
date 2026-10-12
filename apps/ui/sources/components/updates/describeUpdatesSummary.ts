@@ -31,6 +31,9 @@ export function describeUpdatesHeader(
             ? t('updates.summary.checkedAt', { time: formatLastSeen(facts.checkedAt) })
             : t('updates.summary.notCheckedYet');
     const base = { showUpdateAll: false, showStop: false, empty: false };
+    const withManual = (meta: string) => summary.manualCount > 0
+        ? `${meta} · ${t('updates.summary.manualCount', { count: summary.manualCount })}`
+        : meta;
     if (batch) {
         return {
             ...base,
@@ -46,7 +49,7 @@ export function describeUpdatesHeader(
         case 'failed':
             return { ...base, title: t('updates.summary.failedCount', { count: summary.failedCount }), meta: checked, showUpdateAll };
         case 'available':
-            return { ...base, title: t('updates.summary.available', { count: summary.actionableCount }), meta: checked, showUpdateAll };
+            return { ...base, title: t('updates.summary.available', { count: summary.actionableCount }), meta: withManual(checked), showUpdateAll };
         case 'running':
             return { ...base, title: t('updates.summary.updating'), meta: t('updates.summary.keepWorking') };
         case 'ready':
@@ -54,6 +57,11 @@ export function describeUpdatesHeader(
         case 'completed':
         case 'none':
             break;
+    }
+    // Newer versions the person installs themselves lead over a coverage caveat ("No known updates"
+    // above rows that show 0.2.10 → 0.2.16 would be untrue); the caveat stays as the meta.
+    if (summary.manualCount > 0 && summary.status !== 'checking') {
+        return { ...base, title: t('updates.summary.manualOnly', { count: summary.manualCount }), meta: checked };
     }
     switch (summary.status) {
         case 'checking':

@@ -103,3 +103,51 @@ describe('describeUpdatesGroupRow — one row per machine, one state, at most on
             .toBe('updates.sections.thisComputer');
     });
 });
+
+describe('partitionUpdatesPageGroups — one quiet place for machines that cannot be updated now', () => {
+    it('folds offline machines together and keeps this app, this computer and reachable machines as sections', async () => {
+        const { partitionUpdatesPageGroups } = await import('./describeUpdatesGroupRow');
+        const app: UpdatesGroup = { id: 'app', kind: 'app', machineName: null, machineId: null, online: true, lastSeenAt: null, items: [current(cli)] };
+        const own: UpdatesGroup = machine([current(cli)], { id: 'thisComputer', kind: 'thisComputer', machineName: 'MacBook Pro', machineId: 'mbp' });
+        const studio = machine([cli]);
+        const devbox = machine([cli], { id: 'machine:devbox', machineName: 'devbox', machineId: 'devbox', online: false, lastSeenAt: 1 });
+        const ci = machine([current(cli)], { id: 'machine:ci', machineName: 'ci-runner-2', machineId: 'ci', online: false });
+
+        const parts = partitionUpdatesPageGroups([app, own, studio, devbox, ci]);
+
+        expect(parts.sections.map((group) => group.id)).toEqual(['app', 'thisComputer', 'machine:studio']);
+        expect(parts.offline.map((group) => group.id)).toEqual(['machine:devbox', 'machine:ci']);
+    });
+});
+
+describe('partitionUncheckedItems — one cause is said once', () => {
+    it('folds several tools that could not be checked into one group and keeps anything actionable as its own row', async () => {
+        const { partitionUncheckedItems } = await import('./describeUpdatesGroupRow');
+        const unchecked = (item: UpdateItem): UpdateItem => ({ ...item, state: 'unknown', latestVersion: null, action: { kind: 'none' } });
+        const retryable: UpdateItem = { ...cli, id: 'studio:app', state: 'unknown', action: { kind: 'run', verb: 'retry' } };
+        const gemini: UpdateItem = { ...codex, id: 'studio:agent:gemini', title: 'Gemini' };
+
+        expect(partitionUncheckedItems([cli, unchecked(codex), retryable, unchecked(gemini)])).toEqual({
+            rows: [cli, retryable],
+            unchecked: [unchecked(codex), unchecked(gemini)],
+        });
+        // A single unchecked tool is just its row.
+        expect(partitionUncheckedItems([cli, unchecked(codex)])).toEqual({ rows: [cli, unchecked(codex)], unchecked: [] });
+    });
+});
+
+describe('partitionUpdatesPageGroups — quiet machines', () => {
+    it('folds reachable machines with nothing to do into one place and keeps machines with an update, a failure or a newer version to install yourself', async () => {
+        const { partitionUpdatesPageGroups } = await import('./describeUpdatesGroupRow');
+        const own = (version: string): UpdateItem => ({ ...cli, managedBy: 'user', latestVersion: version, state: 'available', action: { kind: 'manual', command: 'npm i -g happier' } });
+        const quiet = machine([current(cli)], { id: 'machine:quiet', machineName: 'quiet' });
+        const ownCurrent = machine([own('0.2.12')], { id: 'machine:own-current', machineName: 'own-current' });
+        const ownNewer = machine([own('0.2.16')], { id: 'machine:own-newer', machineName: 'own-newer' });
+        const studio = machine([cli]);
+
+        const parts = partitionUpdatesPageGroups([studio, quiet, ownCurrent, ownNewer]);
+
+        expect(parts.sections.map((group) => group.id)).toEqual(['machine:studio', 'machine:own-newer']);
+        expect(parts.quiet.map((group) => group.id)).toEqual(['machine:quiet', 'machine:own-current']);
+    });
+});

@@ -10,7 +10,7 @@ import type { UpdatesSummary } from '@/updates/items/buildUpdatesSummary';
 import { describeUpdatesHeader } from './describeUpdatesSummary';
 
 function summary(overrides: Partial<UpdatesSummary>): UpdatesSummary {
-    return { actionableCount: 0, failedCount: 0, runningCount: 0, phase: 'none', status: 'upToDate', visible: false, ...overrides };
+    return { actionableCount: 0, manualCount: 0, failedCount: 0, runningCount: 0, phase: 'none', status: 'upToDate', visible: false, ...overrides };
 }
 
 const CHECKED = Date.now() - 60_000;
@@ -52,6 +52,18 @@ describe('describeUpdatesHeader (one header per summary state)', () => {
         expect(describeUpdatesHeader(failed, null, { checkedAt: CHECKED, uncheckedMachineCount: 0 }).meta).toMatch(/^updates\.summary\.checkedAt/);
         expect(describeUpdatesHeader(failed, null, { checkedAt: CHECKED, uncheckedMachineCount: 1 }).meta).toBe('updates.summary.uncheckedMeta');
         expect(describeUpdatesHeader(failed, null, { checkedAt: null, uncheckedMachineCount: 0 }).meta).toBe('updates.summary.notCheckedYet');
+    });
+
+    it('names updates the person installs themselves instead of hiding them behind a count or "up to date"', () => {
+        const facts = { checkedAt: CHECKED, uncheckedMachineCount: 0 };
+        const both = describeUpdatesHeader(summary({ actionableCount: 1, manualCount: 1, phase: 'available', status: 'available' }), null, facts);
+        expect(both.title).toBe('updates.summary.available:{"count":1}');
+        expect(both.meta).toContain('updates.summary.manualCount:{"count":1}');
+        const manualOnly = describeUpdatesHeader(summary({ manualCount: 2 }), null, facts);
+        expect(manualOnly).toMatchObject({ title: 'updates.summary.manualOnly:{"count":2}', empty: false });
+        // Never "No known updates" above newer versions: they lead, the coverage caveat follows.
+        const unchecked = describeUpdatesHeader(summary({ manualCount: 3, status: 'unchecked' }), null, { checkedAt: CHECKED, uncheckedMachineCount: 2 });
+        expect(unchecked).toMatchObject({ title: 'updates.summary.manualOnly:{"count":3}', meta: 'updates.summary.uncheckedMeta' });
     });
 });
 

@@ -86,8 +86,8 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key: string) => key });
 });
 
-const NONE: UpdatesSummary = { actionableCount: 0, failedCount: 0, runningCount: 0, phase: 'none', status: 'upToDate', visible: false };
-const TWO: UpdatesSummary = { actionableCount: 2, failedCount: 0, runningCount: 0, phase: 'available', status: 'available', visible: true };
+const NONE: UpdatesSummary = { actionableCount: 0, manualCount: 0, failedCount: 0, runningCount: 0, phase: 'none', status: 'upToDate', visible: false };
+const TWO: UpdatesSummary = { actionableCount: 2, manualCount: 0, failedCount: 0, runningCount: 0, phase: 'available', status: 'available', visible: true };
 
 describe('UpdatesPopoverButton', () => {
     beforeEach(() => {
@@ -163,7 +163,7 @@ describe('UpdatesPopoverButton', () => {
     });
 
     it('the sidebar entry is a compact mark with a count; its sentence is the accessible name and the tooltip', async () => {
-        const FAILED: UpdatesSummary = { actionableCount: 0, failedCount: 3, runningCount: 0, phase: 'failed', status: 'failed', visible: true };
+        const FAILED: UpdatesSummary = { actionableCount: 0, manualCount: 0, failedCount: 3, runningCount: 0, phase: 'failed', status: 'failed', visible: true };
         const { UpdatesPopoverButton } = await import('./UpdatesPopoverButton');
         const screen = await renderScreen(<UpdatesPopoverButton summary={FAILED} variant="pill" testID="pill" />);
         const pill = screen.findByTestId('pill');
