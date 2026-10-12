@@ -50,10 +50,10 @@ export function useManagedMachineConfigurator(input: Readonly<{
     return React.useCallback((preset: ManagedMachinePresetV1 | null) => {
         if (!binding?.isCurrent()) return;
         onConfigure?.();
+        // The opener's binding belongs to the picker and dies with it; the modal keeps its own (below),
+        // for the same Account.
         Modal.show({ component: ManagedMachineSelectionConfigurationModal,
-            props: { serverId, preset, initialConfiguration, binding, onUse: (draft: ManagedMachineSelectionDraft) => {
-                if (binding.isCurrent()) onUse(draft);
-            } } });
+            props: { serverId, preset, initialConfiguration, accountId: binding.accountId, onUse } });
     }, [binding, serverId, initialConfiguration, onUse, onConfigure]);
 }
 
@@ -101,15 +101,24 @@ function CurrentManagedMachineSelectionOffers(props: OffersProps & Readonly<{ bi
 
 function ManagedMachineSelectionConfigurationModal(props: CustomModalInjectedProps & Readonly<{
     serverId: string; preset: ManagedMachinePresetV1 | null; initialConfiguration?: ManagedMachineConfigurationContinuation;
-    binding: ServerCredentialAccountScopeBinding;
+    accountId: string;
     onUse: (draft: ManagedMachineSelectionDraft) => void;
 }>) {
-    // A configurator for an Account that is no longer current closes itself.
-    const { binding, onClose } = props;
+    // The modal holds its own Account binding (the picker that opened it may be gone): it closes once
+    // the Home is bound to a different Account, and only uses a draft while the opening Account is
+    // the current one. A profile refresh that rebinds the same Account leaves it open.
+    const { binding } = useServerCredentialAccountScopeBinding(props.serverId);
+    const closeRef = React.useRef(props.onClose);
+    closeRef.current = props.onClose;
+    const otherAccount = binding !== null && binding.accountId !== props.accountId;
     React.useEffect(() => {
-        const retirement = binding.onRetire(onClose);
-        return () => retirement.dispose();
-    }, [binding, onClose]);
+        if (otherAccount) closeRef.current();
+    }, [otherAccount]);
+    const use = (draft: ManagedMachineSelectionDraft) => {
+        if (!binding?.isCurrent() || binding.accountId !== props.accountId) return;
+        props.onClose();
+        props.onUse(draft);
+    };
     const [selected, setSelected] = React.useState<ManagedProvisionerSelection | null>(() => props.preset ? {
         serverId: props.serverId, provisioner: buildQualifiedPluginContributionKey(props.preset.recipe.provider), controller: props.preset.controller,
     } : props.initialConfiguration?.serverId === props.serverId ? props.initialConfiguration : null);
@@ -119,6 +128,6 @@ function ManagedMachineSelectionConfigurationModal(props: CustomModalInjectedPro
         initialController={selected.controller} presetId={props.preset?.id}
         initialConnectPurpose={selected.connectPurpose}
         initialOptionsSelectors={!props.preset && selected === props.initialConfiguration ? props.initialConfiguration?.optionsSelectors : undefined}
-        onUse={draft => { props.onClose(); props.onUse(draft); }} />
+        onUse={use} />
         : <MachineProvisionerPicker serverId={props.serverId} onSelectProvisioner={setSelected} />;
 }

@@ -70,7 +70,10 @@ describe('useManagedMachineConfigurator', () => {
     await hook.unmount();
 
     expect(host.events).toEqual(['picker:close', 'show:modal-1']);
-    expect(host.shown[0]?.props.binding).toBe(accountBinding);
+    // The opener's binding dies with the picker (its isCurrent() follows the picker's mount), so the
+    // modal takes the Account to keep, not the binding: a stale binding closed it in a loop live.
+    expect(host.shown[0]?.props.binding).toBeUndefined();
+    expect(host.shown[0]?.props.accountId).toBe(accountBinding.accountId);
     expect(host.shown[0]?.props.preset).toBeNull();
   });
 
