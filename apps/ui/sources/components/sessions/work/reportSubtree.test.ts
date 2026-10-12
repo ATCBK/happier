@@ -3,11 +3,26 @@ import { createSessionFixture, createSessionListRenderableSessionFixture } from 
 import { selectSessionReportSubtree } from './reportSubtree';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
+import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 
 describe('selectSessionReportSubtree', () => {
+    it('keeps the list status for unopened reports even when an opened transcript has a higher message sequence', () => {
+        const nowMs = 1_000_000;
+        const opened = createSessionFixture({ id: 'child', serverId: 'home-a', reportsTo: { sessionId: 'lead' },
+            seq: 20, active: true, activeAt: nowMs, latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: nowMs - 1, pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0 });
+        const row = createSessionListRenderableSessionFixture({ id: 'child', reportsTo: { sessionId: 'lead' },
+            seq: 19, active: true, activeAt: nowMs, latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: nowMs,
+            agentStateVersion: opened.agentStateVersion + 1, hasPendingPermissionRequests: true, pendingRequestObservedAt: nowMs });
+        const report = selectSessionReportSubtree({ child: opened }, 'lead', 'home-a', { 'home-a': { child: row } })[0]!;
+        const present = (source: Parameters<typeof readSessionWorkStatusFacts>[0]) => resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(source, nowMs) });
+        expect(present(row).bucket).toBe('needs_you');
+        expect(present(report)).toEqual(present(row));
+    });
     it('names unopened layout-v1 reports from the owner list projection', () => {
         const source = createSessionFixture({ id: 'child', reportsTo: { sessionId: 'lead' }, metadataLayoutVersion: 1,
-            accessLevel: 'owner', metadata: null,
+            metadata: null,
             ownerMetadataView: { name: 'Unopened report', path: '/repo', host: 'machine' } });
         const row = buildSessionListRenderableFromSession(source);
         const reports = selectSessionReportSubtree({}, 'lead', 'home-a', { 'home-a': { child: row } });

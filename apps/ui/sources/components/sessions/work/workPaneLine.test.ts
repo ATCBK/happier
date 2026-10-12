@@ -19,6 +19,14 @@ describe('describeWorkPaneLine (lab convo-W1 header sub)', () => {
         expect(describeWorkPaneLine(summary({ outstanding: 2, sessions: 2 }))).toEqual([t('sessionWork.list.reportsWorking', { count: 2 })]);
     });
 
+    it.each([{ needsYou: 1, stalled: 0 }, { needsYou: 0, stalled: 1 }])('never describes waiting or stalled work as working (%o)', (buckets) => {
+        const line = describeWorkPaneLine(summary({ outstanding: 1, sessions: 1, ...buckets }));
+        expect(line).not.toContain(t('sessionWork.list.reportsWorking', { count: 1 }));
+        expect(line).toEqual(buckets.needsYou
+            ? [{ text: t('sessionWork.strip.needsYou', { count: 1 }), attention: true }]
+            : [t('sessionWork.subtitle.sessions', { count: 1 })]);
+    });
+
     it('counts what it leads once everything has settled, and says nothing for no work', () => {
         expect(describeWorkPaneLine(summary({ sessions: 2, runs: 1 }))).toEqual([
             t('sessionWork.subtitle.sessions', { count: 2 }), t('sessionWork.subtitle.runs', { count: 1 }),

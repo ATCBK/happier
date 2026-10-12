@@ -9,7 +9,7 @@ vi.mock('@/text', async () => {
 
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
-import { readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
+import { readSessionWorkStalled, readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
 import type { AgentActivityEntry } from '@/sync/domains/session/agentActivity';
 import { NO_SESSION_AGENT_ACTIVITY_ATTENTION } from '@/sync/domains/session/agentActivity';
 import { createActionOperationSelectors } from '@/sync/domains/actionOperations/actionOperationSelectors';
@@ -111,6 +111,23 @@ function input(overrides: Partial<WorkProjectionInput>): WorkProjectionInput {
 }
 
 describe('projectWork', () => {
+    it.each([
+        { active: false, latestTurnStatus: 'failed' as const, needsYou: 0, stalled: 0, outstanding: 0, group: 'recent' as const },
+        { active: true, latestTurnStatus: 'failed' as const, needsYou: 1, stalled: 0, outstanding: 1, group: 'needsYou' as const },
+        { active: false, latestTurnStatus: 'in_progress' as const, needsYou: 0, stalled: 1, outstanding: 1, group: 'recent' as const },
+    ])('agrees with direct-report counts and lead settlement for $active / $latestTurnStatus', ({ active, latestTurnStatus, needsYou, stalled, outstanding, group }) => {
+        const now = Date.now();
+        const child = createSessionListRenderableSessionFixture({ id: 'child', active, activeAt: now,
+            presence: active ? 0 : 1, latestTurnStatus, latestTurnStatusObservedAt: now });
+        const projection = projectWork(input({ reportSessions: [report({ sessionId: child.id, leadSessionId: 'lead',
+            statusFacts: readSessionWorkStatusFacts(child, now), stalled: readSessionWorkStalled(child, now) })] }));
+        expect(projection.summary).toMatchObject({ needsYou, stalled, outstanding });
+        expect(groupWorkByState(projection)[group].map(item => item.key)).toEqual(['session:child']);
+        const lead = createSessionListRenderableSessionFixture({ active: true, activeAt: now, latestTurnStatus: 'completed',
+            reports: { total: 1, working: 0, needsYou, stalled } });
+        expect(readSessionWorkStatusFacts(lead, now).settled).toBe(outstanding === 0);
+    });
+
     it('retains unchanged work identities when unrelated work updates', () => {
         const a = report({ sessionId: 'a', leadSessionId: 'lead' });
         const b = report({ sessionId: 'b', leadSessionId: 'lead' });

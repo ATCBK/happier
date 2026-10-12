@@ -27,7 +27,7 @@ describe('SessionHeaderWorkStrip (lab session-C)', () => {
         const { SessionHeaderWorkStrip } = await import('./SessionHeaderWorkStrip');
         const strip = <SessionHeaderWorkStrip sessionId="s1" serverId={runtime.serverId} scopeId="session:s1"
             summary={{ outstanding: 3, needsYou: 1, stalled: 0, sessions: 2, runs: 1 }} />;
-        const working = () => t('sessionWork.strip.stillWorking', { count: 3 });
+        const working = () => t('sessionWork.strip.stillWorking', { count: 2 });
         const screen = await renderScreen(<runtime.Wrapper>{strip}</runtime.Wrapper>);
         expect(screen.getTextContent()).toContain(working());
         await act(async () => runtime.pane.openRight({ tabId: 'agents' }));
@@ -36,5 +36,14 @@ describe('SessionHeaderWorkStrip (lab session-C)', () => {
         await act(async () => runtime.pane.setRightTab('git'));
         await act(async () => screen.update(<runtime.Wrapper>{strip}</runtime.Wrapper>));
         expect(screen.getTextContent()).toContain(working());
+    });
+
+    it.each([{ needsYou: 1, stalled: 0 }, { needsYou: 0, stalled: 1 }])('does not call waiting or stalled work still working (%o)', async (buckets) => {
+        const { SessionHeaderWorkStrip } = await import('./SessionHeaderWorkStrip');
+        const screen = await renderScreen(<runtime.Wrapper><SessionHeaderWorkStrip sessionId="s1"
+            serverId={runtime.serverId} scopeId="session:s1" summary={{ outstanding: 1, ...buckets, sessions: 1, runs: 0 }} /></runtime.Wrapper>);
+        expect(screen.getTextContent()).not.toContain(t('sessionWork.strip.stillWorking', { count: 1 }));
+        if (buckets.needsYou) expect(screen.getTextContent()).toContain(t('sessionWork.strip.needsYou', { count: 1 }));
+        if (buckets.stalled) expect(screen.getTextContent()).toContain(t('sessionWork.workerUpdate.state.stalled'));
     });
 });

@@ -101,7 +101,7 @@ function toManagedRunSources(state: SessionManagedWorkflowRunsState): readonly W
     return state.runs.map((run) => ({
         run,
         title: formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(state.metadataByRunId?.[run.id])),
-        word: describeWorkflowRunState(run.state).label,
+        word: describeWorkflowRunState(run.state, { inAttentionWindow: state.attentionRunIds.has(run.id) }).label,
         needsAttention: state.attentionRunIds.has(run.id),
     }));
 }

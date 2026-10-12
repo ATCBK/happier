@@ -38,7 +38,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     status: {
         ...Typography.default(),
-        flexShrink: 0,
+        // The map's trailing slot caps the word's width; a long word truncates before the name does.
+        flexShrink: 1,
+        minWidth: 0,
         fontSize: 12,
         color: theme.colors.text.secondary,
     },

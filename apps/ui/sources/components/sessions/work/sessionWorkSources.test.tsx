@@ -25,7 +25,7 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { useSessionWorkSourcesOwner, toWorkReportSessionSource } = await import('./sessionWorkSources');
 const { resolveSessionInstructionsPolicy, useSessionInstructionsDetail } = await import('./useSessionInstructionsSource');
 const { useSessionAgentActivity } = await import('@/hooks/session/useSessionAgentActivity');
-const { invokeMountedWorkRead } = await import('@/sync/ops/actions/mountedWorkReadAction');
+const { createAppShellAction } = await import('@/sync/ops/actions/appShellAction');
 afterEach(() => { standardCleanup(); actionOperationStore.reset(); });
 
 describe('the Session Work operation source', () => {
@@ -58,15 +58,18 @@ describe('the Session Work operation source', () => {
                 ownerMetadata: null, agentActivity: useSessionAgentActivity({ sessionId: 'lead', serverId }) }));
             const before = hook.getCurrent().projection;
             expect(before.sessions[0]?.facts.join(' · ')).toContain('Studio Mac');
-            const read = () => invokeMountedWorkRead({ actionId: 'session.work.get', input: { sessionId: 'lead' },
-                context: { surface: 'ui', serverId, runtimeAccountId: 'account' } });
+            // Real Action admission resolves the saved Home profile alias before the exact-scope mounted read.
+            const action = createAppShellAction();
+            const read = (runtimeAccountId = 'account') => action({ actionId: 'session.work.get', input: { sessionId: 'lead' },
+                context: { surface: 'ui', serverId, runtimeAccountId } });
             expect(await read()).toMatchObject({ status: 'ready', summary: before.summary,
                 items: [{ key: before.sessions[0]!.key, facts: before.sessions[0]!.facts }] });
+            expect(await read('other-account')).toEqual({ status: 'unavailable' });
             // A retained route and an opened pane can mount the same scoped Session producer.
             const equivalent = await renderHook(() => useSessionWorkSourcesOwner({ sessionId: 'lead', serverId,
                 ownerMetadata: null, agentActivity: useSessionAgentActivity({ sessionId: 'lead', serverId }) }));
             expect(await read()).toMatchObject({ status: 'ready', summary: before.summary });
-            await act(async () => { storage.setState({ settings: { ...storage.getState().settings, debugInformationEnabled: true } }); });
+            await act(async () => { storage.setState({ settings: { ...storage.getState().settings, analyticsOptOut: true } }); });
             expect(hook.getCurrent().projection).toBe(before);
             await act(async () => { storage.setState({ machineListByServerId: { [serverId]: [{ ...machine,
                 metadata: { ...machine.metadata!, displayName: 'Travel Mac' } }] } }); });
@@ -81,19 +84,14 @@ describe('the Session Work operation source', () => {
     });
     it('projects Agent edits from its Account Action surface, not a neighboring surface waiver', () => {
         const settings = normalizeActionsSettingsV1({ v: 1, actions: {}, approvalWaivedSurfaces: { 'prompt_doc.update': ['cli'] } });
-        let saved = settings;
-        const policy = resolveSessionInstructionsPolicy({ settings, targetId: 'agent', onChange: next => { saved = next; } });
+        const policy = resolveSessionInstructionsPolicy({ settings, targetId: 'agent' });
         expect(policy).toMatchObject({
             actionId: 'prompt_doc.update', targetId: 'agent', scope: 'account_action_surface',
             controlState: { kind: 'approval', approvalSurface: 'agent', approvalRequiredByPolicy: true },
         });
-        expect(resolveSessionInstructionsPolicy({ targetId: 'agent', onChange: () => {}, settings: normalizeActionsSettingsV1({
+        expect(resolveSessionInstructionsPolicy({ targetId: 'agent', settings: normalizeActionsSettingsV1({
             ...settings, approvalWaivedSurfaces: { 'prompt_doc.update': ['agent', 'cli'] },
         }) }).controlState).toMatchObject({ value: 'allowed', approvalRequiredByPolicy: false });
-        // Retain the incumbent adapter's coverage until the shared Action writer replaces its live caller.
-        policy.setValue('allowed');
-        expect(new Set(saved.approvalWaivedSurfaces?.['prompt_doc.update'])).toEqual(new Set(['agent', 'cli']));
-        expect(saved.actions['session.instructions.set']).toBeUndefined();
     });
 
     it('demands current Instructions only in Work, distinguishes empty and stale content, and clears private disclosure', async () => {

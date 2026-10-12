@@ -24,7 +24,6 @@ export function selectSessionRelationRecords(
     }
     for (const row of Object.values(readSessionListRowsForServerId(rowsByServerId, serverId) ?? {})) {
         const base = records[row.id];
-        if (base && base.seq > row.seq) continue;
         const cached = projectedRows.get(row);
         if (cached && cached.base === base && cached.serverId === serverId) {
             records[row.id] = cached.session;
