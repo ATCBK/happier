@@ -27,8 +27,12 @@ const TONE_BY_CODE: Readonly<Record<string, ScmChangeTone>> = {
     '!': 'conflicted',
 };
 
-export function describeScmChangeKind(kind: ScmEntryKind): ScmChangeDescriptor {
-    return DESCRIPTORS[kind] ?? DESCRIPTORS.modified;
+export function normalizeScmChangeKind(kind: string): ScmEntryKind {
+    return Object.prototype.hasOwnProperty.call(DESCRIPTORS, kind) ? kind as ScmEntryKind : 'modified';
+}
+
+export function describeScmChangeKind(kind: string): ScmChangeDescriptor {
+    return DESCRIPTORS[normalizeScmChangeKind(kind)];
 }
 
 /** The tone of a letter a summary already carries (a folder's dominant change). */

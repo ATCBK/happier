@@ -77,4 +77,9 @@ describe('fetchUnifiedDiffForPath', () => {
         expect(first.success && first.diff).toContain('+new text');
         expect(reads).toBe(1);
     });
+    it('says a new empty file is empty instead of drawing a hunk with no lines', async () => {
+        const request: UnifiedDiffInput = { ...input(), file: { status: 'untracked' }, loadDiff: async () => ({ success: true, diff: '' }),
+            readFileForFallback: async () => '' };
+        expect(await fetchUnifiedDiffForPath(request)).toEqual({ success: true, diff: '', emptyFile: true });
+    });
 });

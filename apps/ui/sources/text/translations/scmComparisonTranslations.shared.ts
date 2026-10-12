@@ -31,6 +31,8 @@ export const en = {
     tabTitle: ({ view, scope }: { view: string; scope: string }) => `${view} · ${scope}`,
     since: ({ time }: { time: string }) => `since ${time}`,
     turnsWithChanges: ({ count }: { count: number }) => `${count} ${count === 1 ? 'turn' : 'turns'} with changes`,
+    /** Where pending changes live ("on fix-settings-modal"), the scope detail of a checkout review. */
+    onBranch: ({ branch }: { branch: string }) => `on ${branch}`,
     scopePicker: {
         a11y: 'Changes to show',
         branchChoice: 'Branch vs base',

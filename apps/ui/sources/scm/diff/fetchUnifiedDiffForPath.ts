@@ -23,7 +23,7 @@ export type UnifiedDiffInput = Readonly<{
     readFileForFallback: () => Promise<string | null>;
 }>;
 
-export async function fetchUnifiedDiffForPath(input: UnifiedDiffInput): Promise<Readonly<{ success: true; diff: string }> | Readonly<{ success: false; error: string }>> {
+export async function fetchUnifiedDiffForPath(input: UnifiedDiffInput): Promise<Readonly<{ success: true; diff: string; emptyFile?: true }> | Readonly<{ success: false; error: string }>> {
     const cache = input.diffCache === undefined ? scmDiffCache : input.diffCache;
     if (cache && input.cacheKey && input.forceRefresh) {
         cache.invalidatePaths({ sessionId: input.cacheKey.sessionId, paths: new Set([input.path]) });
@@ -44,6 +44,8 @@ export async function fetchUnifiedDiffForPath(input: UnifiedDiffInput): Promise<
     // Fallback reads have caller-owned preview bounds. Never cache a bounded/unavailable
     // read as backend truth, or share it with a caller using a different read policy.
     const decoded = await input.readFileForFallback();
+    // A new file with no bytes has no lines to show: say so, rather than a hunk header with no body.
+    if (decoded === '') return { success: true, diff: '', emptyFile: true };
     return {
         success: true,
         diff: decoded !== null && !isBinaryContent(decoded)

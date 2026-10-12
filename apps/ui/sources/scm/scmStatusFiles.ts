@@ -6,6 +6,8 @@
 import type { ScmWorkingEntry, ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 
 import { isDirectoryLikeScmFileStatus } from './isDirectoryLikeScmFileStatus';
+import { normalizeScmChangeKind } from './scmChangeKind';
+import { normalizeRepoPathParts } from '@/utils/path/normalizeRepoPathParts';
 
 export interface ScmFileStatus {
     fileName: string;
@@ -33,6 +35,14 @@ export interface ScmStatusFiles {
     detached?: boolean;
     totalIncluded: number;
     totalPending: number;
+}
+
+/** Captured comparison projections use the same file-row model as working status. */
+export function scmFileStatusFromChange(change: Readonly<{ path: string; changeKind: string; added: number; removed: number; previousPath?: string | null }>): ScmFileStatus {
+    const { name, dir } = normalizeRepoPathParts({ fullPath: change.path });
+    return { fullPath: change.path, fileName: name, filePath: dir ?? '', status: normalizeScmChangeKind(change.changeKind),
+        isIncluded: false, linesAdded: change.added, linesRemoved: change.removed,
+        ...(change.previousPath ? { oldPath: change.previousPath } : {}) };
 }
 
 const snapshotStatusFilesCache = new WeakMap<ScmWorkingSnapshot, ScmStatusFiles>();
