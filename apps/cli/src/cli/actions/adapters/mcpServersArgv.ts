@@ -60,7 +60,8 @@ export async function tryHandleMcpServerCliCommand(params: Readonly<{
     consumeSuccess: payload => {
       const snapshot = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.list'].parse(payload);
       if (snapshot.status !== 'ready' || snapshot.authority !== 'active') throw Object.assign(new Error('MCP catalog is unavailable'), { code: 'mcp_catalog_unavailable' });
-      resolvedId = snapshot.catalog.servers.find(server => server.id === requestedName || server.name === requestedName)?.id;
+      resolvedId = (snapshot.catalog.servers.find(server => server.id === requestedName)
+        ?? snapshot.catalog.servers.find(server => server.name === requestedName))?.id;
       if (!resolvedId) throw Object.assign(new Error('MCP server was not found'), { code: 'mcp_server_not_found' });
       return true;
     } });

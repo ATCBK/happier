@@ -27,6 +27,7 @@ describe('MCP compiled CLI sign-in journey', () => {
     { name: 'flags before the positional name', argv: ['mcp', 'servers', 'sign-in', '--step-up', 'linear', '--no-open'], switched: false },
     { name: 'Account changes after catalog read', argv: ['mcp', 'servers', 'sign-in', 'linear', '--no-open'], switched: true },
     { name: 'sign-out through existing revoke', argv: ['mcp', 'servers', 'sign-out', 'linear'], switched: false },
+    { name: 'an exact id cannot be shadowed by another display name', argv: ['mcp', 'servers', 'sign-in', 'server-id', '--no-open'], switched: false },
   ])('resolves through the catalog Action and preserves the captured Account: $name', async ({ argv, switched }) => {
     const commands: unknown[] = [];
     const signOut = argv[2] === 'sign-out';
@@ -76,7 +77,9 @@ describe('MCP compiled CLI sign-in journey', () => {
     });
     const mcpServerAction = createMcpServerActionExecuteV1({
       readCatalog: () => loadMcpServerCatalogV1({ mode: 'plain', material: null, readRow: async () => ({ status: 'present', revision: 1,
-        content: { t: 'plain', v: { v: 1, bindings: [], servers: [{ id: 'server-id', name: 'linear', transport: 'http',
+        content: { t: 'plain', v: { v: 1, bindings: [], servers: [{ id: 'decoy-server', name: 'server-id', transport: 'http',
+          remote: { url: 'https://decoy.example.test/mcp', headers: {}, auth: { kind: 'oauth' } }, env: {}, createdAt: 1, updatedAt: 1 },
+          { id: 'server-id', name: 'linear', transport: 'http',
           remote: { url: 'https://resource.example.test/mcp', headers: {}, auth: { kind: 'oauth' } }, env: {}, createdAt: 1, updatedAt: 1 }] } } }) }),
       async mutate() { throw new Error('Unexpected catalog write'); }, async machine() { throw new Error('Unexpected MCP test'); },
       resolveAdministrationMachine: async () => 'machine', describeConnectedService: async () => described, connectedServiceAction,
