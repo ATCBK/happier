@@ -377,7 +377,8 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                 approvalContext: context, requester: { ...projectRuntimeAccountRowsInput(current.runtime, actionId), serverHttpBaseUrl: current.runtime.serverHttpBaseUrl },
                 secretEnvironment: current.runtime.secretEnvironment,
             });
-            if (!request.expectedEffectDigest || request.expectedEffectDigest !== current.reviewedEffectDigest) return {
+            if (request.expectedEffectDigest !== undefined ? request.expectedEffectDigest !== current.reviewedEffectDigest
+                : isApprovalRequiredByActionsSettings(actionId, settings, context)) return {
                 ok: false, reasonCode: request.expectedEffectDigest ? 'project_service_effect_changed' : 'project_service_effect_review_required',
                 reviewedEffect: current.reviewedEffect, reviewedEffectDigest: current.reviewedEffectDigest,
             };
