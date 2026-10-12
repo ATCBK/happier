@@ -9,6 +9,8 @@ import { readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev
 import { readConnectedServiceLimitCategoryV1 } from '@happier-dev/protocol/connect/connected-service-limit-category';
 import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
+import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
+import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
 import { SessionRuntimeIssueSourceV1Schema, SessionRuntimeTeamCredentialDenialDetailsV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { sanitizeConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/sanitizeConnectedServiceRuntimeFailureClassification';
 import { hasConnectedServiceRuntimeAuthRecoveryContext } from './connectedServiceRuntimeAuthRecoveryContext';
@@ -450,7 +452,16 @@ export function classifyPrimarySessionRuntimeIssue(
   const catalogUnavailable = !teamCredentialDenial
     && errorCode.kind === 'string'
     && errorCode.value === DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE;
-  const source = missingCli || catalogUnavailable
+  // Host turn publication reclassifies its typed diagnostic, not the original Error instance.
+  const promptPreparationCode = teamCredentialDenial ? null
+    : input.error instanceof PromptStackPreparationError
+      ? input.error.cause instanceof HomeTargetResolutionError ? input.error.cause.code : input.error.code
+    : declaredSource === 'dependency_failure' && errorCode.kind === 'string'
+      && (errorCode.value === 'preparation_pending' || errorCode.value === 'attachment_unavailable'
+        || errorCode.value === 'profile_missing' || errorCode.value === 'invalid_target'
+        || errorCode.value === 'identity_unobserved' || errorCode.value === 'identity_mismatch')
+    ? errorCode.value : null;
+  const source = missingCli || catalogUnavailable || promptPreparationCode
     ? 'dependency_failure' as const
     : teamCredentialDenial
     ? 'team_credential' as const
@@ -480,7 +491,7 @@ export function classifyPrimarySessionRuntimeIssue(
     status: 'failed',
     code: missingCli ? SPAWN_SESSION_ERROR_CODES.AGENT_CLI_MISSING
       : catalogUnavailable ? DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE
-      : temporaryThrottle ? 'provider_temporary_throttle' : source,
+      : promptPreparationCode ?? (temporaryThrottle ? 'provider_temporary_throttle' : source),
     source,
     occurredAt,
     ...(sessionSeq === null ? {} : { sessionSeq }),
@@ -488,6 +499,7 @@ export function classifyPrimarySessionRuntimeIssue(
     ...(agentTurnId === null ? {} : { agentTurnId }),
     sanitizedPreview: (missingCli ? AGENT_CLI_MISSING_PREVIEW : null)
       ?? (catalogUnavailable ? DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_PREVIEW : null)
+      ?? (promptPreparationCode ? 'Prompt context could not be prepared. Check the selected documents and Home connection, then retry the Session.' : null)
       ?? buildSafeModelNotFoundPreview(input.error)
       ?? (temporaryThrottle ? 'Provider is temporarily limiting requests' : sanitizedPreviewBySource[source]),
     ...(usageLimit === null ? {} : { usageLimit }),

@@ -1,12 +1,48 @@
 import { describe, expect, it } from 'vitest';
 
 import { classifyPrimarySessionRuntimeIssue } from './classifyPrimarySessionRuntimeIssue';
+import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
+import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
 
 describe('classifyPrimarySessionRuntimeIssue', () => {
+  it('retains the deterministic Home preparation cause through terminal publication', () => {
+    const error = Object.assign(new PromptStackPreparationError('unavailable', { kind: 'doc', artifactId: 'private-doc' }), {
+      cause: new HomeTargetResolutionError('profile_missing', 'private Home reference'),
+    });
+    const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error });
+    expect(issue).toMatchObject({ code: 'profile_missing', source: 'dependency_failure' });
+    const published = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: {
+      code: issue.code, details: { v: 1, source: issue.source }, message: 'private error text',
+    } });
+    expect(published).toMatchObject({ code: issue.code, source: issue.source, sanitizedPreview: issue.sanitizedPreview });
+    expect(JSON.stringify([issue, published])).not.toMatch(/private/iu);
+  });
+  it.each(['unavailable', 'locked', 'not_found', 'malformed', 'wrong_kind'] as const)(
+    'classifies prompt preparation %s with static recovery and no private references', (reason) => {
+      const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error',
+        error: new PromptStackPreparationError(reason, { kind: 'doc', artifactId: 'private-prompt' }),
+      });
+      expect(issue).toMatchObject({
+        code: reason === 'unavailable' ? 'preparation_pending' : 'attachment_unavailable',
+        source: 'dependency_failure',
+      });
+      expect(issue.sanitizedPreview).toMatch(/prompt.*retry/iu);
+      expect(JSON.stringify(issue)).not.toContain('private-prompt');
+      const published = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: {
+        code: issue.code, message: 'private-prompt', details: { v: 1, source: issue.source },
+      } });
+      expect(published).toMatchObject({ code: issue.code, source: issue.source,
+        sanitizedPreview: issue.sanitizedPreview });
+      expect(JSON.stringify(published)).not.toContain('private-prompt');
+    },
+  );
+
   it('does not infer a missing Agent CLI from arbitrary errors or unrelated unavailable system tools', () => {
     for (const error of [
       new ReferenceError('Agent CLI missing: secret startup detail'),
       { code: 'plugin_exec_system_tool_unavailable', message: 'secret startup detail' },
+      { code: 'preparation_pending', message: 'secret startup detail' },
+      { code: 'attachment_unavailable', message: 'secret startup detail', details: { v: 2, source: 'dependency_failure' } },
     ]) {
       expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error })).toMatchObject({
         code: 'agent_session_error', source: 'agent_session_error', sanitizedPreview: 'Provider session failed',
