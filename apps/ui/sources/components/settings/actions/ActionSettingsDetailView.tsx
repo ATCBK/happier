@@ -44,7 +44,7 @@ import {
     type ActionSettingsTargetEntry,
 } from './buildActionSettingsEntries';
 import { normalizeActionsSettings } from './normalizeActionsSettings';
-import { listActionSettingsTargetDefinitions } from './actionSettingsTargetDefinitions';
+import { listActionSettingsFacts, listActionSettingsTargetDefinitions } from './actionSettingsTargetDefinitions';
 import { useActionSettingsNarrowLayout } from './useActionSettingsNarrowLayout';
 import { SessionAgentSpawnPolicyControls } from './SessionAgentSpawnPolicyControls';
 
@@ -241,6 +241,7 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
             })
             .filter((target): target is NonNullable<typeof target> => target !== null)
     ), [entry, filteredTargets, settings]);
+    const facts = React.useMemo(() => listActionSettingsFacts(props.actionId), [props.actionId]);
 
     const commitSettings = React.useCallback((next: unknown) => {
         setRawSettings(normalizeActionsSettings(next));
@@ -301,7 +302,7 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
             <PageHeader
                 testID={`settings-actions:action:${entry.actionId}:header`}
                 title={entry.title}
-                description={entry.description ?? t('settingsActions.noDescription')}
+                description={entry.description ?? undefined}
                 actions={(
                     <View style={styles.headerActions}>
                         {machineChip}
@@ -389,6 +390,29 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
                     })}
                 </ItemGroup>
             ))}
+
+            {(['automations', 'alwaysTrue'] as const).map((section) => {
+                const sectionFacts = facts.filter((fact) => fact.section === section);
+                return sectionFacts.length > 0 ? (
+                    <ItemGroup
+                        key={section}
+                        title={t(section === 'automations'
+                            ? 'settingsActions.facts.automationsSection'
+                            : 'settingsActions.facts.alwaysTrueSection')}
+                    >
+                        {sectionFacts.map((fact) => (
+                            <Item
+                                key={fact.id}
+                                testID={`settings-actions:action:${entry.actionId}:fact:${fact.id}`}
+                                title={t(fact.titleKey)}
+                                subtitle={t(fact.subtitleKey)}
+                                mode="info"
+                                showChevron={false}
+                            />
+                        ))}
+                    </ItemGroup>
+                ) : null;
+            })}
 
             {captureViewingPlugins.length > 0 ? (
                 <ItemGroup title={t('settingsActions.targets.plugin.title')} description={t('settingsActions.approvalHelpBody')}>

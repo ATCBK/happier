@@ -6,6 +6,7 @@ import {
 } from './resolveActionSettingsEntryStatusSummary';
 import { normalizeActionsSettings } from './normalizeActionsSettings';
 import { getActionSettingsTargetDefinition } from './actionSettingsTargets';
+import { listActionSettingsTargetDefinitions } from './actionSettingsTargetDefinitions';
 
 function target(
     id: ActionSettingsEntryStatusTarget['id'],
@@ -20,6 +21,29 @@ function target(
 }
 
 describe('resolveActionSettingsEntryStatusSummary', () => {
+    it('describes effective approval by audience and declared danger, including an explicit integration waiver', () => {
+        const actionId = 'acme.forge/actions/merge' as const;
+        const definitions = listActionSettingsTargetDefinitions({
+            surfaces: { ui: true, agent: true, mcp: true, api: true, plugin: true },
+            placements: [],
+            contributedAction: { dangerLevel: 'externalSideEffect' },
+        });
+        const settings = normalizeActionsSettings({ v: 1, actions: {}, approvalWaivedSurfaces: { [actionId]: ['plugin'] } });
+        const summary = resolveActionSettingsEntryStatusSummary({ settings, actionId, targets: definitions.map((definition) => ({ id: definition.id, definition, state: 'on' })) });
+        expect(summary).toMatchObject({
+            audiences: [
+                { audience: 'human', allowedCount: 0, askFirstCount: 1, offCount: 0 },
+                { audience: 'agent', allowedCount: 0, askFirstCount: 1, offCount: 0 },
+                { audience: 'integration', allowedCount: 1, askFirstCount: 2, offCount: 0 },
+            ],
+            danger: 'external',
+        });
+        expect(listActionSettingsEntryStatusParts(summary).map((part) => part.labelKey)).toEqual([
+            'settingsActions.status.humanAskFirst', 'settingsActions.status.agentAskFirst',
+            'settingsActions.status.integrationAllowed', 'settingsActions.status.integrationAskFirst',
+            'settingsActions.status.external',
+        ]);
+    });
     it('counts allowed, ask-first, off, and unavailable target states from one action entry', () => {
         const settings = normalizeActionsSettings({
             v: 1,
@@ -41,7 +65,7 @@ describe('resolveActionSettingsEntryStatusSummary', () => {
                 target('command_palette'),
                 target('mcp', 'unavailable'),
             ],
-        })).toEqual({
+        })).toMatchObject({
             allowedCount: 0,
             askFirstCount: 1,
             offCount: 1,
@@ -56,7 +80,7 @@ describe('resolveActionSettingsEntryStatusSummary', () => {
             settings,
             actionId: 'review.start',
             targets: [target('cli')],
-        })).toEqual({
+        })).toMatchObject({
             allowedCount: 1,
             askFirstCount: 0,
             offCount: 0,
@@ -83,7 +107,7 @@ describe('resolveActionSettingsEntryStatusSummary', () => {
                 target('mcp', 'on', 'session.responsibility.set'),
                 target('cli', 'on', 'session.responsibility.set'),
             ],
-        })).toEqual({
+        })).toMatchObject({
             allowedCount: 0,
             askFirstCount: 4,
             offCount: 0,
@@ -97,6 +121,11 @@ describe('resolveActionSettingsEntryStatusSummary', () => {
             askFirstCount: 0,
             offCount: 1,
             unavailableCount: 6,
-        }).map((part) => part.key)).toEqual(['allowedCount', 'offCount']);
+            audiences: [{ audience: 'integration', allowedCount: 1, askFirstCount: 0, offCount: 1 }],
+            danger: null,
+        })).toEqual([
+            { labelKey: 'settingsActions.status.integrationAllowed', partial: true },
+            { labelKey: 'settingsActions.status.integrationOff', partial: true },
+        ]);
     });
 });

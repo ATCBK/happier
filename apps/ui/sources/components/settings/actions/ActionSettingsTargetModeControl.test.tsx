@@ -51,4 +51,13 @@ describe('ActionSettingsTargetModeControl', () => {
         await screen.pressByTestIdAsync('confirmation:mode:allowed');
         expect(screen.findByTestId('confirmation:mode:allowed')?.props.accessibilityState.checked).toBe(true);
     });
+
+    it.each(['machines.resources.policy.set', 'machines.storage.trash.move'] as const)(
+        'keeps the user waiver available for resource Action %s',
+        async (actionId) => {
+            const screen = await renderScreen(<ControlHarness Control={ActionSettingsTargetModeControl} actionId={actionId} targetId="agent" />);
+            expect(screen.findByTestId('confirmation:mode:allowed')?.props.accessibilityState.checked).toBe(true);
+            expect(screen.findByTestId('confirmation:mode:default')).not.toBeNull();
+        },
+    );
 });

@@ -38,6 +38,12 @@ describe('buildActionSettingsEntries', () => {
             if (!entry) throw new Error('GitHub Action was not projected');
             expect(resolveActionSettingsEntryStatusSummary({ settings, actionId, targets: entry.targets })).toEqual({
                 allowedCount: 1, askFirstCount: 5, offCount: 0, unavailableCount: 0,
+                danger: dangerLevel === 'destructive' ? 'destructive' : 'external',
+                audiences: [
+                    { audience: 'human', allowedCount: 0, askFirstCount: 1, offCount: 0 },
+                    { audience: 'agent', allowedCount: 0, askFirstCount: 1, offCount: 0 },
+                    { audience: 'integration', allowedCount: 1, askFirstCount: 3, offCount: 0 },
+                ],
             });
             for (const target of entry.targets) {
                 const input = { actionId, targetId: target.id, target: target.definition };

@@ -52,6 +52,42 @@ export type ActionSettingsTargetDefinition =
     | ActionSettingsPlacementTargetDefinition
     | ActionSettingsSurfaceTargetDefinition;
 
+export type ActionSettingsFact = Readonly<{
+    id: 'automations' | 'forbidden' | 'trash-first';
+    section: 'automations' | 'alwaysTrue';
+    titleKey: Extract<TranslationKey, `settingsActions.facts.${string}.title`>;
+    subtitleKey: Extract<TranslationKey, `settingsActions.facts.${string}.subtitle`>;
+}>;
+
+/** Presentation facts, not a second Action policy or a configurable caller. */
+const ACTION_SETTINGS_FACTS: Partial<Record<ActionId, readonly ActionSettingsFact[]>> = {
+    'machines.storage.trash.move': [
+        {
+            id: 'automations',
+            section: 'automations',
+            titleKey: 'settingsActions.facts.automations.title',
+            subtitleKey: 'settingsActions.facts.automations.subtitle',
+        },
+        {
+            id: 'forbidden',
+            section: 'alwaysTrue',
+            titleKey: 'settingsActions.facts.forbidden.title',
+            subtitleKey: 'settingsActions.facts.forbidden.subtitle',
+        },
+        {
+            id: 'trash-first',
+            section: 'alwaysTrue',
+            titleKey: 'settingsActions.facts.trashFirst.title',
+            subtitleKey: 'settingsActions.facts.trashFirst.subtitle',
+        },
+    ],
+};
+
+export function listActionSettingsFacts(actionId: ActionSettingsActionId): readonly ActionSettingsFact[] {
+    const hostActionId = ActionIdSchema.safeParse(actionId);
+    return hostActionId.success ? ACTION_SETTINGS_FACTS[hostActionId.data] ?? [] : [];
+}
+
 const PLACEMENT_TARGETS: readonly ActionSettingsPlacementTargetDefinition[] = [
     {
         id: 'session_header',

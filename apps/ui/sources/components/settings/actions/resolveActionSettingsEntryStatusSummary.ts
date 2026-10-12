@@ -7,6 +7,7 @@ import {
 } from './actionSettingsTargets';
 import type { ActionSettingsTargetState } from './buildActionSettingsEntries';
 import type { ActionSettingsTargetDefinition } from './actionSettingsTargetDefinitions';
+import { getActionTargetApprovalPolicy } from './actionSettingsTargetApproval';
 
 export type ActionSettingsEntryStatusTarget = Readonly<{
     id: ActionSettingsTargetId;
@@ -19,12 +20,21 @@ export type ActionSettingsEntryStatusSummary = Readonly<{
     askFirstCount: number;
     offCount: number;
     unavailableCount: number;
+    audiences: readonly ActionSettingsAudienceStatus[];
+    danger: 'destructive' | 'external' | null;
+}>;
+
+type ActionSettingsAudience = 'human' | 'agent' | 'integration';
+type ActionSettingsAudienceStatus = Readonly<{
+    audience: ActionSettingsAudience;
+    allowedCount: number;
+    askFirstCount: number;
+    offCount: number;
 }>;
 
 export type ActionSettingsEntryStatusPart = Readonly<{
-    key: keyof ActionSettingsEntryStatusSummary;
-    count: number;
     labelKey: Extract<TranslationKey, `settingsActions.status.${string}`>;
+    partial: boolean;
 }>;
 
 export function resolveActionSettingsEntryStatusSummary(params: Readonly<{
@@ -38,8 +48,13 @@ export function resolveActionSettingsEntryStatusSummary(params: Readonly<{
         offCount: 0,
         unavailableCount: 0,
     };
+    const audiences: ActionSettingsAudienceStatus[] = [];
+    let danger: ActionSettingsEntryStatusSummary['danger'] = null;
 
     for (const target of params.targets) {
+        const declaredDanger = target.definition.contributedAction?.dangerLevel;
+        if (declaredDanger === 'destructive') danger = 'destructive';
+        else if (danger === null && (declaredDanger === 'externalSideEffect' || declaredDanger === 'writesRemote')) danger = 'external';
         if (target.state === 'unavailable') {
             summary.unavailableCount += 1;
             continue;
@@ -52,39 +67,40 @@ export function resolveActionSettingsEntryStatusSummary(params: Readonly<{
             target: target.definition,
             available: true,
         });
-
-        if (controlState.kind === 'approval') {
-            // The policy's own answer, not a status-local reading of `default`:
-            // an inherited default confirms on Agent, MCP and CLI and does not on
-            // the in-app surface, and this row is where a person reads that.
-            if (controlState.value === 'off') {
-                summary.offCount += 1;
-            } else if (controlState.approvalRequiredByPolicy) {
-                summary.askFirstCount += 1;
-            } else {
-                summary.allowedCount += 1;
-            }
-            continue;
-        }
-
-        if (controlState.kind === 'switch' && controlState.value === 'on') {
-            summary.allowedCount += 1;
-        } else {
-            summary.offCount += 1;
-        }
+        const audience: ActionSettingsAudience = target.id === 'agent' || target.id === 'voice' || target.id === 'voice_panel'
+            ? 'agent' : target.definition.kind === 'placement' || target.id === 'contextual_ui' || target.id === 'slash_command'
+                ? 'human' : 'integration';
+        // Visibility controls do not own execution approval. The incumbent
+        // approval owner maps the target and retains its manifest facts.
+        const approvalRequired = controlState.kind === 'approval' ? controlState.approvalRequiredByPolicy
+            : getActionTargetApprovalPolicy({
+                settings: params.settings, actionId: params.actionId, targetId: target.id,
+                target: target.definition,
+            }).approvalRequiredByPolicy;
+        const key = params.settings.actions[params.actionId]?.enabled === false || controlState.value === 'off'
+            ? 'offCount' : approvalRequired ? 'askFirstCount' : 'allowedCount';
+        summary[key] += 1;
+        const index = audiences.findIndex((entry) => entry.audience === audience);
+        const previous = index === -1 ? { audience, allowedCount: 0, askFirstCount: 0, offCount: 0 } : audiences[index]!;
+        const next = { ...previous, [key]: previous[key] + 1 };
+        if (index === -1) audiences.push(next);
+        else audiences[index] = next;
     }
 
-    return summary;
+    return { ...summary, audiences: (['human', 'agent', 'integration'] as const).flatMap((audience) => audiences.filter((entry) => entry.audience === audience)), danger };
 }
 
 export function listActionSettingsEntryStatusParts(
     summary: ActionSettingsEntryStatusSummary,
 ): readonly ActionSettingsEntryStatusPart[] {
-    const parts: readonly ActionSettingsEntryStatusPart[] = [
-        { key: 'allowedCount', count: summary.allowedCount, labelKey: 'settingsActions.status.allowed' },
-        { key: 'askFirstCount', count: summary.askFirstCount, labelKey: 'settingsActions.status.askFirst' },
-        { key: 'offCount', count: summary.offCount, labelKey: 'settingsActions.status.off' },
-    ];
-
-    return parts.filter((part) => part.count > 0);
+    const parts: ActionSettingsEntryStatusPart[] = summary.allowedCount === 0 && summary.askFirstCount === 0 && summary.offCount > 0
+        ? [{ labelKey: 'settingsActions.status.allOff', partial: false }]
+        : summary.audiences.flatMap((audience) => {
+            const total = audience.allowedCount + audience.askFirstCount + audience.offCount;
+            return ([['allowedCount', 'Allowed'], ['askFirstCount', 'AskFirst'], ['offCount', 'Off']] as const).flatMap(([key, suffix]) => (
+                audience[key] > 0 ? [{ labelKey: `settingsActions.status.${audience.audience}${suffix}` as const, partial: audience[key] < total }] : []
+            ));
+        });
+    if (summary.danger) parts.push({ labelKey: `settingsActions.status.${summary.danger}`, partial: false });
+    return parts;
 }

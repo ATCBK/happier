@@ -8,6 +8,7 @@ import {
     resolveActionSettingsApprovalSurface,
 } from './actionSettingsTargetApproval';
 import { normalizeActionsSettings } from './normalizeActionsSettings';
+import { listActionSettingsTargetDefinitions } from './actionSettingsTargetDefinitions';
 
 describe('actionSettingsTargetApproval', () => {
     it.each([
@@ -45,6 +46,19 @@ describe('actionSettingsTargetApproval', () => {
  * the policy default (teams-lane-04/11-responsible-assignment.md §7.1).
  */
 describe('getActionTargetApprovalRequired', () => {
+    it('reports execution approval for a visible contributed placement without turning its visibility into an approval control', () => {
+        const actionId = 'acme.forge/actions/delete' as const;
+        const target = listActionSettingsTargetDefinitions({
+            surfaces: { ui: true }, placements: ['command_palette'],
+            contributedAction: { dangerLevel: 'destructive' },
+        }).find((entry) => entry.id === 'command_palette')!;
+        expect(resolveActionSettingsApprovalSurface(actionId, target.id, target)).toBeNull();
+        expect(getActionTargetApprovalRequired({ settings: DEFAULT_ACTIONS_SETTINGS_V1, actionId, targetId: target.id, target })).toBe(true);
+        expect(getActionTargetApprovalRequired({
+            settings: normalizeActionsSettings({ v: 1, actions: {}, approvalWaivedSurfaces: { [actionId]: ['ui'] } }),
+            actionId, targetId: target.id, target,
+        })).toBe(false);
+    });
     it('reports assignment confirmation as required by default on the app, and a ui waiver as not', () => {
         expect(getActionTargetApprovalRequired({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,

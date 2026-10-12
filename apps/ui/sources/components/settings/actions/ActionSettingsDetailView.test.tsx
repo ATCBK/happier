@@ -340,6 +340,25 @@ describe('ActionSettingsDetailView', () => {
         ]);
     });
 
+    it('shows resource safety and automation facts without creating an automation approval control', async () => {
+        const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
+        await renderScreen(<ActionSettingsDetailContent actionId="machines.storage.trash.move" />);
+
+        const factIds = capture.items
+            .map((item) => item.testID)
+            .filter((id) => typeof id === 'string' && id.includes(':fact:'));
+        expect(factIds).toEqual([
+            'settings-actions:action:machines.storage.trash.move:fact:automations',
+            'settings-actions:action:machines.storage.trash.move:fact:forbidden',
+            'settings-actions:action:machines.storage.trash.move:fact:trash-first',
+        ]);
+        expect(capture.segmentedTabBars.some((bar) => String(bar.testIDPrefix).includes('automations'))).toBe(false);
+        expect(capture.items.find((item) => item.testID === factIds[0])?.rightElement).toBeUndefined();
+        expect(capture.segmentedTabBars.find((bar) =>
+            bar.testIDPrefix === 'settings-actions:action:machines.storage.trash.move:target:agent:mode',
+        )?.tabs).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'allowed' })]));
+    });
+
     it('persists ask-first approval mode through the canonical settings writer', async () => {
         const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
 

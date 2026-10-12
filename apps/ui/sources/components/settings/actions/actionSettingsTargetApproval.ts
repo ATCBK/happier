@@ -5,6 +5,7 @@ import { setActionApprovalOverride, type ActionSettingsActionId, type ActionsSet
 import { normalizeActionsSettings } from './normalizeActionsSettings';
 import {
     resolveActionSettingsTargetDefinition,
+    isVoiceTargetId,
     type ActionSettingsSurface,
     type ActionSettingsTargetDefinition,
     type ActionSettingsTargetId,
@@ -29,6 +30,17 @@ export function resolveActionSettingsApprovalSurface(
     }
 
     return null;
+}
+
+/** Execution policy is distinct from the placement's visibility control. */
+export function resolveActionSettingsExecutionSurface(
+    actionId: ActionSettingsActionId,
+    targetId: ActionSettingsTargetId,
+    target?: ActionSettingsTargetDefinition,
+): ActionSettingsSurface {
+    const resolvedTarget = resolveActionSettingsTargetDefinition({ actionId, targetId, target });
+    return resolvedTarget.kind === 'surface' ? resolvedTarget.surface
+        : isVoiceTargetId(resolvedTarget.id) ? 'voice' : 'ui';
 }
 
 /**
@@ -62,10 +74,7 @@ export function getActionTargetApprovalPolicy(params: Readonly<{
     target?: ActionSettingsTargetDefinition;
 }>): Readonly<{ approvalRequiredByPolicy: boolean; approvalWaivable: boolean }> {
     const normalizedSettings = normalizeActionsSettings(params.settings);
-    const surface = resolveActionSettingsApprovalSurface(params.actionId, params.targetId, params.target);
-    if (!surface) {
-        return { approvalRequiredByPolicy: false, approvalWaivable: false };
-    }
+    const surface = resolveActionSettingsExecutionSurface(params.actionId, params.targetId, params.target);
     const context = {
         surface,
         ...(surface === 'ui' ? { authority: 'present_user' as const } : {}),
