@@ -1130,10 +1130,10 @@ export function createCliActionDeps(params: Readonly<{
   const resolveActionCallerSession = async (context: ActionExecutorContext) => await resolveCliActionCallerSession({
     context, credentials: params.credentials, boundSessionId: params.sessionId, resolveTransportForSession,
     readBoundSession: async () => {
-      const metadata = await readCurrentSessionMetadata();
+      const metadata = await readCurrentSessionMetadata(context.signal);
       return { metadata, workDepth: params.getCurrentSessionWorkDepth?.() ?? params.rawSession?.workDepth,
         backendTarget: params.getCurrentSessionBackendTarget?.() ?? resolveBackendTargetFromSessionMetadata(metadata),
-        machineId: await resolveCurrentSessionValue('machineId'), directory: await resolveCurrentSessionValue('path') };
+        machineId: await resolveCurrentSessionValue('machineId', context.signal), directory: await resolveCurrentSessionValue('path', context.signal) };
     },
   });
   const resolveAgentStartContext: NonNullable<ActionExecutorDeps['resolveAgentStartContext']> = async (context) => {
@@ -1358,7 +1358,7 @@ export function createCliActionDeps(params: Readonly<{
         }
         let raw: unknown;
         if (source.sessionId) {
-          const transport = await resolveTransportForSession(source.sessionId);
+          const transport = await resolveTransportForSession(source.sessionId, caller?.signal);
           if (!transport.ok || readExecutionRunTransportMachineId(transport) !== source.machineId) {
             throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
           }
@@ -1438,7 +1438,6 @@ export function createCliActionDeps(params: Readonly<{
     workspaceId?: string;
   }>;
 
-  const sessionTransportCache = new Map<string, ResolvedSessionTransport>();
   const ambiguousSpawnActionRequestIds = new Set<string>();
   const isMachineActionServerScopeCurrent = async (serverId?: string | null): Promise<boolean> =>
     !serverId || await isServerProfileHomeIdentity(params.serverId ?? configuration.activeServerId, serverId);
@@ -1547,7 +1546,7 @@ export function createCliActionDeps(params: Readonly<{
     authorizeConnectedAccountRequest: (context, request) => resolveServerRequestHeaders(context,
       context?.externalActionExecutionAuthorization?.binding.actionId ?? 'sessions.spawn.connected_services.list', request),
     readCurrentSessionMetadata: () => readCurrentSessionMetadata(),
-    resolveTransportForSession: (id) => resolveTransportForSession(id),
+    resolveTransportForSession: (id, signal) => resolveTransportForSession(id, signal),
   });
   const signInOperations = (target: Readonly<{ machineId: string; serverId?: string; signal?: AbortSignal }>): Parameters<typeof restartMachineAgentSignIn>[1] => {
     const { machineId, serverId, signal } = target;
@@ -1644,16 +1643,16 @@ export function createCliActionDeps(params: Readonly<{
 
   const readCurrentSessionMetadata = createCliBoundSessionMetadataReader({ ...params,
     // Transport resolution is lazy; the owner is constructed later in this composition.
-    resolveTransportForSession: (id) => resolveTransportForSession(id),
+    resolveTransportForSession: (id, signal) => resolveTransportForSession(id, signal),
   });
 
-  const resolveCurrentSessionValue = async (key: 'path' | 'host' | 'machineId'): Promise<string | null> => {
+  const resolveCurrentSessionValue = async (key: 'path' | 'host' | 'machineId', signal?: AbortSignal): Promise<string | null> => {
     const rawValue = params.rawSession?.[key];
     if (typeof rawValue === 'string' && rawValue.trim().length > 0) {
       return rawValue.trim();
     }
 
-    const metadata = await readCurrentSessionMetadata();
+    const metadata = await readCurrentSessionMetadata(signal);
     const metadataValue = metadata?.[key];
     return typeof metadataValue === 'string' && metadataValue.trim().length > 0
       ? metadataValue.trim()
@@ -2011,9 +2010,6 @@ export function createCliActionDeps(params: Readonly<{
     if (!normalized) {
       return { ok: false, code: 'session_not_found' };
     }
-    const cachedTransport = sessionTransportCache.get(normalized);
-    if (cachedTransport) return cachedTransport;
-
     const serverFeaturesSnapshot = await readServerFeaturesSnapshot();
     const resolved = await resolveSessionTransportContext({
       credentials: params.credentials,
@@ -2029,11 +2025,9 @@ export function createCliActionDeps(params: Readonly<{
       };
     }
 
-    const cached: ResolvedSessionTransport = resolved;
-    sessionTransportCache.set(resolved.sessionId, cached);
-    // If the input is already a full id, also cache by that literal.
-    sessionTransportCache.set(normalized, cached);
-    return cached;
+    // A Session can move or lose access between Actions and between capability
+    // preflight and admission. Resolve its current transport at each boundary.
+    return resolved;
   };
 
   const resumeInactiveSessionTransport = async (input: Readonly<{
@@ -2125,7 +2119,7 @@ export function createCliActionDeps(params: Readonly<{
     const targetSessionId = sessionId ?? originSessionId ?? ownSessionId;
 
     if (targetSessionId) {
-      const transport = await resolveTransportForSession(targetSessionId);
+      const transport = await resolveTransportForSession(targetSessionId, opts?.signal);
       if (!transport.ok) return { ok: false, errorCode: 'execution_run_target_unavailable' };
       const machineId = readExecutionRunTransportMachineId(transport);
       return machineId
@@ -2399,7 +2393,7 @@ export function createCliActionDeps(params: Readonly<{
     if (!params.credentials) {
       return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
     }
-    const transport = await resolveTransportForSession(sessionId);
+    const transport = await resolveTransportForSession(sessionId, signal);
     if (!transport.ok) {
       return { ok: false, errorCode: transport.code, error: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
     }
@@ -2776,7 +2770,7 @@ export function createCliActionDeps(params: Readonly<{
     if (!sessionId) {
       return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
     }
-    const transport = await resolveTransportForSession(sessionId);
+    const transport = await resolveTransportForSession(sessionId, context.signal);
     if (!transport.ok) {
       return { ok: false, errorCode: transport.code, error: transport.code };
     }
@@ -3594,7 +3588,7 @@ export function createCliActionDeps(params: Readonly<{
         if (request.actionId === 'session.roles.apply_to_reports' && request.context.actionCaller?.kind === 'session'
           && request.context.authority !== 'present_user') {
           const input = RoleActionInputSchemasV1['session.roles.apply_to_reports'].parse(request.input);
-          const target = await resolveTransportForSession(input.sessionId);
+          const target = await resolveTransportForSession(input.sessionId, request.context.signal);
           if (!target.ok || target.rawSession.effectiveAccess?.level !== 'owner' || !params.credentials) {
             throw Object.assign(new Error('session_target_unavailable'), { code: 'session_target_unavailable' });
           }
@@ -3624,7 +3618,7 @@ export function createCliActionDeps(params: Readonly<{
       forwardSessionRoleAction: async ({ actionId, input, context }) => {
         const request = RoleActionInputSchemasV1[actionId].parse(input);
         if (!('sessionId' in request)) throw Object.assign(new Error('session_target_unavailable'), { code: 'session_target_unavailable' });
-        const transport = await resolveTransportForSession(request.sessionId);
+        const transport = await resolveTransportForSession(request.sessionId, context.signal);
         if ('ok' in transport && transport.ok === false) throw Object.assign(new Error(transport.code), { code: transport.code });
         const response = await callSessionRoleRpc(transport, actionId, input, context);
         if (response && typeof response === 'object' && 'ok' in response && response.ok === false) return response;
@@ -3664,7 +3658,7 @@ export function createCliActionDeps(params: Readonly<{
           return reports;
         },
         writeReportSessionRoles: async (sessionId, configuration, context) => {
-          const transport = await resolveTransportForSession(sessionId);
+          const transport = await resolveTransportForSession(sessionId, context.signal);
           if ('ok' in transport && transport.ok === false) throw Object.assign(new Error(transport.code), { code: transport.code });
           const result = await callSessionRoleRpc(transport, SESSION_RPC_METHODS.SESSION_ROLES_CONFIGURATION_SET,
             { sessionId, configuration }, context);
@@ -3708,7 +3702,16 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, code: 'execution_run_target_unavailable',
           details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated') };
       }
-      const transport = await resolveTransportForSession(sessionId);
+      let transport: Awaited<ReturnType<typeof resolveTransportForSession>>;
+      try {
+        transport = await resolveTransportForSession(sessionId, opts?.signal);
+      } catch (error) {
+        // Fresh transport preparation has not attempted resume or Start. Its
+        // failure is positive evidence that this invocation created no Run.
+        return { ok: false,
+          code: isExecutionRunActionAbort(error, opts?.signal) ? 'cancelled' : 'execution_run_target_unavailable',
+          details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated') };
+      }
       if (!transport.ok) {
         return {
           ok: false,
@@ -3760,7 +3763,7 @@ export function createCliActionDeps(params: Readonly<{
           opts,
         );
       }
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, opts?.signal);
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
       }
@@ -3783,7 +3786,7 @@ export function createCliActionDeps(params: Readonly<{
           opts,
         );
       }
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, opts?.signal);
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
       }
@@ -3812,7 +3815,7 @@ export function createCliActionDeps(params: Readonly<{
           opts,
         );
       }
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, opts?.signal);
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { details: transport.candidates } : {}) };
       }
@@ -3834,7 +3837,7 @@ export function createCliActionDeps(params: Readonly<{
           opts,
         );
       }
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, opts?.signal);
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { details: transport.candidates } : {}) };
       }
@@ -3856,7 +3859,7 @@ export function createCliActionDeps(params: Readonly<{
           opts,
         );
       }
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, opts?.signal);
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { details: transport.candidates } : {}) };
       }
@@ -3878,7 +3881,7 @@ export function createCliActionDeps(params: Readonly<{
           opts,
         );
       }
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, opts?.signal);
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { details: transport.candidates } : {}) };
       }
@@ -3900,7 +3903,7 @@ export function createCliActionDeps(params: Readonly<{
           opts,
         );
       }
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, opts?.signal);
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { details: transport.candidates } : {}) };
       }
@@ -3917,7 +3920,7 @@ export function createCliActionDeps(params: Readonly<{
       if (sessionId === null) {
         return await callDetachedExecutionRunRpc(sessionId, SESSION_RPC_METHODS.EXECUTION_RUN_CANCEL_TURN_V1, request, opts);
       }
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, opts?.signal);
       if (!transport.ok) return { ok: false, code: transport.code };
       return await callSessionRpc({
         ...transport, token: params.token, sessionId: transport.sessionId,
@@ -3935,7 +3938,7 @@ export function createCliActionDeps(params: Readonly<{
           opts,
         );
       }
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, opts?.signal);
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
       }
@@ -3957,7 +3960,7 @@ export function createCliActionDeps(params: Readonly<{
           opts,
         );
       }
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, opts?.signal);
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
       }
@@ -3978,6 +3981,7 @@ export function createCliActionDeps(params: Readonly<{
         targetMachineId: context.executionRunTargetMachineId,
         originSessionId: context.defaultSessionId,
         serverId: context.serverId,
+        signal: context.signal,
       });
       if (!target.ok) return { ok: false, errorCode: target.errorCode, error: target.errorCode };
       const direct = params.machineActionDirectTargetTransport;
@@ -4016,7 +4020,7 @@ export function createCliActionDeps(params: Readonly<{
               { ...opts, exactMachineId: target.machineId, ...(signal ? { signal } : {}) }) } : {}),
         });
       }
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, opts?.signal);
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
       }
@@ -4554,7 +4558,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!exactServerId || !boundServerId || exactServerId !== boundServerId) {
         return { ok: false, errorCode: 'session_not_found', error: 'session_not_found' };
       }
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, signal);
       if (!transport.ok) {
         return { ok: false, errorCode: transport.code, error: transport.code };
       }
@@ -4594,7 +4598,7 @@ export function createCliActionDeps(params: Readonly<{
       signal,
     }) => {
       if (!params.credentials) return notSupported();
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, signal);
       if (!transport.ok) {
         return { ok: false, errorCode: transport.code, error: transport.code };
       }
@@ -4800,7 +4804,7 @@ export function createCliActionDeps(params: Readonly<{
       signal,
     }) => {
       if (!params.credentials) return notSupported();
-      const transport = await resolveTransportForSession(sessionId);
+      const transport = await resolveTransportForSession(sessionId, signal);
       if (!transport.ok) {
         return { ok: false, errorCode: transport.code, error: transport.code };
       }
@@ -6125,7 +6129,7 @@ export function createCliActionDeps(params: Readonly<{
             code: 'session_input_untrusted_assertion' as const,
           };
         }
-        const transport = await resolveTransportForSession(sessionId);
+        const transport = await resolveTransportForSession(sessionId, signal);
         if (!transport.ok) {
           return {
             status: 'rejected' as const,
@@ -7189,7 +7193,7 @@ export function createCliActionDeps(params: Readonly<{
             resolveAuthorizationHeaders,
             ...(signal ? { signal } : {}),
           })
-        : await resolveTransportForSession(sessionId);
+        : await resolveTransportForSession(sessionId, signal);
       if (!transport.ok) {
         return {
           ok: false,
@@ -7271,7 +7275,7 @@ export function createCliActionDeps(params: Readonly<{
             resolveAuthorizationHeaders,
             ...(signal ? { signal } : {}),
           })
-        : await resolveTransportForSession(sessionId);
+        : await resolveTransportForSession(sessionId, signal);
       if (!transport.ok) {
         return {
           ok: false,
