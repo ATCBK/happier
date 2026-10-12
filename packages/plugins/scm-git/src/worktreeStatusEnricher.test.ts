@@ -57,7 +57,7 @@ describe('readWorktreeStatusEnrichmentForPaths', () => {
         expect(result[0]?.lastActivityAt).toBeGreaterThan(0);
     });
 
-    it('bounds dirty-file mtime scans while preserving porcelain changeCount', async () => {
+    it('preserves the complete change count without using dirty file mtimes as last use', async () => {
         const repoRoot = await initRepoWithCommit('git-plugin-enrich-budget-');
         cleanups.push(() => rm(repoRoot, { recursive: true, force: true }));
 
@@ -70,17 +70,11 @@ describe('readWorktreeStatusEnrichmentForPaths', () => {
             await writeFile(join(repoRoot, `f${index}.txt`), `b${index}\n`, 'utf8');
         }
 
-        const statCalls: string[] = [];
         const result = await runWithRealGitScmRuntime(() => readWorktreeStatusEnrichmentForPaths({
             worktreePaths: [repoRoot],
-            dirtyFileStatBudgetMs: 0,
-            onDirtyFileStat: (relativePath) => {
-                statCalls.push(relativePath);
-            },
         }));
 
         expect(result[0]?.changeCount).toBe(fileCount);
-        expect(statCalls.length).toBeLessThanOrEqual(4);
     });
 
     it('omits enrichment deterministically when the process boundary reports a timeout', async () => {

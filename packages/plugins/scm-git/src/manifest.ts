@@ -19,6 +19,10 @@ export const GIT_PLUGIN = definePlugin({
   version: '0.0.0',
   displayName: 'Git SCM backend',
   description: 'First-party local Git SCM backend.',
+  brand: { iconResourceId: 'brand-icon', monochrome: true },
+  resources: {
+    'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+  },
   engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
   entrypoints: { daemon: './.happier-plugin/daemon.js' },
   hostAccess: {

@@ -15,6 +15,7 @@ export const GIT_SCM_BACKEND_CAPABILITIES = {
         executable: supportedCapability(),
     },
     read: {
+        ignoredPaths: supportedCapability(),
         status: supportedCapability(),
         diffFile: supportedCapability(),
         diffCommit: supportedCapability(),
@@ -73,6 +74,8 @@ export const GIT_SCM_BACKEND_CAPABILITIES = {
         remove: supportedCapability(),
         prune: supportedCapability(),
         prepare: supportedCapability(),
+        retire: supportedCapability(),
+        reinstate: supportedCapability(),
     },
     lifecycle: {
         init: supportedCapability(),

@@ -100,7 +100,7 @@ export function normalizeRepoRootRelativePath(
   rawPath: string,
 ): { ok: true; relativePath: string; pathspec: string } | { ok: false; error: string } {
   const requestedPath = String(rawPath ?? '');
-  if (!requestedPath.trim()) return { ok: false, error: 'Path cannot be empty' };
+  if (!requestedPath) return { ok: false, error: 'Path cannot be empty' };
   if (requestedPath.includes('\0')) return { ok: false, error: 'Path contains null bytes' };
   if (requestedPath.startsWith('-')) return { ok: false, error: 'Path cannot start with "-"' };
   if (requestedPath.startsWith(':')) return { ok: false, error: 'Path contains unsupported syntax' };

@@ -3,6 +3,7 @@ export function buildScmNonInteractiveEnv(
 ): Record<string, string | undefined> {
   return {
     GIT_TERMINAL_PROMPT: '0',
+    GIT_ASK_YESNO: 'false',
     GCM_INTERACTIVE: 'Never',
     ...(overrides ?? {}),
   };

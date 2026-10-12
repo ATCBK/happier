@@ -91,6 +91,8 @@ import type {
   ScmWorktreePruneRequest,
   ScmWorktreePruneResponse,
   ScmWorktreeRemoveRequest,
+  ScmWorktreeRetireRequest,
+  ScmWorktreeReinstateRequest,
   ScmWorktreeRemoveResponse,
 } from '@happier-dev/plugin-sdk/scm';
 import type {
@@ -203,6 +205,8 @@ export interface ScmBackend {
     context: ScmBackendContext;
     request: ScmWorktreesEnrichmentRequest;
   }): Promise<ScmWorktreesEnrichmentResponse>;
+  ignoredPaths?(input: { context: ScmBackendContext; request: { cwd?: string }; signal?: AbortSignal }):
+    Promise<Awaited<ReturnType<NonNullable<NonNullable<BackendRuntimeHandlers['read']>['ignoredPaths']>>>>;
   diffFile(input: {
     context: ScmBackendContext;
     request: ScmDiffFileRequest;
@@ -290,6 +294,8 @@ export interface ScmBackend {
     context: ScmBackendContext;
     request: ScmWorktreeRemoveRequest;
   }): Promise<ScmWorktreeRemoveResponse>;
+  worktreeRetire?(input: { context: ScmBackendContext; request: ScmWorktreeRetireRequest }): Promise<ScmWorktreeRemoveResponse>;
+  worktreeReinstate?(input: { context: ScmBackendContext; request: ScmWorktreeReinstateRequest }): Promise<ScmWorktreeRemoveResponse>;
   worktreePrune(input: {
     context: ScmBackendContext;
     request: ScmWorktreePruneRequest;

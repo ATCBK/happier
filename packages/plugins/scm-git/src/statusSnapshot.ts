@@ -46,7 +46,17 @@ function uniqueRemoteNames(names: readonly (string | null | undefined)[]): strin
     return result;
 }
 
-function resolveRemoteDefaultBranch(input: Readonly<{
+export function resolveRemoteDefaultBranch(input: Readonly<{
+    remoteHeadRefsOutput?: string;
+    remotes: readonly { name: string }[];
+    upstreamRef: string | null | undefined;
+}>): string | null {
+    const ref = resolveRemoteDefaultRef(input);
+    return ref ? ref.slice(ref.indexOf('/') + 1) : null;
+}
+
+/** Preserve the selected remote identity when callers need an ancestry ref, not a display branch. */
+export function resolveRemoteDefaultRef(input: Readonly<{
     remoteHeadRefsOutput?: string;
     remotes: readonly { name: string }[];
     upstreamRef: string | null | undefined;
@@ -66,13 +76,14 @@ function resolveRemoteDefaultBranch(input: Readonly<{
 
     for (const remoteName of preferredRemoteNames) {
         const branch = refsByRemote.get(remoteName);
-        if (branch) return branch;
+        if (branch) return `${remoteName}/${branch}`;
     }
 
-    return refs
+    const fallback = refs
         .slice()
         .sort((left, right) => left.remoteName.localeCompare(right.remoteName))[0]
-        ?.branch ?? null;
+        ?? null;
+    return fallback ? `${fallback.remoteName}/${fallback.branch}` : null;
 }
 
 export function buildGitSnapshot(input: {

@@ -17,6 +17,13 @@ import { runScmCommand } from '../runtime.js';
 import { buildScmNonInteractiveEnv } from '../providers/shared/nonInteractiveEnv.js';
 import { mapGitErrorCode } from '../remote.js';
 import { createGitWorkspaceCheckoutAtDefaultPath } from './materializeGitWorkspaceCheckout.js';
+import { lstat, rm, readFile } from 'node:fs/promises';
+import { basename, dirname, join, toNamespacedPath } from 'node:path';
+import { canonicalizePath, isCanonicalAbsolutePathInsideRoot } from '@happier-dev/plugin-sdk/fs';
+import { canonicalAbsolutePathsEqual } from '@happier-dev/cli-common/path';
+import { inspectGitCheckoutIdentity } from '../checkoutIdentity.js';
+import { parseGitWorktreeListPorcelain } from '../worktreeListParser.js';
+import { withGitWorktreeMutation } from './worktreeMutationQueue.js';
 
 function normalizeBaseRef(value: string | null | undefined): string | null {
     const trimmed = String(value ?? '').trim();
@@ -200,35 +207,100 @@ export async function gitWorktreeRemove(input: {
         };
     }
 
-    const result = await runScmCommand({
-        bin: 'git',
-        cwd: input.context.cwd,
-        args: ['worktree', 'remove', '--force', '--', validatedPath.value],
-        timeoutMs: 60_000,
-        env: buildScmNonInteractiveEnv(),
-    });
+    return withGitWorktreeMutation(input.context.cwd, async () => {
+        const path = validatedPath.value;
+        input.context.assertFilesystemPathAuthorized?.(path);
+        const before = await readPathIdentity(path);
+        if (!before && input.context.beforeFilesystemMutation) {
+            const listed = await runScmCommand({ bin: 'git', cwd: input.context.cwd,
+                args: ['worktree', 'list', '--porcelain', '-z'], env: buildScmNonInteractiveEnv() });
+            if (!listed.success) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_FAILED, error: listed.stderr };
+            const registered = parseGitWorktreeListPorcelain({ worktreesOutput: listed.stdout, currentWorktreePath: null });
+            if (!registered.some(entry => canonicalAbsolutePathsEqual(entry.path, path))) {
+                await input.context.beforeFilesystemMutation();
+                if (await readPathIdentity(path)) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.INVALID_PATH,
+                    error: 'The removed worktree path became occupied' };
+                return { success: true };
+            }
+        }
+        const identity = before ? await inspectGitCheckoutIdentity({ cwd: path }) : null;
+        const physicalPath = identity ? await canonicalizePath(path) : path;
+        if (identity) {
+            const list = await runScmCommand({ bin: 'git', cwd: input.context.cwd,
+                args: ['worktree', 'list', '--porcelain', '-z'], env: buildScmNonInteractiveEnv() });
+            if (!list.success) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_FAILED, error: list.stderr };
+            const nested = parseGitWorktreeListPorcelain({ worktreesOutput: list.stdout, currentWorktreePath: null })
+                .some(entry => !canonicalAbsolutePathsEqual(entry.path, physicalPath) && isCanonicalAbsolutePathInsideRoot(physicalPath, entry.path));
+            if (nested) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.INVALID_REQUEST,
+                error: 'Nested registered worktrees must be removed first' };
+        }
+        let retainedEntry: string | null = null;
+        if (identity) {
+            try {
+                const lock = (await readFile(join(identity.gitDirPath, 'locked'), 'utf8')).trim();
+                if (lock.startsWith('happier-trash:')) retainedEntry = lock.slice('happier-trash:'.length);
+            } catch { /* Ordinary worktrees are unlocked. */ }
+        }
 
-    if (!result.success) {
+        await input.context.beforeFilesystemMutation?.();
+        const result = await runScmCommand({
+            bin: 'git',
+            cwd: input.context.cwd,
+            args: ['worktree', 'remove', '--force', '--force', '--', path],
+            timeoutMs: 60_000,
+            env: buildScmNonInteractiveEnv(),
+        });
+
+        let after = await readPathIdentity(path);
+        if (after) {
+            const registered = await runScmCommand({ bin: 'git', cwd: input.context.cwd,
+                args: ['worktree', 'list', '--porcelain', '-z'], env: buildScmNonInteractiveEnv() });
+            const repositoryRoot = identity ? dirname(identity.commonDirPath) : input.context.detection.rootPath ?? input.context.cwd;
+            const guarded = isCanonicalAbsolutePathInsideRoot(join(repositoryRoot, '.dev', 'worktree'), physicalPath)
+                || (retainedEntry !== null && basename(path) === 'payload' && basename(dirname(path)) === retainedEntry);
+            const registeredPaths = registered.success ? parseGitWorktreeListPorcelain({ worktreesOutput: registered.stdout, currentWorktreePath: null }) : null;
+            const fresh = await readPathIdentity(path);
+            const repository = identity ? await inspectGitCheckoutIdentity({ cwd: input.context.cwd }) : null;
+            const same = before && fresh && before.dev === fresh.dev && before.ino === fresh.ino && fresh.isDirectory() && !fresh.isSymbolicLink()
+                && identity && repository && canonicalAbsolutePathsEqual(identity.commonDirPath, repository.commonDirPath);
+            if (!guarded || !same || !registeredPaths || registeredPaths.some(entry => canonicalAbsolutePathsEqual(entry.path, physicalPath) || isCanonicalAbsolutePathInsideRoot(physicalPath, entry.path))) {
+                return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_FAILED,
+                    error: `Worktree removal left an unverified path: ${path}`, stderr: result.stderr };
+            }
+            await rm(toNamespacedPath(path), { recursive: true, force: true });
+            after = await readPathIdentity(path);
+            if (after) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_FAILED, error: `Worktree path remains after removal: ${path}` };
+            return { success: true, stdout: result.stdout, stderr: result.stderr };
+        }
+
+        if (!result.success) {
+            return {
+                success: false,
+                stdout: result.stdout,
+                stderr: result.stderr,
+                error: result.stderr || 'Failed to remove worktree',
+                errorCode: mapGitErrorCode(result.stderr),
+            };
+        }
+
         return {
-            success: false,
+            success: true,
             stdout: result.stdout,
             stderr: result.stderr,
-            error: result.stderr || 'Failed to remove worktree',
-            errorCode: mapGitErrorCode(result.stderr),
         };
-    }
+    });
+}
 
-    return {
-        success: true,
-        stdout: result.stdout,
-        stderr: result.stderr,
-    };
+async function readPathIdentity(path: string) {
+    try { return await lstat(toNamespacedPath(path)); }
+    catch (error) { if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return null; throw error; }
 }
 
 export async function gitWorktreePrune(input: {
     context: ScmBackendContext;
     request: ScmWorktreePruneRequest;
 }): Promise<ScmWorktreePruneResponse> {
+    return withGitWorktreeMutation(input.context.cwd, async () => {
     const result = await runScmCommand({
         bin: 'git',
         cwd: input.context.cwd,
@@ -252,4 +324,5 @@ export async function gitWorktreePrune(input: {
         stdout: result.stdout,
         stderr: result.stderr,
     };
+    });
 }

@@ -58,7 +58,7 @@ describe('Git SCM plugin runtime', () => {
   it('rejects root-equivalent selected mutation paths', () => {
     const cwd = process.cwd();
 
-    for (const path of ['', ' ', '.', './', ':', ':(top)*', '-path']) {
+    for (const path of ['', '.', './', ':', ':(top)*', '-path']) {
       expect(normalizePathspec(path, cwd).ok).toBe(false);
     }
 
@@ -66,6 +66,7 @@ describe('Git SCM plugin runtime', () => {
       ok: true,
       pathspec: 'src/a.ts',
     });
+    expect(normalizePathspec(' ', cwd)).toMatchObject({ ok: true, pathspec: ' ' });
   });
 });
 
@@ -101,9 +102,8 @@ describe('Git literal selection', () => {
         }
     });
 
-    it.skipIf(process.platform === 'win32')('preserves leading and trailing filename whitespace', () => {
+    it.skipIf(process.platform === 'win32').each([' leading\t\n', 'file ', ' '])('preserves literal filename whitespace for %j', (filename) => {
         const cwd = mkdtempSync(join(tmpdir(), 'happier-whitespace-pathspec-'));
-        const filename = ' leading\t\n';
         try {
             execFileSync('git', ['init'], { cwd, stdio: 'pipe' });
             writeFileSync(join(cwd, filename), 'selected');

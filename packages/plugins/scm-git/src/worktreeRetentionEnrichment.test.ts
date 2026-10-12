@@ -1,0 +1,41 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, rm, writeFile, utimes } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, expect, it } from 'vitest';
+import { readWorktreeStatusEnrichmentForPaths } from './worktreeStatusEnricher.js';
+import { runWithRealGitScmRuntime } from './testkit/scmRuntime.test-support.js';
+const roots: string[] = [];
+afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+it('reports no-upstream unpushed commits, lock identity and only user-action last use', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-worktree-facts-')); roots.push(root);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+    git('init', '-b', 'main'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid');
+    await writeFile(join(root, 'file'), 'original'); git('add', '.'); git('commit', '-m', 'initial');
+    const path = join(root, '.dev', 'worktree', 'feature'); git('worktree', 'add', '-b', 'feature', path);
+    git('worktree', 'lock', '--reason', 'kept-by-user', path);
+    const maintenance = new Date(Date.now() + 86_400_000);
+    await utimes(join(root, '.git', 'worktrees', 'feature', 'index'), maintenance, maintenance);
+    const [facts] = await runWithRealGitScmRuntime(() => readWorktreeStatusEnrichmentForPaths({ worktreePaths: [path] }));
+    expect(facts).toMatchObject({ path, changeCount: 0, ahead: 1, upstream: null, upstreamGone: false,
+        isLocked: true, lockReason: 'kept-by-user', headOid: git('rev-parse', 'HEAD') });
+    expect(facts).not.toHaveProperty('mergedIntoDefault');
+    expect(facts!.lastActivityAt).toBeLessThan(maintenance.getTime());
+});
+it('uses the upstream remote default when different remotes share the same default branch name', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-worktree-default-')); roots.push(root);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+    git('init', '-b', 'main'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid');
+    await writeFile(join(root, 'file'), 'original'); git('add', '.'); git('commit', '-m', 'initial');
+    const initial = git('rev-parse', 'HEAD');
+    const path = join(root, '.dev', 'worktree', 'feature'); git('worktree', 'add', '-b', 'feature', path);
+    git('-C', path, 'commit', '--allow-empty', '-m', 'feature');
+    const head = git('-C', path, 'rev-parse', 'HEAD');
+    git('remote', 'add', 'origin', root); git('remote', 'add', 'team', root);
+    git('update-ref', 'refs/remotes/origin/main', initial); git('update-ref', 'refs/remotes/team/main', head);
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+    git('symbolic-ref', 'refs/remotes/team/HEAD', 'refs/remotes/team/main');
+    git('-C', path, 'branch', '--set-upstream-to=team/main');
+    const [facts] = await runWithRealGitScmRuntime(() => readWorktreeStatusEnrichmentForPaths({ worktreePaths: [path] }));
+    expect(facts).toMatchObject({ ahead: 0, upstream: 'team/main', mergedIntoDefault: true });
+});

@@ -1,260 +1,92 @@
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-
-import type {
-  ScmWorktree,
-  ScmWorktreeEnrichmentEntry,
-} from '@happier-dev/plugin-sdk/scm';
-
+import type { ScmWorktree, ScmWorktreeEnrichmentEntry } from '@happier-dev/plugin-sdk/scm';
 import { runScmCommand } from './runtime.js';
-import { parseGitStatusPorcelainShortZ, type ParsedGitStatusPorcelainShortZEntry } from './statusParser.js';
+import { inspectGitCheckoutIdentity } from './checkoutIdentity.js';
+import { parseGitStatusPorcelainShortZ } from './statusParser.js';
+import { resolveRemoteDefaultRef } from './statusSnapshot.js';
+import { buildScmNonInteractiveEnv } from './providers/shared/nonInteractiveEnv.js';
 
 export const DEFAULT_WORKTREE_STATUS_CONCURRENCY = 8;
 export const DEFAULT_WORKTREE_STATUS_PER_CALL_TIMEOUT_MS = 1500;
-export const DEFAULT_DIRTY_FILE_STAT_MAX_ENTRIES = 16;
-export const DEFAULT_DIRTY_FILE_STAT_CONCURRENCY = 4;
-export const DEFAULT_DIRTY_FILE_STAT_BUDGET_MS = 200;
-
-type DirtyFileScanOptions = Readonly<{
-    maxEntries: number;
-    concurrency: number;
-    budgetMs: number;
-    onDirtyFileStat?: (relativePath: string) => void;
-    onDirtyFileStatStart?: (relativePath: string) => void;
-    onDirtyFileStatFinish?: (relativePath: string) => void;
-}>;
-
 type EnrichmentOptions = Readonly<{
     concurrency?: number;
     perCallTimeoutMs?: number;
-    dirtyFileStatMaxEntries?: number;
-    dirtyFileStatConcurrency?: number;
-    dirtyFileStatBudgetMs?: number;
     onPerWorktreeStart?: (path: string) => void;
     onPerWorktreeFinish?: (path: string) => void;
-    onDirtyFileStat?: (relativePath: string) => void;
-    onDirtyFileStatStart?: (relativePath: string) => void;
-    onDirtyFileStatFinish?: (relativePath: string) => void;
 }>;
-
 export type EnrichGitWorktreesWithStatusInput = EnrichmentOptions & Readonly<{
-    worktrees: ReadonlyArray<ScmWorktree>;
-    includeWorktreeStatus: boolean | undefined;
+    worktrees: ReadonlyArray<ScmWorktree>; includeWorktreeStatus: boolean | undefined;
 }>;
-
-export async function enrichGitWorktreesWithStatus(
-    input: EnrichGitWorktreesWithStatusInput,
-): Promise<ScmWorktree[]> {
-    const worktrees = [...input.worktrees];
-    if (input.includeWorktreeStatus !== true || worktrees.length === 0) {
-        return worktrees;
-    }
-
-    const entries = await readWorktreeStatusEnrichmentForPaths({
-        ...input,
-        worktreePaths: worktrees.map((worktree) => worktree.path),
-    });
-    const byPath = new Map(entries.map((entry) => [entry.path, entry]));
-
-    return worktrees.map((worktree) => {
-        const metrics = byPath.get(worktree.path);
-        if (!metrics) return worktree;
-        const next: ScmWorktree = { ...worktree };
-        if (metrics.changeCount !== undefined) next.changeCount = metrics.changeCount;
-        if (metrics.lastActivityAt !== undefined) next.lastActivityAt = metrics.lastActivityAt;
-        return next;
+export async function enrichGitWorktreesWithStatus(input: EnrichGitWorktreesWithStatusInput): Promise<ScmWorktree[]> {
+    if (input.includeWorktreeStatus !== true || !input.worktrees.length) return [...input.worktrees];
+    const entries = await readWorktreeStatusEnrichmentForPaths({ ...input, worktreePaths: input.worktrees.map(w => w.path) });
+    const byPath = new Map(entries.map(e => [e.path, e]));
+    return input.worktrees.map(w => {
+        const facts = byPath.get(w.path);
+        return { ...w, ...(facts?.changeCount !== undefined ? { changeCount: facts.changeCount } : {}),
+            ...(facts?.lastActivityAt !== undefined ? { lastActivityAt: facts.lastActivityAt } : {}) };
     });
 }
-
-export type ReadWorktreeStatusEnrichmentForPathsInput = EnrichmentOptions & Readonly<{
-    worktreePaths: ReadonlyArray<string>;
-}>;
-
-export async function readWorktreeStatusEnrichmentForPaths(
-    input: ReadWorktreeStatusEnrichmentForPathsInput,
-): Promise<ScmWorktreeEnrichmentEntry[]> {
-    const paths = [...input.worktreePaths];
-    const result: ScmWorktreeEnrichmentEntry[] = new Array(paths.length);
-    if (paths.length === 0) return result;
-
-    const concurrency = Math.max(1, Math.floor(input.concurrency ?? DEFAULT_WORKTREE_STATUS_CONCURRENCY));
+export type ReadWorktreeStatusEnrichmentForPathsInput = EnrichmentOptions & Readonly<{ worktreePaths: ReadonlyArray<string> }>;
+export async function readWorktreeStatusEnrichmentForPaths(input: ReadWorktreeStatusEnrichmentForPathsInput): Promise<ScmWorktreeEnrichmentEntry[]> {
+    const result: ScmWorktreeEnrichmentEntry[] = new Array(input.worktreePaths.length);
+    let next = 0;
     const timeoutMs = Math.max(1, Math.floor(input.perCallTimeoutMs ?? DEFAULT_WORKTREE_STATUS_PER_CALL_TIMEOUT_MS));
-    const dirtyOpts = resolveDirtyFileScanOptions(input);
-
-    let nextIndex = 0;
-    const workerCount = Math.min(concurrency, paths.length);
-    const workers: Promise<void>[] = [];
-    for (let workerId = 0; workerId < workerCount; workerId += 1) {
-        workers.push((async () => {
-            while (true) {
-                const index = nextIndex;
-                nextIndex += 1;
-                if (index >= paths.length) return;
-                const path = paths[index]!;
-
-                input.onPerWorktreeStart?.(path);
-                try {
-                    const metrics = await readWorktreeEnrichmentMetrics(path, timeoutMs, dirtyOpts);
-                    const entry: ScmWorktreeEnrichmentEntry = { path };
-                    if (metrics.changeCount !== undefined) entry.changeCount = metrics.changeCount;
-                    if (metrics.lastActivityAt !== undefined) entry.lastActivityAt = metrics.lastActivityAt;
-                    result[index] = entry;
-                } finally {
-                    input.onPerWorktreeFinish?.(path);
-                }
-            }
-        })());
-    }
-
-    await Promise.all(workers);
-    for (let index = 0; index < paths.length; index += 1) {
-        if (!result[index]) result[index] = { path: paths[index]! };
-    }
+    const count = Math.min(input.worktreePaths.length, Math.max(1, Math.floor(input.concurrency ?? DEFAULT_WORKTREE_STATUS_CONCURRENCY)));
+    await Promise.all(Array.from({ length: count }, async () => {
+        while (next < input.worktreePaths.length) {
+            const index = next++;
+            const path = input.worktreePaths[index]!;
+            input.onPerWorktreeStart?.(path);
+            try { result[index] = await readFacts(path, timeoutMs); }
+            finally { input.onPerWorktreeFinish?.(path); }
+        }
+    }));
     return result;
 }
-
-function resolveDirtyFileScanOptions(input: EnrichmentOptions): DirtyFileScanOptions {
-    return {
-        maxEntries: Math.max(0, Math.floor(input.dirtyFileStatMaxEntries ?? DEFAULT_DIRTY_FILE_STAT_MAX_ENTRIES)),
-        concurrency: Math.max(1, Math.floor(input.dirtyFileStatConcurrency ?? DEFAULT_DIRTY_FILE_STAT_CONCURRENCY)),
-        budgetMs: Math.max(0, Math.floor(input.dirtyFileStatBudgetMs ?? DEFAULT_DIRTY_FILE_STAT_BUDGET_MS)),
-        onDirtyFileStat: input.onDirtyFileStat,
-        onDirtyFileStatStart: input.onDirtyFileStatStart,
-        onDirtyFileStatFinish: input.onDirtyFileStatFinish,
-    };
-}
-
-type WorktreeEnrichmentMetrics = Readonly<{
-    changeCount: number | undefined;
-    lastActivityAt: number | undefined;
-}>;
-
-async function readWorktreeEnrichmentMetrics(
-    worktreePath: string,
-    timeoutMs: number,
-    dirtyOpts: DirtyFileScanOptions,
-): Promise<WorktreeEnrichmentMetrics> {
-    const [headTime, porcelainEntries] = await Promise.all([
-        readHeadCommitTimeMs(worktreePath, timeoutMs),
-        readWorktreePorcelainEntries(worktreePath, timeoutMs),
+async function readFacts(path: string, timeoutMs: number): Promise<ScmWorktreeEnrichmentEntry> {
+    const facts: ScmWorktreeEnrichmentEntry = { path };
+    const command = (args: string[]) => runScmCommand({ bin: 'git', cwd: path, args, timeoutMs, env: buildScmNonInteractiveEnv() });
+    const [status, identity, submodules] = await Promise.all([
+        command(['status', '--porcelain', '-z']), inspectGitCheckoutIdentity({ cwd: path }), command(['ls-files', '--stage', '-z']),
     ]);
-
-    const changeCount = porcelainEntries === undefined ? undefined : porcelainEntries.length;
-    let lastActivityAt = headTime.kind === 'value' ? headTime.value : undefined;
-
-    if (headTime.kind === 'timeout') {
-        return { changeCount, lastActivityAt: undefined };
-    }
-
-    if (lastActivityAt === undefined) {
-        try {
-            const info = await stat(worktreePath);
-            const mtimeMs = Math.floor(info.mtimeMs);
-            if (Number.isFinite(mtimeMs) && mtimeMs >= 0) lastActivityAt = mtimeMs;
-        } catch {
-            // Missing or unreadable worktrees simply omit lastActivityAt.
-        }
-    }
-
-    if (porcelainEntries && dirtyOpts.maxEntries > 0) {
-        const trackedDirty = porcelainEntries.filter((entry) => !entry.isUntracked).slice(0, dirtyOpts.maxEntries);
-        if (trackedDirty.length > 0) {
-            const newestDirtyMtime = await readNewestDirtyFileMtime({
-                worktreePath,
-                entries: trackedDirty,
-                dirtyOpts,
-            });
-            if (newestDirtyMtime !== undefined) {
-                lastActivityAt = lastActivityAt === undefined ? newestDirtyMtime : Math.max(lastActivityAt, newestDirtyMtime);
-            }
-        }
-    }
-
-    return { changeCount, lastActivityAt };
-}
-
-async function readNewestDirtyFileMtime(input: Readonly<{
-    worktreePath: string;
-    entries: readonly ParsedGitStatusPorcelainShortZEntry[];
-    dirtyOpts: DirtyFileScanOptions;
-}>): Promise<number | undefined> {
-    const startedAtMs = Date.now();
-    let newest: number | undefined;
-    let nextEntryIndex = 0;
-    const isBudgetExceeded = (): boolean => {
-        if (input.dirtyOpts.budgetMs === 0) return true;
-        return (Date.now() - startedAtMs) > input.dirtyOpts.budgetMs;
-    };
-
-    const dispatchNext = async (): Promise<void> => {
-        while (true) {
-            if (isBudgetExceeded()) return;
-            const index = nextEntryIndex;
-            nextEntryIndex += 1;
-            if (index >= input.entries.length) return;
-            const entry = input.entries[index]!;
-            input.dirtyOpts.onDirtyFileStat?.(entry.path);
-            input.dirtyOpts.onDirtyFileStatStart?.(entry.path);
-            try {
-                const info = await stat(join(input.worktreePath, entry.path));
-                const mtimeMs = Math.floor(info.mtimeMs);
-                if (Number.isFinite(mtimeMs) && mtimeMs >= 0) {
-                    newest = newest === undefined ? mtimeMs : Math.max(newest, mtimeMs);
-                }
-            } catch {
-                // File races are expected while a worktree is active.
-            } finally {
-                input.dirtyOpts.onDirtyFileStatFinish?.(entry.path);
-            }
-        }
-    };
-
-    const workerCount = Math.min(input.dirtyOpts.concurrency, input.entries.length);
-    const workers: Promise<void>[] = [];
-    for (let workerId = 0; workerId < workerCount; workerId += 1) {
-        workers.push(dispatchNext());
-    }
-    await Promise.all(workers);
-    return newest;
-}
-
-type HeadCommitTimeResult =
-    | { kind: 'value'; value: number }
-    | { kind: 'failed' }
-    | { kind: 'timeout' };
-
-async function readHeadCommitTimeMs(worktreePath: string, timeoutMs: number): Promise<HeadCommitTimeResult> {
+    if (status.success) facts.changeCount = parseGitStatusPorcelainShortZ(status.stdout).length;
+    if (submodules.success) facts.hasSubmodules = submodules.stdout.split('\0').some(e => e.startsWith('160000 '));
+    if (!identity) return facts;
+    if (identity.headRevision) facts.headOid = identity.headRevision;
     try {
-        const result = await runScmCommand({
-            bin: 'git',
-            cwd: worktreePath,
-            args: ['log', '-1', '--format=%ct'],
-            timeoutMs,
-        });
-        if (result.timedOut) return { kind: 'timeout' };
-        if (!result.success || result.exitCode !== 0) return { kind: 'failed' };
-        const seconds = Number.parseInt((result.stdout ?? '').trim(), 10);
-        if (!Number.isFinite(seconds) || seconds < 0) return { kind: 'failed' };
-        return { kind: 'value', value: seconds * 1000 };
-    } catch {
-        return { kind: 'failed' };
+        facts.lockReason = (await readFile(join(identity.gitDirPath, 'locked'), 'utf8')).trim();
+        facts.isLocked = true;
+    } catch (error) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') facts.isLocked = false;
     }
-}
-
-async function readWorktreePorcelainEntries(
-    worktreePath: string,
-    timeoutMs: number,
-): Promise<readonly ParsedGitStatusPorcelainShortZEntry[] | undefined> {
-    try {
-        const result = await runScmCommand({
-            bin: 'git',
-            cwd: worktreePath,
-            args: ['status', '--porcelain', '-z'],
-            timeoutMs,
-        });
-        if (!result.success || result.exitCode !== 0) return undefined;
-        return parseGitStatusPorcelainShortZ(result.stdout ?? '');
-    } catch {
-        return undefined;
+    const [times, reflog, upstream, remoteHeads] = await Promise.all([
+        Promise.all(['HEAD', 'COMMIT_EDITMSG', 'ORIG_HEAD'].map(async name => {
+            try { return Math.floor((await stat(join(identity.gitDirPath, name))).mtimeMs); } catch { return undefined; }
+        })), command(['reflog', '-1', '--date=unix', '--format=%gD']),
+        identity.branchName ? command(['for-each-ref', '--format=%(upstream:short)%00%(upstream:track)', `refs/heads/${identity.branchName}`]) : Promise.resolve(null),
+        command(['for-each-ref', '--format=%(refname:short)%09%(symref:short)', 'refs/remotes/*/HEAD']),
+    ]);
+    if (reflog.success) {
+        const value = /@\{(\d+)\}/u.exec(reflog.stdout);
+        if (value) times.push(Number(value[1]) * 1000);
     }
+    const knownTimes = times.filter((value): value is number => value !== undefined && Number.isFinite(value));
+    if (knownTimes.length) facts.lastActivityAt = Math.max(...knownTimes);
+    if (upstream?.success || identity.branchName === null) {
+        const [ref, track] = upstream?.stdout.trim().split('\0') ?? ['', ''];
+        facts.upstream = ref || null;
+        facts.upstreamGone = track?.includes('[gone]') ?? false;
+        const ahead = await command(facts.upstream && !facts.upstreamGone
+            ? ['rev-list', '--count', '@{upstream}..HEAD'] : ['rev-list', '--count', 'HEAD', '--not', '--remotes']);
+        if (ahead.success && /^\d+$/u.test(ahead.stdout.trim())) facts.ahead = Number(ahead.stdout.trim());
+    }
+    const defaultRef = remoteHeads.success ? resolveRemoteDefaultRef({ remoteHeadRefsOutput: remoteHeads.stdout,
+        remotes: [], upstreamRef: facts.upstream }) : null;
+    if (defaultRef) {
+        const merged = await command(['merge-base', '--is-ancestor', 'HEAD', defaultRef]);
+        if (!merged.timedOut && !merged.outputLimitExceeded && (merged.exitCode === 0 || merged.exitCode === 1)) facts.mergedIntoDefault = merged.exitCode === 0;
+    }
+    return facts;
 }

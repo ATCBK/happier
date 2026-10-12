@@ -49,6 +49,8 @@ import { gitRepositoryClone } from './operations/repositoryCloneOperations.js';
 import { gitRepositoryInit } from './operations/repositoryInitOperations.js';
 import { gitStashApply, gitStashCreate, gitStashDrop, gitStashList, gitStashPop, gitStashShow } from './operations/stashOperations.js';
 import { gitWorktreeCreate, gitWorktreePrune, gitWorktreeRemove } from './operations/worktreeOperations.js';
+import { gitWorktreeRetire, gitWorktreeReinstate } from './operations/worktreeRetention.js';
+import { gitIgnoredPaths } from './operations/ignoredPaths.js';
 import { GIT_INSTALLABLE_DEP_ID } from './installables/gitInstallable.js';
 
 export function createGitBackend(): ScmBackend {
@@ -110,6 +112,7 @@ export function createGitBackend(): ScmBackend {
         async worktreesEnrichment({ context, request }) {
             return getGitWorktreesEnrichment({ context, request });
         },
+        ignoredPaths: gitIgnoredPaths,
         diffFile: gitDiffFile,
         diffCommit: gitDiffCommit,
         changeInclude: gitChangeInclude,
@@ -139,6 +142,8 @@ export function createGitBackend(): ScmBackend {
         conflictMarkResolved: gitConflictMarkResolved,
         worktreeCreate: gitWorktreeCreate,
         worktreeRemove: gitWorktreeRemove,
+        worktreeRetire: gitWorktreeRetire,
+        worktreeReinstate: gitWorktreeReinstate,
         worktreePrune: gitWorktreePrune,
         remoteAdd: gitRemoteAdd,
         remoteSetUrl: gitRemoteSetUrl,
@@ -212,6 +217,7 @@ export function createGitScmBackendRuntimeRegistration(): ScmBackendRuntimeRegis
             read: {
                 statusSnapshot: backend.statusSnapshot,
                 worktreesEnrichment: backend.worktreesEnrichment,
+                ignoredPaths: backend.ignoredPaths,
                 diffFile: backend.diffFile,
                 diffCommit: backend.diffCommit,
                 logList: backend.logList,
@@ -254,6 +260,8 @@ export function createGitScmBackendRuntimeRegistration(): ScmBackendRuntimeRegis
             worktree: {
                 create: backend.worktreeCreate,
                 remove: backend.worktreeRemove,
+                retire: backend.worktreeRetire,
+                reinstate: backend.worktreeReinstate,
                 prune: backend.worktreePrune,
             },
             lifecycle: {

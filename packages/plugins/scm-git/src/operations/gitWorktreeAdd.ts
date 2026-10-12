@@ -1,5 +1,6 @@
 import { runScmCommand, type ScmExecResult } from '../runtime.js';
 import { buildScmNonInteractiveEnv } from '../providers/shared/nonInteractiveEnv.js';
+import { withGitWorktreeMutation } from './worktreeMutationQueue.js';
 
 /**
  * The one place this package runs `git worktree add`.
@@ -57,7 +58,7 @@ export async function runGitWorktreeAdd(input: Readonly<{
     baseRef?: string | null;
     force?: boolean;
 }>): Promise<ScmExecResult> {
-    return await runScmCommand({
+    return await withGitWorktreeMutation(input.repoRoot, () => runScmCommand({
         bin: 'git',
         cwd: input.repoRoot,
         args: buildGitWorktreeAddArgs({
@@ -69,7 +70,7 @@ export async function runGitWorktreeAdd(input: Readonly<{
         }),
         timeoutMs: GIT_WORKTREE_ADD_TIMEOUT_MS,
         env: buildScmNonInteractiveEnv(),
-    });
+    }));
 }
 
 /**
