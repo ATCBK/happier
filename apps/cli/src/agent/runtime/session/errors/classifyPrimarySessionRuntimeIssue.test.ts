@@ -118,7 +118,7 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
           url: 'https://opencode.ai/billing',
         },
         connectedService: {
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           profileId: 'backup',
           groupId: 'codex-main',
         },
@@ -186,7 +186,7 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
         limitCategory: 'usage_limit',
         planType: null,
         connectedService: {
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           profileId: 'primary',
           groupId: 'codex-main',
         },
@@ -373,7 +373,7 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
         limitCategory: 'capacity',
         providerLimitId: 'server_overloaded',
         connectedService: {
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           profileId: 'primary',
           groupId: 'codex-main',
         },
@@ -509,7 +509,7 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
           resetAtMs: 9_000,
           limitCategory: expectedCategory,
           connectedService: {
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             profileId: 'primary',
             groupId: 'codex-main',
           },
