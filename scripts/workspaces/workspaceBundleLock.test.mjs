@@ -8,9 +8,39 @@ import { fileURLToPath } from 'node:url';
 
 import {
   DEFAULT_WORKSPACE_BUNDLE_LOCK_TIMEOUT_MS,
+  WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE,
   withWorkspaceBundleLock,
   withWorkspaceBundleLockSync,
 } from './workspaceBundleLock.mjs';
+import { withOptionalCliSharedDepsBuildLock } from '../../apps/cli/scripts/optionalWorkspaceBundleLock.mjs';
+
+test('CLI publication adapter reenters the exact inherited joint lease supplied by its environment', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'workspace-cli-joint-lease-'));
+  const lockPath = join(root, 'publication.lock');
+  try {
+    for (const lockModulePath of [fileURLToPath(new URL('./workspaceBundleLock.mjs', import.meta.url)), join(root, 'absent.mjs')]) {
+      let release, acquired, heldLockValue, waited = false;
+      const ready = new Promise(resolveReady => { acquired = resolveReady; });
+      const holder = withWorkspaceBundleLock(async context => {
+        heldLockValue = context.heldLockValue;
+        acquired();
+        await new Promise(resolveRelease => { release = resolveRelease; });
+        context.assertOwned();
+      }, { lockPath });
+      await ready;
+      try {
+        assert.equal(await withOptionalCliSharedDepsBuildLock(() => 'reused', {
+          repoRoot: root, lockPath, lockModulePath,
+          env: { ...process.env, HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '',
+            HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: JSON.stringify([heldLockValue]) },
+          onWait() { waited = true; release(); },
+        }), 'reused');
+        assert.equal(waited, false, 'adapter must reenter rather than wait for its own authenticated lease');
+      } finally { release(); await holder; }
+    }
+    assert.equal(existsSync(lockPath), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test('a contended publication reuses its directory watch across fallback wakes and closes it on admission or cancellation', () => {
   for (const outcome of ['admission', 'cancellation']) {
@@ -1858,6 +1888,54 @@ test('withWorkspaceBundleLock permits exact-path reentry when the caller inherit
     );
 
     assert.equal(result, 'nested');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('nonblocking workspace admission refuses a foreign lease without waiting or changing its owner', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'happier-workspace-nonblocking-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lockPath = join(root, 'publication.lock');
+  await withWorkspaceBundleLock(async ({ heldLockValue }) => {
+    const owner = readFileSync(lockPath, 'utf8');
+    await assert.rejects(withWorkspaceBundleLock(() => assert.fail('foreign lease entered'), {
+      lockPath, wait: false,
+      // The OS watch boundary records an attempted wait without hanging RED.
+      waitForLockChangeImpl: async () => { throw new Error('native wait was requested'); },
+    }), { code: 'EWORKSPACEBUNDLELOCKBUSY' });
+    assert.equal(readFileSync(lockPath, 'utf8'), owner);
+    assert.equal(existsSync(`${lockPath}.claim`), false);
+    assert.equal(await withWorkspaceBundleLock(({ inherited }) => inherited,
+      { lockPath, heldLockValue, wait: false }), true);
+  }, { lockPath });
+  assert.equal(await withWorkspaceBundleLock(() => 'available', { lockPath, wait: false }), 'available');
+});
+
+test('joint workspace leases reenter each exact owner without letting a released lease bypass its successor', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'happier-workspace-joint-leases-'));
+  const bundlePath = join(tempRoot, 'bundle.lock');
+  const packagePath = join(tempRoot, 'package.lock');
+  let priorPackageLease;
+  try {
+    await withWorkspaceBundleLock(async ({ heldLockValue: bundleLease }) => {
+      await withWorkspaceBundleLock(async ({ heldLockValue: packageLease }) => {
+        priorPackageLease = packageLease;
+        const env = { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: bundleLease,
+          HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: JSON.stringify([bundleLease, packageLease]) };
+        for (const lockPath of [bundlePath, packagePath]) {
+          const inherited = await withWorkspaceBundleLock(({ inherited }) => inherited,
+            { lockPath, env, timeoutMs: 30, staleAfterMs: 1_000 });
+          assert.equal(inherited, true);
+        }
+      }, { lockPath: packagePath });
+    }, { lockPath: bundlePath });
+    await withWorkspaceBundleLock(async () => {
+      await assert.rejects(withWorkspaceBundleLock(() => assert.fail('stale lease entered successor'), {
+        lockPath: packagePath, env: { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: JSON.stringify([priorPackageLease]) },
+        timeoutMs: 30, staleAfterMs: 1_000,
+      }), { code: WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE });
+    }, { lockPath: packagePath });
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

@@ -12,13 +12,13 @@ import {
   renameSync,
   statSync,
   unlinkSync,
-  watch,
   writeFileSync,
   writeSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { basename, dirname, join, resolve, win32 } from 'node:path';
+import { createFileChangeObserver, DEFAULT_FILE_CHANGE_CATCH_UP_MS } from './fileChangeObserver.mjs';
 
 import {
   createWorkspaceLockLeaseValue,
@@ -30,6 +30,7 @@ import {
 } from './processInstance.mjs';
 
 export const WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE = 'EWORKSPACEBUNDLELOCKTIMEOUT';
+export const WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE = 'EWORKSPACEBUNDLELOCKBUSY';
 export const WORKSPACE_BUNDLE_LOCK_OWNERSHIP_LOST_ERROR_CODE = 'EWORKSPACEBUNDLELOCKOWNERSHIPLOST';
 export const DEFAULT_WORKSPACE_BUNDLE_LOCK_TIMEOUT_MS = 30 * 60_000;
 
@@ -178,54 +179,13 @@ async function waitForWorkspaceBundleLockChange({
   claimSnapshot,
   maxWaitMs,
   signal,
-  watchState,
+  observer,
 }) {
-  signal?.throwIfAborted();
-  await new Promise((resolve, reject) => {
-    let settled = false;
-    let timer = null;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      watchState.onChange = null;
-      watchState.onError = null;
-      signal?.removeEventListener('abort', abort);
-      if (signal?.aborted) reject(signal.reason);
-      else resolve();
-    };
-
-    const abort = () => finish();
-    signal?.addEventListener('abort', abort, { once: true });
-    timer = setTimeout(finish, Math.max(1, maxWaitMs));
-    try {
-      const lockName = basename(lockPath);
-      const claimName = basename(claimPath);
-      const snapshotsChanged = () => (
-        !lockSnapshotUnchanged(readLockOwnerSnapshot(lockPath), lockSnapshot)
-        || !lockSnapshotUnchanged(readLockOwnerSnapshot(claimPath), claimSnapshot)
-      );
-      watchState.onChange = (filename) => {
-        const changedName = filename == null ? '' : String(filename);
-        // A queued event can describe the waiter's own already-observed claim refresh.
-        // Waking for it refreshes the claim again and can starve the owner's completion.
-        if ((!changedName || changedName === lockName || changedName === claimName) && snapshotsChanged()) finish();
-      };
-      watchState.onError = finish;
-      if (!watchState.watcher) {
-        watchState.watcher = watch(dirname(lockPath), { persistent: false }, (_event, filename) => {
-          watchState.onChange?.(filename);
-        });
-        watchState.watcher.on('error', () => {
-          watchState.watcher?.close();
-          watchState.watcher = null;
-          watchState.onError?.();
-        });
-      }
-      if (snapshotsChanged()) queueMicrotask(finish);
-    } catch {
-      // The timer remains the portable fallback when directory watching is unavailable.
-    }
+  const key = snapshot => [Boolean(snapshot?.exists), Boolean(snapshot?.readable), snapshot?.raw];
+  await observer.wait({
+    snapshot: JSON.stringify([key(lockSnapshot), key(claimSnapshot)]),
+    readSnapshot: () => JSON.stringify([key(readLockOwnerSnapshot(lockPath)), key(readLockOwnerSnapshot(claimPath))]),
+    maxWaitMs, signal,
   });
 }
 
@@ -244,7 +204,7 @@ function resolveWorkspaceBundleLockWaitMs({
   const configuredFallbackMs = Number(options.watchFallbackMs);
   const fallbackMs = Number.isFinite(configuredFallbackMs) && configuredFallbackMs > 0
     ? configuredFallbackMs
-    : 1_000;
+    : DEFAULT_FILE_CHANGE_CATCH_UP_MS;
   const configuredClaimStaleAfterMs = Number(options.priorityClaimStaleAfterMs);
   const claimRecheckMs = Number.isFinite(configuredClaimStaleAfterMs) && configuredClaimStaleAfterMs > 0
     ? configuredClaimStaleAfterMs
@@ -800,7 +760,7 @@ function clearPriorityClaimIfOwned(claimPath, claimRaw) {
   return readLockOwnerSnapshot(claimPath).raw !== claimRaw;
 }
 
-function callerHoldsWorkspaceBundleLock(lockPath, heldLockValue) {
+export function callerHoldsWorkspaceBundleLock(lockPath, heldLockValue) {
   const snapshot = readLockOwnerSnapshot(lockPath);
   return snapshot.exists && workspaceLockLeaseMatchesOwner({
     lockPath,
@@ -832,8 +792,32 @@ function createWorkspaceBundleLockOwnershipLostError(lockPath) {
   return error;
 }
 
+function assertWorkspaceLockMayWait(options, lockPath) {
+  // Native admission alone marks charged payloads. This restriction cannot
+  // admit a process or transfer a lease; even an explicit wait:true must not
+  // let a lock-only consumer wait while its ancestor's envelope is charged.
+  const admitted = options.env?.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED === '0'
+    || process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED === '0';
+  if (options.wait !== false && !admitted) return;
+  const error = new Error(`${admitted ? 'HSTACK_WORKSPACE_ADMISSION_ORDER: ' : ''}Workspace publication lease is busy: ${lockPath}`);
+  error.code = WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE;
+  throw error;
+}
+
 function resolveHeldLockValue(options) {
-  return String(options.heldLockValue ?? options.heldLockPath ?? '').trim();
+  const env = options.env ?? process.env;
+  const primary = String(options.heldLockValue ?? options.heldLockPath
+    ?? env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD ?? '').trim();
+  if (callerHoldsWorkspaceBundleLock(options.lockPath, primary)) return primary;
+  // Joint build admission may own both publication and package leases. Each
+  // remains an ordinary token-authenticated lease of the existing lock owner;
+  // the outermost legacy value cannot represent both exact paths.
+  let leases;
+  try { leases = JSON.parse(env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES ?? '[]'); }
+  catch { return primary; }
+  if (!Array.isArray(leases)) return primary;
+  return leases.find(lease => typeof lease === 'string'
+    && callerHoldsWorkspaceBundleLock(options.lockPath, lease)) ?? primary;
 }
 
 function notifyWaiter(options, lockPath, snapshot, startedAt, staleAfterMs, timeoutMs) {
@@ -908,9 +892,12 @@ export async function withWorkspaceBundleLock(fn, options = {}) {
   let waited = false;
   // The acquisition owns one native watch. Reopening it on every fallback wake
   // repeatedly registers FSEvents clients during long macOS build contention.
-  const watchState = { watcher: null, onChange: null, onError: null };
+  const observer = createFileChangeObserver([dirname(lockPath)], {
+    isRelevant: (_directory, filename) => filename == null
+      || String(filename) === basename(lockPath) || String(filename) === basename(claimPath),
+  });
   const waitForLockChange = options.waitForLockChangeImpl
-    ?? ((input) => waitForWorkspaceBundleLockChange({ ...input, watchState }));
+    ?? ((input) => waitForWorkspaceBundleLockChange({ ...input, observer }));
   const claimHistoryOptions = { staleAfterMs, initializationGraceMs, options, priorityClaim: true };
   classifyRetainedLockSnapshots(claimPath, claimHistoryOptions);
 
@@ -935,6 +922,7 @@ export async function withWorkspaceBundleLock(fn, options = {}) {
         }
         if (claimSnapshot.exists) {
           const waitSnapshot = lockSnapshot.exists ? lockSnapshot : claimSnapshot;
+          assertWorkspaceLockMayWait(options, lockPath);
           if (workspaceBundleLockWaitTimedOut(
             lockSnapshot.exists ? lockPath : claimPath,
             waitSnapshot, staleAfterMs, startedAt, timeoutMs,
@@ -1035,6 +1023,7 @@ export async function withWorkspaceBundleLock(fn, options = {}) {
             throw new Error(`Failed to safely reclaim workspace bundle lock: ${lockPath}`);
           }
         }
+        assertWorkspaceLockMayWait(options, lockPath);
         if (ownClaimRaw === null) {
           const claim = tryAcquirePriorityClaim({
             claimPath,
@@ -1078,7 +1067,7 @@ export async function withWorkspaceBundleLock(fn, options = {}) {
     classifyRetainedLockSnapshots(claimPath, { ...claimHistoryOptions, releasedOwner: { ownerToken, processInstanceFingerprint } });
     throw error;
   } finally {
-    watchState.watcher?.close();
+    observer.close();
   }
 
   try {
@@ -1206,6 +1195,7 @@ export function withWorkspaceBundleLockSync(fn, options = {}) {
         }
         if (claimSnapshot.exists) {
           const waitSnapshot = lockSnapshot.exists ? lockSnapshot : claimSnapshot;
+          assertWorkspaceLockMayWait(options, lockPath);
           if (workspaceBundleLockWaitTimedOut(
             lockSnapshot.exists ? lockPath : claimPath,
             waitSnapshot, staleAfterMs, startedAt, timeoutMs,
@@ -1291,6 +1281,7 @@ export function withWorkspaceBundleLockSync(fn, options = {}) {
             throw new Error(`Failed to safely reclaim workspace bundle lock: ${lockPath}`);
           }
         }
+        assertWorkspaceLockMayWait(options, lockPath);
         if (ownClaimRaw === null) {
           const claim = tryAcquirePriorityClaim({
             claimPath,

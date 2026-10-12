@@ -7,6 +7,7 @@ export interface WorkspaceBundleLockContext {
 }
 
 export const WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE: 'EWORKSPACEBUNDLELOCKTIMEOUT';
+export const WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE: 'EWORKSPACEBUNDLELOCKBUSY';
 export const WORKSPACE_BUNDLE_LOCK_OWNERSHIP_LOST_ERROR_CODE: 'EWORKSPACEBUNDLELOCKOWNERSHIPLOST';
 export const DEFAULT_WORKSPACE_BUNDLE_LOCK_TIMEOUT_MS: number;
 
@@ -14,6 +15,8 @@ export interface WorkspaceBundleLockOptions<T = unknown> {
   lockPath: string;
   heldLockValue?: string;
   heldLockPath?: string;
+  /** Refuse contention without watching, sleeping, or reserving waiter priority. */
+  wait?: boolean;
   /** Bounds waits without a fresh authenticated owner heartbeat; healthy owners use staleAfterMs. */
   timeoutMs?: number;
   pollIntervalMs?: number;
@@ -55,6 +58,7 @@ export interface WorkspaceBundleLockOptions<T = unknown> {
 
 export function resolveWorkspaceBundleLockPath(repoRoot: string): string;
 export function resolveCliSharedDepsBuildLockPath(repoRoot: string): string;
+export function callerHoldsWorkspaceBundleLock(lockPath: string, heldLockValue?: string): boolean;
 export function isWorkspaceBundleLockActive(
   lockPath: string,
   options?: { staleAfterMs?: number; nowMs?: number },

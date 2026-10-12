@@ -71,6 +71,9 @@ export async function withOptionalCliSharedDepsBuildLock(fn, options = {}) {
     return await withWorkspaceBundleLock(fn, {
       lockPath: explicitLockPath,
       heldLockValue: resolveInheritedWorkspaceBundleLockValue(options),
+      env: options.env,
+      signal: options.signal,
+      wait: options.wait,
       timeoutMs: lockTimeoutMs,
       pollIntervalMs: options.lockPollIntervalMs ?? options.pollIntervalMs ?? 250,
       staleAfterMs: options.lockStaleAfterMs ?? options.staleAfterMs ?? lockTimeoutMs,
@@ -91,6 +94,9 @@ export async function withOptionalCliSharedDepsBuildLock(fn, options = {}) {
   return await mod.withWorkspaceBundleLock(fn, {
     lockPath: String(options.lockPath ?? resolveCliSharedDepsBuildLockPath(repoRoot)),
     heldLockValue: resolveInheritedWorkspaceBundleLockValue(options),
+    env: options.env,
+    signal: options.signal,
+    wait: options.wait,
     timeoutMs: lockTimeoutMs,
     pollIntervalMs: options.lockPollIntervalMs ?? options.pollIntervalMs ?? 250,
     staleAfterMs: options.lockStaleAfterMs ?? options.staleAfterMs ?? lockTimeoutMs,
@@ -115,6 +121,9 @@ export function withOptionalCliSharedDepsBuildLockSync(fn, options = {}) {
   return withWorkspaceBundleLockSync(fn, {
     lockPath,
     heldLockValue: resolveInheritedWorkspaceBundleLockValue(options),
+    env: options.env,
+    signal: options.signal,
+    wait: options.wait,
     timeoutMs,
     pollIntervalMs: options.lockPollIntervalMs ?? options.pollIntervalMs ?? 250,
     staleAfterMs: options.lockStaleAfterMs ?? options.staleAfterMs ?? timeoutMs,
