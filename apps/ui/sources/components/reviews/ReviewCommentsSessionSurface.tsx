@@ -90,6 +90,13 @@ export type ReviewCommentsSessionSurfaceProps = Readonly<{
     permissionGrantError?: string | null;
     onRefreshPermissionGrants?: () => void;
     defaultPanelOpen?: boolean;
+    /**
+     * `external`: the host draws the disclosure itself (`ReviewCommentsHeaderButton compact` in its bar)
+     * and owns `open`; this surface renders only the opened panel and reports its unresolved count.
+     */
+    header?: 'inline' | 'external';
+    open?: boolean;
+    onUnresolvedCountChange?: (count: number | null) => void;
     testID?: string;
 }>;
 
@@ -124,7 +131,9 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
     const directWriteGrantLabels = React.useMemo(() => buildReviewCommentDirectWriteGrantLabels(), []);
     const actions = React.useMemo(() => createReviewCommentsActions({ execute: props.execute }), [props.execute]);
     const [commentsState, setCommentsState] = React.useState(createEmptyReviewCommentsState);
-    const [panelOpen, setPanelOpen] = React.useState(props.defaultPanelOpen !== false);
+    const [ownPanelOpen, setPanelOpen] = React.useState(props.defaultPanelOpen !== false);
+    const externalHeader = props.header === 'external';
+    const panelOpen = externalHeader ? props.open === true : ownPanelOpen;
     const [showHistory, setShowHistory] = React.useState(false);
     const [isRefreshing, setIsRefreshing] = React.useState(false);
     const [loadFailed, setLoadFailed] = React.useState(false);
@@ -166,6 +175,8 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
     const activeComments = selectReviewComments(commentsState, { states: ACTIVE_REVIEW_COMMENT_STATES })
         .filter(isReviewCommentActiveItem);
     const activeCount = activeComments.length;
+    const onUnresolvedCountChange = props.onUnresolvedCountChange;
+    React.useEffect(() => { onUnresolvedCountChange?.(loaded ? activeCount : null); }, [activeCount, loaded, onUnresolvedCountChange]);
     const filteredActiveComments = selectedActiveStates.length === 0
         ? []
         : selectReviewComments(commentsState, { states: selectedActiveStates }).filter(isReviewCommentActiveItem);
@@ -382,6 +393,8 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
         if (bulkActionId) setBulkTransitionResult({ bulkActionId, failed });
     }, [actions, commentsState.byId, upsertUpdatedComments]);
 
+    // A host that draws the disclosure in its own bar shows nothing here until the panel is opened.
+    if (externalHeader && !panelOpen) return null;
     return (
         <View
             testID={props.testID}
@@ -391,13 +404,13 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                 backgroundColor: theme.colors.surface.base,
             }}
         >
-            <ReviewCommentsHeaderButton
+            {externalHeader ? null : <ReviewCommentsHeaderButton
                 labels={headerLabels}
                 unresolvedCount={loaded ? activeCount : null}
                 expanded={panelOpen}
                 onPress={togglePanel}
                 testID={`${props.testID ?? 'review-comments'}-header`}
-            />
+            />}
             {panelOpen ? (
                 <View style={{ gap: 8, paddingHorizontal: 12, paddingBottom: 12 }}>
                     <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
