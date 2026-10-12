@@ -20,6 +20,7 @@ import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/use
 import { useProjectSurfaceActions } from '@/components/projects/detail/useProjectSurfaceActions';
 import { useProjectSurfaceController } from '@/components/projects/detail/useProjectSurfaceController';
 import { useProjectRouteSurfaceSync } from '@/components/projects/detail/useProjectRouteSurfaceSync';
+import { CheckoutReachabilityLine } from '@/components/workspaces/reachability/checkoutReachability';
 import type { ProjectMobileSurface, ProjectAttachedDashboardSelection } from './projectCockpitState';
 
 type ProjectCockpitShellProps = Readonly<{
@@ -34,7 +35,18 @@ type ProjectCockpitShellProps = Readonly<{
     onSelectRootPath: (path: string) => void;
 }>;
 
-export const ProjectCockpitShell = React.memo((props: ProjectCockpitShellProps) => {
+/**
+ * The Project's page under its header. When the checkout's machine isn't answering, the page says so
+ * once here, above every page; the surfaces below inherit it (see `checkoutReachability`).
+ */
+export const ProjectCockpitShell = React.memo((props: ProjectCockpitShellProps) => (
+    <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+        <CheckoutReachabilityLine scope={props.workspaceRef} testID="project-checkout-reachability" />
+        <ProjectCockpitSurface {...props} />
+    </View>
+));
+
+const ProjectCockpitSurface = React.memo((props: ProjectCockpitShellProps) => {
     const { navigateToSurface, selectDashboard, checkoutWorkspace, codeLocation, navigateCodeLocation, openCodeHistory } = useProjectSurfaceController({
         scopeId: props.scopeId,
         workspaceRef: props.workspaceRef,
@@ -171,6 +183,7 @@ export const ProjectCockpitShell = React.memo((props: ProjectCockpitShellProps) 
                         workspaceRoot={props.activeRootPath}
                         onOpenServiceInBrowser={openServiceInBrowser}
                         presentation="page"
+                        onAddService={() => navigateToSurface('scripts')}
                         testID="project-services-page"
                     />
                 </React.Suspense>

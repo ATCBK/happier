@@ -47,7 +47,7 @@ import {
     type SessionPaneUrlDetailsTarget,
     type SessionPaneUrlState,
 } from '@/components/sessions/panes/url/sessionPaneUrlState';
-import { SessionView } from '@/components/sessions/shell/SessionView';
+import { SessionView } from '@/components/sessions/shell/SessionViewHost';
 import { useSessionViewShellSession } from '@/components/sessions/shell/sessionViewStableSession';
 import { SessionBoardPane } from '@/components/sessions/board/SessionBoardPane';
 import { useSessionPluginRuntime } from '@/components/sessions/plugins/useSessionPluginRuntime';
@@ -62,6 +62,7 @@ import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateS
 import { PaneHeaderSlotProvider, PaneHeaderSlotScope, usePublishedPaneHeaderContent } from '@/components/appShell/panes/paneHeaderSlot';
 import { PaneHeaderActions } from '@/components/appShell/panes/PaneHeaderActions';
 import { getRightSidebarTabLabel } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
+import { AppRightSidebarTabSurface, useAppRightSidebarTabInputs } from '@/components/appShell/rightSidebar/appRightSidebarTabs';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import {
     selectPluginDestinationSurfacePlacements,
@@ -199,7 +200,9 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
             ? selectPluginRightSidebarTabPlacements(pluginProjection.pluginUiProjection, 'session')
             : []
     ), [pluginProjection.pluginUiProjection]);
+    const appTabInputs = useAppRightSidebarTabInputs();
     const mobileCatalog = React.useMemo(() => resolveSessionCockpitMobileCatalog({
+        ...appTabInputs,
         sessionSharingAvailable,
         boardFeatureEnabled,
         terminalTabAvailable,
@@ -207,6 +210,7 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
         projectionGeneration: pluginProjection.pluginUiProjection?.generation ?? null,
         runtimeAdmission,
     }), [
+        appTabInputs,
         boardFeatureEnabled,
         sessionSharingAvailable,
         pluginPlacements,
@@ -812,18 +816,28 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
                 <SessionCockpitFullscreenSurface screenTestID={`session-plugin-screen-${pluginMobileTab.id}`} safeAreaPadding={false} header={surfaceHeader}>
                     <React.Suspense fallback={<PaneLoadingFallback />}>
                         <PluginSurfaceFocusEligibilityProvider active={isFocused}>
-                            <PluginSurfacePlacementHost
-                                placement={pluginMobileTab.placement}
-                                machineId={pluginProjection.machineId}
-                                serverId={pluginProjection.serverId}
-                                sessionId={props.sessionId}
-                                pluginUiProjection={pluginProjection.pluginUiProjection}
-                                projectionInteractionEnabled={pluginProjection.interactionEnabled}
-                                platform={pluginProjection.platform}
-                                binding={pluginBinding}
-                                launchInput={activePaneLaunch?.input}
-                                mountInstanceKey={activeInstanceKey}
-                            />
+                            {pluginMobileTab.placement.binding.targetKind === 'app' ? (
+                                <AppRightSidebarTabSurface
+                                    placement={pluginMobileTab.placement}
+                                    executionTarget={pluginProjection.serverId && pluginProjection.machineId
+                                        ? { serverId: pluginProjection.serverId, machineId: pluginProjection.machineId } : null}
+                                    binding={enclosingNavigation ? { openSurface: enclosingNavigation.openSurface } : undefined}
+                                    mountInstanceKey={activeInstanceKey}
+                                />
+                            ) : (
+                                <PluginSurfacePlacementHost
+                                    placement={pluginMobileTab.placement}
+                                    machineId={pluginProjection.machineId}
+                                    serverId={pluginProjection.serverId}
+                                    sessionId={props.sessionId}
+                                    pluginUiProjection={pluginProjection.pluginUiProjection}
+                                    projectionInteractionEnabled={pluginProjection.interactionEnabled}
+                                    platform={pluginProjection.platform}
+                                    binding={pluginBinding}
+                                    launchInput={activePaneLaunch?.input}
+                                    mountInstanceKey={activeInstanceKey}
+                                />
+                            )}
                         </PluginSurfaceFocusEligibilityProvider>
                     </React.Suspense>
             </SessionCockpitFullscreenSurface>,

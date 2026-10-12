@@ -30,7 +30,7 @@ const navigatorState = vi.hoisted(() => ({
     goBack: null as null | (() => void),
     registeredChrome: null as null | {
         activeSurface: string;
-        switchSurface: (surface: string) => void;
+        switchSurface: (surface: SessionMobileSurface) => void;
     },
     navigationContainerRenderCount: 0,
     persistedSurfaces: [] as Array<Readonly<{ sessionId: string; surface: string }>>,
@@ -233,16 +233,23 @@ vi.mock('@react-navigation/bottom-tabs', () => ({
     }),
 }));
 
-vi.mock('./SessionCockpitSurfaceScreen', () => ({
+vi.mock('./SessionCockpitSurfaceScreen', async () => {
+    const { useSessionCockpitSurfaceNavigation } = await import('./SessionCockpitSurfaceNavigation');
+    return {
     SessionCockpitSurfaceScreen: (props: Record<string, unknown>) => {
+        const navigation = useSessionCockpitSurfaceNavigation();
         const owner = React.useContext(BoardOwnerContext);
         const surface = String(props.surface ?? '');
+        if (navigation && surface === navigatorState.activeRouteName) {
+            navigatorState.registeredChrome = { activeSurface: surface, switchSurface: navigation.switchSurface };
+        }
         if (owner && surface === navigatorState.activeRouteName) {
             navigatorState.activeBoardOwnerObservations.push({ surface, ...owner });
         }
         return React.createElement('SessionCockpitSurfaceScreen', props);
     },
-}));
+    };
+});
 
 vi.mock('@/components/sessions/board/SessionBoardControllerProvider', () => ({
     SessionBoardControllerProvider: ({
@@ -269,38 +276,6 @@ vi.mock('@/components/sessions/board/SessionBoardControllerProvider', () => ({
             { value: owner },
             React.createElement('SessionBoardControllerProvider', { sessionId, serverId }, children),
         );
-    },
-}));
-
-vi.mock('./SessionCockpitSurfaceNavigation', () => ({
-    SessionCockpitSurfaceNavigationProvider: ({
-        children,
-        value,
-    }: {
-        children?: React.ReactNode;
-        value: { switchSurface: (surface: string) => void };
-    }) => {
-        const child = React.Children.toArray(children).find(React.isValidElement);
-        const surface = child
-            ? String((child.props as { surface?: unknown }).surface ?? '')
-            : '';
-        if (surface === navigatorState.activeRouteName) {
-            navigatorState.registeredChrome = {
-                activeSurface: surface,
-                switchSurface: value.switchSurface,
-            };
-        }
-        return React.createElement(React.Fragment, null, children);
-    },
-}));
-
-vi.mock('./SessionCockpitChromeRegistry', () => ({
-    useSessionCockpitChromeRegister: () => (model: {
-        activeSurface: string;
-        switchSurface: (surface: string) => void;
-    }) => {
-        navigatorState.registeredChrome = model;
-        return () => {};
     },
 }));
 

@@ -60,7 +60,7 @@ export type ProjectRouteContext = Readonly<{
     comparisonId?: string | null;
     routeParams?: Readonly<Record<string, string | string[] | undefined>>;
 }>;
-export type ProjectAttachedDashboardSelection = Readonly<{ sourceId: string; artifactId: string }>;
+export type ProjectAttachedDashboardSelection = Readonly<{ sourceId: string; artifactId: string; serverId?: string }>;
 
 export function resolveProjectRoutePathForSurface(input: Readonly<{
     workspaceRefId: string;
@@ -87,10 +87,12 @@ export function resolveProjectRoutePathForSurface(input: Readonly<{
     if (input.attachedDashboard !== undefined) {
         searchParams.delete('dashboardSourceId');
         searchParams.delete('dashboardArtifactId');
+        searchParams.delete('dashboardServerId');
         if (input.attachedDashboard) {
             searchParams.delete('layoutId');
             searchParams.set('dashboardSourceId', input.attachedDashboard.sourceId);
             searchParams.set('dashboardArtifactId', input.attachedDashboard.artifactId);
+            if (input.attachedDashboard.serverId) searchParams.set('dashboardServerId', input.attachedDashboard.serverId);
         }
     }
     if (input.surface !== page) searchParams.set('mobileSurface', input.surface);

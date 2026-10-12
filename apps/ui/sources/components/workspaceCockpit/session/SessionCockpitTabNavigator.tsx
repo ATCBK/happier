@@ -22,6 +22,7 @@ import { selectPluginRightSidebarTabPlacements } from '@/sync/domains/plugins/ui
 import { PluginSurfacePaneLaunchScope } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 import { resolvePluginUiRuntimeFormFactor } from '@/components/appShell/panes/layout/resolveMultiPaneDeviceType';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { useAppRightSidebarTabInputs } from '@/components/appShell/rightSidebar/appRightSidebarTabs';
 import { PanePresentationProvider, type PanePresentationIntent } from '@/components/appShell/panes/panePresentation';
 
 import {
@@ -164,6 +165,7 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
         accountRealmKey: persistenceAccountRealmKey,
     }), [persistenceAccountRealmKey, props.sessionId, sessionServerId]);
     const boardPluginRuntime = useSessionPluginRuntime({ address: sessionAddress });
+    const appTabInputs = useAppRightSidebarTabInputs();
     const runtimeAdmission = React.useMemo(() => Object.freeze({
         platform: boardPluginRuntime.platform,
         formFactor: resolvePluginUiRuntimeFormFactor({ deviceType }),
@@ -174,6 +176,7 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
             : []
     ), [boardPluginRuntime.pluginUiProjection]);
     const catalog = React.useMemo(() => resolveSessionCockpitMobileCatalog({
+        ...appTabInputs,
         sessionSharingAvailable,
         boardFeatureEnabled,
         terminalTabAvailable,
@@ -181,6 +184,7 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
         projectionGeneration: boardPluginRuntime.pluginUiProjection?.generation ?? null,
         runtimeAdmission,
     }), [
+        appTabInputs,
         boardFeatureEnabled,
         sessionSharingAvailable,
         pluginPlacements,

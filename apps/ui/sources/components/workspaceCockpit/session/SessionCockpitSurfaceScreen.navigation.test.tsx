@@ -577,6 +577,37 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
         expect(cockpitNavigatorState.activeSurface).toBe('chat');
     });
 
+    it('presents an App panel beside the Session on phone with that Session\'s exact machine default', async () => {
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+        const { SessionCockpitChromeRegistryProvider } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
+        const { SessionCockpitShell } = await import('@/components/workspaceCockpit/session/SessionCockpitShell');
+        const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
+        const original = createCockpitPluginProjection();
+        const source = Object.values(original.surfacePlacementsById)[0]!;
+        const binding = normalizePluginUiDestinationBindingV1({ pluginId: REVIEW_PLUGIN_ID, destinationId: 'review-panel',
+            rendererId: 'review-panel', container: 'rightSidebarTab', target: { kind: 'app' } });
+        if (!binding) throw new Error('App panel fixture must be admitted');
+        const placement = { ...source, binding, target: binding.target, headerActions: [] };
+        const projection = { ...EMPTY_PLUGIN_UI_PROJECTION, ...original, surfacePlacementsById: { [placement.id]: placement } };
+        const screen = await renderScreen(
+            <AppShellPluginUiProjectionValueProvider value={{ pluginUiProjection: projection, pluginBrowserProjection: null,
+                phase: 'current', interactionEnabled: true, machineId: null, serverId: null, platform: 'web', accountLifetime: null,
+                reloadConnectedAccountProjection() {}, clientExecutableActivation: { status: 'ready' }, reloadClientExecutables() {} }}>
+                <AppPaneProvider><SessionCockpitChromeRegistryProvider>
+                    <SessionCockpitShell surface="chat" routeServerId="server-1" scopeId="session:session-1" sessionId="session-1" terminalTabAvailable={false} />
+                </SessionCockpitChromeRegistryProvider></AppPaneProvider>
+            </AppShellPluginUiProjectionValueProvider>,
+        );
+        const chat = screen.tree.findAllByType('SessionView' as never)[0]!;
+        await act(async () => chat.props.pane.selectRightDestination({ kind: 'plugin', destination: binding.destination }));
+        expect(cockpitNavigatorState.activeSurface).toBe(REVIEW_PLUGIN_SURFACE);
+        const host = screen.tree.findByType('PluginSurfacePlacementHost' as never);
+        expect(host.props.placement.binding.targetKind).toBe('app');
+        expect(host.props.contextualExecutionTarget).toEqual({ serverIdentityId: 'server-1', machineId: 'machine-1' });
+        await screen.unmount();
+    });
+
     it('routes repeated Companion work reveals to the separate Chat scene without losing its draft', async () => {
         const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
         const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');
