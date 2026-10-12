@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-// Boundary mocks only: the active socket transport, the ephemeral fallback socket, and the active-server
-// runtime. The restart op and machineRpcWithServerScope routing below them run for real.
+// Boundary mocks only: the active socket transport and the ephemeral fallback socket. The restart op,
+// active-server selection, and machineRpcWithServerScope routing below them run for real.
 const activeMachineRpc = vi.hoisted(() => vi.fn());
 const createEphemeralSocket = vi.hoisted(() => vi.fn());
 
@@ -17,15 +17,6 @@ vi.mock('@/sync/api/session/apiSocket', async (importOriginal) => {
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createEphemeralServerSocketClient', () => ({
     createEphemeralServerSocketClient: (...args: unknown[]) => createEphemeralSocket(...args),
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({
-        serverId: 'server-a',
-        serverUrl: 'https://server-a.example.test',
-        kind: 'custom',
-        generation: 1,
-    }),
 }));
 
 describe('restartStaleSessionRunner transport', () => {
