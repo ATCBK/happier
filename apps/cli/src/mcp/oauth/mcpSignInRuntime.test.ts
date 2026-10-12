@@ -5,13 +5,18 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { ConnectedAccountRequestAuthMaterializationV1Schema } from '@happier-dev/protocol/connect/connected-account-request-auth';
 import type { HostConnectedAccountAuthenticationContext } from '@/plugins/runtime/connectedAccounts/hostRuntime';
 import { createConnectedAccountConfigurationOwner, type ConnectedAccountConfigurationRecord } from '@/plugins/runtime/connectedAccounts/configurationOwner';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+const networkFetch = globalThis.fetch;
+afterEach(async () => {
+    try { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); }
+    finally { vi.restoreAllMocks(); }
+});
 
 async function authorizationServer(options: Readonly<{
     metadata?: Readonly<Record<string, unknown>>;
@@ -29,9 +34,11 @@ async function authorizationServer(options: Readonly<{
     resourceSuffix?: string;
     probeSse?: boolean;
     onRequest?: (path: string) => void;
+    httpResource?: boolean;
 }> = {}) {
     const requests: Array<{ path: string; body: string; authorization: string | undefined }> = [];
     let base = '';
+    let resource = '';
     let tokenCount = 0;
     let tokenOverrides = options.tokenOverrides;
     let metadataOverrides = options.metadata;
@@ -46,12 +53,12 @@ async function authorizationServer(options: Readonly<{
         response.setHeader('content-type', 'application/json');
         if (path === '/mcp') {
             if (options.probeSse) { response.writeHead(200, { 'content-type': 'text/event-stream' }); response.write(': keepalive\n\n'); return; }
-            response.writeHead(401, { 'www-authenticate': options.challenge ?? `Bearer resource_metadata="${base}/prm", scope="read"` });
+            response.writeHead(401, { 'www-authenticate': options.challenge ?? `Bearer resource_metadata="${new URL('/prm', resource).href}", scope="read"` });
             response.end('{}');
         } else if (path === '/prm' || path === '/.well-known/oauth-protected-resource/mcp' || path === '/.well-known/oauth-protected-resource') {
             const status = path === '/prm' ? options.headerPrmStatus : path === '/.well-known/oauth-protected-resource/mcp' ? options.pathPrmStatus : undefined;
             if (status) { response.writeHead(status); response.end('{}'); return; }
-            response.end(JSON.stringify({ resource: options.prmResource ?? `${base}/mcp`, authorization_servers: [`${base}/issuer`], scopes_supported: ['ignored'] }));
+            response.end(JSON.stringify({ resource: options.prmResource ?? resource, authorization_servers: [`${base}/issuer`], scopes_supported: ['ignored'] }));
         } else if (path === '/.well-known/oauth-authorization-server/issuer' && !options.oauthMissing || path === options.oidcPath) {
             response.end(JSON.stringify({ issuer: `${base}/issuer`, authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token`, registration_endpoint: `${base}/register`, revocation_endpoint: `${base}/revoke`, response_types_supported: ['code'], code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['client_secret_post'], authorization_response_iss_parameter_supported: true, jwks_uri: `${base}/jwks`, subject_types_supported: ['public'], id_token_signing_alg_values_supported: ['RS256'], ...metadataOverrides }));
         } else if (path === '/register') {
@@ -72,11 +79,23 @@ async function authorizationServer(options: Readonly<{
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Missing fixture port');
     base = `http://127.0.0.1:${address.port}`;
+    resource = options.httpResource ? `${base}/mcp` : `https://resource-${address.port}.fixture.test/mcp`;
+    const resourceOrigin = new URL(resource).origin;
+    // Only the resource/PRM network boundary is remapped. The admitted audience
+    // is HTTPS; discovery, registration and token endpoints remain real HTTP AS
+    // requests. Actual HTTPS bridge transport has its separate TLS fixture.
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+        const requested = typeof input === 'string' || input instanceof URL ? new URL(input) : new URL(input.url);
+        if (!options.httpResource && requested.origin === resourceOrigin) {
+            return networkFetch(new URL(`${requested.pathname}${requested.search}`, base), init);
+        }
+        return networkFetch(input, init);
+    });
     cleanups.push(async () => {
         server.closeAllConnections();
         await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     });
-    return { base, requests,
+    return { base, resource, resourceOrigin, requests,
         setTokenOverrides(value: Readonly<Record<string, unknown>>) { tokenOverrides = value; },
         setMetadataOverrides(value: Readonly<Record<string, unknown>>) { metadataOverrides = value; },
         setTokenStatus(value?: number) { tokenStatus = value; },
@@ -103,7 +122,7 @@ describe('MCP server sign-in runtime', () => {
         const entries = new Map<string, string>();
         const descriptor = lease.descriptor.authentication.modes.find(candidate => candidate.id === 'oauth');
         if (!descriptor) throw new Error('Missing OAuth descriptor');
-        const record = { revision: 'r1', values: { serverId: 'server-a', resource: `${fixture.base}/mcp${options?.resourceSuffix ?? ''}`, ...values }, secretRefs: {} };
+        const record = { revision: 'r1', values: { serverId: 'server-a', resource: `${fixture.resource}${options?.resourceSuffix ?? ''}`, ...values }, secretRefs: {} };
         const configurationOwner = createConnectedAccountConfigurationOwner({
             read: async () => record,
             replace: async () => { throw new Error('Staging must not write before settlement'); },
@@ -137,6 +156,14 @@ describe('MCP server sign-in runtime', () => {
         expect(staged.content?.values).toMatchObject({ stepUp: false, stepUpScopes: [] });
         await expect(mode.complete({ code: 'code', callbackUrl: 'https://app.happier.dev/oauth/mcp/callback', state: 'attempt-failure.state', pkceVerifier: 'verifier' }, context))
             .resolves.toMatchObject({ status: 'connected', scopes: ['read', 'existing', 'write'] });
+    });
+
+    it('refuses an unusable HTTP OAuth resource before probing, registering or staging', async () => {
+        const { result, fixture, staged, entries } = await begin({ httpResource: true });
+        expect(result).toMatchObject({ status: 'rejected', diagnostic: { code: 'mcp_oauth_resource_requires_https' } });
+        expect(fixture.requests).toEqual([]);
+        expect(staged.content).toBeNull();
+        expect(entries.size).toBe(0);
     });
 
     it.each([
@@ -260,7 +287,7 @@ describe('MCP server sign-in runtime', () => {
             isRuntimeCurrent: () => lease.isCurrent(),
         });
         await configurationOwner.replace({ target, mode, expectedRevision: null,
-            replacement: { values: { serverId: 'server-a', resource: `${fixture.base}/mcp` }, secretRefs: {} },
+            replacement: { values: { serverId: 'server-a', resource: fixture.resource }, secretRefs: {} },
             occurrenceId: lease.occurrenceId, sourceCustody: lease.sourceCustody });
         const admitted = await configurationOwner.admit({ intent: 'connect', service, mode, attemptId: target.attemptId,
             occurrenceId: lease.occurrenceId, sourceCustody: lease.sourceCustody });
@@ -283,7 +310,7 @@ describe('MCP server sign-in runtime', () => {
         expect(started).toMatchObject({ status: 'awaitingOAuthRedirect', issuer: `${fixture.base}/issuer`, issuerResponseParameterRequired: true });
         if (started.status !== 'awaitingOAuthRedirect') throw new Error('Authorization was not started');
         const url = new URL(started.authorizationUrl);
-        expect(Object.fromEntries(url.searchParams)).toMatchObject({ client_id: 'fixture-client', resource: `${fixture.base}/mcp`, code_challenge: 'sealed-challenge', scope: 'read', state: 'attempt-mcp.state' });
+        expect(Object.fromEntries(url.searchParams)).toMatchObject({ client_id: 'fixture-client', resource: fixture.resource, code_challenge: 'sealed-challenge', scope: 'read', state: 'attempt-mcp.state' });
         expect(JSON.parse(fixture.requests.find(request => request.path === '/register')!.body)).toMatchObject({ application_type: 'native', redirect_uris: ['https://app.happier.dev/oauth/mcp/callback'] });
         expect(JSON.stringify(staged.content?.values)).not.toContain('registration-secret');
         expect(staged.content?.secretValues).toBeDefined();
@@ -308,11 +335,12 @@ describe('MCP server sign-in runtime', () => {
         expect(fixture.requests.filter(request => request.path === '/prm')).toHaveLength(1);
         const tokenRequests = fixture.requests.filter(request => request.path === '/token').map(request => Object.fromEntries(new URLSearchParams(request.body)));
         expect(tokenRequests).toEqual([
-            expect.objectContaining({ resource: `${fixture.base}/mcp`, code_verifier: 'sealed-verifier' }),
-            expect.objectContaining({ resource: `${fixture.base}/mcp`, refresh_token: 'refresh-1' }),
-            expect.objectContaining({ resource: `${fixture.base}/mcp`, refresh_token: 'refresh-1' }),
+            expect.objectContaining({ resource: fixture.resource, code_verifier: 'sealed-verifier' }),
+            expect.objectContaining({ resource: fixture.resource, refresh_token: 'refresh-1' }),
+            expect.objectContaining({ resource: fixture.resource, refresh_token: 'refresh-1' }),
         ]);
-        await expect(lease.runtime.materialize({ kind: 'httpHeaders', origin: fixture.base, headerNames: ['authorization'] }, established))
+        const requestAuthMaterialization = ConnectedAccountRequestAuthMaterializationV1Schema.parse({ kind: 'httpHeaders', origin: fixture.resourceOrigin, headerNames: ['authorization'] });
+        await expect(lease.runtime.materialize(requestAuthMaterialization, established))
             .resolves.toEqual({ kind: 'httpHeaders', headers: { authorization: 'Bearer access-3' } });
         await expect(lease.runtime.materialize({ kind: 'httpHeaders', origin: 'https://another.example', headerNames: ['authorization'] }, established)).rejects.toThrow();
         fixture.setTokenStatus(503);
