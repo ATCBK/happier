@@ -35,6 +35,13 @@ export type SidebarFooterTranslation = Readonly<{
     usageNextInOrder: (params: Readonly<{ account: string }>) => string;
     usageNextMostLeft: (params: Readonly<{ account: string }>) => string;
     usageNextStays: (params: Readonly<{ pool: string; account: string }>) => string;
+    /** The popover with no machine yet: an invitation with one way to start. */
+    machinesEmptyTitle: string;
+    machinesEmptyBody: string;
+    machinesAddThisComputer: string;
+    machinesAddAnotherMachine: string;
+    /** A Home this device is signed out of: its machines cannot be listed. */
+    machinesHomeSignedOut: (params: Readonly<{ home: string }>) => string;
 }>;
 
 
@@ -61,4 +68,9 @@ export const sidebarFooterTranslationsEnglish = { en: {
         usageNextInOrder: ({ account }) => `When ${account} runs out, the next turn moves to the next account in order`,
         usageNextMostLeft: ({ account }) => `When ${account} runs out, the next turn moves to the account with the most left`,
         usageNextStays: ({ pool, account }) => `${pool} stays on ${account} until you switch`,
+        machinesEmptyTitle: 'Run sessions on your own computers',
+        machinesEmptyBody: 'Add this Mac, a server or a cloud machine. Happier shows what each one is doing and tells you when one needs you.',
+        machinesAddThisComputer: 'Add this computer',
+        machinesAddAnotherMachine: 'Add another machine',
+        machinesHomeSignedOut: ({ home }) => `You're signed out of ${home}, so its machines aren't listed.`,
     } } as const satisfies Pick<Record<string, SidebarFooterTranslation>, "en">;

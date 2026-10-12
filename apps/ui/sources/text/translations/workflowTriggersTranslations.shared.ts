@@ -126,6 +126,7 @@ export const en = {
         turnOff: 'Turn off',
         turnOn: 'Turn on',
         deleteTrigger: 'Delete trigger',
+        deleteTriggerSet: 'Delete trigger set',
         repeat: 'Repeat',
         everyDay: 'Every day',
         weekdays: 'Weekdays',

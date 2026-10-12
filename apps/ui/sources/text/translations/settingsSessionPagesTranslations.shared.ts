@@ -77,6 +77,8 @@ export const en = {
             advancedMotionOff: 'Transcript animations are off, so these have no effect. Turn them on in Transcript › Motion.',
             toolsSection: 'Tool calls',
             toolOverridesDescription: 'Give individual tools more or less detail.',
+            agentVisualsSection: 'Agent visuals',
+            agentVisualsDescription: 'Charts, tables and pages that agents show in their replies.',
             thinkingSummary: 'Summary',
             thinkingFull: 'Full',
             strategyConsecutive: 'Consecutive',

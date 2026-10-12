@@ -46,6 +46,12 @@ export type WidgetDefinitionTranslation = Readonly<{
     duplicated: (params: Readonly<{ name: string }>) => string;
     duplicateFailed: string;
     saveMenu: string;
+    visualSaveTitle: string;
+    visualSaveHint: string;
+    visualSaveMenu: string;
+    visualShareMenu: string;
+    visualSavedSnapshot: string;
+    visualSaveFailed: string;
     saveMenuSubtitle: string;
     saveTitle: string;
     saveHint: string;
@@ -120,6 +126,12 @@ export const widgetDefinitionTranslationsEnglish = { en: {
         duplicated: ({ name }) => `Saved a copy, “${name}”, to Your widgets`,
         duplicateFailed: "Couldn’t make a copy. Try again.",
         saveMenu: "Save as your widget…",
+        visualSaveTitle: "Save as Artifact",
+        visualSaveHint: "Save a copy before sharing. This session keeps its own visual.",
+        visualSaveMenu: "Save as Artifact…",
+        visualShareMenu: "Share link…",
+        visualSavedSnapshot: "Saved to your account as a snapshot. Creating a public link is a separate choice.",
+        visualSaveFailed: "The copy could not be saved. Your session visual is still here.",
         saveMenuSubtitle: "A copy for Home and your boards",
         saveTitle: "Save as your widget",
         saveHint: "A copy you can put on Home, your boards and projects. This session keeps its own.",

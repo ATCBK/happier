@@ -13,6 +13,7 @@ export const en = {
         runMeta: 'Workflow run',
         otherTitle: 'Other sessions',
         otherMeta: 'Not part of an orchestrator or run',
+        runsTitle: 'Workflow runs',
         openSession: 'Open session',
         openRun: 'Open run',
     },
@@ -48,7 +49,6 @@ export const en = {
     settleFailed: "Couldn't settle this session",
     detail: {
         openApproval: 'Open request',
-        idle: 'Choose an item to see it here',
     },
 };
 

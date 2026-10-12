@@ -11,8 +11,10 @@ import { machineDetailPageTranslations as pt } from './features/pt';
 import { machineDetailPageTranslations as ru } from './features/ru';
 import { machineDetailPageTranslations as zh_Hans } from './features/zh-Hans';
 import { machineDetailPageTranslations as zh_Hant } from './features/zh-Hant';
+import type { SupportedLanguage } from '../_all';
+import type { MachineDetailPageTranslations } from './machineDetailPageTranslations.shared';
 
-export const machineDetailPageTranslations = {
+export const machineDetailPageTranslations: Record<SupportedLanguage, MachineDetailPageTranslations> = {
     ...en.machineDetailPageTranslations,
     ...ca.machineDetailPageTranslations,
     ...de.machineDetailPageTranslations,

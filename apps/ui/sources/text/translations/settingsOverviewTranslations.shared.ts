@@ -28,9 +28,10 @@ export type SettingsOverviewTranslation = Readonly<{
     browsePluginsSubtitle: string;
     accountServiceSignedIn: (params: Readonly<{ service: string }>) => string;
     aboutDescription: string;
-    machinesTitle: string;
     machineOnline: string;
     machineOffline: (params: Readonly<{ lastSeen: string }>) => string;
+    /** A live machine (fresh heartbeat) this Home's last request could not reach. */
+    machineUnreachableFromHome: (params: Readonly<{ lastSeen: string }>) => string;
     machineUpdateAvailable: string;
     machinesOnlineCount: (params: Readonly<{ count: number }>) => string;
     machinesOfflineCount: (params: Readonly<{ count: number }>) => string;
@@ -101,9 +102,9 @@ export const settingsOverviewTranslationsEnglish = { en: {
         browsePluginsSubtitle: 'Add tools, panels and integrations to Happier.',
         accountServiceSignedIn: ({ service }) => `Signed in to ${service}`,
         aboutDescription: 'Version, source code and legal terms (Happier is not affiliated with Anthropic).',
-        machinesTitle: 'Machines',
         machineOnline: 'Online',
         machineOffline: ({ lastSeen }) => `Offline · last seen ${lastSeen}`,
+        machineUnreachableFromHome: ({ lastSeen }) => `Can’t reach from this Home · seen ${lastSeen}`,
         machineUpdateAvailable: 'Update available',
         machinesOnlineCount: ({ count }) => `${count} online`,
         machinesOfflineCount: ({ count }) => `${count} offline`,
@@ -118,7 +119,7 @@ export const settingsOverviewTranslationsEnglish = { en: {
         saveRecoveryKeyTitle: 'Save your recovery key',
         saveRecoveryKeySubtitle: 'The only way back into encrypted data if you lose every device.',
         addMachineTitle: 'Add a machine',
-        addMachineSubtitle: 'Connect a computer where your agents run.',
+        addMachineSubtitle: 'Connect a machine where your agents run.',
         homeGreetingNamed: ({ name }) => `Welcome back, ${name}.`,
         homeStartSection: 'Start a session',
         homeCustomize: 'Customize home',

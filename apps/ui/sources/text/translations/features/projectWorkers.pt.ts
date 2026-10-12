@@ -80,6 +80,8 @@ export const projectWorkers: ProjectWorkersTranslations = {
     noCopyNeeded: 'sem cópia',
     runOn: ({ name }: { name: string }) => `Executar ${name} em`,
     workersSection: 'Workers',
+    offlineWorkers: ({ count }: { count: number }) => `${count} offline`,
+    offlineWorkersDetail: 'Inacessível neste momento',
     poolsSection: 'Pools',
     workerSettings: 'Configurações de workers…',
     workerSettingsDetail: 'Seus padrões para este checkout',

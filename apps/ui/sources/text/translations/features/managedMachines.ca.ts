@@ -13,7 +13,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         noWorkDescription: "Segons com factura cada servei. Que no s’executi res vol dir cap sessió, script, terminal, servei, configuració, execució de flux de treball ni activador esperant-hi.",
         noWorkDescriptionShort: "Segons com factura cada servei.",
         categoryHelp: {
-            local: "Aturar-la allibera CPU i memòria a l’ordinador on s’executa. El disc es manté.",
+            local: "Aturar-la allibera CPU i memòria a la màquina on s’executa. El disc es manté.",
             runningOnly: "Aturades, només facturen l’emmagatzematge que es conserva.",
             stoppedBilled: "Aturar-les no reduiria la factura, així que continuen en marxa fins que les suprimeixis.",
             unknown: "Happier no endevina. Conserva la màquina fins que decideixis.",
@@ -101,7 +101,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             noControllerReason: "Les màquines es creen des d’un dels teus ordinadors amb Happier. Configura aquest ordinador per començar.",
             setUpThisComputer: "Configura aquest ordinador",
             choosingCreate: "Triant què crear",
-            pageDescription: "Connecta un ordinador que ja tinguis o deixa que Happier en creï un per a tu.",
+            pageDescription: "Connecta una màquina que ja tinguis o deixa que Happier en creï una per a tu.",
             joinsThisHome: "S’uneix a aquest Home",
             createPathSubtitle: "Happier la crea amb el teu compte",
             status: {
@@ -327,7 +327,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             presets: "Valors predefinits",
             oneOff: "Màquina puntual…",
             oneOffHelp: "Tria la ubicació, la mida i la imatge només per a aquesta",
-            connectComputer: "Connecta un ordinador…",
+            connectComputer: "Connecta una màquina…",
             connectComputerHelp: "Aquest ordinador, per SSH o un altre ordinador",
         },
     },
@@ -441,7 +441,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveShort: "Mou…",
         moveHere: "Mou la gestió aquí",
         description: ({ provider }: { provider: string }) => `Iniciar, aturar i eliminar s’executen a la màquina que té el compte de ${provider}.`,
-        fixedLocal: ({ controller }: { controller: string }) => `Aquesta màquina està emmagatzemada a ${controller}. La gestió no es pot moure a un altre ordinador.`,
+        fixedLocal: ({ controller }: { controller: string }) => `Aquesta màquina està emmagatzemada a ${controller}. La gestió no es pot moure a una altra màquina.`,
         pending: "És possible que una acció del proveïdor acabi després de moure la gestió. Els càrrecs poden continuar.",
     },
     managedCleanup: {

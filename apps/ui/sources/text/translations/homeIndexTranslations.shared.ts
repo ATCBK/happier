@@ -28,7 +28,6 @@ export type HomeIndexTranslation = Readonly<{
     builtIn: string;
     startDescription: string;
     attentionDescription: string;
-    machinesDescription: string;
     hiddenSetupSteps: string;
     showAgain: (params: Readonly<{ count: number }>) => string;
     reorderHandle: (params: Readonly<{ section: string }>) => string;
@@ -60,7 +59,6 @@ export const homeIndexTranslationsEnglish = { en: {
         builtIn: 'Built in',
         startDescription: 'Composer and suggestions',
         attentionDescription: 'Shown whenever something needs you',
-        machinesDescription: 'Built in · a grid of your machines',
         hiddenSetupSteps: 'Hidden setup steps',
         showAgain: ({ count }) => `${count} · Show again`,
         reorderHandle: ({ section }) => `Reorder ${section}`,

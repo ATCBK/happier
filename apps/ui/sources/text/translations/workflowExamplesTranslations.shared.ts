@@ -16,6 +16,8 @@ export type Copy = Readonly<{
     installDepsInWorktree: ExampleCopy; testAfterEveryTurn: ExampleCopy; noSessions: string;
     /** What a session-bound example does when it is offered inside that Session (no session to choose). */
     sessionNotifyDescription: string; sessionDailySummaryDescription: string; sessionTestDescription: string;
+    /** The quiet mark beside an example the catalog added recently (lab `b-habit T`, Memory upkeep). */
+    newTag: string;
 }>;
 
 
@@ -23,9 +25,10 @@ export const workflowExamplesTranslationsEnglish: Pick<Record<'en'|'de'|'es'|'fr
         sessionNotifyDescription: "A notification whenever this session’s agent needs your input.",
         sessionDailySummaryDescription: "A summary here every day at 09:00.",
         sessionTestDescription: "Run an editable test command after every completed, failed or cancelled turn.",
+        newTag: 'New',
         notifyWhenAgentWaits: { title: 'Notify me when an agent waits', description: 'Choose a session and get a notification whenever its agent needs your input.' },
         dailySummaryInSession: { title: 'Daily summary in this session', description: 'Choose a session for a summary every day at 09:00.' },
-        memoryUpkeepInSession: { title: 'Memory upkeep', description: 'Review this session’s memory every day at 09:00 and keep useful facts current.' },
+        memoryUpkeepInSession: { title: 'Memory upkeep', description: 'Review this session’s memory every Sunday at 09:00 and keep useful facts current.' },
         installDepsInWorktree: { title: 'Install deps on a new worktree', description: 'Create a new worktree and run an editable install command there.' },
         testAfterEveryTurn: { title: 'Test after every turn', description: 'Choose a session and run an editable test command after every completed, failed or cancelled turn.' },
         noSessions: 'Start a working session to use this template.',

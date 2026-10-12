@@ -32,6 +32,7 @@ export type SessionBoardTranslation = Readonly<{
     recovered: Readonly<{ title: string; description: string; pin: string }>;
     /** Typed Board mutation results. A durable change never fails silently. */
     mutation: Readonly<{
+        approvalRequired: string;
         conflict: string;
         outcomeUnknown: string;
         denied: string;
@@ -87,6 +88,8 @@ export type SessionBoardTranslation = Readonly<{
         unsupported: SessionBoardStateTranslation;
         missing: SessionBoardStateTranslation;
         notCopied: SessionBoardStateTranslation;
+        /** A copy of an executable visual that is not the one running live. */
+        runningElsewhere: SessionBoardStateTranslation;
         removed: SessionBoardStateTranslation;
         pluginUnavailable: SessionBoardStateTranslation;
         rendererUnavailable: SessionBoardStateTranslation;
@@ -111,6 +114,8 @@ export type SessionBoardTranslation = Readonly<{
             rename: string;
             /** Drop this view's placement; the shared record survives. */
             unpin: string;
+            /** Adds a Board placement for a visual shown in a reply; the same item, never a copy. */
+            pinToBoard: string;
             /** Names the destination board view; never a code-joined "label: title". */
             moveToView: (params: Readonly<{ title: string }>) => string;
         }>;
@@ -181,8 +186,8 @@ export type SessionBoardTranslation = Readonly<{
      * destination rather than borrowing "Open here".
      */
     inline: Readonly<{
-        openBoard: string;
-        openBoardA11y: (params: Readonly<{ title: string }>) => string;
+        openPanel: string;
+        openPanelA11y: (params: Readonly<{ title: string }>) => string;
     }>;
     /** Viewer-local Companion copy. Product says "Companion"; persistence says item. */
     companion: Readonly<{
@@ -341,6 +346,7 @@ export const sessionBoardTranslationsEnglish = { en: {
                 reason: 'Its content is preserved. Open it on a supported device or update Happier.',
             },
             notCopied: { title: 'Visual not copied', reason: 'This visual could not be copied into this fork.' },
+            runningElsewhere: { title: 'Running elsewhere', reason: 'This visual runs live in one place at a time.' },
             missing: {
                 title: 'This widget is missing',
                 reason: 'The board still points at it, but its content is not on this Home.',
@@ -372,6 +378,7 @@ export const sessionBoardTranslationsEnglish = { en: {
                 readFull: 'Read full note',
                 rename: 'Rename widget',
                 unpin: 'Unpin from this view',
+                pinToBoard: 'Pin to Board',
                 moveToView: ({ title }) => `Move to ${title}`,
             },
             moved: {
@@ -409,6 +416,7 @@ export const sessionBoardTranslationsEnglish = { en: {
             pin: 'Add to this view',
         },
         mutation: {
+            approvalRequired: 'Queued · waiting for approval',
             conflict: 'This board changed on another device. Refresh to see the latest.',
             outcomeUnknown: 'Happier could not confirm whether that change was saved.',
             denied: 'You no longer have permission to change this board.',
@@ -445,8 +453,8 @@ export const sessionBoardTranslationsEnglish = { en: {
         },
         mobile: { searchPlaceholder: 'Search this board' },
         inline: {
-            openBoard: 'Open Board',
-            openBoardA11y: ({ title }) => `Open “${title}” on the board`,
+            openPanel: 'Open in panel',
+            openPanelA11y: ({ title }) => `Open “${title}” in a panel`,
         },
         companion: {
             title: 'Companion',

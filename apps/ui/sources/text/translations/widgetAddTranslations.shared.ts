@@ -22,6 +22,8 @@ export type WidgetAddTranslation = Readonly<{
     panes: string;
     panesHint: string;
     builtIn: string;
+    prompts: Readonly<{ project: string; projects: string; session: string; workspace: string; machine: string }>;
+    inputLabels: Readonly<Record<'session' | 'metric' | 'breakdown' | 'groupBy' | 'apiEquivalent' | 'agent' | 'model' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine', string>>;
     nativeDescriptions: Readonly<{
         session_summary: string;
         agent_plan: string;
@@ -31,6 +33,10 @@ export type WidgetAddTranslation = Readonly<{
     noMatch: (params: Readonly<{ query: string }>) => string;
     pickTitle: string;
     pickHint: string;
+    /** The nothing-selected pane's key legend: ↑↓, ↵ and esc. */
+    keysBrowse: string;
+    keysAdd: string;
+    keysClose: string;
     pickNote: string;
     askAction: string;
     pluginTag: string;
@@ -149,6 +155,8 @@ export const widgetAddTranslationsEnglish = { en: {
         panes: 'Panes',
         panesHint: 'added as a link that opens in Details',
         builtIn: 'Built in',
+        prompts: { project: 'Which project?', projects: 'Which projects?', session: 'Which session?', workspace: 'Which workspace?', machine: 'Which machine?' },
+        inputLabels: { session: 'Session', metric: 'Metric', breakdown: 'Breakdown', groupBy: 'Group by', apiEquivalent: 'API equivalent', agent: 'Agent', model: 'Model', project: 'Project', workspace: 'Workspace', backendMode: 'Backend mode', source: 'Source', machine: 'Machine' },
         nativeDescriptions: {
             session_summary: 'Activity and next steps for the session you choose.',
             agent_plan: 'Follow the agent’s plan for the session you choose.',
@@ -158,6 +166,9 @@ export const widgetAddTranslationsEnglish = { en: {
         noMatch: ({ query }) => `No widgets match “${query}”`,
         pickTitle: 'Pick a widget to see it here',
         pickHint: 'It shows your own data, at the size you choose, before anything is added.',
+        keysBrowse: 'browse',
+        keysAdd: 'add',
+        keysClose: 'close',
         pickNote: 'Pick a widget to add it',
         askAction: 'Draft the request',
         pluginTag: 'plugin',

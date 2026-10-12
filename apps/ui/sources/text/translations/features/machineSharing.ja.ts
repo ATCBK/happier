@@ -11,7 +11,7 @@ export const machineSharing = createMachineSharingTranslations({
     trustedOsLead: '{machine} のターミナルやエージェントにアクセスできる人は、あなたのOSユーザーとして操作します。',
     trustedOsDetail: 'ローカル認証情報や、存在する場合はアカウント暗号化キーを取得できます。Happier API は所有者の認証情報やキーを読み取ったりエクスポートしたりしませんが、共有シェルの出力に含まれる場合があります。チーム専用マシンの共有を推奨します。',
     manageHelp: '{machine} を管理できる人は、他の人にも同じアクセス権を共有できます。',
-    loading: '{machine} のアクセス権を読み込んでいます。', readError: '{machine} のアクセス権を読み込めませんでした。', offline: '{machine} はオフラインです。アクセス権の変更はここに保存されます。', approvalPending: 'このアクセス権の変更はあなたの承認を待っています。',
+    loading: '{machine} のアクセス権を読み込んでいます。', readError: '{machine} のアクセス権を読み込めませんでした。', offline: '{machine} はオフラインです。アクセス権の変更はここに保存されます。', offlineRecipient: "{machine} はオフラインです。", approvalPending: 'このアクセス権の変更はあなたの承認を待っています。',
     denied: '{machine} を管理できる人だけが共有を変更できます。', use: '使用可能', manage: '管理可能', allMembers: '現在の全メンバー（後から参加する人も含む）',
     pending: '権限のあるキー保有者が {machine} のアクセスを準備するのを待っています。', incompatible: '{machine} はエンドツーエンド暗号化されていますが、{person} のアカウントは暗号化されていないため、{person} は開けません。',
     incompatibleHelp: '暗号化されていないマシンを共有するか、{person} にアカウント設定でエンドツーエンド暗号化を有効にするよう依頼してください。',

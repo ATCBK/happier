@@ -57,6 +57,8 @@ export type BoardsTranslations = Readonly<{
         workflow: Readonly<{
             noRuns: string;
             lastRun: (params: Readonly<{ word: string; age: string }>) => string;
+            /** The last run's age alone, where the card's state word already names its outcome. */
+            lastRunAt: (params: Readonly<{ age: string }>) => string;
             needYou: Count;
         }>;
         run: Readonly<{
@@ -143,7 +145,7 @@ export const en: BoardsTranslations = {
         body: 'It was deleted, or it belongs to a Home that is not connected here.',
     },
     meta: {
-        needYou: ({ count }) => `${count} need you`,
+        needYou: ({ count }) => (count === 1 ? '1 needs you' : `${count} need you`),
         items: ({ count }) => (count === 1 ? '1 item' : `${count} items`),
         handPicked: 'Hand-picked',
         empty: 'empty',
@@ -181,14 +183,15 @@ export const en: BoardsTranslations = {
             online: 'Online',
             offline: 'Offline',
             running: ({ count }) => (count === 1 ? '1 session running' : `${count} sessions running`),
-            needYou: ({ count }) => `${count} needs you`,
+            needYou: ({ count }) => (count === 1 ? '1 needs you' : `${count} need you`),
             idle: 'No sessions running',
             offlineBody: 'Its sessions wait until it is back.',
         },
         workflow: {
             noRuns: 'No runs yet',
             lastRun: ({ word, age }) => `Last run ${age} · ${word}`,
-            needYou: ({ count }) => `${count} needs you`,
+            lastRunAt: ({ age }) => `Last run ${age}`,
+            needYou: ({ count }) => (count === 1 ? '1 needs you' : `${count} need you`),
         },
         run: {
             waitingForYou: 'Waiting for your review',

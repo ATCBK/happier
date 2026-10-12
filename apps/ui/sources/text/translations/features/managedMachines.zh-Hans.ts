@@ -13,7 +13,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         noWorkDescription: "按各服务的计费方式决定。没有任务运行指没有会话、脚本、终端、服务、设置、工作流运行或触发器在等待它。",
         noWorkDescriptionShort: "按各服务的计费方式决定。",
         categoryHelp: {
-            local: "停止会释放所在电脑的 CPU 和内存。磁盘会保留。",
+            local: "停止会释放所在机器的 CPU 和内存。磁盘会保留。",
             runningOnly: "停止后只对保留的存储计费。",
             stoppedBilled: "停止并不会降低费用，所以会一直运行，直到你删除它们。",
             unknown: "Happier 不做猜测。会保留机器，直到你决定。",
@@ -101,7 +101,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             noControllerReason: "机器由你运行 Happier 的电脑创建。先设置这台电脑。",
             setUpThisComputer: "设置这台电脑",
             choosingCreate: "正在选择要创建的内容",
-            pageDescription: "连接你已有的电脑，或让 Happier 为你创建一台。",
+            pageDescription: "连接你已有的机器，或让 Happier 为你创建一台。",
             joinsThisHome: "加入此 Home",
             createPathSubtitle: "Happier 用你的账户创建",
             status: {
@@ -327,7 +327,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             presets: "预设",
             oneOff: "一次性机器…",
             oneOffHelp: "为这台机器选择位置、规格和镜像",
-            connectComputer: "连接电脑…",
+            connectComputer: "连接机器…",
             connectComputerHelp: "这台电脑、通过 SSH，或另一台电脑",
         },
     },
@@ -441,7 +441,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveShort: "移动…",
         moveHere: "将管理移到这里",
         description: ({ provider }: { provider: string }) => `启动、停止和删除操作在持有 ${provider} 账户的机器上执行。`,
-        fixedLocal: ({ controller }: { controller: string }) => `这台机器存储在 ${controller} 上。管理无法移到另一台电脑。`,
+        fixedLocal: ({ controller }: { controller: string }) => `这台机器存储在 ${controller} 上。管理无法移到另一台机器。`,
         pending: "移动管理后，提供方的操作可能仍会完成。费用可能会继续产生。",
     },
     managedCleanup: {

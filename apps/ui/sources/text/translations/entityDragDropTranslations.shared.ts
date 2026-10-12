@@ -23,7 +23,7 @@ export const en = {
         putUnderDetail: 'Reports to it · both keep running',
         moveAbove: ({ target }: { target: string }) => `Move above ${target}`,
         moveBelow: ({ target }: { target: string }) => `Move below ${target}`,
-        orderDetail: 'Order only · nothing reports to anything',
+        orderDetail: 'Changes the order only',
         moveToFolder: ({ folder }: { folder: string }) => `Move to ${folder}`,
         folderDetail: 'Folder only · reports to no one',
         moveToTopLevel: 'Move to the top level',
@@ -52,6 +52,7 @@ export const en = {
         dismiss: 'Dismiss',
     },
     reasons: {
+        noRowAbove: 'There’s no row above this place to put it under',
         read: 'It’s shared with you read-only, so it can’t take reports',
         input: 'You can’t send to it, so it can’t take reports',
         pairwise: 'These two sessions can’t share their context',
@@ -67,6 +68,9 @@ export const en = {
         foldersOff: 'Folders are off for this Home',
         gone: 'That place just went away',
         generic: 'This place can’t take it',
+        otherGroup: 'It belongs to another group',
+        cantHold: 'That row can’t hold anything',
+        fixedItem: 'It can’t be moved in this list',
     },
     chooser: {
         putUnderTitle: ({ item }: { item: string }) => `Put ${item} under…`,

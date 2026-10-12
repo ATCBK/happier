@@ -13,7 +13,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         noWorkDescription: "各サービスの課金方法に応じて決まります。何も実行されていないとは、待機中のセッション、スクリプト、ターミナル、サービス、セットアップ、ワークフロー実行、トリガーがないことです。",
         noWorkDescriptionShort: "各サービスの課金方法に応じて決まります。",
         categoryHelp: {
-            local: "停止すると、実行中のコンピューターの CPU とメモリが解放されます。ディスクは残ります。",
+            local: "停止すると、実行中のマシンの CPU とメモリが解放されます。ディスクは残ります。",
             runningOnly: "停止中は保持されたストレージのみ課金されます。",
             stoppedBilled: "停止しても請求は下がらないため、削除するまで実行し続けます。",
             unknown: "Happier は推測しません。決めるまでマシンを保持します。",
@@ -101,7 +101,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             noControllerReason: "マシンは Happier を実行しているあなたのコンピュータから作成されます。まずこのコンピュータを設定してください。",
             setUpThisComputer: "このコンピュータを設定",
             choosingCreate: "作成するものを選択中",
-            pageDescription: "手持ちのコンピュータを接続するか、Happier に作成を任せましょう。",
+            pageDescription: "手持ちのマシンを接続するか、Happier に作成を任せましょう。",
             joinsThisHome: "この Home に参加",
             createPathSubtitle: "あなたのアカウントで Happier が作成します",
             status: {
@@ -327,7 +327,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             presets: "プリセット",
             oneOff: "単発のマシン…",
             oneOffHelp: "このマシンの場所、サイズ、イメージを選択します",
-            connectComputer: "コンピューターを接続…",
+            connectComputer: "マシンを接続…",
             connectComputerHelp: "このコンピューター、SSH 経由、または別のコンピューター",
         },
     },
@@ -441,7 +441,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveShort: "移動…",
         moveHere: "管理をここに移動",
         description: ({ provider }: { provider: string }) => `開始、停止、削除は ${provider} アカウントを保持しているマシンで実行されます。`,
-        fixedLocal: ({ controller }: { controller: string }) => `このマシンは ${controller} に保存されています。管理を別のコンピューターに移動することはできません。`,
+        fixedLocal: ({ controller }: { controller: string }) => `このマシンは ${controller} に保存されています。管理を別のマシンに移動することはできません。`,
         pending: "管理を移動した後も、プロバイダーの操作が完了する場合があります。料金が発生し続けることがあります。",
     },
     managedCleanup: {

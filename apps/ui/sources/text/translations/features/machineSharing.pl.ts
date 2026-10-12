@@ -11,7 +11,7 @@ export const machineSharing = createMachineSharingTranslations({
     trustedOsLead: 'Osoby z dostępem do terminala lub agentów na {machine} działają jako Twój użytkownik systemu operacyjnego.',
     trustedOsDetail: 'Mogą uzyskać lokalne dane logowania oraz klucz szyfrowania konta, jeśli istnieje. Żadne API Happier nie odczytuje ani nie eksportuje danych logowania lub kluczy właściciela; wyniki wspólnej powłoki mogą je zawierać. Zalecamy udostępnianie osobnego komputera zespołowego.',
     manageHelp: 'Osoby zarządzające {machine} mogą także udostępniać ją innym z tym samym dostępem.',
-    loading: 'Wczytywanie dostępu do {machine}.', readError: 'Nie udało się wczytać dostępu do {machine}.', offline: '{machine} jest offline. Zmiany dostępu są tutaj zapisywane.', approvalPending: 'Ta zmiana dostępu czeka na Twoje zatwierdzenie.',
+    loading: 'Wczytywanie dostępu do {machine}.', readError: 'Nie udało się wczytać dostępu do {machine}.', offline: '{machine} jest offline. Zmiany dostępu są tutaj zapisywane.', offlineRecipient: "{machine} jest offline.", approvalPending: 'Ta zmiana dostępu czeka na Twoje zatwierdzenie.',
     denied: 'Tylko osoby zarządzające {machine} mogą zmieniać udostępnianie.', use: 'Może używać', manage: 'Może zarządzać', allMembers: 'Wszyscy obecni członkowie, również osoby dołączające później',
     pending: 'Oczekiwanie na uprawnionego posiadacza klucza, który przygotuje dostęp do {machine}.', incompatible: '{machine} jest szyfrowana kompleksowo, ale konto {person} nie. Dlatego {person} nie może jej otworzyć.',
     incompatibleHelp: 'Udostępnij nieszyfrowaną maszynę lub poproś {person} o włączenie szyfrowania kompleksowego w ustawieniach konta.',

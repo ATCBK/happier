@@ -87,6 +87,8 @@ export const projectWorkersEn = {
     noCopyNeeded: 'no copy needed',
     runOn: ({ name }: { name: string }) => `Run ${name} on`,
     workersSection: 'Workers',
+    offlineWorkers: ({ count }: { count: number }) => `${count} offline`,
+    offlineWorkersDetail: 'Not reachable right now',
     poolsSection: 'Pools',
     workerSettings: 'Worker settings…',
     workerSettingsDetail: 'Your defaults for this checkout',

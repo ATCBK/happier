@@ -31,6 +31,8 @@ export const setupFidelityCopy = {
 
 
 export const en = {
+    runtimeNotLoaded: "This service hasn’t loaded on a machine yet. Check its plugin settings, then refresh.",
+    identityConflict: "Your machines report conflicting details for this service. Update its plugin on each machine, then refresh.",
     ...setupFidelityCopy,
     accountCount: ({ count }: { count: number }) => count === 1 ? '1 account' : `${count} accounts`,
     defaultAccount: ({ name }: { name: string }) => `Default: ${name}`,
@@ -66,8 +68,8 @@ export const en = {
     perAgentDescription: 'Override these defaults for one agent.',
     perAgentPurpose: 'Choose, per agent, what connected-account sessions share with your own sign-in.',
     servicePurpose: ({ service }: { service: string }) => `The accounts you sign in to ${service} with, and the pools that share them.`,
-    chooseMachineTitle: 'Choose a machine',
     chooseMachineDescription: 'Adding, signing in and removing accounts runs on one of your machines. Your accounts stay listed on Connected services.',
+    accountMachineInvitation: 'Signing in again and removing this account run on one of your machines.',
     newAccountTitle: 'New account',
     newAccountDescription: 'Choose how to sign in.',
     newAccountInProgress: 'Finish signing in below.',

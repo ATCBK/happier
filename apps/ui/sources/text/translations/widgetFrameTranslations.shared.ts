@@ -32,6 +32,7 @@ export type WidgetFrameTranslation = Readonly<{
     groupSaveHint: (params: Readonly<{ count: number }>) => string;
     groupSaveNote: string;
     groupInputs: string;
+    groupInputsValue: (params: Readonly<{ field: string; value: string }>) => string;
     groupWidth: string;
     widthHalf: string;
     widthFull: string;
@@ -69,12 +70,14 @@ export type WidgetFrameTranslation = Readonly<{
     intoGroupAbove: (params: Readonly<{ target: string }>) => string;
     intoGroupBelow: (params: Readonly<{ target: string }>) => string;
     intoGroupEnd: string;
+    intoGroupKeepsSize: (params: Readonly<{ size: string }>) => string;
     reorderInGroupDetail: string;
     outOfGroupDetail: (params: Readonly<{ group: string }>) => string;
     wholeGroupDetail: (params: Readonly<{ count: number }>) => string;
     cantPutInGroup: (params: Readonly<{ group: string }>) => string;
     groupRefusedWidth: string;
     groupRefusedNesting: string;
+    groupRefusedNestingNamed: (params: Readonly<{ group: string; target: string }>) => string;
     groupNeedsFullWidth: (params: Readonly<{ widget: string }>) => string;
     groupFacts: (params: Readonly<{ width: string; count: number }>) => string;
     groupCannotTake: (params: Readonly<{ group: string }>) => string;
@@ -127,6 +130,7 @@ export const widgetFrameTranslationsEnglish = { en: {
         noticeChanged: 'Frame changed',
         newChip: 'New',
         groupInputs: "Inputs…",
+        groupInputsValue: ({ field, value }) => `${field}: ${value}`,
         groupWidth: "Width",
         widthHalf: "Half",
         widthFull: "Full",
@@ -163,14 +167,16 @@ export const widgetFrameTranslationsEnglish = { en: {
         intoGroupAbove: ({ target }) => `Above ${target} · shows plain inside the group`,
         intoGroupBelow: ({ target }) => `Below ${target} · shows plain inside the group`,
         intoGroupEnd: "Shows plain inside the group",
+        intoGroupKeepsSize: ({ size }) => `stays ${size}`,
         reorderInGroupDetail: "Order only",
         outOfGroupDetail: ({ group }) => `Out of ${group} · gets its own card again`,
         wholeGroupDetail: ({ count }) => count === 1 ? `Its widget moves with it` : `Its ${count} widgets move with it`,
         cantPutInGroup: ({ group }) => `Can’t put it in ${group}`,
         groupRefusedWidth: "It needs the full width and this group is half. Drop it beside, or make the group full width.",
         groupRefusedNesting: "Groups can’t go inside groups. Drop it above or below, or ungroup it first.",
+        groupRefusedNestingNamed: ({ group, target }) => `Groups can’t go inside groups. Drop ${group} above or below ${target}, or ungroup it first.`,
         groupNeedsFullWidth: ({ widget }) => `${widget} needs the full width`,
-        groupFacts: ({ width, count }) => `${width} · ${count} widgets`,
+        groupFacts: ({ width, count }) => `${width} · ${count === 1 ? '1 widget' : `${count} widgets`}`,
         groupCannotTake: ({ group }) => `Needs the full width; ${group} is half`,
         groupA11y: ({ name }) => `Group: ${name}`,
         groupCount: ({ count }) => `Group · ${count}`,

@@ -28,6 +28,9 @@ export type VoiceMomentsTranslation = Readonly<{
     setupMicrophoneDone: string;
     setupMicrophoneDeniedTitle: string;
     setupMicrophoneDeniedDetail: string;
+    setupMicrophoneMissingTitle: string;
+    setupMicrophoneMissingDetail: string;
+    setupMicrophoneCheckAgain: string;
     setupOpenSystemSettings: string;
     setupTryTitle: string;
     setupTryDetail: string;
@@ -92,6 +95,9 @@ export const voiceMomentsTranslationsEnglish = { en: {
         setupMicrophoneDone: 'Microphone allowed',
         setupMicrophoneDeniedTitle: 'The microphone is off for Happier',
         setupMicrophoneDeniedDetail: 'Turn it on in your system settings, then come back here.',
+        setupMicrophoneMissingTitle: 'No microphone found',
+        setupMicrophoneMissingDetail: 'Connect a microphone or headset, then check again.',
+        setupMicrophoneCheckAgain: 'Check again',
         setupOpenSystemSettings: 'Open settings',
         setupTryTitle: 'Try it',
         setupTryDetail: 'Ask “What are my sessions doing?” Your words land in the conversation like any message.',

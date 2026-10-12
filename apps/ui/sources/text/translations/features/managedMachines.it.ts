@@ -13,7 +13,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         noWorkDescription: "In base a come fattura ogni servizio. Non gira nulla significa nessuna sessione, script, terminale, servizio, configurazione, esecuzione di workflow o trigger in attesa.",
         noWorkDescriptionShort: "In base a come fattura ogni servizio.",
         categoryHelp: {
-            local: "Fermarla libera CPU e memoria sul computer che la ospita. Il disco resta.",
+            local: "Fermarla libera CPU e memoria sulla macchina che la ospita. Il disco resta.",
             runningOnly: "Ferme, fatturano solo lo spazio conservato.",
             stoppedBilled: "Fermarle non ridurrebbe la fattura, quindi restano accese finché non le elimini.",
             unknown: "Happier non tira a indovinare. Tiene la macchina finché non decidi.",
@@ -101,7 +101,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             noControllerReason: "Le macchine vengono create da uno dei tuoi computer con Happier. Configura questo computer per iniziare.",
             setUpThisComputer: "Configura questo computer",
             choosingCreate: "Scelta di cosa creare",
-            pageDescription: "Collega un computer che hai già o lascia che Happier ne crei uno per te.",
+            pageDescription: "Collega una macchina che hai già o lascia che Happier ne crei una per te.",
             joinsThisHome: "Si unisce a questo Home",
             createPathSubtitle: "Happier la crea con il tuo account",
             status: {
@@ -327,7 +327,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             presets: "Preset",
             oneOff: "Macchina singola…",
             oneOffHelp: "Scegli posizione, dimensione e immagine solo per questa",
-            connectComputer: "Collega un computer…",
+            connectComputer: "Collega una macchina…",
             connectComputerHelp: "Questo computer, via SSH o un altro computer",
         },
     },
@@ -441,7 +441,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveShort: "Sposta…",
         moveHere: "Sposta la gestione qui",
         description: ({ provider }: { provider: string }) => `Avvio, arresto ed eliminazione vengono eseguiti sulla macchina che contiene l’account ${provider}.`,
-        fixedLocal: ({ controller }: { controller: string }) => `Questa macchina è archiviata su ${controller}. La gestione non può essere spostata su un altro computer.`,
+        fixedLocal: ({ controller }: { controller: string }) => `Questa macchina è archiviata su ${controller}. La gestione non può essere spostata su un’altra macchina.`,
         pending: "Un’azione del provider potrebbe completarsi dopo lo spostamento della gestione. I costi potrebbero continuare.",
     },
     managedCleanup: {

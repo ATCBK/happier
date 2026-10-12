@@ -19,7 +19,7 @@ export const managedMachinesEn = {
         noWorkDescription: "Chosen by how each service bills. Nothing runs means no sessions, scripts, terminals, services, setup, workflow runs or triggers waiting on it.",
         noWorkDescriptionShort: "Chosen by how each service bills.",
         categoryHelp: {
-            local: "Stopping frees CPU and memory on the computer it runs on. The disk stays.",
+            local: "Stopping frees CPU and memory on the machine it runs on. The disk stays.",
             runningOnly: "Stopped, these bill only for storage that’s kept.",
             stoppedBilled: "Stopping wouldn’t lower the bill, so they keep running until you delete them.",
             unknown: "Happier doesn’t guess. It keeps the machine until you decide.",
@@ -107,7 +107,7 @@ export const managedMachinesEn = {
             noControllerReason: "Machines are created from one of your computers running Happier. Set up this computer to start.",
             setUpThisComputer: "Set up this computer",
             choosingCreate: "Choosing what to create",
-            pageDescription: "Connect a computer you already have, or let Happier create one for you.",
+            pageDescription: "Connect a machine you already have, or let Happier create one for you.",
             joinsThisHome: "Joins this Home",
             createPathSubtitle: "Happier creates it with your account",
             status: {
@@ -334,7 +334,7 @@ export const managedMachinesEn = {
             presets: "Presets",
             oneOff: "One-off machine…",
             oneOffHelp: "Choose where, size and image for this one",
-            connectComputer: "Connect a computer…",
+            connectComputer: "Connect a machine…",
             connectComputerHelp: "This computer, over SSH, or another computer",
         },
     },
@@ -448,7 +448,7 @@ export const managedMachinesEn = {
         moveShort: "Move…",
         moveHere: "Move management here",
         description: ({ provider }: { provider: string }) => `Start, stop and delete run on the machine that holds the ${provider} account.`,
-        fixedLocal: ({ controller }: { controller: string }) => `This machine is stored on ${controller}. Management can’t move to another computer.`,
+        fixedLocal: ({ controller }: { controller: string }) => `This machine is stored on ${controller}. Management can’t move to another machine.`,
         pending: "A provider action may still finish after you move management. Charges may continue.",
     },
     managedCleanup: {

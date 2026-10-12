@@ -3,11 +3,12 @@
 export const en = {
     sectionTitle: 'Drafts',
     sectionTitleForHome: ({ home }: { home: string }) => `Drafts on ${home}`,
+    showAll: ({ count }: { count: number }) => `Show all ${count}`,
     // A waiting Temporary-computer request is not an ordinary draft: its
     // package is already on someone else's computer. This title says exactly
     // which Home owns the live request, so switching Homes never makes one
     // silently disappear.
-    waitingSectionTitleForHome: ({ home }: { home: string }) => `Waiting for a computer on ${home}`,
+    waitingSectionTitleForHome: ({ home }: { home: string }) => `Waiting for a machine on ${home}`,
     badge: 'Draft',
     untitled: 'Untitled draft',
     continueEditing: 'Continue editing',
@@ -19,8 +20,8 @@ export const en = {
         starting: 'Starting the agent conversation…',
         reconciling: 'Checking whether this agent conversation started…',
         unresolved: 'We couldn’t confirm whether this agent conversation started. Starting another may create a second conversation.',
-        targetChanged: 'The computer for this session changed before the conversation could start. Nothing was started.',
-        secretReferenceOverlayUpdateRequired: 'Using shared secrets in an agent conversation needs an updated computer. Nothing was started.',
+        targetChanged: 'The machine for this session changed before the conversation could start. Nothing was started.',
+        secretReferenceOverlayUpdateRequired: 'Using shared secrets in an agent conversation needs an updated machine. Nothing was started.',
     },
     status: {
         offline: 'Offline — saved on this device',

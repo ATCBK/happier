@@ -40,6 +40,16 @@ const IGNORED_UNTRANSLATED_KEYS = new Set([
     'homeSettings.choices.trace',
     'homeSettings.choices.error',
     'homeSettings.choices.manual',
+    'homeSettings.choices.publicdev',
+    // Database engines and Redis Streams retain their proper names in every locale.
+    'homeSettings.choices.postgres',
+    'homeSettings.choices.postgresql',
+    'homeSettings.choices.pglite',
+    'homeSettings.choices.sqlite',
+    'homeSettings.choices.mysql',
+    'homeSettings.choices.redis-streams',
+    // SQLite's NORMAL mode has the same ordinary adjective in these Latin-script locales.
+    'homeSettings.choices.NORMAL',
     // Prompts & Skills (lane e): the value is only the `{count}` placeholder.
     'promptLibrary.surface.itemCount',
     // Product names: the same word in every locale.
@@ -1208,6 +1218,18 @@ function callSampledTranslation(value: unknown, args: readonly unknown[]): strin
 }
 
 describe('i18n integrity', () => {
+    it('keeps machine resource Actions, suggestions and widget copy reachable at the public locale roots', () => {
+        for (const locale of [en, ca, de, es, fr, itLocale, ja, pl, pt, ru, zhHans, zhHant]) {
+            expect(locale.settingsActions.families.resources.reading.title.length).toBeGreaterThan(0);
+            expect(locale.settingsActions.facts.automations.subtitle.length).toBeGreaterThan(0);
+            expect(locale.machineResources.askSuggestions.prompts.memory({ machine: 'Atlas' })).toContain('Atlas');
+            expect(locale.machineResources.askSuggestions.reasons.disk({ amount: '10 GB' })).toContain('10 GB');
+            expect(locale.machines.widgets.machine_vitals.length).toBeGreaterThan(0);
+            expect(locale.machines.widgets.inputs.volume.length).toBeGreaterThan(0);
+            expect(locale.widgetAdd.prompts.machine.length).toBeGreaterThan(0);
+        }
+    });
+
     it('keeps identical-vocabulary exemptions scoped to their keys and locales', () => {
         const translations = {
             secrets: { catalog: { kinds: { token: 'Token' } } },
@@ -2012,12 +2034,15 @@ describe('i18n integrity', () => {
             const value = readTranslationLeaf(root, key);
             const englishValue = readTranslationLeaf(en, key);
             if (typeof englishValue === 'function') {
-                const args = [{ matches: 37, files: 13 }];
+                const params = { matches: 37, files: 13, name: 'quartz-repo' };
+                const args = [params];
                 const sample = callSampledTranslation(value, args);
                 const englishSample = callSampledTranslation(englishValue, args);
+                // Every parameter the English copy shows must survive in the translation.
+                const shown = Object.values(params).map(String).filter((param) => englishSample?.includes(param));
                 return typeof value === 'function' && value !== englishValue
                     && sample && sample !== englishSample
-                    && sample.includes('37') && sample.includes('13')
+                    && shown.every((param) => sample.includes(param))
                     ? []
                     : [`${code}: ${key}`];
             }

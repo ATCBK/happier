@@ -11,7 +11,7 @@ export const machineSharing = createMachineSharingTranslations({
     trustedOsLead: 'Personen mit Terminal- oder Agentenzugriff auf {machine} arbeiten als dein Betriebssystembenutzer.',
     trustedOsDetail: 'Sie können lokale Zugangsdaten und, falls vorhanden, den Kontoverschlüsselungsschlüssel erhalten. Keine Happier-API liest oder exportiert Zugangsdaten oder Schlüssel des Eigentümers; Ausgaben einer gemeinsamen Shell können sie enthalten. Wir empfehlen einen eigenen Teamcomputer.',
     manageHelp: 'Wer {machine} verwalten kann, kann anderen dieselben Zugriffsrechte geben.',
-    loading: 'Zugriff auf {machine} wird geladen.', readError: 'Zugriff auf {machine} konnte nicht geladen werden.', offline: '{machine} ist offline. Zugriffsänderungen werden hier gespeichert.', approvalPending: 'Diese Zugriffsänderung wartet auf deine Freigabe.',
+    loading: 'Zugriff auf {machine} wird geladen.', readError: 'Zugriff auf {machine} konnte nicht geladen werden.', offline: '{machine} ist offline. Zugriffsänderungen werden hier gespeichert.', offlineRecipient: "{machine} ist offline.", approvalPending: 'Diese Zugriffsänderung wartet auf deine Freigabe.',
     denied: 'Nur Personen, die {machine} verwalten können, dürfen die Freigabe ändern.', use: 'Kann nutzen', manage: 'Kann verwalten', allMembers: 'Alle aktuellen Mitglieder, auch später beitretende Personen',
     pending: 'Eine berechtigte Person mit Schlüssel muss den Zugriff auf {machine} vorbereiten.', incompatible: '{machine} ist Ende-zu-Ende verschlüsselt, das Konto von {person} jedoch nicht. {person} kann den Computer nicht öffnen.',
     incompatibleHelp: 'Teile einen unverschlüsselten Computer oder bitte {person}, Ende-zu-Ende-Verschlüsselung in den Kontoeinstellungen zu aktivieren.',

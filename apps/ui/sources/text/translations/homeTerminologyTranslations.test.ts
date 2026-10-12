@@ -57,7 +57,7 @@ const HOME_PRODUCT_NOUN_KEYS = [
     'personalHome.bootstrap.blocked.existing_runtime', 'personalHome.bootstrap.blocked.personal_home_erased',
     'personalHome.bootstrap.blockedBody.personal_home_erased', 'personalHome.settings.defaultHomeLabel',
     'personalHome.settings.summaryTitle', 'newSession.temporaryComputer.target.home', 'settingsAccount.currentHome',
-    'settingsNotifications.push.currentHome', 'settingsAccount.logoutSubtitle',
+    'settingsAccount.logoutSubtitle',
 ] as const;
 
 const NATIVE_HOME_NOUN = /zuhause|maison|foyer|hogar|\bcas[ae]\b|\bllar|\bdom(u|em|ie)?\b|(^|[^а-яё])дом(а|ом|е|у)?([^а-яё]|$)|ホーム|之家|家庭/i;
@@ -79,7 +79,7 @@ function renderLeaf(translations: object, path: string): string | undefined {
         node = (node as Record<string, unknown>)[segment];
     }
     if (typeof node === 'string') return node;
-    if (typeof node === 'function') return String(node({ name: 'NAME', count: 2, provider: 'PROVIDER', host: 'HOST', home: 'HOME', serverUrl: 'URL' }));
+    if (typeof node === 'function') return String(node({ name: 'NAME', names: ['NAME'], lanes: ['LANE'], kind: 'KIND', count: 2, provider: 'PROVIDER', host: 'HOST', home: 'HOME', serverUrl: 'URL' }));
     return undefined;
 }
 

@@ -16,7 +16,7 @@ declare const providerNonSecretHeaderTranslations: Record<"ca" | "es" | "fr" | "
 declare const providerProbePathsTranslations: Record<"ca" | "es" | "fr" | "it" | "ja" | "pl" | "pt" | "ru" | "zhHans" | "zhHant", string>;
 declare const providerLocalAuthoringTranslations: Record<"ca" | "es" | "fr" | "it" | "ja" | "pl" | "pt" | "ru" | "zhHans" | "zhHant", { enableAfterSaving: string; enableOnCurrentMachine: string; enableAccountWide: string; localAddressTitle: string; localAddressDescription: ({ machine, endpoint }: { machine: string; endpoint: string }) => string }>;
 declare const providerAuthoringReviewTranslations: Record<"ca" | "es" | "fr" | "it" | "ja" | "pl" | "pt" | "ru" | "zhHans" | "zhHant", { destinationReview: string; destinationLoading: string; destinationSelection: string; destinationSelectionDescription: string; destinationScope: string; destinationMachine: string; destinationAccount: string }>;
-declare const providerCompatibilityTranslations: Record<"ca" | "es" | "fr" | "it" | "ja" | "pl" | "pt" | "ru" | "zhHans" | "zhHant", { title: string; footer: string; verified: string; experimental: string; incompatible: string; verifiedDescription: string; experimentalDescription: string; incompatibleDescription: string }>;
+declare const providerCompatibilityTranslations: Record<"ca" | "es" | "fr" | "it" | "ja" | "pl" | "pt" | "ru" | "zhHans" | "zhHant", { title: string; footer: string; verified: string; experimental: string; incompatible: string; experimentalDescription: string; incompatibleDescription: string }>;
 declare const providerModelNotLoadedTranslations: Record<"ca" | "es" | "fr" | "it" | "ja" | "pl" | "pt" | "ru" | "zhHans" | "zhHant", string>;
 declare const providerModelLoadCancellationTranslations: Record<"ca" | "es" | "fr" | "it" | "ja" | "pl" | "pt" | "ru" | "zhHans" | "zhHant", { cancelLoad: string; loadCancelled: string; loadCancelledProviderMayContinue: string }>;
 declare const providerPartialStatusTranslations: Record<"ca" | "es" | "fr" | "it" | "ja" | "pl" | "pt" | "ru" | "zhHans" | "zhHant", string>;
@@ -123,7 +123,12 @@ export function withProviderSharedFields<T extends {
             actions: parts.providerCompletenessTranslations.recoveryActions,
         },
         compatibility: {
-            ...parts.providerCompatibilityTranslations,
+            title: parts.providerCompatibilityTranslations.title,
+            footer: parts.providerCompatibilityTranslations.footer,
+            verified: parts.providerCompatibilityTranslations.verified,
+            experimental: parts.providerCompatibilityTranslations.experimental,
+            incompatible: parts.providerCompatibilityTranslations.incompatible,
+            experimentalDescription: parts.providerCompatibilityTranslations.experimentalDescription,
             reasons: parts.providerCompletenessTranslations.compatibilityReasons,
         },
         migration: {

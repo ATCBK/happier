@@ -80,6 +80,8 @@ export const projectWorkers: ProjectWorkersTranslations = {
     noCopyNeeded: 'コピー不要',
     runOn: ({ name }: { name: string }) => `${name} の実行先`,
     workersSection: 'ワーカー',
+    offlineWorkers: ({ count }: { count: number }) => `${count} 台オフライン`,
+    offlineWorkersDetail: '現在接続できません',
     poolsSection: 'プール',
     workerSettings: 'ワーカー設定…',
     workerSettingsDetail: 'このチェックアウトの既定',

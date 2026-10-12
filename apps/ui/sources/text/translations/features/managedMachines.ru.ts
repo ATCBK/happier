@@ -13,7 +13,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         noWorkDescription: "Зависит от того, как тарифицирует сервис. Ничего не выполняется — значит, нет ожидающих сессий, скриптов, терминалов, служб, настройки, запусков рабочих процессов и триггеров.",
         noWorkDescriptionShort: "Зависит от того, как тарифицирует сервис.",
         categoryHelp: {
-            local: "Остановка освобождает процессор и память на компьютере, где она работает. Диск сохраняется.",
+            local: "Остановка освобождает процессор и память на машине, где она работает. Диск сохраняется.",
             runningOnly: "Остановленные оплачиваются только за сохранённое хранилище.",
             stoppedBilled: "Остановка не снизит счёт, поэтому они работают, пока вы их не удалите.",
             unknown: "Happier не гадает. Машина сохраняется, пока вы не решите.",
@@ -101,7 +101,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             noControllerReason: "Машины создаются с одного из ваших компьютеров с Happier. Настройте этот компьютер, чтобы начать.",
             setUpThisComputer: "Настроить этот компьютер",
             choosingCreate: "Выбор, что создать",
-            pageDescription: "Подключите уже имеющийся компьютер или позвольте Happier создать его для вас.",
+            pageDescription: "Подключите уже имеющуюся машину или позвольте Happier создать её для вас.",
             joinsThisHome: "Присоединяется к этому Home",
             createPathSubtitle: "Happier создаёт её с вашим аккаунтом",
             status: {
@@ -327,7 +327,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             presets: "Пресеты",
             oneOff: "Разовая машина…",
             oneOffHelp: "Выберите расположение, размер и образ только для неё",
-            connectComputer: "Подключить компьютер…",
+            connectComputer: "Подключить машину…",
             connectComputerHelp: "Этот компьютер, по SSH или другой компьютер",
         },
     },
@@ -441,7 +441,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveShort: "Перенести…",
         moveHere: "Перенести управление сюда",
         description: ({ provider }: { provider: string }) => `Запуск, остановка и удаление выполняются на машине, где находится аккаунт ${provider}.`,
-        fixedLocal: ({ controller }: { controller: string }) => `Эта машина хранится на ${controller}. Управление нельзя перенести на другой компьютер.`,
+        fixedLocal: ({ controller }: { controller: string }) => `Эта машина хранится на ${controller}. Управление нельзя перенести на другую машину.`,
         pending: "Действие у провайдера может завершиться уже после переноса управления. Расходы могут продолжаться.",
     },
     managedCleanup: {

@@ -85,6 +85,8 @@ export type ArtifactsBrowserTranslations = Readonly<{
         accountBody: (params: Readonly<{ used: string; limit: string }>) => string;
         documentBody: (params: Readonly<{ size: string; limit: string }>) => string;
     }>;
+    /** A save refused because a newer version was saved meanwhile (`version_mismatch`). */
+    conflict: Readonly<{ title: string; body: string }>;
     open: Readonly<{
         document: string;
         prompt: string;
@@ -215,6 +217,10 @@ export const artifactsBrowserTranslationsEnglish = { en: {
             documentTitle: 'Too large to save',
             accountBody: ({ used, limit }) => `${used} of ${limit} used, versions included. Delete or export artifacts you no longer need to save new ones.`,
             documentBody: ({ size, limit }) => `This would be ${size}; each artifact can hold up to ${limit}. Your edits are still here.`,
+        },
+        conflict: {
+            title: 'Changed while you edited',
+            body: 'A newer version was saved. Your edits are still here — review the current version before you save.',
         },
         open: {
             document: 'Open document',

@@ -2,8 +2,8 @@
 
 
 export const promptPickerTranslationsEnglish = { "en": {
-        "partialHistory": "Sent before covers only known sessions.",
-        "loadedHistory": "Sent before shows loaded messages only.",
+        "partialHistory": "Sent before: known sessions only",
+        "loadedHistory": "Sent before: loaded messages only",
         "open": "Open prompts",
         "menu": "Prompts…",
         "placeholder": "Search prompts and what you sent",
@@ -27,6 +27,7 @@ export const promptPickerTranslationsEnglish = { "en": {
         "clear": "Clear",
         "favorite": "Favourite",
         "favoritesInvite": "Star a prompt or something you sent to keep it here.",
+        "loadingLibrary": "Loading your prompts…",
         "saveAsFavorite": "Save as a favourite prompt",
         "saveInPlaceStarred": ({ time }: { time: string }) => `From your message of ${time} · goes to your library, starred`,
         "saveInPlace": ({ time }: { time: string }) => `From your message of ${time} · goes to your library`,

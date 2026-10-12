@@ -12,7 +12,7 @@ export const machineSharing = createMachineSharingTranslations({
     trustedOsDetail: 'They can obtain your local credentials and Account encryption key, if present. No Happier API reads or exports owner credentials or keys; anything a shared shell prints can contain them. We recommend sharing a dedicated team machine.',
     manageHelp: 'People who can manage {machine} can also share it with others, giving them the same access.',
     loading: 'Loading access to {machine}.', readError: 'Could not load access to {machine}.',
-    offline: '{machine} is offline. Access changes are saved here.', approvalPending: 'This access change is waiting for your approval.', denied: 'Only people who can manage {machine} can change sharing.',
+    offline: '{machine} is offline. Access changes are saved here.', offlineRecipient: "{machine} is offline.", approvalPending: 'This access change is waiting for your approval.', denied: 'Only people who can manage {machine} can change sharing.',
     use: 'Can use', manage: 'Can manage', allMembers: 'All current members, including people who join later',
     pending: 'Waiting for an authorized key holder to prepare access to {machine}.',
     incompatible: "{machine} is end-to-end encrypted and {person}'s account is not, so {person} cannot open it.",

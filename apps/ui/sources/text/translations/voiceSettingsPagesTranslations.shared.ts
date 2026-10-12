@@ -113,6 +113,7 @@ export type VoiceSettingsPagesCopy = Readonly<{
       restoreUnavailable: string;
       restoreResumeFeatureOff: string;
       restoreResumeAgentCannot: string;
+      diagnosticsUnreachable: string;
       fallbackTitle: string;
       fallbackDescription: string;
       restoreCountTitle: string;
@@ -150,6 +151,7 @@ export type VoiceSettingsPagesCopy = Readonly<{
       hearTitle: string;
       hearDescription: string;
       speechRecognitionTitle: string;
+      handsFreeDescription: string;
       handsFreeUnsupported: string;
       handsFreeTimingUnavailable: string;
       interruptTitle: string;
@@ -189,9 +191,9 @@ export type VoiceSettingsPagesCopy = Readonly<{
       replyInDescription: string;
       replySame: string;
       iSpeakAutomatic: string;
-      iSpeakEngineDescription: (params: { engine: string }) => string;
+      iSpeakEngineDescription: string;
       voiceTitle: string;
-      voiceDescription: (params: { engine: string }) => string;
+      voiceDescription: string;
       voiceDefault: string;
       voiceDevice: string;
       voiceInEngine: string;
@@ -229,6 +231,12 @@ export type VoiceSettingsPagesCopy = Readonly<{
       speechModelsTitle: string;
       speechModelsNeedComputerTitle: string;
       speechModelsNeedComputer: string;
+      speechModelsChecking: string;
+      speechModelsOff: string;
+      speechModelsUnreachable: string;
+      speechModelsUnsupported: string;
+      speechModelsTimeout: string;
+      speechModelsFailed: string;
       computerDescription: string;
       connectionTitle: string;
       timeoutTitle: string;
@@ -255,7 +263,7 @@ export const en: VoiceSettingsPagesCopy = {
       summaryNothingShared: 'Nothing shared when a conversation starts',
       summaryRemembers: 'Voice agent remembers past conversations',
       summaryForgets: 'Voice agent forgets after each conversation',
-      summaryVoiceComputer: ({ machine }) => `Voice computer: ${machine}`,
+      summaryVoiceComputer: ({ machine }) => `Voice machine: ${machine}`,
       summaryTranscript: 'transcript while talking',
     },
     pipeline: {
@@ -271,7 +279,7 @@ export const en: VoiceSettingsPagesCopy = {
       notChecked: 'Not checked yet',
       off: 'Off · Dictation stays available',
       onMachine: ({ machine }) => `On ${machine}`,
-      onVoiceComputer: 'On your Voice computer',
+      onVoiceComputer: 'On your Voice machine',
       inTheCloud: 'In the service’s cloud, from this device',
       inTheSession: 'Its own agent answers, in the transcript',
       intoYourMessage: 'You review it before sending',
@@ -284,10 +292,10 @@ export const en: VoiceSettingsPagesCopy = {
       intoYourMessageTitle: 'Into your message',
     },
     privacy: {
-      localAudio: "Your device or Voice computer",
+      localAudio: "Your device or Voice machine",
       localProcessor: "Your selected speech model",
       localRetention: "Managed by your device/runtime. Diagnostics follow your recording settings.",
-      localDisclosure: "Selected speech models run on your device or Voice computer. Voice History and diagnostic recordings have separate settings on this page.",
+      localDisclosure: "Selected speech models run on your device or Voice machine. Voice History and diagnostic recordings have separate settings on this page.",
       audioTitle: "Audio goes to",
       processorTitle: "Processed by",
       retentionTitle: "Retention",
@@ -352,6 +360,7 @@ export const en: VoiceSettingsPagesCopy = {
       restoreUnavailable: 'Turn on “Remember” to choose.',
       restoreResumeFeatureOff: 'Resuming needs the Voice agent turned on for this server.',
       restoreResumeAgentCannot: 'This agent can’t resume a past conversation.',
+      diagnosticsUnreachable: 'Can’t reach your Voice machine, so its recordings can’t be shown right now.',
       fallbackTitle: 'If resuming fails, replay messages',
       fallbackDescription: 'Starts from your recent messages instead of from nothing.',
       restoreCountTitle: 'Messages to restore',
@@ -389,6 +398,7 @@ export const en: VoiceSettingsPagesCopy = {
       hearTitle: 'Hear',
       hearDescription: 'How your speech becomes text before it is answered.',
       speechRecognitionTitle: 'Speech recognition',
+      handsFreeDescription: 'Keeps listening after each reply. Off: tap to talk each time.',
       handsFreeUnsupported: 'Hands-free needs speech recognition on this device or a Happier speech model.',
       handsFreeTimingUnavailable: 'Turn on Hands-free to change this.',
       interruptTitle: 'Interrupt by speaking',
@@ -428,11 +438,11 @@ export const en: VoiceSettingsPagesCopy = {
       replyInDescription: 'The answer comes back in this language, even if you switch.',
       replySame: 'Same as I speak',
       iSpeakAutomatic: 'Automatic',
-      iSpeakEngineDescription: ({ engine }) => `Helps ${engine} understand you. Set it with speech recognition in Hear.`,
+      iSpeakEngineDescription: 'Speech recognition uses it to understand you. Set it in Hear.',
       voiceTitle: 'Voice',
-      voiceDescription: ({ engine }) => `From ${engine}, the engine in Speak.`,
+      voiceDescription: 'The voice replies are read in. Set it in Speak.',
       voiceDefault: 'Default',
-      voiceDevice: 'This device’s voice',
+      voiceDevice: 'System voice',
       voiceInEngine: 'Set in Speak',
       languageServiceDescription: 'The language your voice service answers in.',
       languageAutomaticDescription: 'Your voice service detects the language you speak.',
@@ -464,11 +474,17 @@ export const en: VoiceSettingsPagesCopy = {
       autoOpenTitle: 'Open it when a conversation starts',
       autoOpenDescription: 'Off: open it yourself from the conversation.',
       autoOpenUnavailable: 'Turn on “Show the transcript” to choose.',
-      computerTitle: 'Voice computer',
+      computerTitle: 'Voice machine',
       speechModelsTitle: 'Speech models',
-      speechModelsNeedComputerTitle: 'Needs a Voice computer',
-      speechModelsNeedComputer: 'Choose a Voice computer above to install and manage its speech models.',
-      computerDescription: 'The computer that runs speech models and signs in to connected accounts for voice. Shared across your devices.',
+      speechModelsNeedComputerTitle: 'Needs a Voice machine',
+      speechModelsNeedComputer: 'Choose a Voice machine above to install and manage its speech models.',
+      speechModelsChecking: 'Checking the speech models on your Voice machine…',
+      speechModelsOff: 'Speech models are turned off on this server.',
+      speechModelsUnreachable: 'Can’t reach your Voice machine right now.',
+      speechModelsUnsupported: 'Your Voice machine can’t run speech models.',
+      speechModelsTimeout: 'Your Voice machine didn’t answer in time.',
+      speechModelsFailed: 'Speech models couldn’t be loaded.',
+      computerDescription: 'The machine that runs speech models and signs in to connected accounts for voice. Shared across your devices.',
       connectionTitle: 'Connection',
       timeoutTitle: 'Give up on a speech request after',
       timeoutDescription: "For endpoints and speech models.",

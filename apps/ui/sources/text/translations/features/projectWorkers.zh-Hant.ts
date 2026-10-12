@@ -80,6 +80,8 @@ export const projectWorkers: ProjectWorkersTranslations = {
     noCopyNeeded: '不需複製',
     runOn: ({ name }: { name: string }) => `執行 ${name} 於`,
     workersSection: '工作機',
+    offlineWorkers: ({ count }: { count: number }) => `${count} 台離線`,
+    offlineWorkersDetail: '暫時無法連線',
     poolsSection: '集區',
     workerSettings: '工作機設定…',
     workerSettingsDetail: '此檢出的預設',

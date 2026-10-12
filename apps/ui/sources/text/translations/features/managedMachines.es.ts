@@ -13,7 +13,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         noWorkDescription: "Según cómo factura cada servicio. Que no se ejecute nada significa ninguna sesión, script, terminal, servicio, configuración, ejecución de flujo de trabajo ni disparador esperándola.",
         noWorkDescriptionShort: "Según cómo factura cada servicio.",
         categoryHelp: {
-            local: "Detenerla libera CPU y memoria en el ordenador donde se ejecuta. El disco se conserva.",
+            local: "Detenerla libera CPU y memoria en la máquina donde se ejecuta. El disco se conserva.",
             runningOnly: "Detenidas, solo facturan el almacenamiento que se conserva.",
             stoppedBilled: "Detenerlas no bajaría la factura, así que siguen en marcha hasta que las elimines.",
             unknown: "Happier no adivina. Conserva la máquina hasta que decidas.",
@@ -101,7 +101,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             noControllerReason: "Las máquinas se crean desde uno de tus ordenadores con Happier. Configura este ordenador para empezar.",
             setUpThisComputer: "Configurar este ordenador",
             choosingCreate: "Eligiendo qué crear",
-            pageDescription: "Conecta un ordenador que ya tengas o deja que Happier cree uno por ti.",
+            pageDescription: "Conecta una máquina que ya tengas o deja que Happier cree una por ti.",
             joinsThisHome: "Se une a este Home",
             createPathSubtitle: "Happier la crea con tu cuenta",
             status: {
@@ -327,7 +327,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             presets: "Ajustes predefinidos",
             oneOff: "Máquina puntual…",
             oneOffHelp: "Elige ubicación, tamaño e imagen solo para esta",
-            connectComputer: "Conectar un ordenador…",
+            connectComputer: "Conectar una máquina…",
             connectComputerHelp: "Este ordenador, por SSH u otro ordenador",
         },
     },
@@ -441,7 +441,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveShort: "Mover…",
         moveHere: "Mover la gestión aquí",
         description: ({ provider }: { provider: string }) => `Iniciar, detener y eliminar se ejecutan en la máquina que tiene la cuenta de ${provider}.`,
-        fixedLocal: ({ controller }: { controller: string }) => `Esta máquina está almacenada en ${controller}. La gestión no se puede mover a otro ordenador.`,
+        fixedLocal: ({ controller }: { controller: string }) => `Esta máquina está almacenada en ${controller}. La gestión no se puede mover a otra máquina.`,
         pending: "Una acción del proveedor podría terminar después de mover la gestión. Los cargos podrían continuar.",
     },
     managedCleanup: {

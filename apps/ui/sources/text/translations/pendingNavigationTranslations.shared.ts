@@ -15,6 +15,7 @@ export const en = {
     sessionsWaiting: ({ count }: Count) => `${count} sessions are waiting`,
     go: 'Go',
     dismiss: 'Not now',
+    nothingWaiting: 'Nothing needs you right now',
 };
 
 

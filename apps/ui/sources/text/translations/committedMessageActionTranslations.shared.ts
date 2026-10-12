@@ -22,11 +22,11 @@ export const committedMessageActionTranslationsEnglish = { "en": {
             "shortcutPlaceholder": "/shortcut",
             "savedToLibrary": "Saved to Library",
             "savePromptHint": "Reuse it from the prompt library",
-            "copyHint": "Copy a message’s text.",
-            "forkHint": "Start a new session from a message.",
+            "copyHint": "The message’s text, ready to paste.",
+            "forkHint": "A new session that continues from that message.",
             "rollbackHint": "Return the workspace to how it was before a message.",
-            "pinHint": "Pin messages to come back to them. Pinned messages stay pinned.",
-            "savePromptSettingHint": "Keep a message you sent as a library prompt.",
+            "pinHint": "Keep messages in reach. Existing pins stay when this is off.",
+            "savePromptSettingHint": "Turn something you sent into a prompt you can reuse.",
             "pluginsHint": "Actions your plugins add under messages."
         }
     } };

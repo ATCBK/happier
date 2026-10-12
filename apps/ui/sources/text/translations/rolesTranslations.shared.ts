@@ -30,6 +30,7 @@ export type RolesTranslations = Readonly<{
         sourceYours: string;
         sourceShared: string;
         sourcePlugin: (params: Readonly<{ plugin: string }>) => string;
+        usedBySessions: (params: Readonly<{ count: number }>) => string;
         migrated: string;
         migratedNote: (params: Readonly<{ names: readonly string[] }>) => string;
         duplicate: string;
@@ -126,6 +127,8 @@ export type RolesTranslations = Readonly<{
         countAdded: (params: Readonly<{ count: number }>) => string;
         addNotes: string;
         refusal: Readonly<{
+            runtimeUnavailableTitle: string;
+            runtimeUnavailableBody: string;
             unenforceableTitle: string;
             unenforceableBody: string;
             restartRequiredTitle: string;
@@ -190,6 +193,7 @@ export const rolesTranslationsEnglish = { en: {
             sourceYours: 'Yours',
             sourceShared: 'Shared with you',
             sourcePlugin: ({ plugin }) => `From ${plugin}`,
+            usedBySessions: ({ count }) => (count === 1 ? 'used by 1 session' : `used by ${count} sessions`),
             migrated: 'from 0.2 sub-agents',
             migratedNote: ({ names }) => (names.length === 1 ? `${names[0]} came from your 0.2 sub-agents guidance: its description is now its instructions, its agent and model its engine.` : `${names.join(', ')} came from your 0.2 sub-agents guidance: each description is now the instructions, each agent and model the engine.`),
             nameTitle: 'Name',
@@ -254,6 +258,8 @@ export const rolesTranslationsEnglish = { en: {
         },
         session: {
             refusal: {
+                runtimeUnavailableTitle: 'Start the session to change its role',
+                runtimeUnavailableBody: 'This session is not serving role changes. Start or resume it, then choose the role again.',
                 unenforceableTitle: 'This agent can’t run hands-off',
                 unenforceableBody: 'The role is hands-off, and this session’s agent has no way to hold back its own file edits. Turn Hands-off off for the role, or start it in a new session on an agent that supports it.',
                 restartRequiredTitle: 'Restart the session to go hands-off',

@@ -11,7 +11,6 @@ export const en = {
     directOnDescription: 'Previews, live views and file transfers go straight between your devices when they can reach each other, and through Happier when they can’t.',
     directOffDescription: 'Everything goes through Happier. Nothing connects to your machines directly; on the same network this is a little slower.',
     serverDenied: 'Your Home’s server sends everything through Happier, so there’s nothing to choose here.',
-    machineSectionTitle: 'Connection',
     machineTitle: ({ machine }: MachineParams) => `Connect to ${machine}`,
     machineOptionDefault: 'Default',
     machineOptionDirect: 'Directly',

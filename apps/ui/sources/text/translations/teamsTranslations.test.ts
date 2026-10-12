@@ -10,6 +10,8 @@ import { teamsTranslations } from './teamsTranslations';
  * key (Japanese, Russian, Chinese) is still audited.
  */
 const COINCIDENTAL_TRANSLATIONS: Readonly<Record<string, readonly string[]>> = {
+    // Italian uses the established technical loanword "Directory" too.
+    'teams.authentication.directory.section': ['it'],
     'teams.authentication.directory.actions.section': ['fr'],
     'teams.title': ['de'],
     // "Team" is the German and Italian word for the Team section heading too.
@@ -18,6 +20,9 @@ const COINCIDENTAL_TRANSLATIONS: Readonly<Record<string, readonly string[]>> = {
     'teams.create.nameLabel': ['de'],
     'teams.groups.nameLabel': ['de'],
     'teams.invitations.byLink': ['de', 'pl'],
+    // French "invitation" and the Italian loanword "Directory" are the established words.
+    'teams.authentication.policy.admissionSegment.inviteOnly': ['fr'],
+    'teams.authentication.policy.admissionSegment.provisioned': ['it'],
     'teams.invitations.stateActive': ['fr'],
     'teams.members.personLabel': ['de'],
     'teams.tabs.invitations': ['fr'],
@@ -44,6 +49,16 @@ function isCoincidental(locale: string, key: string): boolean {
 }
 
 describe('teamsTranslations', () => {
+    it('uses cardinal forms for a single member, person, Group and Account', () => {
+        const { en } = teamsTranslations;
+        expect(en.teams.groups.memberCount({ count: 1 })).toBe('1 member');
+        expect(en.teams.groups.memberCount({ count: 2 })).toBe('2 members');
+        expect(en.teams.credentials.audience.memberCount({ count: 1 })).toBe('1 person');
+        expect(en.teams.credentials.audience.groupCount({ count: 1 })).toBe('1 Group');
+        expect(en.teams.credentials.create.poolAccounts({ count: 1 })).toBe('1 account');
+        expect(en.teams.directory.namesAndOthers({ names: 'Ada', count: 1 })).toBe('Ada and 1 other');
+        expect(en.teams.credentials.usage.sliceSummary({ requests: '1', tokens: '1', requestCount: 1, tokenCount: 1 })).toBe('1 request · 1 token');
+    });
     it('keeps every Team surface complete and localized in every supported locale', () => {
         const { en, ...localesByCode } = teamsTranslations;
         const locales = Object.entries(localesByCode).map(([code, root]) => ({ code, root }));

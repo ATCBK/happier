@@ -1,4 +1,7 @@
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
+import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
+import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
 import { machineSharing } from './features/machineSharing.en';
 import { managedMachines } from './features/managedMachines.en';
 import { projectWorkers } from './features/projectWorkers.en';
@@ -1650,10 +1653,13 @@ const enApprovals = {
   approve: 'Approve',
   reject: 'Reject',
   stopWaiting: 'Stop waiting',
+  waitingForYou: 'Waiting for your approval',
+  review: 'Review',
   loadError: 'Failed to load approval.',
   decisionError: 'Failed to update approval.',
   decisionAuthorityError:
     'This sign-in cannot approve requests. Sign in to this Home with your account recovery key, or approve from another device with an account sign-in.',
+  staleFailure: "This request is no longer current, so it wasn't executed. Review the latest request in Inbox.",
   technicalDetails: 'Technical details',
   unsafeDetailsTitle: 'These details cannot be shown safely',
   unsafeDetailsBody:
@@ -1691,6 +1697,7 @@ const enMemoryContext = {
     keyFactsDescription: 'Short and always loaded. Move detail into a topic to keep this list quick to read.',
     factsTitle: 'Facts',
     alwaysRemembered: 'Always remembered:',
+    searchable: 'Searchable:',
     factCount: ({ count }: { count: number }) => `${count} ${count === 1 ? 'fact' : 'facts'}`,
     topicsLabel: 'Topics:',
     showAll: ({ count }: { count: number }) => `Show all ${count}`,
@@ -1901,7 +1908,7 @@ const enPromptLibrary = {
       'Files exported next to SKILL.md, such as templates and checklists.',
     addFile: 'Add file',
     externalLinksDescription:
-      'Where this item is exported on your machines. Exports stay linked to the library.',
+        "Where this item was copied on your machines. Copies don't change when you edit the library.",
     manageExternalAssetsDescription:
       'Export it to a tool on a machine, or update an export.',
     templateSection: 'Template',
@@ -1922,7 +1929,7 @@ const enPromptLibrary = {
     supportingFileDescription: ({ skill }: { skill: string }) =>
       `A file of ${skill}, exported next to its SKILL.md.`,
     foldersPageDescription:
-      'Group prompts and skills so they are easier to find.',
+      'How your prompts and skills are filed. The same folders hold everything in Artifacts.',
     foldersSectionDescription:
       'Deleting a folder keeps its items; they just leave the folder.',
     profileStacksDescription:
@@ -1984,8 +1991,6 @@ const enPromptLibrary = {
   templatesSubtitle: 'Create and manage /slash templates',
   newTemplate: 'New template',
   newTemplateSubtitle: 'Create a reusable slash template',
-  stacks: 'System prompt additions',
-  stacksSubtitle: 'Attach prompts and skills to coding, voice, and profiles',
   externalAssets: 'External assets',
   externalAssetsSubtitle:
     'Import skills and prompt assets from connected machines',
@@ -2950,7 +2955,7 @@ const enCommon = {
   files: 'Files',
   path: 'Path',
   fileViewer: 'File Viewer',
-  loading: 'Loading...',
+  loading: 'Loading…',
   none: '—',
   notProvided: 'Not provided',
   unavailable: 'Unavailable',
@@ -2996,6 +3001,7 @@ const enCommon = {
 const enUi = {
   resizableDockedPane: {
     resizeA11y: 'Resize panel',
+    resizeValue: ({ px }: { px: number }) => `${px} px`,
     resizeHint: 'Use keyboard arrows or adjustment actions to resize',
   },
   modalPane: {
@@ -3010,6 +3016,11 @@ const enUi = {
     collectionEmpty: 'None',
     error: 'Something went wrong',
     moreActions: 'More actions',
+    actionFailed: "That didn't go through. Nothing changed.",
+    actionUnavailable: "This isn't available right now. Try again in a moment.",
+    actionDenied: "This isn't allowed here.",
+    actionStale: "This page is out of date. Reopen it and try again.",
+    actionNoAnswer: "No answer came back in time, so it may still finish.",
   },
 };
 
@@ -3060,6 +3071,7 @@ encryptedUnavailable: 'Encrypted details unavailable',
   permissionRequired: 'Permission required',
   activeNow: 'Active now',
   unknown: 'Status unknown',
+  unknownState: 'Unknown',
 };
 
 const enConnectionStatus = {
@@ -3147,6 +3159,7 @@ const enConnect = {
     signInFirst: 'Sign in first',
   },
   restoreAccount: 'Restore account',
+  signInWithKeySubmit: 'Sign in',
   enterSecretKey: 'Please enter a recovery key',
   invalidSecretKey: 'Invalid recovery key. Please check and try again.',
   enterUrlManually: 'Enter URL manually',
@@ -3227,7 +3240,7 @@ const enConnect = {
     `We found an existing Happier account linked to ${provider}. To finish signing in on this device, restore your account key using the QR code or your recovery key.`,
   restoreWithSecretKeyInstead: 'Restore with recovery key instead',
   restoreWithSecretKeyDescription:
-    'Enter your recovery key to restore access to your account.',
+    'Your key stays on this device. It only signs a one-time check.',
   lostAccessLink: 'Lost access?',
   lostAccessBody:
     'If you no longer have any device linked to this account and you lost your recovery key, you can reset your account using your identity provider. This creates a new Happier account. Your old encrypted history cannot be recovered.',
@@ -3288,8 +3301,9 @@ const enBugReports = {
       includeSubtitle:
         'Attach sanitized debugging artifacts for faster diagnosis.',
       disabledByServerSuffix: ' (disabled by server)',
+      chooseIncluded: 'Choose what’s included',
       pasteDoctorJson: {
-        title: 'CLI doctor JSON (optional)',
+        title: 'CLI doctor JSON',
         subtitle:
           'If your machine is unreachable from the UI, run happier doctor --json on your computer and paste it here.',
         placeholder: '{ "capturedAt": "...", ... }',
@@ -3330,21 +3344,25 @@ const enBugReports = {
       title: 'Describe the issue',
       subtitle:
         'Provide enough detail so we can reproduce and diagnose quickly.',
-      titleLabel: 'Title (required)',
+      titleLabel: 'Title',
       titlePlaceholder: 'Short issue title',
-      githubUsernameLabel: 'GitHub username (optional)',
+      githubUsernameLabel: 'GitHub username',
       githubUsernamePlaceholder: 'Used as contact info in the issue body',
-      summaryLabel: 'Concise summary (required)',
+      summaryLabel: 'Concise summary',
       summaryPlaceholder: 'One-paragraph summary',
-      currentBehaviorLabel: 'Current behavior (optional)',
+      currentBehaviorLabel: 'Current behavior',
       currentBehaviorPlaceholder: 'What actually happens?',
-      expectedBehaviorLabel: 'Expected behavior (optional)',
+      expectedBehaviorLabel: 'Expected behavior',
       expectedBehaviorPlaceholder: 'What should happen instead?',
-      reproductionStepsLabel: 'Reproduction steps (optional)',
+      reproductionStepsLabel: 'Reproduction steps',
       reproductionStepsPlaceholder:
         '1. Open Happier\n2. Start a session\n3. ...',
-      whatChangedLabel: 'What changed recently (optional)',
+      whatChangedLabel: 'What changed recently',
       whatChangedPlaceholder: 'Updates, config changes, new setup steps...',
+      moreDetailTitle: 'More detail',
+      moreDetailDescription: 'Optional. The more you share, the faster we can reproduce it.',
+      addMoreDetail: 'Add more detail',
+      filledCount: ({ count }: { count: number }) => `${count} added`,
     },
     similarIssues: {
       title: 'Possible duplicates',
@@ -3380,13 +3398,13 @@ const enBugReports = {
     environment: {
       description:
         'Filled in from this device. Correct anything that is wrong.',
-      title: 'Environment (editable)',
+      title: 'Environment',
       appVersionLabel: 'App version',
       platformLabel: 'Platform',
       osVersionLabel: 'OS version',
       deviceModelLabel: 'Device model',
       serverUrlLabel: 'Server URL',
-      serverVersionLabel: 'Server version (optional)',
+      serverVersionLabel: 'Server version',
       deploymentTypeLabel: 'Deployment type',
       deploymentType: {
         cloud: 'Cloud',
@@ -3400,6 +3418,15 @@ const enBugReports = {
         'I understand diagnostics may include technical metadata',
       understandSubtitle:
         'Do not include passwords, access tokens, or private keys.',
+    },
+    validation: {
+      titleTooShort: ({ min }: { min: number }) => `Title must be at least ${min} characters.`,
+      summaryTooShort: ({ min }: { min: number }) => `Summary must be at least ${min} characters.`,
+      privacyRequired: 'Privacy consent is required when including diagnostics.',
+      missingTitle: 'Missing title',
+      incompleteReport: 'Incomplete report',
+      privacyRequiredTitle: 'Privacy consent required',
+      privacyRequiredMessage: 'Please confirm the privacy notice to include diagnostics and logs.',
     },
     submit: {
       requiredFieldsHint: 'Complete the required fields to enable submission.',
@@ -3765,11 +3792,13 @@ const enSettings = {
 
   // Main settings hub category groups
   profileAndAccount: 'Profile & account',
-  aiAndAgents: 'AI & agents',
+  agentsGroup: 'Agents',
+  toolsAndModels: 'Tools & models',
   sessionsBehavior: 'Sessions & behavior',
   general: 'General',
   filesAndSourceControl: 'Files & source control',
   system: 'System',
+  pluginPages: 'Plugins',
 
   // Renamed / promoted items
   sessions: 'Sessions',
@@ -4498,6 +4527,7 @@ const enSystemStatus = {
   },
   machines: {
     none: 'No machines',
+    calmOnline: 'Online · no issues',
     status: ({ status }: { status: string }) => `Status: ${status}`,
   },
   machine: {
@@ -4508,14 +4538,13 @@ const enSystemStatus = {
       loading: 'Fetching daemon relay/account…',
       invalid: 'Could not read doctor snapshot from machine',
     },
-    daemonAttributionUnknown: 'Daemon relay/account: unknown',
     daemonAttribution: ({
-      serverUrl,
-      accountId,
+      home,
+      account,
     }: {
-      serverUrl: string;
-      accountId: string;
-    }) => `Daemon: ${serverUrl} • ${accountId}`,
+      home: string;
+      account: string;
+    }) => `Daemon: ${home} • ${account}`,
     daemonAttributionAge: ({ age }: { age: string }) => `Last checked: ${age}`,
     cliVersionBullet: ({ version }: { version: string }) => ` • v${version}`,
   },
@@ -4546,9 +4575,9 @@ const enDiagnosis = {
   overview: {
     activeServer: 'Active Home',
     account: 'Account',
-    onlineMachines: 'Online machines (active server)',
+    onlineMachines: 'Online machines (active Home)',
     cachedAttribution: ({ count }: { count: number }) =>
-      `${count} cached doctor snapshot(s) available`,
+      `${count} cached doctor ${plural({ count, singular: 'snapshot', plural: 'snapshots' })} available`,
   },
   actions: {
     run: 'Run diagnosis',
@@ -4564,7 +4593,7 @@ const enDiagnosis = {
     ok: 'Pasted doctor JSON looks valid.',
     helper:
       'Optional: paste doctor JSON to diagnose account/server mismatches when your machine is unreachable.',
-    error: ({ error }: { error: string }) => `Invalid doctor JSON: ${error}`,
+    error: ({ error }: { error: string }) => `${error}`,
   },
   machine: {
     invalidDoctorSnapshot: 'Machine returned an invalid doctor snapshot',
@@ -4674,7 +4703,17 @@ const enDiagnosis = {
 
 const enConnectedServices = {
   purposeTargets: {
+    serviceUnavailable: "This service is unavailable. Refresh the account list.",
+    targetMissing: "This target is no longer available. Choose another account or pool.",
+    accountReconnect: "Sign in again to use this account.",
+    accountUnavailable: "This account is not ready. Review its settings and sign-in.",
+    poolEmpty: "Add an account to this pool.",
+    poolNeedsActiveAccount: "Choose an enabled, signed-in account in this pool.",
+    poolAccounts: ({ count }: { count: number }) => count === 1 ? '1 account' : `${count} accounts`,
+    poolAccountsInUse: ({ accounts, account }: { accounts: string; account: string }) => `${accounts} · using ${account}`,
     requiredPrompt: 'Choose an account or group',
+    notSet: 'Not set',
+    ownSignIn: ({ agent }: { agent: string }) => `${agent}’s own sign-in`,
     legacyUnavailable: 'This server cannot show connected-account targets yet',
   },
   fallbackName: 'Connected service',
@@ -4698,14 +4737,11 @@ const enConnectedServices = {
     connectedCountLabel: ({ count }: { count: number }) => `${count} connected`,
     runsThrough: ({ source }: { source: string }) => `Runs through ${source}`,
     runsThroughOwnSignIn: 'Runs through its own sign-in',
-    nowVia: ({ source }: { source: string }) => `Now via ${source}`,
-    changePending: 'Change pending',
+    popoverTitle: 'Runs through',
+    popoverDescription: ({ agent }: { agent: string }) => `Where ${agent} gets its models for this session.`,
+    nextVia: ({ source }: { source: string }) => `Next via ${source}`,
+    armedNote: ({ source }: { source: string }) => `Switches to ${source} with your next message. Nothing is sent until then.`,
     worksWith: ({ agents }: { agents: string }) => `Works with ${agents}`,
-    now: 'Now',
-    next: 'Next',
-    switchesOnRestart: ({ agent, source }: { agent: string; source: string }) => `${agent} switches when it restarts. Until then this session keeps running through ${source}.`,
-    restartAgent: ({ agent }: { agent: string }) => `Restart ${agent}`,
-    keepCurrent: 'Keep current',
   },
   authSwitch: {
     activeTurnDisabled:
@@ -5044,6 +5080,21 @@ const enConnectedServices = {
     activeMemberA11y: 'Active account',
     setActiveA11y: 'Set active account',
     resets: {
+      remainingCount: ({ count }: { count: number }) => `Saved resets: ${count}`,
+      appliesTo: ({ limits }: { limits: string }) => `Applies to: ${limits}`,
+      fiveHourLimit: "5-hour limit",
+      weeklyLimit: "Weekly limit",
+      unavailableReasons: {
+          paused: "Paused",
+          cooldown: "Waiting for cooldown",
+          ineligible: "Not eligible",
+          not_selected: "Not selected",
+          provider_unavailable: "Provider unavailable",
+          not_started: "Not started yet",
+          expired: "Expired",
+          consumed: "Already used",
+          unknown: "Unavailable now",
+      },
       now: 'now',
       inDays: ({ days }: { days: number }) =>
         days === 1 ? 'in 1 day' : `in ${days} days`,
@@ -5485,16 +5536,16 @@ const enConnectedServices = {
     removeGroupTitle: 'Remove',
   },
   authModal: {
-    nativeAuthTitle: 'Backend native auth',
-    nativeAuthSubtitle: 'Use your local CLI login / API keys',
+    nativeAuthTitle: 'Its own sign-in',
+    nativeAuthSubtitle: 'The CLI login or API keys already on this machine',
     groupSubtitle: 'Use a connected account group',
     groupReadySubtitle: 'Use the active member, with fallback available',
     groupExhaustedSubtitle: 'All enabled members are waiting for quota',
     groupNeedsMembersSubtitle: 'Add or enable a member before using this group',
     connectedServicesTitle: 'Use connected services',
     connectedServicesSubtitle: 'Fetch and materialize from Happier cloud',
-    notConnectedTitle: 'No connected services',
-    notConnectedSubtitle: 'Tap to open settings',
+    notConnectedTitle: 'No account connected',
+    notConnectedSubtitle: 'Connect one in settings',
     profileLabel: 'Profile',
   },
 };
@@ -5599,7 +5650,7 @@ const enSettingsAttachments = {
 
 const enSettingsSourceControl = {
   page: {
-    description: 'How commits, pushes, and diffs work in your sessions.',
+    description: 'How commits, pushes and diffs work in your sessions, and how Happier explains changes.',
     commits: {
       title: 'Commits',
       description: 'How changes made in a session become commits.',
@@ -6262,7 +6313,6 @@ const enSettingsNotifications = {
   },
   push: {
     title: 'Push notifications',
-    currentHome: 'Current Home',
     footer: ({ home }: { home: string }) =>
       `Push consent is synced for ${home}. Device notification permissions and overrides apply across this device.`,
     enabledSubtitle: ({ home }: { home: string }) =>
@@ -6551,7 +6601,6 @@ const enSecretsSettings = secretsSettingsTranslations.en;
 const enSettingsProviders = {
   title: 'Providers',
   entrySubtitle: 'Connect cloud and local model sources',
-  detailTitle: 'Provider connection',
   configuredTitle: 'Your providers',
   configuredFooter:
     'Models from enabled providers appear in compatible agent model pickers.',
@@ -6604,7 +6653,7 @@ const enSettingsProviders = {
       'Services found on this machine. Where models run depends on the service.',
     detected: 'Detected',
     possible: 'Possible service',
-    detectedAtPort: ({ port }: { port: string }) => `Detected · Port ${port}`,
+    detectedAtPort: ({ port }: { port: string }) => `Port ${port}`,
     possibleAtPort: ({ provider, port }: { provider: string; port: string }) =>
       `Possible ${provider} service · Port ${port}`,
     addConnectionTitle: 'Add another local connection',
@@ -6660,9 +6709,7 @@ const enSettingsProviders = {
     verified: 'Verified',
     experimental: 'Experimental',
     incompatible: 'Incompatible',
-    verifiedDescription: 'Tested with this agent integration',
     experimentalDescription: 'May work, but needs review before first use',
-    incompatibleDescription: 'This agent cannot use the connection safely',
     reasons: {
       noCompatibleProtocol:
         'No supported API protocol overlaps with this agent.',
@@ -6864,7 +6911,7 @@ const enSettingsProviders = {
     modelsPathPlaceholder: '/v1/models',
     credentialsTitle: 'Credentials',
     credentialsFooter:
-      'Select a Saved Secret. Never paste an API key into the URL or headers.',
+      'Paste the key below; it is kept as a Saved Secret. Never put an API key in the URL or headers.',
     requiresApiKey: 'Requires an API key',
     requiresApiKeyYes: 'Use a Saved Secret for requests',
     requiresApiKeyNo: 'Connect without credentials',
@@ -7218,13 +7265,23 @@ const enSettingsAgents = {
     usedByNewSessions: 'used by new sessions',
     sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `Used when a new session starts with ${agent}. Saved to your account.`,
     setupTitle: 'Setup and status',
-    setupNoComputer: 'No computer selected. Choose one to check the CLI or sign in.',
+    setupNoComputer: 'No machine selected. Choose one to check the CLI or sign in.',
     modelsDefaultTag: 'Default',
+    modelsLegendFavorite: 'Pinned to the top',
+    modelsLegendShown: 'Shown in the picker',
+    modelsLegendDefault: 'New sessions start here',
     modelsDescription: ({ agent }: { agent: string }) => `What ${agent}’s model picker shows.`,
+    modelsVisibilitySummary: ({ shown, hidden }: { shown: number; hidden: number }) => hidden > 0 ? `${shown} shown · ${hidden} hidden` : `${shown} shown`,
+    modelsSourceHiddenDescription: ({ count }: { count: number }) => `Hidden from the picker · ${count} ${count === 1 ? 'model' : 'models'}`,
+    modelsBrowseSource: ({ count }: { count: number }) => `Browse ${count} ${count === 1 ? 'model' : 'models'}`,
+    modelsStaysVisibleFavorite: 'Stays visible as a favorite',
+    modelsStaysVisibleDefault: 'Stays visible as the default',
     modelsNativeDescription: ({ agent }: { agent: string }) => `${agent}’s own models. Always in the picker.`,
     modelsNativeFallbackTitle: 'Agent models',
     modelsNativeFallbackDescription: 'The agent’s own models. Always in the picker.',
     modelsSourceShownDescription: 'Shown in every agent that can run it.',
+    modelsListsChecked: ({ machine, time }: { machine: string; time: string }) => `Lists last checked on ${machine} at ${time}`,
+    modelsNeedsComputer: 'Needs a machine to confirm',
     machineScopeLabel: 'Setup and status on',
     readinessDescription: 'Sign-in and CLI on the machine above.',
     sessionDefaultsAccountDescription: ({ agent }: { agent: string }) =>
@@ -7836,6 +7893,10 @@ const enSettingsAppearance = {
   pageDescription: 'Theme, text, layout and motion.',
   themesSummary: ({ light, dark }: { light: string; dark: string }) =>
     `Light uses ${light} · Dark uses ${dark}`,
+  materialsAndMotion: 'Materials and motion',
+  widgetsAndSurfaces: 'Widgets and surfaces',
+  widgetsAndSurfacesDescription: 'How widgets are framed and how deep surfaces look on this device.',
+  momentsSummary: ({ on, total }: { on: number; total: number }) => `${on} of ${total} on`,
   themesCount: ({ builtIn, custom }: { builtIn: number; custom: number }) =>
     `${builtIn} built-in${custom > 0 ? ` · ${custom} custom` : ''}`,
   textSizeGlyph: 'A',
@@ -8270,6 +8331,7 @@ const enErrors = {
   homeAddressNotConfirmed: ({ home }: { home: string }) =>
     `Sign-in to ${home} stopped because its address was not confirmed.`,
   failedToForkSession: 'Failed to fork session',
+  connectedAccountsUnavailable: 'Your connected accounts aren’t available right now. Check your connection and try again.',
   daemonUnavailableTitle: 'Daemon unavailable',
   daemonUnavailableBody:
     'Happier can’t reach the daemon on this machine. It may be offline, still starting, or disconnected from the server.',
@@ -8352,6 +8414,7 @@ const enErrors = {
   codexAcpNotInstalledMessage:
     'To use the Codex ACP experiment, install codex-acp on the target machine (Machine Details → Installables) or disable the experiment.',
 
+  sourceControlUnavailableTitle: 'Couldn’t read source control',
   sourceControlUnavailableForSession:
     'Source control is unavailable for this session.',
 };
@@ -8576,6 +8639,10 @@ const enNewSession = {
   launchStillPendingTitle: 'Launch still in progress',
   launchStillPendingBody:
     'Happier hasn’t confirmed the new session yet. Your launch request is still saved. Retry to continue the same launch without creating a duplicate session.',
+  initialInputNotConfirmedTitle: 'Check your first message',
+  initialInputRejectedTitle: 'Your first message wasn’t sent',
+  initialInputNotConfirmed:
+    'Your session was created, but Happier couldn’t confirm your first message was accepted. Your draft is kept. Check the session before sending it again.',
   connectedServiceSwitchUnavailable: {
     startFreshAction: 'Start fresh under the new account',
   },
@@ -9315,7 +9382,7 @@ const enSession = {
       body: 'This inactive session has queued input. Resume it when you are ready.',
     },
     queued_offline: {
-      title: 'Message waiting for manual resume',
+      title: 'Machine offline · message queued',
       body: 'It will stay queued until you resume this session.',
     },
     actions: {
@@ -9395,6 +9462,7 @@ const enSession = {
       `${agent}. Selected for your next message.`,
     detailTitle: ({ agent }: { agent: string }) => `Continue with ${agent}`,
     sendLabel: ({ agent }: { agent: string }) => `Continue with ${agent}`,
+    routeSendLabel: ({ source }: { source: string }) => `Continue via ${source}`,
     detailDescription:
       'Your recent conversation carries over as text; images and files don’t. Nothing is sent until your next message.',
     detailDescriptionEmpty:
@@ -9813,9 +9881,9 @@ const enSession = {
 
   pendingMessages: {
     title: 'Pending messages',
-    indicator: ({ count }: { count: number }) => `Pending (${count})`,
+    indicator: ({ count }: { count: number }) => `${count} queued`,
     badgeLabel: ({ count }: { count: number }) =>
-      count > 0 ? `Pending (+${count})` : 'Pending',
+      count > 0 ? `Queued (+${count})` : 'Queued',
     deliveryStatus: {
       blocked: 'Blocked',
       delivering: 'Delivering',
@@ -9850,6 +9918,7 @@ const enSession = {
       unknown: 'Delivery status needs review',
     },
     admissionRejected: {
+      storageUnavailable: 'Your Home could not save this message. Nothing was sent. Your draft is kept; try sending again.',
       invalid: 'The message could not be accepted as written.',
       archived: 'This session is archived and no longer accepts input.',
       unauthorized: 'You don’t have permission to send to this session.',
@@ -9858,7 +9927,7 @@ const enSession = {
       targetUnavailable:
         'The selected agent conversation is no longer available. Nothing was sent.',
       targetUpdateRequired:
-        'Sending to an agent conversation needs an updated Home and computer. Nothing was sent.',
+        'Sending to an agent conversation needs an updated Home and machine. Nothing was sent.',
       cancelled: 'The send was cancelled before it was accepted.',
       untrustedAssertion: 'The message’s origin could not be verified.',
       idempotencyConflict:
@@ -10067,7 +10136,9 @@ const enUniversalSearch = {
   scopeFilterLabel: 'Home',
   commitsUpdateRequired: 'Update Happier on this machine to search commits.',
   moreResultsAvailable: 'More results are available. Refine your search.',
-  sessionInventoryLoading: 'Loading more sessions…',
+  sessionInventoryLoading: 'Still loading sessions…',
+  searchingGroup: 'Searching…',
+  groupFailed: ({ group }: { group: string }) => `Couldn’t search ${group}. Type again to retry.`,
   sessionInventoryIncomplete:
     'Some Sessions could not be loaded. Clear the search and try again.',
   sections: {
@@ -10133,6 +10204,7 @@ const enCommandPalette = {
     move: 'Move',
     open: 'Open',
     close: 'Close',
+    openAtLine: 'Open at the line',
   },
 };
 
@@ -10956,6 +11028,11 @@ const enAgentInput = {
   chipPicker: {
     selectedOptionAccessibilityLabel: ({ option }: { option: string }) =>
       `${option}. Selected.`,
+    agentsTitle: 'Agents',
+  },
+  chipRail: {
+    accessibilityLabel: 'Composer controls',
+    moreControlsHint: 'More controls are available. Use the left and right arrow keys to move through them.',
   },
   // Section headers for the composer suggestion picker. One per suggestion
   // kind; the registry maps kind -> key, mirroring markdown.slash.groups.*.
@@ -11103,7 +11180,7 @@ const enAgentInput = {
     searchSource: ({ source }: { source: string }) => `Search ${source}…`,
     nativeSubagentNote: 'Native subagent models follow Agent definitions.',
     unavailable:
-      'Model discovery is unavailable for this provider on this machine.',
+      'Couldn’t list models on this machine.',
     extendedContextToggleLabel: '1M context',
     extendedContextToggleDescription:
       'Use the extended 1M-token context window for this model.',
@@ -12083,6 +12160,7 @@ const enFiles = {
   },
   fileEmpty: 'File is empty',
   noChanges: 'No changes to display',
+  emptyFile: 'Empty file',
   sourceControlOperations: {
     title: 'Source control',
     actorThisSession: 'this session',
@@ -12386,6 +12464,7 @@ const enLocalServices = {
     offline: 'This machine is offline',
     offlineReason: 'Its dev servers appear here again when it’s back.',
     checkAgain: 'Check again',
+    addService: 'Add a service',
     sectionRunning: 'Running',
     sectionReady: 'Ready to start',
     sectionElsewhereOn: ({ machine }: { machine: string }) =>
@@ -12416,7 +12495,6 @@ const enLocalServices = {
     startedByOn: ({ name, machine }: { name: string; machine: string }) => `Started by ${name} on ${machine}`,
     waitingAddress: 'Started. Waiting for an address.',
     noAddress: 'No address',
-    notStarted: 'not started',
     failed: 'Service could not start.',
   },
   session: {
@@ -12513,9 +12591,9 @@ const enLocalServices = {
     ttlPromptTitle: 'Link lifetime',
     ttlPromptMessage: ({ service }: { service: string }) =>
       `How long should the public link to "${service}" stay valid?`,
-    ttlOptionMinutes: ({ count }: { count: number }) => `${count} minutes`,
-    ttlOptionHours: ({ count }: { count: number }) => `${count} hours`,
-    ttlOptionDays: ({ count }: { count: number }) => `${count} days`,
+    ttlOptionMinutes: ({ count }: { count: number }) => (count === 1 ? `${count} minute` : `${count} minutes`),
+    ttlOptionHours: ({ count }: { count: number }) => (count === 1 ? `${count} hour` : `${count} hours`),
+    ttlOptionDays: ({ count }: { count: number }) => (count === 1 ? `${count} day` : `${count} days`),
     disabledPolicySubtitle: 'Public previews are disabled for this service.',
     disabledUnsupportedModeSubtitle:
       'Happier creates secret-link public previews only right now.',
@@ -12553,6 +12631,7 @@ const enLocalServices = {
         'The server has no signing key for machine tunnels.',
     },
     createActionA11y: 'Create public preview link',
+    shareCta: 'Share a link',
     revokeActionA11y: 'Revoke public preview link',
     confirmTitle: 'Share a link to this service?',
     confirmMessage: ({ service }: { service: string }) =>
@@ -12577,7 +12656,7 @@ const enLocalServices = {
   },
   actions: {
     terminateDetectedA11y: 'Terminate detected local service',
-    forgetA11y: 'Hide this service from the list',
+    forgetA11y: 'Hide from the list',
     hiddenNotice: 'Service hidden',
     terminatePidOnlyConfidence:
       'Terminate confidence: PID-only identity; confirmation required',
@@ -13204,7 +13283,6 @@ const enSettingsActions = {
   detailSearchPlaceholder: 'Search surfaces',
   noResults: 'No actions match your current search.',
   noTargetsMatch: 'No surfaces match your current search.',
-  noDescription: 'No description available yet.',
   requireApproval: 'Require approval',
   invalidActionTitle: 'Action not found',
   invalidActionSubtitle: 'This action is no longer available in this build.',
@@ -13254,71 +13332,66 @@ const enSettingsActions = {
       none: 'None allowed',
       selected: ({ count }: { count: number }) => `${count} selected`,
     },
-    title: 'AI session spawn policy',
+    title: 'When an agent starts a session',
     footer:
-      'These controls apply only when an assistant inside a Happier session creates another session. Inherited parent settings remain allowed; denied items reject explicit overrides with a clear error.',
+      'What an agent working in a session may choose when it starts another one. Anything it doesn’t choose comes from its own session; a choice turned off here is refused.',
     toggles: {
       allowCustomDirectory: {
-        title: 'Custom directory',
-        subtitle:
-          'Allow the assistant to choose a different working directory.',
+        title: 'Working directory',
+        subtitle: 'Work in another folder than its own session.',
       },
       allowCrossMachine: {
-        title: 'Cross-machine targets',
-        subtitle: 'Allow creation on another available machine.',
+        title: 'Another machine',
+        subtitle: 'Start it on another of your machines.',
       },
       allowBackendTargetOverride: {
-        title: 'Backend target',
-        subtitle: 'Allow choosing a different agent or backend target.',
+        title: 'Agent',
+        subtitle: 'Use a different agent, such as Codex instead of Claude.',
       },
       allowModelOverride: {
         title: 'Model',
-        subtitle:
-          'Allow choosing a model instead of inheriting the parent model.',
+        subtitle: 'Pick a model instead of using its own session’s.',
       },
       allowPermissionModeOverride: {
-        title: 'Permission mode',
-        subtitle:
-          'Allow lower or equal permission overrides. Escalation is still rejected.',
+        title: 'Permissions',
+        subtitle: 'Choose the same or stricter permissions, never looser.',
       },
       allowAgentModeOverride: {
-        title: 'Agent mode',
-        subtitle: 'Allow choosing an agent/session mode.',
+        title: 'Mode',
+        subtitle: 'Start in another mode, such as Plan.',
       },
       allowConfigOptionOverrides: {
-        title: 'Config options',
-        subtitle:
-          'Allow provider options such as thinking effort and workflows.',
+        title: 'Agent options',
+        subtitle: 'Set options such as thinking effort.',
       },
       allowProfileOverride: {
-        title: 'Profile',
-        subtitle:
-          'Allow selecting a profile by id without exposing profile secrets.',
+        title: 'Launch profile',
+        subtitle: 'Use one of your launch profiles; its secrets stay hidden from the agent.',
       },
       allowEnvironmentVariables: {
         title: 'Environment variables',
-        subtitle: 'Allow explicit environment variables on new sessions.',
+        subtitle: 'Add environment variables to the new session.',
       },
       allowConnectedServicesOverride: {
         title: 'Connected services',
-        subtitle: 'Allow selecting connected-service bindings by reference.',
+        subtitle: 'Choose which of your connected accounts it uses.',
       },
       allowMcpSelectionOverride: {
-        title: 'MCP selection',
-        subtitle: 'Allow overriding inherited MCP server selection.',
+        title: 'MCP servers',
+        subtitle: 'Choose which MCP servers it gets.',
       },
       allowTranscriptStorageOverride: {
         title: 'Transcript storage',
-        subtitle: 'Allow choosing a compatible transcript storage mode.',
+        subtitle: 'Choose where its transcript is kept.',
       },
     },
     permissionCeiling: {
-      title: 'Permission ceiling',
-      subtitle: 'Optional extra ceiling below the caller permission.',
+      title: 'Permission limit',
+      subtitle: 'The most a started session may do, within its own session’s permissions.',
       options: {
         inherit: {
-          title: 'No extra ceiling',
-          subtitle: 'Use the caller permission as the only ceiling.',
+          title: 'No extra limit',
+          subtitle: 'Up to its own session’s permissions.',
         },
         default: {
           title: 'Default',
@@ -13352,6 +13425,7 @@ const enSettingsActions = {
     },
   },
   status: {
+    ...actionSettingsResourcesTranslations.en.status,
     allowed: ({ count }: { count: number }) => `${count} allowed`,
     askFirst: ({ count }: { count: number }) => `${count} ask first`,
     off: ({ count }: { count: number }) => `${count} off`,
@@ -13367,7 +13441,9 @@ const enSettingsActions = {
     voice: 'Voice',
     integrations: 'Integrations',
   },
+  facts: actionSettingsResourcesTranslations.en.facts,
   families: {
+    resources: actionSettingsResourcesTranslations.en.family,
     browser: {
       title: 'Browser',
     },
@@ -13502,7 +13578,7 @@ const enWorkspaceSync = {
       'Changes on linked machines can become visible to agents on the others. Conflicting versions need review; use separate worktrees when you want isolation.',
   },
   footer:
-    'Status comes from the computer managing this relationship. Changes appear only after that computer confirms them.',
+    'Status comes from the machine managing this relationship. Changes appear only after that machine confirms them.',
   legacyRecovery: {
     title: 'Retired workspace sync data',
     footer:
@@ -13604,15 +13680,15 @@ const enWorkspaceSync = {
     conflictNeedsAttention:
       'This conflict changed. Refresh it before choosing a version.',
     updateRequired:
-      'Update Happier on the source computer before trying this workspace handoff again. Other session and computer actions are still available.',
+      'Update Happier on the source machine before trying this workspace handoff again. Other session and machine actions are still available.',
     needsAttention:
       'Workspace sync needs attention. Refresh its status, then try again.',
   },
   start: {
     blocked: {
-      targetMachine: 'Choose a destination computer to continue.',
+      targetMachine: 'Choose a destination machine to continue.',
       targetMachineOffline:
-        'That computer is unavailable right now. Reconnect it, then try again.',
+        'That machine is unavailable right now. Reconnect it, then try again.',
       relationshipUnavailable:
         'That workspace sync no longer covers these two folders. Choose another workspace option.',
       sourceFolder:
@@ -14204,22 +14280,24 @@ const enSettingsSession = {
     },
     messageActions: {
       groupTitle: 'Message actions',
+      selectionTitle: 'Selected messages',
+      selectionDescription: 'What happens to the messages you pick with Select.',
       groupFooter:
         'Choose which actions appear under each message. An action that is off leaves the row and the long-press menu.',
       selectionEnabled: {
         title: 'Select',
         subtitle:
-          'Show a Select icon under messages to bulk-copy or forward them',
+          'Pick several messages to copy or send them together.',
       },
       sendToSessionEnabled: {
-        title: 'Enable Send to session',
+        title: 'Send to session',
         subtitle:
-          'Show a bulk Send action that appends selected messages to another session draft',
+          'Adds the messages you picked to another session’s draft.',
       },
       template: {
         title: 'Send to session template',
         subtitle:
-          'Use {{MESSAGES}}, {{SELECTED_COUNT}}, and {{SOURCE_SESSION_NAME}} as placeholders',
+          'How the sent messages read. Use {{MESSAGES}}, {{SELECTED_COUNT}} and {{SOURCE_SESSION_NAME}}.',
         placeholder: '{{MESSAGES}}',
         warningMissingPlaceholder:
           'Tip: add {{MESSAGES}} to control where your selected messages appear',
@@ -14238,6 +14316,13 @@ const enSettingsSession = {
       turnsSubtitle: 'Group messages into user/assistant turns.',
     },
     showToolCallsTitle: 'Show tool calls',
+    agentHtmlNetworkPolicy: 'Network for agent HTML',
+    agentHtmlNetworkAllowed: 'Allowed',
+    agentHtmlNetworkAsk: 'Ask',
+    agentHtmlNetworkOff: 'Off',
+    agentHtmlNetworkAllowedSubtitle: 'New agent visuals use the network they declare, without asking.',
+    agentHtmlNetworkAskSubtitle: 'You approve each new agent visual that wants the network.',
+    agentHtmlNetworkOffSubtitle: 'New agent visuals run without network access.',
     showToolCallsSubtitle: "Default for sessions without their own choice. Bots hide them by default.",
     toolCallsGroupTitle: 'Group tool calls',
     toolCallsGroupSubtitle:
@@ -14390,7 +14475,6 @@ const enSettingsSession = {
       safeYolo: 'Auto',
       yolo: 'Yolo',
     },
-    backendFooter: 'Used when this agent starts a new session.',
     defaultPermissionModeTitle: 'Default permission mode',
     promptSurface: {
       composerTitle: 'Near composer (recommended)',
@@ -14740,54 +14824,52 @@ const enSettingsVoice = {
     sectionTitle: 'History',
     sectionFooter:
       'Review or remove transcripts from targetless and Global Voice conversations.',
-    pageDescription:
-      'Transcripts from Global Voice and conversations started outside a session.',
+    pageDescription: 'Conversations you had with Voice outside a session.',
     entryTitle: 'Voice history',
     entrySubtitle: 'Search, export or clear past voice conversations.',
     searchTitle: 'Search loaded history',
     searchFooter:
       'Search runs on the Voice messages already decrypted on this device.',
     searchPlaceholder: 'Search transcripts or providers',
-    searchAccessibilityLabel: 'Search Voice History',
+    searchAccessibilityLabel: 'Search voice history',
     actionsTitle: 'History actions',
-    loading: 'Loading Voice History…',
-    emptyTitle: 'No Voice History yet',
-    emptyBody:
-      'Standalone and Global Voice transcripts will appear here after they are saved.',
+    loading: 'Loading voice history…',
+    emptyTitle: 'No voice conversations yet',
+    emptyBody: 'When you talk with Voice outside a session, the transcript is kept here so you can search, export or clear it.',
     noResultsTitle: 'No matches in loaded history',
     noResultsBody:
       'Try another search, or load older messages before searching again.',
     loadOlderTitle: 'Load older messages',
     loadOlderSubtitle:
-      'Read-only: decrypt the previous page of Voice History on this device.',
+      'Read-only: decrypt the previous page of voice history on this device.',
     loadOlderFooter:
-      'Loading older messages does not change or lock Voice History on any device.',
+      'Loading older messages does not change or lock voice history on any device.',
     loadingOlder: 'Loading older messages…',
-    loadOlderFailed: 'Older Voice History could not be loaded.',
+    loadOlderFailed: 'Older voice history could not be loaded.',
     exportTitle: 'Export voice history',
     exportSubtitle: 'Load the remaining history and save it as JSON.',
     exporting: 'Preparing export…',
-    exportSucceeded: 'Voice History export is ready.',
-    exportFailed: 'Voice History could not be exported.',
+    exportSucceeded: 'Voice history export is ready.',
+    exportFailed: 'Voice history could not be exported.',
     clearTitle: 'Clear voice history',
     clearSubtitle:
-      'Delete the entire standalone Voice History for this account across devices.',
-    clearing: 'Clearing Voice History…',
+      'Delete the entire standalone voice history for this account across devices.',
+    clearing: 'Clearing voice history…',
     clearConfirmTitle: 'Clear voice history?',
     clearConfirmBody:
-      'This permanently deletes the whole standalone Voice History for this account. This cannot be undone.',
+      'This permanently deletes the whole standalone voice history for this account. This cannot be undone.',
     clearConfirmAction: 'Clear history',
-    clearSucceeded: 'Voice History was cleared.',
-    clearFailed: 'Voice History could not be cleared.',
-    errorTitle: 'Voice History is unavailable',
+    clearSucceeded: 'Voice history was cleared.',
+    clearFailed: 'Voice history could not be cleared.',
+    errorTitle: 'Voice history is unavailable',
     errorBody:
       'Happier could not load the encrypted history for this account. Check your connection and try again.',
-    upgradeRequiredTitle: 'Update required to load Voice History',
+    upgradeRequiredTitle: 'Update required to load voice history',
     upgradeRequiredBody:
       'This server does not support the encrypted-history format used by this account. Update Happier on the server, then reload.',
     supersededTitle: 'The active account changed',
     supersededBody:
-      'This Voice History request was stopped before it could use a different account. Reload to continue safely.',
+      'This voice history request was stopped before it could use a different account. Reload to continue safely.',
     retry: 'Try again',
     roleYou: 'You',
     roleAssistant: 'Assistant',
@@ -14830,7 +14912,7 @@ const enSettingsVoice = {
     result: 'Setup status',
   },
   modeTitle: 'Voice',
-  providerSectionTitle: 'Provider',
+  providerSectionTitle: 'Service',
   providerSectionDescription:
     'Who listens and answers when you talk. One provider is active at a time.',
   modeDescription:
@@ -14842,7 +14924,7 @@ const enSettingsVoice = {
     happierSubtitle: 'Use Happier Voice (subscription required)',
     local: 'Local voice',
     localSubtitle:
-      'Use device speech or local OpenAI-compatible STT/TTS endpoints',
+      'You choose how it hears and speaks.',
     byo: 'My ElevenLabs account',
     byoSubtitle: 'Use your own ElevenLabs API key and agent',
     openaiRealtime: 'OpenAI Realtime',
@@ -15743,7 +15825,7 @@ const enSettingsVoice = {
 
       provider: {
         title: 'Happier speech model',
-        subtitle: 'Runs on your computers; audio stays with you.',
+        subtitle: 'Runs on your machines; audio stays with you.',
         detail: 'Sherpa',
       },
     },
@@ -16026,9 +16108,9 @@ const enSettingsVoice = {
     sttModelTitle: 'STT Model',
     sttModelDescription:
       'Model name to send to your STT server (OpenAI-compatible field).',
-    deviceTts: 'Device TTS (experimental)',
+    deviceTts: 'This device’s voice',
     deviceTtsSubtitle:
-      'Use on-device speech synthesis instead of an OpenAI-compatible endpoint',
+      'Free, with the voices built into your device or browser. Experimental.',
     ttsProvider: 'TTS Provider',
     ttsProviderSubtitle:
       'Choose device TTS, an OpenAI-compatible endpoint, or Kokoro (web/desktop)',
@@ -16056,9 +16138,9 @@ const enSettingsVoice = {
       mp3Subtitle: 'Smaller output, broadly compatible.',
       wavSubtitle: 'Larger output, uncompressed.',
     },
-    testTts: 'Test TTS',
+    testTts: 'Hear a sample',
     testTtsSubtitle:
-      'Play a short sample using your configured local TTS (device TTS or endpoint)',
+      'Plays a short sentence with the voice engine above.',
     testTtsSample: 'Hello from Happier. This is a test of your local TTS.',
     testTtsMissingBaseUrl: 'Set a TTS Base URL first.',
     testTtsFailed:
@@ -16157,15 +16239,13 @@ const enSettingsVoice = {
       },
       title: 'Local voice models',
       statusTitle: 'Model service',
-      footer:
-        'Install local voice model packs on your voice-home daemon and choose the default for each kind.',
+      footer: 'Installed on your Voice machine. Tap a model to install it or make it the default.',
       sttGroupTitle: 'Speech-to-text models',
       ttsGroupTitle: 'Text-to-speech models',
       defaultBadge: 'Default',
       defaultSubtitle: 'Default for this kind',
-      installSubtitle: 'Tap to install on the daemon',
+      installSubtitle: 'Tap to install it on your Voice machine',
       setDefaultSubtitle: 'Tap to use as the default',
-      unknownSubtitle: 'Status unavailable',
       modelFiles: ({ size }: { size: string }) => `${size} model files`,
       removeConfirmTitle: 'Remove model pack',
       removeConfirmBody: ({ name }: { name: string }) =>
@@ -16200,6 +16280,8 @@ const enSettingsVoice = {
       update_required: 'Update the selected agent runtime to use Voice.',
       feature_unavailable:
         'Voice is unavailable for the selected agent runtime.',
+      mic_unavailable: 'No microphone found. Connect one and try again.',
+      speech_recognition_unavailable: 'Speech recognition isn’t available here. Choose another speech engine.',
     },
   },
   languageTitle: 'Language',
@@ -16250,12 +16332,10 @@ const enSettingsVoice = {
     },
   },
   diagnostics: {
-    title: 'Local speech diagnostics',
-    footer:
-      'Off by default. Audio stays on the selected machine until you explicitly export it.',
-    enabled: 'Record local diagnostic audio',
-    enabledSubtitle:
-      'Keep bounded STT inputs and TTS outputs locally for troubleshooting',
+    title: 'Diagnostic recordings',
+    footer: 'Off by default. Recordings stay on your Voice machine until you export them.',
+    enabled: 'Save diagnostic audio',
+    enabledSubtitle: 'What you say and what Voice says, kept briefly to troubleshoot speech.',
     consentTitle: 'Record speech audio on this machine?',
     consentBody:
       'Speech audio can contain private conversation and background sound. Files stay local, use private permissions, expire automatically, and are never synced or attached to analytics or crash reports.',
@@ -16359,7 +16439,7 @@ const enSettingsAccount = {
     accountService: string;
   }) => `Can’t reach ${accountService}`,
   accountServiceUnreachableBody:
-    'Your Homes and this device are not affected. Retry, or choose another service.',
+    'Your Homes and this device are not affected.',
   accountServiceCustodyTitle: ({
     accountService,
   }: {
@@ -16446,8 +16526,13 @@ const enSettingsAccount = {
   notEndToEndEncrypted: 'Not end-to-end encrypted',
   encryptionFactChecking: 'Checking encryption…',
   encryptionFactUnread: "Couldn't read encryption",
-  editUsername: 'Edit username',
-  chooseUsername: 'Choose username',
+  editProfile: "Edit profile",
+  addName: "Add your name",
+  profileTitle: "Profile",
+  profileDescription: ({ home }: { home: string }) => `How people you work with on ${home} see you.`,
+  nameLabel: "Name",
+  namePlaceholder: "What should people call you?",
+  nameSaveFailed: "Couldn’t save your name. Try again.",
   signInSecurityDescription: ({ home }: { home: string }) =>
     `How you sign in to ${home}.`,
   emailPasswordWithPassword: ({ email }: { email: string }) =>
@@ -16776,6 +16861,7 @@ const enChangelog = {
 
 const enReleaseNotes = {
   viewFullChangelog: 'View full release notes',
+  whatsNewInVersion: ({ version }: { version: string }) => `What’s new in ${version}`,
   mediaUnavailable: 'Media unavailable',
   storyDeck: {
     dragToDismiss: 'Drag to dismiss',
@@ -17183,6 +17269,16 @@ const enTerminalEmbedded = {
       'The daemon does not have permission to use this working directory.',
     spawnFailed: 'Failed to spawn the terminal process.',
     invalidRequest: 'Invalid terminal request.',
+    projectRequesterCredentialsUnavailable:
+      'The Project requester credentials are no longer available. Reopen the Project and try again.',
+    projectWorkspaceChanged:
+      'This Project workspace changed. Reopen the Project before starting a terminal.',
+    projectWorkspaceUnavailable:
+      'This Project workspace is no longer available on the selected machine.',
+    projectSetupConsentRequired:
+      'Review and approve this Project\u2019s setup before starting a terminal.',
+    projectSetupEffectChanged:
+      'This Project\u2019s setup changed. Review it again before starting a terminal.',
     busy: 'Terminal is busy. Try again.',
   },
 
@@ -17204,7 +17300,7 @@ const enModals = {
   pleaseSignInFirst:
     'Sign in or create an account to continue. If you already have a Happier account on another device, use that same account.',
   invalidAuthUrl: 'Invalid authentication URL',
-  microphoneAccessRequiredTitle: 'Microphone Access Required',
+  microphoneAccessRequiredTitle: 'Microphone access required',
   microphoneAccessRequiredRequestPermission:
     'Happier needs access to your microphone for voice chat. Please grant permission when prompted.',
   microphoneAccessRequiredEnableInSettings:
@@ -17278,7 +17374,7 @@ const enWelcome = {
     `We can’t connect to ${serverUrl}. Retry or choose a different Home to continue.`,
   serverIncompatibleTitle: 'Home not supported',
   serverIncompatibleBody: ({ serverUrl }: { serverUrl: string }) =>
-    `The Home at ${serverUrl} returned an unexpected response. Update that Home or choose a different Home to continue.`,
+    `${serverUrl} returned an unexpected response. Update that Home or choose a different Home to continue.`,
 
   // Unified onboarding redesign — BrandPanel (left pane / mobile hero)
   brandTaglineLine1: 'Start coding anywhere.',
@@ -17321,6 +17417,12 @@ const enWelcome = {
   signInServiceUnsupportedBody:
     'This address is a Home, or it does not offer account sign-in. Choose another sign-in service.',
   useDifferentHome: 'Use a different Home',
+  keyEntryDescription: 'Paste your secret key or recovery key.',
+  certificateDescription: 'Use the certificate installed on this device.',
+  emailSignInDescription: 'Sign in with the email you used before.',
+  emailCreateDescription: 'Create an account with your email address.',
+  emailConnectDescription: 'Add them to the account you already use.',
+  useDifferentHomeSubtitle: ({ home }: { home: string }) => `Instead of ${home}`,
   welcomeSecondarySubtitle: 'Scan a QR code, or enter your recovery key',
 
   // Unified onboarding redesign — returning-user copy variants.
@@ -17652,8 +17754,8 @@ const enSetupOnboarding = {
   addHomeTitle: 'Add another Home',
   addHomeSubtitle:
     'Scan a QR code to add a Home without leaving your current one',
-  authSecretKeyTitle: 'Login with recovery key',
-  authSecretKeySubtitle: 'Enter your recovery key to sign in to Happier',
+  authSecretKeyTitle: 'Sign in with your key',
+  authSecretKeySubtitle: 'Paste your secret key or recovery key.',
   authLostAccessTitle: 'Lost access?',
   authLostAccessSubtitle: 'Reset your account with your identity provider',
   webRelayHostHandoffTitle: 'Create a Personal Home on your computer',
@@ -17902,7 +18004,7 @@ const enMachine = {
   launchNewSessionInDirectory: 'Launch new session in directory',
   offlineUnableToSpawn: 'Launcher disabled while machine is offline',
   offlineHelp:
-    '• Make sure your computer is online\n• Run happier daemon status to diagnose\n• Are you running the latest CLI version? Run happier self update',
+    '• Make sure your machine is online\n• Run happier daemon status to diagnose\n• Are you running the latest CLI version? Run happier self update',
   customPathPlaceholder: 'Enter custom path',
   tools: {
     title: 'Tools',
@@ -17945,7 +18047,7 @@ const enMachine = {
   stopDaemon: 'Stop daemon',
   stopDaemonConfirmTitle: 'Stop daemon?',
   stopDaemonConfirmBody:
-    'You will not be able to spawn new sessions on this machine until you restart the daemon on your computer again. Your current sessions will stay alive.',
+    'You will not be able to spawn new sessions on this machine until you restart the daemon on your machine again. Your current sessions will stay alive.',
   daemonStoppedTitle: 'Daemon stopped',
   stopDaemonFailed: 'Failed to stop daemon. It may not be running.',
   renameTitle: 'Rename machine',
@@ -18220,6 +18322,7 @@ const enMessage = {
     'Agent authentication recovered',
   connectedServiceRuntimeAuthRecoveryCancelled:
     'Agent authentication recovery cancelled',
+  connectedServiceRuntimeAuthRecoveryStopped: 'Provider recovery stopped; it will not retry automatically',
   unknownTime: 'unknown time',
 };
 
@@ -18540,10 +18643,18 @@ const enUsage = {
     page: {
       // usage-board:page
       sourceAccounting: "usage",
+      sourceClaudeResponses: "Claude responses",
+      sourceClaudeSessionSummaries: "Claude session summaries",
+      executionHappier: "In Happier",
+      executionOutside: "Outside Happier",
+      executionUnknown: "Unknown execution",
       sourceQuota: "allowances",
       sourceWork: "work links",
       sourceHowYouWork: "activity",
       sourceComparison: "previous period",
+      sourceKindMeasured: "Measured",
+      sourceKindFromLogs: "From logs",
+      sourceKindNotAdded: "Not added",
       coverageFailed: ({ sources }: { sources: string | number }) => `Couldn't read ${sources}. Showing what arrived.`,
       coveragePending: ({ sources }: { sources: string | number }) => `Still reading ${sources}`,
       coveragePartial: ({ sources }: { sources: string | number }) => `Partial ${sources}: some history is missing`,
@@ -18562,7 +18673,7 @@ const enUsage = {
       readFailedReason: "Your Home didn't answer. Nothing is lost.",
       signedOutTitle: "Sign in to this Home to see usage",
       loading: "Reading usage",
-      unattributed: "Unattributed",
+      unattributed: "Unknown",
       average: "avg",
       byAgent: "by agent",
       byModel: "by model",
@@ -18624,6 +18735,29 @@ const enUsage = {
       filterMachines: "Machines",
       filterProjects: "Projects",
       filterAll: "All",
+      pricesTitle: "Model prices",
+      pricesAsOf: ({ date }: { date: string | number }) => `LiteLLM prices as of ${date}`,
+      pricesUnpriced: ({ count }: { count: string | number }) => `${count} unpriced`,
+      pricesFetchDisabled: "Fetching is off on this Home, so built-in prices are used.",
+      pricesFetchFailed: "Couldn't refresh. Showing the last prices.",
+      pricesRefresh: "Refresh",
+      priceCatalog: "Catalog price",
+      priceYours: "Your price",
+      priceMapped: ({ model }: { model: string | number }) => `Priced as ${model}`,
+      priceNone: "No price · not in $ totals",
+      priceSet: "Set price",
+      priceMap: "Price as…",
+      priceReset: "Reset",
+      priceInput: "Input",
+      priceOutput: "Output",
+      priceCacheRead: "Cache read",
+      priceCacheWrite: "Cache write",
+      priceUnit: "$ per million tokens",
+      priceRates: ({ input, output }: { input: string | number; output: string | number }) => `${input} in · ${output} out`,
+      priceSearchModels: "Search models",
+      priceCancel: "Cancel",
+      priceSave: "Save",
+      filtersLabel: "Filters",
       filterCount: ({ count }: { count: string | number }) => `${count} selected`,
       filterAllOf: ({ what }: { what: string | number }) => `All ${what}`,
       drillFilterTo: ({ name }: { name: string | number }) => `Show only ${name}`,
@@ -18659,6 +18793,7 @@ const enUsage = {
       emptyView: "This view is empty. Add the widgets you want here.",
       addTo: ({ view }: { view: string | number }) => `Add to ${view}`,
       asOf: ({ time }: { time: string | number }) => `As of ${time}`,
+      sessionSubtitle: "What this session used and what it cost.",
       machinesCount: ({ count }: { count: string | number }) => `${count} machines`,
       agentsCount: ({ count }: { count: string | number }) => `${count} agents`,
       purposeDaily: "How much you used each day, by agent.",
@@ -18693,7 +18828,7 @@ const enUsage = {
       capacityCaption: "every plan · longest window",
       capacityTightestUnit: ({ name }: { name: string | number }) => `left on ${name}, the tightest`,
       capacityResets: ({ time }: { time: string | number }) => `resets ${time}`,
-      capacityAccounts: ({ count }: { count: string | number }) => `${count} accounts read`,
+      capacityAccounts: ({ count }: { count: string | number }) => `${count} ${Number(count) === 1 ? 'account' : 'accounts'} read`,
       capacityNoReads: "No plan allowances read yet",
       capacityNoReadsReason: "Connect a subscription account to see what each plan has left.",
       openConnectedServices: "Connected services",
@@ -18726,6 +18861,7 @@ const enUsage = {
       projectionRunsOut: ({ time }: { time: string | number }) => `runs out ${time}`,
       paceNotDerived: "no pace yet",
       paceStale: "reading is old",
+      paceSharedReason: ({ reason }: { reason: string | number }) => `No projection yet · ${reason}`,
       paceUnknownWindow: "window unknown",
       paceJustStarted: "window just started",
       paceOutsideWindow: "outside its window",
@@ -18765,6 +18901,18 @@ const enUsage = {
       waitingCancelFailed: "Couldn't cancel",
       waitingSession: "Queued message",
       planFitCaption: "what each plan costs and how it ends",
+      planEntered: ({ amount }: { amount: string | number }) => `You entered ${amount}`,
+      weatherTitle: "Capacity weather",
+      weatherResult: ({ percent }: { percent: string | number }) => `${percent} projected used at reset`,
+      modelHeadroomTitle: "Model headroom",
+      modelHeadroomResult: ({ model, percent }: { model: string | number; percent: string | number }) => `${model} · ${percent} left in its model-specific allowance`,
+      pricePerResetTitle: "Price per recorded reset",
+      pricePerResetResult: ({ amount, count }: { amount: string | number; count: string | number }) => `${amount} per reset across ${count} recorded resets; partial history`,
+      recordedWeekTitle: "Your recorded week",
+      recordedWeekResult: ({ days, events }: { days: string | number; events: string | number }) => `${days} recorded active days · ${events} recorded events`,
+      insightPartial: "Only recorded history is shown; human presence is unknown.",
+      insightUnavailable: "Not enough matching recorded evidence.",
+      recordedWeekRequires: "Choose a completed calendar week with recorded activity.",
       planPaid: ({ amount }: { amount: string | number }) => `You paid ${amount}`,
       planList: ({ amount, date }: { amount: string | number; date: string | number }) => `list price ${amount}, as of ${date}`,
       planNoPrice: "No paid or list price reported",
@@ -18772,7 +18920,21 @@ const enUsage = {
       planEnds: ({ time }: { time: string | number }) => `Ends ${time}`,
       planRenews: ({ time }: { time: string | number }) => `Renews ${time}`,
       planRenewalUnknown: "Renewal not reported",
-      planValueInsufficient: "Value per plan needs usage attributed to each account, which isn't recorded yet.",
+      planValueInsufficient: "Value needs recorded usage attributed to this account.",
+      planValueTitle: "Plan value",
+      planDetails: "Details",
+      moreDetailLater: "More detail appears after a few weeks of readings.",
+      insufficientSummary: ({ items }: { items: string }) => `Not enough recorded yet: ${items}`,
+      unreportedWindows: ({ count }: { count: string | number }) => `+${count} windows not reported`,
+      reportedWindows: ({ count }: { count: string | number }) => `Reported windows (${count})`,
+      monthlyPrice: "Your monthly price",
+      monthlyPriceAmount: "Monthly amount",
+      monthlyPriceCurrency: "Currency",
+      monthlyPriceNote: "You entered this price; it is not a provider-reported payment.",
+      monthlyPriceClear: "Remove entered price",
+      planValueApiEquivalent: ({ amount }: { amount: string | number }) => `Observed API-equivalent value: ${amount}`,
+      planValueMultiple: ({ multiple }: { multiple: string | number }) => `${multiple}× the matching period price`,
+      planValuePartial: "Recorded subset; unknown or unpriced usage is excluded.",
       planManageBilling: "Billing is managed with the provider",
       hintTitle: "Uses first",
       hintSticky: "kept while it lasts",
@@ -18825,6 +18987,9 @@ const enUsage = {
       whyNone: "No account can be used right now",
       whyDecided: ({ time }: { time: string | number }) => `decided ${time}`,
       whyRule: "Rule",
+      comparisonTitle: "Compare a different rule or moment",
+      comparisonMoment: "Moment",
+      comparisonNote: "Read-only comparison of the facts already known. Future readings may be old or missing; quota refills are not predicted. Your live rule and account stay unchanged.",
       whyEvidenceMissing: "reading old or missing",
       whyChecked: ({ time }: { time: string | number }) => `checked ${time}`,
       whySelected: "Selected",
@@ -18863,8 +19028,12 @@ const enUsage = {
       resetStartTitle: "Queued in this session",
       resetStartMeta: "hold a message until a window resets",
       resetStartAction: "Start at a reset",
+      sendAtReset: "Send at reset",
+      resetStartStale: "This allowance reading is no longer current. Refresh the allowance and try again.",
+      resetStartAuthority: "The session or allowance is no longer available under this account. Reopen it and try again.",
+      resetStartChanged: "The allowance window has changed. Refresh the allowance and choose a reset again.",
       resetStartFailed: "Couldn't set the start",
-      resetStartNoReading: "No allowance reading to bind a start to yet.",
+      resetStartNoReading: "Waiting messages can start at a reset once an allowance has been read.",
       resetStartNoReset: "No window reports a reset time, so there is nothing to wait for.",
       resetStartNoWitness: "A start needs a recorded allowance reading to wait on. Refresh the allowance, then try again.",
       fitTitle: "Fit",
@@ -18880,6 +19049,7 @@ const enUsage = {
       notRecordedStrategy: "Multi-account setups",
       notRecordedStrategyReason: "Comparing setups needs the same replay, so none is shown.",
       earlierCurve: ({ time }: { time: string | number }) => `Earlier window, ended ${time}`,
+      earlierCurves: "Earlier windows",
       earlierShown: ({ count }: { count: string | number }) => `Grey lines: ${count} earlier comparable windows on the same span`,
       earlierNone: ({ reason }: { reason: string | number }) => `No earlier window can be drawn beside this one: ${reason}`,
       earlierSingleReading: "only one reading",
@@ -18943,18 +19113,65 @@ const enUsage = {
       filterProjectOn: "Showing only this project",
       linkedToPrs: "Linked to PRs",
       notLinked: "Not linked to a PR",
+      noneLinked: "None of it is linked to a PR yet",
       mergedIn: ({ duration }: { duration: string | number }) => `merged in ${duration}`,
       medianSession: "Median session",
       otherAgents: "Other agents",
       autopsyTitle: "This session",
       turnNumber: ({ number }: { number: string | number }) => `Turn ${number}`,
+      costOverTime: "Cost over time",
+      phase_read: "Reading tools",
+      phase_change: "Change-capable tools",
+      phase_execute: "Command execution",
+      phase_delegate: "Delegated tool",
+      phase_compaction: "Compaction",
+      phase_unknown: "Unknown tool",
+      linesKeptPartial: "partial",
+      linesKept: "Lines kept",
+      linesKeptMethod: "Unchanged changed-file comparison; partial counts are a lower bound.",
       phasesCaption: "Solid is working, hatched is waiting.",
       linkedOutcome: "Linked outcome",
     },
     coach: {
       // usage-board:coach
       digestTitle: "Recurring digest",
+      why: "Why?",
+      methodTitle: "Method",
+      evidence_accounting: "Accounting",
+      evidence_permission: "Approval",
+      evidence_composition: "Prompt composition",
+      evidence_file_read: "File read",
+      evidence_compaction: "Compaction",
+      evidence_model_comparison: "Model comparison",
+      evidence_native_cache: "Native cache",
+      evidence_tool: "Tool use",
+      evidence_loop: "Repeated operation",
+      evidence_mcp_usage: "MCP use",
+      evidence_effort: "Effort",
+      evidence_subagent: "Subagent",
+      basis_observation: "Observation",
+      basis_derived: "Derived from observations",
+      basis_guidance_derived: "Derived from guidance",
+      basis_vendor_fact: "Provider-documented behavior",
+      citation_vendor_docs: "Provider documentation",
+      citation_vendor_changelog: "Provider changelog",
+      citation_research_paper: "Research paper",
+      citation_price_catalog: "Price catalog",
+      diagnostics: "Diagnostic identifiers",
+      observationsTitle: "Recorded observations",
+      metric_unused_mcp_bindings: "unused MCP bindings",
+      citationsTitle: "Sources",
+      hiddenFindings: ({ count }: { count: string | number }) => `Hidden findings (${count})`,
       summary_comparable_completed_request_cost_difference: "The same completed request had different model costs",
+      configure: "Configure checks",
+      checksDescription: "Only enabled checks are evaluated. Dismissed and snoozed findings keep their existing state.",
+      modelMode_off: "Off",
+      modelMode_suggest_with_estimates: "Suggest with estimates (default)",
+      modelMode_complete_only: "Only with complete evidence",
+      modelEvidenceDescription: "Suggestions require the same completed host request on two models in this session. Native accounting does not yet certify complete request costs.",
+      modelProviderUnknown: "provider unknown",
+      modelQualified: ({ model, candidate, cost, candidateCost, provider }: { model: string; candidate: string; cost: string; candidateCost: string; provider: string }) => `Completed matching requests on ${model} in this session cost about ${cost}, versus ${candidateCost} on ${candidate} (partial, observed; ${provider}). The lower-cost model may be enough for this request; completion does not establish equal quality.`,
+      disabledCount: ({ count }: { count: string | number }) => `${count} checks off`,
       summary_unused_mcp_binding_observed: "An included MCP binding was not used",
       digestDescription: ({ duration }: { duration: string }) => `An Automation can review the latest ${duration} with this view’s filters and notify you. Choose when and where it runs.`,
       digestConfigure: "Schedule a digest…",
@@ -18966,11 +19183,36 @@ const enUsage = {
       detector_approval_friction: "Waiting on you",
       detector_mcp_overhead: "MCP overhead",
       detector_repeated_file_reads: "Re-read files",
-      detector_compaction_storms: "Compaction storms",
+      detector_compaction_storms: "Compaction thrash",
       detector_anomalous_looping_usage: "Looping usage",
       detector_cache_busting_prompt_changes: "Caching issue",
       detector_outside_usage: "Outside Happier",
-      detector_context_bloat: "Context bloat",
+      detector_context_bloat: "Context growth cost",
+      detector_cache_economics: "Cache economics",
+      summary_mcp_definition_overhead_observed: "MCP definitions occupied the request context",
+      metric_loaded_schema_tokens: "loaded definition tokens",
+      detector_effort_audit: "Effort audit",
+      detector_subagent_fanout: "Subagent usage",
+      summary_compaction_thrash_observed: "Context immediately refilled after three compactions",
+      summary_context_growth_cost_observed: "Request context grew during this session",
+      summary_cache_economics_observed: "Observed cache reads, writes and miss causes",
+      summary_effort_audit_observed: "Recorded effort and thinking usage",
+      summary_subagent_fanout_observed: "Parent and subagent token usage",
+      metric_cache_read_tokens: "cache reads",
+      metric_input_tokens: "uncached input",
+      metric_cache_hit_ratio: "input cache-hit ratio",
+      metric_cache_replacement_premium: "API-equivalent replacement premium",
+      metric_cache_cost_share: "observed cost fraction",
+      metric_cached_history_cost: "API-equivalent cached-history cost",
+      metric_output_tokens: "output",
+      metric_thinking_tokens: "thinking",
+      metric_parent_tokens: "parent tokens",
+      metric_subagent_tokens: "subagent tokens",
+      metric_fanout_multiplier: "tree-to-parent token ratio",
+      capability_cache_accounting: "normalized cache accounting and request causes",
+      capability_recorded_effort: "recorded request effort and output/thinking tokens",
+      capability_subagent_accounting: "exact parent and subagent accounting",
+      modelN1Cache: "One observed pair (n=1), not a trend. A mid-session switch rebuilds the cache; include that cost before switching.",
       summary_duplicate_injection_observed: "The same instructions were sent more than once",
       summary_compatible_model_cost_difference: "A cheaper model met the same outcome",
       summary_idle_cache_recreation_observed: "Caches were rebuilt after idle gaps",
@@ -18993,7 +19235,7 @@ const enUsage = {
       metric_compactions: "compactions",
       metric_failed_repetitions: "failed repeats",
       metric_outside_tokens: "outside Happier",
-      metric_composed_tokens: "composed",
+      metric_composed_tokens: "tokens in the request",
       metric_context_window_tokens: "context window",
       capability_instruction_injections: "which instructions were injected",
       capability_model_outcome_comparison: "matched outcomes across models",
@@ -19027,7 +19269,6 @@ const enUsage = {
       apply_mcp_on: "Turn on server",
       apply_prepared_session: "Start a session",
       apply_recovery: "Run it",
-      noRemedy: "No one-tap fix; the evidence above is what was seen.",
       applied: "Applied",
       undo: "Undo",
       undone: "Undone",
@@ -19043,6 +19284,16 @@ const enUsage = {
       insufficientTitle: "Needs more evidence",
       insufficientRow: ({ missing }: { missing: string | number }) => `Needs ${missing}`,
       showChecks: "Show all checks",
+      summaryOfChecks: ({ count }: { count: string | number }) => `of ${count} checks`,
+      summarySessions: "Sessions checked",
+      summaryClearCaption: ({ count }: { count: string | number }) => `${count} checked, nothing found`,
+      moreFindings: ({ count }: { count: string | number }) => `${count} more in Coach`,
+      hiddenSnoozed: ({ time }: { time: string | number }) => `Snoozed until ${time}`,
+      hiddenDismissed: "Dismissed",
+      summaryOff: "Turned off",
+      summaryClear: "Checked, nothing found",
+      summaryNeedEvidence: "Need more evidence",
+      summaryFindings: "Findings",
       hideChecks: "Hide checks",
       noFinding: "Checked · nothing found",
       unavailableTitle: "Coach evidence isn't loaded for this period",
@@ -19101,6 +19352,7 @@ const enUsage = {
       nightChooseHour: "Choose an hour",
       nightClear: "Clear night hours",
       nightUnknownTitle: "Night hours aren't known",
+      nightHoursTitle: "Night hours",
       nightUnknownReason: "Night shift counts work recorded inside your night hours. Without them it would only be a guess, so nothing is shown.",
       nightWindow: ({ start, end, offset }: { start: string | number; end: string | number; offset: string | number }) => `${start}–${end}, ${offset}`,
       eventCount: ({ count }: { count: string | number }) => `Usage events: ${count}`,
@@ -19290,6 +19542,7 @@ const enUsage = {
     other: 'Other',
   },
   showAll: 'Show all',
+  showAvailable: 'Show available',
   showLess: 'Show less',
   exportCsv: 'Download CSV',
   efficiency: {
@@ -19677,6 +19930,15 @@ const enProfiles = {
       bypassPermissions: 'Skip all permissions',
     },
   },
+  sessionStart: {
+    title: 'When a session starts',
+    description: 'What a new session starts with when you pick this profile. You can still change any of it before starting.',
+  },
+  agentDefaults: {
+    title: 'Agents',
+    allAccountDefault: 'Every agent uses the account default',
+    changedFor: ({ agents }: { agents: string }) => `Changed for ${agents}`,
+  },
   defaultPermissions: {
     title: 'Default permissions',
     footer:
@@ -19896,6 +20158,8 @@ const enProjects = {
       copy: "A copy of another checkout",
       existingDetail: ({ path, ref }: { path: string; ref: string }) => `${path} · ${ref}`,
       worktreeDetail: ({ path }: { path: string }) => `From ${path} on a new branch`,
+      openedAgo: ({ when }: { when: string }) => `opened ${when}`,
+      chooseCheckout: ({ count }: { count: number }) => `Choose which of the ${count} checkouts`,
       cloneDetail: ({ path }: { path: string }) => `Into ${path} with your own Git account`,
       copyDetail: "Copied once or kept in sync",
       noAgent: "Opening prepares files. No agent starts until you start a session.",
@@ -19921,7 +20185,7 @@ const enProjects = {
       chooseExact: "Choose the one to open. Nothing is merged or removed.",
       gitDenied: ({ repository }: { repository: string }) => `Your Git account can’t read ${repository}.`,
       refMissing: ({ ref }: { ref: string }) => `${ref} is no longer available in this repository.`,
-      offline: ({ machine }: { machine: string }) => `${machine} is offline. Your choices are kept.`,
+      offline: 'Offline · your choices are kept',
       pickAnother: "Pick another",
       accessLost: "You no longer have access to this machine.",
       targetMismatch: "The machine couldn’t verify the selected Home and machine.",
@@ -20039,6 +20303,9 @@ const enProjects = {
       consequenceThisTime: "Runs setup now. Next time, Happier asks again.",
       consequenceUntilChanged: "Covers this project on any machine, including a teammate’s shared machine, until a command, the tools or the project file change. Teammates approve for themselves.",
       readySince: ({ time }: { time: string }) => `Ready for these inputs since ${time}`,
+      notRunYet: "Setup hasn’t run for this version yet",
+      needsReview: "Setup changed. Review it in Scripts",
+      stateUnknown: "Setup state unknown",
       provenanceAtBranch: ({ commit, branch }: { commit: string; branch: string }) => `at ${commit} on ${branch}`,
       provenanceAt: ({ commit }: { commit: string }) => `at ${commit}`,
       provenanceModified: "changed since that commit",
@@ -20141,13 +20408,17 @@ const enProjects = {
       readmeMissing: "No README in this checkout.",
       checkouts: "Checkouts",
       sessions: "Sessions",
-      localChanges: "Local Changes",
+      sessionsEmpty: "No sessions in this project yet.",
+      sessionsMore: "Show more sessions",
+      localChanges: "Local changes",
       scriptsEmpty: "No scripts found",
       scriptsPartial: "Some script definitions could not be inspected",
       scriptsUnavailable: "Couldn’t read scripts",
       addTo: ({ dashboard, area }: { dashboard: string; area: string }) => `Add to ${dashboard} · ${area}`,
       mainArea: "main area",
       sideArea: "side area",
+      mainAreaChoice: "Main area",
+      sideAreaChoice: "Side area",
       sourceRequired: "This input needs a saved repository source.",
       saveSource: "Save as a source",
       emptyArea: "No widgets here yet.",
@@ -20203,6 +20474,9 @@ const enProjects = {
   },
   checkouts: {
       chipLabel: ({ machine, branch }: { machine: string; branch: string }) => `Checkout: ${machine} · ${branch}`,
+      notAnswering: ({ machine }: { machine: string }) => `${machine} isn’t answering`,
+      waiting: ({ machine }: { machine: string }) => `Waiting for ${machine}`,
+      offline: 'offline',
       thisMachine: "On this machine",
       otherMachines: "Other machines",
       openElsewhere: "Open this branch on another machine",
@@ -20243,6 +20517,9 @@ const enProjects = {
     openAmbiguousBody: "Choose the one to open. Nothing is merged or removed.",
     openMissingTitle: "This checkout isn’t saved here anymore.",
     openMissingBody: "It may have been forgotten, or it belongs to another Home. Open it again from Projects.",
+    rowsLoadingTitle: "Loading your projects",
+    rowsUnavailableTitle: "Your projects didn’t load.",
+    rowsUnavailableBody: "Nothing was removed. Try again in a moment.",
     openInvalidTitle: "This link doesn’t point to one checkout.",
     openInvalidBody: "Open the project from Projects instead.",
     backToProjects: "Back to Projects",
@@ -20280,7 +20557,6 @@ const enProjects = {
     historyChanged: 'The checkout changed. Refresh to see current history.',
     noGitHistory: ({ path }: { path: string }) => `No Git history here · ${path}`,
     readUnavailable: 'This file couldn’t be read.',
-    offline: 'This machine is offline. Showing last-known files.',
     expandFolder: ({ name }: { name: string }) => `Expand ${name}`,
     collapseFolder: ({ name }: { name: string }) => `Collapse ${name}`,
     entryCount: ({ count }: { count: number }) => count === 1 ? '1 entry' : `${count} entries`,
@@ -20452,7 +20728,6 @@ const enSettingsPlugins = {
   ...pluginMarketplaceDiscoverTranslations.en,
   ...pluginSettingsPresentationTranslations.en,
   ...eventAutomationComposerTranslations.en,
-  title: 'Plugin marketplace',
   subtitle:
     'Discover plugins from npm and configured sources, and manage installed plugins on this machine.',
   appPanelsTitle: 'Plugin panels',
@@ -20460,7 +20735,7 @@ const enSettingsPlugins = {
   executionOriginReleaseContentConflict:
     'Release content does not match. Publish a new version.',
   administrationMachineTitle: 'Manage on',
-  executionOriginTitle: 'Run on',
+  executionOriginTitle: 'Runs on',
   targetSelection: {
     missingInHome: ({ home }: { home: string }) =>
       `This machine is no longer in ${home}`,
@@ -20784,6 +21059,8 @@ const enSettingsPlugins = {
   genericSettingsTitle: 'Plugin settings',
   genericSettingsFooter: 'Stored locally for this plugin on this machine.',
   genericSettingsAccountFooter: 'Synced for this plugin across your Account.',
+  genericSettingsDefaults: 'Defaults',
+  genericSettingsChangedCount: ({ count }: { count: number }) => `${count} changed`,
   genericSettingsLoading: 'Loading plugin settings',
   genericSettingsUnavailable:
     'Plugin settings are unavailable for this machine.',
@@ -20889,6 +21166,10 @@ const enUpdates = {
     thisApp: 'This app',
     thisComputer: 'This computer',
     machine: 'Machine',
+    quietTitle: 'Nothing to update',
+    offlineTitle: 'Offline machines',
+    offlineDescription: 'Updates wait until each machine is back online.',
+    offlineMachines: ({ count }: { count: number }) => `${count} ${plural({ count, singular: 'machine', plural: 'machines' })}`,
   },
   offline: 'Offline',
   pill: {
@@ -20940,6 +21221,8 @@ const enUpdates = {
         singular: '1 update didn’t finish',
         plural: `${count} updates didn’t finish`,
       }),
+    manualCount: ({ count }: { count: number }) => `${count} more to update yourself`,
+    manualOnly: ({ count }: { count: number }) => `${count} to update yourself`,
     notCheckedYet: 'Not checked yet',
     required: 'An update is required',
     upToDate: 'You’re up to date',
@@ -21009,6 +21292,7 @@ const enUpdates = {
     appDownloadFailed: 'The download didn’t finish.',
     appInstallFailed: 'The update couldn’t be installed.',
     latestUnknown: 'Couldn’t check for a newer version',
+    uncheckedTools: ({ count }: { count: number }) => `Couldn’t check ${count} tools for a newer version`,
     rolledBack: ({ kept, target }: { kept: string; target: string }) =>
       `${target} didn’t start on this machine, so it’s still on ${kept}.`,
     installedByYou: 'Installed by you',
@@ -21045,8 +21329,6 @@ const enUpdates = {
         plural: `${count} updates waiting until it’s back online`,
       }),
   },
-  footer:
-    'Updates install on each machine. After a command-line update, Happier restarts that machine’s background service.',
   tray: {
     available: ({ count }: { count: number }) =>
       `Updates available (${count})…`,
@@ -21143,6 +21425,7 @@ const enExternalSessions = {
   browseSearchTarget: 'Search in',
   browseContentPlaceholder: 'Search conversation text…',
   browseContentSearchPrompt: 'Enter a phrase, then search conversations.',
+  browseContentSearchReady: ({ query }: { query: string }) => `Press Return to search conversations for “${query}”.`,
   browseContentSubmit: 'Search',
   browseContentUpdateRequired: ({ machine }: { machine: string }) =>
     `Update Happier on ${machine} to search conversations.`,
@@ -21188,13 +21471,13 @@ const enExternalSessions = {
 };
 
 const enPluginReactNative = {
-  unavailable: 'React Native plugin UI unavailable',
+  unavailable: 'This plugin view couldn’t open',
   disabled: 'React Native plugin UI disabled',
   fallback: 'Using plugin fallback',
 };
 
 const enPluginRuntime = {
-  unavailableGeneric: 'This plugin view is unavailable right now.',
+  unavailableGeneric: 'It may still be starting. Try again in a moment.',
   crashLoop: 'The plugin was stopped after repeated crashes.',
   disabledByPolicy:
     'This plugin view is disabled by current settings or compatibility.',
@@ -21219,6 +21502,8 @@ const enPluginRuntime = {
     'Happier could not verify this plugin view. Open plugin settings to repair the selected installation.',
   incompatible:
     'This plugin view needs a compatible Happier or plugin version.',
+  installationConflict:
+    'Your machines have different versions of this plugin. Choose the machine it should run on.',
   authorFailure:
     'This plugin view could not start because its executable UI is invalid. Ask the plugin author to rebuild it.',
   retired:
@@ -21352,9 +21637,12 @@ const enConversationSearch = {
 };
 
 export const en: TranslationStructure = {
+    resourceProposal: resourceProposalTranslations.en,
     conversationSearch: enConversationSearch,
   sessions: { workspace: { noFolder: 'No folder' } },
   ...machineSharing,
+  machineResources: { ask: machineResourceUiTranslations.en.ask, askSuggestions: machineResourceUiTranslations.en.askSuggestions },
+  machines: { ...machineSharing.machines, widgets: machineResourceUiTranslations.en.widgets },
   ...managedMachines,
   ...projectWorkers,
   homeDeviceApproval: enHomeDeviceApproval,
@@ -21498,6 +21786,8 @@ export const en: TranslationStructure = {
     locked: 'Unlock this account to read its instructions.',
     ownerPrivate: 'These instructions belong to the session owner and aren\'t shared with you.',
     refused: 'You can\'t change this session\'s instructions.',
+    setConflict: 'This session changed somewhere else. Try again.',
+    setFailed: 'Couldn\'t change its instructions. Nothing was lost.',
     savePending: 'Waiting to save the instructions…',
     saveDenied: 'Kept its previous instructions.',
     saveConflict: 'The document changed after this edit was reviewed. Review the current version before saving.',
@@ -21559,6 +21849,7 @@ export const en: TranslationStructure = {
     empty: { title: 'Give a session an ongoing job', body: 'Create a bot, or make an existing session a bot.' },
     loading: 'Loading your bots…',
     partial: "Some bots couldn't be loaded.",
+    unreadable: "Some sessions can't be read on this device, so a bot may be missing.",
     offline: (params: { home: string }) => `${params.home} isn't answering. Showing your last known bots.`,
     offlineEmpty: (params: { home: string }) => `${params.home} isn't answering. Your bots will show here when it's back.`,
     roster: {
@@ -21733,6 +22024,7 @@ type DeepTranslationShape<T> = T extends (...args: infer Args) => infer Return
 type TranslationOverlay<Base, Overlay> = Omit<Base, keyof Overlay> & Overlay;
 
 type EnglishNamespaces0 = {
+  readonly resourceProposal: typeof resourceProposalTranslations.en;
   readonly conversationSearch: typeof enConversationSearch;
   // memoryContext:type:begin
   readonly memoryContext: typeof enMemoryContext;
@@ -21759,6 +22051,8 @@ type EnglishNamespaces0 = {
     readonly locked: string;
     readonly ownerPrivate: string;
     readonly refused: string;
+    readonly setConflict: string;
+    readonly setFailed: string;
     readonly savePending: string;
     readonly saveDenied: string;
     readonly saveConflict: string;
@@ -21820,6 +22114,7 @@ type EnglishNamespaces0 = {
     readonly empty: { readonly title: string; readonly body: string };
     readonly loading: string;
     readonly partial: string;
+    readonly unreadable: string;
     readonly offline: (params: { home: string }) => string;
     readonly offlineEmpty: (params: { home: string }) => string;
     readonly roster: {
@@ -22165,7 +22460,8 @@ type EnglishNamespaces26 = TranslationOverlay<
 type EnglishNamespaces27 = TranslationOverlay<
   EnglishNamespaces26,
   {
-    readonly machines: typeof machineSharing.machines;
+    readonly machines: typeof machineSharing.machines & { readonly widgets: typeof machineResourceUiTranslations.en.widgets };
+    readonly machineResources: { readonly ask: typeof machineResourceUiTranslations.en.ask; readonly askSuggestions: typeof machineResourceUiTranslations.en.askSuggestions };
     readonly settingsPlugins: typeof enSettingsPlugins;
     readonly settingsScmDiffSummary: typeof enSettingsScmDiffSummary;
     readonly updates: typeof enUpdates;

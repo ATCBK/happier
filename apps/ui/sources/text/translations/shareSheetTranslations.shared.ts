@@ -4,7 +4,6 @@ export type ShareSheetTranslations = Readonly<{
     publicLink: Readonly<{ description: string; workflowDescription: string; workflowGrants: string; grants: string; audit: string; auditEmpty: string; ownerUpdateRequired: string; ownerUpdateRequiredDescription: string }>;
     suggestions: (params: Readonly<{ kind: string }>) => string;
     profileAgentsMore: (params: Readonly<{ count: number }>) => string;
-    roleRunsIn: (params: Readonly<{ kind: string }>) => string;
     whoHasAccess: string;
     whoHasAccessStale: string;
     owner: string;
@@ -65,7 +64,6 @@ export const shareSheetTranslationsEnglish = { en: {
         publicLink: { workflowDescription: "Anyone with the link can read this workflow, without an account.", workflowGrants: "Read-only workflow.", description: "Anyone with the link can read this document, without an account.", grants: "Read-only document.", audit: "Access log", auditEmpty: "No visits recorded yet.", ownerUpdateRequired: "This link is being updated by its owner", ownerUpdateRequiredDescription: "Ask the owner to open Happier, then try this link again." },
         suggestions: ({ kind }: Readonly<{ kind: string }>) => `Suggested ${kind}`,
         profileAgentsMore: ({ count }: Readonly<{ count: number }>) => `+${count} more`,
-        roleRunsIn: ({ kind }: Readonly<{ kind: string }>) => `Runs in ${kind}`,
         whoHasAccess: 'Who has access',
         whoHasAccessStale: 'Who has access · may be out of date',
         owner: 'Owner',

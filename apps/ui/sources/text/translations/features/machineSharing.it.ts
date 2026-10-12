@@ -11,7 +11,7 @@ export const machineSharing = createMachineSharingTranslations({
     trustedOsLead: 'Le persone con accesso al terminale o agli agenti di {machine} operano come il tuo utente del sistema operativo.',
     trustedOsDetail: 'Possono ottenere le credenziali locali e la chiave di cifratura dell’account, se presente. Nessuna API Happier legge o esporta credenziali o chiavi del proprietario; l’output di una shell condivisa può contenerle. Consigliamo di condividere una macchina dedicata al team.',
     manageHelp: 'Chi può gestire {machine} può anche condividerla con altri, concedendo lo stesso accesso.',
-    loading: 'Caricamento degli accessi a {machine}.', readError: 'Impossibile caricare gli accessi a {machine}.', offline: '{machine} è offline. Le modifiche agli accessi vengono salvate qui.', approvalPending: 'Questa modifica dell’accesso attende la tua approvazione.',
+    loading: 'Caricamento degli accessi a {machine}.', readError: 'Impossibile caricare gli accessi a {machine}.', offline: '{machine} è offline. Le modifiche agli accessi vengono salvate qui.', offlineRecipient: "{machine} è offline.", approvalPending: 'Questa modifica dell’accesso attende la tua approvazione.',
     denied: 'Solo chi può gestire {machine} può modificare la condivisione.', use: 'Può usare', manage: 'Può gestire', allMembers: 'Tutti i membri attuali, comprese le persone che si uniranno in seguito',
     pending: 'In attesa che un titolare autorizzato della chiave prepari l’accesso a {machine}.', incompatible: '{machine} usa la cifratura end-to-end, ma l’account di {person} no. {person} non può quindi aprirla.',
     incompatibleHelp: 'Condividi una macchina non cifrata o chiedi a {person} di attivare la cifratura end-to-end nelle impostazioni dell’account.',
