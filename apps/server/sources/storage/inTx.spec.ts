@@ -209,6 +209,30 @@ describe("inTx", () => {
         expect(delayMock).toHaveBeenCalledTimes(1);
     });
 
+    it.each([false, true])("replays audience acquisition under the existing retry budget (exhausted: %s)", async (exhausted) => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: "1" });
+        let attempts = 0;
+        const published: number[] = [];
+        const operation = inTx(async tx => {
+            const attempt = ++attempts;
+            afterTx(tx, () => published.push(attempt));
+            if (exhausted || attempt === 1) throw new inTxModule.TransactionReplayRequiredError("session-account-audience-changed");
+            return "committed";
+        });
+
+        if (exhausted) {
+            await expect(operation).rejects.toMatchObject({
+                name: "TransactionConflictExhaustedError", code: "database_transaction_conflict_exhausted",
+            });
+            expect(published).toEqual([]);
+        } else {
+            await expect(operation).resolves.toBe("committed");
+            expect(published).toEqual([2]);
+        }
+        expect(attempts).toBe(2);
+        expect(delayMock).toHaveBeenCalledTimes(1);
+    });
+
     it.each([
         { meta: { code: "40001", modelName: "Session" }, failedStatementRelation: "Session" },
         { meta: { code: "40001" }, failedStatementRelation: undefined },
@@ -425,5 +449,30 @@ describe("inTx", () => {
         expect(transaction).toHaveBeenCalledTimes(1);
         expect(delayMock).not.toHaveBeenCalled();
         expect(recordDatabaseTransactionRetry).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])("retains the typed SQLite deadline and earlier ambiguous cause (callback entered: %s)", async (callbackEntered) => {
+        applyEnvValues({ HAPPY_DB_PROVIDER: undefined, HAPPIER_DB_PROVIDER: "sqlite", HAPPIER_DB_TX_MAX_RETRIES: "1" });
+        const uncertainCompletion = Object.assign(new Error("Socket timeout"), { code: "P1008" });
+        const finalFailure = Object.assign(new Error(callbackEntered ? "Transaction is already closed" : "Unable to start a transaction"), { code: "P2028" });
+        transaction.mockRejectedValueOnce(uncertainCompletion);
+        if (callbackEntered) {
+            transaction.mockImplementationOnce(async fn => { await fn({}); throw finalFailure; });
+        } else {
+            transaction.mockRejectedValueOnce(finalFailure);
+        }
+
+        await expect(inTx(async () => "request-effect", { deadlineAtMs: Date.now() + 60_000 })).rejects.toMatchObject({
+            name: "TransactionDeadlineExceededError", cause: uncertainCompletion,
+        });
+    });
+
+    it.each([false, true])("does not certify rollback from PostgreSQL message heuristics (later conflict: %s)", async (laterConflict) => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: laterConflict ? "1" : "0" });
+        const uncertainCompletion = new Error("Connection lost while handling serialization failure");
+        transaction.mockRejectedValueOnce(uncertainCompletion);
+        if (laterConflict) transaction.mockRejectedValueOnce(Object.assign(new Error("Rolled back"), { code: "P2034" }));
+
+        await expect(inTx(async () => "request-effect")).rejects.toBe(uncertainCompletion);
     });
 });
