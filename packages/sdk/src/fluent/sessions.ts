@@ -38,7 +38,7 @@ export type HappierSessionSpawnInput = Readonly<
 
 /** Additional Action input for `session.sendAndWait()`, whose Session and wait mode are fixed by the fluent handle. */
 export type HappierSessionSendAndWaitInput = Readonly<
-  Omit<PublicActionInputById['session.message.send'], 'sessionId' | 'message' | 'wait'>
+  Omit<Extract<PublicActionInputById['session.message.send'], { message: string }>, 'sessionId' | 'message' | 'wait'>
 >;
 
 /** Per-call controls for an unbound fluent Session client. */

@@ -8,6 +8,7 @@ import {
   createActionExecutor,
   isApprovalRequiredByActionsSettings,
   type ActionExecutorDeps,
+  PublicActionIdSchema,
   getActionSpec,
   openExternalActionRequestV2,
   prepareExternalActionResponseV2,
@@ -221,7 +222,7 @@ describe('Happier SDK client', () => {
       const request = JSON.parse(String(init?.body)) as { input: unknown };
       const actionId = decodeURIComponent(new URL(String(url)).pathname.split('/').at(-1)!);
       return responseForRequest(init, { v: 1, actionId,
-        execution: await executor.execute(actionId, request.input, { surface: 'api', serverId: target.serverId }) });
+        execution: await executor.execute(PublicActionIdSchema.parse(actionId), request.input, { surface: 'api', serverId: target.serverId }) });
     }));
     const client = connect({ endpoint: 'http://daemon', token: TEST_API_TOKEN });
     const open = { ...target, terminalKey: 'member', workspace };
@@ -270,7 +271,7 @@ describe('Happier SDK client', () => {
       const request = JSON.parse(String(init?.body)) as { input: unknown };
       const actionId = decodeURIComponent(new URL(String(url)).pathname.split('/').at(-1)!);
       requests.push({ actionId, input: request.input });
-      const execution = await executor.execute(actionId, request.input, { surface: 'api', serverId: target.serverId });
+      const execution = await executor.execute(PublicActionIdSchema.parse(actionId), request.input, { surface: 'api', serverId: target.serverId });
       return responseForRequest(init, { v: 1, actionId, execution });
     });
     vi.stubGlobal('fetch', fetch);
@@ -1756,7 +1757,7 @@ describe('Happier SDK client', () => {
     ]);
   });
 
-  it('publishes both directory removal preview and the approved removal execution leaf', async () => {
+  it('publishes identity removal previews without exposing present-user directory removal to automation', async () => {
     const calls: Array<{ actionId: string; input: unknown }> = [];
     const fetch = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
       const actionId = decodeURIComponent(new URL(String(url)).pathname.split('/').at(-1) ?? '');
@@ -1773,12 +1774,7 @@ describe('Happier SDK client', () => {
     await callsTransport(client.actions.teams.identity.connections.remove.preview({
       v: 1, teamId: 'team-1', connectionId: 'connection-1', expectedRevision: 1,
     }));
-    await callsTransport(client.actions.teams.directory.sources.remove.preview({
-      v: 1, teamId: 'team-1', sourceId: 'source-1',
-    }));
-    await callsTransport(client.actions.teams.directory.sources.remove.execute({
-      v: 1, teamId: 'team-1', sourceId: 'source-1',
-    }));
+    expect(client.actions.teams.directory.sources).not.toHaveProperty('remove');
 
     expect(calls).toEqual([
       { actionId: 'identity.providers.remove.preview', input: {
@@ -1786,12 +1782,6 @@ describe('Happier SDK client', () => {
       } },
       { actionId: 'teams.identity.connections.remove.preview', input: {
         v: 1, teamId: 'team-1', connectionId: 'connection-1', expectedRevision: 1,
-      } },
-      { actionId: 'teams.directory.sources.remove.preview', input: {
-        v: 1, teamId: 'team-1', sourceId: 'source-1',
-      } },
-      { actionId: 'teams.directory.sources.remove', input: {
-        v: 1, teamId: 'team-1', sourceId: 'source-1',
       } },
     ]);
     await client.close();
