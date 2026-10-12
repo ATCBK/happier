@@ -9,7 +9,7 @@ import {
 import { resolveExternalSessionSourceFromAgentProjection } from '@/plugins/projection/registry/externalSessionSources';
 import type { BoundedAgentExternalSessionsContribution } from '@/session/external/agentExternalSessionsInvocation';
 
-export type NativeUsageSourceDescriptor = Pick<NativeUsageCaptureSource, 'agent' | 'source' | 'sourceKey' | 'root' | 'supported'> & Readonly<{
+export type NativeUsageSourceDescriptor = Pick<NativeUsageCaptureSource, 'agent' | 'source' | 'sourceKey' | 'root' | 'supported' | 'accountingSources'> & Readonly<{
     rootKind: 'default' | 'configured' | 'materialized' | 'override';
     /** Declared configured identity, independent of a runtime-resolved root. */
     configuredSourceKey?: string;
@@ -52,6 +52,7 @@ export async function resolveNativeUsageSourceMetadata(input: Readonly<{
             sourceKey: canonical.sourceKey,
             root: resolved.value.accountingSource?.rootPath ?? resolved.value.transcriptMediaReadRoots?.[0] ?? null,
             supported: input.boundary.externalSessions.supportsAccounting,
+            ...(resolved.value.accountingSource?.accountingSources ? { accountingSources: [...resolved.value.accountingSource.accountingSources] } : {}),
             rootKind: 'default',
         },
         metadata: resolved.value,

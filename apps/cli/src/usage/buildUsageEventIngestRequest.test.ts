@@ -12,7 +12,10 @@ describe('buildUsageEventIngestRequest', () => {
         const request = buildUsageEventIngestRequest({
             subject, observedAt: 10, externalKey: 'opaque-inference',
             metadata: { path: '/private/project', prompt: 'private text' },
-            observation: { provider: 'codex', source: 'codex-native', scope: 'turn_delta', tokens: { total: 12 } },
+            observation: {
+                provider: 'codex', source: 'codex-native', scope: 'turn_delta', tokens: { total: 12 },
+                key: null, modelId: null, cost: null, contextUsedTokens: null, contextWindowTokens: null,
+            },
         });
         expect(request).toMatchObject({ subject, machineId: 'machine-1', agentId: 'codex', externalKey: 'opaque-inference' });
         expect(request).not.toHaveProperty('sessionId');

@@ -7,13 +7,14 @@ import type { NativeUsageCaptureAuthority, NativeUsageCaptureSource, NativeUsage
 import { AsyncLock } from '@/utils/lock';
 import { deriveNativeUsageAccountingIdentity } from './nativeUsageAccountingIdentity';
 
-export type NativeUsageSourceDescriptor = Pick<NativeUsageCaptureSource, 'agent' | 'source' | 'sourceKey' | 'root' | 'supported' | 'rootKind' | 'error'>;
+export type NativeUsageSourceDescriptor = Pick<NativeUsageCaptureSource, 'agent' | 'source' | 'sourceKey' | 'root' | 'supported' | 'rootKind' | 'error' | 'accountingSources'>;
 
 /** Discovery metadata is not part of the strict persisted accounting shape. */
 function projectCaptureSourceDescriptor(descriptor: NativeUsageSourceDescriptor): NativeUsageSourceDescriptor {
-    const { agent, source, sourceKey, root, supported, rootKind, error } = descriptor;
+    const { agent, source, sourceKey, root, supported, rootKind, error, accountingSources } = descriptor;
     return { agent, source, sourceKey, root, supported,
-        ...(rootKind === undefined ? {} : { rootKind }), ...(error === undefined ? {} : { error }) };
+        ...(rootKind === undefined ? {} : { rootKind }), ...(error === undefined ? {} : { error }),
+        ...(accountingSources === undefined ? {} : { accountingSources }) };
 }
 export type NativeUsageCollectorDependencies = Readonly<{
     store: NativeUsageCaptureStore;
@@ -261,6 +262,8 @@ export function createNativeUsageCollector(input: NativeUsageCollectorDependenci
         return {
             serverId: input.authority.serverId, machineId: input.authority.machineId, sourceId: source.sourceId,
             agent: source.agent, externalSessionSource: source.source,
+            captureKind: 'from_logs',
+            ...(source.accountingSources ? { accountingSources: source.accountingSources } : {}),
             root: { kind: source.rootKind ?? 'default', path: source.root },
             consent: source.consented ? 'enabled' : 'disabled',
             status: unavailable ? 'unavailable' : !source.supported || source.error === 'native_ingest_unsupported' ? 'unsupported'

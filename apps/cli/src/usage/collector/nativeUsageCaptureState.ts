@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { ExternalSessionsSourceSchema } from '@happier-dev/protocol/sessions/external/sourceCatalog';
 import { AgentExternalSessionAccountingObservationSchema, AgentExternalSessionAccountingCoverageSchema } from '@happier-dev/protocol/sessions/external/accounting';
@@ -18,6 +19,7 @@ const NativeUsagePendingObservationSchema = AgentExternalSessionAccountingObserv
 
 export const NativeUsageCaptureSourceSchema = z.object({
     sourceId: z.string().min(1),
+    accountingSources: z.array(z.string().trim().min(1)).optional(),
     agent: asHostProtocolZod(PluginContributionIdentityV1Schema),
     source: ExternalSessionsSourceSchema,
     sourceKey: z.string().min(1),
@@ -37,6 +39,7 @@ export const NativeUsageCaptureStateSchema = z.object({
     sources: z.array(NativeUsageCaptureSourceSchema),
 }).strict();
 export type NativeUsageCaptureState = z.infer<typeof NativeUsageCaptureStateSchema>;
+const StoredNativeUsageCaptureStateSchema = createStoredReadSchema(NativeUsageCaptureStateSchema);
 export type NativeUsageCaptureStore = Readonly<{
     load(): Promise<NativeUsageCaptureState>;
     save(state: NativeUsageCaptureState): Promise<void>;
@@ -45,8 +48,7 @@ export type NativeUsageCaptureStore = Readonly<{
 export function createNativeUsageCaptureStore(input: Readonly<{
     path: string; authority: NativeUsageCaptureAuthority; storage: DeviceLocalSecretStorage;
 }>): NativeUsageCaptureStore {
-    function validate(value: unknown): NativeUsageCaptureState {
-        const state = NativeUsageCaptureStateSchema.parse(value);
+    function validate(state: NativeUsageCaptureState): NativeUsageCaptureState {
         if (state.authority.serverId !== input.authority.serverId
             || state.authority.accountId !== input.authority.accountId
             || state.authority.machineId !== input.authority.machineId) {
@@ -67,10 +69,10 @@ export function createNativeUsageCaptureStore(input: Readonly<{
             }
             const value = input.storage.openJson({ purpose: 'usage_accounting_capture', ciphertext });
             if (value === null) throw new Error('Invalid sealed native accounting custody');
-            return validate(value);
+            return validate(StoredNativeUsageCaptureStateSchema.parse(value));
         },
         async save(state) {
-            const ciphertext = input.storage.sealJson({ purpose: 'usage_accounting_capture', value: validate(state) });
+            const ciphertext = input.storage.sealJson({ purpose: 'usage_accounting_capture', value: validate(NativeUsageCaptureStateSchema.parse(state)) });
             await writeProtectedLocalStateFileAtomic(input.path, ciphertext);
         },
     };

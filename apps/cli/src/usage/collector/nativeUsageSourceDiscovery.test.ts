@@ -56,10 +56,12 @@ describe('native source metadata discovery', () => {
                 publisher: { publish: unavailable }, deleteHistory: unavailable,
             });
             try {
-                await collector.discover();
+                const discovered = await collector.discover();
+                expect(discovered[0]).toMatchObject({ accountingSources: ['claude-assistant-usage', 'claude-sdk-result'], captureKind: 'from_logs' });
                 const state = await store.load();
                 expect(state.sources).toHaveLength(1);
                 expect(state.sources[0].agent).toEqual({ pluginId: ingestion.manifest.id, localId: 'claude' });
+                expect(state.sources[0]).toMatchObject({ accountingSources: ['claude-assistant-usage', 'claude-sdk-result'] });
                 expect(state.sources[0]).not.toHaveProperty('configuredSourceKey');
             } finally { await collector.dispose(); }
         } finally { await rm(directory, { recursive: true, force: true }); }

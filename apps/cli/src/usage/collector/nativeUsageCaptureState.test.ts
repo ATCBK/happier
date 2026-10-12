@@ -24,13 +24,26 @@ describe('native accounting capture custody', () => {
                 }],
             }] };
             await store.save(state);
+            const retainedState = { ...state, retiredCaptureMode: 'native', authority: { ...authority, retiredAuthority: true },
+                sources: state.sources.map(source => ({ ...source, retiredSource: true,
+                    agent: { ...source.agent, retiredAgent: true }, source: { ...source.source, retiredRoot: true },
+                    pending: source.pending.map(pending => ({ ...pending, retiredPending: true,
+                        observation: { ...pending.observation, retiredObservation: true,
+                            tokens: { ...pending.observation.tokens, retiredTokens: 1 } } })) })) };
+            await writeFile(path, storage.sealJson({ purpose: 'usage_accounting_capture', value: retainedState }), { mode: 0o600 });
             const restarted = createNativeUsageCaptureStore({ path, authority, storage });
-            expect(await restarted.load()).toEqual(state);
+            // Provider-native source JSON is opaque custody, unlike the typed capture fields.
+            const openedState = { ...state, sources: state.sources.map(source => ({ ...source,
+                source: { ...source.source, retiredRoot: true } })) };
+            expect(await restarted.load()).toEqual(openedState);
+            await expect(restarted.save(retainedState)).rejects.toThrow();
             const retainedBytes = await readFile(path, 'utf8');
             expect(retainedBytes).not.toContain('native-session');
             expect(retainedBytes).not.toContain(directory);
-            await restarted.save({ ...state, sources: state.sources.map(source => ({ ...source, pending: [] })) });
+            await restarted.save({ ...openedState, sources: openedState.sources.map(source => ({ ...source, pending: [] })) });
             expect((await store.load()).sources[0]?.pending).toEqual([]);
+            expect(storage.openJson({ purpose: 'usage_accounting_capture', ciphertext: await readFile(path, 'utf8') }))
+                .toEqual({ ...openedState, sources: openedState.sources.map(source => ({ ...source, pending: [] })) });
             await expect(createNativeUsageCaptureStore({ path, storage, authority: { ...authority, accountId: 'other' } }).load())
                 .rejects.toThrow(/authority/);
             await writeFile(path, 'corrupt-custody', { mode: 0o600 });

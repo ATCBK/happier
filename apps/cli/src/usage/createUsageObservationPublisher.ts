@@ -1,6 +1,6 @@
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import axios from 'axios';
-import type { UsageNativeAccountingSubject, UsageNativeAccountingEvidence } from '@happier-dev/protocol';
+import type { UsageNativeAccountingSubject, UsageNativeAccountingEvidence, UsageRequestAttribution } from '@happier-dev/protocol';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { normalizeBaseUrl } from '@/diagnostics/httpClient';
@@ -136,6 +136,7 @@ export function createUsageObservationPublisher(params: Readonly<{
             signal?: AbortSignal;
             subject?: UsageNativeAccountingSubject;
             accounting?: UsageNativeAccountingEvidence;
+            attribution?: UsageRequestAttribution;
             observation: UsageObservation;
             observedAt?: number;
             backendMode?: string | null;
@@ -158,6 +159,7 @@ export function createUsageObservationPublisher(params: Readonly<{
                     sessionId: input.sessionId,
                     subject: input.subject,
                     accounting: input.accounting,
+                    attribution: input.attribution,
                     observedAt: input.observedAt ?? Date.now(),
                     observation: input.observation,
                     backendMode: input.backendMode,

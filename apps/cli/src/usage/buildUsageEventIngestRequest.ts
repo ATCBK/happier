@@ -1,4 +1,4 @@
-import type { UsageEventIngestRequest, UsageNativeAccountingSubject, UsageNativeAccountingEvidence } from '@happier-dev/protocol';
+import type { UsageEventIngestRequest, UsageNativeAccountingSubject, UsageNativeAccountingEvidence, UsageRequestAttribution } from '@happier-dev/protocol';
 
 import {
     normalizeUsageObservation,
@@ -62,6 +62,7 @@ export function buildUsageEventIngestRequest(params: Readonly<{
     sessionId?: string;
     subject?: UsageNativeAccountingSubject;
     accounting?: UsageNativeAccountingEvidence;
+    attribution?: UsageRequestAttribution;
     observedAt: number;
     observation: UsageObservationBoundaryInput;
     backendMode?: string | null;
@@ -107,6 +108,7 @@ export function buildUsageEventIngestRequest(params: Readonly<{
     return {
         ...(params.subject ? { subject: params.subject } : { sessionId: sessionId! }),
         ...(params.subject && params.accounting ? { accounting: params.accounting } : {}),
+        ...(!params.subject && params.attribution && observation.scope === 'turn_delta' && params.turnId === params.attribution.turnId ? { attribution: params.attribution } : {}),
         observedAt: Math.max(0, Math.trunc(params.observedAt)),
         agentId: observation.provider,
         backendMode: asNullableTrimmedString(params.backendMode),
