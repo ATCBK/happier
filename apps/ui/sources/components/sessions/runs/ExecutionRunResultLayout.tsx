@@ -2,6 +2,7 @@ import * as React from 'react';
 import { ScrollView, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
+import { SurfaceCard } from '@/components/ui/cards/SurfaceCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
@@ -11,13 +12,9 @@ const NARROW_FOOT_WIDTH_PX = 480;
 export type ExecutionRunResultPresentation = 'message' | 'page';
 
 const stylesheet = StyleSheet.create((theme) => ({
+    // The card itself is the canonical Elements card (`SurfaceCard`): its material, edge and radius.
     message: {
         gap: 14,
-        padding: 12,
-        borderRadius: 12,
-        backgroundColor: theme.colors.surface.elevated,
-        borderWidth: 1,
-        borderColor: theme.colors.border.default,
     },
     page: {
         flex: 1,
@@ -115,7 +112,7 @@ export function ExecutionRunResultLayout(props: Readonly<{
 
     if (props.presentation === 'message') {
         return (
-            <View testID={props.testID} style={styles.message}>
+            <SurfaceCard testID={props.testID} padding="sm" style={styles.message}>
                 {props.children}
                 {hasFoot ? (
                     <View style={styles.messageFoot}>
@@ -124,7 +121,7 @@ export function ExecutionRunResultLayout(props: Readonly<{
                         {props.footHint ?? null}
                     </View>
                 ) : null}
-            </View>
+            </SurfaceCard>
         );
     }
 
