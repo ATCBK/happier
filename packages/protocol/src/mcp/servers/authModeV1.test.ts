@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { inferMcpServerAuthModeV1 } from './authModeV1.js';
 
 describe('inferMcpServerAuthModeV1', () => {
+  it('does not mistake Session facts for stored credentials or disrupt machine-environment auth', () => {
+    const remote = { url: 'https://example.test/mcp', headers: {
+      Sender: { t: 'sessionAttested' as const, field: 'externalPrincipalId' as const },
+    } };
+    expect(inferMcpServerAuthModeV1({ env: {}, remote })).toBe('none');
+    expect(inferMcpServerAuthModeV1({ env: { TOKEN: { t: 'literal', v: '${TOKEN}' } }, remote })).toBe('machineEnv');
+  });
+
   it('returns none when the server has no env or header values', () => {
     expect(
       inferMcpServerAuthModeV1({

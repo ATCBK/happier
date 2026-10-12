@@ -19,6 +19,26 @@ const catalog: McpServerCatalogV1 = { v: 1, servers: [{ id: 'server', name: 'ser
 }] };
 
 describe('MCP catalog row authority', () => {
+  it('preserves attested references through catalog admission and secret rewrites', () => {
+    const source: McpServerCatalogV1 = { ...catalog,
+      servers: catalog.servers.map(server => ({ ...server, remote: { ...server.remote!, headers: {
+        ...server.remote!.headers, Sender: { t: 'sessionAttested', field: 'externalPrincipalId' },
+      } } })),
+      bindings: catalog.bindings.map(binding => ({ ...binding, overrides: { ...binding.overrides,
+        remote: { headersPatch: { Message: { t: 'sessionAttested', field: 'sourceMessageId' }, Removed: null } },
+      } })),
+    };
+    expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: source } }))
+      .toEqual({ status: 'opened', catalog: source });
+    expect(listMcpServerCatalogSavedSecretRefsV1(source).map(ref => ref.secretId)).toEqual([oldReference, oldReference]);
+    const rewritten = remapMcpServerCatalogSavedSecretReferencesV1(source, { [oldReference]: newReference });
+    expect(rewritten.servers[0]?.remote?.headers.Sender).toEqual({ t: 'sessionAttested', field: 'externalPrincipalId' });
+    expect(rewritten.bindings[0]?.overrides?.remote?.headersPatch).toEqual({
+      Message: { t: 'sessionAttested', field: 'sourceMessageId' }, Removed: null,
+    });
+    expect(listMcpServerCatalogSavedSecretRefsV1(rewritten).map(ref => ref.secretId)).toEqual([newReference, newReference]);
+  });
+
   it('converts complete retained metadata losslessly while ordinary new writes remain strict', () => {
     const payload = { ...catalog, catalogMetadata: { label: 'retained' }, servers: catalog.servers.map(server => ({ ...server,
       serverMetadata: { label: 'original' }, env: { REGION: { t: 'literal', v: 'local', literalMetadata: { source: 'prior' } } } })) };

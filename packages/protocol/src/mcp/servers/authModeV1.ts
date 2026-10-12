@@ -5,7 +5,8 @@ export type McpServerAuthModeV1 = 'none' | 'savedSecret' | 'machineEnv' | 'plain
 function valueRefsFromServer(server: Pick<McpServerCatalogEntryV1, 'env' | 'remote'>): McpValueRefV1[] {
   const refs = Object.values(server.env ?? {});
   const headerRefs = Object.values(server.remote?.headers ?? {});
-  return [...refs, ...headerRefs];
+  // Session facts assert origin; they are not an authentication credential.
+  return [...refs, ...headerRefs].filter(valueRef => valueRef.t !== 'sessionAttested');
 }
 
 function isEnvironmentTemplateLiteral(value: string): boolean {
