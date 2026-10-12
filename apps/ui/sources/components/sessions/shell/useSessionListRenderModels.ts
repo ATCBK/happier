@@ -524,11 +524,12 @@ export function useSessionListRenderModels(input: Readonly<{
     const projectHeaderViewModelState = React.useMemo(() => {
         return buildSessionListProjectHeaderViewModels({
             listItems,
+            machinesById,
             workspaceLabels: normalizedShellState.workspaceLabels,
             workspaceRefs: normalizedShellState.workspaceRefs,
             workspacePathDisplayModeV1: input.workspacePathDisplayModeV1,
         });
-    }, [input.workspacePathDisplayModeV1, listItems, normalizedShellState.workspaceLabels, normalizedShellState.workspaceRefs]);
+    }, [input.workspacePathDisplayModeV1, listItems, machinesById, normalizedShellState.workspaceLabels, normalizedShellState.workspaceRefs]);
 
     const rowViewModels = React.useMemo(() => {
         if (!deriveRowViewModels) {

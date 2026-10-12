@@ -9,6 +9,7 @@ import { readDisplayMachineTargetForSession } from '@/sync/ops/sessionMachineTar
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { readSessionListProjectHeaderMachineId } from './sessionListProjectHeaderViewModels';
 
 type ReachabilityMachineDisplay = Readonly<Pick<MachineDisplayRenderable, 'id' | 'metadata' | 'replacedByMachineId'>>;
 
@@ -232,28 +233,24 @@ function areDisplayRowsReferenceEqual(left: readonly SessionDisplayRow[], right:
     return left.every((row, index) => row === right[index]);
 }
 
-function buildSummaryFromDisplayRows(rows: readonly SessionDisplayRow[]): SessionListReachabilitySummary {
-    if (rows.length === 0) {
+function buildSummaryFromDisplayRows(rows: readonly SessionDisplayRow[], hasMultipleMachines: boolean): SessionListReachabilitySummary {
+    if (rows.length === 0 && !hasMultipleMachines) {
         return EMPTY_SESSION_LIST_REACHABILITY_SUMMARY;
     }
 
     const displayById = new Map<string, ReachableSessionDisplay>();
     const displayByKey = new Map<string, ReachableSessionDisplay>();
-    const machineKeys = new Set<string>();
     for (const row of rows) {
         displayById.set(row.sessionId, row.display);
         if (row.sessionKey) {
             displayByKey.set(row.sessionKey, row.display);
-        }
-        if (row.machineKey) {
-            machineKeys.add(row.machineKey);
         }
     }
 
     return {
         displayById,
         displayByKey,
-        hasMultipleMachines: machineKeys.size > 1,
+        hasMultipleMachines,
     };
 }
 
@@ -266,8 +263,15 @@ export function buildSessionListReachabilitySummary(input: Readonly<{
     cache?: SessionListReachabilitySummaryCache;
 }>): SessionListReachabilitySummary {
     const rows = buildSessionDisplayRows(input);
+    const machineKeys = new Set(rows.map(row => row.machineKey).filter(Boolean));
+    for (const item of input.listItems) {
+        if (item.type !== 'header' || item.headerKind !== 'project') continue;
+        const machineId = readSessionListProjectHeaderMachineId(item, input.workspaceRefs);
+        if (machineId) machineKeys.add(machineId);
+    }
+    const hasMultipleMachines = machineKeys.size > 1;
 
-    if (rows.length === 0) {
+    if (rows.length === 0 && !hasMultipleMachines) {
         if (input.cache) {
             input.cache.previousRows = [];
             input.cache.previousSummary = EMPTY_SESSION_LIST_REACHABILITY_SUMMARY;
@@ -278,15 +282,16 @@ export function buildSessionListReachabilitySummary(input: Readonly<{
     if (input.cache) {
         if (
             input.cache.previousSummary
+            && input.cache.previousSummary.hasMultipleMachines === hasMultipleMachines
             && areDisplayRowsReferenceEqual(input.cache.previousRows, rows)
         ) {
             return input.cache.previousSummary;
         }
-        const summary = buildSummaryFromDisplayRows(rows);
+        const summary = buildSummaryFromDisplayRows(rows, hasMultipleMachines);
         input.cache.previousRows = rows;
         input.cache.previousSummary = summary;
         return summary;
     }
 
-    return buildSummaryFromDisplayRows(rows);
+    return buildSummaryFromDisplayRows(rows, hasMultipleMachines);
 }

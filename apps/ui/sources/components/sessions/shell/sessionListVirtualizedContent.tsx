@@ -2,7 +2,6 @@ import React from 'react';
 import { Platform, View, type ViewToken } from 'react-native';
 import { VirtualizedList } from '@/components/ui/lists/virtualized/VirtualizedList';
 import type { VirtualizedListRef } from '@/components/ui/lists/virtualized/virtualizedListTypes';
-import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { t, type TranslationKey } from '@/text';
 
@@ -54,12 +53,14 @@ const SessionListCompositeHeader = React.memo(function SessionListCompositeHeade
     onSelectFolderBreadcrumb: (folderId: string) => void;
     rowDensity: SessionListRowDensity;
     showDrafts?: boolean;
+    /** The Account's own reminders (Recovery key) belong to Sessions, not to a Runs-only list. */
+    showReminders?: boolean;
     scheduledSection?: React.ReactNode;
     viewContext?: SessionListViewContext;
 }>) {
     return (
         <>
-            <SessionsListHeader />
+            {props.showReminders !== false ? <SessionsListHeader /> : null}
             {props.scheduledSection}
             {props.showDrafts !== false ? (
                 <NewSessionDraftsSection
@@ -209,19 +210,17 @@ export const SessionListVirtualizedContent = React.memo(function SessionListVirt
     folderFocus: SessionFolderFocusScope | null;
     folderFocusRootTitle?: string | null;
     showDrafts?: boolean;
+    showReminders?: boolean;
     /** The global, live Work sidebar alone demands Account upcoming work. */
     scheduledSection?: React.ReactNode;
     onClearFolderFocus: () => void;
     onSelectFolderBreadcrumb: (folderId: string) => void;
 }>) {
-    // Read reactively and keep it in the memo deps: `layout.maxWidth` alone would be
-    // pinned by this memo, so the user's content-width preference would only reach the
-    // list after a remount.
-    const contentMaxWidthStyle = useLayoutMaxWidthStyle();
+    // The SessionsList viewport owns preferred page width versus a filled Run column.
+    // Rows fill that viewport; a second cap here would silently narrow only their sheet.
     const contentContainerStyle = React.useMemo(() => ({
         paddingBottom: props.safeAreaBottom + 128,
-        maxWidth: contentMaxWidthStyle.maxWidth,
-    }), [contentMaxWidthStyle, props.safeAreaBottom]);
+    }), [props.safeAreaBottom]);
     // A FlatList rejects a new `onViewableItemsChanged` for its whole lifetime ("Changing
     // onViewableItemsChanged on the fly is not supported"), so the list gets one function per list
     // instance that forwards to the caller's current handler. It lives in a ref, not a `useCallback`:
@@ -255,10 +254,11 @@ export const SessionListVirtualizedContent = React.memo(function SessionListVirt
             onSelectFolderBreadcrumb={props.onSelectFolderBreadcrumb}
             rowDensity={rowDensity}
             showDrafts={props.showDrafts}
+            showReminders={props.showReminders}
             scheduledSection={props.scheduledSection}
             viewContext={props.viewContext}
         />
-    ), [props.folderFocus, props.folderFocusRootTitle, props.onClearFolderFocus, props.onSelectFolderBreadcrumb, props.showDrafts, props.scheduledSection, props.viewContext, rowDensity]);
+    ), [props.folderFocus, props.folderFocusRootTitle, props.onClearFolderFocus, props.onSelectFolderBreadcrumb, props.showDrafts, props.showReminders, props.scheduledSection, props.viewContext, rowDensity]);
     const getNodeType = React.useCallback(
         (node: SessionListVirtualizedNode) => getSessionListNodeType(node, rowDensity),
         [rowDensity],

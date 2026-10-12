@@ -28,6 +28,8 @@ type Focusable = Readonly<{ focus: () => void }>;
 export type SessionListSearchChromeProps = Readonly<{
     filterControl?: React.ReactNode;
     filterSummary?: Readonly<{ label: string; onReset(): void }>;
+    /** A fixed Run window has a quiet summary, not a second Sessions scope title. */
+    presentation?: 'sessions' | 'runs';
     searchQuery: string;
     /** Exact Home whose transcript provider supplies contextual matches. */
     searchScopeLabel?: string;
@@ -144,11 +146,24 @@ export const SessionListSearchChrome = React.memo(function SessionListSearchChro
         searchStatus?.onRetry?.();
     }, [searchStatus]);
 
+    const resetControl = props.filterSummary ? <HappierPressable
+        testID="session-list-filter-summary-reset"
+        accessibilityRole="button"
+        accessibilityLabel={t('common.reset')}
+        onPress={props.filterSummary.onReset}
+        style={(state) => [
+            styles.searchChromeStatusRetry,
+            // A finger gets the platform floor; a pointer keeps the quiet line's own height.
+            touchTargetSize ? { minWidth: touchTargetSize, minHeight: touchTargetSize } : null,
+            focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
+        ]}
+    ><Text style={styles.searchChromeStatusActionText}>{t('common.reset')}</Text></HappierPressable> : null;
+
     return (
         <View style={styles.searchChrome} testID="session-list-search-chrome">
             <View
                 testID="session-list-search-primary-controls"
-                style={styles.searchChromeControlsRow}
+                style={[styles.searchChromeControlsRow, props.presentation === 'runs' ? styles.searchChromeSummaryRow : null]}
             >
                 <View testID="session-list-title-slot" style={styles.searchChromeTitleSlot}>
                     {filterControl}
@@ -167,28 +182,16 @@ export const SessionListSearchChrome = React.memo(function SessionListSearchChro
                     iconName="magnifying-glass"
                     onPress={handleToggleSearch}
                 />
-                <SessionListViewOptionsButton
+                {props.presentation === 'runs' ? resetControl : <SessionListViewOptionsButton
                     placement="bottom"
                     serverId={props.organizationServerId}
                     minimumInteractiveTargetSize={touchTargetSize}
-                />
+                />}
             </View>
-            {props.filterSummary ? (
+            {props.filterSummary && props.presentation !== 'runs' ? (
                 <View testID="session-list-filter-summary" style={styles.searchChromeStatusRow}>
                     <Text style={styles.searchChromeStatusText}>{props.filterSummary.label}</Text>
-                    <HappierPressable
-                        testID="session-list-filter-summary-reset"
-                        accessibilityRole="button"
-                        accessibilityLabel={t('common.reset')}
-                        onPress={props.filterSummary.onReset}
-                        style={(state) => [
-                            styles.searchChromeStatusRetry,
-                            MINIMUM_ESCALATION_TARGET_STYLE,
-                            focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
-                        ]}
-                    >
-                        <Text style={styles.searchChromeStatusRetryText}>{t('common.reset')}</Text>
-                    </HappierPressable>
+                    {resetControl}
                 </View>
             ) : null}
             {searchIsOpen ? (

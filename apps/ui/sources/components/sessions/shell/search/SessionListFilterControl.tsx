@@ -96,7 +96,7 @@ export function readSessionListWorkFilterSummary(
     const { filters, defaultFilters } = controller;
     const startersMatch = filters.startedBy.length === defaultFilters.startedBy.length
         && filters.startedBy.every((starter) => defaultFilters.startedBy.includes(starter));
-    if (filters.show === (controller.fixedShow ?? defaultFilters.show) && startersMatch) return null;
+    if (controller.fixedShow !== 'runs' && filters.show === (controller.fixedShow ?? defaultFilters.show) && startersMatch) return null;
     const labels = buildSessionListFilterEditorLabels();
     const showLabel = filters.show === 'sessions'
         ? labels.sessions
@@ -171,7 +171,8 @@ export const SessionListFilterControl = React.memo(function SessionListFilterCon
 
     return (
         <SessionListFilterEditorControl
-            label={controlLabel}
+            label={controller.fixedShow === 'runs' ? readSessionListWorkFilterSummary(controller) ?? labels.runs : controlLabel}
+            presentation={controller.fixedShow === 'runs' ? 'summary' : 'title'}
             active={active}
             editor={{
                 filters: controller.filters,

@@ -439,12 +439,14 @@ export const SessionFolderFocusBreadcrumbs = React.memo(function SessionFolderFo
 
 export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: Readonly<{
     item: Extract<SessionListIndexItem, { type: 'header' }>;
+    machineSubtitle?: string;
     hasMultipleMachines: boolean;
     displayTitle: string;
     hasCustomLabel: boolean;
     canOpenProject: boolean;
     workspaceFaviconsEnabled?: boolean;
     workspaceMachineSubtitlesEnabled?: boolean;
+    newSessionEnabled?: boolean;
     onOpenProject: () => void;
     onCreateSession: () => void;
     onAddFolder: () => void;
@@ -457,7 +459,8 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     const styles = sessionListStyles;
     const { theme } = useUnistyles();
     const materialColor = useHappierMaterialColorResolver();
-    const { item, hasMultipleMachines, displayTitle, hasCustomLabel, canOpenProject, workspaceFaviconsEnabled = false, workspaceMachineSubtitlesEnabled = true, onOpenProject, onCreateSession, onAddFolder, onRename, onReset, collapsed, onToggleCollapse } = props;
+    const machineSubtitle = props.machineSubtitle ?? props.item.subtitle;
+    const { item, hasMultipleMachines, displayTitle, hasCustomLabel, canOpenProject, workspaceFaviconsEnabled = false, workspaceMachineSubtitlesEnabled = true, newSessionEnabled = true, onOpenProject, onCreateSession, onAddFolder, onRename, onReset, collapsed, onToggleCollapse } = props;
     const [isRowHovered, setIsRowHovered] = React.useState(false);
     const [isActionsHovered, setIsActionsHovered] = React.useState(false);
     const [menuOpen, setMenuOpen] = React.useState(false);
@@ -471,7 +474,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     const showChevron = !isWeb || collapsed || showHoverActions;
     const reorderHandleKey = item.groupKey ?? item.workspaceKey ?? '';
     const actionIconColor = theme.colors.text.secondary;
-    const canCreateSession = newSessionTarget !== null;
+    const canCreateSession = newSessionEnabled && newSessionTarget !== null;
     const favicon = useWorkspaceFavicon({
         enabled: workspaceFaviconsEnabled,
         serverId: item.workspaceScopeHint?.serverId ?? item.serverId ?? null,
@@ -535,6 +538,10 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
                             </View>
                         ) : null}
                         <Eyebrow style={styles.groupHeaderTitle} numberOfLines={1}>{displayTitle}</Eyebrow>
+                        {/* The machine sits on the label's line, quiet like a count ("Chats  MacBook Pro", lab FL3). */}
+                        {workspaceMachineSubtitlesEnabled && hasMultipleMachines && machineSubtitle ? (
+                            <Text testID="session-list-group-machine" style={styles.groupHeaderMachine} numberOfLines={1}>{machineSubtitle}</Text>
+                        ) : null}
                         <View
                             style={styles.groupHeaderInlineActions}
                             onPointerEnter={isWeb ? () => setIsActionsHovered(true) : undefined}
@@ -554,9 +561,6 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
                             </View>
                         </View>
                     </View>
-                    {workspaceMachineSubtitlesEnabled && hasMultipleMachines && item.subtitle ? (
-                        <Text style={styles.groupHeaderSubtitle}>{item.subtitle}</Text>
-                    ) : null}
                 </Pressable>
                 <View style={styles.groupHeaderTrailingActions}>
                     {showHoverActions && reorderHandleKey ? (

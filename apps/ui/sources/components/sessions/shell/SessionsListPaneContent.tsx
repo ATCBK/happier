@@ -112,6 +112,7 @@ function ActiveSessionsListPaneStateSubscriber(props: SessionsListPaneContentPro
         sessionListSurfaceDataActive: true,
         queryHomes: props.filterController.pagingHomes,
         emptyQuerySelectionComplete: props.filterController.emptyQuerySelectionComplete,
+        workFilter: props.filterController.filters,
     });
 
     const onPaneState = props.onPaneState;

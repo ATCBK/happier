@@ -66,6 +66,28 @@ function editorProps(overrides: HarnessOverrides = {}): SessionListFilterEditorP
 }
 
 describe('SessionListFilterEditor panel', () => {
+    it('keeps the fixed Runs filter summary visible at its default and Reset preserves the Runs destination', async () => {
+        let owner: ReturnType<typeof useSessionListViewFilters> | null = null;
+        function RunsFilterSummaryHarness() {
+            const retained = useSessionListViewFilters({ contextKey: 'runs-summary-panel', fixedShow: 'runs',
+                defaults: { homeServerIds: ['home-a'] }, accountScopeResolutions: new Map() });
+            owner = retained;
+            const summary = readSessionListWorkFilterSummary({ filters: retained.filters,
+                defaultFilters: createSessionListViewFilterDefaults({ homeServerIds: ['home-a'] }), fixedShow: 'runs' });
+            return <>
+                <SessionListSearchChrome searchQuery="" onSearchQueryChange={retained.setSearchQuery}
+                    filterSummary={summary ? { label: summary, onReset: retained.resetFilters } : undefined} />
+                <Text testID="retained-runs-filter">{JSON.stringify({ show: retained.filters.show, startedBy: retained.filters.startedBy })}</Text>
+            </>;
+        }
+        const screen = await renderScreen(<RunsFilterSummaryHarness />);
+        expect(screen.getTextContent()).toContain('Runs · You');
+        await act(async () => owner!.updateFilters(filters => ({ ...filters, startedBy: ['you', 'triggers'] })));
+        expect(screen.getTextContent()).toContain('Runs · You, Triggers');
+        await screen.pressByTestIdAsync('session-list-filter-summary-reset');
+        expect(screen.getTextContent()).toContain('"show":"runs","startedBy":["you"]');
+        expect(screen.getTextContent()).toContain('Runs · You');
+    });
     it('shows a quiet active-filter summary without search and Reset reaches the retained owner', async () => {
         let owner: ReturnType<typeof useSessionListViewFilters> | null = null;
         function FilterSummaryHarness() {

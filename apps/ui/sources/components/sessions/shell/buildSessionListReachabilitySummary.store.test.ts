@@ -24,6 +24,19 @@ function machineDisplayMap(machines: readonly Machine[]) {
 }
 
 describe('session reachability summary with real storage', () => {
+    it('counts visible Run project machines without Sessions and invalidates the cached count when groups change', () => {
+        const listItems: SessionListIndexItem[] = ['machine-a', 'machine-b'].map(machineId => ({
+            type: 'header', headerKind: 'project', title: '/home/happier', groupKey: machineId,
+            workspaceScopeHint: { serverId: 'server-a', machineId, rootPath: '/home/happier' },
+        }));
+        const input = { listItems, machinesById: new Map(), workspaceRefs: [],
+            resolveSessionRenderable: () => null, cache: createSessionListReachabilitySummaryCache() };
+        const first = buildSessionListReachabilitySummary(input);
+        expect(first.hasMultipleMachines).toBe(true);
+        expect(buildSessionListReachabilitySummary(input)).toBe(first);
+        expect(buildSessionListReachabilitySummary({ ...input, listItems: listItems.slice(0, 1) }).hasMultipleMachines).toBe(false);
+        expect(buildSessionListReachabilitySummary(input).hasMultipleMachines).toBe(true);
+    });
     it('retains display identity across heartbeats while names and replacement targets stay current', () => {
         const session = createSessionFixture({ serverId: 'server-a' });
         const machine = createMachineFixture();

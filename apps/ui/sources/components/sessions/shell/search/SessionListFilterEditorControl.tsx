@@ -14,7 +14,7 @@ import { shouldUseReadablePhoneMinimalSessionRow } from '../resolveSessionListDe
 import { Modal } from '@/modal';
 import type { CustomModalInjectedProps } from '@/modal/types';
 
-import { SESSION_LIST_COLUMN_METRICS } from '../sessionListStyles';
+import { SESSION_LIST_COLUMN_METRICS, sessionListStyles } from '../sessionListStyles';
 import {
     SessionListFilterEditor,
     type SessionListFilterEditorProps,
@@ -25,6 +25,7 @@ type EditorProps = Omit<SessionListFilterEditorProps, 'onDone' | 'maxHeight'>;
 export type SessionListFilterEditorControlProps = Readonly<{
     label: string;
     active: boolean;
+    presentation?: 'title' | 'summary';
     editor: EditorProps;
 }>;
 
@@ -170,9 +171,11 @@ export const SessionListFilterEditorControl = React.memo(function SessionListFil
                 pressed ? styles.triggerPressed : null,
             ]}
         >
-            <Text numberOfLines={1} style={[styles.triggerLabel, phone ? styles.phoneTriggerLabel : null]}>{props.label}</Text>
-            <Icon name="caret-down" size={12} color={theme.colors.text.secondary} />
-            {props.active ? (
+            <Text numberOfLines={1} style={props.presentation === 'summary'
+                ? sessionListStyles.searchChromeStatusText
+                : [styles.triggerLabel, phone ? styles.phoneTriggerLabel : null]}>{props.label}</Text>
+            {props.presentation !== 'summary' ? <Icon name="caret-down" size={12} color={theme.colors.text.secondary} /> : null}
+            {props.active && props.presentation !== 'summary' ? (
                 <Icon
                     testID="session-list-filter-trigger-narrowed"
                     name="funnel-simple"

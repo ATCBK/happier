@@ -3,6 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { buildSessionListProjectHeaderViewModels } from './sessionListProjectHeaderViewModels';
 
 describe('buildSessionListProjectHeaderViewModels', () => {
+    it('keeps the project path when hydration omits the redundant scope hint', () => {
+        const project = { t: 'workspaceScope' as const, serverId: 'stable-home', machineId: 'stable-machine', rootPath: '/home/ubuntu/release' };
+        const input = { listItems: [{ type: 'header' as const, headerKind: 'project' as const,
+            groupKey: 'stable-project', title: 'No folder', workspace: project }], workspaceRefs: [], workspaceLabels: {} };
+        const first = buildSessionListProjectHeaderViewModels(input);
+        expect(first.projectHeaderViewModelByGroupKey.get('stable-project')?.displayTitle).toBe('release');
+        const moved = buildSessionListProjectHeaderViewModels({ ...input,
+            listItems: [{ ...input.listItems[0]!, workspace: { ...project, rootPath: '/home/ubuntu/another' } }] });
+        expect(moved.projectHeaderViewModelByGroupKey.get('stable-project')?.displayTitle).toBe('another');
+    });
     it('keeps the Chats identity despite an inherited legacy workspace label', () => {
         const inheritedLabel = buildSessionListProjectHeaderViewModels({
             listItems: [{

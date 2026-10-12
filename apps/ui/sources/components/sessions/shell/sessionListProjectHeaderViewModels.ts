@@ -4,6 +4,8 @@ import type { WorkspacePathDisplayModeV1 } from '@/sync/domains/workspaces/works
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { LruMap } from '@/utils/cache/lruMap';
+import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
+import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 
 import { readSessionListShellCacheMaxEntriesFromEnv } from './sessionListShellCacheConfig';
 
@@ -15,6 +17,7 @@ export type SessionListProjectHeaderViewModel = Readonly<{
     legacyWorkspaceKey: string;
     scopeHint: WorkspaceScopeBase | null;
     seedSessionId: string | null;
+    machineSubtitle?: string;
 }>;
 
 export type SessionListProjectHeaderViewModelState = Readonly<{
@@ -35,13 +38,25 @@ function appendCachePart(parts: string[], value: string): void {
     parts.push(value);
 }
 
-function buildSessionListProjectHeaderViewModelStateCacheKey(input: Readonly<{
+type ProjectHeaderProjectionInput = Readonly<{
     listItems: ReadonlyArray<SessionListIndexItem>;
     workspaceLabels: Readonly<Record<string, string> | null | undefined>;
     workspaceRefs: ReadonlyArray<WorkspaceRefV1>;
     workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
-}>): string {
+    machinesById?: ReadonlyMap<string, Pick<MachineDisplayRenderable, 'id' | 'metadata' | 'availability'>>;
+}>;
+
+export function readSessionListProjectHeaderMachineId(item: Extract<SessionListIndexItem, { type: 'header' }>, workspaceRefs: readonly WorkspaceRefV1[]): string | null {
+    const workspace = item.workspace;
+    return item.workspaceScopeHint?.machineId ?? item.machine?.id
+        ?? (workspace?.t === 'workspaceRef'
+            ? workspaceRefs.find(ref => ref.id === workspace.workspaceRefId && ref.serverId === workspace.serverId)?.machineId
+            : workspace?.machineId) ?? null;
+}
+
+function buildSessionListProjectHeaderViewModelStateCacheKey(input: ProjectHeaderProjectionInput, machineNames: ReadonlyMap<string, string>): string {
     const parts: string[] = ['session-list-project-header-view-model-state'];
+    appendCachePart(parts, JSON.stringify([...machineNames].sort(([left], [right]) => left.localeCompare(right))));
 
     for (const [workspaceKey, workspaceLabel] of Object.entries(input.workspaceLabels ?? {}).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))) {
         appendCachePart(parts, `workspaceLabel:${workspaceKey}:${workspaceLabel}`);
@@ -69,12 +84,15 @@ function buildSessionListProjectHeaderViewModelStateCacheKey(input: Readonly<{
             String(item.title ?? ''),
             String(item.workspaceKey ?? ''),
             String(item.workspace?.t ?? ''),
+            JSON.stringify(item.workspace ?? null),
             String(item.workspaceScopeHint?.serverId ?? ''),
             String(item.workspaceScopeHint?.machineId ?? ''),
             String(item.workspaceScopeHint?.rootPath ?? ''),
             String(item.seedSessionId ?? ''),
             String(item.serverId ?? ''),
             String(item.serverName ?? ''),
+            String(item.subtitle ?? ''),
+            String(readSessionListProjectHeaderMachineId(item, input.workspaceRefs) ?? ''),
         ].join('|'));
     }
 
@@ -83,13 +101,19 @@ function buildSessionListProjectHeaderViewModelStateCacheKey(input: Readonly<{
     return parts.join('::');
 }
 
-export function buildSessionListProjectHeaderViewModels(input: Readonly<{
-    listItems: ReadonlyArray<SessionListIndexItem>;
-    workspaceLabels: Readonly<Record<string, string> | null | undefined>;
-    workspaceRefs: ReadonlyArray<WorkspaceRefV1>;
-    workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
-}>): SessionListProjectHeaderViewModelState {
-    const cacheKey = buildSessionListProjectHeaderViewModelStateCacheKey(input);
+export function buildSessionListProjectHeaderViewModels(input: ProjectHeaderProjectionInput): SessionListProjectHeaderViewModelState {
+    const machines = new Map(input.machinesById);
+    const unlistedMachineIds = new Set<string>();
+    for (const item of input.listItems) {
+        if (item.type !== 'header' || item.headerKind !== 'project') continue;
+        const machineId = readSessionListProjectHeaderMachineId(item, input.workspaceRefs);
+        if (!machineId || machines.has(machineId)) continue;
+        if (item.machine) machines.set(machineId, item.machine);
+        else if (input.machinesById) unlistedMachineIds.add(machineId);
+    }
+    const machineNames = resolveMachineDisplayNames([...machines.values(),
+        ...[...unlistedMachineIds].filter(id => !machines.has(id)).map(id => ({ id, absence: 'unlisted' as const }))]);
+    const cacheKey = buildSessionListProjectHeaderViewModelStateCacheKey(input, machineNames);
     const cachedState = SESSION_LIST_PROJECT_HEADER_VIEW_MODEL_STATE_CACHE.get(cacheKey);
     if (cachedState) {
         return cachedState;
@@ -114,7 +138,14 @@ export function buildSessionListProjectHeaderViewModels(input: Readonly<{
         }
 
         const legacyWorkspaceKey = String(item.workspaceKey ?? '').trim();
-        const scopeHint = item.workspaceScopeHint ?? null;
+        const workspace = item.workspace;
+        const workspaceRef = workspace?.t === 'workspaceRef'
+            ? input.workspaceRefs.find(ref => ref.id === workspace.workspaceRefId && ref.serverId === workspace.serverId)
+            : null;
+        const scopeHint = item.workspaceScopeHint ?? (workspace?.t === 'workspaceScope'
+            && workspace.serverId && workspace.machineId
+            ? { serverId: workspace.serverId, machineId: workspace.machineId, rootPath: workspace.rootPath }
+            : workspaceRef ? { serverId: workspaceRef.serverId, machineId: workspaceRef.machineId, rootPath: workspaceRef.rootPath } : null);
         const seedSessionId = String(item.seedSessionId ?? '').trim() || null;
         if (legacyWorkspaceKey && scopeHint) {
             scopeHintByLegacyWorkspaceKey.set(legacyWorkspaceKey, scopeHint);
@@ -126,7 +157,7 @@ export function buildSessionListProjectHeaderViewModels(input: Readonly<{
         const presentation = resolveWorkspaceDisplayPresentation({
             scope: scopeHint,
             workspaceRefs: input.workspaceRefs,
-            fallbackPathLabel: item.title,
+            fallbackPathLabel: item.workspaceScopeHint ? item.title : scopeHint?.rootPath ?? item.title,
             fallbackPathDisplayMode: input.workspacePathDisplayModeV1,
             legacyLabel: legacyCustomLabel,
         });
@@ -139,6 +170,7 @@ export function buildSessionListProjectHeaderViewModels(input: Readonly<{
             legacyWorkspaceKey,
             scopeHint,
             seedSessionId,
+            machineSubtitle: machineNames.get(readSessionListProjectHeaderMachineId(item, input.workspaceRefs) ?? '') ?? item.subtitle,
         });
     }
 

@@ -306,17 +306,15 @@ function VisibleSessionsListViewContent(
 ) {
     const styles = sessionListStyles;
     const maxWidthStyle = useLayoutMaxWidthStyle();
+    const runsPresentation = props.filterController.filters.show === 'runs';
     const contentContainerStyle = React.useMemo(
-        () => [styles.contentContainer, maxWidthStyle],
-        [maxWidthStyle, styles.contentContainer],
+        () => [styles.contentContainer, runsPresentation ? null : maxWidthStyle],
+        [maxWidthStyle, runsPresentation, styles.contentContainer],
     );
     const safeArea = useChromeSafeAreaInsets();
     const sourceScopeKey = props.filterController.retentionScopeKey;
     const surfaceOwnership = props.surfaceOwnership;
     const showSessionSections = props.corpusStorage === 'active' && props.filterController.filters.show !== 'runs';
-    const scheduledSection = React.useMemo(() => showSessionSections && surfaceOwnership.dataActive
-        && props.filterController.viewContext.kind === 'global' ? <ScheduledWorkflowSection /> : undefined,
-    [showSessionSections, surfaceOwnership.dataActive, props.filterController.viewContext.kind]);
     const surfaceDataActiveRef = React.useRef(surfaceOwnership.dataActive);
     surfaceDataActiveRef.current = surfaceOwnership.dataActive;
     React.useEffect(() => () => {
@@ -328,6 +326,9 @@ function VisibleSessionsListViewContent(
         pathname: props.pathname,
         surfaceOwnership,
     });
+    const scheduledSection = React.useMemo(() => showSessionSections && surfaceOwnership.dataActive
+        && props.filterController.viewContext.kind === 'global' ? <ScheduledWorkflowSection density={viewState.rowDensity} /> : undefined,
+    [showSessionSections, surfaceOwnership.dataActive, props.filterController.viewContext.kind, viewState.rowDensity]);
     const {
         measureNodeViewportOffset,
         nodeIds,
@@ -498,12 +499,14 @@ function VisibleSessionsListViewContent(
         >
             <View
                 ref={viewState.treeViewportRef as React.Ref<View>}
+                testID="session-list-content"
                 onLayout={handleTreeViewportLayout}
                 style={contentContainerStyle}
             >
                 <SessionListTitleChrome
                     searchChrome={viewState.searchChrome}
                     filterSummary={filterSummary}
+                    presentation={runsPresentation ? 'runs' : 'sessions'}
                 />
                 {queryVisibleSessionCount > 0 ? (
                     <HomeReachabilityGate
@@ -543,6 +546,7 @@ function VisibleSessionsListViewContent(
                         }}
                         folderFocus={viewState.folderFocus}
                         showDrafts={showSessionSections}
+                        showReminders={props.filterController.filters.show !== 'runs'}
                         scheduledSection={scheduledSection}
                         folderFocusRootTitle={viewState.folderFocusRootTitle}
                         onClearFolderFocus={viewState.onClearFolderFocus}
@@ -572,8 +576,9 @@ function VisibleSessionsListViewContent(
 const SessionListTitleChrome = React.memo(function SessionListTitleChrome(props: Readonly<{
     searchChrome: React.ComponentProps<typeof SessionListSearchChrome>;
     filterSummary: React.ComponentProps<typeof SessionListSearchChrome>['filterSummary'];
+    presentation: React.ComponentProps<typeof SessionListSearchChrome>['presentation'];
 }>) {
     const organize = useSessionListOrganizeMode();
     if (organize.active) return <SessionListOrganizeBar onDone={organize.exit} />;
-    return <SessionListSearchChrome {...props.searchChrome} filterSummary={props.filterSummary} />;
+    return <SessionListSearchChrome {...props.searchChrome} filterSummary={props.filterSummary} presentation={props.presentation} />;
 });

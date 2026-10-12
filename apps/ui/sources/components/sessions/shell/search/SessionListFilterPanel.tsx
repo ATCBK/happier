@@ -331,7 +331,6 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                             tabs={showTabs}
                             activeTabId={activeShowTab}
                             onSelectTab={onSelect}
-                            slidingThumb
                             accessibilityLabel={labels.show}
                             testIDPrefix="session-list-filter"
                             targetSize="platform"
@@ -395,7 +394,6 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                                 tabs={inactiveTabs}
                                 activeTabId={activeInactiveTab}
                                 onSelectTab={onSelect}
-                                slidingThumb
                                 segmentSizing="content"
                                 accessibilityLabel={labels.inactiveSessions}
                                 testIDPrefix="session-list-filter"
@@ -478,7 +476,6 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                                 tabs={sourceTabs}
                                 activeTabId={activeSourceTab}
                                 onSelectTab={onSelect}
-                                slidingThumb
                                 segmentSizing="content"
                                 accessibilityLabel={labels.source}
                                 testIDPrefix="session-list-filter"

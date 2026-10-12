@@ -836,6 +836,32 @@ describe('ProjectGroupHeader menu items', () => {
         ]));
     });
 
+    it('offers no New session action on a project group in a Runs-only list', async () => {
+        platformOs = 'web';
+        const item = {
+            type: 'header', title: '/repo', headerKind: 'project', groupKey: 'project:repo', workspaceKey: 'legacy_repo',
+            workspaceScopeHint: { serverId: 'server_a', machineId: 'machine_a', rootPath: '/repo' },
+        } as const;
+        const screen = await renderScreen(
+            <ProjectGroupHeader
+                item={item as any}
+                hasMultipleMachines={false}
+                displayTitle="Important Repo"
+                hasCustomLabel={false}
+                canOpenProject={true}
+                newSessionEnabled={false}
+                onOpenProject={vi.fn()}
+                onCreateSession={vi.fn()}
+                onAddFolder={vi.fn()}
+                onRename={vi.fn()}
+                onReset={vi.fn()}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+            />,
+        );
+        expect(screen.root.findAllByProps({ accessibilityLabel: 'machine.launchNewSessionInDirectory' })).toHaveLength(0);
+    });
+
     it('keeps the project add action visible while hover-only controls appear on demand', async () => {
         platformOs = 'web';
         const onCreateSession = vi.fn();

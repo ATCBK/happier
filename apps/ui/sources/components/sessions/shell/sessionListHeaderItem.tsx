@@ -67,6 +67,8 @@ type SessionListHeaderItemProps = Readonly<{
     onRegisterSessionFolderDropTarget?: RegisterSessionFolderDropTarget;
     workspaceFaviconsEnabled?: boolean;
     workspaceMachineSubtitlesEnabled?: boolean;
+    /** False in a Runs-only list, where no group is a place to start a Session. */
+    newSessionEnabled?: boolean;
     dataIndex?: number;
     overlayShared?: TreeDropOverlaySharedValues;
     onRegisterTreeRowBounds?: RegisterSessionListTreeRowBounds;
@@ -167,12 +169,14 @@ export const SessionListHeaderItem = React.memo((props: SessionListHeaderItemPro
         const projectHeader = (
             <ProjectGroupHeader
                 item={props.item}
+                machineSubtitle={props.projectHeaderViewModelByGroupKey.get(props.item.groupKey ?? '')?.machineSubtitle}
                 hasMultipleMachines={props.hasMultipleMachines}
                 displayTitle={headerViewState.displayTitle}
                 hasCustomLabel={headerViewState.hasCustomLabel}
                 canOpenProject={Boolean(headerViewState.workspaceRefId)}
                 workspaceFaviconsEnabled={props.workspaceFaviconsEnabled === true}
                 workspaceMachineSubtitlesEnabled={props.workspaceMachineSubtitlesEnabled !== false}
+                newSessionEnabled={props.newSessionEnabled !== false}
                 onOpenProject={headerActionHandlers.onOpenProject}
                 onCreateSession={headerActionHandlers.onCreateSession}
                 onAddFolder={() => props.onAddFolderToWorkspace(props.item)}
