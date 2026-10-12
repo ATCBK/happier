@@ -274,7 +274,12 @@ export async function inspectProjectImportCandidates(input: Readonly<{
         }
         const intent = await selectNativeCommand({ root: input.root, source: entry.source, usage: entry.usage });
         let executionInputs = intent.kind === 'selected' ? await readProjectExecutionInputs(input.root, intent.reviewInputs.map(fact => fact.file)) : undefined;
-        const preview = intent.kind === 'selected' ? { invocation: { tool: intent.tool, args: intent.args, cwd: intent.cwd,
+        // Passive previews are read in this checkout. Keep the exact launch/review
+        // tuple in the resolver, and display its selected config relative to cwd.
+        const configPath = resolve(input.root, entry.source.file.replaceAll('\\', '/'));
+        const preview = intent.kind === 'selected' ? { invocation: { tool: intent.tool,
+            args: intent.args.map((arg, index) => arg === configPath && index < intent.args.length - 1
+                ? relative(intent.cwd, configPath) || '.' : arg), cwd: intent.cwd,
             ...(intent.packageManager?.version ? { requestedVersion: intent.packageManager.version } : {}) } } : {};
         const selectedFacts = () => ({ ...preview, ...(executionInputs ? { executionInputs } : {}) });
         if (!input.io) { candidates.push({ ...entry, ...selectedFacts(), availability: 'unresolved', code: 'native_tool_resolution_unavailable', preselected: false }); continue; }

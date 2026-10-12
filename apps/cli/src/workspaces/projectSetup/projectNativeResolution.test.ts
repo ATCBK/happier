@@ -6,6 +6,22 @@ import type { ProjectDefinitionDetectionV1 } from '@happier-dev/protocol/workspa
 import { inspectProjectImportCandidates, resolveProjectDevcontainerSelection, resolveProjectEnvironmentSelection, resolveProjectNativeCommand } from './projectNativeResolution';
 
 describe('project native resolution', () => {
+    it('previews declared native config paths relative to the invocation while retaining exact execution argv', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'native-preview-'));
+        try {
+            await mkdir(join(root, 'tools'));
+            await writeFile(join(root, 'tools/Makefile'), 'docker-build:\n\techo build\n');
+            const source = { kind: 'native', tool: 'make', file: 'tools/Makefile', target: 'docker-build' } as const;
+            const detection: ProjectDefinitionDetectionV1 = { entries: [{ source, usage: 'script' }],
+                environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] };
+            const io = { resolveTool: async () => ({ executablePath: '/installed/make' }) };
+            const [preview] = await inspectProjectImportCandidates({ root, detection, io });
+            expect(preview?.invocation).toEqual({ tool: 'make', args: ['-f', 'Makefile', 'docker-build'], cwd: join(root, 'tools') });
+            expect(await resolveProjectNativeCommand({ root, source, usage: 'script', io }))
+                .toMatchObject({ kind: 'resolved', args: ['-f', join(root, 'tools/Makefile'), 'docker-build'],
+                    reviewInvocation: { args: ['-f', join(root, 'tools/Makefile'), 'docker-build'] } });
+        } finally { await rm(root, { recursive: true, force: true }); }
+    });
     it('keeps missing or unproved tools visible, and preselects only available unambiguous intents', async () => {
         const root = await mkdtemp(join(tmpdir(), 'native-candidates-'));
         try {
