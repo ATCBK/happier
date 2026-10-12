@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
-import { PromptInvocationsV1Schema } from '@happier-dev/protocol/prompts/library/promptInvocationsV1';
-import { PromptFoldersV1Schema } from '@happier-dev/protocol';
 import { renderHook } from '@/dev/testkit';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { usePromptPickerLibrary } from './usePromptPickerLibrary';
@@ -27,10 +25,9 @@ describe('prompt picker Account invocation inventory', () => {
                         ...PromptLibraryCatalogKeyV1Schema.options.filter(key => key !== 'invocations').map(key => ({ key, revision: 1, content: null }))] })
                     : null,
         });
-        // The captured Settings path reads this real admitted store before HTTP.
-        // A stale HTTP-only baseline would let that competing path pass too.
-        storage.setState({ settings: { ...storage.getState().settings,
-            promptInvocationsV1: PromptInvocationsV1Schema.parse(retained), promptFoldersV1: PromptFoldersV1Schema.parse(retainedFolders) } });
+        // Hydrate retained Settings through the real Account boundary; current
+        // empty catalog destinations must still override those legacy bytes.
+        await fixture.hydrateAccountSettings();
         hook = await renderHook(() => usePromptPickerLibrary(fixture!.home.id), { flushOptions: { cycles: 30, turns: 10 } });
         expect(hook.getCurrent()).toMatchObject({ isLoading: false, error: false, coverage: 'complete', invocations: [], folders: [] });
     });

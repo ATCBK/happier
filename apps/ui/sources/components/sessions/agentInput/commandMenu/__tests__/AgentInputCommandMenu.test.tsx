@@ -61,7 +61,7 @@ describe('AgentInputCommandMenu', () => {
         expect(capturedCommandMenuProps.current?.placement).toBe('top');
         expect(capturedCommandMenuProps.current?.gap).toBe(8);
         expect(capturedCommandMenuProps.current?.keyboardBottomInset).toBe(320);
-        expect(capturedCommandMenuProps.current?.edgePadding).toEqual({ horizontal: 16 });
+        expect(capturedCommandMenuProps.current?.edgePadding).toEqual({ horizontal: 16, vertical: 16 });
         expect(capturedCommandMenuProps.current?.consumeOutsidePointerDown).toBe(false);
         expect(capturedCommandMenuProps.current?.containerStyle).toEqual({ paddingHorizontal: 0 });
         expect(capturedCommandMenuProps.current?.backdrop).toEqual({

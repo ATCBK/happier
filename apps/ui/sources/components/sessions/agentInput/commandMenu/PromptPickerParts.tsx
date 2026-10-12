@@ -8,12 +8,14 @@ import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { resolveOverlayMotionPreset, useOverlayMotionAnimation } from '@/components/ui/overlays/motion/overlayMotion';
 import { KeyHint } from '@/components/ui/keyboard/KeyHint';
 import { FavoriteToggleButton } from '@/components/ui/buttons/FavoriteToggleButton';
-import { SelectionListSkeletonRow } from '@/components/ui/selectionList/SelectionListSkeletonRow';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
+import { SELECTION_LIST_SKELETON_ROW_SHAPE } from '@/components/ui/selectionList/_constants';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
 import { queryRanges } from '@/components/ui/text/queryRanges';
 import { ITEM_SUBTITLE_TEXT_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { Text } from '@/components/ui/text/Text';
+import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { Typography } from '@/constants/Typography';
 import type { UserMessageHistoryEntriesSnapshot } from '@/hooks/session/useUserMessageHistoryEntries';
 import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
@@ -32,13 +34,16 @@ type RowLabels = Readonly<{
 
 const ARGUMENTS_TOKEN = '$ARGUMENTS';
 
-type MetaPart = Readonly<{ text: string; token?: true }>;
+/** `fixed` parts (a time) never lose their place to a long neighbour. */
+type MetaPart = Readonly<{ text: string; token?: true; fixed?: true }>;
 
 /** "Library · /e2e · Testing", "Built in · /review" or "Fix settings modal remount · 12m ago"; `/tokens` are marked. */
 function describeRow(row: PromptPickerRow, labels: RowLabels): readonly MetaPart[] {
     if (row.kind === 'history') {
         const session = labels.sessionNames.get(row.entry.sessionId);
-        return [session, formatRelativeTimeShort(row.entry.createdAtMs, labels.nowMs)].filter((text): text is string => Boolean(text)).map((text) => ({ text }));
+        // A session is usually named after its first message; that text is already the title.
+        const named = session && !sharesLeadingText(session, row.title) ? [{ text: session }] : [];
+        return [...named, { text: formatRelativeTimeShort(row.entry.createdAtMs, labels.nowMs), fixed: true as const }];
     }
     const tokens = row.tokens.map((text): MetaPart => ({ text, token: true }));
     if (row.kind === 'builtIn') return [{ text: t('agentInput.promptPicker.builtIn') }, ...tokens];
@@ -46,10 +51,29 @@ function describeRow(row: PromptPickerRow, labels: RowLabels): readonly MetaPart
     return [{ text: t('agentInput.promptPicker.library') }, ...tokens, ...(place ? [{ text: place }] : [])];
 }
 
-function MetaLine(props: Readonly<{ parts: readonly MetaPart[]; style: StyleProp<TextStyle>; trailing?: string }>) {
-    return <Text style={props.style} numberOfLines={1}>{props.parts.map((part, index) => <React.Fragment key={index}>
+const squash = (text: string) => text.replace(/\s+/g, ' ').replace(/(?:…|\.{3})$/, '').trim().toLowerCase();
+
+/** True when one text is the start of the other, e.g. a session named from its first message. */
+function sharesLeadingText(a: string, b: string): boolean {
+    const [x, y] = [squash(a), squash(b)];
+    return x.length > 0 && y.length > 0 && (x.startsWith(y) || y.startsWith(x));
+}
+
+function MetaLine(props: Readonly<{ parts: readonly MetaPart[]; style: StyleProp<TextStyle>; trailing?: string; lines?: number }>) {
+    const joined = (parts: readonly MetaPart[]) => parts.map((part, index) => <React.Fragment key={index}>
         {index ? ' · ' : ''}{part.token ? <Text style={styles.token}>{part.text}</Text> : part.text}
-    </React.Fragment>)}{props.trailing ? ` · ${props.trailing}` : ''}</Text>;
+    </React.Fragment>);
+    const fixed = props.parts.filter((part) => part.fixed);
+    // Where the line may wrap (the preview header) every part stays in reading order; on a one-line row
+    // the flowing parts give way so the fixed one (a time) always shows.
+    if (!fixed.length || props.lines) {
+        return <Text style={props.style} numberOfLines={props.lines ?? 1}>{joined(props.parts)}{props.trailing ? ` · ${props.trailing}` : ''}</Text>;
+    }
+    const flowing = props.parts.filter((part) => !part.fixed);
+    return <View style={styles.metaRow}>
+        {flowing.length ? <Text style={[props.style, styles.metaLead]} numberOfLines={1}>{joined(flowing)}</Text> : null}
+        <Text style={props.style} numberOfLines={1}>{flowing.length ? ' · ' : ''}{fixed.map((part) => part.text).join(' · ')}</Text>
+    </View>;
 }
 
 export function PromptPickerRowContent(props: RowLabels & Readonly<{
@@ -98,23 +122,38 @@ export function PromptPickerPreview(props: RowLabels & Readonly<{ row: PromptPic
     const origin = row.kind === 'doc' ? t('agentInput.promptPicker.previewEdited', { time: formatRelativeTimeShort(row.document.updatedAtMs, props.nowMs) })
         : row.kind === 'history' ? props.sessionNames.get(row.entry.sessionId) || null : null;
     return <View style={styles.preview} testID="prompt-picker-preview">
-        <MetaLine style={styles.previewMeta} parts={describeRow(row, props)} trailing={kind} />
+        <MetaLine style={styles.previewMeta} parts={describeRow(row, props)} trailing={kind} lines={2} />
         <ScrollView style={styles.previewScroll} contentContainerStyle={styles.previewScrollContent}>
             {current?.error ? <Text style={styles.previewError}>{t('agentInput.promptPicker.readError')}</Text>
-                : current?.text !== undefined ? <PreviewText text={current.text} />
-                : <SelectionListSkeletonRow index={0} />}
+                : current?.text !== undefined ? <PreviewText text={current.text} markdown={row.kind !== 'history'} />
+                : <SkeletonRows rows={1} {...SELECTION_LIST_SKELETON_ROW_SHAPE} />}
         </ScrollView>
         {origin ? <Text style={styles.previewMeta} numberOfLines={1}>{origin}</Text> : null}
     </View>;
 }
 
-/** `$ARGUMENTS` is where the caret lands after insert, so the preview marks it. */
-function PreviewText(props: Readonly<{ text: string }>) {
-    const parts = props.text.split(ARGUMENTS_TOKEN);
-    return <Text selectable style={styles.previewText}>{parts.map((part, index) => <React.Fragment key={index}>
-        {part}
-        {index < parts.length - 1 ? <Text style={styles.argument}>{ARGUMENTS_TOKEN}</Text> : null}
-    </React.Fragment>)}</Text>;
+/**
+ * The prompt as the reader should see it: a leading YAML front matter block (a skill's `name`,
+ * `description`, `metadata`) is machine header, not prompt text, so the preview starts at the body.
+ */
+export function promptPreviewDisplayText(text: string): string {
+    const match = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+    return match ? text.slice(match[0].length).replace(/^\s+/, '') : text;
+}
+
+/**
+ * `$ARGUMENTS` is where the caret lands after insert, so the preview marks it as code. A saved prompt
+ * is markdown: it renders through the same renderer as every other document; what you sent stays the
+ * plain text it was.
+ */
+function markArguments(markdown: string): string {
+    return markdown.split(/(```[\s\S]*?```|`[^`\n]*`)/).map((part, index) => index % 2 ? part : part.split(ARGUMENTS_TOKEN).join(`\`${ARGUMENTS_TOKEN}\``)).join('');
+}
+
+function PreviewText(props: Readonly<{ text: string; markdown: boolean }>) {
+    const text = promptPreviewDisplayText(props.text);
+    if (props.markdown) return <MarkdownView profile="widget" markdown={markArguments(text)} />;
+    return <Text selectable style={styles.previewText}>{text}</Text>;
 }
 
 /** One quiet line in the list: an invitation, an empty result or a recoverable failure. */
@@ -140,7 +179,7 @@ export function PromptPickerNotice(props: Readonly<{
 
 export function PromptPickerSkeletonRow(props: Readonly<{ testID?: string }>) {
     return <View style={styles.skeleton} testID={props.testID}>
-        {[0, 1, 2].map((index) => <SelectionListSkeletonRow key={index} index={index} />)}
+        <SkeletonRows rows={3} {...SELECTION_LIST_SKELETON_ROW_SHAPE} />
     </View>;
 }
 
@@ -206,8 +245,12 @@ export function PromptPickerSaveRow(props: Readonly<{
 export function PromptPickerFooter(props: Readonly<{
     history: UserMessageHistoryEntriesSnapshot;
     hardwareKeyboard: boolean;
+    /** The two-pane picker; the phone-width one is a touch-first list and leaves key hints out. */
+    wide?: boolean;
     canSend: boolean;
     applyError: boolean;
+    /** The library is still arriving while other rows (built-ins, history) already show. */
+    libraryLoading?: boolean;
 }>) {
     const { history } = props;
     const platform = resolveKeyboardPlatform();
@@ -230,19 +273,22 @@ export function PromptPickerFooter(props: Readonly<{
         : history.hasMore ? <TextLinkButton label={t('agentInput.promptPicker.loadOlder')}
             onPress={() => { void history.loadMore(); }} testID="prompt-picker-history-more" />
         : null;
-    const coverage = history.coverage === 'partial' ? t('agentInput.promptPicker.partialHistory')
+    const coverage = props.libraryLoading ? t('agentInput.promptPicker.loadingLibrary')
+        : history.coverage === 'partial' ? t('agentInput.promptPicker.partialHistory')
         : history.coverage === 'loaded' ? t('agentInput.promptPicker.loadedHistory') : null;
-    if (!props.hardwareKeyboard && !status && !coverage) return null;
+    const hints = props.hardwareKeyboard && props.wide !== false;
+    if (!hints && !status && !coverage) return null;
     return <View style={styles.footer} testID="prompt-picker-footer">
-        {props.hardwareKeyboard ? <View style={styles.hints}>
+        {hints ? <View style={styles.hints}>
             <Hint keys="↑↓" label={t('commandPalette.hints.move')} />
             <Hint keys="↵" label={t('agentInput.promptPicker.insert')} />
             {props.canSend ? <Hint keys={formatKeybindingLabel({ binding: 'Mod+Enter' }, platform)} label={t('agentInput.promptPicker.send')} /> : null}
             <Hint keys={formatKeybindingLabel({ binding: 'Mod+D' }, platform)} label={t('agentInput.promptPicker.favorite')} />
         </View> : null}
-        <View style={styles.footerEnd}>
-            {coverage ? <Text style={styles.status} accessibilityLiveRegion="polite" testID="prompt-picker-history-coverage">{coverage}</Text> : null}
-            {status ?? (!coverage && props.hardwareKeyboard && pickerShortcut ? <Hint keys={pickerShortcut} label={t('agentInput.promptPicker.title')} /> : null)}
+        <View style={[styles.footerEnd, hints ? null : styles.footerStart]}>
+            {/* One status line: the coverage fact, then its next step after a quiet separator. */}
+            {coverage ? <Text style={styles.status} accessibilityLiveRegion="polite" testID="prompt-picker-history-coverage">{coverage}{status ? ' ·' : ''}</Text> : null}
+            {status ?? (!coverage && hints && pickerShortcut ? <Hint keys={pickerShortcut} label={t('agentInput.promptPicker.title')} /> : null)}
         </View>
     </View>;
 }
@@ -258,6 +304,8 @@ const styles = StyleSheet.create((theme) => ({
     title: { ...Typography.rowTitle(), ...Typography.default(), color: theme.colors.text.primary },
     meta: { ...Typography.rowMeta(), color: theme.colors.text.secondary },
     token: Typography.mono(),
+    metaRow: { flexDirection: 'row', alignItems: 'baseline', minWidth: 0 },
+    metaLead: { flexShrink: 1, minWidth: 0 },
     // The in-place save row: the field and Save share one line; the meta says where it goes.
     saveRow: { alignItems: 'flex-start', paddingVertical: 10 },
     saveLead: { marginTop: 9 },
@@ -272,8 +320,6 @@ const styles = StyleSheet.create((theme) => ({
     previewScrollContent: { paddingBottom: 4 },
     previewText: { ...Typography.default(), ...ITEM_SUBTITLE_TEXT_METRICS.compact, color: theme.colors.text.primary },
     previewError: { ...Typography.default(), ...ITEM_SUBTITLE_TEXT_METRICS.compact, color: theme.colors.state.danger.foreground },
-    argument: { ...Typography.rowMeta(), ...Typography.mono('semiBold'), color: theme.colors.text.link,
-        backgroundColor: theme.colors.state.info.background, ...(Platform.OS === 'web' ? { borderRadius: 4, paddingHorizontal: 2 } : {}) },
     notice: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 8, gap: 6 },
     noticeTitle: { ...Typography.rowMeta(), ...Typography.default('semiBold'), color: theme.colors.text.secondary },
     noticeText: { ...Typography.default(), ...ITEM_SUBTITLE_TEXT_METRICS.cozy, color: theme.colors.text.secondary },
@@ -285,6 +331,7 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 12, paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border.default },
     hints: { maxWidth: '100%', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 14, rowGap: 4 },
     footerEnd: { maxWidth: '100%', flexGrow: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end', alignItems: 'center' },
+    footerStart: { justifyContent: 'flex-start' },
     hint: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     hintLabel: { ...Typography.timestamp(), color: theme.colors.text.tertiary },
     status: { ...Typography.timestamp(), color: theme.colors.text.secondary, textAlign: 'right' },

@@ -6,7 +6,7 @@ import type { PromptFoldersV1 } from '@happier-dev/protocol';
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { captureLazyActionAccountContext, type LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { createUiPromptLibraryArtifactStore, withUiPromptLibraryArtifactReader } from '@/sync/ops/promptLibrary/promptLibraryArtifactStore';
-import { readPromptLibraryCatalogProjectionInContext } from '@/sync/api/account/apiPromptLibraryCatalog';
+import { observePromptLibraryCatalog } from '@/sync/engine/settings/promptLibraryCatalogEngine';
 
 type Inventory = Readonly<{
     serverId: string | null;
@@ -34,11 +34,13 @@ export function usePromptPickerLibrary(serverId: string) {
         const account = captureLazyActionAccountContext(serverId, controller.signal);
         const current = { account, signal: controller.signal, reads: new Map<string, Promise<string>>() };
         let retireSubscription: Readonly<{ dispose: () => void }> | undefined;
+        let releaseCatalog: (() => void) | undefined;
         resource.current = current;
         setLoading(true);
         setError(false);
         void account.then(async (captured) => {
             if (controller.signal.aborted || resource.current !== current) return;
+            releaseCatalog = observePromptLibraryCatalog({ serverId: captured.serverId, accountId: captured.accountId });
             retireSubscription = captured.accountLifetime.onRetire(() => {
                 if (resource.current !== current) return;
                 setInventory(EMPTY);
@@ -54,7 +56,9 @@ export function usePromptPickerLibrary(serverId: string) {
                     if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
                     return result.result as PublicActionResultById['prompts.library.list'];
                 }),
-                readPromptLibraryCatalogProjectionInContext(captured, controller.signal),
+                // The existing Account organization port shares the foreground catalog
+                // with the list Action and publishes before optional history cleanup.
+                createUiPromptLibraryArtifactStore(captured.workflowArtifacts, captured).organization!.readCatalog(controller.signal),
             ]);
             captured.assertCurrent();
             const invocations = readPromptLibraryCatalogRecordV1({ ...projection, key: 'invocations' });
@@ -72,6 +76,7 @@ export function usePromptPickerLibrary(serverId: string) {
         });
         return () => {
             retireSubscription?.dispose();
+            releaseCatalog?.();
             controller.abort();
             if (resource.current === current) resource.current = null;
             void account.then((captured) => captured.dispose(), () => {});

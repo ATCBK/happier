@@ -66,8 +66,7 @@ async function mount() {
     const { switchConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
     await switchConnectionToActiveServer();
     const scope = { serverId, accountId: 'prompt-owner' };
-    act(() => storage.setState({ settingsScope: scope, profileScope: scope, settingsVersion: 1,
-        settings: { ...storage.getState().settings, promptInvocationsV1: { v: 1, entries: [] } } }));
+    act(() => storage.setState({ settingsScope: scope, profileScope: scope, settingsVersion: 1 }));
     const onApply = vi.fn(async () => true);
     const screen = await renderScreen(<Picker serverId={serverId} onApply={onApply} />);
     return { screen, serverId, onApply };

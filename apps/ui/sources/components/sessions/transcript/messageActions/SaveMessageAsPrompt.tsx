@@ -1,12 +1,12 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
-import { HappierPressable, happierFocusRingStyle } from '@happier-dev/plugin-ui/presentation';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { StyleSheet } from 'react-native-unistyles';
 import { Popover } from '@/components/ui/popover';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { FavoriteToggleButton } from '@/components/ui/buttons/FavoriteToggleButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { Text } from '@/components/ui/text/Text';
 import { Modal, type CustomModalInjectedProps } from '@/modal';
 import { t } from '@/text';
@@ -14,6 +14,7 @@ import { Typography } from '@/constants/Typography';
 import { useSaveMessageAsPrompt } from './useSaveMessageAsPrompt';
 
 const POPOVER_WIDTH = 340;
+const POPOVER_EDGE_PADDING = { horizontal: 12, vertical: 12 } as const;
 
 type SaveProps = Readonly<{
     messageId: string;
@@ -25,7 +26,6 @@ type SaveProps = Readonly<{
 
 /** Mounted only on demand; both presentations use this exact form. */
 export function SaveMessagePromptForm(props: SaveProps) {
-    const { theme } = useUnistyles();
     const { title, setTitle, favorite, setFavorite, shortcutExpanded, setShortcutExpanded, shortcut, setShortcut,
         error, setError, isSaving, canSave, save } = useSaveMessageAsPrompt({ text: props.text, serverId: props.serverId,
         onSaved: (saved) => props.onSaved(saved.artifactId) });
@@ -40,11 +40,10 @@ export function SaveMessagePromptForm(props: SaveProps) {
         {shortcutExpanded ? <FieldTextInput testID="save-message-prompt-shortcut" accessibilityLabel={t('committedMessageActions.shortcut')}
             value={shortcut} onChangeText={(value) => { setError(null); setShortcut(value); }} autoCapitalize="none" monospace autoFocus
             placeholder={t('committedMessageActions.shortcutPlaceholder')} returnKeyType="done" onSubmitEditing={canSave ? save : undefined} />
-            : <HappierPressable testID="save-message-prompt-shortcut-toggle" accessibilityRole="button" onPress={() => setShortcutExpanded(true)}
-                style={({ pressed, focused }) => [styles.shortcutToggle, pressed ? styles.pressed : null,
-                    happierFocusRingStyle({ visible: focused, color: theme.colors.border.focus })]} hitSlop={8}>
-                <Text style={styles.link}>{t('committedMessageActions.addShortcut')}</Text>
-            </HappierPressable>}
+            : <View style={styles.shortcutToggle}>
+                <TextLinkButton testID="save-message-prompt-shortcut-toggle" size="meta" expanded={false}
+                    label={t('committedMessageActions.addShortcut')} onPress={() => setShortcutExpanded(true)} />
+            </View>}
         {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
         <View style={styles.buttons}>
             <RoundButton testID="save-message-prompt-cancel" size="small" display="inverted" title={t('common.cancel')} onPress={props.onClose} />
@@ -71,7 +70,10 @@ export function SaveMessageAsPrompt(props: SaveProps & Readonly<{ anchorRef: Rea
     if (native) return null;
     // Opens beside the row that summoned it, never over the message being named; its trailing edge
     // stays on the icon because user rows sit at the right.
+    // The popover keeps the same inset from the window edges as the app's other anchored popovers, so on a
+    // phone-width window it never touches the screen edge.
     return <Popover open anchorRef={props.anchorRef} placement="auto-vertical" maxWidthCap={POPOVER_WIDTH}
+        edgePadding={POPOVER_EDGE_PADDING}
         portal={{ web: true, native: true, matchAnchorWidth: false, anchorAlign: 'end' }} onRequestClose={props.onClose}>
         {({ maxHeight }) => <FloatingOverlay surfaceChrome="theme" maxHeight={maxHeight}>
             <View style={styles.popoverBody}><SaveMessagePromptForm {...props} /></View>
@@ -84,9 +86,7 @@ const styles = StyleSheet.create((theme) => ({
     popoverBody: { width: POPOVER_WIDTH, maxWidth: '100%' },
     heading: { ...Typography.rowTitle(), color: theme.colors.text.primary, marginBottom: 2 },
     hint: { ...Typography.rowMeta(), color: theme.colors.text.secondary, marginTop: -4 },
-    shortcutToggle: { alignSelf: 'flex-start', borderRadius: 6 },
-    pressed: { opacity: 0.6 },
-    link: { ...Typography.rowMeta(), color: theme.colors.text.link },
+    shortcutToggle: { alignSelf: 'flex-start' },
     buttons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 4 },
     error: { ...Typography.rowMeta(), color: theme.colors.state.danger.foreground },
 }));

@@ -29,6 +29,8 @@ export function resolveAgentInputFieldAccessoryGeometry(input: Readonly<{
 export function AgentInputFieldAccessories(props: Readonly<{
     showLibrary: boolean;
     onOpenLibrary: () => void;
+    /** The library picker is open: its trigger's tooltip steps aside, as every popover trigger's does. */
+    libraryOpen?: boolean;
     accessory?: React.ReactNode;
     belowToggle: boolean;
     /**
@@ -56,6 +58,7 @@ export function AgentInputFieldAccessories(props: Readonly<{
                         iconName="book-open"
                         accessibilityLabel={t('agentInput.promptPicker.open')}
                         tooltip={t('agentInput.promptPicker.open')}
+                        tooltipHidden={props.libraryOpen === true}
                         variant="plain"
                         size={VISUAL_SIZE}
                         iconSize={16}

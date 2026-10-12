@@ -13,6 +13,7 @@ import { useUserMessageHistoryEntries, type UserMessageHistoryEntriesSnapshot } 
 import { BUILT_IN_PROMPTS } from '@/sync/domains/input/slashCommands/builtInPrompts';
 import { getStorage } from '@/sync/domains/state/storage';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { useDeviceType } from '@/utils/platform/responsive';
 import { t } from '@/text';
 import { resolveKeyboardPlatform } from '@/keyboard/runtime';
 import { useNativeKeyboardInput } from '@/keyboard/KeyboardShortcutProvider';
@@ -99,6 +100,7 @@ export function PromptPickerView(props: PromptPickerViewProps) {
     const detectedKeyboard = useHardwareKeyboard();
     const hardwareKeyboard = props.hardwareKeyboard ?? detectedKeyboard;
     const { width } = useWindowDimensions();
+    const isPhone = useDeviceType() === 'phone';
     const builtRows = React.useMemo(() => buildPromptPickerRows({ documents: library.documents, invocations: library.invocations,
         builtIns: BUILT_IN_PROMPTS, history: history.entries, sessionId: props.sessionId, serverId: props.serverId, query }),
     [library.documents, library.invocations, history.entries, props.sessionId, props.serverId, query]);
@@ -220,7 +222,7 @@ export function PromptPickerView(props: PromptPickerViewProps) {
     return <AgentInputCommandMenu
         open anchor={props.anchor} query={query} items={items} selectedIndex={selected ? selectedIndex : -1}
         onMoveUp={() => move(-1)} onMoveDown={() => move(1)} onSelect={(_, index) => { void apply(rows[index], 'insert'); }}
-        onRequestClose={props.onRequestClose} preserveHostFocus={false} maxWidth={width} placement="top" flip={false}
+        onRequestClose={props.onRequestClose} preserveHostFocus={false} maxWidth={width} placement="top" phoneSheetTitle={t('agentInput.promptPicker.title')}
         matchAnchorWidth fillHeight maxHeight={wide ? PICKER_HEIGHT_WITH_PREVIEW : PICKER_HEIGHT}
         testID="agent-input-prompt-picker"
         leadingEmptyGroup={!query && !library.isLoading && !libraryUnavailable && !hasFavorites && rows.length > 0
@@ -235,7 +237,8 @@ export function PromptPickerView(props: PromptPickerViewProps) {
                 onSubmitEditing={() => { void apply(selected, 'insert'); }}
                 onInputFocus={() => setInputFocused(true)} onInputBlur={() => setInputFocused(false)}
                 testID="prompt-picker-header" inputTestID="prompt-picker-search" inputRef={searchInputRef}
-                rightAdornment={hardwareKeyboard ? <KeyHint label="esc" />
+                // The phone sheet carries its own title and close, so the field keeps only itself.
+                rightAdornment={isPhone ? undefined : hardwareKeyboard ? <KeyHint label="esc" />
                     : <IconButton iconName="x" accessibilityLabel={t('common.close')} variant="plain" onPress={props.onRequestClose} testID="prompt-picker-close" />}
                 style={styles.header} />
             {libraryUnavailable ? <PromptPickerNotice testID="prompt-picker-library-error" tone="error" text={t('agentInput.promptPicker.libraryError')}
@@ -245,8 +248,8 @@ export function PromptPickerView(props: PromptPickerViewProps) {
         </View>}
         preview={wide && selected ? <PromptPickerPreview row={selected} read={readRow} nowMs={openedAtMs}
             folderNames={props.folderNames} sessionNames={props.sessionNames} /> : null}
-        footer={<PromptPickerFooter history={history} hardwareKeyboard={hardwareKeyboard}
-            canSend={props.canSend} applyError={applyError} />}
+        footer={<PromptPickerFooter history={history} hardwareKeyboard={hardwareKeyboard} wide={wide}
+            canSend={props.canSend} applyError={applyError} libraryLoading={library.isLoading && rows.length > 0} />}
     />;
 }
 

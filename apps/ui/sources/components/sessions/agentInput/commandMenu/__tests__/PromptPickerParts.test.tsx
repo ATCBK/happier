@@ -9,7 +9,7 @@ import { KeyHint } from '@/components/ui/keyboard/KeyHint';
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
-const { PromptPickerFooter, PromptPickerPreview } = await import('../PromptPickerParts');
+const { PromptPickerFooter, PromptPickerPreview, PromptPickerRowContent } = await import('../PromptPickerParts');
 afterEach(standardCleanup);
 
 const history: UserMessageHistoryEntriesSnapshot = {
@@ -34,6 +34,47 @@ describe('picker coverage and preview read admission', () => {
         await screen.update(<PromptPickerFooter history={{ ...history, error: true }} hardwareKeyboard={hardwareKeyboard} canSend applyError={false} />);
         expect(screen.findByTestId('prompt-picker-history-coverage')).not.toBeNull();
         expect(screen.getTextContent()).toContain('agentInput.promptPicker.historyError');
+    });
+
+    it('keeps key hints for the wide picker and leaves them out of the narrow one', async () => {
+        const hints = async (wide: boolean) => (await renderScreen(<PromptPickerFooter history={history} hardwareKeyboard wide={wide}
+            canSend applyError={false} />)).findAllByType(KeyHint).length;
+        expect(await hints(true)).toBe(4);
+        expect(await hints(false)).toBe(0);
+    });
+
+    it('says the library is still arriving while other rows already show', async () => {
+        const screen = await renderScreen(<PromptPickerFooter history={{ ...history, coverage: 'complete' }} hardwareKeyboard={false} canSend applyError={false} libraryLoading />);
+        expect(screen.getTextContent()).toContain('agentInput.promptPicker.loadingLibrary');
+        await screen.update(<PromptPickerFooter history={{ ...history, coverage: 'complete' }} hardwareKeyboard={false} canSend applyError={false} libraryLoading={false} />);
+        expect(screen.getTextContent()).not.toContain('agentInput.promptPicker.loadingLibrary');
+    });
+
+    it('names a Sent before row\'s session only when it adds something, and always keeps the time', async () => {
+        const text = 'The settings modal flickers when the window resizes. Find out why and fix it.';
+        const entry = { serverId: 'home', sessionId: 's', messageId: 'm', seq: 2, createdAtMs: 0, text };
+        const [row] = buildPromptPickerRows({ documents: [], invocations: [], builtIns: [], history: [entry], sessionId: null, query: '' });
+        const render = (name: string) => renderScreen(<PromptPickerRowContent row={row} query="" nowMs={12 * 60_000}
+            folderNames={new Map()} sessionNames={new Map([['s', name]])} onToggleFavorite={() => {}} />);
+        // A session named after its first message would say the same thing twice.
+        const same = (await render('The settings modal flickers when the window resizes. Find out why and…')).getTextContent();
+        expect(same).not.toContain('Find out why and…');
+        expect(same).toContain('time.minutesAgoShort');
+        const other = (await render('Fix settings modal remount')).getTextContent();
+        expect(other).toContain('Fix settings modal remount');
+        expect(other).toContain('time.minutesAgoShort');
+    });
+
+    it('previews a skill-style prompt from its body, not its front matter header', async () => {
+        const builtIns = [{ token: '/diagnose', title: 'Diagnose', allowArgs: true,
+            body: '---\nname: diagnose\nmetadata: {"homepage":"x"}\n---\n\n# Diagnose\n\nFind the cause of $ARGUMENTS.' }];
+        const [row] = buildPromptPickerRows({ documents: [], invocations: [], builtIns, history: [], sessionId: null, query: '' });
+        const screen = await renderScreen(<PromptPickerPreview row={row} read={async (r) => r.kind === 'builtIn' ? r.prompt.body : ''} nowMs={0} folderNames={new Map()} sessionNames={new Map()} />);
+        await act(async () => {});
+        const text = screen.getTextContent();
+        expect(text).toContain('Diagnose');
+        expect(text).toContain('$ARGUMENTS');
+        expect(text).not.toContain('metadata:');
     });
 
     it('reads a preview once across filtering, then refreshes on selection or content revision', async () => {

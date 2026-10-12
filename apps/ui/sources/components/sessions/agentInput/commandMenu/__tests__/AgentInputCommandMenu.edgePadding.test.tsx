@@ -69,7 +69,7 @@ describe('AgentInputCommandMenu edge padding', () => {
 
         await renderScreen(<AgentInputCommandMenu {...buildProps()} />);
 
-        expect(capturedCommandMenuProps.current?.edgePadding).toEqual({ horizontal: 12 });
+        expect(capturedCommandMenuProps.current?.edgePadding).toEqual({ horizontal: 12, vertical: 12 });
     });
 
     it('keeps the default edge padding on a wide web viewport', async () => {
@@ -77,7 +77,8 @@ describe('AgentInputCommandMenu edge padding', () => {
 
         await renderScreen(<AgentInputCommandMenu {...buildProps()} />);
 
-        expect(capturedCommandMenuProps.current?.edgePadding).toEqual({ horizontal: 16 });
+        // The desktop title strip stays clear above (`DESKTOP_MAIN_CONTENT_DRAG_HEIGHT_PX`).
+        expect(capturedCommandMenuProps.current?.edgePadding).toEqual({ horizontal: 16, vertical: 16, top: 56 });
     });
 
     it('lets an explicit caller override win over the layout owner', async () => {

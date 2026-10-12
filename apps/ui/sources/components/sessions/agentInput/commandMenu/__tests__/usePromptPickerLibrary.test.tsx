@@ -15,12 +15,18 @@ const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
 const { createUiPromptLibraryArtifactStore } = await import('@/sync/ops/promptLibrary/promptLibraryArtifactStore');
+const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
+const { resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
 const { usePromptPickerLibrary } = await import('../usePromptPickerLibrary');
 
 beforeEach(async () => { await harness.reset(); installHomeGovernanceBoundaries(harness); });
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => {
+    resetPromptLibraryCatalogEngineForTests();
+    resetPromptLibraryCatalogSnapshotsForTests();
+    vi.restoreAllMocks();
+});
 
-async function seed() {
+async function seed(organize = true) {
     const serverId = await harness.addHome({ name: 'Picker Home', serverUrl: 'https://picker-library.test', accountId: 'picker-account' });
     harness.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 2 }) });
     const catalog = createPromptLibraryCatalogBoundary({ records: [{ key: 'folders', value: { v: 1,
@@ -36,13 +42,43 @@ async function seed() {
     const account = await captureLazyActionAccountContext(serverId);
     try {
         const created = await createPromptDocInLibrary({ store: createUiPromptLibraryArtifactStore(account.workflowArtifacts, account),
-            request: { title: 'Testing', markdown: 'Test $ARGUMENTS', favorite: false, tags: ['debug'], folderId: 'folder' } });
+            request: { title: 'Testing', markdown: 'Test $ARGUMENTS', favorite: false,
+                ...(organize ? { tags: ['debug'], folderId: 'folder' } : {}) } });
         harness.answer(serverId, '/v1/artifacts?limit=500', { body: harness.artifacts(serverId).list() });
         return { serverId, artifactId: created.artifactId, catalog };
     } finally { account.dispose(); }
 }
 
 describe('active prompt picker Account library', () => {
+    it('shares the catalog read and shows usable prompts while retained Settings cleanup is pending', async () => {
+        const { serverId } = await seed(false);
+        resetPromptLibraryCatalogEngineForTests();
+        resetPromptLibraryCatalogSnapshotsForTests();
+        // Sign-in already hydrated Action policy; only the catalog's retained-source read is held.
+        const { storage } = await import('@/sync/domains/state/storage');
+        const previousScope = { settingsScope: storage.getState().settingsScope, profileScope: storage.getState().profileScope };
+        storage.setState({ settingsScope: { serverId, accountId: 'picker-account' }, profileScope: { serverId, accountId: 'picker-account' } });
+        const held = createDeferred<void>();
+        harness.answer(serverId, '/v2/account/settings', {
+            body: { version: 2, content: { t: 'plain', v: {} } }, respondAfter: held.promise,
+        });
+        const before = harness.requests.filter(request => request.path === PROMPT_LIBRARY_ROWS_ROUTE_V1).length;
+        const hook = await renderHook(() => usePromptPickerLibrary(serverId));
+        try {
+            await vi.waitFor(async () => {
+                await flushHookEffects();
+                expect(hook.getCurrent().isLoading).toBe(false);
+                expect(hook.getCurrent().documents).toHaveLength(1);
+                expect(hook.getCurrent().folders).toMatchObject([{ id: 'folder', name: 'Personal' }]);
+            });
+            expect(harness.requests.filter(request => request.path === PROMPT_LIBRARY_ROWS_ROUTE_V1).length - before).toBe(1);
+        } finally {
+            held.resolve();
+            await hook.unmount();
+            storage.setState(previousScope);
+        }
+    });
+
     it('loads headers, shares a highlighted pending body read with insertion and patches favorite without losing the body', async () => {
         const { serverId, artifactId, catalog } = await seed();
         const hook = await renderHook(() => usePromptPickerLibrary(serverId));
