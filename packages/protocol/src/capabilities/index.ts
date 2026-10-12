@@ -82,6 +82,10 @@ export {
 
 export {
   MachineAgentInventoryItemSchema,
+  MachineAcpInventoryDefinitionSchema,
+  MachineAcpInventoryRequestSchema,
+  buildMachineAgentInventoryKey,
+  projectAcpCatalogForMachineInventory,
   MachineAgentInventoryUnavailableSchema,
   MachinesAgentsListInputSchema,
   MachinesAgentsListOutputSchema,
@@ -90,6 +94,7 @@ export {
   projectMachineAgentsDetectResponse,
   MachineAgentInventoryUnavailableError,
   type MachineAgentInventoryItem,
+  type MachineAcpInventoryDefinition,
   type MachineAgentInventoryUnavailable,
   type MachineAgentInventoryDescriptor,
   type MachinesAgentsListInput,

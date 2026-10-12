@@ -5,6 +5,8 @@ import {
   MachinesAgentsListOutputSchema,
   MachineAgentInventoryUnavailableError,
   projectMachineAgentsDetectResponse,
+  MachineAcpInventoryRequestSchema,
+  projectAcpCatalogForMachineInventory,
 } from './index.js';
 
 const agents = [{ agentId: 'antigravity', title: 'Antigravity' }, { agentId: 'acme/helper', title: 'Helper' }];
@@ -18,6 +20,40 @@ const facts = {
 } as const;
 
 describe('machine Agent inventory projection', () => {
+  it('rejects secret-bearing requests and unsolicited or mismatched definition responses', () => {
+    const definition = { definitionId: 'first', title: 'Caller title', launch: { kind: 'npm' as const, package: 'fixture', version: '1', args: [] } };
+    expect(MachineAcpInventoryRequestSchema.safeParse({ definitions: [{ ...definition, env: { TOKEN: 'private' } }] }).success).toBe(false);
+    expect(MachineAcpInventoryRequestSchema.safeParse({ definitions: [{ ...definition, launch: { kind: 'command', command: 'npx', args: [] } }] }).success).toBe(false);
+    for (const invalid of [{ definitionId: 'foreign', title: definition.title }, { definitionId: 'first', title: 'Custodian private title' }]) {
+      const output = projectMachineAgentsDetectResponse({ agents: [], definitions: [definition], response: { protocolVersion: 1,
+        results: { 'tool.acpAgentInventory': { ok: true, checkedAt: 2, data: { items: [{ ...facts, ...invalid,
+          agentId: 'custom-acp', managed: true, fit: { kind: 'can_run', via: 'npm' } }] } } } } });
+      expect(output.items).toEqual([]);
+      expect(output.unavailable).toEqual([{ agentId: 'custom-acp', definitionId: 'first', reason: 'invalid_facts' }]);
+      expect(JSON.stringify(output)).not.toContain('Custodian');
+    }
+    expect(projectAcpCatalogForMachineInventory({ status: 'partial', reason: 'incomplete-inventory', record: { v: 1, definitions: [] }, diagnostics: [] }))
+      .toEqual({ definitions: [], definitionCatalog: { status: 'unavailable', reason: 'incomplete-inventory' } });
+  });
+  it('requests definition inventory from only the caller catalog and preserves distinct definition rows', () => {
+    const definitions = ['first', 'second'].map(definitionId => ({ definitionId, title: definitionId,
+      launch: { kind: 'npm' as const, package: 'acp-fixture', version: '1.0', args: [] } }));
+    expect(buildMachineAgentsDetectRequest({ agents: [], definitions }).requests).toEqual([
+      { id: 'tool.acpAgentInventory', params: { definitions } },
+    ]);
+    const items = definitions.map(({ definitionId, title }) => ({ ...facts, agentId: 'custom-acp', definitionId, title,
+      installed: true, managed: true, version: '1.0', fit: { kind: 'can_run', via: 'npm' } }));
+    expect(projectMachineAgentsDetectResponse({ agents: [], definitions,
+      response: { protocolVersion: 1, results: { 'tool.acpAgentInventory': { ok: true, checkedAt: 2, data: { items } } } },
+    })).toEqual({ items });
+  });
+
+  it('marks a failed definition read unavailable instead of withdrawing its known definition', () => {
+    const definitions = [{ definitionId: 'first', title: 'First', launch: { kind: 'npm' as const, package: 'fixture', version: '1', args: [] } }];
+    expect(projectMachineAgentsDetectResponse({ agents: [], definitions,
+      response: { protocolVersion: 1, results: { 'tool.acpAgentInventory': { ok: false, checkedAt: 2, error: { code: 'catalog-unavailable' } } } },
+    })).toEqual({ items: [], unavailable: [{ agentId: 'custom-acp', definitionId: 'first', reason: 'probe_failed', errorCode: 'catalog-unavailable' }] });
+  });
   it('requests complete native status and latest versions for every registry Agent', () => {
     expect(buildMachineAgentsDetectRequest({ agents, refresh: true })).toEqual({
       requests: agents.map(({ agentId }) => ({ id: `cli.${agentId}`, params: { includeLoginStatus: true, includeLatestVersion: true } })),
