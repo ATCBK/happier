@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { ScmBackendCapabilitiesSchema, type ScmBackendPreference, type ScmRepoMode } from '@happier-dev/protocol';
+import { runWithBackendRuntimeServices } from '@happier-dev/plugin-sdk/scm/backend';
+
+import { detectGitRepo } from '../../../../packages/plugins/scm-git/src/repository';
+import { detectSaplingRepo } from '../../../../packages/plugins/scm-sapling/src/repository';
 
 import {
     createScmBackendRegistry,
@@ -143,6 +147,69 @@ function backend(input: {
 }
 
 describe('scm backend registry selection', () => {
+    it.each([
+        ['sapling', detectSaplingRepo],
+        ['git', detectGitRepo],
+    ] as const)('treats an absent executable as an inapplicable detector: %s', async (id, detectRepo) => {
+        const registry = createScmBackendRegistry([{
+            ...backend({ id, detected: { isRepo: false, mode: null, rootPath: null } }),
+            detectRepo,
+        }]);
+
+        // The process boundary reports executable absence; the real plugin detector and
+        // registry decide whether that absence should refuse repository selection.
+        await runWithBackendRuntimeServices({
+            runCommand: async () => ({
+                success: false,
+                stdout: '',
+                stderr: 'The requested tool is absent',
+                exitCode: -1,
+                executableMissing: true,
+            }),
+        }, async () => {
+            await expect(registry.selectBackend({ cwd: '/repo', workingDirectory: '/repo' }))
+                .resolves.toBeNull();
+        });
+    });
+
+    it('surfaces the failed installed detector rather than another absent executable', async () => {
+        const registry = createScmBackendRegistry([
+            {
+                ...backend({ id: 'sapling', detected: { isRepo: false, mode: null, rootPath: null } }),
+                detectRepo: detectSaplingRepo,
+            },
+            {
+                ...backend({ id: 'git', detected: { isRepo: false, mode: null, rootPath: null } }),
+                detectRepo: detectGitRepo,
+            },
+        ]);
+
+        await runWithBackendRuntimeServices({
+            runCommand: async ({ command }) => command === 'sl'
+                ? { success: false, stdout: '', stderr: 'The requested tool is absent', exitCode: -1, executableMissing: true }
+                : { success: false, stdout: '', stderr: 'Git repository probe timed out', exitCode: -1, timedOut: true },
+        }, async () => {
+            await expect(registry.selectBackend({ cwd: '/repo', workingDirectory: '/repo' }))
+                .rejects.toThrow('Git repository probe timed out');
+        });
+    });
+
+    it('does not infer executable absence from diagnostic text', async () => {
+        const registry = createScmBackendRegistry([{
+            ...backend({ id: 'sapling', detected: { isRepo: false, mode: null, rootPath: null } }),
+            detectRepo: detectSaplingRepo,
+        }]);
+        await runWithBackendRuntimeServices({
+            runCommand: async () => ({
+                success: false, stdout: '', exitCode: -1,
+                stderr: 'SCM executable not found for sapling-cli (sl)',
+            }),
+        }, async () => {
+            await expect(registry.selectBackend({ cwd: '/repo', workingDirectory: '/repo' }))
+                .rejects.toMatchObject({ errorCode: 'BACKEND_UNAVAILABLE' });
+        });
+    });
+
     it('prefers sapling for .sl repositories', async () => {
         const registry = createScmBackendRegistry([
             backend({ id: 'git', detected: { isRepo: false, mode: null, rootPath: null } }),

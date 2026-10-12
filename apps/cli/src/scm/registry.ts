@@ -1,4 +1,5 @@
 import type { ScmBackendId, ScmBackendPreference, ScmRepoMode } from '@happier-dev/protocol';
+import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol/scm/operationError';
 
 import type { ScmBackend, ScmRepoDetection } from './types';
 
@@ -53,15 +54,19 @@ export function createScmBackendRegistry(backends: readonly ScmBackend[]) {
         ));
         if (detectedRepositories.length > 0) return detectedRepositories;
 
-        // Three states, not two (`F-SCM-1`). A fulfilled detection is a backend that looked and
-        // answered; a rejection is a backend that could not look. "Not a repository" is only a fact
-        // when at least one backend actually answered — otherwise every caller downstream would
-        // publish a confident negative about a path nothing inspected. A backend whose tool is
-        // missing rejects too, so it neither answers for the others nor overrides one that did.
+        // Prefer a detector's authoritative negative over other backends' failed probes.
+        // When none answered, missing tools are inapplicable, but an installed tool's failed
+        // probe must remain undetermined rather than publish a confident negative (`F-SCM-1`).
         const answeredAuthoritatively = results.some((result) => result.status === 'fulfilled');
         if (answeredAuthoritatively) return [];
 
-        const detectorFailure = results.find((result) => result.status === 'rejected');
+        const detectorFailure = results.find((result) => (
+            result.status === 'rejected'
+            && !(typeof result.reason === 'object'
+                && result.reason !== null
+                && 'errorCode' in result.reason
+                && result.reason.errorCode === SCM_OPERATION_ERROR_CODES.BACKEND_NOT_INSTALLED)
+        ));
         if (detectorFailure?.status === 'rejected') throw detectorFailure.reason;
         return [];
     }

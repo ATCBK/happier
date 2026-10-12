@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 
 import { createScmCapabilities } from '@happier-dev/protocol/scm/capabilities';
 import type { ScmWorkingSnapshot } from '@happier-dev/protocol/scm';
-import type { BackendCommandRunInput, BackendCommandStreamInput } from '@happier-dev/plugin-sdk/scm/backend';
+import type { BackendCommandRunInput, BackendCommandRunResult, BackendCommandStreamInput } from '@happier-dev/plugin-sdk/scm/backend';
 import { resolveBackendCommandMaxOutputBytes } from '@happier-dev/plugin-sdk/scm/backend';
 import { resolveWindowsCommandOnPath } from '@happier-dev/cli-common/process';
 
@@ -18,15 +18,7 @@ import {
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
 
-export type ScmExecResult = {
-    success: boolean;
-    stdout: string;
-    stderr: string;
-    exitCode: number;
-    timedOut?: boolean;
-    outputLimitExceeded?: boolean;
-    stoppedEarly?: boolean;
-};
+export type ScmExecResult = BackendCommandRunResult;
 
 const SCM_INSTALLABLE_KEYS = {
     git: 'dep.git',
@@ -123,6 +115,7 @@ export function runScmCommand(input: {
             stdout: '',
             stderr: `SCM executable not found for ${installableKey} (${input.bin})`,
             exitCode: -1,
+            executableMissing: true,
         });
     }
 

@@ -31,6 +31,7 @@ describe('runScmCommand output limits', () => {
             expect(result).toEqual(expect.objectContaining({
                 success: false,
                 exitCode: -1,
+                executableMissing: true,
             }));
             expect(result.stderr).toContain('SCM executable not found');
             expect(result.stderr).toContain('dep.git');

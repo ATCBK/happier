@@ -689,6 +689,8 @@ export type BackendCommandRunResult = Readonly<{
     exitCode: number;
     timedOut?: boolean;
     outputLimitExceeded?: boolean;
+    /** Host executable resolution found no installed command; no process was started. */
+    executableMissing?: true;
     /** The consumer settled its read and the host completed owned process cleanup. */
     stoppedEarly?: boolean;
 }>;

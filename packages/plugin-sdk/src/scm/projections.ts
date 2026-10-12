@@ -183,7 +183,8 @@ export type ScmOperationErrorCode =
     | 'BRANCH_OPERATION_IN_PROGRESS'
     | 'BRANCH_OPERATION_NOT_IN_PROGRESS'
     | 'FEATURE_UNSUPPORTED'
-    | 'BACKEND_UNAVAILABLE';
+    | 'BACKEND_UNAVAILABLE'
+    | 'BACKEND_NOT_INSTALLED';
 
 export type ScmCapabilities = {
     capabilityScope: 'local-backend';
@@ -1452,6 +1453,7 @@ export const SCM_OPERATION_ERROR_CODES: Readonly<{
     BRANCH_OPERATION_NOT_IN_PROGRESS: 'BRANCH_OPERATION_NOT_IN_PROGRESS';
     FEATURE_UNSUPPORTED: 'FEATURE_UNSUPPORTED';
     BACKEND_UNAVAILABLE: 'BACKEND_UNAVAILABLE';
+    BACKEND_NOT_INSTALLED: 'BACKEND_NOT_INSTALLED';
 }> = canonicalScmOperationErrorCodes;
 export const SCM_WORKTREE_REMOVE_AUTHORIZATION_TOKEN: 'remove-worktree' = canonicalScmWorktreeRemoveAuthorizationToken;
 export const ScmCapabilitiesSchema: {

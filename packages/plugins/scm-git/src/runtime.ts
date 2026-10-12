@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import {
   type BackendCommandRunInput,
+  type BackendCommandRunResult,
   type BackendCommandStreamInput,
   resolveBackendCommandMaxOutputBytes as resolveScmBackendCommandMaxOutputBytes,
   runBackendCommand as runScmBackendCommand } from '@happier-dev/plugin-sdk/scm/backend';
@@ -19,15 +20,7 @@ import { GIT_INSTALLABLE_DEP_ID } from './installables/gitInstallable.js';
 
 const SAFE_GIT_ALLOW_PROTOCOL = 'https:ssh:git:file';
 
-export type ScmExecResult = {
-  success: boolean;
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  timedOut?: boolean;
-  outputLimitExceeded?: boolean;
-  stoppedEarly?: boolean;
-};
+export type ScmExecResult = BackendCommandRunResult;
 
 export function getScmCommandIndeterminateErrorCode(result: ScmExecResult): ScmOperationErrorCode | null {
   if (result.timedOut) return SCM_OPERATION_ERROR_CODES.COMMAND_TIMEOUT;

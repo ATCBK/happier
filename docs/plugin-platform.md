@@ -1355,6 +1355,12 @@ platform execution policy, without an inert latency-demotion state.
 
 ### SCM filesystem authority (0.3 development)
 
+The host command result marks failed executable resolution with the optional
+`executableMissing: true` field. Git and Sapling repository detectors translate
+that fact to `BACKEND_NOT_INSTALLED`; the host selection registry treats that
+detector as inapplicable. Installed-tool failures remain unavailable when no
+detector answers. Diagnostic prose carries no executable-absence meaning.
+
 Entry-history backends may declare the optional `read.historyEntries` operation
 and its handler-backed capability through the existing SCM contribution. The
 public SDK projects the strict Protocol request/result; registration and the

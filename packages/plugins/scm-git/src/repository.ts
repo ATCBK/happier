@@ -47,7 +47,7 @@ export function createGitExecutionFeatureDetector(): () => Promise<GitExecutionF
 }
 
 /**
- * `git` produced no answer at all — the binary is missing, the spawn failed, the probe was cut
+ * `git` produced no answer at all — the spawn failed, the probe was cut
  * short by its deadline, or the output cap killed it. Rejecting is the contract the host registry
  * already reads as "this backend could not look"; returning `isRepo: false` would publish the
  * confident domain fact *"this directory is not under source control"* about a directory nothing
@@ -73,6 +73,11 @@ export async function detectGitRepo(input: { cwd: string }): Promise<ScmRepoDete
         timeoutMs: 5000,
         env: { LC_ALL: 'C', LANGUAGE: 'C' },
     });
+    if (gitRepoCheck.executableMissing === true) {
+        throw Object.assign(new Error(gitRepoCheck.stderr || 'Git is not installed'), {
+            errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_NOT_INSTALLED,
+        });
+    }
     if (!gitRepoCheck.success || gitRepoCheck.exitCode !== 0) {
         if (commandProducedNoAnswer(gitRepoCheck)) {
             throw detectionUnavailable(gitRepoCheck.stderr.trim() || 'the repository probe did not complete');
