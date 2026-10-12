@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { rm } from 'node:fs/promises';
+import { basename, dirname, relative, resolve } from 'node:path';
+import { createHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 import { authorizeFilesystemPath } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
 import { observeWorkspaceSyncEntryAtRoot } from '@/workspaces/sync/workspaceSyncFileRead';
 import { captureWorkspaceSyncEntryAtRoot } from '@/workspaces/sync/workspaceSyncConflicts';
@@ -56,7 +56,7 @@ export async function prepareWorkspaceEntryExport(params: Readonly<{
   const expectation = await observeWorkspaceSyncEntryAtRoot({ rootPath: params.rootPath, relativePath,
     assertCurrentAuthority: params.assertCurrentAuthority });
   if (expectation.kind === 'missing') throw new Error('Filesystem copy source is missing');
-  const captureDirectory = await mkdtemp(join(tmpdir(), 'happier-filesystem-copy-source-'));
+  const captureDirectory = createHappierTempDir({ purpose: 'filesystem-copy-source' });
   try {
     const captured = await captureWorkspaceSyncEntryAtRoot({ rootPath: params.rootPath, relativePath,
       expected: expectation, captureDirectory, assertCurrentAuthority: params.assertCurrentAuthority });
@@ -73,7 +73,7 @@ export async function prepareWorkspaceEntryExport(params: Readonly<{
           additionalAllowedDirs: params.additionalAllowedReadDirs });
         if (!confined.valid || !admitted.valid) throw new Error('Filesystem copy source link escapes its admitted root');
       } });
-    const payloadSource = { ...exported.payloadSource, dispose: () => rm(captureDirectory, { recursive: true, force: true }) };
+    const payloadSource = { ...exported.payloadSource, dispose: () => removeHappierTempDirAsync(captureDirectory) };
     const manifestHash = await resolveTransferPayloadManifestHash(payloadSource);
     const sizeBytes = await resolveTransferPayloadSizeBytes(payloadSource);
     await params.assertCurrentAuthority();
@@ -83,7 +83,7 @@ export async function prepareWorkspaceEntryExport(params: Readonly<{
       expiresAt: published.expiresAt, name: basename(params.path), sizeBytes, manifestHash },
       entryTree: { operationId: params.operationId, expectation, blobs: [...exported.blobs] } };
   } catch (error) {
-    await rm(captureDirectory, { recursive: true, force: true });
+    await removeHappierTempDirAsync(captureDirectory);
     throw error;
   }
 }

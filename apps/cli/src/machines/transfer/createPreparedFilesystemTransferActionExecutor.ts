@@ -1,8 +1,8 @@
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
-import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { copyFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 import {
   FilesystemUploadInputSchema, FilesystemDownloadInputSchema, FilesystemTransferCancelInputSchema, FilesystemPreparedCopyInputSchema,
   type FilesystemUploadOutput, type FilesystemDownloadOutput, type FilesystemTransferCancelOutput, type FilesystemCopyOutput,
@@ -87,7 +87,7 @@ export function createPreparedFilesystemTransferActionExecutor(params: Readonly<
           const entryTree = copy.source.entryTree;
           if (entryTree.expectation.kind === 'missing') return failure('Filesystem copy source is missing', 'source_missing');
           if (entryTree.expectation.kind === 'directory' && !copy.recursive) return failure('Directory copies require recursive=true', 'recursive_required');
-          const custody = await mkdtemp(join(tmpdir(), 'happier-filesystem-copy-destination-'));
+          const custody = createHappierTempDir({ purpose: 'filesystem-copy-destination' });
           const imports: Array<{ transferId: string; prepared: Awaited<ReturnType<DirectTransferServerLifecycle['prepareImportSession']>>;
             settlement: ReturnType<DirectTransferServerLifecycle['waitForImportTransferSettlement']> }> = [];
           let retainCustody = false;
@@ -133,7 +133,7 @@ export function createPreparedFilesystemTransferActionExecutor(params: Readonly<
             if (outcome.status === 'restored') return failure('Filesystem copy failed and the destination was restored', 'filesystem_copy_restored');
             return { success: true, status: 'completed', sourceId: copy.source.sourceId, path: target.path, expectation: entryTree.expectation };
           } finally {
-            if (!retainCustody) { await cancelAll().catch(() => undefined); await rm(custody, { recursive: true, force: true }); }
+            if (!retainCustody) { await cancelAll().catch(() => undefined); await removeHappierTempDirAsync(custody); }
           }
         }
         const prepared = await params.lifecycle.prepareImportSession({ t: 'session_file_upload_v1', workingDirectory: target.rootPath,
