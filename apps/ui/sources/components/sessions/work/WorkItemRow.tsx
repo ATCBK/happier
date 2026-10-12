@@ -138,8 +138,10 @@ function phaseFor(item: WorkItem): SessionAgentActivityPresentation['phase'] {
         case 'needs_you':
             return 'attention';
         case 'working':
-        case 'offline':
             return 'live';
+        // Offline work sits under Recent with its word ("Offline"); nothing in it is still going, so its
+        // mark's corner stays quiet instead of spinning.
+        case 'offline':
         case 'finished':
         case 'idle':
             return 'finished';

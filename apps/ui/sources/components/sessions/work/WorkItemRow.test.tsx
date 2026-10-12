@@ -1,21 +1,12 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionWorkflowRunSnapshotV1 } from '@happier-dev/protocol';
 
-import { renderScreen } from '@/dev/testkit';
-import {
-    createWorkflowDefinitionFixture,
-    createWorkflowInvocationIndexFixture,
-    createWorkflowRunSummaryFixture,
-} from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { installSessionSubagentCommonModuleMocks } from '@/components/sessions/agents/sessionSubagentTestHelpers';
 import type { SessionWorkSources } from './sessionWorkSources';
 
-import { groupWorkByState, projectWork, type WorkItem, type WorkProjectionInput } from './workProjection';
-import { WORKER_KIND_GLYPHS } from './workerKindGlyphs';
-import { readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
-import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import type { WorkItem, WorkProjectionInput } from './workProjection';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -29,13 +20,6 @@ const detailActions = vi.hoisted(() => ({
 }));
 vi.mock('@/sync/domains/workflows/workflowRunDetailActions', () => ({
     workflowRunDetailActions: detailActions,
-}));
-vi.mock('@/sync/domains/scope/activeServerAccountScope', () => ({
-    captureActiveServerAccountScopeLifetime: () => ({
-        scope: SCOPE,
-        isCurrent: () => true,
-        onRetire: () => ({ dispose: () => undefined }),
-    }),
 }));
 
 // Only the storage environment is replaced: the Run invocation window is the real canonical domain.
@@ -59,6 +43,24 @@ installSessionSubagentCommonModuleMocks({
     },
 });
 
+// Install boundary options before importing owners that can initialize React Native or storage.
+const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+const { activateStorageAccountScope } = await import('@/dev/testkit/mocks/storage');
+const { createWorkflowDefinitionFixture, createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } =
+    await import('@/dev/testkit/fixtures/workflowRunFixtures');
+const { readSessionWorkStatusFacts } = await import('@/components/work/status/sessionWorkStatusFacts');
+const { createSessionListRenderableSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+
+let activeScope: Awaited<ReturnType<typeof activateStorageAccountScope>> | null = null;
+beforeEach(async () => {
+    const { storage } = await import('@/sync/domains/state/storage');
+    activeScope = await activateStorageAccountScope(SCOPE, storage);
+});
+afterEach(() => {
+    activeScope?.dispose();
+    activeScope = null;
+});
+
 function needsYouSession(): WorkItem {
     return {
         key: 'session:checkout',
@@ -76,12 +78,20 @@ function needsYouSession(): WorkItem {
 
 // Load the row's module graph outside the per-test assertion deadline instead of
 // lengthening the deadline.
+const { groupWorkByState, projectWork } = await import('./workProjection');
+const { WORKER_KIND_GLYPHS } = await import('./workerKindGlyphs');
 await import('./WorkItemRow');
 
 describe('WorkItemRow', () => {
     it('uses the same session identity glyph as worker updates', async () => {
         const { presentWorkItem } = await import('./WorkItemRow');
         expect(presentWorkItem(needsYouSession()).iconName).toBe(WORKER_KIND_GLYPHS.session);
+    });
+    it('keeps an offline row\'s corner quiet: its word says Offline, nothing in it is still going (Recent, lab convo-W2)', async () => {
+        const { presentWorkItem } = await import('./WorkItemRow');
+        const offline: WorkItem = { ...needsYouSession(), status: { bucket: 'offline', tone: 'neutral', word: 'Offline' } };
+        expect(presentWorkItem(offline).phase).toBe('finished');
+        expect(presentWorkItem({ ...needsYouSession(), status: { bucket: 'working', tone: 'neutral', word: 'Working' } }).phase).toBe('live');
     });
     it('does not repaint unchanged real rows when another projected Session changes', async () => {
         const { WorkItemRow } = await import('./WorkItemRow');
