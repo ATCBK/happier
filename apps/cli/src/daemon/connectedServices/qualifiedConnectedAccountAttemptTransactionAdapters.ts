@@ -100,7 +100,7 @@ const OAuthSnapshotSchema = z.object({
   ...SnapshotBaseShape,
   phase: z.enum(['starting', 'awaitingOAuth', 'outcomeUnknown']),
   authorizationUrl: z.string().min(1).max(8_192).optional(),
-  issuer: z.string().min(1).max(4_096).optional(),
+  issuer: z.string().min(1).optional(),
   issuerResponseParameterRequired: z.boolean().optional(),
   expiresAtMs: SafeTimestampSchema.optional(),
 }).strict();

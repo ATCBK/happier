@@ -221,8 +221,9 @@ describe('qualified Connected Account attempt transaction adapters', () => {
     const handle = await owner.oauth.create({ attemptId: snapshot.attemptId, service: snapshot.service, snapshot,
       callbackUrl: 'https://app.happier.dev/oauth/mcp/callback' });
     expect(handle.expiresAtMs).toBe(api.records.get('oauth:oauth-attempt')!.expiresAtMs);
-    const discovered = { ...snapshot, phase: 'awaitingOAuth' as const, stagedAccountConfigurationContent: {
-      values: { resource: 'https://mcp.example/mcp', issuer: 'https://issuer.example' }, secretValues: { clientSecret: 'secret-client' },
+    const issuer = `https://issuer.example/${'issuer-path'.repeat(420)}`;
+    const discovered = { ...snapshot, phase: 'awaitingOAuth' as const, issuer, issuerResponseParameterRequired: true, stagedAccountConfigurationContent: {
+      values: { resource: 'https://mcp.example/mcp', issuer }, secretValues: { clientSecret: 'secret-client' },
     } };
     await handle.acknowledge!(discovered);
     expect(storedContentJson(api.records.get('oauth:oauth-attempt'))).not.toContain('secret-client');
