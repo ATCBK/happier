@@ -3,27 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { DaemonTtsController } from './DaemonTtsController';
 
-vi.mock('@/voice/runtime/voiceRuntimeConfigDefaults', () => ({
-    VOICE_RUNTIME_CONFIG_DEFAULTS: {
-        daemonInference: {
-            warmIdleEvictMs: 5 * 60 * 1000,
-            warmOnVoiceHomeAttach: true,
-            perModelConcurrency: 1,
-            statusPollMs: 750,
-            tts: {
-                defaultCodec: {
-                    codec: 'wav',
-                    mimeType: 'audio/wav',
-                },
-            },
-            stt: {
-                maxUploadBytes: 25 * 1024 * 1024,
-                acceptedInputFormats: ['audio/wav'],
-            },
-        },
-    },
-}));
-
 vi.mock('./DaemonVoiceInferenceClient', () => ({
     DaemonVoiceInferenceClient: class {
         synthesizeText = vi.fn();
@@ -31,6 +10,35 @@ vi.mock('./DaemonVoiceInferenceClient', () => ({
 }));
 
 describe('DaemonTtsController', () => {
+    it('preserves the real segmented client receiver through feature refusal', async () => {
+        const { DaemonVoiceInferenceClient } = await vi.importActual<typeof import('./DaemonVoiceInferenceClient')>('./DaemonVoiceInferenceClient');
+        const { isRuntimeFeatureEnabled } = await vi.importActual<typeof import('@/sync/domains/features/featureDecisionInputs')>('@/sync/domains/features/featureDecisionInputs');
+        const client = new DaemonVoiceInferenceClient({
+            // Real policy with explicit local inputs refuses before any network or machine work.
+            isRuntimeFeatureEnabled: (params) => isRuntimeFeatureEnabled({
+                ...params,
+                settings: { experiments: false, featureToggles: { 'voice.daemonInference': false } },
+            }),
+        });
+        let played = false;
+        const controller = new DaemonTtsController({
+            client,
+            // Audio playback is the platform boundary; refusal must never reach it.
+            playAudioBytesWithStopper: async () => { played = true; },
+        });
+
+        await expect(controller.speak({
+            sessionId: 'session-1',
+            text: 'hello daemon',
+            packId: 'kokoro-82m-v1.0-onnx-q8-wasm',
+            voiceId: 'af_heart',
+            speed: 1,
+            output: { codec: 'wav', mimeType: 'audio/wav' },
+            registerPlaybackStopper: () => () => {},
+        })).rejects.toMatchObject({ code: 'feature_disabled' });
+        expect(played).toBe(false);
+    });
+
     it('synthesizes with the daemon client and plays the returned audio bytes', async () => {
         const synthesizeText = vi.fn().mockResolvedValue({
             bytes: new Uint8Array(Buffer.from('voice-audio')),

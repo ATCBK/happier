@@ -191,7 +191,7 @@ export class DaemonTtsController {
                     stopActivePlayback,
                     onSpeaking: notifySpeakingOnce,
                     abortController,
-                    startSegmentedTts,
+                    startSegmentedTts: startSegmentedTts.bind(this.deps.client),
                 });
                 return;
             }
