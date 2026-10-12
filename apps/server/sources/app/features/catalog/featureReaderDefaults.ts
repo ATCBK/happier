@@ -302,7 +302,7 @@ export const FEATURE_READER_DEFAULTS = {
         type: 'string',
         ...AT_STARTUP,
         featureId: 'localServices.preview',
-        description: 'Base domain that serves previews on their own origin; unset serves them under the server origin.',
+        description: 'Base domain that serves previews and public stored-content links on isolated origins. When unset, local-service and private Artifact previews are unavailable; public stored-content links require the separate Home opt-in to use its HTTPS address.',
     },
     localServicesPublicPreviewEnabled: { ...OFF, ...HOME },
     localServicesPublicPreviewAllowedModes: {
