@@ -1,12 +1,13 @@
 import { PluginConnectedAccountDescriptorContributionV2Schema } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
+import { ConnectedAccountServiceIdentityV1Schema, type ConnectedAccountSourceCustodyV1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import type { ConnectedAccountRuntime as PluginConnectedAccountRuntime } from '@happier-dev/plugin-sdk/connected-accounts';
 import type { PluginContributionRef } from '@happier-dev/plugin-sdk';
 
 import type { ResolvedConnectedAccountDescriptorContribution } from '@/plugins/projection/registry/types';
-import type { PluginRuntimeOccurrenceId } from '../runtimeSlots';
+import { createPluginRuntimeOccurrenceId, type PluginRuntimeOccurrenceId } from '../runtimeSlots';
 import type { PluginSourceCustody } from '../sourceAuthority';
+import type { HostConnectedAccountRuntime } from './hostRuntime';
 
 export type ConnectedAccountRuntimeRegistration = Readonly<{
     pluginId: string;
@@ -24,17 +25,34 @@ export type ConnectedAccountContributionRegistryEntry = Readonly<{
     ref: PluginContributionRef;
     descriptor: ResolvedConnectedAccountDescriptorContribution['definition'];
     occurrenceId: PluginRuntimeOccurrenceId;
-    sourceCustody: PluginSourceCustody;
+    sourceCustody: ConnectedAccountSourceCustodyV1;
     isCurrent(): boolean;
 }>;
 
-export type ConnectedAccountRuntimeLease = Readonly<{
+export type ConnectedAccountPluginRuntimeLease = Readonly<{
+    owner?: 'plugin';
     ref: PluginContributionRef;
     occurrenceId: PluginRuntimeOccurrenceId;
     sourceCustody: PluginSourceCustody;
     descriptor: ResolvedConnectedAccountDescriptorContribution['definition'];
     runtime: PluginConnectedAccountRuntime;
     isCurrent(): boolean;
+}>;
+
+export type ConnectedAccountHostRuntimeLease = Readonly<{
+    owner: 'host';
+    ref: PluginContributionRef;
+    occurrenceId: PluginRuntimeOccurrenceId;
+    sourceCustody: Readonly<{ kind: 'host' }>;
+    descriptor: ResolvedConnectedAccountDescriptorContribution['definition'];
+    runtime: HostConnectedAccountRuntime;
+    isCurrent(): boolean;
+}>;
+export type ConnectedAccountRuntimeLease = ConnectedAccountPluginRuntimeLease | ConnectedAccountHostRuntimeLease;
+export type HostConnectedAccountRuntimeRegistration = Readonly<{
+    ref: PluginContributionRef;
+    descriptor: ResolvedConnectedAccountDescriptorContribution['definition'];
+    runtime: HostConnectedAccountRuntime;
 }>;
 
 export class ConnectedAccountRuntimeInvocationNotStartedError extends Error {
@@ -49,18 +67,18 @@ export class ConnectedAccountRuntimeInvocationNotStartedError extends Error {
 }
 
 function qualifiedKey(ref: PluginContributionRef): string {
-    return buildQualifiedPluginContributionKey(createPluginContributionIdentity(ref));
+    return buildQualifiedPluginContributionKey(ConnectedAccountServiceIdentityV1Schema.parse(ref));
 }
 
 function snapshotQualifiedRef(ref: PluginContributionRef): PluginContributionRef {
-    const identity = createPluginContributionIdentity(ref);
+    const identity = ConnectedAccountServiceIdentityV1Schema.parse(ref);
     return Object.freeze({ pluginId: identity.pluginId, localId: identity.localId });
 }
 
 function snapshotDescriptor(
-    contribution: ResolvedConnectedAccountDescriptorContribution,
+    definition: ResolvedConnectedAccountDescriptorContribution['definition'],
 ): ResolvedConnectedAccountDescriptorContribution['definition'] {
-    const parsed = PluginConnectedAccountDescriptorContributionV2Schema.parse(contribution.definition);
+    const parsed = PluginConnectedAccountDescriptorContributionV2Schema.parse(definition);
     const pending: object[] = [parsed];
     while (pending.length > 0) {
         const current = pending.pop()!;
@@ -111,19 +129,22 @@ export function createConnectedAccountContributionRegistry(params: Readonly<{
      * registration, descriptor/runtime mismatch) keep throwing as themselves.
      */
     resolve(ref: PluginContributionRef): Promise<ConnectedAccountRuntimeLease | null>;
+    registerHostConnectedAccountRuntime(input: HostConnectedAccountRuntimeRegistration): void;
     dispose(): void;
 }> {
-    const descriptorsByKey = new Map<string, Readonly<{
+    type Declared = Readonly<{
         ref: PluginContributionRef;
         descriptor: ResolvedConnectedAccountDescriptorContribution['definition'];
         occurrenceId: PluginRuntimeOccurrenceId;
         sourceCustody: PluginSourceCustody;
-    }>>();
+        owner?: 'plugin';
+    }> | ConnectedAccountHostRuntimeLease;
+    const descriptorsByKey = new Map<string, Declared>();
     const duplicateKeys = new Set<string>();
     for (const contribution of params.descriptors) {
         const pluginId = contribution.pluginId?.trim();
         if (!pluginId) throw new TypeError('Connected-account descriptors require a plugin-qualified owner');
-        const descriptor = snapshotDescriptor(contribution);
+        const descriptor = snapshotDescriptor(contribution.definition);
         const ref = Object.freeze({ pluginId, localId: descriptor.id });
         const occurrenceId = params.readPluginOccurrenceId(pluginId);
         const sourceCustody = params.readPluginSourceCustody(pluginId);
@@ -178,22 +199,34 @@ export function createConnectedAccountContributionRegistry(params: Readonly<{
         return matches[0] ?? null;
     }
 
-    function coldEntry(declared: Readonly<{
-        ref: PluginContributionRef;
-        descriptor: ResolvedConnectedAccountDescriptorContribution['definition'];
-        occurrenceId: PluginRuntimeOccurrenceId;
-        sourceCustody: PluginSourceCustody;
-    }>): ConnectedAccountContributionRegistryEntry {
+    function coldEntry(declared: Declared): ConnectedAccountContributionRegistryEntry {
         return Object.freeze({
             ref: declared.ref,
             descriptor: declared.descriptor,
             occurrenceId: declared.occurrenceId,
             sourceCustody: declared.sourceCustody,
-            isCurrent: () => isCurrentOccurrence(declared.ref.pluginId, declared.occurrenceId),
+            isCurrent: () => declared.owner === 'host'
+                ? !disposed : isCurrentOccurrence(declared.ref.pluginId, declared.occurrenceId),
         });
     }
 
     return Object.freeze({
+        registerHostConnectedAccountRuntime(input) {
+            if (disposed) throw new ConnectedAccountRuntimeInvocationNotStartedError();
+            const ref = snapshotQualifiedRef(input.ref);
+            if (ref.pluginId !== 'happier') throw new TypeError('Host Connected Accounts require a reserved host service');
+            const key = qualifiedKey(ref);
+            if (descriptorsByKey.has(key)) throw new Error(`Duplicate connected-account descriptor '${key}'`);
+            const descriptor = snapshotDescriptor(input.descriptor);
+            if (descriptor.id !== ref.localId) throw new TypeError('Host Connected Account descriptor does not match its service');
+            descriptorsByKey.set(key, Object.freeze({
+                owner: 'host' as const, ref, descriptor,
+                occurrenceId: createPluginRuntimeOccurrenceId(ref.pluginId),
+                sourceCustody: Object.freeze({ kind: 'host' as const }),
+                runtime: input.runtime,
+                isCurrent: () => !disposed,
+            }));
+        },
         list() {
             return Object.freeze([...descriptorsByKey.values()].map(coldEntry));
         },
@@ -205,6 +238,10 @@ export function createConnectedAccountContributionRegistry(params: Readonly<{
             const qualifiedRef = snapshotQualifiedRef(ref);
             const declared = descriptorsByKey.get(qualifiedKey(qualifiedRef));
             if (!declared) return null;
+            if (declared.owner === 'host') {
+                if (!declared.isCurrent()) throw new ConnectedAccountRuntimeInvocationNotStartedError();
+                return declared;
+            }
             if (!isCurrentOccurrence(qualifiedRef.pluginId, declared.occurrenceId)) {
                 throw new ConnectedAccountRuntimeInvocationNotStartedError();
             }

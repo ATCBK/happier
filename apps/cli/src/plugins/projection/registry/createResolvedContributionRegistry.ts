@@ -242,6 +242,8 @@ export function createResolvedContributionRegistry(inputs: ResolvedContributionI
         buildQualifiedPluginContributionKey(left.identity).localeCompare(buildQualifiedPluginContributionKey(right.identity))));
     const inputTypes = Object.freeze([...(inputs.inputTypes ?? [])].sort((left, right) =>
         buildQualifiedPluginContributionKey(left.identity).localeCompare(buildQualifiedPluginContributionKey(right.identity))));
+    const atmospherePictures = Object.freeze([...(inputs.atmospherePictures ?? [])].sort((left, right) =>
+        buildQualifiedPluginContributionKey(left.identity).localeCompare(buildQualifiedPluginContributionKey(right.identity))));
     const dragSources = freezeQualifiedContributions(inputs.dragSources ?? []);
     const machineProvisioners = freezeQualifiedContributions(inputs.machineProvisioners ?? []);
     const machineProvisionersByContributionKey = new Map(machineProvisioners.map((entry) => [
@@ -526,6 +528,7 @@ export function createResolvedContributionRegistry(inputs: ResolvedContributionI
         roles,
         workflows,
         inputTypes,
+        atmospherePictures,
         machineProvisioners,
         machineProvisionersByContributionKey: Object.freeze(machineProvisionersByContributionKey),
         dragSources,
@@ -1047,6 +1050,7 @@ export function createMergedContributionRegistry(
         roles: Object.freeze([...(builtIn.roles ?? []), ...(plugin.roles ?? [])]),
         workflows: Object.freeze([...(builtIn.workflows ?? []), ...(plugin.workflows ?? [])]),
         inputTypes: Object.freeze([...(builtIn.inputTypes ?? []), ...(plugin.inputTypes ?? [])]),
+        atmospherePictures: Object.freeze([...(builtIn.atmospherePictures ?? []), ...(plugin.atmospherePictures ?? [])]),
         machineProvisioners: Object.freeze([...(builtIn.machineProvisioners ?? []), ...(plugin.machineProvisioners ?? [])]),
         dragSources: Object.freeze([...(builtIn.dragSources ?? []), ...(plugin.dragSources ?? [])]),
         dropTargets: Object.freeze([...(builtIn.dropTargets ?? []), ...(plugin.dropTargets ?? [])]),

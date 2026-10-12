@@ -1668,7 +1668,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 }],
                 mcp: {
                     servers: [{ id: 'session-tools', title: 'Session tools', kind: 'dynamic', sessionScope: 'session' }],
-                    discoverySources: [{ id: 'pi-synthetic', title: 'Pi discovery' }],
+                    discoverySources: [{ id: 'pi-synthetic', title: 'Pi discovery', loadedInHappierSessions: true }],
                 },
             },
         }), 'utf8');

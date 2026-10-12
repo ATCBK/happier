@@ -294,12 +294,14 @@ function createFileScope(filePath: string): PluginStorageOwnerScope {
     async function mutateValues<T>(
         operation: (values: JsonObject) => Promise<T> | T,
         shouldWrite: (result: T) => boolean = () => true,
+        signal?: AbortSignal,
     ): Promise<T> {
         return await withJsonOwnerFileLock({
             lockPath: `${filePath}.lock`,
-            timeoutMs: 5_000,
-            staleAfterMs: 30_000,
+            timeoutMs: Infinity,
+            staleAfterMs: Infinity,
             errorCode: 'PLUGIN_STORAGE_LOCK_UNAVAILABLE',
+            ...(signal ? { signal } : {}),
         }, async () => {
             const values = await readValues();
             const result = await operation(values);
@@ -351,7 +353,7 @@ function createFileScope(filePath: string): PluginStorageOwnerScope {
             values,
             operation,
             ...(signal ? { signal } : {}),
-        }))
+        }), undefined, signal)
     ));
     return scope;
 }
@@ -522,7 +524,7 @@ function createStableStorageScope(params: Readonly<{
             const result = await operation(handle);
             assertUsable(signal);
             return result;
-        }, signal ?? params.signal);
+        }, signal ? AbortSignal.any([params.signal, signal]) : params.signal);
     };
     return Object.freeze({
         consistency: () => params.consistency,

@@ -101,6 +101,7 @@ export type DaemonPluginAvailabilityReporter = Readonly<{
  * subprocess host this owner; neither caller reimplements G3 decisions.
  */
 export function createDaemonPluginRuntimeOwner(params: Readonly<{
+  readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
   happyHomeDir: string;
   managedResourcePreflight?: PluginManagedResourcePreflightBinding;
   /** Daemon-owned live machine identity for host-stamped nested Action callers. */
@@ -211,6 +212,7 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
     input,
   ) => developmentRoots?.resolveDevelopmentSourceAuthority(input) ?? null;
   const runtimeLifecycle = createDaemonPluginRegistryRuntimeLifecycle({
+    readSpawnFailureLimits: params.readSpawnFailureLimits,
     happyHomeDir: params.happyHomeDir,
     ...(params.executeClientAction ? { executeClientAction: params.executeClientAction } : {}),
     ...(params.resolveCurrentMachineId
@@ -559,20 +561,29 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
    * checkout development roots) are machine materializations only the live
    * runtime knows, so the one report adds them from the serving registry.
    */
-  const withReleaseLessMaterializations = (
+  const reportAvailability = async (
     inventory: PluginRegistryAvailabilityInventory,
-  ): PluginRegistryAvailabilityInventory => {
+    reporter: DaemonPluginAvailabilityReporter,
+  ): Promise<void> => {
     const lease = params.reloadController.tryAcquireRuntimeRegistry();
-    if (!lease) return projectPluginInstalledAvailabilityInventory({ inventory, registry: null, registryRevision: null, runtimeMaterializations: [] });
+    if (!lease) {
+      projectPluginInstalledAvailabilityInventory({ inventory, registry: null, registryRevision: null, runtimeMaterializations: [] });
+      return;
+    }
     try {
-      return projectPluginInstalledAvailabilityInventory({
+      const complete = projectPluginInstalledAvailabilityInventory({
         inventory,
         registry: lease.registry.contributes,
         registryRevision: lease.durableRevision,
         runtimeMaterializations: lease.registry.readReleaseLessMaterializations?.() ?? [],
       });
+      await reporter.report(complete);
+      // Native provisioners need declaration admission before Save/acquire,
+      // even when they declare no Account storage capability or Collections.
+      // Startup, reload and reconnect reuse this same publication lifecycle.
+      await lease.registry.claimReleaseLessDeclarations();
     } finally {
-      void lease.release().catch(() => undefined);
+      await lease.release();
     }
   };
   reportAvailabilityAfterApplied = (record) => {
@@ -581,14 +592,14 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
     // Runtime application is already durable. Availability is a best-effort
     // consumer: transport failure never changes the local transaction.
     void stateStore.readAvailabilityInventoryForCommit(record)
-      .then(async (inventory) => await reporter.report(withReleaseLessMaterializations(inventory)))
+      .then(async (inventory) => await reportAvailability(inventory, reporter))
       .catch((error: unknown) => reportAvailabilityFailure(error, record.revision));
   };
   const reportCurrentAvailability = (): void => {
     const reporter = params.availabilityReporter;
     if (!reporter) return;
     void stateStore.readAvailabilityInventory()
-      .then(async (inventory) => await reporter.report(withReleaseLessMaterializations(inventory)))
+      .then(async (inventory) => await reportAvailability(inventory, reporter))
       .catch((error: unknown) => reportAvailabilityFailure(error, -1));
   };
 
@@ -602,6 +613,7 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
       const initialLease = await params.reloadController.acquireRuntimeRegistry({
         resolveRuntimeRegistry: async () => {
           const registry = await resolveExecutablePluginRuntimeRegistry({
+            readSpawnFailureLimits: params.readSpawnFailureLimits,
             happyHomeDir: params.happyHomeDir,
             ...(params.executeClientAction ? { executeClientAction: params.executeClientAction } : {}),
             generation: params.reloadController.getState().generation + 1,
@@ -634,6 +646,9 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
               : {}),
             resolveDevelopmentSourceAuthority,
             connectedAccounts: params.connectedAccounts,
+            ...(params.actionFormConnectedAccounts
+              ? { actionFormConnectedAccounts: params.actionFormConnectedAccounts }
+              : {}),
             ...(params.providers ? { providers: params.providers } : {}),
             ...(params.managedProviderOperationAuthority
               ? {

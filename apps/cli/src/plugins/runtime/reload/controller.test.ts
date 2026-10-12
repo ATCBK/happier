@@ -960,6 +960,64 @@ describe('createPluginReloadController', () => {
         expect(disposeLower).toHaveBeenCalledOnce();
     });
 
+    it.each(['committed', 'adopted'] as const)('does not publish a committed recovery after a successor revision is %s', async (successorState) => {
+        const recoveryEntered = createDeferred<void>();
+        const releaseRecovery = createDeferred<void>();
+        const disposeFailed = vi.fn(async () => {});
+        const initialRegistry = createRuntimeRegistry('revision-one', { durableRevision: 1 });
+        const failedRegistry = createRuntimeRegistry('revision-two', { dispose: disposeFailed });
+        const successorRegistry = createRuntimeRegistry('revision-three');
+        const controller = createPluginReloadController({ resolveRuntimeRegistry: async () => initialRegistry });
+        const initialLease = await controller.acquireRuntimeRegistry();
+        await initialLease.release();
+        const failure = new Error('committed publication failed');
+        let failPublication = true;
+        const recoveringAdoption = controller.adoptPreparedRuntimeRegistry({
+            registry: failedRegistry,
+            changedPluginIds: ['acme.changed'],
+            durableRevision: 2,
+            runningSessionDisposition: 'retainRunningSessions',
+            beforePublish: async (_registry, publish) => {
+                if (failPublication) {
+                    failPublication = false;
+                    throw failure;
+                }
+                recoveryEntered.resolve();
+                await releaseRecovery.promise;
+                publish();
+            },
+        });
+        const enteredRecovery = await Promise.race([
+            recoveryEntered.promise.then(() => true),
+            recoveringAdoption.then(() => false, () => false),
+        ]);
+        expect(enteredRecovery).toBe(true);
+        try {
+            controller.publishDurableRunningSessionDisposition({
+                durableRevision: 3,
+                changedPluginIds: ['acme.changed'],
+                runningSessionDisposition: 'retainRunningSessions',
+            });
+            if (successorState === 'adopted') {
+                await expect(controller.adoptPreparedRuntimeRegistry({
+                    registry: successorRegistry,
+                    changedPluginIds: ['acme.changed'],
+                    durableRevision: 3,
+                    runningSessionDisposition: 'retainRunningSessions',
+                })).resolves.toMatchObject({ registry: successorRegistry });
+            }
+        } finally {
+            releaseRecovery.resolve();
+        }
+        await expect(recoveringAdoption).rejects.toBe(failure);
+        expect(controller.getState().activeRegistry).toBe(
+            successorState === 'adopted' ? successorRegistry : initialRegistry,
+        );
+        expect(controller.readCurrentDurableRevision()).toBe(3);
+        expect(disposeFailed).toHaveBeenCalledOnce();
+        await controller.shutdown();
+    });
+
     it('reserves a newer revision before awaiting cold initialization and fences its changed consumers', async () => {
         const lowerEntered = createDeferred<void>();
         const releaseLower = createDeferred<void>();
@@ -1037,7 +1095,7 @@ describe('createPluginReloadController', () => {
         await coldLease.release();
     });
 
-    it('does not publish a prepared registry when pre-publication reconciliation fails', async () => {
+    it.each([undefined, 2])('does not publish a prepared registry when pre-publication reconciliation keeps failing (durable revision %s)', async (durableRevision) => {
         const failure = new Error('purpose reconciliation failed');
         const retireInitialConsumers = vi.fn();
         const fenceInitialPluginConsumers = vi.fn();
@@ -1048,6 +1106,7 @@ describe('createPluginReloadController', () => {
             fencePluginConsumers: fenceInitialPluginConsumers,
             retirePluginConsumers: retireInitialPluginConsumers,
             activatedPluginIds: ['acme.plugin'],
+            durableRevision: 1,
             occurrenceIds: {
                 'acme.plugin': 'plugin-incumbent' as PluginRuntimeOccurrenceId,
             },
@@ -1072,6 +1131,7 @@ describe('createPluginReloadController', () => {
         await expect(controller.adoptPreparedRuntimeRegistry({
             registry: preparedRegistry,
             changedPluginIds: ['acme.plugin'],
+            ...(durableRevision === undefined ? {} : { durableRevision }),
             runningSessionDisposition: 'retainRunningSessions',
             beforePublish,
         })).rejects.toBe(failure);
@@ -1096,13 +1156,14 @@ describe('createPluginReloadController', () => {
         expect(immediateRegistry).toBe(initialRegistry);
         expect(acquisitionOutcome).toBe('resolved');
         expect(retireInitialConsumers).not.toHaveBeenCalled();
-        expect(fenceInitialPluginConsumers).not.toHaveBeenCalled();
+        if (durableRevision === undefined) expect(fenceInitialPluginConsumers).not.toHaveBeenCalled();
+        else expect(fenceInitialPluginConsumers).toHaveBeenCalledWith(['acme.plugin']);
         expect(retireInitialPluginConsumers).not.toHaveBeenCalled();
-        expect(incumbentRetirement.signal.aborted).toBe(false);
+        expect(incumbentRetirement.signal.aborted).toBe(durableRevision !== undefined);
         expect(initialRegistry.isPluginOccurrenceCurrent?.(
             'acme.plugin',
             'plugin-incumbent' as PluginRuntimeOccurrenceId,
-        )).toBe(true);
+        )).toBe(durableRevision === undefined);
         expect(disposePrepared).toHaveBeenCalledTimes(1);
     });
 
@@ -1773,7 +1834,18 @@ describe('createPluginReloadController', () => {
 
         const coldLease = await controller.acquireRuntimeRegistry();
         expect(coldLease.durableRevision).toBe(0);
+        expect(controller.readCurrentDurableRevision()).toBe(0);
         await coldLease.release();
+
+        controller.publishDurableRunningSessionDisposition({
+            durableRevision: 4,
+            changedPluginIds: ['acme.plugin'],
+            runningSessionDisposition: 'retainRunningSessions',
+        });
+        expect(controller.readCurrentDurableRevision()).toBe(4);
+        const priorLease = controller.tryAcquireRuntimeRegistry();
+        expect(priorLease?.durableRevision).toBe(0);
+        await priorLease?.release();
 
         await controller.adoptPreparedRuntimeRegistry({
             registry: preparedRegistry,
@@ -1784,7 +1856,24 @@ describe('createPluginReloadController', () => {
 
         const preparedLease = controller.tryAcquireRuntimeRegistry();
         expect(preparedLease?.durableRevision).toBe(4);
+        expect(controller.readCurrentDurableRevision()).toBe(4);
         await preparedLease?.release();
+
+        await expect(controller.adoptPreparedRuntimeRegistry({
+            registry: createRuntimeRegistry('failed-publication', { durableRevision: -1 }),
+            changedPluginIds: ['acme.plugin'],
+            durableRevision: 5,
+            runningSessionDisposition: 'retainRunningSessions',
+            beforePublish: async () => {
+                expect(controller.readCurrentDurableRevision()).toBe(5);
+                const servingLease = controller.tryAcquireRuntimeRegistry();
+                expect(servingLease?.durableRevision).toBe(4);
+                await servingLease?.release();
+                throw new Error('Publication failed after durable commit');
+            },
+        })).rejects.toThrow('Publication failed after durable commit');
+        expect(controller.readCurrentDurableRevision()).toBe(5);
+        await controller.shutdown();
     });
 
     it('waits for a held registry lease during shutdown before disposing its generation', async () => {

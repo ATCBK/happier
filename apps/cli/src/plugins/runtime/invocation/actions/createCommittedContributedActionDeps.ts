@@ -1,6 +1,7 @@
 import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import type { ActionDefinitionV1 } from '@happier-dev/protocol';
+import type { ActionDefinitionV1, WorkflowAcceptedAuthorizationV1 } from '@happier-dev/protocol';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import { formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions';
 import { inputTypeResourceReference } from '@happier-dev/protocol/inputs/runtime';
@@ -30,6 +31,7 @@ function projectDefinition(definition: ResolvedActionDefinition, identity: NonNu
     surfaces: definition.surfaces,
     inputHints: definition.inputHints,
     inputSchema: definition.inputSchema,
+    ...(definition.contextualDefaults === undefined ? {} : { contextualDefaults: definition.contextualDefaults }),
     ...(definition.approval === undefined ? {} : { approval: definition.approval }),
     ...(definition.toolExposure === undefined ? {} : { toolExposure: definition.toolExposure }),
     ...(definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
@@ -92,6 +94,11 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
   requestCurrentIntent?: (request: TargetActionCurrentIntentRequest) => Promise<TargetActionCurrentIntentResult>;
   fixedInvocationSurface?: PluginActionSurface;
   captureApprovalReplayPlacement?: true;
+  /** Bound only by the accepted Workflow host; author input cannot supply this proof. */
+  isWorkflowRunAuthorizationCurrent?: (params: Readonly<{
+    authorization: WorkflowAcceptedAuthorizationV1;
+    signal?: AbortSignal;
+  }>) => boolean | Promise<boolean>;
 }> = {}): NonNullable<ActionExecutorDeps['invokeContributedAction']> {
   const acquire = input.acquireRuntimeRegistryLease ?? acquireAuthoritativePluginRuntimeRegistryLease;
   return async ({ action, input: actionInput, context, approvalExecutionOrigin, requiredDangerLevel, signal }) => {
@@ -99,6 +106,21 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
     invocationSignal.throwIfAborted();
     const surface = input.fixedInvocationSurface ?? readSurface(context.surface);
     if (!surface) return { ok: false, errorCode: 'contributed_action_unavailable', error: 'contributed_action_unavailable' };
+    const workflowCaller = context.actionCaller?.kind === 'workflowRun' && input.isWorkflowRunAuthorizationCurrent
+      ? context.actionCaller : null;
+    const isWorkflowCurrent = async () => {
+      if (!workflowCaller) return true;
+      return await input.isWorkflowRunAuthorizationCurrent!({
+        authorization: workflowCaller.authorization, signal: invocationSignal,
+      });
+    };
+    if (!await isWorkflowCurrent()) return {
+      ok: false, errorCode: 'workflow_authorization_not_current', error: 'workflow_authorization_not_current',
+    };
+    // The accepted owner-authored effect has a background origin. Agent
+    // authored Runs retain their agent confirmation and capability surface.
+    const invocationSurface = input.fixedInvocationSurface === undefined && surface === 'agent'
+      && workflowCaller?.authorization.principal.kind === 'host' ? 'background' : surface;
     const externalActionContext = projectExternalActionContext(
       context,
       approvalExecutionOrigin !== undefined,
@@ -128,8 +150,13 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
           : {}),
         context: {
           surface,
-          invocationSurface: surface,
+          invocationSurface,
           initiatingActionCaller: context.actionCaller ?? { kind: 'host' },
+          ...(workflowCaller ? { beforeHandlerInvocation: async () => {
+            if (!await isWorkflowCurrent()) throw new PluginError({
+              code: 'workflow_authorization_not_current', message: 'workflow_authorization_not_current',
+            });
+          } } : {}),
           ...(externalActionContext ? { externalActionContext } : {}),
           ...(typeof context.defaultSessionId === 'string' ? { defaultSessionId: context.defaultSessionId } : {}),
           signal: invocationSignal,

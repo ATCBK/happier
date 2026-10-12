@@ -1132,9 +1132,14 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
     ): Promise<readonly PluginActivationDemandResult[]> {
         const pluginIds = [...new Set(
             activationTargets
-                .filter((target) => demands.some((demand) => (
-                    activationTargetMatchesContributionDemand(target, demand)
-                )))
+                .filter((target) => (
+                    // Declarations remain global, but executable demand cannot
+                    // admit a plugin outside the composition owner's occurrences.
+                    (!params.occurrenceIdsByPluginId || params.occurrenceIdsByPluginId.has(target.pluginId))
+                    && demands.some((demand) => (
+                        activationTargetMatchesContributionDemand(target, demand)
+                    ))
+                ))
                 .map((target) => target.pluginId),
         )].sort();
         return Object.freeze(await Promise.all(pluginIds.map((pluginId) => activatePluginIdForDemand(pluginId))));
@@ -1146,6 +1151,7 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
         const executablePluginIds = new Set(activationTargets.map((target) => target.pluginId));
         const selected = [...new Set(pluginIds.map((pluginId) => pluginId.trim()).filter((pluginId) => (
             pluginId.length > 0 && executablePluginIds.has(pluginId)
+            && (!params.occurrenceIdsByPluginId || params.occurrenceIdsByPluginId.has(pluginId))
         )))].sort();
         return Object.freeze(await Promise.all(selected.map((pluginId) => activatePluginIdForDemand(pluginId))));
     }

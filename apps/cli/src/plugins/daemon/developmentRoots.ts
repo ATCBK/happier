@@ -4,6 +4,7 @@ import { access, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { z } from 'zod';
+import type { PluginDevelopmentControlResultV1, PluginDevelopmentPhaseV1, PluginDevelopmentStatusV1 } from '@happier-dev/protocol/capabilities';
 
 import { startFileWatcher } from '@/integrations/watcher/startFileWatcher';
 import { BUNDLED_FIRST_PARTY_PLUGIN_METADATA } from '@/plugins/projection/registry/sources/generatedBundledPluginManifests';
@@ -35,31 +36,8 @@ export type DaemonPluginDevelopmentSubmission = Omit<
   }>;
 }>;
 
-export type DaemonPluginDevelopmentPhase =
-  | 'observing'
-  | 'preparing_dependencies'
-  | 'compiling'
-  | 'validating'
-  | 'active'
-  | 'retained_incumbent'
-  | 'unavailable';
-
-export type DaemonPluginDevelopmentStatus = Readonly<{
-  roots: readonly Readonly<{
-    kind: 'home' | 'workspace' | 'explicit';
-    rootPath: string;
-    trusted: boolean;
-    persisted: boolean;
-  }>[];
-  plugins: readonly Readonly<{
-    sourceRootPath: string;
-    pluginId?: string;
-    phase: DaemonPluginDevelopmentPhase;
-    occurrenceId?: string;
-    uiArtifactDigest?: string;
-    diagnostic?: Readonly<{ code: string; message?: string }>;
-  }>[];
-}>;
+export type DaemonPluginDevelopmentPhase = PluginDevelopmentPhaseV1;
+export type DaemonPluginDevelopmentStatus = PluginDevelopmentStatusV1;
 
 export type DaemonPluginDevelopmentControlRequest =
   | Readonly<{
@@ -72,15 +50,7 @@ export type DaemonPluginDevelopmentControlRequest =
   | Readonly<{ kind: 'invalidate' | 'reload'; rootPath: string }>
   | Readonly<{ kind: 'status' }>;
 
-export type DaemonPluginDevelopmentControlResult =
-  | Readonly<{ kind: 'status'; status: DaemonPluginDevelopmentStatus }>
-  | Readonly<{
-      kind: 'trustRequired';
-      projectRoot: string;
-      pluginRoot: string;
-      status: DaemonPluginDevelopmentStatus;
-    }>
-  | Readonly<{ kind: 'failed'; code: string; message: string; status: DaemonPluginDevelopmentStatus }>;
+export type DaemonPluginDevelopmentControlResult = PluginDevelopmentControlResultV1;
 
 export type PendingWorkspaceProjectTrust = Readonly<{
   pendingChangeId: string;

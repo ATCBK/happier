@@ -54,15 +54,26 @@ export async function createAdmittedPluginRuntimeFixture(params: Readonly<{
         },
     });
     try {
-        const lease = await controller.acquireRuntimeRegistry({
-            resolveRuntimeRegistry: async () => await resolveExecutablePluginRuntimeRegistry({
+        const resolveRuntimeRegistry = async () => await resolveExecutablePluginRuntimeRegistry({
                 ...params.runtimeOptions,
                 happyHomeDir,
                 generation: controller.getState().generation + 1,
                 resolveDevelopmentSourceAuthority: developmentRoots.resolveDevelopmentSourceAuthority,
                 currentGlobalExternalSessionsRouter: controller.currentGlobalExternalSessions,
                 targetedContributions: controller.getTargetedContributionsOwner(),
-            }),
+            });
+        if (params.controller && controller.getState().activeRegistry) {
+            // Acquiring an active controller only leases its incumbent. An
+            // authored fixture must publish its requested physical candidate
+            // through that same owner before readers can observe the declaration.
+            await controller.adoptPreparedRuntimeRegistry({
+                registry: await resolveRuntimeRegistry(),
+                changedPluginIds: params.runtimeOptions?.pluginIds ?? [],
+                runningSessionDisposition: 'retainRunningSessions',
+            });
+        }
+        const lease = await controller.acquireRuntimeRegistry({
+            resolveRuntimeRegistry,
         });
         if (lease.source !== 'active' || !controller.isRuntimeRegistryCurrent(lease.registry)) {
             await lease.release();

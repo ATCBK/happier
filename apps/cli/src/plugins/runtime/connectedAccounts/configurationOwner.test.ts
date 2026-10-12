@@ -165,6 +165,28 @@ function createHarness(records: readonly Readonly<{
 }
 
 describe('ConnectedAccountConfigurationOwner', () => {
+    it('stages validated host account configuration under the admitted revision without writing it early', async () => {
+        const mode = configuredMode('account');
+        const hostService = { pluginId: 'happier', localId: 'mcp-sign-in' };
+        const target = { kind: 'attempt' as const, attemptId: 'host-attempt', service: hostService, modeId: mode.id };
+        const record = { revision: 'revision-host', values: { endpoint: 'https://old.example.test' }, secretRefs: {}, secretValues: { clientSecret: 'old-secret' } };
+        const harness = createHarness([{ target, record }]);
+        const admission = await harness.owner.admit({
+            intent: 'connect', service: hostService, mode, attemptId: target.attemptId,
+            occurrenceId: 'host-occurrence', sourceCustody: { kind: 'host' },
+        });
+        if (admission.status !== 'ready') throw new Error('Expected host configuration admission');
+        const replacement = { values: { endpoint: 'https://new.example.test' }, secretValues: { clientSecret: 'new-secret' } };
+        await expect(harness.owner.stageAccountConfiguration({ snapshot: admission.snapshot, replacement }))
+            .resolves.toMatchObject({ values: { endpoint: 'https://new.example.test', audience: 'default-audience' }, secretValues: { clientSecret: 'new-secret' } });
+        expect(harness.replace).not.toHaveBeenCalled();
+        await expect(harness.owner.stageAccountConfiguration({ snapshot: admission.snapshot, replacement: { values: { endpoint: 42 }, secretValues: replacement.secretValues } }))
+            .rejects.toMatchObject({ code: 'connected_account_configuration_invalid' });
+        harness.setRecord(target, { ...record, revision: 'revision-replaced' });
+        await expect(harness.owner.stageAccountConfiguration({ snapshot: admission.snapshot, replacement }))
+            .rejects.toMatchObject({ code: 'connected_account_configuration_stale' });
+    });
+
     it('keeps a captured configuration current across runtime replacement until its record changes', async () => {
         const mode = configuredMode('service');
         const target = { kind: 'service' as const, service, modeId: mode.id };

@@ -1575,7 +1575,7 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
     await rm(happyHomeDir, { recursive: true, force: true });
   });
 
-  it('keeps the changed predecessor stale when post-commit pre-publication work fails', async () => {
+  it('reconciles a fresh serving occurrence from the committed revision after pre-publication failure', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-daemon-plugin-post-commit-failure-'));
     let failNextPublication = false;
     const failure = new Error('post-commit projection failed');
@@ -1584,7 +1584,10 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       happyHomeDir,
       reloadController,
       beforePublish: async (_registry, publish) => {
-        if (failNextPublication) throw failure;
+        if (failNextPublication) {
+          failNextPublication = false;
+          throw failure;
+        }
         publish();
       },
     });
@@ -1600,21 +1603,32 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
     await store.initialize();
     await expect(installFixtureCandidate(store, changed.input)).resolves.toMatchObject({ status: 'committed' });
     await expect(installFixtureCandidate(store, unrelated.input)).resolves.toMatchObject({ status: 'committed' });
+    const predecessorLease = await reloadController.acquireRuntimeRegistry();
+    const predecessorOccurrence = reloadController.readCurrentPluginOccurrenceId?.(changed.input.pluginId);
 
     failNextPublication = true;
-    await expect(store.setEnabledWithResult(changed.input.pluginId, false)).resolves.toMatchObject({
-      transaction: {
-        status: 'outcomeUnknown',
-        phase: 'adoption',
-        message: failure.message,
-      },
+    await expect(installFixtureCandidate(store, changed.input)).resolves.toMatchObject({
+      status: 'committed',
+      applied: true,
     });
 
+    const committed = await readPluginRegistryCommitRecord(store.paths);
+    expect(committed).toMatchObject({ revision: 3 });
     const lease = reloadController.tryAcquireRuntimeRegistry();
     expect(lease).not.toBeNull();
-    await expect(invokeIdentity(lease!.registry, changed.input.pluginId)).resolves.toMatchObject({
+    await expect(invokeIdentity(predecessorLease.registry, changed.input.pluginId)).resolves.toMatchObject({
       status: 'unavailable',
       code: 'plugin_action_generation_retired',
+    });
+    expect(lease!.durableRevision).toBe(committed!.revision);
+    expect(reloadController.readCurrentPluginOccurrenceId?.(changed.input.pluginId)).not.toBe(predecessorOccurrence);
+    expect(reloadController.readCurrentPluginSourceCustody?.(changed.input.pluginId)).toMatchObject({
+      kind: 'managed',
+      immutableGenerationId: committed!.pluginOccurrenceIds[changed.input.pluginId].immutableGenerationId,
+    });
+    await expect(invokeIdentity(lease!.registry, changed.input.pluginId)).resolves.toMatchObject({
+      status: 'executed',
+      value: { pluginId: changed.input.pluginId, retainedOwner: changed.input.pluginId },
     });
     await expect(invokeIdentity(lease!.registry, unrelated.input.pluginId)).resolves.toEqual({
       status: 'executed',
@@ -1624,9 +1638,9 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       },
     });
     await lease!.release();
+    await predecessorLease.release();
 
-    // A later one-plugin change prepares only that plugin's slot: the stale
-    // fenced predecessor does not force every unchanged peer to activate again.
+    // Recovery and later peer changes retain the unaffected serving component.
     failNextPublication = false;
     const third = await createExecutableInstallFixture(
       happyHomeDir,

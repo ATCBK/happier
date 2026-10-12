@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
-import { createNativeAgentCliAuthSpec } from './agentCliMetadata';
+import { createManifestAgentCatalogEntry, createNativeAgentCliAuthSpec } from './agentCliMetadata';
+import { resolveAgentSkillsCapability } from '@/agent/skills/resolveAgentSkillsCapability';
 
 function metadata(params: Readonly<{
   environmentVariables?: readonly string[];
@@ -39,6 +40,22 @@ afterEach(() => {
 });
 
 describe('native Agent CLI auth metadata', () => {
+  it('projects the exact manifest skill delivery facts into the current Agent catalog', () => {
+    const skills = { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+      usageEvidence: 'none', nativeRoots: { user: [['.agents', 'skills']] } } as const;
+    const entry = createManifestAgentCatalogEntry({
+      agentId: 'fixture', pluginId: 'fixture', provenance: 'first_party', cli: null,
+      definition: { id: 'fixture', title: 'Fixture', primary: 'sessions', runtime: { kind: 'custom' },
+        capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true },
+          skills: { ...skills, nativeRoots: { user: [['.agents', 'skills']] } } } },
+    });
+    expect(entry).toHaveProperty('skills', skills);
+    if (!entry) throw new Error('Expected an Agent catalog entry');
+    expect(resolveAgentSkillsCapability('fixture', { catalogEntriesById: { fixture: entry } })).toEqual(skills);
+    expect(resolveAgentSkillsCapability('fixture', { catalogEntriesById: {} })).toEqual({
+      delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+    });
+  });
   it('reads credentials only from the supplied environment and home', async () => {
     const ambientHome = createTempDirSync('happier-auth-ambient-');
     const launchHome = createTempDirSync('happier-auth-launch-');

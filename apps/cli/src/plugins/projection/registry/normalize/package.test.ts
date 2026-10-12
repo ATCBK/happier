@@ -531,7 +531,7 @@ describe('target package contribution projection', () => {
       ...loaded('happier.mcp.catalog', {
         mcp: {
           servers: [{ id: 'tools', title: 'Tools', kind: 'dynamic' }],
-          discoverySources: [{ id: 'catalog', title: 'Catalog' }],
+          discoverySources: [{ id: 'catalog', title: 'Catalog', loadedInHappierSessions: true }],
         },
       }),
       sourceSpec: {

@@ -1,9 +1,14 @@
+import {
+    createStablePluginSettingsModel as createProtocolSettingsModel,
+    createStablePluginSettingsModels as createProtocolSettingsModels,
+    PluginUiDeclarationProjectionErrorV1,
+} from '@happier-dev/protocol/plugins/contributions/ui';
 import { PluginAccountSettingsValuesV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
-import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
-import { PluginJsonSchemaV2Schema } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
-import { PluginSettingsContributionV2Schema, isBoundedPluginPerActiveServerValueV1 } from '@happier-dev/protocol/plugins/contributions/settings';
-import type { PluginJsonSchemaValidator, PluginSettingFieldV2, PluginSettingsContributionV2 } from '@happier-dev/protocol';
-import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { isBoundedPluginPerActiveServerValueV1 } from '@happier-dev/protocol/plugins/contributions/settings';
+import type { PluginJsonSchemaValidator, PluginSettingsContributionV2 } from '@happier-dev/protocol';
+import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { containsEquivalentPluginJsonValue } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import {
@@ -31,6 +36,11 @@ import {
 
 export const PLUGIN_SETTINGS_STORAGE_KEY = `${PLUGIN_HOST_STORAGE_KEY_PREFIX}settings/v1`;
 const SETTINGS_RECORD_TYPE = 'happier_plugin_settings_record_v1';
+const CanonicalPluginSettingsRecordSchema = z.object({
+    t: z.literal(SETTINGS_RECORD_TYPE), revision: z.number().int().nonnegative(),
+    values: z.record(z.string(), z.unknown()),
+}).strict();
+const StoredPluginSettingsRecordSchema = createStoredReadSchema(CanonicalPluginSettingsRecordSchema);
 const SETTINGS_CHANGED_REF = Object.freeze({
     pluginId: '@happier',
     localId: 'runtime/plugin-settings-changed',
@@ -64,6 +74,7 @@ export type StablePluginSettingsModel = Readonly<{
 export type StablePluginSettingsScope = PluginSettingsContributionV2['scope'];
 
 const validatorsByModel = new WeakMap<object, ReadonlyMap<string, PluginJsonSchemaValidator>>();
+const storedValueReadersByModel = new WeakMap<object, ReadonlyMap<string, ReturnType<typeof createPluginJsonSchemaZodValueAdapter>>>();
 const perActiveServerMapFieldIdsByModel = new WeakMap<object, ReadonlySet<string>>();
 
 function isValidStablePluginSettingValue(
@@ -111,174 +122,73 @@ function clonePlainData<T>(value: T, path = 'value'): T {
     });
 }
 
-function localizedText(value: string | Readonly<{ key: string; fallback: string }>): string {
-    return typeof value === 'string' ? value : value.fallback;
-}
-
-function normalizeTarget(
-    pluginId: string,
-    target: PluginSettingsContributionV2['target'],
-): SettingDescriptor['target'] {
-    if (target.kind === 'plugin') return Object.freeze({ kind: 'plugin' });
-    const agent = typeof target.agent === 'string'
-        ? { pluginId, localId: target.agent }
-        : target.agent;
-    return Object.freeze({
-        kind: 'agent',
-        agent: Object.freeze({ pluginId: agent.pluginId, localId: agent.localId }),
-    });
-}
-
-function descriptorForField(
-    contribution: PluginSettingsContributionV2,
-    field: PluginSettingFieldV2,
-    pluginId: string,
-): SettingDescriptor {
-    const schema = PluginJsonSchemaV2Schema.parse(clonePlainData(field.schema));
-    const base = {
-        id: field.id,
-        title: localizedText(field.title),
-        ...(field.description ? { description: localizedText(field.description) } : {}),
-        target: normalizeTarget(pluginId, contribution.target),
-        scope: contribution.scope,
-        schema,
-    };
-    return isSecretSettingField(field)
-        ? Object.freeze({ ...base, secret: true as const })
-        : Object.freeze({
-            ...base,
-            ...(field.default === undefined ? {} : { default: clonePlainData(field.default) }),
-        });
-}
-
-function isSecretSettingField(field: PluginSettingFieldV2): boolean {
-    return field.secret === true || (field.secret !== undefined && field.secret !== false);
-}
-
-function qualifiedSettingsId(pluginId: string, scope: StablePluginSettingsScope): string {
-    return `${pluginId}/settings/${scope}`;
-}
-
-function qualifiedSettingsFieldId(identity: StablePluginSettingsIdentity, contributionId: string, fieldId: string): string {
-    return `${identity.qualifiedId}/${encodeURIComponent(contributionId)}/fields/${encodeURIComponent(fieldId)}`;
-}
-
-export function createStablePluginSettingsModel(params: Readonly<{
-    pluginId: string;
-    contribution?: PluginSettingsContributionV2;
-    contributions?: readonly PluginSettingsContributionV2[];
-}>): StablePluginSettingsModel {
-    const pluginId = PluginIdSchema.parse(params.pluginId);
-    if ((params.contribution === undefined) === (params.contributions === undefined)) {
-        throw settingsError(
-            'plugin_settings_declaration_invalid',
-            `Plugin settings declarations for '${pluginId}' are invalid`,
-        );
-    }
-    const inputContributions = params.contributions ?? [params.contribution!];
-    if (inputContributions.length === 0) {
-        throw settingsError('plugin_settings_declaration_invalid', `Plugin settings declarations for '${pluginId}' are empty`);
-    }
-    const contributions = inputContributions.map((input, index) => {
-        const plainContribution = clonePlainData(input, `contributions[${index}]`);
-        if (!PluginSettingsContributionV2Schema.safeParse(plainContribution).success) {
-            throw settingsError(
-                'plugin_settings_declaration_invalid',
-                `Plugin settings declaration for '${pluginId}' is invalid`,
-            );
+export function createStablePluginSettingsModel(params: Parameters<typeof createProtocolSettingsModel>[0]): StablePluginSettingsModel {
+    let model: StablePluginSettingsModel;
+    try {
+        model = createProtocolSettingsModel(params);
+    } catch (error) {
+        if (error instanceof PluginUiDeclarationProjectionErrorV1) {
+            throw settingsError(error.code, error.message);
         }
-        // Keep the accessor-free clone rather than Zod's reconstructed objects so JSON keys such
-        // as `__proto__` retain exact own-property semantics after validation.
-        return plainContribution;
-    });
-    const scope = contributions[0]!.scope;
-    if (contributions.some((contribution) => contribution.scope !== scope)) {
-        throw settingsError(
-            'plugin_settings_scope_mixed',
-            `Plugin settings declarations for '${pluginId}' span multiple persistence scopes`,
-        );
+        throw error;
     }
-    const identity = Object.freeze({
-        pluginId,
-        qualifiedId: qualifiedSettingsId(pluginId, scope),
-    });
+    return attachSettingsRuntimeValidators(model, params.contributions ?? [params.contribution!]);
+}
+
+function attachSettingsRuntimeValidators(
+    model: StablePluginSettingsModel,
+    inputContributions: readonly PluginSettingsContributionV2[],
+): StablePluginSettingsModel {
+    const contributions = inputContributions.map((contribution, index) => (
+        clonePlainData(contribution, `contributions[${index}]`)
+    ));
+    const perActiveServerMapFieldIds = new Set(contributions.flatMap((contribution) => contribution.fields.flatMap((field) => (
+        field.presentation?.binding?.kind === 'perActiveServer' ? [field.presentation.binding.byServerIdSettingId] : []
+    ))));
     const validators = new Map<string, PluginJsonSchemaValidator>();
-    const perActiveServerMapFieldIds = new Set(
-        contributions.flatMap((contribution) => contribution.fields.flatMap((field) => (
-            field.presentation?.binding?.kind === 'perActiveServer'
-                ? [field.presentation.binding.byServerIdSettingId]
-                : []
-        ))),
-    );
-    const fields = contributions.flatMap((contribution) => contribution.fields.map((field): StablePluginSettingsField => {
-        const qualifiedId = qualifiedSettingsFieldId(identity, contribution.id, field.id);
-        if (validators.has(field.id)) {
-            throw settingsError(
-                'plugin_settings_field_id_conflict',
-                `Plugin setting '${field.id}' is declared by multiple settings contributions for '${pluginId}'`,
-            );
-        }
+    const storedValueReaders = new Map<string, ReturnType<typeof createPluginJsonSchemaZodValueAdapter>>();
+    for (const field of model.fields) {
         let validate: PluginJsonSchemaValidator;
         try {
-            validate = compilePluginJsonSchema(field.schema);
+            validate = compilePluginJsonSchema(field.descriptor.schema);
         } catch {
-            throw settingsError(
-                'plugin_settings_invalid_schema',
-                `Plugin setting '${qualifiedId}' has an invalid schema`,
-            );
+            throw settingsError('plugin_settings_invalid_schema', `Plugin setting '${field.qualifiedId}' has an invalid schema`);
         }
-        if (!isSecretSettingField(field) && field.default !== undefined
-            && !isValidStablePluginSettingValue(
-                validate,
-                perActiveServerMapFieldIds.has(field.id),
-                field.default,
-            )) {
-            throw settingsError(
-                'plugin_settings_invalid_default',
-                `Plugin setting '${qualifiedId}' has an invalid default`,
-            );
+        if (field.descriptor.secret !== true && field.descriptor.default !== undefined
+            && !isValidStablePluginSettingValue(validate, perActiveServerMapFieldIds.has(field.id), field.descriptor.default)) {
+            throw settingsError('plugin_settings_invalid_default', `Plugin setting '${field.qualifiedId}' has an invalid default`);
         }
         validators.set(field.id, validate);
-        return Object.freeze({
-            id: field.id,
-            contributionId: contribution.id,
-            qualifiedId,
-            descriptor: descriptorForField(contribution, field, pluginId),
-        });
-    }));
-    const model: StablePluginSettingsModel = Object.freeze({
-        identity,
-        scope,
-        descriptors: Object.freeze(fields.map((field) => field.descriptor)),
-        fields: Object.freeze(fields),
-    });
+        storedValueReaders.set(field.id, createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(field.descriptor.schema)));
+    }
     validatorsByModel.set(model, validators);
+    storedValueReadersByModel.set(model, storedValueReaders);
     perActiveServerMapFieldIdsByModel.set(model, perActiveServerMapFieldIds);
     return model;
 }
 
 /**
- * Builds one independent model per natural Settings scope.  This is the
- * canonical partition point: callers cannot flatten Account and daemon
- * values into one revision, record, or watch stream.
+ * Consumes the canonical descriptive scope partition and attaches runtime
+ * validators without changing record or watch-stream custody.
  */
 export function createStablePluginSettingsModels(params: Readonly<{
     pluginId: string;
     contributions: readonly PluginSettingsContributionV2[];
 }>): ReadonlyMap<StablePluginSettingsScope, StablePluginSettingsModel> {
-    const pluginId = PluginIdSchema.parse(params.pluginId);
-    const byScope = new Map<StablePluginSettingsScope, PluginSettingsContributionV2[]>();
-
-    for (const contribution of params.contributions) {
-        const group = byScope.get(contribution.scope) ?? [];
-        group.push(contribution);
-        byScope.set(contribution.scope, group);
+    let models: ReadonlyMap<StablePluginSettingsScope, StablePluginSettingsModel>;
+    try {
+        models = createProtocolSettingsModels(params);
+    } catch (error) {
+        if (error instanceof PluginUiDeclarationProjectionErrorV1) {
+            throw settingsError(error.code, error.message);
+        }
+        throw error;
     }
 
     return new Map(
-        [...byScope.entries()].map(([scope, contributions]) => [
+        [...models.entries()].map(([scope, model]) => [
             scope,
-            createStablePluginSettingsModel({ pluginId, contributions }),
+            attachSettingsRuntimeValidators(model, params.contributions.filter(contribution => contribution.scope === scope)),
         ]),
     );
 }
@@ -445,7 +355,7 @@ async function readAccountPluginSettingsRecord(
         });
     }
     return Object.freeze({
-        record: validateRecordForModel(model, parseCanonicalPluginSettingsRecord({
+        record: normalizeStoredRecordForModel(model, parseStoredPluginSettingsRecord({
             t: SETTINGS_RECORD_TYPE,
             revision: source.revision,
             values: source.values,
@@ -651,35 +561,24 @@ function emptyRecord(): CanonicalPluginSettingsRecord {
 }
 
 export function parseCanonicalPluginSettingsRecord(value: unknown): CanonicalPluginSettingsRecord {
+    return parseSettingsRecord(value, false);
+}
+
+function parseStoredPluginSettingsRecord(value: unknown): CanonicalPluginSettingsRecord {
+    return parseSettingsRecord(value, true);
+}
+
+function parseSettingsRecord(value: unknown, stored: boolean): CanonicalPluginSettingsRecord {
     if (value === null) return emptyRecord();
     const plain = clonePlainData(value, 'settingsRecord');
-    if (!plain || typeof plain !== 'object' || Array.isArray(plain)) {
-        throw settingsError('plugin_settings_record_invalid', 'Plugin settings record is invalid');
-    }
-    const record = plain as Readonly<Record<string, unknown>>;
-    const recordKeys = Object.keys(record);
-    const isEnvelope = record.t === SETTINGS_RECORD_TYPE
-        && Object.prototype.hasOwnProperty.call(record, 'revision')
-        && Object.prototype.hasOwnProperty.call(record, 'values');
-    if (!isEnvelope) {
-        throw settingsError(
-            'plugin_settings_record_invalid',
-            'Plugin settings record is invalid',
-        );
-    }
-    if (record.t !== SETTINGS_RECORD_TYPE
-        || recordKeys.some((key) => !['t', 'revision', 'values'].includes(key))
-        || !Number.isSafeInteger(record.revision)
-        || (record.revision as number) < 0
-        || !record.values
-        || typeof record.values !== 'object'
-        || Array.isArray(record.values)) {
+    const parsed = (stored ? StoredPluginSettingsRecordSchema : CanonicalPluginSettingsRecordSchema).safeParse(plain);
+    if (!parsed.success) {
         throw settingsError('plugin_settings_record_invalid', 'Plugin settings record is invalid');
     }
     return Object.freeze({
         t: SETTINGS_RECORD_TYPE,
-        revision: record.revision as number,
-        values: clonePlainData(record.values) as Readonly<Record<string, JsonValue>>,
+        revision: parsed.data.revision,
+        values: clonePlainData(parsed.data.values) as Readonly<Record<string, JsonValue>>,
     });
 }
 
@@ -812,6 +711,23 @@ function validateRecordForModel(
     return record;
 }
 
+function normalizeStoredRecordForModel(
+    model: StablePluginSettingsModel,
+    record: CanonicalPluginSettingsRecord,
+): CanonicalPluginSettingsRecord {
+    const values = { ...record.values };
+    const readers = storedValueReadersByModel.get(model);
+    for (const field of model.fields) {
+        if (!Object.hasOwn(values, field.id)) continue;
+        const parsed = readers?.get(field.id)?.safeParse(values[field.id]);
+        if (!parsed?.success) {
+            throw settingsError('plugin_settings_record_invalid', `Plugin settings record '${model.identity.qualifiedId}' contains an invalid field value`);
+        }
+        values[field.id] = parsed.data;
+    }
+    return validateRecordForModel(model, Object.freeze({ ...record, values: Object.freeze(values) }));
+}
+
 function assertSupportedScope(
     model: StablePluginSettingsModel,
     store: StablePluginSettingsRecordStore,
@@ -878,7 +794,7 @@ export function createStablePluginSettingsOwner(params: Readonly<{
             };
             const change = await params.recordStore.update(model, (raw) => {
                 assertCurrent(seed, input.signal);
-                const record = validateRecordForModel(model, parseCanonicalPluginSettingsRecord(raw));
+                const record = normalizeStoredRecordForModel(model, parseStoredPluginSettingsRecord(raw));
                 assertExpectedRevision(record, input.expectedRevision);
                 const nextRevision = record.revision + 1;
                 if (!Number.isSafeInteger(nextRevision)) {
@@ -946,9 +862,9 @@ export function createStablePluginSettingsOwner(params: Readonly<{
             async function read(signal?: AbortSignal): Promise<CanonicalPluginSettingsRecord> {
                 assertSupportedScope(model, params.recordStore);
                 assertCurrent(seed, signal);
-                const record = validateRecordForModel(
+                const record = normalizeStoredRecordForModel(
                     model,
-                    parseCanonicalPluginSettingsRecord(await params.recordStore.read(model, { signal })),
+                    parseStoredPluginSettingsRecord(await params.recordStore.read(model, { signal })),
                 );
                 assertCurrent(seed, signal);
                 return record;
@@ -991,7 +907,7 @@ export function createStablePluginSettingsOwner(params: Readonly<{
                 };
                 const change = await params.recordStore.update(model, (raw) => {
                     assertCurrent(seed, input.signal);
-                    const record = validateRecordForModel(model, parseCanonicalPluginSettingsRecord(raw));
+                    const record = normalizeStoredRecordForModel(model, parseStoredPluginSettingsRecord(raw));
                     assertExpectedRevision(record, input.expectedRevision);
                     const nextRevision = record.revision + 1;
                     if (!Number.isSafeInteger(nextRevision)) {

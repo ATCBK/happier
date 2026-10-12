@@ -212,6 +212,7 @@ async function resolveCandidateContributes(
 }
 
 export function createDaemonPluginRegistryRuntimeLifecycle(params: Readonly<{
+  readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
   happyHomeDir: string;
   /** Daemon-owned live machine identity for host-stamped nested Action callers. */
   resolveCurrentMachineId?: () => string | null;
@@ -389,6 +390,7 @@ export function createDaemonPluginRegistryRuntimeLifecycle(params: Readonly<{
         const targetedContributions =
           params.reloadController.getTargetedContributionsOwner();
         registry = await resolveExecutablePluginRuntimeRegistry({
+          readSpawnFailureLimits: params.readSpawnFailureLimits,
             happyHomeDir: params.happyHomeDir,
             contributes,
             generation: activationOccurrenceId,

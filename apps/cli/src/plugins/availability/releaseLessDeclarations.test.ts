@@ -1,6 +1,7 @@
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { describe, expect, it } from 'vitest';
 import { PluginManifestV2Schema } from '@happier-dev/protocol';
+import { PLUGIN_MANIFEST as LIMA_MANIFEST } from '@happier-dev/plugins-machine-lima/manifest';
 
 import type { PluginSourceCustody } from '@/plugins/runtime/sourceAuthority';
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
@@ -41,6 +42,25 @@ const MANAGED: PluginSourceCustody = {
 };
 
 describe('release-less plugin declarations', () => {
+    it('claims the admitted native provisioner declaration needed by preset and acquire admission', () => {
+        const provisionerManifest = PluginManifestV2Schema.parse(LIMA_MANIFEST);
+        const declarations = projectReleaseLessPluginDeclarations({
+            activationTargets: [{ pluginId: provisionerManifest.id, manifest: provisionerManifest }],
+            sourceCustodiesByPluginId: new Map([[provisionerManifest.id, BUNDLED]]),
+            registryMaterializationIdsByPluginId: {}, observedAt: 12,
+        });
+        expect(declarations.get(provisionerManifest.id)).toMatchObject({
+            claimsAccountIntent: true,
+            manifest: { contributes: { machineProvisioners: [{ id: 'lima' }] } },
+            runtimeMaterialization: { enabled: true, trustState: 'trusted' },
+        });
+        const observedOnly = projectReleaseLessPluginDeclarations({
+            activationTargets: [{ pluginId: provisionerManifest.id, manifest: provisionerManifest,
+                sourceSpec: { kind: 'path', locator: '/plugins/lima', trustPolicy: 'local_trusted', installPolicy: 'link' } }],
+            sourceCustodiesByPluginId: new Map(), registryMaterializationIdsByPluginId: {}, observedAt: 12,
+        });
+        expect(observedOnly.get(provisionerManifest.id)?.claimsAccountIntent).toBe(false);
+    });
     it('observes metadata-only path declarations without promoting source policy to admitted trust or an Account claim', () => {
         const observed = projectReleaseLessPluginDeclarations({
             activationTargets: [{ pluginId: 'acme.metadata', manifest: manifest('acme.metadata', { events: [EVENT] }),

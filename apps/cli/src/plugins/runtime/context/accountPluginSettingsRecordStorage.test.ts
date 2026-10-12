@@ -58,6 +58,26 @@ const settingsModel = createStablePluginSettingsModel({ pluginId: 'example.tasks
 describe('Account plugin Settings record storage', () => {
     afterEach(() => clearActiveAccountSettingsSnapshot());
 
+    it.each(['plain', 'e2ee'] as const)('drops retired Settings carrier fields on %s stored reads', async mode => {
+        const credentials = mode === 'plain' ? plainCredentials : e2eeCredentials;
+        const payload = { v: 1, values: { theme: 'dark', authorData: { retained: true } }, retired: true };
+        const content = mode === 'plain' ? { t: 'plain', v: payload } : { t: 'encrypted', c: sealAccountScopedBlobCiphertext({
+            kind: PLUGIN_ACCOUNT_SETTINGS_ACCOUNT_SCOPED_BLOB_KIND_V1, material: e2eeMaterial, payload,
+            randomBytes: length => new Uint8Array(length).fill(3),
+        }) };
+        const adapter = createAccountPluginSettingsRecordStorage({
+            readCredentials: async () => credentials, isCurrentAccount: () => true,
+            resolveBaseUrl: () => 'https://server.example',
+            http: {
+                get: async url => ({ status: 200, data: url.endsWith('/encryption')
+                    ? { mode, updatedAt: 1 } : { status: 'present', revision: 4, content } }),
+                post: async () => ({ status: 200, data: { status: 'updated', revision: 5 } }),
+            },
+        });
+        const access = await adapter.bindOperation();
+        expect(await access.readRecord(model)).toEqual({ status: 'present', revision: 4, values: payload.values });
+    });
+
     it('accepts successful record reads and writes after fifteen seconds', async () => {
         vi.useFakeTimers();
         try {

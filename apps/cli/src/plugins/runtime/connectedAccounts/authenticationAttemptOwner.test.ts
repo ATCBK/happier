@@ -19,8 +19,13 @@ import {
 import {
     ConnectedAccountRuntimeInvocationNotStartedError,
 } from './contributionRegistry';
+import { createConnectedAccountConfigurationOwner, type ConnectedAccountConfigurationOwner } from './configurationOwner';
+import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { createQualifiedConnectedAccountAttemptTransactionAdapters } from '@/daemon/connectedServices/qualifiedConnectedAccountAttemptTransactionAdapters';
+import type { ConnectedAccountAttemptTransactionStoreApi, ConnectedAccountAttemptTransactionRecord } from '@/api/client/connectedAccountAttemptTransactionApi';
 import { anthropicConnectedAccountRuntime, ANTHROPIC_API_KEY_INPUT_SCHEMA } from '../../../../../../packages/plugins/claude/src/connectedAccounts/anthropicRuntime';
 import { createUnavailablePluginServices } from '../invocation/services/unavailable';
+import { createDeferred } from '@/testkit/async/deferred';
 
 const service = Object.freeze({ pluginId: 'acme.accounts', localId: 'work' });
 const accountA = Object.freeze({ service, accountId: 'account-a' });
@@ -115,7 +120,7 @@ function oauthMode(input: Readonly<{
             kind: 'oauthAuthorizationCode',
             pkce: 'required',
             outcomeReconciliation: input.outcomeReconciliation,
-            ...(input.callbackUrl ? { callbackUrl: input.callbackUrl } : {}),
+            callbackUrl: input.callbackUrl ?? 'http://127.0.0.1:4000/auth/callback',
             ...(input.configuration ? { configuration: input.configuration } : {}),
         }),
         occurrenceId: 'generation-1',
@@ -152,7 +157,8 @@ function deviceMode(
 
 function harness(input: Readonly<{
     configuration?: ConnectedAccountAttemptConfigurationAdmission;
-    admitConfiguration?: (input: unknown) => Promise<ConnectedAccountAttemptConfigurationAdmission>;
+    admitConfiguration?: Parameters<typeof createConnectedAccountAuthenticationAttemptOwner>[0]['configuration']['admit'];
+    stageAccountConfiguration?: ConnectedAccountConfigurationOwner['stageAccountConfiguration'];
     admittedMode?: ConnectedAccountAttemptModeAdmission;
     admitMode?: (input: unknown) => Promise<ConnectedAccountAttemptModeAdmission>;
     invoke?: (input: ConnectedAccountAttemptProviderInvocation) => Promise<unknown>;
@@ -285,6 +291,7 @@ function harness(input: Readonly<{
             admit: admitConfiguration,
             isCurrent: configurationCurrent,
             destroyAttempt: destroyAttemptConfiguration,
+            ...(input.stageAccountConfiguration ? { stageAccountConfiguration: input.stageAccountConfiguration } : {}),
         },
         runtime: {
             admit: vi.fn(input.admitMode ?? (async () => input.admittedMode ?? manualMode())),
@@ -350,6 +357,134 @@ async function waitForAttemptStatus(
     });
     return current;
 }
+
+describe('OAuth issuer admission', () => {
+    it('publishes the sealed transaction expiry when an authorization server supplies no expiry', async () => {
+        const records = new Map<string, ConnectedAccountAttemptTransactionRecord>();
+        // The transaction HTTP/database boundary is replaced; the actual PKCE,
+        // envelope, revision and attempt owners run together.
+        const api: ConnectedAccountAttemptTransactionStoreApi = {
+            async create(input) { const record = { revision: 1, content: input.content, expiresAtMs: input.expiresAtMs };
+                records.set(input.attemptId, record); return record; },
+            async read(input) { return records.get(input.attemptId) ?? null; },
+            async replace(input) { const current = records.get(input.attemptId);
+                if (!current || current.revision !== input.expectedRevision) throw new Error('fixture CAS conflict');
+                const record = { revision: current.revision + 1, content: input.content, expiresAtMs: input.expiresAtMs };
+                records.set(input.attemptId, record); return record; },
+            async delete(input) { records.delete(input.attemptId); }, async listPending() { return []; },
+        };
+        const transactions = createQualifiedConnectedAccountAttemptTransactionAdapters({ credentials: { token: 'account-token', encryption: null },
+            getAccountEncryptionMode: async () => 'plain', getMachineId: () => 'machine-1', now: () => 1_000, api });
+        const h = harness({ admittedMode: oauthMode({ outcomeReconciliation: 'none' }), oauthTransactions: transactions.oauth, now: () => 1_000,
+            invoke: async () => ({ status: 'awaitingOAuthRedirect', authorizationUrl: 'https://issuer.example/authorize' }) });
+        try {
+            await h.owner.beginConnect({ service, modeId: 'oauth' });
+            const response = await waitForAttemptStatus(h.owner, 'attempt-1', 'awaitingOAuth');
+            expect(response).toMatchObject({ expiresAtMs: records.get('attempt-1')!.expiresAtMs });
+            expect((await transactions.oauth.read!('attempt-1'))?.snapshot.expiresAtMs).toBe(records.get('attempt-1')!.expiresAtMs);
+        } finally { h.owner.dispose(); }
+    });
+    it('stages discovered host client configuration in the existing attempt and settlement', async () => {
+        const mode = oauthMode({ outcomeReconciliation: 'none', configuration: {
+            scope: 'account', changeBehavior: 'reconnect', fields: [
+                { id: 'resource', title: 'Resource', schema: { type: 'string' }, required: true },
+                { id: 'issuer', title: 'Issuer', schema: { type: 'string' } },
+                { id: 'clientSecret', title: 'Client secret', schema: { type: 'string' }, secret: true },
+            ],
+        } });
+        const record = { revision: 'configuration-1', values: { resource: 'https://mcp.example/mcp' }, secretRefs: {} };
+        // Only persistent storage and secret retrieval are replaced; configuration
+        // admission, schema normalization, attempt and settlement logic remain real.
+        const configuration = createConnectedAccountConfigurationOwner({
+            read: async () => record,
+            replace: async () => { throw new Error('Host staging must not write before settlement'); },
+            destroyAttempt: async () => {},
+            secrets: { admit: async () => {}, has: async () => false, read: async () => null },
+            isRuntimeCurrent: () => true,
+        });
+        const durable = durableOAuthTransactions();
+        const admittedMode = { ...mode, service: HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1, sourceCustody: { kind: 'host' as const } };
+        const h = harness({ admittedMode, oauthTransactions: durable.owner,
+            admitConfiguration: configuration.admit,
+            configurationCurrent: async () => true,
+            stageAccountConfiguration: input => configuration.stageAccountConfiguration(input),
+            invoke: async ({ operation, context }) => {
+                if (operation.kind === 'beginOAuth') {
+                    await context.stageAccountConfiguration!({ values: { resource: record.values.resource, issuer: 'https://issuer.example' },
+                        secretValues: { clientSecret: 'private-client-secret' } });
+                    return { status: 'awaitingOAuthRedirect', authorizationUrl: 'https://issuer.example/authorize' };
+                }
+                return { status: 'connected', accountId: 'server-1', displayName: 'MCP', scopes: ['read'] };
+            },
+        });
+        try {
+            await h.owner.beginConnect({ service: HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1, modeId: 'oauth' });
+            await waitForAttemptStatus(h.owner, 'attempt-1', 'awaitingOAuth');
+            expect(durable.readRecord()?.snapshot).toMatchObject({ stagedAccountConfigurationContent: {
+                values: { resource: record.values.resource, issuer: 'https://issuer.example' },
+                secretValues: { clientSecret: 'private-client-secret' },
+            } });
+            const response = await h.owner.completeOAuth({ attemptId: 'attempt-1', completion: {
+                code: 'code', state: 'state-1', callbackUrl: 'http://127.0.0.1:4000/auth/callback',
+            } });
+            expect(response.status).toBe('connected');
+            expect(h.settle.mock.calls[0]?.[0]).toMatchObject({ stagedAccountConfigurationContent: {
+                values: { issuer: 'https://issuer.example' }, secretValues: { clientSecret: 'private-client-secret' },
+            } });
+        } finally { h.owner.dispose(); }
+    });
+    it('restores issuer admission after restart and does not disclose a forged provider error', async () => {
+        const durable = durableOAuthTransactions();
+        const configuration = configured('configuration-1', {}, 'oauth');
+        const admittedMode = oauthMode({ outcomeReconciliation: 'none' });
+        const first = harness({ configuration, admittedMode, oauthTransactions: durable.owner,
+            invoke: async () => ({ status: 'awaitingOAuthRedirect', authorizationUrl: 'https://issuer.example/authorize',
+                issuer: 'https://issuer.example', issuerResponseParameterRequired: true }) });
+        const replacement = harness({ configuration, admittedMode, oauthTransactions: durable.owner });
+        try {
+            await first.owner.beginConnect({ service, modeId: 'oauth' });
+            await waitForAttemptStatus(first.owner, 'attempt-1', 'awaitingOAuth');
+            expect(durable.readRecord()?.snapshot).toMatchObject({ issuer: 'https://issuer.example', issuerResponseParameterRequired: true });
+            const completion = { code: 'code', state: 'state-1', callbackUrl: 'http://127.0.0.1:4000/auth/callback',
+                iss: 'https://other.example', error: 'forged-provider-error' };
+            const response = await replacement.owner.completeOAuth({ attemptId: 'attempt-1', completion });
+            expect(response).toMatchObject({ status: 'rejected', code: 'connected_account_oauth_issuer_invalid' });
+            expect(JSON.stringify(response)).not.toContain('forged-provider-error');
+            expect(replacement.invoke.mock.calls.some(([input]) => input.operation.kind === 'completeOAuth')).toBe(false);
+        } finally { first.owner.dispose(); replacement.owner.dispose(); }
+    });
+    it.each([
+        { required: false, iss: 'https://other.example', expected: 'rejected' },
+        { required: true, iss: undefined, expected: 'rejected' },
+        { required: false, iss: undefined, expected: 'connected' },
+        { required: true, iss: 'https://issuer.example', expected: 'connected' },
+        { required: false, iss: '', expected: 'rejected' },
+        { required: false, iss: 'https://issuer.example/', expected: 'rejected' },
+    ])('validates the sealed issuer before exchange ($required, $iss)', async ({ required, iss, expected }) => {
+        // The substituted invocation is the external authorization-server boundary.
+        const h = harness({
+            admittedMode: oauthMode({ outcomeReconciliation: 'none' }),
+            invoke: async ({ operation }) => operation.kind === 'beginOAuth'
+                ? { status: 'awaitingOAuthRedirect', authorizationUrl: 'https://issuer.example/authorize',
+                    issuer: 'https://issuer.example', issuerResponseParameterRequired: required }
+                : { status: 'connected', accountId: 'account-a', displayName: 'Account', scopes: [] },
+        });
+        try {
+            await h.owner.beginConnect({ service, modeId: 'oauth' });
+            await waitForAttemptStatus(h.owner, 'attempt-1', 'awaitingOAuth');
+            const response = await h.owner.completeOAuth({ attemptId: 'attempt-1', completion: {
+                code: 'code', state: 'state-1', callbackUrl: 'http://127.0.0.1:4000/auth/callback',
+                ...(iss === undefined ? {} : { iss }),
+            } });
+            expect(response.status).toBe(expected);
+            if (expected === 'rejected') {
+                expect(response).toMatchObject({ code: 'connected_account_oauth_issuer_invalid' });
+                expect(h.invoke.mock.calls.some(([input]) => input.operation.kind === 'completeOAuth')).toBe(false);
+                expect(h.settle).not.toHaveBeenCalled();
+            }
+        } finally { h.owner.dispose(); }
+    });
+});
 
 it('continues a captured manual attempt after runtime reload without readmitting or replaying authentication', async () => {
     let current = true;
@@ -4937,5 +5072,57 @@ describe('ConnectedAccountAuthenticationAttemptOwner', () => {
             status: 'awaitingManual',
             attemptId: 'attempt-4',
         });
+    });
+});
+
+describe('Connected Account provider-start await', () => {
+    function starting() {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        // Third-party provider invocation is the boundary; the attempt lifecycle,
+        // transaction and cancellation owners remain real beneath it.
+        const h = harness({ admittedMode: oauthMode({ outcomeReconciliation: 'none' }),
+            invoke: async ({ operation }) => {
+                if (operation.kind !== 'beginOAuth') return { status: 'cancelled' };
+                entered.resolve();
+                await release.promise;
+                return { status: 'awaitingOAuthRedirect', authorizationUrl: 'https://provider.example/authorize', expiresAtMs: 61_000 };
+            } });
+        return { ...h, entered, release };
+    }
+    it('awaits the existing background start while ordinary reads remain nonblocking', async () => {
+        const h = starting();
+        try {
+            expect(await h.owner.beginConnect({ service, modeId: 'oauth' })).toEqual({ status: 'starting', attemptId: 'attempt-1' });
+            await h.entered.promise;
+            expect(await h.owner.read({ attemptId: 'attempt-1' })).toEqual({ status: 'starting', attemptId: 'attempt-1' });
+            let settled = false;
+            const waiting = h.owner.read({ attemptId: 'attempt-1', waitForProviderStart: true }).then(response => { settled = true; return response; });
+            await Promise.resolve();
+            await Promise.resolve();
+            expect(settled).toBe(false);
+            h.release.resolve();
+            expect(await waiting).toMatchObject({ status: 'awaitingOAuth', attemptId: 'attempt-1', authorizationUrl: 'https://provider.example/authorize' });
+        } finally { h.release.resolve(); h.owner.dispose(); }
+    });
+    it.each(['cancel', 'dispose', 'callerAbort'] as const)('releases a waiting caller on %s while the provider has not returned', async outcome => {
+        const h = starting();
+        try {
+            await h.owner.beginConnect({ service, modeId: 'oauth' });
+            await h.entered.promise;
+            const controller = new AbortController();
+            const waiting = h.owner.read({ attemptId: 'attempt-1', waitForProviderStart: true, signal: controller.signal });
+            if (outcome === 'cancel') {
+                await h.owner.cancel({ attemptId: 'attempt-1' });
+                expect(await waiting).toMatchObject({ status: 'cancelled', attemptId: 'attempt-1' });
+            } else if (outcome === 'dispose') {
+                h.owner.dispose();
+                expect(await waiting).toMatchObject({ status: 'conflict', attemptId: 'attempt-1', code: 'connected_account_attempt_cancelled' });
+            } else {
+                controller.abort(new Error('Request retired'));
+                await expect(waiting).rejects.toThrow('Request retired');
+                expect(await h.owner.read({ attemptId: 'attempt-1' })).toEqual({ status: 'starting', attemptId: 'attempt-1' });
+            }
+        } finally { h.release.resolve(); h.owner.dispose(); }
     });
 });

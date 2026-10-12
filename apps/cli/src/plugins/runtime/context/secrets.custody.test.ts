@@ -1,10 +1,11 @@
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
+import { normalizePluginStorageNamespace } from './pluginNamespace';
 
 import * as pluginSecretsContext from './secrets';
 
@@ -17,6 +18,21 @@ import {
 } from './secrets';
 
 describe('declared plugin secret custody', () => {
+    it('drops retired secret entry fields on stored reads without changing ciphertext', async () => {
+        const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-secret-retired-'));
+        const paths = resolvePluginStorePaths({ happyHomeDir });
+        try {
+            const store = createPluginSecretStore({ pluginId: 'acme.plugin', paths, secretKey: new Uint8Array(32).fill(7) });
+            await store.set('token', 'retained-secret');
+            const path = join(paths.secretsDir, normalizePluginStorageNamespace('acme.plugin'), 'secrets.v1.json');
+            const stored = JSON.parse(await readFile(path, 'utf8'));
+            stored.retired = true;
+            stored.secrets.token.retired = true;
+            stored.secrets.token.encryptedValue.retired = true;
+            await writeFile(path, JSON.stringify(stored));
+            await expect(store.get('token')).resolves.toBe('retained-secret');
+        } finally { await rm(happyHomeDir, { recursive: true, force: true }); }
+    });
     it('does not retain the retired HostAccess-gated secrets service', () => {
         expect('createStablePluginSecretsService' in pluginSecretsContext).toBe(false);
     });

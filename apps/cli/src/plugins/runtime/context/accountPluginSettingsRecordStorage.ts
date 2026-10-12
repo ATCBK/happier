@@ -2,7 +2,7 @@ import axios from 'axios';
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
 
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
-import { PLUGIN_ACCOUNT_SETTINGS_ACCOUNT_SCOPED_BLOB_KIND_V1, PluginAccountSettingsMutationResponseV1Schema, PluginAccountSettingsReadResponseV1Schema, PluginAccountSettingsStorageUnavailableV1Schema, PluginAccountSettingsValuesV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
+import { PLUGIN_ACCOUNT_SETTINGS_ACCOUNT_SCOPED_BLOB_KIND_V1, PluginAccountSettingsMutationResponseV1Schema, PluginAccountSettingsReadResponseV1Schema, PluginAccountSettingsStorageUnavailableV1Schema, PluginAccountSettingsValuesV1Schema, PluginAccountSettingsValuesV1StoredSchema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
 import type { AccountScopedCryptoMaterial } from '@happier-dev/protocol';
 import { isPluginError, PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 
@@ -56,7 +56,6 @@ function requestConfig(credentials: StoredCredentials, signal?: AbortSignal): Re
             Authorization: `Bearer ${credentials.token}`,
             'Content-Type': 'application/json',
         },
-        timeout: 15_000,
         validateStatus: () => true,
         ...(signal ? { signal } : {}),
     };
@@ -82,7 +81,7 @@ function accountSettingsRecordError(message: string): PluginError {
 }
 
 function parseValues(value: unknown): Readonly<Record<string, JsonValue>> | null {
-    const parsed = PluginAccountSettingsValuesV1Schema.safeParse(value);
+    const parsed = PluginAccountSettingsValuesV1StoredSchema.safeParse(value);
     return parsed.success ? parsed.data.values as Readonly<Record<string, JsonValue>> : null;
 }
 

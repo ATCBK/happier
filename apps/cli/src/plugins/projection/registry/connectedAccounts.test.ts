@@ -37,6 +37,7 @@ describe('connectedAccountProjectionFamily', () => {
               modes: [{
                 id: 'oauth',
                 kind: 'oauthAuthorizationCode',
+                callbackUrl: 'https://provider.example/oauth/callback',
                 pkce: 'required',
                 outcomeReconciliation: 'providerCheck',
               }],
@@ -59,6 +60,7 @@ describe('connectedAccountProjectionFamily', () => {
           modes: [{
             id: 'oauth',
             kind: 'oauthAuthorizationCode',
+            callbackUrl: 'https://provider.example/oauth/callback',
             pkce: 'required',
             outcomeReconciliation: 'providerCheck',
           }],

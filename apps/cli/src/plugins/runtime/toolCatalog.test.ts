@@ -15,8 +15,9 @@ function createRegistry(
   const action = {
     provenance,
     pluginId: 'acme.review.plugin',
+    identity: { pluginId: 'acme.review.plugin', localId: 'review-start' },
     definition: {
-      id: 'acme.review.plugin/review-start',
+      id: 'review-start',
     },
   };
   return {
@@ -71,7 +72,7 @@ describe('projectExecutablePluginToolCatalog', () => {
 
     expect(projectExecutablePluginToolCatalog(registry)).toEqual([{
       toolId: 'acme.review.plugin/review-tool',
-      actionId: 'acme.review.plugin/review-start',
+      actionId: 'acme.review.plugin/actions/review-start',
       name: 'acme_review_start',
       title: 'Acme Review Start',
       description: 'Start a review',

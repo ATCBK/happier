@@ -27,6 +27,30 @@ import {
 import type { PluginInvocationServicesSeed } from './types';
 
 describe('retired Settings fields are never pruned', () => {
+    it('drops retired envelope and declared value fields on stored reads while preserving opaque field ids and strict set admission', async () => {
+        const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-settings-stored-'));
+        const storage = createPluginStorageOwner({ pluginId: 'acme.plugin', paths: resolvePluginStorePaths({ happyHomeDir }) });
+        await storage.daemon.set(PLUGIN_SETTINGS_STORAGE_KEY, { t: 'happier_plugin_settings_record_v1', revision: 3,
+            retired: true, values: { config: { name: 'retained', retired: true, metadata: { nested: { retained: true } } }, oldField: { opaque: true } },
+        });
+        const model = createStablePluginSettingsModel({ pluginId: 'acme.plugin', contribution: {
+            id: 'preferences', version: 1, title: 'Preferences', target: { kind: 'plugin' }, scope: 'daemon',
+            fields: [
+                { id: 'config', title: 'Configuration', schema: { type: 'object', properties: { name: { type: 'string' }, metadata: { type: 'object', additionalProperties: true } }, required: ['name'], additionalProperties: false } },
+                { id: 'enabled', title: 'Enabled', schema: { type: 'boolean' } },
+            ], presentation: { sections: [], subagentSections: [] },
+        } });
+        const owner = createStablePluginSettingsOwner({ recordStore: createPluginStorageBackedSettingsRecordStore({ storageForPlugin: () => storage.daemon }),
+            broker: createStablePluginEventsBroker(),
+        });
+        const service = owner.bind({ model, seed: seed(() => true) });
+        await expect(service.get('config')).resolves.toEqual({ name: 'retained', metadata: { nested: { retained: true } } });
+        await expect(service.set('config', { name: 'new', retired: true })).rejects.toMatchObject({ code: 'plugin_settings_validation_failed' });
+        await service.set('enabled', true);
+        expect(await storage.daemon.get(PLUGIN_SETTINGS_STORAGE_KEY)).toEqual({ t: 'happier_plugin_settings_record_v1', revision: 4,
+            values: { config: { name: 'retained', metadata: { nested: { retained: true } } }, oldField: { opaque: true }, enabled: true },
+        });
+    });
     const accountDeclaration = (): PluginSettingsContributionV2 => ({
         id: 'general',
         version: 1,

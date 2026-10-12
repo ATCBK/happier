@@ -14,6 +14,10 @@ import type { ResolvedAgentContribution } from '../types';
 import { projectManifestAgentContribution } from '../projectManifestAgentContribution';
 import { PLUGIN_MANIFEST as CUSTOM_ACP_MANIFEST } from '../../../../../../../packages/plugins/custom-acp/src/manifest';
 import { PLUGIN_MANIFEST as QWEN_MANIFEST } from '../../../../../../../packages/plugins/qwen/src/manifest';
+import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '../sources/generatedBundledPluginManifests';
+import { readBundledPluginManifest } from './locators';
+import { BUNDLED_FIRST_PARTY_AGENT_REGISTRATION_BINDINGS } from '../sources/generatedBundledPlugins';
+import { ingestCanonicalPluginManifest } from '../../../manifest/ingest';
 
 function manifestAgents(): readonly ResolvedAgentContribution[] {
     return getAllAgentDefinitionContracts().map((definition) => {
@@ -61,6 +65,32 @@ function manifestAgents(): readonly ResolvedAgentContribution[] {
 }
 
 describe('built-in Agent projection overlays', () => {
+    it('projects current generated manifest Agents against every generated registration binding', () => {
+        const manifests = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.flatMap((locator) => {
+            const ingestion = ingestCanonicalPluginManifest(readBundledPluginManifest(locator), {
+                manifestAuthority: 'bundled_first_party',
+                sourceProvenance: 'localSource',
+            });
+            if (!ingestion.ok) throw new Error(JSON.stringify(ingestion.diagnostics));
+            return (ingestion.manifest.contributes.agents ?? []).map((definition) => projectManifestAgentContribution({
+                definition, pluginId: locator.pluginId,
+                provenance: 'first_party', source: { kind: 'bundled' },
+            }));
+        });
+        const projected = projectBuiltInAgents({
+            manifestAgents: manifests,
+            registrationBindings: BUNDLED_FIRST_PARTY_AGENT_REGISTRATION_BINDINGS,
+        });
+        expect(projected.find((agent) => agent.id === 'antigravity')).toMatchObject({
+            identity: { pluginId: 'happier.agent.antigravity', localId: 'antigravity' },
+            runtimeSpec: { binaryName: 'agy' },
+        });
+        expect(projected.map((agent) => agent.id)).toEqual(
+            BUNDLED_FIRST_PARTY_AGENT_REGISTRATION_BINDINGS
+                .filter((binding) => binding.registrationFamily === 'agents')
+                .map((binding) => binding.implementationOwnerId),
+        );
+    });
     it('keeps a declared bundled Agent without native CLI metadata alongside native CLI Agents', () => {
         const manifestAgents = [CUSTOM_ACP_MANIFEST, QWEN_MANIFEST].map((manifest) => projectManifestAgentContribution({
             definition: manifest.contributes.agents![0]!,

@@ -46,6 +46,7 @@ import {
     BUNDLED_FIRST_PARTY_PLUGIN_METADATA,
 } from '@/plugins/projection/registry/sources/generatedBundledPluginManifests';
 import { createBundledActivationSourceResolver } from '@/plugins/runtime/bundledActivationSource';
+import { readBundledPluginManifest } from '@/plugins/projection/registry/builtIn/locators';
 import { readPluginManifest } from '@/plugins/manifest/read';
 import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
 import {
@@ -1014,7 +1015,7 @@ describe('first-party runner Agent factory matrix', () => {
                         '.happier-plugin',
                         'plugin.json',
                     ),
-                    JSON.stringify(bundledLocator.manifest),
+                    JSON.stringify(readBundledPluginManifest(bundledLocator)),
                     'utf8',
                 );
                 await cp(
@@ -1544,7 +1545,7 @@ describe('first-party runner Agent factory matrix', () => {
                     );
                 }
                 const module = await source.load();
-                const manifest = readCanonicalPluginManifest(bundledLocator.manifest);
+                const manifest = readCanonicalPluginManifest(readBundledPluginManifest(bundledLocator));
                 if (!manifest) {
                     throw new Error(
                         `Invalid execution-only manifest for '${agent.id}'`,

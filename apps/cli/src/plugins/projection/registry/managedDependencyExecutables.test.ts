@@ -4,6 +4,7 @@ import { GH_INSTALLABLE_DESCRIPTOR, PluginManagedDependencyContributionV2Schema 
 
 import type { ResolvedInstallableContribution } from './types';
 import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from './sources/generatedBundledPluginManifests';
+import { readBundledPluginManifest } from './builtIn/locators';
 import {
     resolveExecutableManagedDependenciesRegistry,
     selectExecutableManagedDependencies,
@@ -17,7 +18,7 @@ function readBundledAntigravityAcpServerContribution(): ResolvedInstallableContr
     const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS
         .find((candidate) => candidate.pluginId === 'happier.agent.antigravity');
     if (!locator) throw new Error('Bundled Antigravity plugin locator is missing');
-    const manifest = locator.manifest as Readonly<{
+    const manifest = readBundledPluginManifest(locator) as Readonly<{
         contributes: Readonly<{ managedDependencies: readonly unknown[] }>;
     }>;
     const declaration = manifest.contributes.managedDependencies

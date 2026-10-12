@@ -8,7 +8,7 @@ import { ManagedResourceDispositionV1Schema } from '@happier-dev/protocol/machin
 
 import type { PluginActionExecutionAttempt } from '@/plugins/runtime/invocation/actions/executeContributedAction';
 import type { CurrentDaemonPluginCatalogSnapshot } from './currentCatalog';
-import type { DaemonPluginCatalogProjection } from './catalogProjection';
+import { DaemonPluginCatalogReadRequestSchema, type DaemonPluginCatalogReadRequest, type DaemonPluginCatalogProjection } from './catalogProjection';
 import type {
   TargetActionCurrentIntentRequest,
   TargetActionCurrentIntentResult,
@@ -207,11 +207,15 @@ export function registerDaemonPluginChangeRoutes(
       request: TargetActionCurrentIntentRequest
     ) => Promise<TargetActionCurrentIntentResult>;
     readCatalog?: () => Promise<readonly unknown[]>;
-    readCatalogSnapshot?: () => Promise<CurrentDaemonPluginCatalogSnapshot>;
+    readCatalogSnapshot?: (request?: DaemonPluginCatalogReadRequest) => Promise<CurrentDaemonPluginCatalogSnapshot>;
     readCatalogProjection?: () => DaemonPluginCatalogProjection;
   }>,
 ): void {
-  app.post(PLUGIN_CATALOG_READ_PATH, { preHandler: params.requireAuth }, async (_request, reply) => {
+  app.post(PLUGIN_CATALOG_READ_PATH, { preHandler: params.requireAuth }, async (request, reply) => {
+    const parsed = DaemonPluginCatalogReadRequestSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return await reply.code(400).send({ kind: 'unavailable', code: 'invalid_plugin_catalog_request' });
+    }
     if (!params.readCatalog && !params.readCatalogSnapshot) {
       return await reply.code(503).send({
         kind: 'unavailable',
@@ -224,7 +228,7 @@ export function registerDaemonPluginChangeRoutes(
       const projection = params.readCatalogProjection?.();
       return {
         kind: 'available',
-        ...await params.readCatalogSnapshot(),
+        ...await params.readCatalogSnapshot(parsed.data),
         ...(projection ? { projection } : {}),
       };
     }

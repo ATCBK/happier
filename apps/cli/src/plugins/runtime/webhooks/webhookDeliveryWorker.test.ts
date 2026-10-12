@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { deriveBoxPublicKeyFromSeed, sealBoxBundle } from '@happier-dev/protocol/crypto/boxBundle';
+import { PluginWebhookDeliveryContentV1Schema } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
 
 import {
   AutomationEventAdmitInputV1Schema,
@@ -90,9 +92,20 @@ describe('plugin webhook claimed delivery worker', () => {
     expect(complete).not.toHaveBeenCalled();
   });
 
-  it('marks execution started, dispatches the same-plugin Action, and settles only with the renewed lease revision', async () => {
+  it.each(['plain', 'e2ee'] as const)('drops retired %s stored content while dispatching the same-plugin Action and settling only the renewed lease', async mode => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
+    const secret = new Uint8Array(32).fill(7);
+    const retainedContent = { ...content, retired: true,
+      headers: content.headers.map(header => ({ ...header, retired: true })),
+      verified: { ...content.verified, retired: true },
+    };
+    expect(PluginWebhookDeliveryContentV1Schema.safeParse(retainedContent).success).toBe(false);
+    const sealedContent = Buffer.from(sealBoxBundle({
+      plaintext: new TextEncoder().encode(JSON.stringify(retainedContent)),
+      recipientPublicKey: deriveBoxPublicKeyFromSeed(secret),
+      randomBytes: length => new Uint8Array(length).fill(3),
+    })).toString('base64');
     const renew = vi.fn(async () => ({ kind: 'renewed' as const, revision: 8, expiresAtMs: 120_000 }));
     let observedReference: ReturnType<typeof readCurrentPluginWebhookInvocationReferenceV1> = null;
     let releaseDetachedRead!: () => void;
@@ -107,7 +120,7 @@ describe('plugin webhook claimed delivery worker', () => {
       return { kind: 'settled' as const, disposition: 'accepted' as const };
     });
     const complete = vi.fn(async () => ({ kind: 'settled' as const, state: 'succeeded' as const }));
-    const fail = vi.fn();
+    const fail = vi.fn(async () => ({ kind: 'settled' as const, state: 'dead_letter' as const }));
 
     await expect(processClaimedPluginWebhookDeliveryV1({
       claim: {
@@ -123,12 +136,12 @@ describe('plugin webhook claimed delivery worker', () => {
         attempt: 1,
         replay: 0,
         receivedAtMs: 1,
-        envelope: { t: 'plain', v: content },
+        envelope: mode === 'plain' ? { t: 'plain', v: retainedContent } : { t: 'encrypted', c: sealedContent },
         lease: { leaseId: 'lease-1', revision: 7, firstClaimAtMs: 1, expiresAtMs: 120_000, maxClaimUntilMs: 600_000 },
         pluginVersion: '1.0.0',
         target,
       },
-      credentials: { token: 'token', encryption: null },
+      credentials: { token: 'token', encryption: mode === 'plain' ? null : { type: 'legacy', secret } },
       transport: { renew, complete, fail },
       execute,
     })).resolves.toEqual({ kind: 'settled', state: 'succeeded' });

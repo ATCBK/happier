@@ -1,3 +1,5 @@
+import { projectPluginMachineMaterializationReportFactsV1 } from '@happier-dev/protocol';
+
 import type { ServerFeaturesSnapshotStore } from '@/features/serverFeaturesSnapshotStore';
 import type { StoredCredentials } from '@/persistence';
 import type { DaemonPluginAvailabilityReporter } from '@/plugins/daemon/runtimeOwner';
@@ -65,13 +67,18 @@ export function createDaemonPluginAvailabilityReporter(params: Readonly<{
       const snapshot = {
         serverIdentityId,
         machineId,
-        materializations: current.inventory.materializations.map((materialization) => ({
+        materializations: current.inventory.materializations.map((materialization) => projectPluginMachineMaterializationReportFactsV1({
           ...materialization,
           serverIdentityId,
           machineId,
         })),
       };
-      const body = JSON.stringify(snapshot);
+      // Observation provenance travels with real updates, but is not an
+      // installation change (the server compares these same persisted facts).
+      const body = JSON.stringify({
+        ...snapshot,
+        materializations: snapshot.materializations.map(({ observedAt: _observedAt, ...facts }) => facts),
+      });
       if (body === lastAcknowledgedBody) return;
 
       const result = await publisher.reportMaterializations({

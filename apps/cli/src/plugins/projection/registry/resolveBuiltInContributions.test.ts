@@ -35,6 +35,7 @@ import { buildPluginProjectionV2 } from './projection/v2';
 import { resolveBuiltInContributions } from './resolveBuiltInContributions';
 import * as generatedBundledPluginManifests from './sources/generatedBundledPluginManifests';
 import * as generatedBundledPlugins from './sources/generatedBundledPlugins';
+import { readBundledPluginManifest } from './builtIn/locators';
 
 function readResolverSource(): string {
   return readFileSync(new URL('./resolveBuiltInContributions.ts', import.meta.url), 'utf8');
@@ -54,7 +55,8 @@ function readGeneratedBundledPluginsSource(): string {
 describe('resolveBuiltInContributions', () => {
   it('publishes Channels association input and witness result for Agent and MCP callers', () => {
     const locator = generatedBundledPluginManifests.BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find((entry) => entry.pluginId === 'happier.channels');
-    const manifest = PluginManifestV2Schema.parse(locator?.manifest);
+    if (!locator) throw new Error('Missing bundled Channels locator');
+    const manifest = PluginManifestV2Schema.parse(readBundledPluginManifest(locator));
     const action = manifest.contributes.actions?.find((entry) => entry.id === 'binding/read-v1');
     expect(action).toBeDefined();
     if (!action?.inputSchema || !action.resultSchema) throw new Error('Missing Channels binding read schemas');
@@ -131,10 +133,10 @@ describe('resolveBuiltInContributions', () => {
       "import { BUNDLED_FIRST_PARTY_AGENT_REGISTRATION_BINDINGS } from './sources/generatedBundledPlugins';",
     );
     expect(resolverSource).toContain(
-      "import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from './sources/generatedBundledPluginManifests';",
+      "import { loadCurrentBundledPluginLocatorResult } from './builtIn/locators';",
     );
     expect(pluginContributionResolverSource).toContain(
-      "import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from './sources/generatedBundledPluginManifests';",
+      "import { loadCurrentBundledPluginLocatorResult } from './builtIn/locators';",
     );
     expect(pluginContributionResolverSource).not.toContain(
       "import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from './sources/generatedBundledPlugins';",
@@ -164,7 +166,10 @@ describe('resolveBuiltInContributions', () => {
     expect(generatedSource).not.toMatch(
       /from ['"]@happier-dev\/plugins-(?:channels|triage)\/(?:runtime|daemon)['"]/u,
     );
-    expect(generatedSource).toMatch(/manifest:\s*\{\s*"contributes":/u);
+    for (const locator of generatedBundledPluginManifests.BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS) {
+      expect(locator).not.toHaveProperty('manifest');
+      expect(locator.manifestRelativePath).toMatch(/^assets\/bundled-plugin-manifests\/[^/]+\.json$/u);
+    }
   });
 
   it('keeps generated and resolver-owned cold bundled data off Protocol and Agent root barrels', () => {
@@ -183,7 +188,8 @@ describe('resolveBuiltInContributions', () => {
   it('admits generated bundled Channels and Triage target semantics without activating their manifests', () => {
     const channelsLocator = generatedBundledPluginManifests.BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS
       .find((locator) => locator.pluginId === 'happier.channels');
-    const channelsManifest = PluginManifestV2Schema.parse(channelsLocator?.manifest);
+    if (!channelsLocator) throw new Error('Missing bundled Channels locator');
+    const channelsManifest = PluginManifestV2Schema.parse(readBundledPluginManifest(channelsLocator));
     const channelsPoint = channelsManifest.contributes.pluginContributionPoints
       ?.find((point) => point.id === 'providers');
     const canonicalSchemaFailures = channelsPoint?.protocols.flatMap((protocol) => [

@@ -6,3 +6,9 @@ export const DaemonPluginCatalogProjectionSchema = z.strictObject({
   contributionRegistryProjectionRevision: z.number().int().nonnegative().safe(),
 });
 export type DaemonPluginCatalogProjection = Readonly<z.infer<typeof DaemonPluginCatalogProjectionSchema>>;
+
+/** Omission preserves the full display catalog for administration readers. */
+export const DaemonPluginCatalogReadRequestSchema = z.strictObject({
+  selection: z.literal('tools').optional(),
+});
+export type DaemonPluginCatalogReadRequest = Readonly<z.infer<typeof DaemonPluginCatalogReadRequestSchema>>;

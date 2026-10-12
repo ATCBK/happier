@@ -274,7 +274,7 @@ describe('activation target demand', () => {
         const mcp = target({
             mcp: {
                 servers: [{ id: 'tools', title: 'Tools', kind: 'dynamic' }],
-                discoverySources: [{ id: 'detector', title: 'Detector' }],
+                discoverySources: [{ id: 'detector', title: 'Detector', loadedInHappierSessions: true }],
             },
         });
 

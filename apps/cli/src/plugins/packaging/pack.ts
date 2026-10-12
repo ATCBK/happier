@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { access, copyFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 
 import * as tar from 'tar';
 
@@ -268,7 +268,7 @@ async function createPackOperationSource(locator: string): Promise<
   // copy resolves is already canonical. `tmpdir()` is a symlink on macOS, so an
   // uncanonicalized copy root makes that mapping escape the package root.
   const operationParentPath = await realpath(
-    await mkdtemp(join(tmpdir(), 'happier-plugin-pack-source-')),
+    createHappierTempDir({ purpose: 'plugin-pack-source' }),
   );
   const operationRootPath = join(operationParentPath, 'package');
   try {
@@ -295,11 +295,11 @@ async function createPackOperationSource(locator: string): Promise<
         ...(sourceResolution.kind === 'code'
           ? { authoringEntryKind: sourceResolution.entry.kind }
           : {}),
-        cleanup: async () => await rm(operationParentPath, { recursive: true, force: true }),
+        cleanup: async () => await removeHappierTempDirAsync(operationParentPath),
       }),
     };
   } catch (error) {
-    await rm(operationParentPath, { recursive: true, force: true }).catch(() => undefined);
+    await removeHappierTempDirAsync(operationParentPath).catch(() => undefined);
     return {
       ok: false,
       diagnostics: [createDiagnostic(error instanceof Error ? error.message : 'Plugin pack source isolation failed')],

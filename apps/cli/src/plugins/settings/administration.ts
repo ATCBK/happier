@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { DaemonContributionRegistryProjectionDescribeRequestSchema, DaemonContributionRegistryProjectionDescribeResponseSchema, DaemonPluginSettingsGetRequestSchema, DaemonPluginSettingsGetResponseSchema, DaemonPluginSettingsSetRequestSchema, DaemonPluginSettingsSetResponseSchema, DaemonPluginSecretDeleteRequestSchema, DaemonPluginSecretDeleteResponseSchema, DaemonPluginSecretStatusRequestSchema, DaemonPluginSecretStatusResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { PluginSettingsAdministrationActionInputSchemasV1, PluginSettingsAdministrationActionOutputV1Schema } from '@happier-dev/protocol/plugins/settingsAdministration';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
-import type { PluginProjectedSettingsFieldV2, PluginProjectedSettingsV2, PluginSettingsAdministrationActionIdV1, PluginSettingsAdministrationActionOutputV1, PluginSettingsAdministrationDaemonTargetV1, PluginSettingsAdministrationTargetV1, ActionExecutorContext } from '@happier-dev/protocol';
+import { readPluginSettingBoundValueV1, resolvePluginSettingBoundSetV1, resolvePluginSettingBoundResetV1 } from '@happier-dev/protocol/plugins/contributions/settings';
+import type { PluginProjectedSettingsFieldV2, PluginProjectedSettingsV2, PluginSettingFieldV2, PluginSettingsAdministrationActionIdV1, PluginSettingsAdministrationActionOutputV1, PluginSettingsAdministrationDaemonTargetV1, PluginSettingsAdministrationTargetV1, ActionExecutorContext, ActionExecuteFailure } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { isPluginError, PluginError, type JsonValue, type PluginSettingDescriptor } from '@happier-dev/plugin-sdk';
@@ -40,16 +41,24 @@ type ParsedActionInput = Readonly<{
   value?: JsonValue;
   expectedRevision?: string;
   savedSecretId?: string;
+  bindingServerIdentityId?: string | null;
+  canonicalOrigin?: string;
 }>;
 
-export type ExecutePluginSettingsAdministrationAction = (params: Readonly<{
+type PluginSettingsAdministrationActionParams = Readonly<{
   actionId: PluginSettingsAdministrationActionIdV1;
   input: unknown;
   happyHomeDir?: string;
   /** Canonical host-stamped Action provenance; never derived from Action input. */
   actionCaller?: ActionExecutorContext['actionCaller'];
   signal?: AbortSignal;
-}>) => Promise<PluginSettingsAdministrationActionOutputV1>;
+}>;
+
+export type ExecutePluginSettingsAdministrationAction = (
+  (params: PluginSettingsAdministrationActionParams) => Promise<PluginSettingsAdministrationActionOutputV1>
+) & Readonly<{
+  admitInput: (params: PluginSettingsAdministrationActionParams) => Promise<ActionExecuteFailure | null>;
+}>;
 
 class PluginSettingsAdministrationError extends Error {
   constructor(
@@ -104,6 +113,8 @@ function readSafePluginErrorCode(error: unknown): string | null {
 function normalizeFailure(error: unknown): Readonly<{ code: string; message: string }> {
   const code = readSafePluginErrorCode(error);
   switch (code) {
+    case 'invalid_arguments':
+      return { code, message: 'Plugin Settings action input is invalid.' };
     case 'not_authenticated':
       return { code, message: 'Sign in before administering Plugin Settings.' };
     case 'plugin_settings_revision_conflict':
@@ -345,6 +356,7 @@ async function daemonSecretStatus(params: Readonly<{
   target: PluginSettingsAdministrationDaemonTargetV1;
   pluginId: string;
   localId: string;
+  canonicalOrigin?: string;
   signal?: AbortSignal;
 }>) {
   await revalidateDaemonTarget(params.target, params.signal);
@@ -356,6 +368,7 @@ async function daemonSecretStatus(params: Readonly<{
       machineId: params.target.machineId,
       pluginId: params.pluginId,
       secretId: params.localId,
+      ...(params.canonicalOrigin === undefined ? {} : { canonicalOrigin: params.canonicalOrigin }),
     }),
     ...(params.signal ? { signal: params.signal } : {}),
   });
@@ -374,6 +387,7 @@ async function daemonSecretDelete(params: Readonly<{
   target: PluginSettingsAdministrationDaemonTargetV1;
   pluginId: string;
   localId: string;
+  canonicalOrigin?: string;
   expectedRevision?: string;
   signal?: AbortSignal;
 }>) {
@@ -386,6 +400,7 @@ async function daemonSecretDelete(params: Readonly<{
       machineId: params.target.machineId,
       pluginId: params.pluginId,
       secretId: params.localId,
+      ...(params.canonicalOrigin === undefined ? {} : { canonicalOrigin: params.canonicalOrigin }),
       ...(params.expectedRevision === undefined ? {} : { expectedRevision: params.expectedRevision }),
     }),
     write: true,
@@ -453,15 +468,8 @@ async function accountSettingsService(params: Readonly<{
 }>): Promise<Readonly<{
   service: ScopedSettingsService;
   hiddenFieldIds: ReadonlySet<string>;
+  fieldsById: ReadonlyMap<string, PluginSettingFieldV2>;
 }>> {
-  const credentials = await currentCredentials(params.signal);
-  await bootstrapAccountSettingsContext({
-    credentials,
-    mode: 'blocking',
-    refresh: 'force',
-    honorAccountSettingsModeEnv: false,
-    shouldCommit: () => !params.signal?.aborted,
-  });
   assertCurrent(params.signal);
   const registry = await resolveMergedContributionRegistry({
     ...(params.happyHomeDir ? { happyHomeDir: params.happyHomeDir } : {}),
@@ -517,7 +525,21 @@ async function accountSettingsService(params: Readonly<{
   return Object.freeze({
     service: service.forScope({ kind: 'account' }),
     hiddenFieldIds,
+    fieldsById: new Map(declarations.filter(({ contribution }) => contribution.scope === 'account')
+      .flatMap(({ contribution }) => contribution.fields.map(field => [field.id, field] as const))),
   });
+}
+
+async function initializeAccountSettings(signal?: AbortSignal): Promise<void> {
+  const credentials = await currentCredentials(signal);
+  await bootstrapAccountSettingsContext({
+    credentials,
+    mode: 'blocking',
+    refresh: 'force',
+    honorAccountSettingsModeEnv: false,
+    shouldCommit: () => !signal?.aborted,
+  });
+  assertCurrent(signal);
 }
 
 async function currentSecretDeclaration(params: Readonly<{
@@ -650,20 +672,68 @@ function requireDaemonSecretTarget(input: ParsedActionInput): PluginSettingsAdmi
   );
 }
 
-async function executeSettingsAction(params: Readonly<{
-  actionId: PluginSettingsAdministrationActionIdV1;
+async function resolveSettingsOwner(params: Readonly<{
   input: ParsedActionInput;
   happyHomeDir?: string;
   signal?: AbortSignal;
-}>): Promise<PluginSettingsAdministrationActionOutputV1> {
+}>) {
   const scoped = requireScopedInput(params.input);
   if (scoped.kind === 'daemon') {
+    if (params.input.bindingServerIdentityId !== undefined) {
+      administrationError('invalid_arguments', 'Server binding applies only to Account Settings.');
+    }
     const projection = await daemonSettingsProjection({
       target: scoped.target,
       pluginId: params.input.pluginId,
       scope: scoped.scope,
       ...(params.signal ? { signal: params.signal } : {}),
     });
+    return { kind: 'daemon' as const, scoped, projection };
+  }
+  const account = await accountSettingsService({
+    pluginId: params.input.pluginId,
+    ...(params.happyHomeDir ? { happyHomeDir: params.happyHomeDir } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+  return { kind: 'account' as const, scoped, account };
+}
+
+function requireNonSecretDaemonField(
+  projection: Awaited<ReturnType<typeof daemonSettingsProjection>>,
+  input: ParsedActionInput,
+) {
+  const field = findDaemonField(projection, requireLocalId(input));
+  if (field.secretCustody !== null) {
+    administrationError('plugin_settings_unknown_key', 'Secret fields are administered through the secret commands.');
+  }
+  return field;
+}
+
+function requireNonSecretAccountField(
+  account: Awaited<ReturnType<typeof accountSettingsService>>,
+  input: ParsedActionInput,
+) {
+  const localId = requireLocalId(input);
+  const descriptor = account.service.describe().find((candidate) => candidate.id === localId);
+  if (!descriptor || descriptor.secret || account.hiddenFieldIds.has(localId)) {
+    administrationError('plugin_settings_unknown_key', 'The requested non-secret Settings field is not declared.');
+  }
+  const binding = account.fieldsById.get(localId)?.presentation?.binding;
+  if (input.bindingServerIdentityId !== undefined && binding?.kind !== 'perActiveServer') {
+    administrationError('invalid_arguments', 'The requested field has no per-server binding.');
+  }
+  return { descriptor, binding };
+}
+
+async function executeSettingsAction(params: Readonly<{
+  actionId: PluginSettingsAdministrationActionIdV1;
+  input: ParsedActionInput;
+  happyHomeDir?: string;
+  signal?: AbortSignal;
+}>): Promise<PluginSettingsAdministrationActionOutputV1> {
+  const owner = await resolveSettingsOwner(params);
+  if (owner.kind === 'daemon') {
+    const { projection, scoped } = owner;
     if (params.actionId === 'plugins.settings.list') {
       const snapshot = await daemonSnapshot({
         target: scoped.target,
@@ -686,10 +756,7 @@ async function executeSettingsAction(params: Readonly<{
       }));
     }
     const localId = requireLocalId(params.input);
-    const field = findDaemonField(projection, localId);
-    if (field.secretCustody !== null) {
-      administrationError('plugin_settings_unknown_key', 'Secret fields are administered through the secret commands.');
-    }
+    const field = requireNonSecretDaemonField(projection, params.input);
     if (params.actionId === 'plugins.settings.get') {
       const snapshot = await daemonSnapshot({
         target: scoped.target,
@@ -725,13 +792,10 @@ async function executeSettingsAction(params: Readonly<{
     }), 'live');
   }
 
-  const account = await accountSettingsService({
-    pluginId: params.input.pluginId,
-    ...(params.happyHomeDir ? { happyHomeDir: params.happyHomeDir } : {}),
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
+  const { account, scoped } = owner;
   const { service } = account;
   if (params.actionId === 'plugins.settings.list') {
+    await initializeAccountSettings(params.signal);
     const snapshot = await service.snapshot({ ...(params.signal ? { signal: params.signal } : {}) });
     const projection = projectAccountSettingsAdministrationSnapshot({
       descriptors: service.describe(),
@@ -744,9 +808,36 @@ async function executeSettingsAction(params: Readonly<{
     }));
   }
   const localId = requireLocalId(params.input);
-  const descriptor = service.describe().find((candidate) => candidate.id === localId);
-  if (!descriptor || descriptor.secret || account.hiddenFieldIds.has(localId)) {
-    administrationError('plugin_settings_unknown_key', 'The requested non-secret Settings field is not declared.');
+  const { descriptor, binding } = requireNonSecretAccountField(account, params.input);
+  await initializeAccountSettings(params.signal);
+  if (params.input.bindingServerIdentityId !== undefined) {
+    const snapshot = await service.snapshot({ ...(params.signal ? { signal: params.signal } : {}) });
+    const bound = { values: snapshot.values, field: { key: localId, binding },
+      serverIdentityId: params.input.bindingServerIdentityId };
+    if (params.actionId === 'plugins.settings.get') {
+      const raw = readPluginSettingBoundValueV1(bound);
+      return result(params.actionId, Object.freeze({
+        scope: snapshot.scope, target: scoped.target, localId, revision: snapshot.revision,
+        value: raw === undefined ? descriptor.default ?? null : StrictJsonValueSchema.parse(raw),
+      }));
+    }
+    // Mapping an entry uses this exact readable map. Reuse service CAS so a
+    // newer sibling entry cannot be replaced, even without a caller revision.
+    const options = { expectedRevision: params.input.expectedRevision ?? snapshot.revision,
+      ...(params.signal ? { signal: params.signal } : {}) };
+    const next = await (async () => {
+      if (params.actionId === 'plugins.settings.set') {
+        const mapped = resolvePluginSettingBoundSetV1({ ...bound, value: params.input.value });
+        return await service.set(mapped.fieldId, StrictJsonValueSchema.parse(mapped.value), options);
+      }
+      const mapped = resolvePluginSettingBoundResetV1(bound);
+      return mapped.mutation.kind === 'delete'
+        ? await service.reset(mapped.fieldId, options)
+        : await service.set(mapped.fieldId, StrictJsonValueSchema.parse(mapped.mutation.value), options);
+    })();
+    return result(params.actionId, Object.freeze({
+      scope: next.scope, target: scoped.target, localId, revision: next.revision,
+    }), 'live');
   }
   if (params.actionId === 'plugins.settings.get') {
     const snapshot = await service.snapshot({ ...(params.signal ? { signal: params.signal } : {}) });
@@ -789,6 +880,9 @@ async function executeSecretAction(params: Readonly<{
     ...(params.signal ? { signal: params.signal } : {}),
   });
   if (declaration.custody === 'account') {
+    if (params.input.canonicalOrigin !== undefined) {
+      administrationError('invalid_arguments', 'Native origin routing does not apply to Account secret custody.');
+    }
     const resolved = await accountSecretCustody({
       pluginId: params.input.pluginId,
       declaration,
@@ -862,6 +956,7 @@ async function executeSecretAction(params: Readonly<{
       target,
       pluginId: params.input.pluginId,
       localId,
+      ...(params.input.canonicalOrigin === undefined ? {} : { canonicalOrigin: params.input.canonicalOrigin }),
       ...(params.signal ? { signal: params.signal } : {}),
     });
     return result(params.actionId, Object.freeze({
@@ -876,6 +971,7 @@ async function executeSecretAction(params: Readonly<{
     target,
     pluginId: params.input.pluginId,
     localId,
+    ...(params.input.canonicalOrigin === undefined ? {} : { canonicalOrigin: params.input.canonicalOrigin }),
     ...(params.input.expectedRevision === undefined ? {} : { expectedRevision: params.input.expectedRevision }),
     ...(params.signal ? { signal: params.signal } : {}),
   });
@@ -888,7 +984,7 @@ async function executeSecretAction(params: Readonly<{
   }), 'live');
 }
 
-export const executePluginSettingsAdministrationAction: ExecutePluginSettingsAdministrationAction = async (params) => {
+export const executePluginSettingsAdministrationAction: ExecutePluginSettingsAdministrationAction = Object.assign(async (params: PluginSettingsAdministrationActionParams) => {
   assertCurrent(params.signal);
   const parsed = PluginSettingsAdministrationActionInputSchemasV1[params.actionId].safeParse(params.input);
   if (!parsed.success) {
@@ -909,4 +1005,25 @@ export const executePluginSettingsAdministrationAction: ExecutePluginSettingsAdm
     const normalized = normalizeFailure(error);
     return failure(params.actionId, normalized.code, normalized.message);
   }
-};
+}, {
+  admitInput: async (params: PluginSettingsAdministrationActionParams): Promise<ActionExecuteFailure | null> => {
+    assertCurrent(params.signal);
+    if (params.actionId !== 'plugins.settings.set') return null;
+    const parsed = PluginSettingsAdministrationActionInputSchemasV1[params.actionId].safeParse(params.input);
+    if (!parsed.success) {
+      return { ok: false, errorCode: 'invalid_arguments', error: 'Plugin Settings action input is invalid.' };
+    }
+    try {
+      const input = parsed.data as ParsedActionInput;
+      const owner = await resolveSettingsOwner({ ...params, input });
+      if (owner.kind === 'daemon') requireNonSecretDaemonField(owner.projection, input);
+      else requireNonSecretAccountField(owner.account, input);
+      assertCurrent(params.signal);
+      return null;
+    } catch (error) {
+      if (params.signal?.aborted) throw error;
+      const normalized = normalizeFailure(error);
+      return { ok: false, errorCode: normalized.code, error: normalized.message };
+    }
+  },
+});

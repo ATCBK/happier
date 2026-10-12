@@ -263,6 +263,7 @@ describe('external Agent UI-behavior descriptor projection', () => {
                 definition: {
                     id: 'config',
                     title: 'Acme MCP configuration',
+                    loadedInHappierSessions: true,
                     metadata: { agentId: 'acme-mcp' },
                 },
             }],

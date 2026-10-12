@@ -103,6 +103,7 @@ function manifest(params: Readonly<{
     inputSchema?: Readonly<Record<string, unknown>>;
     inputHints?: PluginActionContributionV2['inputHints'];
     inputTypes?: NonNullable<ReturnType<typeof readCanonicalPluginManifest>>['contributes']['inputTypes'];
+    resources?: NonNullable<ReturnType<typeof readCanonicalPluginManifest>>['contributes']['resources'];
     resultSchema?: Readonly<Record<string, unknown>>;
     availability?: Readonly<Record<string, unknown>>;
     operation?: ActionOperationDeclarationV1;
@@ -115,6 +116,7 @@ function manifest(params: Readonly<{
         hostAccess: params.hostAccess ?? { required: [], optional: [] },
         contributes: {
             ...(params.inputTypes ? { inputTypes: params.inputTypes } : {}),
+            ...(params.resources ? { resources: params.resources } : {}),
             actions: [{
                 id: 'run', title: 'Run', description: 'Run', scopes: ['global'], surfaces,
                 execution: params.execution ?? { target: 'daemon' },
@@ -471,6 +473,7 @@ function registry(params: Readonly<{
         actions: [resolvedAction],
         inputTypes: normalized.inputTypes.map(type => ({ provenance: 'external' as const, source: { kind: 'path' as const }, ...type,
             identity: createPluginContributionIdentity({ pluginId: type.pluginId, localId: type.definition.id }), manifestPath: activation.manifestPath })),
+        resources: normalized.resources.map(resource => ({ provenance: 'external' as const, source: { kind: 'path' as const }, ...resource })),
         occurrenceIdsByPluginId: { 'acme.alpha': '7' as PluginRuntimeOccurrenceId },
         materializationIdsByPluginId: {
             'acme.alpha': 'materialization-alpha-current',
@@ -551,6 +554,7 @@ describe('buildTargetActionInvocationRegistry', () => {
         });
         expect(target.has('acme.alpha', 'run')).toBe(false);
         const runtime: ResolvedExecutablePluginRuntimeRegistry = {
+            claimReleaseLessDeclarations: async () => undefined,
             contributes, targetActionInvocations: target,
             hookHandlersByHookId: new Map(), agentRuntimesByAgentId: new Map(), scmHostingProvidersById: new Map(),
             pluginDiagnosticsByPluginId: {}, activatedPluginIds: new Set(),
@@ -1082,7 +1086,6 @@ describe('buildTargetActionInvocationRegistry', () => {
             .toMatchObject({ status: 'invalid', code: 'input_type_value_invalid' });
     });
 
-    // Blocked regression preparation: author grammar remains restrictive; the current-source registry bootstrap fails before dispatch assertions.
     it('[blocked: authored typed static choices] refuses a headless submitted plugin-type value before the target handler without discarding it', async () => {
         const inputType = { pluginId: 'acme.alpha', localId: 'repository' };
         const pluginManifest = manifest({
@@ -1111,6 +1114,65 @@ describe('buildTargetActionInvocationRegistry', () => {
         expect(await target.invoke({ pluginId: 'acme.alpha', localId: 'run',
             input: { repository: { repositoryId: 'excluded' } }, surface: 'cli' }))
             .toMatchObject({ status: 'invalid', code: 'input_type_option_invalid' });
+        expect(invoked).toBe(1);
+    });
+
+    it('intersects headless authored choices with the serving type Resource before the handler', async () => {
+        const inputType = { pluginId: 'acme.alpha', localId: 'repository' };
+        const pluginManifest = manifest({
+            inputSchema: { type: 'object', properties: { repository: { type: 'string' } }, required: ['repository'], additionalProperties: false },
+            inputHints: { fields: [{ path: 'repository', title: 'Repository', widget: 'select', inputType,
+                options: [{ value: 'one', label: 'One' }, { value: 'outside-resource', label: 'Outside' }] }] },
+            inputTypes: [{ id: 'repository', title: 'Repository', semantic: 'repository', valueSchema: { type: 'string' },
+                options: { resource: 'repositories' } }],
+            resources: [{ id: 'repositories', source: 'dynamic', kind: 'config', contentType: 'application/json', scope: 'global' }],
+        });
+        const contributes = registry({ pluginManifest });
+        let invoked = 0;
+        let options = [{ value: 'one', label: 'One' }];
+        const target = buildRegistry({ contributes,
+            readRuntimeRegistry: () => ({ contributes, readUiResource: async () => ({ kind: 'config', digest: 'resource-fixture', contentType: 'application/json',
+                bytes: new TextEncoder().encode(JSON.stringify(options)) }) }),
+            targetRegistrations: [{ pluginId: 'acme.alpha', occurrenceId: '7',
+                registration: { family: 'actions', localId: 'run', value: async () => { invoked++; return { accepted: true }; } } }],
+            targetActivationFacts: [fact()],
+        });
+        const refused = { repository: 'outside-resource' };
+        expect(await target.invoke({ pluginId: 'acme.alpha', localId: 'run', input: refused, surface: 'cli' }))
+            .toMatchObject({ status: 'invalid', code: 'input_type_option_invalid' });
+        expect(refused).toEqual({ repository: 'outside-resource' });
+        expect(invoked).toBe(0);
+        expect(await target.invoke({ pluginId: 'acme.alpha', localId: 'run', input: { repository: 'one' }, surface: 'cli' }))
+            .toMatchObject({ status: 'executed', value: { accepted: true } });
+        options = [];
+        expect(await target.invoke({ pluginId: 'acme.alpha', localId: 'run', input: { repository: 'one' }, surface: 'cli' }))
+            .toMatchObject({ status: 'invalid', code: 'input_type_option_invalid' });
+        expect(invoked).toBe(1);
+    });
+
+    it('narrows headless host multiselections without widening their type schema', async () => {
+        const pluginManifest = manifest({
+            inputSchema: { type: 'object', properties: { queries: { type: 'array', items: { type: 'object', additionalProperties: true } } }, required: ['queries'], additionalProperties: false },
+            inputHints: { fields: [{ path: 'queries', title: 'Usage', widget: 'multiselect', inputType: { hostType: 'usageQuery' },
+                options: [{ value: { metric: 'cost' }, label: 'Cost' },
+                    { value: { metric: 'tokens' }, label: 'Tokens', disabled: true },
+                    { value: { metric: 'forged' }, label: 'Invalid schema' }] }] },
+        });
+        let invoked = 0;
+        const target = buildRegistry({ contributes: registry({ pluginManifest }),
+            targetRegistrations: [{ pluginId: 'acme.alpha', occurrenceId: '7',
+                registration: { family: 'actions', localId: 'run', value: async () => { invoked++; return { accepted: true }; } } }],
+            targetActivationFacts: [fact()],
+        });
+        for (const [metric, code] of [['tokens', 'input_type_option_invalid'], ['forged', 'input_type_value_invalid']] as const) {
+            expect(await target.invoke({ pluginId: 'acme.alpha', localId: 'run',
+                input: { queries: [{ metric: 'cost' }, { metric }] }, surface: 'cli' }))
+                .toMatchObject({ status: 'invalid', code });
+        }
+        expect(invoked).toBe(0);
+        expect(await target.invoke({ pluginId: 'acme.alpha', localId: 'run',
+            input: { queries: [{ metric: 'cost' }] }, surface: 'cli' }))
+            .toMatchObject({ status: 'executed', value: { accepted: true } });
         expect(invoked).toBe(1);
     });
 

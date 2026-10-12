@@ -112,7 +112,7 @@ export function fixture(options: Readonly<{
     } : null;
     const fixtureSchemasFor = (localId: string) => localId === 'reconcile' ? reconciliationSchemas
         : localId === 'cleanup' && reconciliationSchemas ? { input: reconciliationSchemas.cleanupInput, result: MachineProvisionerCleanupObservationV1Schema }
-        : localId === 'destroy' && reconciliationSchemas ? { input: reconciliationSchemas.destroyInput, result: MachineProvisionerPowerResultV1Schema }
+        : localId === 'destroy' && reconciliationSchemas ? { input: reconciliationSchemas.destroyInput, result: reconciliationSchemas.destroyResult }
         : localId === 'acquire' && reconciliationSchemas ? { input: acquisitionSchemas.acquireInput, result: reconciliationSchemas.result }
         : localId === 'ordinary' && repairSchemas ? repairSchemas
         : schemasFor(localId);

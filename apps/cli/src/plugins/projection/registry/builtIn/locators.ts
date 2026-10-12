@@ -17,12 +17,23 @@ import * as generatedBundledPluginManifests from '../sources/generatedBundledPlu
 
 export type BundledPluginLocator = Readonly<{
     pluginId: string;
-    manifest: unknown;
     manifestPath: string;
     daemonEntryPath: string | null;
     devDaemonEntryPath?: string | null;
     sourceSpec: PluginSourceSpecV1;
-}>;
+}> & (Readonly<{ manifestRelativePath: string }> | Readonly<{ manifest: unknown }>);
+
+/** Read declarations only when the catalog needs them, never on locator import. */
+export function readBundledPluginManifest(
+    locator: Readonly<{ manifestRelativePath: string }> | Readonly<{ manifest: unknown }>,
+    runtimeRoot?: string,
+): unknown {
+    if ('manifest' in locator) return locator.manifest;
+    const manifestPath = runtimeRoot
+        ? join(runtimeRoot, locator.manifestRelativePath)
+        : resolveCliRuntimeAssetPath(locator.manifestRelativePath);
+    return JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown;
+}
 
 function readBundledPluginRootPath(locator: BundledPluginLocator): string {
     if (locator.sourceSpec.kind !== 'bundled' || !locator.sourceSpec.locator.trim()) {
@@ -123,15 +134,16 @@ export function projectManagedRuntimePublicationManifest(
     unavailableProviderKeys: ReadonlySet<string>,
     unmatchedProviderKeys: Set<string>,
 ): unknown {
-    if (unavailableProviderKeys.size === 0) return locator.manifest;
-    if (!locator.manifest || typeof locator.manifest !== 'object' || Array.isArray(locator.manifest)) {
-        return locator.manifest;
+    const declaration = readBundledPluginManifest(locator);
+    if (unavailableProviderKeys.size === 0) return declaration;
+    if (!declaration || typeof declaration !== 'object' || Array.isArray(declaration)) {
+        return declaration;
     }
-    const manifest = locator.manifest as Readonly<Record<string, unknown>>;
+    const manifest = declaration as Readonly<Record<string, unknown>>;
     const contributes = manifest.contributes;
-    if (!contributes || typeof contributes !== 'object' || Array.isArray(contributes)) return locator.manifest;
+    if (!contributes || typeof contributes !== 'object' || Array.isArray(contributes)) return declaration;
     const contributionRecord = contributes as Readonly<Record<string, unknown>>;
-    if (!Array.isArray(contributionRecord.providers)) return locator.manifest;
+    if (!Array.isArray(contributionRecord.providers)) return declaration;
 
     let changed = false;
     const providers = contributionRecord.providers.map((value) => {
@@ -145,7 +157,7 @@ export function projectManagedRuntimePublicationManifest(
         unmatchedProviderKeys.delete(key);
         return providerWithoutManagedRuntime;
     });
-    if (!changed) return locator.manifest;
+    if (!changed) return declaration;
     return {
         ...manifest,
         contributes: { ...contributionRecord, providers },
@@ -153,6 +165,11 @@ export function projectManagedRuntimePublicationManifest(
 }
 
 function resolveInstalledBundledPluginRootPath(packageName: string): string | null {
+    // Source runtime emission puts the plugin beside its CLI. Its immutable
+    // graph and bytes must not come from the moving dependency symlink instead.
+    if (isExecutingFirstPartySourceRuntime(import.meta.url) && packageName.startsWith('@happier-dev/plugins-')) {
+        return resolveCliRuntimeAssetPath('../../packages/plugins', packageName.slice('@happier-dev/plugins-'.length));
+    }
     for (const searchPath of requireFromCli.resolve.paths(packageName) ?? []) {
         const packageRootPath = join(searchPath, ...packageName.split('/'));
         if (existsSync(join(packageRootPath, 'package.json'))) {
@@ -263,9 +280,9 @@ export function loadBundledPluginLocators(
 let admittedBundledPlugins: ReturnType<typeof loadBundledPluginLocatorResult> | null = null;
 
 export function loadCurrentBundledPluginLocatorResult() {
-    // Imported bundled declarations are fixed for this process, as is its admitted
-    // publication. Installed-plugin discovery reuses that graph instead of cloning
-    // and validating every bundled manifest on each catalog/settings refresh.
+    // Admit the executing closure's bundled declarations on the first catalog
+    // demand. Installed-plugin discovery then reuses that graph instead of
+    // rereading and validating every bundled manifest on each refresh.
     if (admittedBundledPlugins) return admittedBundledPlugins;
     // Current source declarations activate their real development modules.
     // Distribution failures describe prepared package bytes, so only their

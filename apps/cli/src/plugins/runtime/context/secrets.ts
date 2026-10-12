@@ -30,9 +30,6 @@ type SecretsFileV1 = Readonly<{
     secrets: Record<string, PersistedPluginSecretV1>;
 }>;
 
-const SECRETS_FILE_LOCK_TIMEOUT_MS = 5_000;
-const SECRETS_FILE_LOCK_STALE_AFTER_MS = 30_000;
-
 export type PluginSecretsOwnerParams = Readonly<{
     pluginId: string;
     paths: PluginStorePaths;
@@ -169,7 +166,7 @@ type PluginSecretsEncryptedOwner = Readonly<{
     read(): Promise<Record<string, PersistedPluginSecretV1>>;
     decrypt(secret: PersistedPluginSecretV1): Promise<string>;
     encrypt(value: string): Promise<PersistedPluginSecretV1>;
-    mutate<T>(operation: PluginSecretsMutation<T>): Promise<T>;
+    mutate<T>(operation: PluginSecretsMutation<T>, signal?: AbortSignal): Promise<T>;
 }>;
 
 function createPluginSecretsEncryptedOwner(params: PluginSecretsOwnerParams): PluginSecretsEncryptedOwner {
@@ -215,12 +212,14 @@ function createPluginSecretsEncryptedOwner(params: PluginSecretsOwnerParams): Pl
 
     async function mutate<T>(
         operation: PluginSecretsMutation<T>,
+        signal?: AbortSignal,
     ): Promise<T> {
         return await withJsonOwnerFileLock({
             lockPath: `${filePath}.lock`,
-            timeoutMs: SECRETS_FILE_LOCK_TIMEOUT_MS,
-            staleAfterMs: SECRETS_FILE_LOCK_STALE_AFTER_MS,
+            timeoutMs: Infinity,
+            staleAfterMs: Infinity,
             errorCode: 'PLUGIN_SECRETS_LOCK_UNAVAILABLE',
+            ...(signal ? { signal } : {}),
         }, async () => {
             const secrets = await readSecrets();
             const outcome = await operation(secrets);
@@ -424,6 +423,7 @@ export type PluginSecretCustody = Readonly<{
         /** Host-private explicit binding; absent means the legacy unscoped key. */
         canonicalOrigin?: string;
         expectedRevision?: string;
+        signal?: AbortSignal;
         assertCurrent?: SecretMutationCurrentnessCheck;
     }>): Promise<Readonly<{ revision: string }>>;
     delete(input: Readonly<{
@@ -431,6 +431,7 @@ export type PluginSecretCustody = Readonly<{
         /** Host-private explicit binding; absent means the legacy unscoped key. */
         canonicalOrigin?: string;
         expectedRevision?: string;
+        signal?: AbortSignal;
         assertCurrent?: SecretMutationCurrentnessCheck;
     }>): Promise<Readonly<{ revision: string }>>;
 }>;
@@ -515,7 +516,7 @@ export function createDaemonPluginSecretCustodyRouter(params: Readonly<{
         return owner;
     };
 
-    const resolve: PluginSecretCustodyResolver = ({ pluginId, declaration }) => {
+    const resolve: PluginSecretCustodyResolver = ({ pluginId, declaration, signal: occurrenceSignal }) => {
         if (declaration.custody !== 'daemon') return null;
         const normalizedPluginId = normalizePluginStorageNamespace(pluginId);
         const secretId = assertValidDeclaredPluginSecretId(declaration.id);
@@ -560,7 +561,9 @@ export function createDaemonPluginSecretCustodyRouter(params: Readonly<{
                         write: true,
                         result: Object.freeze({ revision: revisionForSecret(encrypted) }),
                     });
-                });
+                }, occurrenceSignal && input.signal
+                    ? AbortSignal.any([occurrenceSignal, input.signal])
+                    : input.signal ?? occurrenceSignal);
             },
             async delete(input) {
                 const storageKey = managedServiceOriginStorageKey(
@@ -577,7 +580,9 @@ export function createDaemonPluginSecretCustodyRouter(params: Readonly<{
                         write: current !== null,
                         result: Object.freeze({ revision: revisionForSecret(null) }),
                     });
-                });
+                }, occurrenceSignal && input.signal
+                    ? AbortSignal.any([occurrenceSignal, input.signal])
+                    : input.signal ?? occurrenceSignal);
             },
         });
     };
@@ -736,6 +741,7 @@ export function createDeclaredPluginSecretsService(params: Readonly<{
                 secretId: declaration.id,
                 ...(options?.expectedRevision ? { expectedRevision: options.expectedRevision } : {}),
                 value,
+                signal: options?.signal ? AbortSignal.any([params.signal, options.signal]) : params.signal,
                 assertCurrent: () => assertCurrent(options?.signal),
             });
             return result;
@@ -747,6 +753,7 @@ export function createDeclaredPluginSecretsService(params: Readonly<{
             const result = await requireInvocationCustody(declaration).delete({
                 secretId: declaration.id,
                 ...(options?.expectedRevision ? { expectedRevision: options.expectedRevision } : {}),
+                signal: options?.signal ? AbortSignal.any([params.signal, options.signal]) : params.signal,
                 assertCurrent: () => assertCurrent(options?.signal),
             });
             return result;
@@ -938,6 +945,7 @@ export function createStableDeclaredPluginSecretsHost(params: Readonly<{
                     ...(request.expectedRevision === undefined
                         ? {}
                         : { expectedRevision: request.expectedRevision }),
+                    signal: request.signal ? AbortSignal.any([input.signal, request.signal]) : input.signal,
                     assertCurrent: () => assertCurrent(request.signal),
                 });
                 // A mutation already acknowledged by custody is authoritative
@@ -954,6 +962,7 @@ export function createStableDeclaredPluginSecretsHost(params: Readonly<{
                     ...(request.expectedRevision === undefined
                         ? {}
                         : { expectedRevision: request.expectedRevision }),
+                    signal: request.signal ? AbortSignal.any([input.signal, request.signal]) : input.signal,
                     assertCurrent: () => assertCurrent(request.signal),
                 });
                 // See the acknowledged mutation rule in `set` above.

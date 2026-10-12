@@ -110,12 +110,13 @@ describe('target action invocation registry', () => {
             } }],
         });
         try {
-            for (let attempt = 0; attempt < 2; attempt += 1) {
-                await expect(registry.invoke({
-                    pluginId: 'acme.alpha', localId: 'run', input: { value: 'x' }, surface: 'cli',
-                })).resolves.toMatchObject({ status: 'executed' });
-            }
+            const results = await Promise.all(['session-first', 'session-second'].map(sessionId => registry.invoke({
+                pluginId: 'acme.alpha', localId: 'run', input: { value: 'x' }, surface: 'cli',
+                sessionId,
+            })));
+            expect(results).toMatchObject([{ status: 'executed' }, { status: 'executed' }]);
             expect(contexts.map(context => context.invocationId)).toEqual(correlations);
+            expect(contexts.map(context => context.session?.id)).toEqual(['session-first', 'session-second']);
             expect(contexts[0]!.invocationId).toBeTruthy();
             expect(contexts[1]!.invocationId).not.toBe(contexts[0]!.invocationId);
         } finally {

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { AUTOMATION_EVENT_STORED_DEFINITIONS_READ_HTTP_PATH_V1, AutomationEventStoredDefinitionsReadHttpRequestV1Schema, AutomationEventStoredDefinitionsReadResultV1Schema, AutomationEventTriggerDefinitionStoredPayloadV1Schema } from '@happier-dev/protocol/automations/event';
 import { AutomationEventSourceDefinitionV1Schema } from '@happier-dev/protocol/automations/automationActionSpecsV1';
@@ -128,7 +129,7 @@ async function projectStoredDefinition(params: Readonly<{
       : {}),
   });
   if (opened.kind !== 'available') return null;
-  const payload = AutomationEventTriggerDefinitionStoredPayloadV1Schema.safeParse(
+  const payload = createStoredReadSchema(AutomationEventTriggerDefinitionStoredPayloadV1Schema).safeParse(
     opened.definition,
   );
   if (!payload.success) return null;

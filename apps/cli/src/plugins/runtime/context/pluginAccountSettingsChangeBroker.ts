@@ -98,6 +98,7 @@ type PluginAccountCollectionWatchState = {
     latestInvalidations: Map<string, PluginAccountCollectionWatchExactInvalidation>;
     latestFullInvalidations: Map<string, PluginAccountCollectionWatchFullInvalidation>;
     latestResetCursor: number | null;
+    latestAvailabilityCursors: Map<string, number>;
 };
 
 const collectionWatchStateByAccountScopeKey = new Map<string, PluginAccountCollectionWatchState>();
@@ -109,6 +110,7 @@ function collectionWatchState(accountScopeKey: string): PluginAccountCollectionW
             latestInvalidations: new Map(),
             latestFullInvalidations: new Map(),
             latestResetCursor: null,
+            latestAvailabilityCursors: new Map(),
         };
         collectionWatchStateByAccountScopeKey.set(accountScopeKey, state);
     }
@@ -242,6 +244,7 @@ export function publishPluginAccountCollectionWatchInvalidation(
         state.latestResetCursor = invalidation.changeCursor;
         state.latestInvalidations.clear();
         state.latestFullInvalidations.clear();
+        state.latestAvailabilityCursors.clear();
         for (const registration of collectionListeners) {
             if (registration.subscription.accountScopeKey === invalidation.accountScopeKey) {
                 scheduleCollectionListener(registration, invalidation);
@@ -373,6 +376,28 @@ export function readPluginAccountSettingsWatchInvalidations(
         }));
     }
     return Object.freeze(invalidations);
+}
+
+/** Availability hints invalidate claim refusals, never select an intent locally. */
+export function publishPluginAccountAvailabilityChanges(
+    accountScopeKey: string,
+    changes: readonly ChangeEntry[],
+): void {
+    for (const change of changes) {
+        const parsed = PluginDomainChangeEntrySchema.safeParse(change);
+        if (!parsed.success || parsed.data.hint.pluginDomain !== 'availability') continue;
+        const state = collectionWatchState(accountScopeKey);
+        const { cursor, hint } = parsed.data;
+        if (state.latestResetCursor !== null && cursor <= state.latestResetCursor) continue;
+        const previous = state.latestAvailabilityCursors.get(hint.pluginId);
+        if (previous === undefined || cursor > previous) state.latestAvailabilityCursors.set(hint.pluginId, cursor);
+    }
+}
+
+/** Read the existing AccountChange ordering inputs, including cursor-domain resets. */
+export function readPluginAccountAvailabilityChangeKey(accountScopeKey: string, pluginId: string): string {
+    const state = collectionWatchStateByAccountScopeKey.get(accountScopeKey);
+    return `${state?.latestResetCursor ?? ''}\u0000${state?.latestAvailabilityCursors.get(pluginId) ?? ''}`;
 }
 
 /** Parse only the strict Data Collection AccountChange arm for local wake-ups. */

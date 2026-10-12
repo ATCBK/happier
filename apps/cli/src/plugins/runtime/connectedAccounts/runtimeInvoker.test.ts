@@ -37,6 +37,7 @@ import {
 } from './authenticationAttemptOwner';
 import {
     createConnectedAccountContributionRegistry,
+    ConnectedAccountRuntimeInvocationNotStartedError,
     type ConnectedAccountRuntimeLease,
 } from './contributionRegistry';
 import { createPluginRuntimeOccurrenceId } from '../runtimeSlots';
@@ -97,7 +98,7 @@ const descriptor = PluginConnectedAccountDescriptorContributionV2Schema.parse({
 
 function runtime(
     observeContext: (context: PluginInvocationContext) => void,
-): PluginConnectedAccountRuntime {
+) {
     return {
         authentication: {
             modes: {
@@ -128,7 +129,7 @@ function runtime(
         async materialize() {
             return { kind: 'environment', env: {} };
         },
-    };
+    } satisfies PluginConnectedAccountRuntime;
 }
 
 function createEstablishedInvoker(
@@ -199,6 +200,87 @@ function invokeEstablished(
 }
 
 describe('connected-account runtime invoker', () => {
+    it('invokes a built-in host account without a plugin package and fences established work on disposal', async () => {
+        const ref = { pluginId: 'happier', localId: 'mcp-sign-in' };
+        const registry = createConnectedAccountContributionRegistry({
+            descriptors: [], activateOnDemand: async () => {}, readRegistrations: () => [],
+            readPluginOccurrenceId: () => null, readPluginSourceCustody: () => null,
+            isPluginOccurrenceCurrent: () => false,
+        });
+        const observed: unknown[] = [];
+        registry.registerHostConnectedAccountRuntime({
+            ref,
+            descriptor: { ...descriptor, id: ref.localId },
+            runtime: {
+                ...runtime(() => {}),
+                authentication: { modes: { manual: {
+                    kind: 'manual',
+                    async complete(_input, context) {
+                        observed.push(context);
+                        await context.attemptCredentials.set('token', 'host-secret');
+                        return { status: 'connected', accountId: 'server-a', displayName: 'Host', scopes: [] };
+                    },
+                } } },
+                async status(context) {
+                    observed.push(context);
+                    const token = await context.credentials.get('token');
+                    return {
+                        status: token === 'host-secret' ? 'connected' : 'needs_reauth',
+                        diagnostic: { code: 'host_status', severity: 'warning', message: `Status for ${token}` },
+                    };
+                },
+            },
+        });
+        const invoker = createConnectedAccountHostRuntimeInvoker({
+            resolveRuntime: registry.resolve,
+            resolvePlugin: () => { throw new Error('Host runtime must not resolve a plugin package'); },
+            resolveHostPolicy: () => { throw new Error('Host runtime must not ask for plugin HostAccess'); },
+            createServices: () => { throw new Error('Host runtime must not create plugin services'); },
+            registerRawForRedaction() {}, resolveHostOwnedConfiguredEndpoints: () => [],
+        });
+        const lease = await registry.resolve(ref);
+        if (!lease) throw new Error('Missing host lease');
+        const values = new Map<string, string>();
+        const configuration = {
+            target: { kind: 'service' as const, service: ref, modeId: mode.id },
+            revision: 'configuration-1', values: {}, getSecret: async () => null,
+        };
+        const credentials = {
+            get: async (key: string) => values.get(key) ?? null,
+            set: async (key: string, value: string) => { values.set(key, value); },
+            delete: async (key: string) => { values.delete(key); },
+        };
+        await expect(invoker.invokeAuthentication({
+            admission: { service: ref, descriptor: mode, modeId: mode.id,
+                occurrenceId: lease.occurrenceId, sourceCustody: lease.sourceCustody },
+            operation: { kind: 'submitManual', fields: { token: 'host-secret' } },
+            context: { service: ref, attempt: { kind: 'connect', attemptId: 'host-attempt' }, configuration, attemptCredentials: credentials },
+            isConfigurationCurrent: () => true,
+        })).resolves.toMatchObject({ status: 'connected', accountId: 'server-a' });
+        const established = {
+            target: { account: { service: ref, accountId: 'server-a' }, expectedCredentialRevision: 'credential-1', expectedRuntimeConfigurationRevision: configuration.revision },
+            operation: { kind: 'status' as const },
+            context: { account: { service: ref, accountId: 'server-a' }, configuration, credentials },
+            isConfigurationCurrent: () => true, isCredentialRevisionCurrent: () => true,
+        };
+        await expect(invoker.invokeEstablished(established)).resolves.toMatchObject({
+            status: 'connected', diagnostic: { message: 'Status for [REDACTED]' },
+        });
+        await expect(invoker.invokeAuthentication({
+            admission: { service: ref, descriptor: mode, modeId: mode.id,
+                occurrenceId: lease.occurrenceId, sourceCustody: lease.sourceCustody },
+            operation: { kind: 'cancel' },
+            context: { service: ref, attempt: { kind: 'connect', attemptId: 'host-attempt' }, configuration, attemptCredentials: credentials },
+            isConfigurationCurrent: () => true,
+        })).resolves.toBeUndefined();
+        for (const context of observed) {
+            expect(context).not.toHaveProperty('plugin');
+            expect(context).not.toHaveProperty('services');
+        }
+        registry.dispose();
+        await expect(invoker.invokeEstablished(established)).rejects.toBeInstanceOf(ConnectedAccountRuntimeInvocationNotStartedError);
+    });
+
     it('preserves every quota window returned by a trusted runtime without a host item cap', async () => {
         const quota = {
             observedAtMs: 1_000,
@@ -793,6 +875,7 @@ describe('connected-account runtime invoker', () => {
         const oauthMode = PluginConnectedAccountAuthenticationModeV2Schema.parse({
             id: 'oauth',
             kind: 'oauthAuthorizationCode',
+            callbackUrl: 'https://provider.example/oauth/callback',
             pkce: 'required',
             outcomeReconciliation: 'providerCheck',
         });
@@ -1151,6 +1234,7 @@ describe('connected-account runtime invoker', () => {
             const oauthMode = PluginConnectedAccountAuthenticationModeV2Schema.parse({
                 id: 'oauth',
                 kind: 'oauthAuthorizationCode',
+                callbackUrl: 'https://provider.example/oauth/callback',
                 pkce: 'required',
                 outcomeReconciliation,
             });

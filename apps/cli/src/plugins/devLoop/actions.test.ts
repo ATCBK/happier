@@ -60,6 +60,23 @@ describe('executePluginDevLoopAction', () => {
     daemonControl.development.mockReset();
   });
 
+  it('unregisters the exact development root through the daemon owner and reports failures', async () => {
+    const status = { roots: [], plugins: [] };
+    daemonControl.development.mockResolvedValueOnce({ kind: 'status', status });
+    const signal = new AbortController().signal;
+    await expect(executePluginDevLoopAction({
+      actionId: 'plugins.dev.unregister',
+      input: { projectRoot: '/workspace/plugin' }, context: { signal },
+    })).resolves.toEqual({ ok: true, kind: 'plugins_dev_unregister', status });
+    expect(daemonControl.development).toHaveBeenCalledWith(
+      { kind: 'unregisterExplicit', rootPath: '/workspace/plugin' }, { signal },
+    );
+    daemonControl.development.mockResolvedValueOnce({ kind: 'failed', code: 'root_missing', message: 'Missing root', status });
+    await expect(executePluginDevLoopAction({
+      actionId: 'plugins.dev.unregister', input: { projectRoot: '/workspace/plugin' },
+    })).resolves.toEqual({ ok: false, kind: 'plugins_dev_unregister', diagnostics: [{ code: 'root_missing', message: 'Missing root' }] });
+  });
+
   it('rejects remote archive locators before the installer can fetch network content', async () => {
     const home = await createTempDir('happier-plugin-dev-loop-action-');
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
@@ -541,7 +558,7 @@ describe('executePluginDevLoopAction', () => {
     }
   });
 
-  it('submits one Agent development snapshot through the daemon change owner without starting a watcher or self-approval', async () => {
+  it('registers Agent development with the daemon watcher owner without self-approval', async () => {
     const home = await createTempDir('happier-plugin-dev-loop-action-');
     const sourceRoot = await createTempDir('happier-plugin-dev-loop-source-');
     await materializeDevPlugin(sourceRoot, 'acme.one-shot');
@@ -551,7 +568,7 @@ describe('executePluginDevLoopAction', () => {
 
     try {
       const result = await executePluginDevLoopAction({
-        actionId: 'plugins.dev.submit' as any,
+        actionId: 'plugins.dev.submit',
         input: { projectRoot: sourceRoot },
         happyHomeDir: home,
       });

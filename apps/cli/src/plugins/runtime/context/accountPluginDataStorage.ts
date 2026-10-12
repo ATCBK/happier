@@ -1,6 +1,8 @@
 import axios from 'axios';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol';
+import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui';
 
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityCollectionWritersClaimActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
@@ -11,7 +13,8 @@ import { PLUGIN_COLLECTION_CANDIDATE_PREPARATION_RETIRE_HTTP_PATH_V1, PLUGIN_COL
 import { PLUGIN_COLLECTION_LIMITS_V1 } from '@happier-dev/protocol/plugins/data/collectionLimitsV1';
 import { PluginAccountCollectionContributionV1Schema, resolvePluginCollectionMigrationChainV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
 import { PluginCollectionRowIdV1Schema } from '@happier-dev/protocol/plugins/data/collectionUiQueryWireV1';
-import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { decodePluginCollectionLogicalRowV1, encodePluginCollectionLogicalValueV1, preparePluginCollectionLogicalMutationRequestV1 } from '@happier-dev/protocol/plugins/data/collectionLogicalCodecV1';
 import { normalizeStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -60,6 +63,7 @@ import type { CanonicalPluginManifest } from '@/plugins/manifest/types';
 import type { StablePluginAccountStorageHost } from './storage';
 import {
     subscribePluginAccountCollectionWatchInvalidation,
+    readPluginAccountAvailabilityChangeKey,
     type PluginAccountCollectionWatchInvalidation,
     type PluginAccountCollectionWatchSubscription,
 } from './pluginAccountSettingsChangeBroker';
@@ -119,6 +123,8 @@ export type AccountPluginDataStorageHostDependencies = Readonly<{
 
 type BoundAccountDataLifecycle = Readonly<{
     pluginId: string;
+    /** Present for plugin bindings; migration preparation has its own candidate authority. */
+    occurrenceId?: string;
     signal: AbortSignal;
     isOccurrenceCurrent(): boolean | Promise<boolean>;
     /** Captured from the canonical active-Account publication owner at admission. */
@@ -128,6 +134,7 @@ type BoundAccountDataLifecycle = Readonly<{
 type BoundCollection = Readonly<{
     contract: NormalizedPluginAccountCollectionContractV1;
     validate: ReturnType<typeof compilePluginJsonSchema>;
+    storedValueSchema: ReturnType<typeof createPluginJsonSchemaZodValueAdapter>;
 }>;
 
 /**
@@ -142,6 +149,8 @@ export type CollectionMigrationCandidateHandle = Readonly<{
 }>;
 
 export type AccountPluginDataStorageHost = StablePluginAccountStorageHost & Readonly<{
+    /** Host declaration publication does not grant the plugin Account storage access. */
+    claimReleaseLessDeclaration(binding: Parameters<StablePluginAccountStorageHost['bind']>[0]): Promise<void>;
     /**
      * Retires a durable stage that was already prepared. This deliberately
      * requires only the current Account/request authority: the target module
@@ -297,7 +306,6 @@ function requestConfig(credentials: StoredCredentials, signal: AbortSignal): Rea
             Authorization: `Bearer ${credentials.token}`,
             'Content-Type': 'application/json',
         },
-        timeout: 15_000,
         validateStatus: () => true,
         signal,
     };
@@ -528,10 +536,12 @@ function mergeLogicalRow<TValue extends PluginAccountCollectionValue<PluginAccou
 }>): PluginCollectionRow<TValue> {
     const decoded = decodePluginCollectionLogicalRowV1<TValue>({
         contract: input.collection.contract,
-        isValidLogicalValue: (value): value is TValue => isLogicalCollectionValue<TValue>(
-            input.collection.validate,
-            value,
-        ),
+        parseStoredLogicalValue: value => {
+            const parsed = input.collection.storedValueSchema.safeParse(value);
+            if (!parsed.success || !parsed.data || typeof parsed.data !== 'object' || Array.isArray(parsed.data)
+                || !isLogicalCollectionValue<TValue>(input.collection.validate, parsed.data)) return null;
+            return parsed.data;
+        },
         row: input.row,
         encryptionMode: input.encryptionMode,
         material: input.material,
@@ -568,6 +578,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
     const contractsByPluginAndCollection = new Map<string, {
         contract: NormalizedPluginAccountCollectionContractV1;
         validate?: BoundCollection['validate'];
+        storedValueSchema?: BoundCollection['storedValueSchema'];
         definitions: WeakMap<PluginAccountCollectionDefinition, BoundCollection>;
     }>();
     for (const contract of params.contracts) {
@@ -584,6 +595,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             await fetchAccountEncryptionCurrentness({
                 token: credentials.token,
                 serverBaseUrl: resolveBaseUrl(),
+                timeoutMs: 0,
                 ...(signal ? { signal } : {}),
             })
         ));
@@ -606,8 +618,16 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
     const resolveServerFeaturesSnapshot = params.resolveServerFeaturesSnapshot;
     const subscribeChanges = params.subscribeChanges ?? subscribePluginAccountCollectionWatchInvalidation;
     const resolveReleaseLessDeclaration = params.resolveReleaseLessDeclaration ?? (() => null);
-    /** One settled-or-pending claim per (Account scope, plugin) for this host's declarations. */
-    const writerClaimsByScope = new Map<string, Promise<void>>();
+    type WriterClaim = Readonly<{
+        declarationDigest: string;
+        occurrenceId: string | undefined;
+        accountLifetimeToken: number;
+        availabilityChangeKey: string;
+        result: Promise<PluginError | null>;
+    }>;
+    const writerClaimsByScope = new Map<string, WriterClaim>();
+    // Admitted manifests are immutable. Hash once per projection, not once per Collection operation.
+    const declarationDigests = new WeakMap<CanonicalPluginManifest, string>();
 
     const readKnownCollectionLimits = (): PluginDataCollectionsCapabilities | undefined => {
         try {
@@ -706,7 +726,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             kind?: 'read' | 'mutation';
             credentials: StoredCredentials;
             operationSignal?: AbortSignal;
-            parseError: (value: unknown) => PluginError | null;
+            parseError: (value: unknown, status: number) => PluginError | null;
             unavailableMessage: string;
         }>): Promise<unknown> => {
             const signal = signalFor(input.operationSignal);
@@ -728,7 +748,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                     await assertCurrentAccount(input.credentials, input.operationSignal);
                 }
                 if (response.status >= 200 && response.status < 300) return response.data;
-                throw input.parseError(response.data)
+                throw input.parseError(response.data, response.status)
                     ?? (input.kind === 'mutation' ? dataError(
                         'plugin_collection_outcome_unknown',
                         'Account Collection mutation may have committed without a valid acknowledgement',
@@ -750,8 +770,9 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
          * The release-less Availability claim for a daemon-selected plugin,
          * carrying its admitted manifest. It is best effort: the server's
          * Collection, webhook, and Event admission stay the only authorities,
-         * so a failed claim leaves an operation to report the server's typed
-         * answer and is retried by the next operation.
+         * so transient failures remain retryable by the next operation. A
+         * contract conflict is retained for the exact declaration and live
+         * Account/occurrence inputs, and stays visibly unavailable.
          */
         const ensureWriterClaim = async (
             credentials: StoredCredentials,
@@ -761,22 +782,34 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             const scopeKey = currentAccountScopeKey();
             if (!manifest || scopeKey === null) return;
             const key = `${scopeKey}\u0000${lifecycle.pluginId}`;
+            let declarationDigest = declarationDigests.get(manifest);
+            if (!declarationDigest) {
+                declarationDigest = computePluginUiArtifactSha256DigestV1(new TextEncoder().encode(createCanonicalJsonSigningInput(manifest)));
+                declarationDigests.set(manifest, declarationDigest);
+            }
+            const availabilityChangeKey = readPluginAccountAvailabilityChangeKey(scopeKey, lifecycle.pluginId);
             let claim = writerClaimsByScope.get(key);
-            if (!claim) {
+            if (!claim || claim.declarationDigest !== declarationDigest
+                || claim.occurrenceId !== lifecycle.occurrenceId
+                || claim.accountLifetimeToken !== lifecycle.accountLifetimeToken
+                || claim.availabilityChangeKey !== availabilityChangeKey) {
                 const claimOnce = (prepare?: true) => post({
                     path: COLLECTION_WRITERS_CLAIM_HTTP_PATH,
                     body: { manifest, ...(prepare ? { prepare } : {}) },
                     credentials,
                     ...(operationSignal ? { operationSignal } : {}),
-                    parseError: (value) => {
+                    parseError: (value, status) => {
                         const code = asJsonObject(value as JsonValue)?.error;
+                        if (code === 'plugin_collection_contract_conflict' && status !== 409) return null;
                         return typeof code === 'string'
-                            ? dataError(code, 'Account Collection writer claim was refused')
+                            ? dataError(code, code === 'plugin_collection_contract_conflict'
+                                ? 'Account Collection contract changed without a schemaVersion bump. Update the plugin schemaVersion and migration, then reload the corrected plugin.'
+                                : 'Account Collection writer claim was refused')
                             : null;
                     },
                     unavailableMessage: 'Account Collection writer claim',
                 });
-                claim = (async () => {
+                const result: Promise<PluginError | null> = (async () => {
                     try {
                         await claimOnce();
                         return;
@@ -812,13 +845,20 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                         }));
                         throw error;
                     }
-                })().then(() => undefined, (error: unknown) => {
-                    if (isPluginError(error) && error.code === COLLECTION_WRITERS_CLAIM_SETTLED_REFUSAL) return;
-                    writerClaimsByScope.delete(key);
+                })().then(() => null, (error: unknown) => {
+                    if (isPluginError(error) && error.code === 'plugin_collection_contract_conflict') return error;
+                    if (isPluginError(error) && error.code === COLLECTION_WRITERS_CLAIM_SETTLED_REFUSAL) return null;
+                    // An obsolete request must not evict a newer input's claim.
+                    if (writerClaimsByScope.get(key)?.result === result) writerClaimsByScope.delete(key);
+                    return null;
                 });
+                claim = { declarationDigest, occurrenceId: lifecycle.occurrenceId,
+                    accountLifetimeToken: lifecycle.accountLifetimeToken, availabilityChangeKey, result };
                 writerClaimsByScope.set(key, claim);
             }
-            await claim;
+            const refusal = await claim.result;
+            await assertBoundCurrent(lifecycle, operationSignal);
+            if (refusal) throw refusal;
         };
         const request = async (input: Readonly<{
             path: string;
@@ -850,6 +890,19 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
     };
 
     const host: AccountPluginDataStorageHost = Object.freeze({
+        async claimReleaseLessDeclaration(binding): Promise<void> {
+            if (binding.signal.aborted || currentAccountScopeKey() === null
+                || resolveReleaseLessDeclaration(binding.pluginId) === null) return;
+            const lifecycle: BoundAccountDataLifecycle = {
+                pluginId: binding.pluginId,
+                occurrenceId: binding.occurrenceId,
+                signal: binding.signal,
+                isOccurrenceCurrent: binding.isOccurrenceCurrent,
+                accountLifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+            };
+            const context = createBoundRequestContext(lifecycle);
+            await context.ensureWriterClaim(await context.currentCredentials());
+        },
         async retireCollectionMigrationCandidate(input): Promise<void> {
             let binding: PluginCollectionCandidatePreparationBindingV1;
             try {
@@ -991,8 +1044,10 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                     'Collection candidate contract schema is invalid',
                 );
             }
-            const source: BoundCollection = Object.freeze({ contract: sourceContract, validate: sourceValidate });
-            const target: BoundCollection = Object.freeze({ contract: targetContract, validate: targetValidate });
+            const source: BoundCollection = Object.freeze({ contract: sourceContract, validate: sourceValidate,
+                storedValueSchema: createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(sourceContract.schema)) });
+            const target: BoundCollection = Object.freeze({ contract: targetContract, validate: targetValidate,
+                storedValueSchema: createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(targetContract.schema)) });
             const abort = new AbortController();
             const lifecycle: BoundAccountDataLifecycle = {
                 pluginId: binding.target.pluginId,
@@ -1262,6 +1317,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             }
             const lifecycle: BoundAccountDataLifecycle = {
                 pluginId: binding.pluginId,
+                occurrenceId: binding.occurrenceId,
                 signal: binding.signal,
                 isOccurrenceCurrent: binding.isOccurrenceCurrent,
                 accountLifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
@@ -1649,7 +1705,9 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                         // binding on each pass. Preparing at the binding lifetime
                         // recompiles its large static schema on the event loop.
                         admitted.validate ??= compilePluginJsonSchema(admitted.contract.schema);
-                        collection = Object.freeze({ contract: admitted.contract, validate: admitted.validate });
+                        admitted.storedValueSchema ??= createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(admitted.contract.schema));
+                        collection = Object.freeze({ contract: admitted.contract, validate: admitted.validate,
+                            storedValueSchema: admitted.storedValueSchema });
                         admitted.definitions.set(definition, collection);
                     }
                 } catch {

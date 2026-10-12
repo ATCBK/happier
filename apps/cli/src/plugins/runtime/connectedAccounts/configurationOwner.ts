@@ -12,12 +12,12 @@ import { normalizeConnectedAccountConfigurationV1 } from '@happier-dev/protocol/
 
 import type { ConnectedAccountAttemptConfigurationAdmission } from './authenticationAttemptOwner';
 import { clonePluginPlainData } from '../plainData';
-import type { PluginSourceCustody } from '../sourceAuthority';
+import type { ConnectedAccountSourceCustodyV1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 
 type MaybePromise<T> = T | Promise<T>;
 type RuntimeIdentity = Readonly<{
     occurrenceId: string;
-    sourceCustody: PluginSourceCustody;
+    sourceCustody: ConnectedAccountSourceCustodyV1;
 }>;
 type ConnectedAccountModeConfiguration =
     Extract<
@@ -304,11 +304,19 @@ function descriptorFields(
 }
 
 export type ConnectedAccountConfigurationOwner = Readonly<{
+    /** Validate built-in discovery output against the captured Account configuration basis. */
+    stageAccountConfiguration(input: Readonly<{
+        snapshot: PluginConnectedAccountRuntimeConfiguration;
+        replacement: Readonly<{
+            values: Readonly<Record<string, unknown>>;
+            secretValues?: Readonly<Record<string, string>>;
+        }>;
+    }>): Promise<Omit<ConnectedAccountConfigurationRecord, 'revision'>>;
     inspect(input: Readonly<{
         target: ConnectedAccountConfigurationTarget;
         mode: PluginConnectedAccountAuthenticationModeV2;
         occurrenceId: string;
-        sourceCustody: PluginSourceCustody;
+        sourceCustody: ConnectedAccountSourceCustodyV1;
     }>): Promise<Readonly<{
         status: 'ready' | 'configurationRequired';
         revision: string | null;
@@ -323,7 +331,7 @@ export type ConnectedAccountConfigurationOwner = Readonly<{
         values: Readonly<Record<string, unknown>>;
         secretValues: Readonly<Record<string, string>>;
         occurrenceId: string;
-        sourceCustody: PluginSourceCustody;
+        sourceCustody: ConnectedAccountSourceCustodyV1;
     }>): Promise<
         | Readonly<{
             status: 'committed';
@@ -342,7 +350,7 @@ export type ConnectedAccountConfigurationOwner = Readonly<{
         attemptId?: string;
         expectedConfigurationRevision?: string;
         occurrenceId: string;
-        sourceCustody: PluginSourceCustody;
+        sourceCustody: ConnectedAccountSourceCustodyV1;
     }>): Promise<ConnectedAccountAttemptConfigurationAdmission>;
     replace(input: Readonly<{
         target: ConnectedAccountConfigurationTarget;
@@ -350,7 +358,7 @@ export type ConnectedAccountConfigurationOwner = Readonly<{
         expectedRevision: string | null;
         replacement: ConfigurationReplacement;
         occurrenceId: string;
-        sourceCustody: PluginSourceCustody;
+        sourceCustody: ConnectedAccountSourceCustodyV1;
     }>): Promise<
         | Readonly<{
             status: 'committed';
@@ -374,7 +382,7 @@ export function createConnectedAccountConfigurationOwner(params: Readonly<{
         expectedRevision: string | null;
         replacement: Omit<ConnectedAccountConfigurationRecord, 'revision'>;
         occurrenceId: string;
-        sourceCustody: PluginSourceCustody;
+        sourceCustody: ConnectedAccountSourceCustodyV1;
     }>): Promise<
         | Readonly<{ status: 'committed'; record: ConnectedAccountConfigurationRecord }>
         | Readonly<{ status: 'conflict' | 'unavailable'; code?: string }>
@@ -386,7 +394,7 @@ export function createConnectedAccountConfigurationOwner(params: Readonly<{
         currentSecretRefs: Readonly<Record<string, string>>;
         secretValues: Readonly<Record<string, string>>;
         occurrenceId: string;
-        sourceCustody: PluginSourceCustody;
+        sourceCustody: ConnectedAccountSourceCustodyV1;
     }>): Promise<
         | Readonly<{ status: 'committed'; record: ConnectedAccountConfigurationRecord }>
         | Readonly<{ status: 'conflict' | 'unavailable'; code?: string }>
@@ -410,7 +418,7 @@ export function createConnectedAccountConfigurationOwner(params: Readonly<{
     isRuntimeCurrent(input: Readonly<{
         pluginId: string;
         occurrenceId: string;
-        sourceCustody: PluginSourceCustody;
+        sourceCustody: ConnectedAccountSourceCustodyV1;
     }>): MaybePromise<boolean>;
 }>): ConnectedAccountConfigurationOwner {
     const snapshotMetadata = new WeakMap<PluginConnectedAccountRuntimeConfiguration, SnapshotMetadata>();
@@ -590,11 +598,52 @@ export function createConnectedAccountConfigurationOwner(params: Readonly<{
     }
 
     const owner = {
+        async stageAccountConfiguration(input: Readonly<{
+            snapshot: PluginConnectedAccountRuntimeConfiguration;
+            replacement: Readonly<{
+                values: Readonly<Record<string, unknown>>;
+                secretValues?: Readonly<Record<string, string>>;
+            }>;
+        }>): Promise<Omit<ConnectedAccountConfigurationRecord, 'revision'>> {
+            const metadata = snapshotMetadata.get(input.snapshot);
+            if (!metadata || metadata.runtimeIdentity.sourceCustody.kind !== 'host'
+                || metadata.target.kind === 'service'
+                || modeConfiguration(metadata.mode)?.scope !== 'account') {
+                throw invalid('Built-in discovery requires an admitted Account configuration');
+            }
+            const assertCurrent = async () => {
+                if (!await owner.isCurrent(input.snapshot)) {
+                    throw new ConnectedAccountConfigurationError(
+                        'connected_account_configuration_stale',
+                        'Connected-account configuration changed during discovery',
+                    );
+                }
+            };
+            await assertCurrent();
+            const normalized = await normalize({
+                target: metadata.target, mode: metadata.mode, record: null,
+                replacement: {
+                    values: input.replacement.values,
+                    secretRefs: Object.freeze({}),
+                    secretValues: input.replacement.secretValues ?? Object.freeze({}),
+                },
+            });
+            if (normalized.missingFieldIds.length > 0) {
+                throw invalid(`Required configuration fields are missing: ${normalized.missingFieldIds.join(', ')}`);
+            }
+            await assertCurrent();
+            return Object.freeze({
+                values: normalized.values,
+                secretRefs: normalized.secretRefs,
+                ...(Object.keys(normalized.secretValues).length > 0 ? { secretValues: normalized.secretValues } : {}),
+            });
+        },
+
         async inspect(input: Readonly<{
             target: ConnectedAccountConfigurationTarget;
             mode: PluginConnectedAccountAuthenticationModeV2;
             occurrenceId: string;
-            sourceCustody: PluginSourceCustody;
+            sourceCustody: ConnectedAccountSourceCustodyV1;
         }>) {
             const target = snapshotTarget(input.target);
             assertTargetMatchesMode(target, input.mode);
@@ -645,7 +694,7 @@ export function createConnectedAccountConfigurationOwner(params: Readonly<{
             values: Readonly<Record<string, unknown>>;
             secretValues: Readonly<Record<string, string>>;
             occurrenceId: string;
-            sourceCustody: PluginSourceCustody;
+            sourceCustody: ConnectedAccountSourceCustodyV1;
         }>) {
             const target = snapshotTarget(input.target);
             assertTargetMatchesMode(target, input.mode);
@@ -800,7 +849,7 @@ export function createConnectedAccountConfigurationOwner(params: Readonly<{
             attemptId?: string;
             expectedConfigurationRevision?: string;
             occurrenceId: string;
-            sourceCustody: PluginSourceCustody;
+            sourceCustody: ConnectedAccountSourceCustodyV1;
         }>): Promise<ConnectedAccountAttemptConfigurationAdmission> {
             const runtimeIdentity = Object.freeze({
                 occurrenceId: input.occurrenceId,
@@ -899,7 +948,7 @@ export function createConnectedAccountConfigurationOwner(params: Readonly<{
             expectedRevision: string | null;
             replacement: ConfigurationReplacement;
             occurrenceId: string;
-            sourceCustody: PluginSourceCustody;
+            sourceCustody: ConnectedAccountSourceCustodyV1;
         }>) {
             const target = snapshotTarget(input.target);
             assertTargetMatchesMode(target, input.mode);

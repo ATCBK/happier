@@ -5,7 +5,6 @@ import { PluginPermissionGrantListActionInputV1Schema, PluginPermissionGrantList
 import type { PluginPermissionGrantListActionInputV1, PluginPermissionGrantListActionOutputV1 } from '@happier-dev/protocol';
 
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
-import { configuration } from '@/configuration';
 import { createDefaultPluginInstallationPublisherHeader } from '@/plugins/installations/publisherProof';
 import type { StoredCredentials } from '@/persistence';
 import {
@@ -112,7 +111,6 @@ export function createServerPluginPermissionGrantListReader(input: Readonly<{
               ? { [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: publisherHeader }
               : {}),
           },
-          timeout: configuration.sessionControlHttpTimeoutMs,
           validateStatus: (status) => status >= 200 && status < 300,
           ...(options.signal ? { signal: options.signal } : {}),
         },

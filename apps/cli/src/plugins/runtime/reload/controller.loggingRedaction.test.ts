@@ -30,6 +30,7 @@ vi.mock('../../../configuration', () => ({
 
 function createRuntimeRegistry(): ResolvedExecutablePluginRuntimeRegistry {
     return {
+        claimReleaseLessDeclarations: async () => undefined,
         contributes: {
             agents: Object.freeze([]),
             providers: Object.freeze([]),

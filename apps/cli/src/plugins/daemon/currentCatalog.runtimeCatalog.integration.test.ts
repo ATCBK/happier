@@ -200,6 +200,7 @@ describe('readCurrentDaemonPluginCatalogSnapshot', () => {
               {
                 provenance: 'external',
                 pluginId: 'acme.review.plugin',
+                identity: { pluginId: 'acme.review.plugin', localId: 'review-start' },
                 definition: { id: 'review-start' },
               },
             ]]),
@@ -220,7 +221,7 @@ describe('readCurrentDaemonPluginCatalogSnapshot', () => {
     await expect(readCurrentDaemonPluginCatalogSnapshot({ reloadController })).resolves.toMatchObject({
       tools: [{
         toolId: 'acme.review.plugin/review-tool',
-        actionId: 'acme.review.plugin/review-start',
+        actionId: 'acme.review.plugin/actions/review-start',
         expectedContributorOccurrenceId: 'occurrence-g',
       }],
     });

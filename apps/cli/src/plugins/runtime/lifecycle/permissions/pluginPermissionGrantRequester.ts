@@ -5,7 +5,6 @@ import { PluginPermissionGrantRequestActionInputV1Schema, PluginPermissionGrantR
 import type { PluginPermissionGrantRequestActionInputV1, PluginPermissionGrantRequestActionOutputV1 } from '@happier-dev/protocol';
 
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
-import { configuration } from '@/configuration';
 import { createDefaultPluginInstallationPublisherHeader } from '@/plugins/installations/publisherProof';
 import type { StoredCredentials } from '@/persistence';
 import { resolveServerHttpBaseUrl } from '@/session/transport/http/serverHttpBaseUrl';
@@ -46,7 +45,6 @@ export function createServerPluginPermissionGrantRequester(input: Readonly<{
             Authorization: `Bearer ${input.credentials.token}`,
             [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: publisherHeader,
           },
-          timeout: configuration.sessionControlHttpTimeoutMs,
           validateStatus: (status) => status >= 200 && status < 300,
           ...(options.signal ? { signal: options.signal } : {}),
         },

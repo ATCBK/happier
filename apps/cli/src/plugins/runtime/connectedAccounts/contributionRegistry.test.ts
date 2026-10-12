@@ -10,6 +10,7 @@ import {
     ConnectedAccountRuntimeInvocationNotStartedError,
     createConnectedAccountContributionRegistry as createProductionConnectedAccountContributionRegistry,
     type ConnectedAccountRuntimeLease,
+    type ConnectedAccountPluginRuntimeLease,
 } from './contributionRegistry';
 
 type RegistryParams = Parameters<typeof createProductionConnectedAccountContributionRegistry>[0];
@@ -59,11 +60,12 @@ async function resolveLease(
             Promise<ConnectedAccountRuntimeLease | null>;
     }>,
     ref: Readonly<{ pluginId: string; localId: string }>,
-): Promise<ConnectedAccountRuntimeLease> {
+): Promise<ConnectedAccountPluginRuntimeLease> {
     const lease = await registry.resolve(ref);
     if (!lease) {
         throw new Error(`Expected a resolvable lease for '${ref.pluginId}/${ref.localId}'`);
     }
+    if (lease.owner === 'host') throw new Error('Expected a plugin lease');
     return lease;
 }
 
@@ -94,7 +96,7 @@ function nestedDescriptorMetadata(): Record<string, unknown> {
     return { nested: value };
 }
 
-function runtime(label: string): PluginConnectedAccountRuntime {
+function runtime(label: string) {
     return {
         authentication: {
             modes: {
@@ -110,7 +112,7 @@ function runtime(label: string): PluginConnectedAccountRuntime {
         async revoke() { return { status: 'remoteUnsupported' }; },
         async status() { return { status: 'connected', displayName: label }; },
         async materialize() { return { kind: 'environment', env: {} }; },
-    };
+    } satisfies PluginConnectedAccountRuntime;
 }
 
 function manualMode(
@@ -125,6 +127,32 @@ function manualMode(
 }
 
 describe('connected-account contribution registry', () => {
+    it('admits a built-in host runtime through the same registry and retires its lease on disposal', async () => {
+        const registry = createProductionConnectedAccountContributionRegistry({
+            descriptors: [],
+            activateOnDemand: async () => { throw new Error('Host runtime must not activate a plugin'); },
+            readRegistrations: () => [],
+            readPluginOccurrenceId: () => null,
+            readPluginSourceCustody: () => null,
+            isPluginOccurrenceCurrent: () => false,
+        });
+        const ref = { pluginId: 'happier', localId: 'mcp-sign-in' };
+        registry.registerHostConnectedAccountRuntime({
+            ref,
+            descriptor: descriptor('happier', ref.localId).definition,
+            runtime: runtime('host'),
+        });
+        const lease = await registry.resolve(ref);
+        if (!lease) throw new Error('Expected a host lease');
+        expect(registry.describe(ref)?.ref).toEqual(ref);
+        expect(lease.sourceCustody).toEqual({ kind: 'host' });
+        expect(lease.isCurrent()).toBe(true);
+        await expect(lease.runtime.status({} as never)).resolves.toMatchObject({ displayName: 'host' });
+        registry.dispose();
+        expect(lease.isCurrent()).toBe(false);
+        await expect(registry.resolve(ref)).rejects.toBeInstanceOf(ConnectedAccountRuntimeInvocationNotStartedError);
+    });
+
     it('uses committed immutable artifact identity instead of the unchanged manifest digest', async () => {
         const contribution = descriptor('acme.alpha');
         const registration = {

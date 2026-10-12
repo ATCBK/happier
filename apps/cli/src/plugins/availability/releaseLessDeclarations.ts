@@ -4,7 +4,6 @@ import type { CanonicalPluginManifest } from '@/plugins/manifest/types';
 import type { PluginSourceCustody } from '@/plugins/runtime/sourceAuthority';
 import type { PluginUiArtifactsManifestV2 } from '@happier-dev/protocol/plugins/ui';
 import { projectVerifiedPluginUiReleaseSlotsV2 } from './releaseFacts';
-import { projectPluginUiDeclarationEntries } from '@/plugins/projection/registry/ui/projection';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import type { PluginRegistryAvailabilityInventory } from '@/plugins/store/registry/currentState';
 
@@ -22,17 +21,7 @@ export function projectPluginInstalledAvailabilityInventory(input: Readonly<{
     }
     const recorded = new Set(input.inventory.materializations.map(materialization => materialization.pluginId));
     const runtime = input.runtimeMaterializations.filter(materialization => !recorded.has(materialization.pluginId));
-    const declarations = new Map((input.registry.pluginDeclarations ?? []).map(source => [source.pluginId, source]));
-    const uiEntries = projectPluginUiDeclarationEntries(input.registry);
-    const materializations = [...input.inventory.materializations, ...runtime].map(materialization => {
-        const declaration = declarations.get(materialization.pluginId)?.manifest;
-        const declaredUiEntries = Object.freeze(Object.fromEntries(Object.entries(uiEntries).filter(([, entry]) => entry.pluginId === materialization.pluginId)));
-        return Object.freeze({
-            ...materialization,
-            ...(declaration ? { declaredManifest: declaration } : {}),
-            ...(declaration || materialization.declaredManifest || Object.keys(declaredUiEntries).length > 0 ? { declaredUiEntries } : {}),
-        });
-    });
+    const materializations = [...input.inventory.materializations, ...runtime];
     return Object.freeze({
         ...input.inventory,
         materializations: Object.freeze(materializations.sort((left, right) => left.materializationId.localeCompare(right.materializationId))),
@@ -62,12 +51,14 @@ export type ReleaseLessPluginDeclaration = Readonly<{
 
 /**
  * Only the Account-scoped contributions the server gates on a declaration
- * make a plugin claim: Collections, webhooks, and Events.
+ * make a plugin claim: Collections, webhooks, Events, and Machine provisioners.
+ * Preset and acquisition admission resolve provisioners through that declaration.
  */
 function declaresAccountScopedContributions(manifest: CanonicalPluginManifest): boolean {
     return manifest.contributes.accountCollections.length > 0
         || manifest.contributes.webhooks.length > 0
-        || manifest.contributes.events.length > 0;
+        || manifest.contributes.events.length > 0
+        || manifest.contributes.machineProvisioners.length > 0;
 }
 
 /** Stable per machine and plugin, so a CLI update keeps its webhook targets. */

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { PluginSettingsContributionV2Schema, PluginDragSourceContributionV1Schema, PluginDropTargetContributionV1Schema } from '@happier-dev/protocol';
+import { PluginSettingsContributionV2Schema, PluginDragSourceContributionV1Schema, PluginDropTargetContributionV1Schema, PluginDeclarativeProjectedModelV1Schema } from '@happier-dev/protocol';
 
 import type { ResolvedContributionRegistry, ResolvedSettingsContribution } from '../types';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 
 import { resolveDeclarativeProjectionModels } from './declarativeModels';
 import { listDeclarativeNodesInPreorder } from '@/plugins/runtime/invocation/services/declarativeModel.testkit';
+import { createResolvedContributionRegistry } from '../createResolvedContributionRegistry';
+import { resolveBuiltInContributions } from '../resolveBuiltInContributions';
 
 function registry(): ResolvedContributionRegistry {
     return {
@@ -82,6 +84,26 @@ function registry(): ResolvedContributionRegistry {
 type ActionRuntime = NonNullable<ResolvedExecutablePluginRuntimeRegistry['targetActionInvocations']>;
 
 describe('declarative projection models', () => {
+    it('builds every bundled plugin declarative renderer with its actual Settings inventory', () => {
+        const bundled = createResolvedContributionRegistry(resolveBuiltInContributions());
+        const unavailable: Array<{ pluginId: string; rendererId: string; error: unknown }> = [];
+        const models = resolveDeclarativeProjectionModels({
+            registry: bundled,
+            readPluginOccurrenceId: (pluginId) => `test:${pluginId}`,
+            onRendererModelUnavailable: (failure) => unavailable.push(failure),
+        });
+        expect(unavailable.map(({ pluginId, rendererId, error }) => ({
+            pluginId, rendererId, reason: error instanceof Error ? error.message : String(error),
+        }))).toEqual([]);
+        const renderers = bundled.uiRenderersV2?.filter(({ definition }) => definition.kind === 'declarative') ?? [];
+        expect(renderers.length).toBeGreaterThan(0);
+        for (const renderer of renderers) {
+            const model = models[`${renderer.pluginId}\0${renderer.definition.id}`];
+            expect(model).toBeDefined();
+            expect(PluginDeclarativeProjectedModelV1Schema.safeParse(model).success).toBe(true);
+        }
+    });
+
     it('projects installed manifest roots without inventing a runtime occurrence or enabling effects', () => {
         const declarations = registry();
         const models = resolveDeclarativeProjectionModels({

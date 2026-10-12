@@ -105,6 +105,7 @@ vi.mock('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry', () => ({
     return ownerMocks.resolveRuntimeRegistryOverride ?? Object.freeze({
       contributes: Object.freeze({ generationId: 'candidate-generation' }),
       stableEventsBroker: ownerMocks.stableEventsBroker,
+      claimReleaseLessDeclarations: async () => undefined,
     });
   }),
 }));
@@ -201,6 +202,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
     const reloadController: PluginReloadController = {
       adoptPreparedRuntimeRegistry: vi.fn(),
       acquireRuntimeRegistry: vi.fn(),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => true),
       invalidateRuntimeProjection: vi.fn(),
@@ -298,6 +300,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => true),
       invalidateRuntimeProjection: vi.fn(),
@@ -372,6 +375,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => true),
       invalidateRuntimeProjection: vi.fn(),
@@ -431,6 +435,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => true),
       invalidateRuntimeProjection: vi.fn(),
@@ -474,6 +479,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => true),
       invalidateRuntimeProjection: vi.fn(),
@@ -530,6 +536,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => true),
       invalidateRuntimeProjection: vi.fn(),
@@ -586,6 +593,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => true),
       invalidateRuntimeProjection: vi.fn(),
@@ -637,6 +645,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => true),
       invalidateRuntimeProjection: vi.fn(),
@@ -674,6 +683,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
     });
     const dispose = vi.fn(async () => undefined);
     ownerMocks.resolveRuntimeRegistryOverride = Object.freeze({
+      claimReleaseLessDeclarations: async () => undefined,
       contributes: Object.freeze({
         activationTargets: Object.freeze([
           Object.freeze({
@@ -727,6 +737,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => true),
       invalidateRuntimeProjection: vi.fn(),
@@ -790,6 +801,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => true),
       invalidateRuntimeProjection: vi.fn(),
@@ -865,6 +877,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
       return Object.freeze({});
     });
     ownerMocks.resolveRuntimeRegistryOverride = Object.freeze({
+      claimReleaseLessDeclarations: async () => undefined,
       contributes: Object.freeze({
         activationTargets: Object.freeze([
           createReadinessActivationTarget('com.acme.bundled-indexer', 'first_party', [{ id: 'index' }]),
@@ -934,6 +947,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
       return Object.freeze({});
     });
     ownerMocks.resolveRuntimeRegistryOverride = Object.freeze({
+      claimReleaseLessDeclarations: async () => undefined,
       contributes: Object.freeze({
         activationTargets: Object.freeze([
           createReadinessActivationTarget('com.acme.broken-activation', 'external', []),
@@ -1024,6 +1038,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
       return Object.freeze({});
     });
     ownerMocks.resolveRuntimeRegistryOverride = Object.freeze({
+      claimReleaseLessDeclarations: async () => undefined,
       contributes: Object.freeze({
         activationTargets: Object.freeze([
           createReadinessActivationTarget('com.acme.bundled-startup', 'first_party', []),
@@ -1088,6 +1103,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
     const readinessError = new Error('activation targets are unavailable');
     const dispose = vi.fn(async () => undefined);
     ownerMocks.resolveRuntimeRegistryOverride = Object.freeze({
+      claimReleaseLessDeclarations: async () => undefined,
       contributes: Object.freeze({
         get activationTargets(): never {
           throw readinessError;
@@ -1136,6 +1152,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
       activatedPluginIds: new Set(['acme.previous']),
     }) as unknown as ResolvedExecutablePluginRuntimeRegistry;
     ownerMocks.resolveRuntimeRegistryOverride = Object.freeze({
+      claimReleaseLessDeclarations: async () => undefined,
       contributes: Object.freeze({ generationId: 'candidate-generation' }),
       activatedPluginIds: candidateActivationIds,
       stableEventsBroker: ownerMocks.stableEventsBroker,
@@ -1161,6 +1178,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
         throw new Error('unexpected prepared-registry adoption');
       }),
       acquireRuntimeRegistry,
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => false),
       invalidateRuntimeProjection: vi.fn(),
@@ -1199,6 +1217,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
   it('reports exact persisted inventories only after registry application without owning machine or server facts', async () => {
     const { createResolvedContributionRegistry } = await vi.importActual<typeof import('@/plugins/projection/registry/createResolvedContributionRegistry')>('@/plugins/projection/registry/createResolvedContributionRegistry');
     ownerMocks.resolveRuntimeRegistryOverride = Object.freeze({
+      claimReleaseLessDeclarations: async () => undefined,
       contributes: createResolvedContributionRegistry({}), stableEventsBroker: ownerMocks.stableEventsBroker,
     });
     let servingRegistry: ResolvedExecutablePluginRuntimeRegistry | null = null;
@@ -1230,6 +1249,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => servingRevision,
       tryAcquireRuntimeRegistry: () => servingRegistry ? Object.freeze({
         registry: servingRegistry, source: 'active' as const, durableRevision: servingRevision, release: async () => undefined,
       }) : null,
@@ -1273,6 +1293,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
   it('retries the full current Availability snapshot after reconnect without a plugin mutation', async () => {
     const { createResolvedContributionRegistry } = await vi.importActual<typeof import('@/plugins/projection/registry/createResolvedContributionRegistry')>('@/plugins/projection/registry/createResolvedContributionRegistry');
     ownerMocks.resolveRuntimeRegistryOverride = Object.freeze({
+      claimReleaseLessDeclarations: async () => undefined,
       contributes: createResolvedContributionRegistry({}), stableEventsBroker: ownerMocks.stableEventsBroker,
     });
     let servingRegistry: ResolvedExecutablePluginRuntimeRegistry | null = null;
@@ -1313,6 +1334,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => currentInventory.revision,
       tryAcquireRuntimeRegistry: () => servingRegistry ? Object.freeze({
         registry: servingRegistry, source: 'active' as const, durableRevision: currentInventory.revision, release: async () => undefined,
       }) : null,
@@ -1396,6 +1418,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
       reloadController: {
         adoptPreparedRuntimeRegistry: vi.fn(),
         acquireRuntimeRegistry: vi.fn(),
+        readCurrentDurableRevision: () => -1,
         tryAcquireRuntimeRegistry: vi.fn(() => null),
         isRuntimeRegistryCurrent: vi.fn(() => false),
         invalidateRuntimeProjection: vi.fn(),
@@ -1496,6 +1519,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
       reloadController: {
         adoptPreparedRuntimeRegistry: vi.fn(),
         acquireRuntimeRegistry: vi.fn(),
+        readCurrentDurableRevision: () => -1,
         tryAcquireRuntimeRegistry: vi.fn(() => null),
         isRuntimeRegistryCurrent: vi.fn(() => false),
         invalidateRuntimeProjection: vi.fn(),
@@ -1541,6 +1565,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => false),
       invalidateRuntimeProjection: vi.fn(),
@@ -1607,6 +1632,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => false),
       invalidateRuntimeProjection: vi.fn(),
@@ -1655,6 +1681,7 @@ describe('createDaemonPluginRuntimeOwner publication join', () => {
           release: ownerMocks.releaseInitialLease,
         });
       }),
+      readCurrentDurableRevision: () => -1,
       tryAcquireRuntimeRegistry: vi.fn(() => null),
       isRuntimeRegistryCurrent: vi.fn(() => false),
       invalidateRuntimeProjection: vi.fn(),

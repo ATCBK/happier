@@ -1,4 +1,5 @@
 import type { ManagedExecutableRef } from '@happier-dev/protocol';
+import { derivePluginDaemonContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
 import { resolveProjectNativeAdapter, type ProjectNativeAdapterResolutionV1 } from './lifecycle/contributions/targetProjectNativeAdapters';
 import type { ProjectNativeAdapterRoleV1 } from '@happier-dev/protocol/plugins/contributions/projectNativeAdapters';
 import type { ResolvedPluginExecutable } from './invocation/services/exec';
@@ -42,6 +43,7 @@ import {
     assembleConnectedAccountRuntime,
     projectConnectedAccountPurposeBindingOwner,
 } from './composition/connectedAccountAssembly';
+import { createMcpSignInConnectedAccountRegistration } from '@/mcp/oauth/mcpSignInRuntime';
 import { assembleAutomationRuntime } from './composition/automationAssembly';
 import { attestRetainedManagedProvider } from './composition/retainedProviderAssembly';
 import type { PreparedPluginDevelopmentActivationGraph } from '@/plugins/authoring/sourceModule';
@@ -146,6 +148,7 @@ import {
     resolveCurrentSessionUiBinding,
 } from '@/session/presentation/currentSessionUiBindings';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
+import { materializePluginSessionAttachment } from '@/session/attachments/materializePluginSessionAttachment';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { createPluginSessionsInventory } from '@/session/services/pluginSessionsInventory';
@@ -567,7 +570,9 @@ export type ManagedProviderAdoptedPublicOutcome = Readonly<{
 export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
     /** Host-private Project supervision/control; the SDK remains plugin-scoped. */
     projectManagedServices: Pick<ReturnType<typeof createManagedServicesOwner>,
-        'superviseProject' | 'stopForAccessLoss' | 'resolveProjectService' | 'listProjectServices' | 'activity'>;
+        'superviseProject' | 'stopForAccessLoss' | 'resolveProjectService' | 'listProjectServices' | 'activity' | 'readProcessRoots' | 'readResourceTargets'>;
+    /** Reads the retained daemon custody owner without activating a contribution. */
+    readSharedProviderGatewayRuntime?: ReturnType<typeof createManagedServicesOwner>['readSharedProviderGatewayRuntime'];
     /** Transfers the same generic Project/shared Provider custody at publication. */
     retainProjectManagedServicesOwner?(owner?: ReturnType<typeof createManagedServicesOwner>,
         isPhysicalSourceCurrent?: (pluginId: string, occurrenceId: string, sourceCustody: PluginSourceCustody) => boolean):
@@ -620,6 +625,8 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
     readReleaseLessMaterializations?(): readonly NonNullable<
         ReleaseLessPluginDeclaration['runtimeMaterialization']
     >[];
+    /** Claims admitted Account declarations through the incumbent Data host, without native activation. */
+    claimReleaseLessDeclarations(): Promise<void>;
     /**
      * The same runtime owner resolves the exact live target contribution that
      * asserted a mediated permission decision.
@@ -941,6 +948,7 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
             binding: AgentSessionRunnerBindingV1;
             sessionId: string;
             correlationId: string;
+            processOwner?: import('@/processes/ownerTag').ProcessOwnerRef;
             signal: AbortSignal;
             readActiveTurnAdmissionWitness?():
                 AgentInvocationTurnAdmissionWitness | null;
@@ -1725,6 +1733,7 @@ export type PluginRuntimeMachineAdmissionTransport = CliActionMachineAdmissionTr
 
 export async function resolveExecutablePluginRuntimeRegistry(
     params?: Readonly<{
+        readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
         happyHomeDir?: string;
         contributes?: ResolvedContributionRegistry;
         generation?: number;
@@ -2132,7 +2141,20 @@ export async function resolveExecutablePluginRuntimeRegistry(
             ]),
         ),
         happyHomeDir: params?.happyHomeDir,
-        resolveActivationSource: resolveCommittedActivationSource,
+        resolveActivationSource(target) {
+            const source = resolveCommittedActivationSource(target);
+            // Admission must establish custody before activate() can publish
+            // callable Actions. Consumer refresh retains its invariant check;
+            // an unavailable source is isolated by the activation owner instead.
+            if (source
+                && !source.sourceAuthority
+                && !admittedPluginSourceCustodiesByPluginId.has(target.pluginId)
+                && derivePluginDaemonContributionRegistrationRights(target.manifest.contributes)
+                    .some((right) => right.family === 'actions')) {
+                throw new Error(`Plugin '${target.pluginId}' lacks admitted source custody for daemon Actions`);
+            }
+            return source;
+        },
         // Route terminal activation failures through this registry's fence
         // before the host callback, so
         // no reader keeps seeing a fenced plugin's applied generation, stale
@@ -3877,6 +3899,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
         },
     });
     const daemonManagedServiceProcessSupervisorHost = createManagedServiceProcessSupervisorHost({
+        readSpawnFailureLimits: params?.readSpawnFailureLimits,
         custodyOwner: 'daemon',
     });
     const daemonManagedServicesHostBindings = {
@@ -4256,6 +4279,15 @@ export async function resolveExecutablePluginRuntimeRegistry(
                     const occurrenceId = seed.occurrenceId;
                     const sourceCustody = seed.sourceCustody;
                     return createPluginSessionsInventory({
+                        materializeAttachment: async (input) => {
+                            const rpc = params?.resolveComposerMediaStageTransferRpcHandler?.();
+                            if (!rpc) throw new PluginError({
+                                code: 'plugin_session_attachment_unavailable',
+                                message: 'The local Session attachment transfer owner is unavailable',
+                                retryable: true,
+                            });
+                            return await materializePluginSessionAttachment({ ...input, rpc });
+                        },
                         executeMessageAction: async ({ sessionId, request, signal }) => (
                             await executePluginSessionMessageAction({
                                 execute: async (actionId, input, context) => (
@@ -4536,6 +4568,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
         http: stableHttpHost,
         ...(resourcesOwner ? { resources: resourcesOwner } : {}),
         exec: {
+            readSpawnFailureLimits: params?.readSpawnFailureLimits,
             agentCli: agentCliService,
             systemToolsForPlugin(pluginId) {
                 return systemToolServicesByPluginId.get(pluginId) ?? emptySystemToolService;
@@ -6580,6 +6613,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
     }
 
     const connectedAccountAssembly = assembleConnectedAccountRuntime({
+        hostRuntimes: [createMcpSignInConnectedAccountRegistration()],
         readPluginOccurrenceId: readCurrentPluginOccurrenceId,
         readPluginSourceCustody: readCurrentPluginSourceCustody,
         isPluginOccurrenceCurrent: isCurrentPluginOccurrence,
@@ -6881,6 +6915,9 @@ export async function resolveExecutablePluginRuntimeRegistry(
         get projectManagedServices() {
             return projectManagedServicesOwner;
         },
+        readSharedProviderGatewayRuntime(input) {
+            return projectManagedServicesOwner.readSharedProviderGatewayRuntime(input);
+        },
         retainProjectManagedServicesOwner(owner, isPhysicalSourceCurrent) {
             if (owner && owner !== projectManagedServicesOwner) {
                 if (daemonManagedServicesOwner.listProjectServices().length > 0) {
@@ -6919,6 +6956,23 @@ export async function resolveExecutablePluginRuntimeRegistry(
                     ? [declaration.runtimeMaterialization]
                     : []
             ))),
+        async claimReleaseLessDeclarations(): Promise<void> {
+            if (scopedActionRuntime) return;
+            const failures: unknown[] = [];
+            for (const [pluginId, declaration] of releaseLessDeclarationsByPluginId) {
+                if (!declaration.claimsAccountIntent) continue;
+                const occurrenceId = readCurrentPluginOccurrenceId(pluginId);
+                if (!occurrenceId) continue;
+                const lifecycle = resolveRuntimeConsumerLifecycle(pluginId);
+                try {
+                    await accountStorageHost.claimReleaseLessDeclaration({ pluginId, occurrenceId,
+                        signal: lifecycle.retirementSignal,
+                        isOccurrenceCurrent: () => lifecycle.isCurrent()
+                            && readCurrentPluginOccurrenceId(pluginId) === occurrenceId });
+                } catch (error) { failures.push(error); }
+            }
+            if (failures.length > 0) throw new AggregateError(failures, 'Plugin Account declaration publication failed');
+        },
         ...(params?.resolveCurrentMachineExecutionOriginContext
             ? {
                 resolveCurrentPluginExecutionOrigin,
@@ -7497,6 +7551,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                         currentTarget.pluginId,
                     ),
                 correlationId: agentParams.correlationId,
+                ...(agentParams.processOwner ? { processOwner: agentParams.processOwner } : {}),
                 surface: 'agent' as const,
                 session: Object.freeze({
                     id: agentParams.sessionId,

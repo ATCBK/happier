@@ -1,5 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { builtinModules, createRequire } from 'node:module';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { builtinModules } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { definePlugin } from '@happier-dev/plugin-sdk';
 import { defineContributionProtocol } from '@happier-dev/plugin-sdk/contributions';
 import { defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
+import type { PluginUiArtifactsManifestV2 } from '@happier-dev/protocol/plugins/ui';
 import { createBundledPluginPublicationFailure } from '../../../../../../../scripts/workspaces/bundledPluginPublicationFailure.mjs';
 import { projectBundledPluginCatalogEntries } from '@/plugins/projection/catalog/installed';
 
@@ -18,21 +19,13 @@ import {
     loadBundledPluginLocators,
     readCurrentBundledPluginPublicationFailures,
     projectManagedRuntimePublicationManifest,
+    readBundledPluginManifest,
     type BundledPluginLocator,
 } from './locators';
 
-const requireFromTest = createRequire(import.meta.url);
-
-function readSerializedBundledPluginManifest(packageName: string): unknown {
-    const manifestEntrypoint = requireFromTest.resolve(`${packageName}/manifest`);
-    const packageRoot = dirname(dirname(manifestEntrypoint));
-    return JSON.parse(readFileSync(
-        join(packageRoot, '.happier-plugin', 'plugin.json'),
-        'utf8',
-    )) as unknown;
-}
-
-function locator(overrides: Partial<BundledPluginLocator> = {}): BundledPluginLocator {
+function locator(
+    overrides: Partial<BundledPluginLocator & Readonly<{ manifest: unknown }>> = {},
+): BundledPluginLocator & Readonly<{ manifest: unknown }> {
     return {
         pluginId: 'happier.provider.fixture',
         manifest: {
@@ -57,6 +50,28 @@ function locator(overrides: Partial<BundledPluginLocator> = {}): BundledPluginLo
 }
 
 describe('bundled plugin locators', () => {
+    it('admits a requested file declaration and isolates an invalid optional manifest', () => {
+        const root = mkdtempSync(join(tmpdir(), 'happier-lazy-bundled-declaration-'));
+        const execPathDescriptor = Object.getOwnPropertyDescriptor(process, 'execPath')!;
+        try {
+            writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@happier-dev/cli' }));
+            writeFileSync(join(root, 'manifest.json'), JSON.stringify(readBundledPluginManifest(locator())));
+            // Native executable identity selects the physical runtime asset root.
+            Object.defineProperty(process, 'execPath', { ...execPathDescriptor, value: join(root, 'happier') });
+            const { manifest: _inline, ...metadata } = locator();
+            const fileLocator = { ...metadata, manifestRelativePath: 'manifest.json' };
+            expect(loadBundledPluginLocators([fileLocator])[0]?.manifest.id).toBe(metadata.pluginId);
+            writeFileSync(join(root, 'manifest.json'), '{invalid');
+            const failed = loadBundledPluginLocatorResult([fileLocator]);
+            expect(failed.loadedPlugins).toEqual([]);
+            expect(failed.pluginFailures).toEqual([expect.objectContaining({
+                pluginId: metadata.pluginId, diagnostic: expect.objectContaining({ code: 'plugin_manifest_invalid' }),
+            })]);
+        } finally {
+            Object.defineProperty(process, 'execPath', execPathDescriptor);
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
     it('admits frozen source declarations from the explicitly launched source bundle without native publication files', async () => {
         const root = mkdtempSync(join(tmpdir(), 'happier-frozen-source-catalog-'));
         const projectRoot = join(root, 'apps', 'cli');
@@ -65,6 +80,7 @@ describe('bundled plugin locators', () => {
         try {
             mkdirSync(join(projectRoot, 'src/chunks'), { recursive: true });
             writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/cli', type: 'module' }));
+            cpSync(join(repoRoot, 'apps/cli/assets/bundled-plugin-manifests'), join(projectRoot, 'assets/bundled-plugin-manifests'), { recursive: true });
             symlinkSync(join(repoRoot, 'node_modules'), join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
             await build({
                 configFile: join(repoRoot, 'apps/cli/vitest.config.ts'), logLevel: 'silent',
@@ -78,10 +94,31 @@ describe('bundled plugin locators', () => {
             process.env.HAPPIER_STACK_CLI_ROOT_DIR = projectRoot;
             const compiled = await import(/* @vite-ignore */ pathToFileURL(join(projectRoot, 'src/chunks/locators.mjs')).href) as {
                 loadCurrentBundledPluginLocatorResult: () => ReturnType<typeof loadBundledPluginLocatorResult>;
+                loadBundledPluginLocators: typeof loadBundledPluginLocators;
             };
             const loaded = compiled.loadCurrentBundledPluginLocatorResult();
             expect(loaded.pluginFailures).toEqual([]);
             expect(loaded.loadedPlugins.some((plugin) => plugin.pluginId === 'happier.agent.codex')).toBe(true);
+            const retainedPluginRoot = join(root, 'packages/plugins/fixture');
+            mkdirSync(join(retainedPluginRoot, 'dist/happier-plugin-ui'), { recursive: true });
+            writeFileSync(join(retainedPluginRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/plugins-fixture' }));
+            const graph = { version: 2, entries: [{ artifactId: 'panel', tier: 'reactNative',
+                entry: 'react-native/panel/entry.cjs.bundle', files: [{ relativePath: 'react-native/panel/entry.cjs.bundle',
+                    digest: `sha256:${'1'.repeat(64)}`, byteSize: 12 }], digest: `sha256:${'2'.repeat(64)}`,
+                builtWith: { bundler: 'esbuild', version: '0.25.0' }, executable: { exports: ['renderSurface'] }, hostUiApiRange: '^1.0.0' }] } satisfies PluginUiArtifactsManifestV2;
+            writeFileSync(join(retainedPluginRoot, 'dist/happier-plugin-ui/ui-artifacts.json'), JSON.stringify(graph));
+            const [retained] = compiled.loadBundledPluginLocators([locator()]);
+            expect(retained?.pluginRootPath).toBe(retainedPluginRoot);
+            expect(retained?.generatedUiArtifactsManifest).toEqual(graph);
+
+            // Missing emitted assets cannot silently borrow a mutable installed
+            // package's graph. Both locations are genuine filesystem boundaries.
+            const linkedPluginRoot = join(projectRoot, 'node_modules/@happier-dev/plugins-fixture');
+            mkdirSync(join(linkedPluginRoot, 'dist/happier-plugin-ui'), { recursive: true });
+            writeFileSync(join(linkedPluginRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/plugins-fixture' }));
+            writeFileSync(join(linkedPluginRoot, 'dist/happier-plugin-ui/ui-artifacts.json'), JSON.stringify(graph));
+            rmSync(retainedPluginRoot, { recursive: true, force: true });
+            expect(compiled.loadBundledPluginLocators([locator()])[0]?.generatedUiArtifactsManifest).toBeUndefined();
         } finally {
             if (previousRoot === undefined) delete process.env.HAPPIER_STACK_CLI_ROOT_DIR;
             else process.env.HAPPIER_STACK_CLI_ROOT_DIR = previousRoot;
@@ -95,6 +132,7 @@ describe('bundled plugin locators', () => {
         try {
             mkdirSync(join(projectRoot, 'src'), { recursive: true });
             writeFileSync(join(projectRoot, 'package.json'), '{}');
+            cpSync(join(repoRoot, 'apps/cli/assets/bundled-plugin-manifests'), join(projectRoot, 'assets/bundled-plugin-manifests'), { recursive: true });
             // Installed third-party packages are the Node execution boundary;
             // compile and execute the real current owner and its internal graph.
             symlinkSync(join(repoRoot, 'node_modules'), join(root, 'node_modules'),
@@ -137,12 +175,14 @@ describe('bundled plugin locators', () => {
         vi.resetModules();
         const { loadCurrentBundledPluginLocatorResult } = await import('./locators');
         const root = mkdtempSync(join(tmpdir(), 'happier-cold-source-catalog-'));
+        const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../../..');
         const execPathDescriptor = Object.getOwnPropertyDescriptor(process, 'execPath')!;
         try {
             // The filesystem/process identity is the boundary. The executing
             // module remains source, and semantic ingestion stays real.
             Object.defineProperty(process, 'execPath', { ...execPathDescriptor, value: join(root, 'happier') });
             writeFileSync(join(root, 'package.json'), '{}');
+            cpSync(join(repoRoot, 'apps/cli/assets/bundled-plugin-manifests'), join(root, 'assets/bundled-plugin-manifests'), { recursive: true });
             const loaded = loadCurrentBundledPluginLocatorResult();
             expect(loaded.loadedPlugins.some((plugin) => plugin.pluginId === 'happier.agent.codex')).toBe(true);
             expect(loaded.loadedPlugins.some((plugin) => plugin.pluginId === 'happier.agent.ohmypi')).toBe(true);
@@ -160,10 +200,12 @@ describe('bundled plugin locators', () => {
         vi.resetModules();
         const { loadCurrentBundledPluginLocatorResult } = await import('./locators');
         const root = mkdtempSync(join(tmpdir(), 'happier-admitted-bundled-catalog-'));
+        const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../../..');
         const execPathDescriptor = Object.getOwnPropertyDescriptor(process, 'execPath')!;
         try {
             Object.defineProperty(process, 'execPath', { ...execPathDescriptor, value: join(root, 'happier') });
             writeFileSync(join(root, 'package.json'), '{}');
+            cpSync(join(repoRoot, 'apps/cli/assets/bundled-plugin-manifests'), join(root, 'assets/bundled-plugin-manifests'), { recursive: true });
             const failurePath = join(root, '.project', 'tmp', 'bundled-plugin-publication', 'failures.json');
             mkdirSync(dirname(failurePath), { recursive: true });
             writeFileSync(failurePath, '[]');
@@ -296,7 +338,7 @@ describe('bundled plugin locators', () => {
 
     it('loads every generated bundled target contribution point as canonical data only', () => {
         const targetLocators = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.filter((candidate) => {
-            const manifest = candidate.manifest as {
+            const manifest = readBundledPluginManifest(candidate) as {
                 contributes?: { pluginContributionPoints?: readonly { id: string }[] };
             };
             return (manifest.contributes?.pluginContributionPoints?.length ?? 0) > 0;
@@ -305,7 +347,7 @@ describe('bundled plugin locators', () => {
         expect(targetLocators.length).toBeGreaterThan(0);
 
         for (const candidate of targetLocators) {
-            const manifest = candidate.manifest as {
+            const manifest = readBundledPluginManifest(candidate) as {
                 contributes: { pluginContributionPoints: readonly { id: string }[] };
             };
             const [loaded] = loadBundledPluginLocators([candidate]);
@@ -367,7 +409,7 @@ describe('bundled plugin locators', () => {
         expect(projected.contributes.providers[0]).not.toHaveProperty('managedRuntime');
         expect(unmatched).toEqual(new Set());
         expect(projectManagedRuntimePublicationManifest(providerLocator, new Set(), new Set()))
-            .toBe(providerLocator.manifest);
+            .toBe(readBundledPluginManifest(providerLocator));
     });
 
     it.each([
@@ -405,7 +447,7 @@ describe('bundled plugin locators', () => {
         );
 
         expect(locator).toBeDefined();
-        expect(locator!.manifest).toMatchObject({ id: pluginId });
+        expect(readBundledPluginManifest(locator!)).toMatchObject({ id: pluginId });
         expect(loadBundledPluginLocators([locator!])).toEqual([
             expect.objectContaining({ pluginId }),
         ]);
@@ -417,27 +459,6 @@ describe('bundled plugin locators', () => {
                 .filter((candidate) => candidate.pluginId.startsWith('happier.scm.hosting.'))
                 .map((candidate) => candidate.pluginId),
         ).toEqual([]);
-    });
-
-    it('projects generated and serialized Claude manifests identically through strict bundled intake', () => {
-        const claudeLocator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(
-            (candidate) => candidate.pluginId === 'happier.agent.claude',
-        );
-
-        expect(claudeLocator).toBeDefined();
-        const [generated] = loadBundledPluginLocators([claudeLocator!]);
-        const [serialized] = loadBundledPluginLocators([{
-            ...claudeLocator!,
-            manifest: readSerializedBundledPluginManifest(claudeLocator!.sourceSpec.locator),
-        }]);
-
-        expect(serialized).toBeDefined();
-        expect(generated).toMatchObject({
-            pluginId: serialized!.pluginId,
-            daemonEntryPath: serialized!.daemonEntryPath,
-            manifest: serialized!.manifest,
-            sourceSpec: serialized!.sourceSpec,
-        });
     });
 
     it('gives every bundled ACP Agent that passes MCP through a tool delivery the host actually builds', () => {
@@ -461,7 +482,7 @@ describe('bundled plugin locators', () => {
         }>;
 
         const agentContributions = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.flatMap((locator) => {
-            const manifest = locator.manifest as Readonly<{
+            const manifest = readBundledPluginManifest(locator) as Readonly<{
                 contributes?: Readonly<{ agents?: readonly BundledAgentContribution[] }>;
             }>;
             return (manifest.contributes?.agents ?? []).map((agent) => ({ locator, agent }));

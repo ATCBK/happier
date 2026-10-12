@@ -19,6 +19,7 @@ import type {
     ResolvedRoleContribution,
     ResolvedWorkflowContribution,
     ResolvedInputTypeContribution,
+    ResolvedAtmospherePictureContribution,
     ResolvedMachineProvisionerContribution,
     ResolvedDragSourceContribution,
     ResolvedDropTargetContribution,
@@ -310,6 +311,7 @@ export function projectLoadedPluginContributes(
     const roleCandidates: ResolvedRoleContribution[] = [];
     const workflowCandidates: ResolvedWorkflowContribution[] = [];
     const inputTypeCandidates: ResolvedInputTypeContribution[] = [];
+    const atmospherePictureCandidates: ResolvedAtmospherePictureContribution[] = [];
     const machineProvisionerCandidates: ResolvedMachineProvisionerContribution[] = [];
     const dragSourceCandidates: ResolvedDragSourceContribution[] = [];
     const dropTargetCandidates: ResolvedDropTargetContribution[] = [];
@@ -884,6 +886,11 @@ export function projectLoadedPluginContributes(
             pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion, identity: contribution.identity!,
             manifestPath: contribution.manifestPath, definition: contribution.definition });
     }
+    for (const contribution of pluginRegistry.atmospherePictures) {
+        atmospherePictureCandidates.push({ provenance: params.provenance, source: { kind: contribution.sourceSpec.kind },
+            pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion, identity: contribution.identity!,
+            manifestPath: contribution.manifestPath, definition: contribution.definition });
+    }
 
     for (const contribution of pluginRegistry.machineProvisioners) {
         machineProvisionerCandidates.push({
@@ -1008,6 +1015,7 @@ export function projectLoadedPluginContributes(
         roles: Object.freeze(roleCandidates),
         workflows: Object.freeze(workflowCandidates),
         inputTypes: Object.freeze(inputTypeCandidates),
+        atmospherePictures: Object.freeze(atmospherePictureCandidates),
         machineProvisioners: Object.freeze(machineProvisionerCandidates),
         dragSources: Object.freeze(dragSourceCandidates),
         dropTargets: Object.freeze(dropTargetCandidates),

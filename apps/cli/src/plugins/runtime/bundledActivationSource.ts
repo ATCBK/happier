@@ -8,6 +8,7 @@ import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPat
 import { defaultCanImportFirstPartyPluginSource } from '@/packagedRuntime/resolvePackagedRuntimeEntrypoint';
 import { projectPathFromModuleUrl } from '@/projectPath';
 import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
+import { readBundledPluginManifest } from '@/plugins/projection/registry/builtIn/locators';
 
 import {
     normalizeBundledWorkspaceNameFromPackageName,
@@ -77,8 +78,7 @@ type BundledPackagedPluginMetadata = Readonly<{
 
 type BundledPackagedPluginLocator = Readonly<{
     pluginId: string;
-    manifest: unknown;
-}>;
+}> & Parameters<typeof readBundledPluginManifest>[0];
 
 function parseContainedPackageNameSegments(packageName: string): readonly string[] {
     const segments = packageName.split('/');
@@ -147,7 +147,7 @@ export function resolvePackagedBundledActivationPaths(params: Readonly<{
         const metadata = metadataByPluginId.get(target.pluginId);
         const locator = locatorByPluginId.get(target.pluginId);
         const manifest = locator
-            ? readCanonicalPluginManifest(locator.manifest)
+            ? readCanonicalPluginManifest(readBundledPluginManifest(locator, runtimeRoot))
             : null;
         const daemonEntrypoint = manifest?.entrypoints?.daemon;
         if (

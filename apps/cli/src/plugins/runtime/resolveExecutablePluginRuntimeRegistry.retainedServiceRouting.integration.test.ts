@@ -354,6 +354,7 @@ function pluginManifest(input: Readonly<{
                 discoverySources: [{
                     id: MCP_DISCOVERY_SOURCE_ID,
                     title: 'Routing discovery',
+                    loadedInHappierSessions: true,
                 }],
             },
             requestInterceptors: input.version === 'G' ? [] : [{

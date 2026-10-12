@@ -235,13 +235,15 @@ export function createManifestAgentCatalogEntry(params: Readonly<{
     const toolDelivery = 'tools' in params.definition.capabilities
         ? params.definition.capabilities.tools?.delivery
         : undefined;
+    const skills = 'skills' in params.definition.capabilities
+        ? params.definition.capabilities.skills
+        : undefined;
 
     return Object.freeze({
         id: params.agentId,
         cliSubcommand: params.agentId,
-        ...('runtime' in params.definition && params.definition.runtime?.kind === 'acp' && params.definition.runtime.definition?.usageLimitRecoveryBackoff
+        ...('runtime' in params.definition && params.definition.runtime?.kind === 'acp' && params.definition.runtime.definition?.usageLimitDiagnostic
             ? { sessionUsageLimitRecoveryBackoffPolicy: {
-                ...params.definition.runtime.definition.usageLimitRecoveryBackoff,
                 providerId: params.agentId, issueProviderFilter: params.agentId,
             } } : {}),
         // Inferred default only. An Agent that declares `catalog.vendorResume`
@@ -253,6 +255,7 @@ export function createManifestAgentCatalogEntry(params: Readonly<{
         ...(toolDelivery
             ? { toolDelivery }
             : {}),
+        ...(skills ? { skills } : {}),
         ...(connectedServiceIds.length > 0 ? { connectedServiceIds } : {}),
         ...(connectedAccountServiceIds.length > 0 ? { connectedAccountServiceIds } : {}),
         ...(cli

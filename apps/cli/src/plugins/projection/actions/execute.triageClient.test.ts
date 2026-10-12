@@ -9,8 +9,11 @@ import { PLUGIN_MANIFEST } from '../../../../../../packages/plugins/triage/src/m
 import { TRIAGE_RUN_CONFIGURED_ACTION_LOCAL_ID_V1, TriageRunConfiguredActionInputV1Schema } from '../../../../../../packages/plugins/triage/src/actions/configuredActionRunProtocol.js';
 
 describe('Triage configured-run client placement', () => {
-  it.each(['agent', 'mcp'] as const)('admits the actual configured-run declaration and delivers the real %s surface only after approval', async (surface) => {
-    const declared = PLUGIN_MANIFEST.contributes.actions.find(action => action.id === TRIAGE_RUN_CONFIGURED_ACTION_LOCAL_ID_V1);
+  // An isolated authored owner exercises the actual Action declaration without
+  // installing a second copy of the already bundled first-party plugin.
+  const fixturePluginId = 'example.triage-relay';
+  it.each(['agent', 'mcp'] as const)('admits the actual configured-run declaration and delivers the real %s surface to the answering client', async (surface) => {
+    const declared = PLUGIN_MANIFEST.contributes.actions?.find(action => action.id === TRIAGE_RUN_CONFIGURED_ACTION_LOCAL_ID_V1);
     if (!declared) throw new Error('Configured-run declaration missing');
     const action = PluginActionContributionV2Schema.parse(declared);
     const input = TriageRunConfiguredActionInputV1Schema.parse({ v: 1, actionId: 'ask', destination: 'single', entries: [{
@@ -20,7 +23,7 @@ describe('Triage configured-run client placement', () => {
     const requests: unknown[] = [];
     const result = { v: 1, status: 'cancelled' } as const;
     const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
-      plugins: [{ manifest: createPluginManifestV2Fixture({ id: PLUGIN_MANIFEST.id, contributes: { actions: [action] } }),
+      plugins: [{ manifest: createPluginManifestV2Fixture({ id: fixturePluginId, contributes: { actions: [action] } }),
         files: { 'daemon.mjs': 'export function activate() {}' } }],
       runtimeOptions: { executeClientAction: createClientActionMachineRpcExecutor(() => ({
         hasConnectedClientRpcHandler: () => true,
@@ -34,21 +37,17 @@ describe('Triage configured-run client placement', () => {
       })) },
     });
     try {
-      let approved = false;
       const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
         invokeContributedAction: createCommittedContributedActionInvoker({
           acquireRuntimeRegistryLease: () => fixture.controller.acquireRuntimeRegistry(),
-          requestCurrentIntent: async ({ fingerprint }) => approved
-            ? { status: 'approved', fingerprint } : { status: 'rejected', code: 'test_approval_rejected' },
         }),
       });
-      const request = { action: { pluginId: PLUGIN_MANIFEST.id, localId: action.id }, input };
-      expect(await executor.execute('action.invoke', request, { surface })).toMatchObject({ ok: false });
-      expect(requests).toEqual([]);
-      approved = true;
+      const request = { action: { pluginId: fixturePluginId, localId: action.id }, input };
+      // Client placement delegates present-user approval to the answering
+      // client's canonical dispatcher; it must not ask independently here.
       expect(await executor.execute('action.invoke', request, { surface })).toEqual({ ok: true, result });
       expect(requests).toEqual([{ v: 1, ...request, surface,
-        expectedContributorOccurrenceId: fixture.registry.readPluginOccurrenceId?.(PLUGIN_MANIFEST.id) }]);
+        expectedContributorOccurrenceId: fixture.registry.readPluginOccurrenceId?.(fixturePluginId) }]);
     } finally { await fixture.dispose(); }
   });
 });

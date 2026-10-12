@@ -10,7 +10,8 @@ import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/action
 import { resolveEffectiveInputFields } from '@happier-dev/protocol/inputs/inputFieldRuntime';
 import { readInputPath } from '@happier-dev/protocol/inputs/inputPredicates';
 import type { InputOption } from '@happier-dev/protocol/inputs';
-import { resolveInputTypeOptions, validateHostInputTypeValue, validateInputTypeValue } from '@happier-dev/protocol/inputs/runtime';
+import { resolveInputTypeOptions, readInputFieldOptionsConstraint, validateInputFieldValue } from '@happier-dev/protocol/inputs/runtime';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { createRegistryInputTypeDeps } from './actions/createCommittedContributedActionDeps';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '../resolveExecutablePluginRuntimeRegistry';
 
@@ -377,20 +378,12 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
                 if (!field.inputType) continue;
                 const value = readInputPath(input.input, field.path);
                 if (value === undefined) continue;
-                const values = field.widget === 'multiselect' && Array.isArray(value) ? value : [value];
-                if ('hostType' in field.inputType) {
-                    for (const selected of values) {
-                        const validation = validateHostInputTypeValue(field.inputType, selected);
-                        if (validation.status !== 'valid') return { status: 'invalid', code: validation.reasonCode, message: 'Input value is invalid' };
-                    }
-                    input.signal.throwIfAborted();
-                    if (!input.isCurrent()) return { status: 'unavailable', code: 'input_type_retired', message: 'Input invocation is retired' };
-                    continue;
-                }
-                const type = await inputTypeDeps.resolveInputType(field.inputType, context);
-                if (!type) return { status: 'unavailable', code: 'input_type_unavailable', message: 'Input type is unavailable' };
+                const selected = StrictJsonValueSchema.safeParse(value);
+                if (!selected.success) return { status: 'invalid', code: 'input_type_value_invalid', message: 'Input value is invalid' };
+                const type = 'hostType' in field.inputType ? undefined : await inputTypeDeps.resolveInputType(field.inputType, context);
+                if (type === null) return { status: 'unavailable', code: 'input_type_unavailable', message: 'Input type is unavailable' };
                 let options: readonly InputOption[] | undefined;
-                if (type.definition.options) {
+                if (type && readInputFieldOptionsConstraint(field, type).kind === 'dynamic') {
                     const resolved = await resolveInputTypeOptions({ deps: inputTypeDeps, ctx: context, identity: field.inputType,
                         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
                         readFailure: result => {
@@ -401,10 +394,8 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
                     if (!resolved.ok) return { status: 'unavailable', code: resolved.errorCode, message: 'Input choices are unavailable' };
                     options = resolved.result;
                 }
-                for (const selected of values) {
-                    const validation = validateInputTypeValue(type, selected, options);
-                    if (validation.status !== 'valid') return { status: 'invalid', code: validation.reasonCode, message: 'Input value is invalid' };
-                }
+                const validation = validateInputFieldValue({ field, value: selected.data, type, options });
+                if (validation.status !== 'valid') return { status: validation.status, code: validation.reasonCode, message: 'Input value is invalid' };
                 input.signal.throwIfAborted();
                 if (!input.isCurrent()) return { status: 'unavailable', code: 'input_type_retired', message: 'Input invocation is retired' };
             }

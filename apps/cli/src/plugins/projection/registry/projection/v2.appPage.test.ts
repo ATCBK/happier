@@ -139,7 +139,7 @@ function expectViewFieldRejected(overrides: Parameters<typeof manifestText>[0]):
 }
 
 describe('EU-5b app-page projection', () => {
-    it('projects the maintained public Inspector Browser and Services declarations into mounted bindings', () => {
+    it('projects the maintained public Inspector Browser declaration without occupying Services', () => {
         const entries = projectUiEntries([
             loadedPlugin(INSPECTOR_PLUGIN_MANIFEST.id, JSON.stringify(INSPECTOR_PLUGIN_MANIFEST), { bundledFirstParty: true }),
         ], 'first_party');
@@ -155,20 +155,8 @@ describe('EU-5b app-page projection', () => {
                 destination: { pluginId: 'happier.inspector', localId: 'inspector-browser-panel' },
             }),
         }));
-        expect(entries['surfacePlacement:happier.inspector:inspector-services-panel']).toEqual(expect.objectContaining({
-            pluginId: 'happier.inspector',
-            descriptorId: 'inspector-services-panel',
-            container: 'servicesPanel',
-            target: { kind: 'services' },
-            binding: expect.objectContaining({
-                container: 'servicesPanel',
-                targetKind: 'services',
-                destination: { pluginId: 'happier.inspector', localId: 'inspector-services-panel' },
-            }),
-        }));
+        expect(entries['surfacePlacement:happier.inspector:inspector-services-panel']).toBeUndefined();
         expect((entries['surfacePlacement:happier.inspector:inspector-browser-panel'] as { availability: { reason: string } }).availability.reason)
-            .not.toBe('placement_unmounted');
-        expect((entries['surfacePlacement:happier.inspector:inspector-services-panel'] as { availability: { reason: string } }).availability.reason)
             .not.toBe('placement_unmounted');
     });
 

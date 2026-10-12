@@ -6,21 +6,29 @@ import { join } from 'node:path';
 import { createRpcCallError, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { createActionExecutor, type ActionExecutorDeps, type ApprovalRequest } from '@happier-dev/protocol';
 import type { Credentials } from '@/persistence';
 import { createApiSessionSocketStub, type ApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { fetchServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 import { writeCommittedLocalPathPluginFixture } from '@/plugins/store/state.testkit';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { configuration } from '@/configuration';
+import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
+import type { JsonValue } from '@happier-dev/plugin-sdk';
 
 const {
   daemonReply,
   readStoredCredentials,
   axiosGet,
+  axiosPost,
   sockets,
 } = vi.hoisted(() => ({
   daemonReply: vi.fn(),
   readStoredCredentials: vi.fn(),
   axiosGet: vi.fn(),
+  axiosPost: vi.fn(),
   sockets: [] as ApiSessionSocketStub[],
 }));
 
@@ -49,7 +57,10 @@ vi.mock('socket.io-client', () => ({ io: () => {
   return socket;
 } }));
 
-vi.mock('axios', () => ({ default: { get: (...args: unknown[]) => axiosGet(...args) } }));
+vi.mock('axios', () => ({ default: {
+  get: (...args: unknown[]) => axiosGet(...args),
+  post: (...args: unknown[]) => axiosPost(...args),
+} }));
 
 vi.mock('@/configuration', async () => {
   const { tmpdir } = await import('node:os');
@@ -70,6 +81,10 @@ import {
   executePluginSettingsAdministrationAction,
   projectAccountSettingsAdministrationSnapshot,
 } from './administration';
+
+// Transport admission starts with the host's real bundled catalog admitted.
+// Keep its cold manifest/schema preparation in collection, not the first RPC's lifetime.
+getResolvedContributionRegistry();
 
 const credentials: Credentials = {
   token: 'account-token',
@@ -93,14 +108,14 @@ const listRequest = {
 
 let fixtureHome: string | undefined;
 
-async function installDeclaredDaemonSecret(): Promise<string> {
+async function installDeclaredPlugin(overrides: Readonly<Record<string, unknown>>): Promise<string> {
   fixtureHome = await mkdtemp(join(tmpdir(), 'happier-settings-transport-'));
   const pluginRoot = join(fixtureHome, 'source');
   const manifestPath = join(pluginRoot, '.happier-plugin', 'plugin.json');
   await mkdir(join(pluginRoot, '.happier-plugin'), { recursive: true });
   await writeFile(join(pluginRoot, 'daemon.mjs'), 'export function activate() {}\n');
   await writeFile(manifestPath, JSON.stringify(createPluginManifestV2Fixture({
-    id: 'acme.settings', secrets: [{ id: 'daemon-token', custody: 'daemon' }],
+    id: 'acme.settings', ...overrides,
   })));
   await writeCommittedLocalPathPluginFixture({
     happyHomeDir: fixtureHome,
@@ -114,6 +129,10 @@ async function installDeclaredDaemonSecret(): Promise<string> {
     },
   });
   return fixtureHome;
+}
+
+async function installDeclaredDaemonSecret(): Promise<string> {
+  return await installDeclaredPlugin({ secrets: [{ id: 'daemon-token', custody: 'daemon' }] });
 }
 
 beforeEach(() => {
@@ -239,6 +258,37 @@ describe('Plugin Settings administration daemon transport', () => {
       errorCode: 'plugin_settings_secret_binding_unavailable',
     });
     expect(daemonReply).not.toHaveBeenCalled();
+  });
+
+  it.each(['status', 'delete'] as const)('routes secret %s to the requested native origin, retaining omitted-origin behavior', async (operation) => {
+    const happyHomeDir = await installDeclaredDaemonSecret();
+    const canonicalOrigin = 'https://selected.example';
+    const method = operation === 'status' ? RPC_METHODS.DAEMON_PLUGIN_SECRET_STATUS : RPC_METHODS.DAEMON_PLUGIN_SECRET_DELETE;
+    // The genuine daemon transport distinguishes two native resources sharing
+    // a secret declaration; losing the origin would touch the default resource.
+    daemonReply.mockImplementation(async (request: { method: string; request: { canonicalOrigin?: string } }) => {
+      if (request.method !== method) throw new Error('Unexpected daemon method');
+      return { protocolVersion: 1, pluginId: 'acme.settings', secretId: 'daemon-token',
+        state: operation === 'status' ? 'configured' : 'missing',
+        revision: request.request.canonicalOrigin === canonicalOrigin ? 'selected-revision' : 'default-revision' };
+    });
+    const actionId = operation === 'status' ? 'plugins.settings.secret.status' : 'plugins.settings.secret.delete';
+    const input = { pluginId: 'acme.settings', localId: 'daemon-token', secretDaemonTarget: target };
+    const routed = await executePluginSettingsAdministrationAction({ actionId, happyHomeDir,
+      input: { ...input, canonicalOrigin } });
+    expect(routed.ok ? routed.data.revision : routed).toBe('selected-revision');
+    await expect(executePluginSettingsAdministrationAction({ actionId, happyHomeDir, input }))
+      .resolves.toMatchObject({ ok: true, data: { revision: 'default-revision' } });
+  });
+
+  it.each(['status', 'delete'] as const)('refuses native origin routing for Account secret %s before reaching its store', async (operation) => {
+    const happyHomeDir = await installDeclaredPlugin({ secrets: [{ id: 'account-token', custody: 'account' }] });
+    await expect(executePluginSettingsAdministrationAction({
+      actionId: operation === 'status' ? 'plugins.settings.secret.status' : 'plugins.settings.secret.delete',
+      happyHomeDir, input: { pluginId: 'acme.settings', localId: 'account-token', canonicalOrigin: 'https://selected.example' },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'invalid_arguments' });
+    expect(daemonReply).not.toHaveBeenCalled();
+    expect(axiosGet).not.toHaveBeenCalled();
   });
 
 });
@@ -456,6 +506,191 @@ describe('Plugin Settings administration declaration defaults', () => {
       kind: 'plugins.settings.get',
       data: { localId: 'nullable', value: null },
     });
+  });
+});
+
+describe('Plugin Settings Account administration explicit binding', () => {
+  const originalActiveServerDir = configuration.activeServerDir;
+  let happyHomeDir: string;
+  let values: Record<string, JsonValue>;
+  let revision: number;
+  const input = { pluginId: 'acme.settings', scope: { kind: 'account' }, target: { kind: 'account' }, localId: 'endpoint' };
+
+  beforeEach(async () => {
+    resetInMemoryAccountSettingsContextForTests();
+    happyHomeDir = await installDeclaredPlugin({ contributes: { settings: [{
+      id: 'preferences', version: 1, title: 'Preferences', target: { kind: 'plugin' }, scope: 'account',
+      fields: [
+        { id: 'endpoint', title: 'Endpoint', schema: { type: 'string', minLength: 1 }, default: 'https://declared.example',
+          presentation: { binding: { kind: 'perActiveServer', fallbackSettingId: 'endpoint', byServerIdSettingId: 'endpointByServer' } } },
+        { id: 'endpointByServer', title: 'Endpoints', schema: { type: 'object', additionalProperties: { type: 'string', minLength: 1 } },
+          presentation: { hidden: true } },
+        { id: 'other', title: 'Other', schema: { type: 'boolean' }, default: false },
+        { id: 'token', title: 'Token', schema: { type: 'string' }, secret: true },
+      ], presentation: { sections: [], subagentSections: [] },
+    }] } });
+    Object.assign(configuration, { activeServerDir: happyHomeDir });
+    values = { endpoint: 'https://fallback.example', endpointByServer: {
+      srv_selected_1: 'https://selected.example', srv_neighbor_1: 'https://neighbor.example',
+    }, other: true };
+    revision = 7;
+    readStoredCredentials.mockResolvedValue({ token: 'plain-settings-token', encryption: null });
+    axiosGet.mockImplementation(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (path === '/v1/account/plugin-settings/acme.settings') return { status: 200,
+        data: { status: 'present', revision, content: { t: 'plain', v: { v: 1, values } } } };
+      const capture = emptyAccountSettingsHistoryCaptureResponse(path);
+      if (capture) return capture;
+      throw new Error(`Unexpected Account request ${path}`);
+    });
+    axiosPost.mockReset();
+    axiosPost.mockImplementation(async (_url: string, body: { expectedRevision: number; content: { t: 'plain'; v: { values: Record<string, JsonValue> } } }) => {
+      if (body.expectedRevision !== revision) return { status: 200, data: { status: 'conflict', revision } };
+      values = body.content.v.values;
+      revision += 1;
+      return { status: 200, data: { status: 'updated', revision } };
+    });
+  });
+
+  afterEach(() => {
+    Object.assign(configuration, { activeServerDir: originalActiveServerDir });
+    resetInMemoryAccountSettingsContextForTests();
+  });
+
+  function actionPort(): NonNullable<ActionExecutorDeps['pluginSettingsAdministrationAction']> {
+    const owner = executePluginSettingsAdministrationAction;
+    return Object.assign(async ({ actionId, input, context }: Parameters<NonNullable<ActionExecutorDeps['pluginSettingsAdministrationAction']>>[0]) =>
+      await owner({ actionId, input, happyHomeDir, signal: context.signal }), {
+      admitInput: async ({ actionId, input, context }: Parameters<NonNullable<ActionExecutorDeps['pluginSettingsAdministrationAction']>>[0]) =>
+        await owner.admitInput({ actionId, input, happyHomeDir, signal: context.signal }),
+    });
+  }
+
+  it('refuses declared secret record operands before hooks, approval disclosure, observations or writes', async () => {
+    for (const transformToSecret of [false, true]) {
+      const artifacts: ApprovalRequest[] = [];
+      const intercepted: unknown[] = [];
+      const observations: unknown[] = [];
+      const secretValue = 'synthetic-private-credential';
+      const executor = createActionExecutor({ pluginSettingsAdministrationAction: actionPort(),
+        isActionApprovalRequired: id => id === 'plugins.settings.set',
+        approvalsCreate: async ({ request }) => { artifacts.push(request); return { artifactId: 'settings-approval' }; },
+        interceptActionExecution: async ({ input: operand }) => {
+          intercepted.push(operand);
+          return { status: 'continue', input: transformToSecret ? { ...input, localId: 'token', value: secretValue } : operand };
+        },
+        observeActionExecution: observation => { observations.push(observation); },
+      } as ActionExecutorDeps);
+      await expect(executor.execute('plugins.settings.set', { ...input,
+        localId: transformToSecret ? 'other' : 'token', value: transformToSecret ? false : secretValue },
+      { surface: 'cli', authority: 'present_user', serverId: 'server-1', actionCaller: { kind: 'host' }, actionRequestId: `private-write-${transformToSecret}` }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'plugin_settings_unknown_key' });
+      expect(artifacts).toEqual([]);
+      if (!transformToSecret) expect(intercepted).toEqual([]);
+      expect(JSON.stringify(observations)).not.toContain(secretValue);
+      expect(axiosGet).not.toHaveBeenCalled();
+      expect(axiosPost).not.toHaveBeenCalled();
+      expect(revision).toBe(7);
+    }
+  });
+
+  it('retains an ordinary declared write for deferred approval and approved replay', async () => {
+    let request: ApprovalRequest | null = null;
+    const executor = createActionExecutor({ pluginSettingsAdministrationAction: actionPort(),
+      isActionApprovalRequired: id => id === 'plugins.settings.set',
+      approvalsCreate: async args => { request = args.request; return { artifactId: 'settings-approval' }; },
+      approvalsGet: async () => request,
+      approvalsUpdate: async args => { request = args.request; return { ok: true }; },
+      isApprovalExecutionOriginCurrent: async () => true,
+    } as ActionExecutorDeps);
+    const operand = { ...input, localId: 'other', value: false, expectedRevision: '7' };
+    await expect(executor.execute('plugins.settings.set', operand, { surface: 'cli', authority: 'present_user', serverId: 'server-1',
+      actionCaller: { kind: 'host' }, actionRequestId: 'ordinary-write' })).resolves.toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(request).toMatchObject({ actionArgs: operand, approval: { flow: 'deferred' } });
+    expect(values.other).toBe(true);
+    await expect(executor.execute('approval.request.decide', { artifactId: 'settings-approval', decision: 'approve' },
+      { surface: 'ui', authority: 'present_user', serverId: 'server-1', actionCaller: { kind: 'host' }, actionRequestId: 'ordinary-decision' })).resolves.toMatchObject({ ok: true });
+    expect(values.other).toBe(false);
+    expect(revision).toBe(8);
+  });
+
+  it('reads an exact server binding, explicit fallback, and omitted legacy fallback distinctly', async () => {
+    for (const [routing, value] of [
+      [{ bindingServerIdentityId: 'srv_selected_1' }, 'https://selected.example'],
+      [{ bindingServerIdentityId: null }, 'https://fallback.example'],
+      [{}, 'https://fallback.example'],
+    ] as const) {
+      await expect(executePluginSettingsAdministrationAction({ actionId: 'plugins.settings.get', happyHomeDir,
+        input: { ...input, ...routing } })).resolves.toMatchObject({ ok: true, data: { value } });
+    }
+  });
+
+  it('sets and resets only the requested server entry while preserving fallback and neighboring values', async () => {
+    await expect(executePluginSettingsAdministrationAction({ actionId: 'plugins.settings.set', happyHomeDir,
+      input: { ...input, bindingServerIdentityId: 'srv_selected_1', value: 'https://changed.example', expectedRevision: '7' } }))
+      .resolves.toMatchObject({ ok: true, data: { revision: '8' } });
+    expect(values).toEqual({ endpoint: 'https://fallback.example', endpointByServer: {
+      srv_selected_1: 'https://changed.example', srv_neighbor_1: 'https://neighbor.example',
+    }, other: true });
+    await expect(executePluginSettingsAdministrationAction({ actionId: 'plugins.settings.reset', happyHomeDir,
+      input: { ...input, bindingServerIdentityId: 'srv_selected_1', expectedRevision: '8' } }))
+      .resolves.toMatchObject({ ok: true, data: { revision: '9' } });
+    expect(values).toEqual({ endpoint: 'https://fallback.example', endpointByServer: {
+      srv_neighbor_1: 'https://neighbor.example',
+    }, other: true });
+  });
+
+  it('refuses a stale bound mutation instead of replacing a newer map', async () => {
+    await expect(executePluginSettingsAdministrationAction({ actionId: 'plugins.settings.set', happyHomeDir,
+      input: { ...input, bindingServerIdentityId: 'srv_selected_1', value: 'https://changed.example', expectedRevision: '6' } }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'plugin_settings_revision_conflict' });
+    expect(axiosPost).not.toHaveBeenCalled();
+    expect(values.endpointByServer).toEqual({ srv_selected_1: 'https://selected.example', srv_neighbor_1: 'https://neighbor.example' });
+  });
+
+  it('sets and resets explicit fallback without removing server overrides', async () => {
+    await expect(executePluginSettingsAdministrationAction({ actionId: 'plugins.settings.set', happyHomeDir,
+      input: { ...input, bindingServerIdentityId: null, value: 'https://changed-fallback.example' } }))
+      .resolves.toMatchObject({ ok: true });
+    expect(values.endpoint).toBe('https://changed-fallback.example');
+    await expect(executePluginSettingsAdministrationAction({ actionId: 'plugins.settings.reset', happyHomeDir,
+      input: { ...input, bindingServerIdentityId: null } })).resolves.toMatchObject({ ok: true });
+    expect(values).toEqual({ endpointByServer: {
+      srv_selected_1: 'https://selected.example', srv_neighbor_1: 'https://neighbor.example',
+    }, other: true });
+  });
+
+  it('retains a newer neighboring map entry when it races a bound edit with no caller revision', async () => {
+    const get = axiosGet.getMockImplementation()!;
+    let recordReads = 0;
+    axiosGet.mockImplementation(async (url: string, config: unknown) => {
+      if (new URL(url).pathname === '/v1/account/plugin-settings/acme.settings' && ++recordReads === 2) {
+        values = { ...values, endpointByServer: { srv_selected_1: 'https://selected.example', srv_neighbor_1: 'https://new-neighbor.example' } };
+        revision = 8;
+      }
+      return await get(url, config);
+    });
+    await expect(executePluginSettingsAdministrationAction({ actionId: 'plugins.settings.set', happyHomeDir,
+      input: { ...input, bindingServerIdentityId: 'srv_selected_1', value: 'https://changed.example' } }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'plugin_settings_revision_conflict' });
+    expect(axiosPost).not.toHaveBeenCalled();
+    expect(values.endpointByServer).toEqual({ srv_selected_1: 'https://selected.example', srv_neighbor_1: 'https://new-neighbor.example' });
+  });
+
+  it('validates the visible field before writing its backing map', async () => {
+    await expect(executePluginSettingsAdministrationAction({ actionId: 'plugins.settings.set', happyHomeDir,
+      input: { ...input, bindingServerIdentityId: 'srv_selected_1', value: '' } })).resolves.toMatchObject({ ok: false });
+    expect(axiosPost).not.toHaveBeenCalled();
+  });
+
+  it.each(['srv_selected_1', null])('refuses explicit server binding %s on an ordinary field without writing', async (bindingServerIdentityId) => {
+    await expect(executePluginSettingsAdministrationAction({ actionId: 'plugins.settings.set', happyHomeDir,
+      input: { ...input, localId: 'other', bindingServerIdentityId, value: false } }))
+      .resolves.toMatchObject({ ok: false });
+    expect(axiosPost).not.toHaveBeenCalled();
+    expect(values.other).toBe(true);
   });
 });
 

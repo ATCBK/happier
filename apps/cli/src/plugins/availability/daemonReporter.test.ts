@@ -243,6 +243,24 @@ describe('daemon plugin Availability reporter', () => {
     expect(publisher.reportMaterializations).toHaveBeenCalledTimes(1);
   });
 
+  it('suppresses observation-only updates but publishes changed installation facts', async () => {
+    const reporter = createDaemonPluginAvailabilityReporter({
+      credentials,
+      serverFeaturesSnapshotStore: { getSnapshot: readyServerFeatures },
+      getMachineId: () => 'machine-current',
+    });
+    await reporter.report(inventory);
+    await reporter.report({ ...inventory, materializations: [{ ...materialization, observedAt: 99 }] });
+    expect(publisher.reportMaterializations.mock.calls.map(([request]) => request.snapshot.materializations)).toEqual([
+      [{ ...materialization, serverIdentityId: 'srv_availability_daemon', machineId: 'machine-current' }],
+    ]);
+    await reporter.report({ ...inventory, materializations: [{ ...materialization, enabled: false, observedAt: 100 }] });
+    expect(publisher.reportMaterializations.mock.calls[1]?.[0]).toMatchObject({
+      expectedRevision: 1,
+      snapshot: { materializations: [{ enabled: false, observedAt: 100 }] },
+    });
+  });
+
   it('does not open the transport when the daemon lacks a ready server identity', async () => {
     const reporter = createDaemonPluginAvailabilityReporter({
       credentials,

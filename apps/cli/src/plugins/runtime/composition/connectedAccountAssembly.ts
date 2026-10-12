@@ -5,6 +5,7 @@ import type { StablePluginConnectedAccountsOwner } from '../invocation/services/
 import type { PluginNetworkAddressResolver } from '../fetch/originLocality';
 import type { ConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { createConnectedAccountContributionRegistry } from '../connectedAccounts/contributionRegistry';
+import type { HostConnectedAccountRuntimeRegistration } from '../connectedAccounts/contributionRegistry';
 import { createConnectedAccountHostRuntimeInvoker } from '../connectedAccounts/runtimeInvoker';
 import { resolveHostOwnedConnectedAccountConfiguredEndpoints } from '../connectedAccounts/configuredOrigins';
 import type { createProductionPluginInvocationServiceOwners } from '../invocation/services/production';
@@ -13,6 +14,7 @@ type InvocationServiceOwners = ReturnType<typeof createProductionPluginInvocatio
 
 export function assembleConnectedAccountRuntime(input: Readonly<{
     descriptors: NonNullable<ResolvedContributionRegistry['connectedAccountDescriptors']>;
+    hostRuntimes?: readonly HostConnectedAccountRuntimeRegistration[];
     readPluginOccurrenceId(pluginId: string): PluginRuntimeOccurrenceId | null;
     readPluginSourceCustody(pluginId: string): PluginSourceCustody | null;
     isPluginOccurrenceCurrent(pluginId: string, occurrenceId: PluginRuntimeOccurrenceId): boolean;
@@ -42,6 +44,7 @@ export function assembleConnectedAccountRuntime(input: Readonly<{
         activateOnDemand: input.activateOnDemand,
         readRegistrations: input.readRegistrations,
     });
+    for (const registration of input.hostRuntimes ?? []) contributions.registerHostConnectedAccountRuntime(registration);
     const invoker = createConnectedAccountHostRuntimeInvoker({
         resolveRuntime: contributions.resolve,
         resolvePlugin: input.resolvePlugin,

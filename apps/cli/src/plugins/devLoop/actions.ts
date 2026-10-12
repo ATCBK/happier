@@ -117,7 +117,7 @@ function projectPendingReview(
 }
 
 async function runPluginDevelopmentAction(params: Readonly<{
-  actionKind: 'plugins_dev_submit' | 'plugins_reload';
+  actionKind: 'plugins_dev_submit' | 'plugins_dev_unregister' | 'plugins_reload';
   projectRoot: string;
   pluginId?: string;
   sdkRegistryOrigin?: string;
@@ -128,7 +128,9 @@ async function runPluginDevelopmentAction(params: Readonly<{
   const result = await control(
     params.actionKind === 'plugins_reload'
       ? { kind: 'reload', rootPath: params.projectRoot }
-      : {
+      : params.actionKind === 'plugins_dev_unregister'
+        ? { kind: 'unregisterExplicit', rootPath: params.projectRoot }
+        : {
           kind: 'registerExplicit',
           rootPath: params.projectRoot,
           ...(params.sdkRegistryOrigin ? { sdkRegistryOrigin: params.sdkRegistryOrigin } : {}),
@@ -258,11 +260,11 @@ export async function executePluginDevLoopAction(
     };
   }
 
-  if (params.actionId === 'plugins.dev.submit') {
+  if (params.actionId === 'plugins.dev.submit' || params.actionId === 'plugins.dev.unregister') {
     const projectRoot = readString(input, 'projectRoot');
     const sdkRegistryOrigin = readString(input, 'sdkRegistryOrigin');
     return await runPluginDevelopmentAction({
-      actionKind: 'plugins_dev_submit',
+      actionKind: params.actionId === 'plugins.dev.submit' ? 'plugins_dev_submit' : 'plugins_dev_unregister',
       projectRoot,
       ...(sdkRegistryOrigin ? { sdkRegistryOrigin } : {}),
       ...(params.context?.signal ? { signal: params.context.signal } : {}),
@@ -443,7 +445,9 @@ export async function executePluginDevLoopAction(
         kind: 'plugins_list',
         diagnostics: [{
           code: catalog.code,
-          message: 'The active daemon plugin catalog is unavailable.',
+          message: catalog.code === 'plugin_catalog_runtime_unavailable'
+            ? 'The daemon plugin runtime is unavailable.'
+            : 'The active daemon plugin catalog is unavailable.',
         }],
       };
     }

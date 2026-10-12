@@ -6,7 +6,6 @@ import { PluginPermissionGrantActionInputSchemasV1, PluginPermissionGrantActionO
 import type { ActionExecutorDeps, PluginMachineMaterializationRefV1, PluginPermissionGrantListActionInputV1, PluginPermissionGrantListActionOutputV1, PluginPermissionGrantRequestActionInputV1, PluginPermissionGrantRequestActionOutputV1 } from '@happier-dev/protocol';
 
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
-import { configuration } from '@/configuration';
 import { createDefaultPluginInstallationPublisherHeader } from '@/plugins/installations/publisherProof';
 import type { RevalidatePluginActionCallerMaterialization } from '@/plugins/runtime/invocation/services/actionCaller';
 import type { StoredCredentials } from '@/persistence';
@@ -79,7 +78,6 @@ function createDefaultTransport(credentials: StoredCredentials): PluginPermissio
             Authorization: `Bearer ${credentials.token}`,
             ...proofHeaders,
           },
-          timeout: configuration.sessionControlHttpTimeoutMs,
           validateStatus: (status) => status >= 200 && status < 300,
           ...(options.signal ? { signal: options.signal } : {}),
         },

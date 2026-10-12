@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 import { runPluginAuthorPhase } from './phaseLog';
 
 import {
@@ -224,7 +225,7 @@ export async function materializePrepublicationAuthorWorkspacePackages(params: R
   bundles: ReadonlyArray<PrepublicationWorkspaceBundle>;
   packageNames: readonly string[];
 }>): Promise<PluginAuthorBundledPrepublicationMaterialization> {
-  const materializationRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-author-packages-'));
+  const materializationRoot = createHappierTempDir({ purpose: 'plugin-author-packages' });
   let installRoot: string | undefined;
   try {
     const bundles = remapWorkspaceBundleDestinations({ materializationRoot, bundles: params.bundles });
@@ -279,7 +280,7 @@ export async function materializePrepublicationAuthorWorkspacePackages(params: R
         try {
           await rm(installRoot!, { recursive: true, force: true });
         } finally {
-          await rm(materializationRoot, { recursive: true, force: true });
+          await removeHappierTempDirAsync(materializationRoot);
         }
       },
     });
@@ -287,7 +288,7 @@ export async function materializePrepublicationAuthorWorkspacePackages(params: R
     try {
       if (installRoot) await rm(installRoot, { recursive: true, force: true });
     } finally {
-      await rm(materializationRoot, { recursive: true, force: true });
+      await removeHappierTempDirAsync(materializationRoot);
     }
     throw error;
   }

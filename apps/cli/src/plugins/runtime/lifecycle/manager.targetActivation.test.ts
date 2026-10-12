@@ -53,7 +53,7 @@ import { resolveExecutableManagedDependenciesRegistry } from '../../projection/r
 import { createStableManagedExecutableResolver } from '../invocation/services/managedExecutableResolver';
 import { createStablePluginManagedDependenciesHost } from '../invocation/services/managedDependencies';
 import { resolveManifestHostAccessRequestsForQualifiedContribution } from '../hostAccess/manifestRequests';
-import * as processTreeBoundary from '@/agent/runtime/process/killProcessTree';
+import * as processTreeBoundary from '@/processes/terminate/terminateProcessTree';
 import { readSupervisedPluginProcessIdForHost } from '../exec/processSupervisor';
 
 type TargetPluginRegistrationApi = ReturnType<typeof createPluginRegistrationScope>['api'];
@@ -300,7 +300,7 @@ describe('target activation publication', () => {
             if (uncertainProduction.kind !== 'ready') throw new Error(uncertainProduction.code);
             const completedBeforeUncertainty = completedInvocations;
             const uncertainSignal = invocationSignals.at(-1)!;
-            const treeTermination = vi.spyOn(processTreeBoundary, 'killProcessTree')
+            const treeTermination = vi.spyOn(processTreeBoundary, 'terminateProcessTree')
                 .mockRejectedValueOnce(new Error('OS boundary could not confirm native tree termination'));
             let uncertainty: unknown;
             const unsubscribeUncertainty = uncertainProduction.production.onOutcomeUncertain(error => { uncertainty = error; });
@@ -370,7 +370,7 @@ describe('target activation publication', () => {
             } };
             // Fake OS boundary: the owned process group is absent on exit.
             const terminals = createTerminalPtySessionManager({ ptyProvider, probeProcessGroup: () => 'absent', config: {
-                maxSessions: 1, idleTimeoutMs: 0, bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
+                bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
                 bufferRetentionMs: 600_000, urlParseBufferLimit: 32_768, maxWriteChunkBytes: 16_384,
                 defaultCols: 80, defaultRows: 24,
             } });
@@ -660,7 +660,7 @@ describe('target activation publication', () => {
             return { pid: 12345, ownedProcessGroupId: 12345, write() {}, resize() {}, kill() {}, onData() { return { dispose() {} }; },
                 onExit(listener) { exits.add(listener); return { dispose() { exits.delete(listener); } }; } };
         // This fake OS spawn has no descendants once its exit event fires.
-        } }, probeProcessGroup: () => 'absent', config: { maxSessions: 2, idleTimeoutMs: 0, bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
+        } }, probeProcessGroup: () => 'absent', config: { bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
             bufferRetentionMs: 600_000, urlParseBufferLimit: 32_768, maxWriteChunkBytes: 16_384, defaultCols: 80, defaultRows: 24 } });
         cleanups.push(() => { terminals.dispose(); });
         let operationSequence = 0;
@@ -739,7 +739,7 @@ describe('target activation publication', () => {
                 const completedBeforeUnknown = completedCommandInvocations;
                 // Only the OS tree-termination boundary is faulted. Exec,
                 // selected invocation custody, the runner and FIFO stay real.
-                const termination = vi.spyOn(processTreeBoundary, 'killProcessTree')
+                const termination = vi.spyOn(processTreeBoundary, 'terminateProcessTree')
                     .mockRejectedValueOnce(new Error('OS could not prove native preparation tree absent'));
                 cleanups.push(async () => {
                     termination.mockRestore();
@@ -1762,7 +1762,7 @@ describe('target activation publication', () => {
                 }],
                 mcp: {
                     servers: [],
-                    discoverySources: [{ id: 'config', title: 'Config discovery' }],
+                    discoverySources: [{ id: 'config', title: 'Config discovery', loadedInHappierSessions: true }],
                 },
                 scmBackends: [{
                     id: 'fixture', title: 'Fixture SCM', kind: 'git', capabilities: ['detect'],
@@ -2519,6 +2519,7 @@ describe('target activation publication', () => {
             dispose: () => Promise<void>,
             occurrenceId: string,
         ): ResolvedExecutablePluginRuntimeRegistry => ({
+            claimReleaseLessDeclarations: async () => undefined,
             contributes,
             hookHandlersByHookId: new Map(),
             agentRuntimesByAgentId: new Map(),

@@ -24,6 +24,7 @@ import type {
   PluginRoleDeclarationV1,
   PluginWorkflowContributionV1,
   PluginInputTypeContributionV1,
+  PluginAtmospherePictureContributionV1,
   PluginDragSourceContributionV1,
   PluginDropTargetContributionV1,
   PluginSessionHeaderActionDescriptorV1,
@@ -123,6 +124,7 @@ export type ResolvedComposerReferenceContribution = ResolvedTargetUiContribution
 export type ResolvedRoleContribution = ResolvedTargetUiContribution<PluginRoleDeclarationV1> & Readonly<{ displayName?: string }>;
 export type ResolvedWorkflowContribution = ResolvedTargetUiContribution<PluginWorkflowContributionV1>;
 export type ResolvedInputTypeContribution = ResolvedTargetUiContribution<PluginInputTypeContributionV1>;
+export type ResolvedAtmospherePictureContribution = ResolvedTargetUiContribution<PluginAtmospherePictureContributionV1>;
 export type ResolvedMachineProvisionerContribution = ResolvedTargetUiContribution<MachineProvisionerContributionV1>;
 export type ResolvedClientExecutableContribution<T> = ResolvedTargetUiContribution<T> & Readonly<{
     pluginRootPath: string;
@@ -854,6 +856,7 @@ export type ResolvedContributionInputs = Readonly<{
     roles?: readonly ResolvedRoleContribution[];
     workflows?: readonly ResolvedWorkflowContribution[];
     inputTypes?: readonly ResolvedInputTypeContribution[];
+    atmospherePictures?: readonly ResolvedAtmospherePictureContribution[];
     machineProvisioners?: readonly ResolvedMachineProvisionerContribution[];
     dragSources?: readonly ResolvedDragSourceContribution[];
     dropTargets?: readonly ResolvedDropTargetContribution[];
@@ -916,6 +919,7 @@ export type ResolvedContributionRegistry = Readonly<{
     roles?: readonly ResolvedRoleContribution[];
     workflows?: readonly ResolvedWorkflowContribution[];
     inputTypes?: readonly ResolvedInputTypeContribution[];
+    atmospherePictures?: readonly ResolvedAtmospherePictureContribution[];
     machineProvisioners?: readonly ResolvedMachineProvisionerContribution[];
     dragSources?: readonly ResolvedDragSourceContribution[];
     dropTargets?: readonly ResolvedDropTargetContribution[];

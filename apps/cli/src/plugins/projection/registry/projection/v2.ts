@@ -45,6 +45,7 @@ import { voiceModelPackProjectionFamily, voiceProviderProjectionFamily } from '.
 import { rolesProjectionFamily } from '../roles';
 import { workflowsProjectionFamily } from '../workflows';
 import { inputTypesProjectionFamily } from '../inputTypes';
+import { atmospherePicturesProjectionFamily } from '../atmospherePictures';
 import { machineProvisionersProjectionFamily } from '../machineProvisioners';
 import { dragSourcesProjectionFamily, dropTargetsProjectionFamily } from '../entityDragDrop';
 import {
@@ -412,6 +413,9 @@ function collectPluginContributionMetadata(
     }
     for (const role of registry.roles ?? []) {
         upsert(role);
+    }
+    for (const picture of registry.atmospherePictures ?? []) {
+        upsert(picture);
     }
 
     return metadata;
@@ -952,6 +956,7 @@ export function buildPluginProjectionV2(params: Readonly<{
         rolesProjectionFamily,
         workflowsProjectionFamily,
         inputTypesProjectionFamily,
+        atmospherePicturesProjectionFamily,
         machineProvisionersProjectionFamily,
         dragSourcesProjectionFamily,
         dropTargetsProjectionFamily,

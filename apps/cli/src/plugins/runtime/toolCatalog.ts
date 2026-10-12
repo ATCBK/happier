@@ -5,6 +5,8 @@ import type {
   PluginToolContributionV2,
 } from '@happier-dev/protocol';
 import { normalizePluginActionInputHintsV2 } from '@happier-dev/protocol/plugins/actions/v2';
+import { formatQualifiedPluginActionId, parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 
 import {
   evaluateContributionAvailability,
@@ -61,7 +63,7 @@ export function projectExecutablePluginToolCatalog(
   for (const tool of runtimeRegistry.contributes.tools ?? []) {
     if (!tool.pluginId) continue;
     const action = runtimeRegistry.contributes.actionsById?.get(tool.definition.actionId);
-    if (!action?.pluginId) continue;
+    if (!action?.pluginId || !action.identity) continue;
     const policy = runtimeRegistry.targetActionInvocations?.evaluateCatalogPolicy(
       action.pluginId,
       action.definition.id,
@@ -77,7 +79,7 @@ export function projectExecutablePluginToolCatalog(
     if (!name || !title) continue;
     projected.push(Object.freeze({
       toolId: `${tool.pluginId}/${tool.definition.id}`,
-      actionId: tool.definition.actionId,
+      actionId: formatQualifiedPluginActionId(action.identity),
       name,
       title,
       description: readLocalizedText(tool.definition.description) ?? title,
@@ -114,8 +116,9 @@ export function projectOccurrenceBoundExecutablePluginToolCatalog(
   runtimeRegistry: PluginToolCatalogRuntimeRegistry,
 ): readonly ProjectedPluginToolCatalogEntry[] {
   return Object.freeze(projectExecutablePluginToolCatalog(runtimeRegistry).flatMap((tool) => {
+    const identity = parseQualifiedPluginActionId(tool.actionId);
     const actionPluginId = runtimeRegistry.contributes.actionsById
-      ?.get(tool.actionId)
+      ?.get(identity ? buildQualifiedPluginContributionKey(identity) : '')
       ?.pluginId
       ?.trim();
     const occurrenceId = actionPluginId

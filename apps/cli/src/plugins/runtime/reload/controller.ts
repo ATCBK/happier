@@ -51,6 +51,7 @@ export type PluginRuntimeRegistryBeforePublish = (
     /**
      * Publish exactly once, synchronously, after durable pre-publication work commits and before
      * releasing any writer fence. No awaited or fallible work may follow this call.
+     * Committed candidates can re-enter reconciliation after failure; it must be idempotent.
      */
     publish: () => void,
 ) => Promise<void>;
@@ -144,6 +145,8 @@ export type PluginReloadController = Readonly<{
         beforePublish?: PluginRuntimeRegistryBeforePublish;
     }>) => Promise<PluginRuntimeRegistryLease>;
     tryAcquireRuntimeRegistry: () => PluginRuntimeRegistryLease | null;
+    /** Latest durable revision observed, even while its serving publication is pending or failed. */
+    readCurrentDurableRevision: () => number;
     isRuntimeRegistryCurrent: (registry: ResolvedExecutablePluginRuntimeRegistry) => boolean;
     /** The plugin's stable slot, or null when the plugin is not admitted. */
     readPluginSlot?: (pluginId: string) => PluginRuntimeSlot | null;
@@ -303,6 +306,10 @@ export function createPluginReloadController(params?: Readonly<{
     let shutdownPromise: Promise<void> | null = null;
     let shutdownStarted = false;
     let highestObservedDurableRevision: number | null = null;
+    // Commit notification precedes asynchronous adoption custody. Keep that
+    // existing durable fact distinct from adoption ordering, so passive readers
+    // cannot serve a predecessor during the intervening work or its failure.
+    let highestCommittedDurableRevision: number | null = null;
     let activeRegistryDurableRevision: number | null = null;
     let shutdownTimeoutMs = normalizeShutdownTimeoutMs(undefined);
     const outstandingLeaseCounts = new Map<ResolvedExecutablePluginRuntimeRegistry, number>();
@@ -716,6 +723,13 @@ export function createPluginReloadController(params?: Readonly<{
     }
 
     controller = {
+        readCurrentDurableRevision() {
+            return Math.max(
+                highestCommittedDurableRevision ?? -1,
+                highestObservedDurableRevision ?? -1,
+                activeRegistryDurableRevision ?? -1,
+            );
+        },
         async adoptPreparedRuntimeRegistry(adoption) {
             if (shutdownStarted) {
                 await adoption.registry.dispose();
@@ -769,11 +783,11 @@ export function createPluginReloadController(params?: Readonly<{
                 }
                 if (
                     adoption.durableRevision !== undefined
-                    && adoption.durableRevision !== highestObservedDurableRevision
+                    && adoption.durableRevision !== controller.readCurrentDurableRevision()
                 ) {
                     throw new Error(
                         `Prepared plugin runtime registry durable revision ${adoption.durableRevision} `
-                        + `was superseded by newer durable revision ${highestObservedDurableRevision}`,
+                        + `was superseded by newer durable revision ${controller.readCurrentDurableRevision()}`,
                     );
                 }
                 retainProjectCustody(adoption.registry);
@@ -827,8 +841,39 @@ export function createPluginReloadController(params?: Readonly<{
                 if (adoption.durableRevision !== undefined) {
                     previousRegistry?.fencePluginConsumers?.(changedPluginIds);
                 }
-                if (adoption.beforePublish) {
-                    await adoption.beforePublish(adoption.registry, publish);
+                const beforePublish = adoption.beforePublish;
+                if (beforePublish) {
+                    const reconcilePublication = async () => {
+                        await beforePublish(adoption.registry, publish);
+                        if (!published) {
+                            throw new Error('Plugin runtime registry pre-publication owner returned without publishing');
+                        }
+                    };
+                    try {
+                        await reconcilePublication();
+                    } catch (error) {
+                        if (
+                            published
+                            || shutdownStarted
+                            || adoption.durableRevision === undefined
+                            || adoption.durableRevision !== controller.readCurrentDurableRevision()
+                        ) throw error;
+                        // The durable commit already retired the predecessor.
+                        // Reconcile that same prepared committed candidate before
+                        // disposing it; the canonical purpose prune is idempotent,
+                        // and publish still checks revision/shutdown currentness.
+                        try {
+                            await reconcilePublication();
+                        } catch (recoveryError) {
+                            logger.warn('[PLUGIN RUNTIME] Committed plugin runtime publication recovery failed', {
+                                error: projectPluginFailureText(recoveryError),
+                            });
+                            throw error;
+                        }
+                        logger.warn('[PLUGIN RUNTIME] Committed plugin runtime publication recovered after reconciliation failure', {
+                            error: projectPluginFailureText(error),
+                        });
+                    }
                 } else {
                     publish();
                 }
@@ -840,10 +885,6 @@ export function createPluginReloadController(params?: Readonly<{
                 logger.warn('[PLUGIN RUNTIME] Plugin runtime post-publication reconciliation failed', {
                     error: projectPluginFailureText(error),
                 });
-            }
-            if (!published) {
-                await adoption.registry.dispose();
-                throw new Error('Plugin runtime registry pre-publication owner returned without publishing');
             }
             // Publication is the synchronous ownership boundary. Only the
             // registry that actually became current may retire its predecessor;
@@ -1023,6 +1064,7 @@ export function createPluginReloadController(params?: Readonly<{
         getTargetedContributionsOwner,
         currentGlobalExternalSessions,
         publishDurableRunningSessionDisposition(event) {
+            highestCommittedDurableRevision = Math.max(highestCommittedDurableRevision ?? -1, event.durableRevision);
             notifyRunningSessionDispositionListeners(Object.freeze({
                 durableRevision: event.durableRevision,
                 changedPluginIds: normalizePluginIds(

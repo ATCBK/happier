@@ -42,7 +42,7 @@ function discovery(pluginId: string, localId: string): ResolvedMcpDiscoverySourc
         provenance: 'external', source: { kind: 'path' }, pluginId,
         manifestPath: `/plugins/${pluginId}/plugin.json`,
         daemonEntryPath: `/plugins/${pluginId}/daemon.js`,
-        definition: { id: localId, title: `${pluginId} ${localId}` },
+        definition: { id: localId, title: `${pluginId} ${localId}`, loadedInHappierSessions: true },
     };
 }
 

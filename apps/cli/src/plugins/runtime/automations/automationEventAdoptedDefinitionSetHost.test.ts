@@ -122,6 +122,7 @@ function storedDefinition(options: Readonly<{
       },
       definition: {
         v: 1,
+        retired: true,
         sourceInstanceId: 'repository-1',
         sourceConfig: { repositoryId: 42 },
         displayLabel: 'Repository 42',
@@ -249,7 +250,7 @@ describe('Automation Event adopted-definition host factory', () => {
     })).rejects.toThrow();
   });
 
-  it('composes one current generation-local adopted set and fails closed when encrypted definition material is unavailable', async () => {
+  it('drops retired stored definition fields in one current generation-local adopted set and fails closed without encrypted material', async () => {
     const page: AutomationEventStoredDefinitionsReadResultV1 = {
       kind: 'page',
       revision: '7',
@@ -685,7 +686,7 @@ describe('Automation Event adopted-definition host factory', () => {
     })).resolves.toEqual({ kind: 'unavailable' });
   });
 
-  it('exposes one ordered encrypted sequence of complete transport-bounded requests', async () => {
+  it('drops retired encrypted stored definition fields and exposes one ordered sequence of complete transport-bounded requests', async () => {
     const snapshot = createAccountScopedCryptoMaterialSnapshotV1({
       accountEncryptionMode: 'e2ee',
       material: { type: 'legacy', secret: credentials.encryption.secret },
@@ -711,6 +712,7 @@ describe('Automation Event adopted-definition host factory', () => {
           },
           definition: {
             v: 1,
+            retired: true,
             sourceInstanceId: `repository-${index}`,
             sourceConfig: { repositoryId: index },
             displayLabel: `Repository ${index}`,

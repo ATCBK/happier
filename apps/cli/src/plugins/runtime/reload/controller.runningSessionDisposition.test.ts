@@ -13,6 +13,7 @@ function createRuntimeRegistry(
     retirePluginConsumers: (pluginIds: readonly string[]) => void | Promise<void> = () => undefined,
 ): ResolvedExecutablePluginRuntimeRegistry {
     return {
+        claimReleaseLessDeclarations: async () => undefined,
         contributes: {
             agents: Object.freeze([]),
             providers: Object.freeze([]),

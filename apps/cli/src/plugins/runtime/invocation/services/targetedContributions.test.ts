@@ -284,6 +284,7 @@ function runtimeRegistry(
         readonly PluginCompatibilityDiagnostic[]
     > = {};
     const registry = {
+        claimReleaseLessDeclarations: async () => undefined,
         contributes: {
             agents: Object.freeze([]),
             providers: Object.freeze([]),
@@ -336,6 +337,7 @@ function runtimeRegistryForResolvedContributions(
         ...contributes.pluginDiagnosticsByPluginId,
     };
     return {
+        claimReleaseLessDeclarations: async () => undefined,
         contributes,
         hookHandlersByHookId: new Map(),
         agentRuntimesByAgentId: new Map(),

@@ -1,7 +1,8 @@
 import { isDeepStrictEqual } from 'node:util';
-import { realpath, rm } from 'node:fs/promises';
+import { realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep, win32 } from 'node:path';
 import { writeSecureTempTextFileSync } from '@happier-dev/plugin-sdk/fs';
+import { removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 import { logger } from '@/ui/logger';
 import { createPreflightCatalogCleanupScope, type PreflightCatalogCleanupScope } from '@/capabilities/probes/preflightCatalogCleanupScope';
 
@@ -17,6 +18,7 @@ import type {
     AgentCliSessionCommandOptionsV1,
     AgentCliSessionCommandPluginSettingsV1,
     AgentConnectedAccountLaunchContributionV1,
+    AgentConnectedAccountSharedStateFileMergeV1,
     AgentExperimentalVendorResumeSupportContributionV1,
     AgentPreflightSessionControlsCommandResultV1,
     AgentPreflightSessionControlsCommandV1,
@@ -33,7 +35,9 @@ import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValu
 import type { ManagedExecutableRef, PluginAgentCliMetadata, RuntimeDescriptorV1 } from '@happier-dev/protocol';
 import { type PluginSystemToolContributionV1 } from '@happier-dev/protocol/plugins/contributions/system-tools';
 
-import { probeAcpCatalogs } from '@/capabilities/probes/probeAcpCatalogs';
+import { probeAcpCatalogs, probeAcpSessionControls } from '@/capabilities/probes/probeAcpCatalogs';
+import { normalizeAcpModelsSnapshot } from '@/capabilities/probes/agentModelsProbe';
+import { normalizeAcpModesSnapshot } from '@/capabilities/probes/agentModesProbe';
 import type { PreflightSessionControlsProbeParams } from '@/capabilities/probes/preflightSessionControlsProbeAdapterTypes';
 import type { CliAuthSpec, CliAuthStatusDraft } from '@/capabilities/cliAuth/types';
 import { runCliCommandBestEffort } from '@/capabilities/cliAuth/shared';
@@ -152,14 +156,17 @@ export function projectAgentConnectedAccountLaunchCatalogEntry(params: Readonly<
     | 'connectedAccountRequestAuthUses'
     | 'connectedAccountFileEnvironmentUses'
     | 'connectedAccountEnvironmentUses'
+    | 'connectedAccountEnvironmentUnsetUses'
     | 'connectedAccountSwitchContinuity'
     | 'getConnectedServiceStateSharingDescriptor'
+    | 'getConnectedServiceSharedStateFileMerge'
     | 'getConnectedServiceRuntimeAuthAdapter'
     | 'verifyResumeReachable'
 > {
     const requestAuthUses = params.connectedAccountLaunch.requestAuthUses;
     const fileEnvironmentUses = params.connectedAccountLaunch.fileEnvironmentUses;
     const environmentUses = params.connectedAccountLaunch.environmentUses;
+    const environmentUnsetUses = params.connectedAccountLaunch.environmentUnsetUses;
     const declaredSwitchContinuity = params.connectedAccountLaunch.switchContinuity;
     const stateSharing = declaredSwitchContinuity?.providerStateSharingRequired;
     const switchContinuity = declaredSwitchContinuity && stateSharing?.serviceIds
@@ -262,6 +269,15 @@ export function projectAgentConnectedAccountLaunchCatalogEntry(params: Readonly<
             if (!input.credential || !input.nativeHome || !stateSharingDescriptor) {
                 return unavailableNativeAuthVerification('native_auth_materialization_unavailable');
             }
+            const currentness = await input.validateCurrentBeforeMutation?.();
+            if (currentness?.current === false) {
+                return unavailableNativeAuthVerification(currentness.reason);
+            }
+            // Shared group projection belongs to guarded launch preparation. A late
+            // process login may prove it is still ready, but cannot replace it.
+            if (input.selection.kind === 'group') {
+                return await inspectNativeAuth!(input);
+            }
             let materialization: ReturnType<typeof nativeAuthCodec.materialize>;
             try {
                 materialization = nativeAuthCodec.materialize({
@@ -274,10 +290,6 @@ export function projectAgentConnectedAccountLaunchCatalogEntry(params: Readonly<
             }
             if (!params.isCurrent()) {
                 return unavailableNativeAuthVerification('plugin_generation_retired');
-            }
-            const currentness = await input.validateCurrentBeforeMutation?.();
-            if (currentness?.current === false) {
-                return unavailableNativeAuthVerification(currentness.reason);
             }
             await input.nativeHome.replaceFiles(materialization.files);
             return await inspectNativeAuth!(input);
@@ -381,12 +393,23 @@ export function projectAgentConnectedAccountLaunchCatalogEntry(params: Readonly<
         ...(environmentUses === undefined
             ? {}
             : { connectedAccountEnvironmentUses: environmentUses }),
+        ...(environmentUnsetUses === undefined
+            ? {}
+            : { connectedAccountEnvironmentUnsetUses: environmentUnsetUses }),
         ...(switchContinuity === undefined
             ? {}
             : { connectedAccountSwitchContinuity: switchContinuity }),
         ...(descriptor === undefined
             ? {}
             : { getConnectedServiceStateSharingDescriptor: async () => descriptor }),
+        ...(continuity?.mergeSharedStateFile === undefined
+            ? {}
+            : { getConnectedServiceSharedStateFileMerge: async () => (input: Parameters<AgentConnectedAccountSharedStateFileMergeV1>[0]) => {
+                if (!params.isCurrent()) throw new Error('plugin_generation_retired');
+                const result = continuity.mergeSharedStateFile!(input);
+                if (!params.isCurrent()) throw new Error('plugin_generation_retired');
+                return result;
+            } }),
         ...(runtimeAuthAdapter === null
             ? {}
             : { getConnectedServiceRuntimeAuthAdapter: async () => runtimeAuthAdapter }),
@@ -786,7 +809,7 @@ async function withPreparedPreflightCommand<T>(
 ): Promise<T> {
     const selectedEnvironment = applyPreflightCommandEnvironment(environment, command);
     const artifacts: string[] = [];
-    const cleanup = async () => { await Promise.all(artifacts.map((path) => rm(path, { recursive: true, force: true }))); };
+    const cleanup = async () => { await Promise.all(artifacts.map((path) => removeHappierTempDirAsync(path))); };
     const releaseCleanup = await cleanupScope?.retain(cleanup);
     try {
         input.signal?.throwIfAborted();
@@ -1191,6 +1214,32 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
             withDeclaredManagedService,
         });
     };
+    type AcpPreflightDeclaration = Extract<NonNullable<AgentPreflightSessionControlsContributionV1['catalogs']>, { kind: 'acp' }>;
+    const withDeclaredAcpPreflight = async <T>(
+        context: AgentPreflightSessionControlsProbeContextV1,
+        catalogs: AcpPreflightDeclaration,
+        inspect: (params: Parameters<typeof probeAcpCatalogs>[0]) => Promise<T>,
+    ): Promise<T> => {
+        const toolId = catalogs.resolveCommandToolId
+            ? resolveSettingsSelectedSystemToolId({
+                commandToolIds: catalogs.commandToolIds ?? [],
+                resolveCommandToolId: catalogs.resolveCommandToolId,
+                accountSettings: context.accountSettings,
+                pluginSettings: context.pluginSettings,
+            })
+            : catalogs.command.toolId;
+        if (catalogs.resolveCommandToolId && !toolId) throw new Error('Agent catalog preflight tool is unavailable');
+        return await context.withDeclaredJsonRpcClient(
+            toolId ? { toolId, args: catalogs.command.args } : { executable: catalogs.command.executable!, args: catalogs.command.args },
+            async (client, signal) => await inspect({
+                client, signal, cwd: context.cwd,
+                ...(catalogs.authenticationMethodId ? { authenticationMethodId: catalogs.authenticationMethodId } : {}),
+                ...(catalogs.selectAuthentication ? { selectAuthentication: (initializeResult) => catalogs.selectAuthentication!({ initializeResult, probe: context }) } : {}),
+            }),
+        );
+    };
+    const acpDeclaration = contribution.catalogs && 'kind' in contribution.catalogs && contribution.catalogs.kind === 'acp'
+        ? contribution.catalogs : null;
     const invoke = <T>(
         callback: ((context: AgentPreflightSessionControlsProbeContextV1) => Promise<T> | T) | undefined,
         probeParams: PreflightSessionControlsProbeParams,
@@ -1246,6 +1295,9 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
                                     return catalogs;
                                 }
                                 const catalogs = contribution.catalogs!;
+                                if ('kind' in catalogs && catalogs.kind === 'acp') {
+                                    return await withDeclaredAcpPreflight(context, catalogs, probeAcpCatalogs);
+                                }
                                 const toolId = catalogs.resolveCommandToolId
                                     ? resolveSettingsSelectedSystemToolId({
                                         commandToolIds: catalogs.commandToolIds ?? [],
@@ -1255,15 +1307,6 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
                                     })
                                     : catalogs.command.toolId;
                                 if (catalogs.resolveCommandToolId && !toolId) throw new Error('Agent catalog preflight tool is unavailable');
-                                if ('kind' in catalogs && catalogs.kind === 'acp') {
-                                    return await context.withDeclaredJsonRpcClient(toolId ? { toolId, args: catalogs.command.args } : { executable: catalogs.command.executable!, args: catalogs.command.args }, async (client, scopedSignal) => (
-                                        await probeAcpCatalogs({
-                                            client, signal: scopedSignal, cwd: probeParams.cwd,
-                                            ...(catalogs.authenticationMethodId ? { authenticationMethodId: catalogs.authenticationMethodId } : {}),
-                                            ...(catalogs.selectAuthentication ? { selectAuthentication: (initializeResult) => catalogs.selectAuthentication!({ initializeResult, probe: context }) } : {}),
-                                        })
-                                    ));
-                                }
                                 if (!toolId) throw new Error('Agent catalog preflight tool is unavailable');
                                 const result = await context.runDeclaredSystemToolCommand({ toolId, args: catalogs.command.args });
                                 if (!result.ok) throw new Error('Agent catalog preflight command failed');
@@ -1280,6 +1323,21 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
                         await cleanupScope.dispose();
                     }
                 },
+            } : {}),
+            ...(acpDeclaration ? {
+                probeModelsRaw: async (probeParams: PreflightSessionControlsProbeParams) => await invoke(async (context) => {
+                    const controls = await withDeclaredAcpPreflight(context, acpDeclaration, probeAcpSessionControls);
+                    return normalizeAcpModelsSnapshot(controls.models, controls.configOptions)
+                        ?? (Array.isArray(controls.models) && controls.models.length === 0 ? [] : null);
+                }, probeParams),
+                probeModesRaw: async (probeParams: PreflightSessionControlsProbeParams) => await invoke(async (context) => {
+                    const controls = await withDeclaredAcpPreflight(context, acpDeclaration, probeAcpSessionControls);
+                    return normalizeAcpModesSnapshot(controls.modes, controls.configOptions)
+                        ?? (Array.isArray(controls.modes) && controls.modes.length === 0 ? [] : null);
+                }, probeParams),
+                probeConfigOptionsRaw: async (probeParams: PreflightSessionControlsProbeParams) => await invoke(async (context) => (
+                    await withDeclaredAcpPreflight(context, acpDeclaration, probeAcpSessionControls)
+                )?.configOptions ?? null, probeParams),
             } : {}),
             ...(contribution.models
                 ? {

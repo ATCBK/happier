@@ -14,10 +14,12 @@ import { createResolvedContributionRegistry } from '@/plugins/projection/registr
 import { resolvePluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import { seedCurrentLocalPathPluginFixture } from '@/plugins/store/registry/currentState.testkit';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 
 describe('executable plugin hook activation ownership', () => {
     it('activates the exact bundled Codex hook demand and projects its registered handler', async () => {
-        const runtime = await resolveExecutablePluginRuntimeRegistry();
+        const fixture = await createAdmittedPluginRuntimeFixture();
+        const runtime = fixture.registry;
 
         try {
             expect(runtime.activatedPluginIds.has('happier.agent.codex')).toBe(false);
@@ -39,7 +41,7 @@ describe('executable plugin hook activation ownership', () => {
                 }),
             ]));
         } finally {
-            await runtime.dispose();
+            await fixture.dispose();
         }
     });
 

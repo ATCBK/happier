@@ -1,8 +1,10 @@
 import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getHappierTempRoot } from '@happier-dev/cli-common/tempDirs';
+
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   AgentCliSessionCommandDeclarationV1,
@@ -14,6 +16,10 @@ import type {
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
 import { COPILOT_PLUGIN } from '@happier-dev/plugins-copilot';
+import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createConnectedServiceRuntimeAuthNativeHome } from '@/daemon/connectedServices/runtimeAuth/createRuntimeAuthNativeHome';
 
 import {
   createCliSessionCommandHandler,
@@ -350,6 +356,70 @@ describe('Agent registration catalog projections', () => {
     expect(verifyResumeReachable).toHaveBeenCalledTimes(1);
   });
 
+  describe('prepared group credentials', () => {
+    let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+    beforeAll(async () => {
+      runtime = await createAdmittedPluginRuntimeFixture({
+        controller: pluginReloadController, runtimeOptions: { pluginIds: ['happier.agent.codex'] },
+      });
+    });
+    afterAll(async () => await runtime?.dispose());
+    it.each(['group_current', 'group_superseded', 'group_same_account_superseded', 'group_malformed', 'profile'] as const)('proves prepared group credentials without a late write for %s', async scenario => {
+      const root = await mkdtemp(join(tmpdir(), 'happier-codex-runtime-persistence-'));
+      try {
+        const authPath = join(root, 'auth.json');
+        const preparedAuth = JSON.stringify({ auth_mode: 'chatgptAuthTokens', tokens: {
+          access_token: 'candidate-b-access', refresh_token: '', id_token: 'candidate-b-id', account_id: 'provider-b',
+        }, last_refresh: '2026-06-06T13:15:00.000Z' });
+        await writeFile(authPath, preparedAuth);
+        const candidate = buildConnectedServiceCredentialRecord({
+          now: 1_000, serviceId: 'openai-codex', profileId: 'account-b', kind: 'oauth',
+          oauth: { accessToken: 'candidate-b-access', refreshToken: 'candidate-b-refresh', idToken: 'candidate-b-id',
+            providerAccountId: 'provider-b', providerEmail: null, scope: null, tokenType: null },
+        });
+        const entry = await runtime.registry.acquireAgentCatalogEntry!('codex');
+        const adapter = await entry!.getConnectedServiceRuntimeAuthAdapter!();
+        const nativeHome = await createConnectedServiceRuntimeAuthNativeHome({ agentId: 'codex', root });
+        expect(nativeHome).not.toBeNull();
+        let finishNativeApply!: (value: { ok: true }) => void;
+        let enteredNativeApply!: () => void;
+        const nativeApplyEntered = new Promise<void>(resolve => { enteredNativeApply = resolve; });
+        const nativeApply = new Promise<{ ok: true }>(resolve => { finishNativeApply = resolve; });
+        // The process RPC is the only substituted boundary; codec, host adapter and native files are real.
+        const pending = adapter!.hotApply({
+          target: { agentId: 'codex' }, credential: candidate, nativeHome: nativeHome!,
+          selection: scenario === 'profile'
+            ? { kind: 'profile', serviceId: 'happier.agent.codex/openai-codex', profileId: 'account-b' }
+            : { kind: 'group', serviceId: 'happier.agent.codex/openai-codex', activeProfileId: 'account-b', groupId: 'pool', generation: 7 },
+          applySelectedAuthGeneration: async () => { enteredNativeApply(); return await nativeApply; },
+        });
+        await nativeApplyEntered;
+        const supersedingAuth = scenario === 'group_malformed'
+          ? JSON.stringify({ tokens: { account_id: 'provider-b' } })
+          : JSON.stringify({ auth_mode: 'chatgptAuthTokens', tokens: {
+          access_token: 'prepared-c-access', refresh_token: '', id_token: 'prepared-c-id', account_id: 'provider-c',
+        }, last_refresh: '2026-06-06T13:15:00.000Z' });
+        const replacementAuth = scenario === 'group_same_account_superseded'
+          ? supersedingAuth.replace('provider-c', 'provider-b')
+          : supersedingAuth;
+        const superseded = scenario !== 'group_current' && scenario !== 'profile';
+        if (superseded) await writeFile(authPath, replacementAuth);
+        finishNativeApply({ ok: true });
+        const result = await pending;
+        if (superseded) {
+          expect(result).toMatchObject({ applied: false, reason: 'provider_account_auth_store_mismatch' });
+          expect(await readFile(authPath, 'utf8')).toBe(replacementAuth);
+        } else {
+          expect(result).toEqual(expect.objectContaining({ applied: true }));
+          if (scenario === 'group_current') expect(await readFile(authPath, 'utf8')).toBe(preparedAuth);
+          else expect(JSON.parse(await readFile(authPath, 'utf8'))).toMatchObject({ tokens: { access_token: 'candidate-b-access' } });
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   it('keeps credential, declared-file, and currentness custody behind typed native-auth operations', async () => {
     const materialize = vi.fn(({ credential, selection }) => ({
       files: {
@@ -416,11 +486,9 @@ describe('Agent registration catalog projections', () => {
     const result = await adapter?.hotApply({
       target: { agentId: 'acme.external' },
       selection: {
-        kind: 'group',
+        kind: 'profile',
         serviceId: 'acme.plugin/acme-service',
-        activeProfileId: 'profile-1',
-        groupId: 'group-1',
-        generation: 2,
+        profileId: 'profile-1',
         credentialRevision: 'revision-1',
       },
       credential: {
@@ -545,7 +613,9 @@ describe('Agent registration catalog projections', () => {
         });
         const adapter = await projected.getPreflightSessionControlsProbeAdapter?.();
         await expect(adapter?.probeModelsRaw?.({ cwd: toolRoot, timeoutMs: 5_000, env: { AGENT_HOME: toolRoot } })).resolves.toBeNull();
-        expect(await readdir(artifactsRoot)).toEqual([]);
+        const protectedArtifactsRoot = getHappierTempRoot(artifactsRoot);
+        expect(await readdir(protectedArtifactsRoot)).toEqual([]);
+        expect(await readdir(artifactsRoot)).toEqual([basename(protectedArtifactsRoot)]);
       } finally { vi.unstubAllEnvs(); await rm(toolRoot, { recursive: true, force: true }); }
     },
   );

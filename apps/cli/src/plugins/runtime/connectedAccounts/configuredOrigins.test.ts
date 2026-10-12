@@ -90,6 +90,7 @@ function baseDescriptor() {
             modes: [{
                 id: 'oauth',
                 kind: 'oauthAuthorizationCode',
+                callbackUrl: 'https://provider.example/oauth/callback',
                 pkce: 'required',
                 outcomeReconciliation: 'none',
                 configuration: {
@@ -160,6 +161,7 @@ describe('connected-account configured origins', () => {
                 modes: [{
                     id: 'oauth',
                     kind: 'oauthAuthorizationCode',
+                    callbackUrl: 'https://provider.example/oauth/callback',
                     pkce: 'required',
                     outcomeReconciliation: 'none',
                     configuration: {

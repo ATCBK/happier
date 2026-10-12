@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 import tweetnacl from 'tweetnacl';
 import {
     FeaturesResponseSchema,
@@ -11,6 +12,7 @@ import {
     normalizePluginAccountCollectionContractV1,
     openPluginAccountStoragePrivatePayloadV1,
     openPluginCollectionPrivatePayloadV1,
+    sealPluginCollectionPrivatePayloadV1,
     PluginAccountStorageMutationRequestV1Schema,
     PluginManifestV2Schema,
     type AccountEncryptionCurrentnessResponse,
@@ -29,6 +31,7 @@ import {
     createAccountPluginDataStorageHost,
     type PluginAccountCollectionWatchInvalidation,
 } from './accountPluginDataStorage';
+import { publishPluginAccountAvailabilityChanges, publishPluginAccountCollectionWatchInvalidation, retirePluginAccountCollectionWatchScope } from './pluginAccountSettingsChangeBroker';
 
 const PLUGIN_ID = 'example.tasks';
 const COLLECTION_ID = 'tasks';
@@ -229,6 +232,41 @@ function bindHost(params: Readonly<{
 }
 
 describe('Account plugin Data storage host', () => {
+    it('keeps its real encryption preflight pending beyond the Connected Services deadline', async () => {
+        vi.useFakeTimers();
+        const get = vi.spyOn(axios, 'get').mockImplementation(async (_url, config) => new Promise((resolve, reject) => {
+            const timeout = config?.timeout && config.timeout > 0
+                ? setTimeout(() => reject(new Error('HTTP deadline elapsed')), config.timeout) : undefined;
+            setTimeout(() => {
+                clearTimeout(timeout);
+                resolve({ status: 200, data: currentnessFor(plainCredentials) });
+            }, 31_000);
+        }));
+        try {
+            const host = createAccountPluginDataStorageHost({
+                contracts: [admitted], readCredentials: async () => plainCredentials,
+                isCurrentAccount: () => true, resolveAccountScopeKey: () => ACCOUNT_SCOPE_KEY,
+                resolveBaseUrl: () => 'https://data.example.test',
+                http: {
+                    get: async () => ({ status: 200, data: { status: 'absent' } }),
+                    post: async () => { throw new Error('Read must not write'); },
+                },
+            });
+            const account = host.bind({ pluginId: PLUGIN_ID, occurrenceId: 'occurrence',
+                signal: new AbortController().signal, isOccurrenceCurrent: () => true });
+            if (!account) throw new Error('Expected Account Data host binding');
+            let settled = false;
+            const pending = account.kv.get('cursor').catch((error: unknown) => error).finally(() => { settled = true; });
+            await vi.advanceTimersByTimeAsync(30_001);
+            expect(settled).toBe(false);
+            await vi.advanceTimersByTimeAsync(999);
+            expect(await pending).toBeNull();
+        } finally {
+            get.mockRestore();
+            vi.useRealTimers();
+        }
+    });
+
     it('accepts successful Account KV reads and writes after fifteen seconds', async () => {
         vi.useFakeTimers();
         try {
@@ -795,6 +833,25 @@ describe('Account plugin Data storage host', () => {
         }]);
     });
 
+    it.each([plainCredentials, encryptedCredentials])('drops retired Collection fields on $token stored reads while keeping writes strict', async credentials => {
+        const privatePayload = { privateNote: 'retained', retired: true };
+        const content = credentials.encryption ? { t: 'encrypted', c: sealPluginCollectionPrivatePayloadV1({
+            material: { type: 'dataKey', machineKey: credentials.encryption.machineKey }, payload: privatePayload,
+            randomBytes: length => new Uint8Array(length).fill(3),
+        }) } : { t: 'plain', v: privatePayload };
+        const account = bindHost({ credentials,
+            get: async () => ({ status: 200, data: { row: { rowId: 'task-retained', revision: 3,
+                content, projection: { status: 'open', retired: true } }, absenceEpoch: 0 } }),
+            post: async () => { throw new Error('Invalid writes must not reach HTTP'); },
+        });
+        const collection = account.collection(collectionDefinition);
+        await expect(collection.get('task-retained')).resolves.toEqual({ rowId: 'task-retained', revision: 3,
+            value: { id: 'task-retained', status: 'open', privateNote: 'retained' },
+        });
+        await expect(collection.put({ id: 'task-new', status: 'open', privateNote: 'new', retired: true }, { expectedRevision: 'absent' }))
+            .rejects.toMatchObject({ code: 'plugin_collection_invalid_value' });
+    });
+
     describe('release-less Account declaration claim', () => {
         const CLAIM_URL = 'https://data.example.test/v1/plugins/availability/collection-writers/claim';
         const declaredManifest = PluginManifestV2Schema.parse({
@@ -832,10 +889,10 @@ describe('Account plugin Data storage host', () => {
                     post: params.post,
                 },
             });
-            return () => {
+            return (occurrenceId = '1') => {
                 const account = host.bind({
                     pluginId: PLUGIN_ID,
-                    occurrenceId: '1',
+                    occurrenceId,
                     signal: new AbortController().signal,
                     isOccurrenceCurrent: () => true,
                 });
@@ -907,7 +964,7 @@ describe('Account plugin Data storage host', () => {
             await vi.waitFor(() => expect(calls).toEqual([CLAIM_URL]));
         });
 
-        it('retries a failed claim on the next operation without failing the operation itself', async () => {
+        it.each(['network', '503', '503-with-conflict-body'] as const)('retries a transient %s claim failure on the next operation', async (failure) => {
             const calls: string[] = [];
             let failClaim = true;
             const bind = claimingHost({
@@ -917,7 +974,9 @@ describe('Account plugin Data storage host', () => {
                     if (url === CLAIM_URL && failClaim) {
                         calls.push(url);
                         failClaim = false;
-                        return { status: 503, data: {} };
+                        if (failure === 'network') throw new Error('Connection reset');
+                        return { status: 503, data: failure === '503-with-conflict-body'
+                            ? { error: 'plugin_collection_contract_conflict' } : {} };
                     }
                     return await recordingPost(calls)(url, body);
                 },
@@ -928,6 +987,100 @@ describe('Account plugin Data storage host', () => {
             await collection.get('task-2');
             await collection.get('task-3');
             expect(calls.filter((url) => url === CLAIM_URL)).toHaveLength(2);
+        });
+
+        it('retains a deterministic refusal for repeated and concurrent operations, with a typed remedy', async () => {
+            const calls: string[] = [];
+            const bind = claimingHost({
+                resolveReleaseLessDeclaration: () => declaredManifest,
+                scopeKey: () => 'gu-refused-account',
+                post: recordingPost(calls, { status: 409, data: { error: 'plugin_collection_contract_conflict' } }),
+            });
+            const collection = bind().collection(collectionDefinition);
+            const first = await Promise.allSettled([collection.get('task-1')]);
+            for (let index = 0; index < 5; index += 1) await Promise.allSettled([collection.get(`sequential-${index}`)]);
+            const operations = await Promise.allSettled(Array.from({ length: 12 }, (_, index) => (
+                bind().collection(collectionDefinition).get(`task-${index + 2}`)
+            )));
+            expect(calls).toEqual([CLAIM_URL]);
+            expect(first[0]).toMatchObject({ status: 'rejected', reason: {
+                code: 'plugin_collection_contract_conflict',
+                message: expect.stringMatching(/schemaVersion.*migration/i),
+            } });
+            expect(operations.every((result) => result.status === 'rejected'
+                && result.reason instanceof PluginError
+                && result.reason.code === 'plugin_collection_contract_conflict')).toBe(true);
+        });
+
+        it('reclaims a refused declaration only when its declaration, occurrence or Account changes', async () => {
+            let manifest = declaredManifest;
+            let scope = 'gu-changed-account-a';
+            let claims = 0;
+            const bind = claimingHost({
+                resolveReleaseLessDeclaration: () => manifest,
+                scopeKey: () => scope,
+                post: async () => {
+                    claims += 1;
+                    return { status: 409, data: { error: 'plugin_collection_contract_conflict' } };
+                },
+            });
+            const refused = async (occurrenceId = '1') => {
+                await expect(bind(occurrenceId).collection(collectionDefinition).get('task-1'))
+                    .rejects.toMatchObject({ code: 'plugin_collection_contract_conflict' });
+            };
+            await refused();
+            manifest = PluginManifestV2Schema.parse(declaredManifest);
+            await refused();
+            expect(claims).toBe(1); // Equal declarations, not object identity.
+            manifest = PluginManifestV2Schema.parse({ ...declaredManifest, displayName: 'Corrected Tasks' });
+            await refused();
+            expect(claims).toBe(2);
+            await refused('2');
+            expect(claims).toBe(3);
+            scope = 'gu-changed-account-b';
+            await refused('2');
+            expect(claims).toBe(4);
+        });
+
+        it('rechecks a refusal after matching Availability changes or an AccountChange cursor reset', async () => {
+            const scopeKey = 'gu-availability-account';
+            let claims = 0;
+            const bind = claimingHost({
+                resolveReleaseLessDeclaration: () => declaredManifest,
+                scopeKey: () => scopeKey,
+                post: async () => {
+                    claims += 1;
+                    return { status: 409, data: { error: 'plugin_collection_contract_conflict' } };
+                },
+            });
+            const change = (pluginId: string, cursor: number) => ({
+                cursor, kind: 'pluginDomain' as const, entityId: `pluginDomain/${pluginId}/availability`, changedAt: 1,
+                hint: { pluginDomain: 'availability', pluginId },
+            });
+            const refused = async () => {
+                await expect(bind().collection(collectionDefinition).get('task-1'))
+                    .rejects.toMatchObject({ code: 'plugin_collection_contract_conflict' });
+            };
+            try {
+                await refused();
+                publishPluginAccountAvailabilityChanges(scopeKey, [change('example.other', 8)]);
+                await refused();
+                expect(claims).toBe(1);
+                publishPluginAccountAvailabilityChanges(scopeKey, [change(PLUGIN_ID, 9)]);
+                await refused();
+                expect(claims).toBe(2);
+                publishPluginAccountAvailabilityChanges(scopeKey, [change(PLUGIN_ID, 9), change(PLUGIN_ID, 7)]);
+                await refused();
+                expect(claims).toBe(2);
+                publishPluginAccountCollectionWatchInvalidation({ kind: 'reset', accountScopeKey: scopeKey, changeCursor: 3 });
+                await refused();
+                expect(claims).toBe(3);
+                publishPluginAccountAvailabilityChanges(scopeKey, [change(PLUGIN_ID, 4)]);
+                await refused();
+                expect(claims).toBe(4);
+            } finally {
+                retirePluginAccountCollectionWatchScope(scopeKey);
+            }
         });
 
         it('never claims for a managed portable plugin', async () => {

@@ -191,8 +191,11 @@ export function joinInstalledCatalogRuntimeIntrospection(
     pluginFinalPolicyCurrentRuntimesById?: ReadonlyMap<string, PluginFinalPolicyCurrentRuntime>;
   }> | null | undefined,
 ): readonly PluginCatalogEntry[] {
+  // A live registry derives this map on access. All rows in one synchronous
+  // join consume the same fresh observation instead of rebuilding it per row.
+  const currentRuntimes = runtimeRegistry?.pluginFinalPolicyCurrentRuntimesById;
   const currentEntries = entries.map((entry) => {
-    const current = runtimeRegistry?.pluginFinalPolicyCurrentRuntimesById?.get(entry.pluginId);
+    const current = currentRuntimes?.get(entry.pluginId);
     const currentCatalogGeneration = current
       ? current.sourceCustody.kind === 'managed'
         ? current.sourceCustody.immutableGenerationId
@@ -211,13 +214,14 @@ export function joinInstalledCatalogRuntimeIntrospection(
     diagnosticsByPluginId: runtimeRegistry?.pluginDiagnosticsByPluginId ?? {},
     occurredAtMs: Date.now(),
   });
-  if (runtimeRegistry?.generation === undefined || !runtimeRegistry.targetActivationFacts) {
+  const targetActivationFacts = runtimeRegistry?.targetActivationFacts;
+  if (runtimeRegistry?.generation === undefined || !targetActivationFacts) {
     return joinPluginCatalogEntriesIntrospection(currentEntries, undefined, attributedDiagnostics);
   }
   return joinPluginCatalogEntriesIntrospection(currentEntries, resolveInstalledCatalogTargetActivationSnapshot({
     entries: currentEntries,
     generation: runtimeRegistry.generation,
-    targetActivationFacts: runtimeRegistry.targetActivationFacts,
+    targetActivationFacts,
     runtimeState: 'current',
   }), attributedDiagnostics);
 }

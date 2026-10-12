@@ -43,8 +43,9 @@ describe('projectManifestAgentContribution', () => {
     it('consumes declarative ACP recovery policy through the shared host backoff owner', async () => {
         const contribution = project({ ...sessionAgent(['create', 'resume']), runtime: {
             kind: 'acp', transport: { kind: 'stdio', executable: { kind: 'systemTool', id: 'fixture-acp' } },
-            definition: { usageLimitRecoveryBackoff: {
-                fallbackBackoffEnvKey: 'HAPPIER_TEST_ACP_FALLBACK_MS', maxAttemptsEnvKey: 'HAPPIER_TEST_ACP_MAX_ATTEMPTS',
+            definition: { usageLimitDiagnostic: {
+                pattern: '^Provider quota exhausted$',
+                connectedAccountService: { pluginId: 'com.acme.agent', localId: 'account' },
             } },
         } });
         const policy = contribution.catalogEntry?.sessionUsageLimitRecoveryBackoffPolicy;

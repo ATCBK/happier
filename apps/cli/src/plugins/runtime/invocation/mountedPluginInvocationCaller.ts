@@ -1,0 +1,174 @@
+import type { DaemonPluginStructuredMessageActionInvocationV1 } from '@happier-dev/protocol';
+import { arePluginMachineMaterializationRefsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import type { PluginInvocationCaller } from '@happier-dev/plugin-sdk';
+import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { pluginSourceCustodyEqual } from '@/plugins/runtime/sourceAuthority';
+
+/**
+ * Convert a mounted UI or client Action binding into invocation provenance only
+ * after the daemon matches it against its admitted runtime lease. The wire
+ * record is a claim from the client, not caller authority.
+ */
+export async function deriveMountedPluginInvocationCaller(input: Readonly<{
+    request: Readonly<{
+        machineId: string;
+        invocationSurface: 'cli' | 'ui' | 'voice' | 'agent' | 'mcp';
+        invocation?: DaemonPluginStructuredMessageActionInvocationV1;
+    }>;
+    registry: ResolvedExecutablePluginRuntimeRegistry;
+    resolveCurrentPluginMaterializationRef?: NonNullable<
+        ResolvedExecutablePluginRuntimeRegistry['resolveCurrentPluginMaterializationRef']
+    >;
+    resolveExecutionOriginContext?: () => Promise<Readonly<{ serverIdentityId: string; machineId: string }> | null> | Readonly<{ serverIdentityId: string; machineId: string }> | null;
+}>): Promise<
+    | Readonly<{ status: 'absent' }>
+    | Readonly<{ status: 'unavailable' }>
+    | Readonly<{
+        status: 'available';
+        caller: Extract<PluginInvocationCaller, Readonly<{ kind: 'plugin' }>>;
+        /** Re-read live machine identity immediately before target effect. */
+        isMountedCallerCurrent: () => Promise<boolean>;
+    }>
+> {
+    const invocation = input.request.invocation;
+    const binding = invocation?.kind === 'mountedPluginSurface'
+        ? invocation.mountedBinding
+        : invocation?.kind === 'clientPluginAction'
+            ? invocation.clientActionBinding
+            : undefined;
+    if (!binding) return Object.freeze({ status: 'absent' as const });
+    const contributes = input.registry.contributes;
+
+    let machineContext: Readonly<{ serverIdentityId: string; machineId: string }> | null = null;
+    try {
+        machineContext = await input.resolveExecutionOriginContext?.() ?? null;
+    } catch {
+        return Object.freeze({ status: 'unavailable' as const });
+    }
+    const pluginId = binding.pluginId;
+    const materialization = binding.materializationRef;
+    let occurrenceId: ReturnType<NonNullable<ResolvedExecutablePluginRuntimeRegistry['readPluginOccurrenceId']>> = null;
+    let sourceCustody: ReturnType<NonNullable<ResolvedExecutablePluginRuntimeRegistry['readPluginSourceCustody']>> = null;
+    try {
+        occurrenceId = input.registry.readPluginOccurrenceId?.(pluginId) ?? null;
+        sourceCustody = input.registry.readPluginSourceCustody?.(pluginId) ?? null;
+    } catch {
+        return Object.freeze({ status: 'unavailable' as const });
+    }
+    if (
+        !machineContext
+        || !occurrenceId
+        || !sourceCustody
+        || (binding.sourceCustody !== undefined && !pluginSourceCustodyEqual(binding.sourceCustody, sourceCustody))
+        || machineContext.machineId !== input.request.machineId
+        || occurrenceId !== binding.occurrenceId
+        || (materialization !== undefined && materialization.machineId !== machineContext.machineId)
+    ) {
+        return Object.freeze({ status: 'unavailable' as const });
+    }
+    if (materialization !== undefined) {
+        try {
+            const current = input.resolveCurrentPluginMaterializationRef?.(pluginId) ?? null;
+            if (current === null || !arePluginMachineMaterializationRefsEqual(current, materialization)) {
+                return Object.freeze({ status: 'unavailable' as const });
+            }
+        } catch {
+            return Object.freeze({ status: 'unavailable' as const });
+        }
+    } else if (contributes.materializationIdsByPluginId?.[pluginId] !== undefined) {
+        // Source-backed occurrences may omit a portable ref; a declared materialization must be supplied.
+        return Object.freeze({ status: 'unavailable' as const });
+    }
+    const initialMachineContext = machineContext;
+
+    let contributionIdentity: Readonly<{ pluginId: string; localId: string }> | null = null;
+    if (invocation?.kind === 'clientPluginAction') {
+        const mountedAction = contributes.actionsById?.get(buildQualifiedPluginContributionKey({
+            pluginId,
+            localId: binding.contributionLocalId,
+        }));
+        if (!mountedAction || !mountedAction.pluginId || !('execution' in mountedAction.definition)) {
+            return Object.freeze({ status: 'unavailable' as const });
+        }
+        const execution = mountedAction.definition.execution;
+        if (
+            typeof execution !== 'object'
+            || execution === null
+            || !('target' in execution)
+            || execution.target !== 'client'
+        ) {
+            return Object.freeze({ status: 'unavailable' as const });
+        }
+        contributionIdentity = {
+            pluginId: mountedAction.pluginId,
+            localId: mountedAction.definition.id,
+        };
+    } else {
+        const mountedContribution = [
+            ...(contributes.uiViewsV2 ?? []),
+            ...(contributes.uiSettingsPagesV2 ?? []),
+            // Plugin manifest ingestion reserves local contribution IDs across
+            // families, so this exact pluginId/localId pair is unambiguous for a
+            // mounted app-shell Voice invocation too.
+            ...(contributes.voiceProviders ?? []),
+        ].find((entry) => (
+            entry.pluginId === pluginId
+            && entry.identity.pluginId === pluginId
+            && entry.identity.localId === binding.contributionLocalId
+        ));
+        if (!mountedContribution) return Object.freeze({ status: 'unavailable' as const });
+        contributionIdentity = mountedContribution.identity;
+    }
+    if (!contributionIdentity) return Object.freeze({ status: 'unavailable' as const });
+
+    return Object.freeze({
+        status: 'available' as const,
+        caller: Object.freeze({
+            kind: 'plugin' as const,
+            pluginId,
+            contribution: Object.freeze({
+                id: contributionIdentity.localId,
+                qualifiedId: buildQualifiedPluginContributionKey(contributionIdentity),
+            }),
+            occurrenceId,
+            sourceCustody,
+            ...(materialization === undefined
+                ? {}
+                : { materialization: Object.freeze({ ...materialization }) }),
+            // Diagnostic provenance only. Target policy receives the independent
+            // invocationSurface below.
+            originSurface: input.request.invocationSurface,
+        }),
+        isMountedCallerCurrent: async (): Promise<boolean> => {
+            let current: Readonly<{ serverIdentityId: string; machineId: string }> | null = null;
+            try {
+                current = await input.resolveExecutionOriginContext?.() ?? null;
+            } catch {
+                return false;
+            }
+            let liveMaterialization: typeof materialization | null = null;
+            if (materialization !== undefined) {
+                try {
+                    liveMaterialization = input
+                        .resolveCurrentPluginMaterializationRef?.(pluginId)
+                        ?? null;
+                } catch {
+                    return false;
+                }
+            }
+            return current !== null
+                && current.serverIdentityId === initialMachineContext.serverIdentityId
+                && current.machineId === initialMachineContext.machineId
+                && current.machineId === input.request.machineId
+                && input.registry.isPluginOccurrenceCurrent?.(
+                    pluginId,
+                    occurrenceId,
+                ) === true
+                && (materialization === undefined
+                    ? input.registry.contributes.materializationIdsByPluginId?.[pluginId] === undefined
+                    : liveMaterialization !== null
+                        && arePluginMachineMaterializationRefsEqual(liveMaterialization, materialization));
+        },
+    });
+}

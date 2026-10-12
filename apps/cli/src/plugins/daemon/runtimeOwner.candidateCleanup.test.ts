@@ -116,6 +116,7 @@ function createReloadController(): PluginReloadController {
         release: ownerMocks.releaseInitialLease,
       });
     }),
+    readCurrentDurableRevision: () => -1,
     tryAcquireRuntimeRegistry: vi.fn(() => null),
     isRuntimeRegistryCurrent: vi.fn(() => false),
     invalidateRuntimeProjection: vi.fn(),

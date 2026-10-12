@@ -1,4 +1,5 @@
 import { PluginWebhookActionInputV1Schema, PluginWebhookActionResultV1Schema, PluginWebhookDeliveryContentV1Schema } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { openBoxBundle } from '@happier-dev/protocol/crypto/boxBundle';
 import type { PluginWebhookActionInputV1, PluginWebhookActionResultV1, PluginWebhookAutomationAdmissionUnresolvedV1, PluginWebhookClaimResultV1, PluginWebhookSettleResultV1 } from '@happier-dev/protocol';
@@ -10,6 +11,7 @@ import {
 } from './pluginWebhookInvocationReference';
 
 type DeliveryClaimV1 = Extract<PluginWebhookClaimResultV1, { kind: 'delivery' }>;
+const StoredDeliveryContentV1Schema = createStoredReadSchema(PluginWebhookDeliveryContentV1Schema);
 /**
  * The exact server-selected target is a claim fact, not a separate caller
  * input: the protocol claim response carries it, and renew/complete/fail
@@ -70,7 +72,10 @@ export type PluginWebhookDeliveryWorkerTransportV1 = Readonly<{
 }>;
 
 function openContentV1(claim: DeliveryClaimV1, credentials: StoredCredentials) {
-  if (claim.envelope.t === 'plain') return claim.envelope.v;
+  if (claim.envelope.t === 'plain') {
+    const parsed = StoredDeliveryContentV1Schema.safeParse(claim.envelope.v);
+    return parsed.success ? parsed.data : null;
+  }
   const encryption = credentials.encryption;
   if (!encryption) return null;
   const secret = encryption.type === 'dataKey' ? encryption.machineKey : encryption.secret;
@@ -80,7 +85,7 @@ function openContentV1(claim: DeliveryClaimV1, credentials: StoredCredentials) {
   });
   if (!plaintext) return null;
   try {
-    return PluginWebhookDeliveryContentV1Schema.parse(JSON.parse(
+    return StoredDeliveryContentV1Schema.parse(JSON.parse(
       new TextDecoder('utf-8', { fatal: true }).decode(plaintext),
     ));
   } catch {

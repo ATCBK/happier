@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
+import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { CHANNELS_PLUGIN, PLUGIN_MANIFEST } from '@happier-dev/plugins-channels/manifest';
 import type { PluginActionDangerLevelV2 } from '@happier-dev/protocol';
 
 import { createTargetActionExecutor, fingerprintTargetActionPolicy } from './actionExecutor';
@@ -54,6 +57,65 @@ function createExecutor(
 }
 
 describe('target action executor', () => {
+  it.each(['agent', 'mcp'] as const)('requests approval for Channels management on %s and dispatches the existing handler once after approval', async (surface) => {
+    const localId = 'connection/pairing-cancel-v1';
+    const parsed = parsePluginManifest(PLUGIN_MANIFEST);
+    if (!parsed.ok) throw new Error('Channels manifest admission failed.');
+    const declaration = parsed.manifest.contributes.actions?.find((action) => action.id === localId);
+    if (!declaration) throw new Error('Missing Channels pairing cancellation declaration.');
+    const testkit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: CHANNELS_PLUGIN });
+    const actionInput = { generationId: 'retired-pairing', challengeId: 'unknown-challenge' };
+    let dispatches = 0;
+    let approvalFingerprint = '';
+    let approvalRequested!: () => void;
+    const requestedApproval = new Promise<void>((resolve) => { approvalRequested = resolve; });
+    let approve!: (decision: Readonly<{ status: 'approved'; fingerprint: string }>) => void;
+    const decision = new Promise<Readonly<{ status: 'approved'; fingerprint: string }>>((resolve) => { approve = resolve; });
+    const executor = createExecutor({
+      resolve: () => ({
+        ...resolved(),
+        qualifiedId: `happier.channels/actions/${localId}`,
+        pluginId: 'happier.channels', localId,
+        dangerLevel: declaration.dangerLevel,
+        scopes: declaration.scopes,
+        surfaces: declaration.surfaces,
+        confirmation: declaration.confirmation,
+        input: actionInput,
+      }),
+      requestCurrentIntent: async ({ fingerprint, invocationSurface }) => {
+        expect(invocationSurface).toBe(surface);
+        approvalFingerprint = fingerprint;
+        approvalRequested();
+        return await decision;
+      },
+      // The host binding is the boundary; the actual Channels activation and
+      // registered handler remain real, including its pairing proof checks.
+      invoke: async () => {
+        dispatches += 1;
+        return { status: 'executed', value: await testkit.invokeAction(localId, actionInput, { surface }) };
+      },
+    });
+    const request = { pluginId: 'happier.channels', localId, input: actionInput, surface };
+    try {
+      const pending = executor.prepare(request);
+      await expect(Promise.race([
+        requestedApproval.then(() => 'approvalRequested'),
+        pending.then((prepared) => prepared.kind),
+      ])).resolves.toBe('approvalRequested');
+      expect(dispatches).toBe(0);
+      approve({ status: 'approved', fingerprint: approvalFingerprint });
+      const prepared = await pending;
+      if (prepared.kind !== 'ready') throw new Error('Approved Channels management did not become runnable.');
+      await expect(Promise.all([prepared.run(), prepared.run()])).resolves.toEqual([
+        { status: 'executed', value: { kind: 'notCancelled', reason: 'restarted' } },
+        { status: 'executed', value: { kind: 'notCancelled', reason: 'restarted' } },
+      ]);
+      expect(dispatches).toBe(1);
+    } finally {
+      await testkit.dispose();
+    }
+  });
+
   it('settles blocking approval before returning ready and memoizes handler dispatch', async () => {
     let resolveApproval!: (value: Readonly<{ status: 'approved'; fingerprint: string }>) => void;
     const approval = new Promise<Readonly<{ status: 'approved'; fingerprint: string }>>((resolve) => {

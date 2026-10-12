@@ -25,6 +25,7 @@ import { createResolvedContributionRegistry } from '../createResolvedContributio
 import { projectLoadedPluginContributes } from '../resolvePluginContributions';
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { projectManifestAgentContribution } from '../projectManifestAgentContribution';
+import { parseDaemonContributionRegistryProjectionDescribeResponse } from '../../../../../../ui/sources/sync/api/daemon/daemonContributionRegistryProjectionProtocol';
 
 function createEmptyResolvedContributionRegistry(): ResolvedContributionRegistry {
     return {
@@ -1376,6 +1377,11 @@ describe('buildPluginProjectionV2', () => {
         const registry = {
             ...createEmptyResolvedContributionRegistry(),
             ...builtIns,
+            // The daemon lease stamps these facts; static declarations alone
+            // intentionally omit plugin-owned family rows from the wire.
+            occurrenceIdsByPluginId: Object.fromEntries([
+                'happier.agent.codex', 'happier.agent.claude', 'happier.agent.antigravity',
+            ].map((pluginId) => [pluginId, createPluginRuntimeOccurrenceId(pluginId)])),
         } satisfies ResolvedContributionRegistry;
         const projection = buildPluginProjectionV2({ registry, generation: 21 });
 
@@ -1408,6 +1414,24 @@ describe('buildPluginProjectionV2', () => {
         }
         for (const agentId of ['auggie', 'cursor', 'copilot']) {
             expect(projection.agentsById[agentId]?.externalSessions).toBeUndefined();
+        }
+
+        // DF35: New Session consumes the complete response, including Connected
+        // Accounts. An Agent-only projection cannot expose this admission failure.
+        const admitted = parseDaemonContributionRegistryProjectionDescribeResponse({
+            protocolVersion: 1,
+            projection,
+        });
+        expect(admitted).not.toBeNull();
+        for (const [pluginId, serviceId] of [
+            ['happier.agent.codex', 'openai-codex'],
+            ['happier.agent.claude', 'claude-subscription'],
+            ['happier.agent.antigravity', 'antigravity-account'],
+        ]) {
+            const entry = admitted?.projection.familiesById.connectedAccounts?.entriesById[`${pluginId}/${serviceId}`];
+            expect(entry?.authentication.modes).toEqual(expect.arrayContaining([
+                expect.objectContaining({ kind: 'oauthAuthorizationCode', callbackUrl: expect.any(String) }),
+            ]));
         }
     });
 
@@ -1583,6 +1607,7 @@ describe('buildPluginProjectionV2', () => {
                     definition: {
                         id: 'acme-discovery',
                         title: 'Acme discovery',
+                        loadedInHappierSessions: true,
                         metadata: { agentId: 'acme' },
                     },
                 },

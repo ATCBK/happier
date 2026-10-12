@@ -1,4 +1,5 @@
 import type { PluginReloadController } from '@/plugins/runtime/reload/controller';
+import type { DaemonPluginCatalogReadRequest } from './catalogProjection';
 import {
   projectBundledPluginCatalogEntries,
   readInstalledPluginCatalogSnapshot,
@@ -17,31 +18,34 @@ export type CurrentDaemonPluginCatalogSnapshot = Readonly<{
   tools: readonly ProjectedPluginToolCatalogEntry[];
 }>;
 
+let bundledCatalogEntries: readonly PluginCatalogEntry[] | undefined;
+
 function projectCurrentDaemonPluginCatalogEntries(
   installedEntries: readonly PluginCatalogEntry[],
-  runtimeRegistry?: Pick<ResolvedExecutablePluginRuntimeRegistry, 'pluginFinalPolicyCurrentRuntimesById'>,
+  currentRuntimes?: ResolvedExecutablePluginRuntimeRegistry['pluginFinalPolicyCurrentRuntimesById'],
 ): readonly PluginCatalogEntry[] {
   // Session runners import shared daemon services but do not read this catalog.
   // Admit bundled declarations only for an actual catalog projection; the
   // locator owner already retains the immutable process-local admission.
-  const bundledPlugins = loadCurrentBundledPluginLocatorResult();
+  if (!bundledCatalogEntries) {
+    const bundledPlugins = loadCurrentBundledPluginLocatorResult();
+    // Bundled admission is immutable for this process. Retain its declaration
+    // projection, not the changing installed state or serving runtime facts.
+    bundledCatalogEntries = projectBundledPluginCatalogEntries(bundledPlugins);
+  }
   const installedPluginIds = new Set(installedEntries.map((entry) => entry.pluginId));
-  const desiredGenerationByPluginId = Object.freeze(Object.fromEntries(
-    [...(runtimeRegistry?.pluginFinalPolicyCurrentRuntimesById ?? new Map())]
-      .map(([pluginId, current]) => [
-        pluginId,
-        current.sourceCustody.kind === 'managed'
-          ? current.sourceCustody.immutableGenerationId
-          : current.occurrenceId,
-      ]),
-  ));
   return Object.freeze([
     ...installedEntries,
-    ...projectBundledPluginCatalogEntries({
-      loadedPlugins: bundledPlugins.loadedPlugins,
-      pluginFailures: bundledPlugins.pluginFailures,
-      desiredGenerationByPluginId,
-      excludedPluginIds: installedPluginIds,
+    ...bundledCatalogEntries.filter((entry) => !installedPluginIds.has(entry.pluginId)).map((entry) => {
+      const current = entry.manifest
+        ? currentRuntimes?.get(entry.pluginId)
+        : undefined;
+      const desiredGeneration = current
+        ? current.sourceCustody.kind === 'managed'
+          ? current.sourceCustody.immutableGenerationId
+          : current.occurrenceId
+        : null;
+      return desiredGeneration === entry.desiredGeneration ? entry : { ...entry, desiredGeneration };
     }),
   ].sort((a, b) => a.pluginId.localeCompare(b.pluginId)));
 }
@@ -68,11 +72,23 @@ export async function readCurrentDaemonPluginCatalog(params: Readonly<{
 export async function readCurrentDaemonPluginCatalogSnapshot(params: Readonly<{
   reloadController: PluginReloadController;
   happyHomeDir?: string;
+  selection?: DaemonPluginCatalogReadRequest['selection'];
 }>): Promise<CurrentDaemonPluginCatalogSnapshot> {
-  const catalogParams = params.happyHomeDir ? { happyHomeDir: params.happyHomeDir } : undefined;
   const lease = params.reloadController.tryAcquireRuntimeRegistry();
   try {
-    const catalog = await readInstalledPluginCatalogSnapshot(catalogParams);
+    if (params.selection === 'tools') {
+      // The controller observes durable adoption before serving publication,
+      // including failures. Passive reads join that fact to their exact lease
+      // without reopening installation and rollback metadata from disk.
+      return {
+        plugins: Object.freeze([]),
+        tools: lease && lease.durableRevision === params.reloadController.readCurrentDurableRevision()
+          ? projectCurrentDaemonPluginTools(lease.registry)
+          : Object.freeze([]),
+      };
+    }
+
+    const catalog = await readInstalledPluginCatalogSnapshot({ happyHomeDir: params.happyHomeDir });
     // A durable commit can lead publication of its derived serving lease. Do
     // not combine snapshots from different revisions: until a later read
     // acquires a matching lease, expose the durable catalog without runtime
@@ -84,10 +100,22 @@ export async function readCurrentDaemonPluginCatalogSnapshot(params: Readonly<{
       };
     }
 
-    const currentEntries = projectCurrentDaemonPluginCatalogEntries(catalog.entries, lease.registry);
+    // These registry getters derive whole-registry facts. Read them once for
+    // this synchronous projection, never once per catalog row. The next read
+    // still observes the live activation owner rather than a retained cache.
+    const runtimeSnapshot = {
+      generation: lease.registry.generation,
+      targetActivationFacts: lease.registry.targetActivationFacts,
+      pluginDiagnosticsByPluginId: lease.registry.pluginDiagnosticsByPluginId,
+      pluginFinalPolicyCurrentRuntimesById: lease.registry.pluginFinalPolicyCurrentRuntimesById,
+    };
+    const currentEntries = projectCurrentDaemonPluginCatalogEntries(
+      catalog.entries,
+      runtimeSnapshot.pluginFinalPolicyCurrentRuntimesById,
+    );
 
     return {
-      plugins: joinInstalledCatalogRuntimeIntrospection(currentEntries, lease.registry),
+      plugins: joinInstalledCatalogRuntimeIntrospection(currentEntries, runtimeSnapshot),
       tools: projectCurrentDaemonPluginTools(lease.registry),
     };
   } finally {
