@@ -25,3 +25,26 @@ export const SessionSystemRecordRevisionSchema = lazyZodSchema(() => z.string()
   }, 'Invalid session system record revision'));
 
 export type SessionSystemRecordRevision = z.infer<typeof SessionSystemRecordRevisionSchema>;
+
+export type ParsedSessionSystemRecordRevision = Readonly<{ id: string; version: number }>;
+
+export function parseSessionSystemRecordRevision(value: unknown): ParsedSessionSystemRecordRevision | null {
+  const parsed = SessionSystemRecordRevisionSchema.safeParse(value);
+  if (!parsed.success) return null;
+  const bytes = decodeBase64(parsed.data.slice('ssr1.'.length), 'base64url');
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const idLength = view.getUint32(0, false);
+  return {
+    id: new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(4, 4 + idLength)),
+    version: view.getUint32(4 + idLength, false),
+  };
+}
+
+/** A later version is reachable only within the same durable record identity. */
+export function isSessionSystemRecordRevisionAtLeastAcknowledged(current: unknown, acknowledged: unknown): boolean {
+  const currentRecord = parseSessionSystemRecordRevision(current);
+  const acknowledgedRecord = parseSessionSystemRecordRevision(acknowledged);
+  return currentRecord !== null && acknowledgedRecord !== null
+    && currentRecord.id === acknowledgedRecord.id
+    && currentRecord.version >= acknowledgedRecord.version;
+}

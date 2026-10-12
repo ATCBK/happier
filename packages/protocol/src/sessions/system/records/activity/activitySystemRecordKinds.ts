@@ -12,6 +12,7 @@ export const SESSION_SYSTEM_RECORD_ACTIVITY_NAMESPACE = 'activity' as const;
 export const ACTIVITY_SESSION_SYSTEM_RECORD_KINDS = [
   'workflow_run.v1',
   'background_task.v1',
+  'session_stop.v1',
 ] as const;
 
 export const ActivitySessionSystemRecordKindSchema = lazyZodSchema(() => z.enum(ACTIVITY_SESSION_SYSTEM_RECORD_KINDS));
@@ -43,4 +44,9 @@ export function buildBackgroundTaskSystemRecordLocalId(params: Readonly<{ taskId
     throw new Error('activity background_task.v1 local id: taskId must be a non-empty string');
   }
   return `activity:background_task:v1:${taskId}`;
+}
+
+/** A stop occurrence remains the same durable record when its receipt is retried. */
+export function buildSessionStopSystemRecordLocalId(params: Readonly<{ at: number }>): string {
+  return `activity:session_stop:v1:${params.at}`;
 }

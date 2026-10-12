@@ -24,6 +24,8 @@ export {
 } from './sessionSystemRecordNamespace.js';
 export {
   SessionSystemRecordSchema,
+  SessionSystemRecordCreatorV1Schema,
+  type SessionSystemRecordCreatorV1,
   type SessionSystemRecord,
 } from './sessionSystemRecord.js';
 export {

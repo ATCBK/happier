@@ -7,6 +7,7 @@ import { SessionSummaryShardV1Schema } from '../../../messages/structured/sessio
 import { SessionSynopsisV1Schema } from '../../../messages/structured/sessionSynopsisV1.js';
 import { SessionBackgroundTaskRecordV1Schema } from '../../work/backgroundTask/backgroundTaskRecordV1.js';
 import { SessionWorkflowRunSnapshotV1Schema } from '../../work/workflow/sessionWorkflowRunSnapshotV1.js';
+import { SessionStopRecordV1Schema } from '../../../machines/guard/sessionGuardStateV1.js';
 import {
   SESSION_PERMISSION_SYSTEM_RECORD_NAMESPACE,
   SessionPermissionRemoteGrantRecordV1Schema,
@@ -80,6 +81,13 @@ export const SESSION_SYSTEM_RECORD_CATALOG = defineSessionSystemRecordCatalog({
   },
   [SESSION_SYSTEM_RECORD_ACTIVITY_NAMESPACE]: {
     kinds: {
+      'session_stop.v1': {
+        payloadSchema: SessionStopRecordV1Schema,
+        policy: {
+          accountScope: 'session-owner', read: 'visible', write: 'edit', delete: 'edit',
+          revision: 'opaque-row-version', cas: 'stored-envelope',
+        },
+      },
       'workflow_run.v1': {
         payloadSchema: SessionWorkflowRunSnapshotV1Schema,
         policy: {

@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { z } from 'zod';
 
 import { StrictJsonValueSchema } from '../../../json/strictJsonValue.js';
+import { createStoredReadSchema } from '../../../json/storedReadSchema.js';
 import {
   addRegisteredSessionSystemRecordKindIssue,
   addSessionSystemRecordPlainContentPayloadIssue,
@@ -90,7 +91,7 @@ export type SessionSystemRecordPageResponse = SessionSystemRecordPage;
 // Host-internal transport DTOs. Public SessionHandle calls carry opened JSON;
 // the CLI seals once and sends this stored envelope to the canonical server owner.
 export const SessionSystemRecordStoredSchema = lazyZodSchema(() => SessionSystemRecordSchema.extend({
-  content: SessionSystemRecordContentSchema,
+  content: createStoredReadSchema(SessionSystemRecordContentSchema),
 }).strict());
 export type SessionSystemRecordStored = z.infer<typeof SessionSystemRecordStoredSchema>;
 export const SessionSystemRecordStoredUpsertRequestSchema = lazyZodSchema(() => z.object({
@@ -126,7 +127,7 @@ export type SessionPermissionMediationRecordKind = z.infer<
 
 export const SessionPermissionMediationRecordStoredSchema = lazyZodSchema(() => SessionPermissionMediationRecordIdentityV1Schema.extend({
   kind: SessionPermissionMediationRecordKindSchema,
-  content: SessionSystemRecordContentSchema,
+  content: createStoredReadSchema(SessionSystemRecordContentSchema),
   revision: SessionSystemRecordRevisionSchema,
 }).strict());
 export type SessionPermissionMediationRecordStored = z.infer<
