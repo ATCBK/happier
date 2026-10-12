@@ -340,11 +340,10 @@ export type PluginDeclarativeProjectedNodeV1 =
   }>;
 
 export const PluginDeclarativeProjectedNodeV1Schema: z.ZodType<PluginDeclarativeProjectedNodeV1> = z.lazy(
-  () => z.discriminatedUnion('kind', [
+  () => z.union([z.union(PluginDeclarativeChartNodeV1Schema.options.map(schema => schema.extend(ProjectedNodeBaseV1Shape))), z.discriminatedUnion('kind', [
     PluginDeclarativeMetricNodeV1Schema.extend(ProjectedNodeBaseV1Shape),
     PluginDeclarativeTableNodeV1Schema.extend(ProjectedNodeBaseV1Shape),
     PluginDeclarativeRowsNodeV1Schema.extend(ProjectedNodeBaseV1Shape),
-    PluginDeclarativeChartNodeV1Schema.extend(ProjectedNodeBaseV1Shape),
     z.object({ kind: z.literal('dragSource'), ...ProjectedNodeBaseV1Shape, source: PluginDeclarativeProjectedQualifiedReferenceV1Schema, reference: PluginJsonValueV2Schema, organizing: z.boolean().optional(), children: z.array(PluginDeclarativeProjectedNodeV1Schema) }).strict(),
     z.object({ kind: z.literal('dropTarget'), ...ProjectedNodeBaseV1Shape, target: PluginDeclarativeProjectedQualifiedReferenceV1Schema, input: PluginJsonValueV2Schema.optional(), children: z.array(PluginDeclarativeProjectedNodeV1Schema) }).strict(),
     z.object({ kind: z.literal('widgetArea'), ...ProjectedNodeBaseV1Shape, area: z.string().trim().min(1), context: z.record(z.string(), PluginJsonValueV2Schema).optional() }).strict(),
@@ -471,7 +470,7 @@ export const PluginDeclarativeProjectedNodeV1Schema: z.ZodType<PluginDeclarative
       title: PluginLocalizedStringV2Schema.optional(),
       children: z.array(PluginDeclarativeProjectedNodeV1Schema),
     }).strict(),
-  ]),
+  ])]),
 );
 
 export type PluginDeclarativeProjectedModelV1 = Readonly<{

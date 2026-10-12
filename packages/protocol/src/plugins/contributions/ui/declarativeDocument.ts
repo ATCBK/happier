@@ -7,11 +7,11 @@ import { asProtocolZod } from "../../actions/internalProtocolZodAdapter.js";
 import {
   buildQualifiedPluginContributionKey,
   createPluginContributionIdentity,
-  PluginContributionLocalIdSchema,
   PluginContributionIdentityV1Schema,
   type PluginContributionIdentityV1,
 } from '../../contributionIdentity.js';
 import { PluginIdSchema } from '../../pluginId.js';
+import { PluginSettingFieldIdV2Schema } from '../settings.js';
 import {
   derivePluginUiTargetedSurfaceMountInstanceKeyV1,
   PluginUiTargetedContributionSurfaceV1Schema,
@@ -183,7 +183,7 @@ export type PluginDeclarativeSettingsInventoryEntryV1 = Readonly<{
 // internals (see providers/capabilities/v1.ts for the same ruling).
 export const PluginDeclarativeSettingsInventoryEntryV1Schema = lazyZodSchema(() => z.object({
   pluginId: asProtocolZod(PluginIdSchema),
-  id: asProtocolZod(PluginContributionLocalIdSchema),
+  id: PluginSettingFieldIdV2Schema,
   qualifiedId: z.string().trim().min(1).max(1_024),
   schema: PluginJsonSchemaV2Schema,
   secret: z.boolean(),

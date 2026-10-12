@@ -14,6 +14,7 @@ import { asProtocolZod } from "../../actions/internalProtocolZodAdapter.js";
 
 import { PluginContributionLocalIdSchema, PluginContributionIdentityV1Schema, type PluginContributionIdentityV1 } from '../../contributionIdentity.js';
 import { PluginIdSchema } from '../../pluginId.js';
+import { PluginSettingFieldIdV2Schema } from '../settings.js';
 import {
   PluginCollectionMemberNameV1Schema,
   PluginCollectionProjectedScalarFieldRefV1Schema,
@@ -77,11 +78,11 @@ export type { PluginUiIconTokenV1 } from './tokens.js';
  * name the same type rather than keeping a second copy of it.
  */
 export const PluginDeclarativeControlV2Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('text'), settingId: asProtocolZod(PluginContributionLocalIdSchema) }).strict(),
-  z.object({ kind: z.literal('number'), settingId: asProtocolZod(PluginContributionLocalIdSchema) }).strict(),
-  z.object({ kind: z.literal('toggle'), settingId: asProtocolZod(PluginContributionLocalIdSchema) }).strict(),
-  z.object({ kind: z.literal('select'), settingId: asProtocolZod(PluginContributionLocalIdSchema), options: z.array(z.object({ value: PluginJsonValueV2Schema, label: PluginLocalizedStringV2Schema }).strict()) }).strict(),
-  z.object({ kind: z.literal('secret'), settingId: asProtocolZod(PluginContributionLocalIdSchema) }).strict(),
+  z.object({ kind: z.literal('text'), settingId: PluginSettingFieldIdV2Schema }).strict(),
+  z.object({ kind: z.literal('number'), settingId: PluginSettingFieldIdV2Schema }).strict(),
+  z.object({ kind: z.literal('toggle'), settingId: PluginSettingFieldIdV2Schema }).strict(),
+  z.object({ kind: z.literal('select'), settingId: PluginSettingFieldIdV2Schema, options: z.array(z.object({ value: PluginJsonValueV2Schema, label: PluginLocalizedStringV2Schema }).strict()) }).strict(),
+  z.object({ kind: z.literal('secret'), settingId: PluginSettingFieldIdV2Schema }).strict(),
 ]));
 export type PluginDeclarativeControlV2 = z.infer<typeof PluginDeclarativeControlV2Schema>;
 /**
@@ -301,8 +302,8 @@ export type PluginDeclarativeNodeV2 =
   | PluginDeclarativeActionPanelNodeV2
   | PluginDeclarativeCollectionListNodeV2;
 
-export const PluginDeclarativeNodeV2Schema: z.ZodType<PluginDeclarativeNodeV2> = z.lazy(() => z.discriminatedUnion('kind', [
-  PluginDeclarativeMetricNodeV1Schema, PluginDeclarativeTableNodeV1Schema, PluginDeclarativeRowsNodeV1Schema, PluginDeclarativeChartNodeV1Schema,
+export const PluginDeclarativeNodeV2Schema: z.ZodType<PluginDeclarativeNodeV2> = z.lazy(() => z.union([PluginDeclarativeChartNodeV1Schema, z.discriminatedUnion('kind', [
+  PluginDeclarativeMetricNodeV1Schema, PluginDeclarativeTableNodeV1Schema, PluginDeclarativeRowsNodeV1Schema,
   z.object({ kind: z.literal('dragSource'), sourceId: asProtocolZod(PluginContributionReferenceV2Schema), reference: PluginJsonValueV2Schema, organizing: z.boolean().optional(), children: z.array(PluginDeclarativeNodeV2Schema) }).strict(),
   z.object({ kind: z.literal('dropTarget'), targetId: asProtocolZod(PluginContributionReferenceV2Schema), input: PluginJsonValueV2Schema.optional(), children: z.array(PluginDeclarativeNodeV2Schema) }).strict(),
   z.object({ kind: z.literal('widgetArea'), area: asProtocolZod(PluginContributionLocalIdSchema), context: z.record(z.string(), PluginJsonValueV2Schema).optional() }).strict(),
@@ -321,7 +322,7 @@ export const PluginDeclarativeNodeV2Schema: z.ZodType<PluginDeclarativeNodeV2> =
   DeclarativeMetadataNodeSchema,
   DeclarativeActionPanelNodeSchema,
   DeclarativeCollectionListNodeSchema,
-]));
+])]));
 
 /**
  * Static roots go through the same iterative document preflight as Resource

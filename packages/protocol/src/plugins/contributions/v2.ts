@@ -111,7 +111,9 @@ import { PluginContributionIdentityV1Schema, PluginContributionLocalIdSchema } f
 import { PluginRoleDeclarationV1Schema } from './roles.js';
 import { PluginWorkflowContributionV1Schema } from './workflows.js';
 import { PluginInputTypeContributionV1Schema } from './inputTypes.js';
+import { PluginAtmospherePictureContributionV1Schema } from './atmospherePictures.js';
 export { PluginInputTypeContributionV1Schema, type PluginInputTypeContributionV1 } from './inputTypes.js';
+export { PluginAtmospherePictureContributionV1Schema, type PluginAtmospherePictureContributionV1 } from './atmospherePictures.js';
 import { PluginDragSourceContributionV1Schema, PluginDropTargetContributionV1Schema } from './entityDragDrop.js';
 export * from './entityDragDrop.js';
 import {
@@ -223,8 +225,6 @@ const PluginAgentAcpNativeSessionMcpConfigV2Schema = lazyZodSchema(() => z.objec
   serversKey: z.string().trim().min(1),
   /** Constant fields merged into every host-generated server entry. */
   serverEntryConstants: z.record(z.string().trim().min(1), z.string()).optional(),
-  /** Config-root siblings linked into the session-private root beside `directory`. */
-  linkedConfigRootEntries: z.array(z.string().trim().min(1)).min(1).optional(),
   /**
    * Workspace-relative provider config files that would shadow a session
    * server. A shadowing project entry fails the launch instead of silently
@@ -328,16 +328,38 @@ export type PluginAgentAcpModelSuffixOptionV2 =
  * Data-only behavior the host ACP composer can apply without invoking plugin
  * code. Dynamic ACP behavior remains a custom Agent runtime responsibility.
  */
+export const PluginAgentAcpSkillsSessionDeliveryV2Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('env_path_list'), envKey: z.string().min(1),
+    separator: z.enum([',', 'path_delimiter']), value: z.enum(['skills_root', 'plugin_root']),
+  }).strict(),
+  z.object({
+    kind: z.literal('defaults_file_env'), envKey: z.string().min(1),
+    directoriesKeyPath: z.array(z.string().min(1)).min(1),
+    disabledKeyPath: z.array(z.string().min(1)).min(1).optional(),
+  }).strict(),
+  z.object({ kind: z.literal('native_config_skills_dir'), subdirectory: z.string().min(1) }).strict(),
+]));
+export type PluginAgentAcpSkillsSessionDeliveryV2 = z.infer<typeof PluginAgentAcpSkillsSessionDeliveryV2Schema>;
+
+const PluginAgentAcpMcpInputPolicyV2Schema = lazyZodSchema(() => z.object({
+  policy: z.enum(['pass_through', 'drop']),
+  nativeSessionConfig: PluginAgentAcpNativeSessionMcpConfigV2Schema.optional(),
+}).strict());
+export type PluginAgentAcpMcpInputPolicyV2 = z.infer<typeof PluginAgentAcpMcpInputPolicyV2Schema>;
+
 export const PluginAgentAcpDefinitionV2Schema = lazyZodSchema(() => z.object({
   auth: z.object({
     methodId: z.string().trim().min(1).max(256),
+    setupFailure: z.object({
+      requestErrorCode: z.number().int(),
+      dataReason: z.string().min(1),
+    }).strict().optional(),
   }).strict().optional(),
   modelConfigOptionId: z.string().trim().min(1).optional(),
   stderrRules: PluginAgentAcpStderrRulesV2Schema.optional(),
-  mcp: z.object({
-    policy: z.enum(['pass_through', 'drop']),
-    nativeSessionConfig: PluginAgentAcpNativeSessionMcpConfigV2Schema.optional(),
-  }).strict().optional(),
+  mcp: PluginAgentAcpMcpInputPolicyV2Schema.optional(),
+  skills: z.object({ sessionDelivery: PluginAgentAcpSkillsSessionDeliveryV2Schema }).strict().optional(),
   models: z.object({
     suffixOption: PluginAgentAcpModelSuffixOptionV2Schema,
   }).strict().optional(),
@@ -347,10 +369,6 @@ export const PluginAgentAcpDefinitionV2Schema = lazyZodSchema(() => z.object({
     }, 'Diagnostic patterns must be valid Unicode regular expressions.'),
     connectedAccountService: asProtocolZod(PluginContributionIdentityV1Schema),
   }).strict().optional(),
-  usageLimitRecoveryBackoff: z.object({
-    fallbackBackoffEnvKey: z.string().trim().min(1),
-    maxAttemptsEnvKey: z.string().trim().min(1),
-  }).strict().optional(),
   permissionModeMapping: PluginAgentAcpPermissionModeMappingV2Schema.optional(),
   permissionModeArgv: PluginAgentAcpPermissionModeArgvV2Schema.optional(),
 }).strict().refine(
@@ -359,9 +377,9 @@ export const PluginAgentAcpDefinitionV2Schema = lazyZodSchema(() => z.object({
     || value.modelConfigOptionId !== undefined
     || value.stderrRules !== undefined
     || value.mcp !== undefined
+    || value.skills !== undefined
     || value.models !== undefined
     || value.usageLimitDiagnostic !== undefined
-    || value.usageLimitRecoveryBackoff !== undefined
     || value.permissionModeMapping !== undefined
     || value.permissionModeArgv !== undefined
   ),
@@ -372,6 +390,9 @@ export const PluginAgentAcpDefinitionV2Schema = lazyZodSchema(() => z.object({
     path: ['mcp'],
     message: 'Native session MCP config delivery requires the `drop` input policy.',
   },
+).refine(
+  (value) => value.skills?.sessionDelivery.kind !== 'native_config_skills_dir' || value.mcp?.nativeSessionConfig !== undefined,
+  { path: ['skills', 'sessionDelivery'], message: 'Native skills directory delivery requires a native session config root.' },
 ));
 export type PluginAgentAcpDefinitionV2 = z.infer<typeof PluginAgentAcpDefinitionV2Schema>;
 
@@ -425,10 +446,30 @@ export const PluginAgentToolsDeliveryV2Schema = lazyZodSchema(() => z.enum([
 ]));
 export type PluginAgentToolsDeliveryV2 = z.infer<typeof PluginAgentToolsDeliveryV2Schema>;
 
+export function agentReceivesUserMcpServersV1(
+  delivery: PluginAgentToolsDeliveryV2 | 'unsupported' | undefined,
+): boolean {
+  return delivery === 'native_mcp' || delivery === 'native_extension';
+}
+
 export const PluginAgentToolsCapabilityV2Schema = lazyZodSchema(() => z.object({
   delivery: PluginAgentToolsDeliveryV2Schema,
 }).strict());
 export type PluginAgentToolsCapabilityV2 = z.infer<typeof PluginAgentToolsCapabilityV2Schema>;
+
+/** Session-private skill delivery and the Agent's declared native discovery roots. */
+export const PluginAgentSkillsCapabilityV2Schema = lazyZodSchema(() => z.object({
+  delivery: z.enum(['session_dir', 'none']),
+  nativeDisable: z.enum(['supported', 'unsupported']),
+  liveReload: z.enum(['supported', 'unsupported']),
+  usageEvidence: z.enum(['reported', 'none']).optional(),
+  nativeRoots: z.object({
+    user: z.array(z.array(z.string().min(1)).min(1)).optional(),
+    project: z.array(z.array(z.string().min(1)).min(1)).optional(),
+    plugin: z.array(z.array(z.string().min(1)).min(1)).optional(),
+  }).strict().optional(),
+}).strict());
+export type PluginAgentSkillsCapabilityV2 = z.infer<typeof PluginAgentSkillsCapabilityV2Schema>;
 
 /** Prompted structured JSON consumed by the host's strict output normalizers. */
 export const PluginAgentStructuredOutputCapabilityV2Schema = lazyZodSchema(() => z.object({
@@ -441,6 +482,7 @@ const PluginAgentCapabilitiesV2Shape = {
   sessions: PluginAgentSessionCapabilitiesV2Schema.optional(),
   executionRuns: PluginAgentExecutionRunCapabilitiesV2Schema.optional(),
   tools: PluginAgentToolsCapabilityV2Schema.optional(),
+  skills: PluginAgentSkillsCapabilityV2Schema.optional(),
   structuredOutput: PluginAgentStructuredOutputCapabilityV2Schema.optional(),
 };
 
@@ -576,6 +618,7 @@ const PluginAgentSessionCapabilitiesShape = {
   surfaces: PluginAgentCapabilitySurfacesV2Schema.optional(),
   sessions: PluginAgentSessionCapabilitiesV2Schema,
   tools: PluginAgentToolsCapabilityV2Schema.optional(),
+  skills: PluginAgentSkillsCapabilityV2Schema.optional(),
   structuredOutput: PluginAgentStructuredOutputCapabilityV2Schema.optional(),
 };
 const PluginAgentSessionPrimaryShape = {
@@ -592,6 +635,7 @@ const PluginAgentExecutionPrimaryShape = {
     surfaces: PluginAgentCapabilitySurfacesV2Schema.optional(),
     executionRuns: PluginAgentExecutionRunCapabilitiesV2Schema,
     tools: PluginAgentToolsCapabilityV2Schema.optional(),
+    skills: PluginAgentSkillsCapabilityV2Schema.optional(),
     structuredOutput: PluginAgentStructuredOutputCapabilityV2Schema.optional(),
   }).strict(),
 };
@@ -613,6 +657,16 @@ export const PluginAgentContributionV2Schema = lazyZodSchema(() => z.union([
   PluginAgentPrimaryContributionV2Schema,
   PluginAgentExternalSessionsAuxiliaryV2Schema,
 ]).superRefine((value, ctx) => {
+  if ('runtime' in value && value.runtime.kind === 'acp') {
+    const declaresSessionDirectory = value.capabilities.skills?.delivery === 'session_dir';
+    const hasSessionDelivery = value.runtime.definition?.skills?.sessionDelivery !== undefined;
+    if (declaresSessionDirectory !== hasSessionDelivery) {
+      ctx.addIssue({
+        code: 'custom', path: ['capabilities', 'skills'],
+        message: 'ACP session-directory skills delivery requires both the capability and its delivery declaration.',
+      });
+    }
+  }
   const declaresExternalSessions = value.capabilities.surfaces?.includes('externalSessions') === true;
   const hasExternalSessionDescriptor = value.surfaces?.externalSession !== undefined;
   if (declaresExternalSessions && !hasExternalSessionDescriptor) {
@@ -835,6 +889,7 @@ export const PLUGIN_CORE_CONTRIBUTION_FAMILIES_V2 = [
   definePluginContributionFamilyV2({ family: 'tools', schema: PluginToolContributionV2Schema }),
   definePluginContributionFamilyV2({ family: 'resources', schema: PluginResourceContributionV2Schema }),
   definePluginContributionFamilyV2({ family: 'inputTypes', schema: PluginInputTypeContributionV1Schema }),
+  definePluginContributionFamilyV2({ family: 'atmospherePictures', schema: PluginAtmospherePictureContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'dragSources', schema: PluginDragSourceContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'dropTargets', schema: PluginDropTargetContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'transcriptActivities', schema: PluginTranscriptActivityContributionV1Schema }),

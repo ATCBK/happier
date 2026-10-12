@@ -69,14 +69,17 @@ function requireScopeTargetMatch(
   value: Readonly<{
     scope: z.infer<typeof PluginSettingsScopeRefV1Schema>;
     target: PluginSettingsAdministrationTargetV1;
+    bindingServerIdentityId?: string | null;
   }>,
   context: z.RefinementCtx,
 ): void {
-  if (value.scope.kind === value.target.kind) return;
-  context.addIssue({
-    code: z.ZodIssueCode.custom,
-    path: ['target'],
+  if (value.scope.kind !== value.target.kind) context.addIssue({
+    code: z.ZodIssueCode.custom, path: ['target'],
     message: 'Plugin Settings administration target must match the selected scope.',
+  });
+  if (value.bindingServerIdentityId !== undefined && value.scope.kind !== 'account') context.addIssue({
+    code: z.ZodIssueCode.custom, path: ['bindingServerIdentityId'],
+    message: 'A per-server Settings binding belongs to an Account record.',
   });
 }
 
@@ -88,6 +91,8 @@ const ScopeSelectedSettingsActionBaseSchema = lazyZodSchema(() => z.object({
 
 const ScopeSelectedSettingsFieldActionBaseSchema = lazyZodSchema(() => ScopeSelectedSettingsActionBaseSchema.extend({
   localId: PluginSettingFieldIdV2Schema,
+  /** Explicit null selects the declared fallback; omission retains the original operation. */
+  bindingServerIdentityId: z.string().trim().regex(SERVER_IDENTITY_ID_PATTERN).nullable().optional(),
 }).strict().superRefine(requireScopeTargetMatch));
 
 /**
@@ -97,12 +102,24 @@ const ScopeSelectedSettingsFieldActionBaseSchema = lazyZodSchema(() => ScopeSele
  * that secret's custody is daemon, `secretDaemonTarget` selects that existing
  * machine owner independently of its Settings scope.
  */
+const CanonicalSecretOriginV1Schema = lazyZodSchema(() => z.string().trim().min(1).refine((value) => {
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === value
+      && url.username === '' && url.password === '';
+  } catch {
+    return false;
+  }
+}, 'A canonical HTTP(S) origin is required.'));
+
 const SecretActionBaseSchema = lazyZodSchema(() => z.object({
   pluginId: asProtocolZod(PluginIdSchema),
   localId: PluginSettingFieldIdV2Schema,
   scope: PluginSettingsScopeRefV1Schema.optional(),
   target: PluginSettingsAdministrationTargetV1Schema.optional(),
   secretDaemonTarget: PluginSettingsAdministrationDaemonTargetV1Schema.optional(),
+  /** Credential partition selected before approval; it is never re-derived on replay. */
+  canonicalOrigin: CanonicalSecretOriginV1Schema.optional(),
 }).strict().superRefine((value, context) => {
   if (value.scope && !value.target) {
     context.addIssue({
@@ -210,6 +227,17 @@ export const PluginSettingsAdministrationActionInputSchemasV1 = {
   z.ZodTypeAny
 >>;
 
+/** Schema-admitted selection shared by placement and approval custody. */
+export function resolvePluginSettingsAdministrationTargetV1(
+  actionId: PluginSettingsAdministrationActionIdV1,
+  input: unknown,
+): PluginSettingsAdministrationTargetV1 {
+  const parsed = PluginSettingsAdministrationActionInputSchemasV1[actionId].parse(input);
+  if ('secretDaemonTarget' in parsed && parsed.secretDaemonTarget) return parsed.secretDaemonTarget;
+  if ('target' in parsed && parsed.target) return parsed.target;
+  return { kind: 'account' };
+}
+
 const PluginSettingsAdministrationResultTextV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(4_096));
 // A list result carries at most one entry per field the record itself admits,
 // so this cardinality is read from the canonical Settings bounds owner rather
@@ -288,6 +316,25 @@ const PluginSettingsAdministrationDaemonSecretDeleteResultDataV1Schema = lazyZod
   application: PluginSettingsAdministrationLiveApplicationV1Schema,
 }).strict());
 
+/** The incumbent owner's safe settlement readback; never a second read or secret record. */
+export const PluginSettingsAdministrationFailureDetailsV1Schema = lazyZodSchema(() => z.union([
+  z.object({
+    kind: z.literal('settings_snapshot'),
+    scope: PluginSettingsScopeRefV1Schema,
+    target: PluginSettingsAdministrationTargetV1Schema,
+    revision: ExpectedRevisionSchema,
+    values: z.record(z.string(), StrictJsonValueSchema),
+  }).strict().superRefine(requireScopeTargetMatch),
+  PluginSettingsAdministrationAccountSecretStatusResultDataV1Schema.extend({
+    kind: z.literal('secret_snapshot'),
+  }).strict(),
+  PluginSettingsAdministrationDaemonSecretStatusResultDataV1Schema.extend({
+    kind: z.literal('secret_snapshot'),
+    canonicalOrigin: CanonicalSecretOriginV1Schema.optional(),
+  }).strict(),
+]));
+export type PluginSettingsAdministrationFailureDetailsV1 = z.infer<typeof PluginSettingsAdministrationFailureDetailsV1Schema>;
+
 /**
  * The public administration result vocabulary is action-specific and closed.
  * Secret actions can carry only custody, current target, status, and revision;
@@ -342,7 +389,11 @@ export const PluginSettingsAdministrationActionOutputV1Schema = lazyZodSchema(()
     kind: PluginSettingsAdministrationActionIdV1Schema,
     errorCode: z.string().trim().min(1).max(128),
     error: PluginSettingsAdministrationResultTextV1Schema,
-  }).strict(),
+    details: PluginSettingsAdministrationFailureDetailsV1Schema.optional(),
+  }).strict().superRefine((value, context) => {
+    if (value.details && value.kind.startsWith('plugins.settings.secret.') !== (value.details.kind === 'secret_snapshot'))
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['details'], message: 'Settlement must match the Settings or Secret owner.' });
+  }),
 ]));
 export type PluginSettingsAdministrationActionOutputV1 = z.infer<
   typeof PluginSettingsAdministrationActionOutputV1Schema

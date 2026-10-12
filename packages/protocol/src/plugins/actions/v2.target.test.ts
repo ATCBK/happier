@@ -12,6 +12,7 @@ import {
 import { PluginCommandContributionV2Schema } from '../contributions/v2.js';
 import { defineProtocolLiteral, defineProtocolNumber, defineProtocolObject, defineProtocolString, defineProtocolUnion } from './protocolComposableSchema.js';
 import type { PluginLocalizedStringV2 } from '../contributions/publicTypes.js';
+import type { InputOptionValue } from '../../inputs/inputFields.js';
 import {
   PluginActionExecutionV2Schema as RootPluginActionExecutionV2Schema,
   PluginActionInputHintsV2Schema as RootPluginActionInputHintsV2Schema,
@@ -43,7 +44,7 @@ describe('plugin executable contribution target grammar', () => {
     expectTypeOf<PluginActionInputHintsV2['fields'][number]['title']>()
       .toEqualTypeOf<PluginLocalizedStringV2>();
     expectTypeOf<NonNullable<PluginActionInputHintsV2['fields'][number]['options']>[number]['value']>()
-      .toEqualTypeOf<string>();
+      .toEqualTypeOf<InputOptionValue>();
     expectTypeOf<PluginActionInputHintsV2['fields'][number]>()
       .not.toHaveProperty('optionsSourceId');
     expectTypeOf<PluginActionInputHintsV2['fields'][number]>()
@@ -630,6 +631,17 @@ describe('plugin executable contribution target grammar', () => {
     expect(PluginActionContributionV2Schema.safeParse({
       ...action, connectedAccountPurposeBindings: [{ path: 'selection.credentialRef', purpose: 'selected-account' }],
     }).success).toBe(false);
+  });
+
+  it('keeps typed JSON choices without allowing a type to manufacture static Connected Account choices', () => {
+    const inputType = { pluginId: 'com.acme.inputs', localId: 'repository' };
+    const field = { path: 'repository', title: localized, widget: 'select', inputType };
+    expect(PluginActionInputHintsV2Schema.safeParse({ fields: [{ ...field,
+      options: [{ value: { repositoryId: 'allowed' }, label: localized }],
+    }] }).success).toBe(true);
+    expect(PluginActionInputHintsV2Schema.safeParse({ fields: [{ ...field,
+      options: [{ value: { service: { pluginId: 'com.acme.accounts', localId: 'service' }, accountId: 'account-1' }, label: localized }],
+    }] }).success).toBe(false);
   });
 
   it('admits only the dedicated purpose-derived Connected Account field capability on exact account leaves', () => {

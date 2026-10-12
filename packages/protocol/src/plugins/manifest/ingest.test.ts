@@ -2260,7 +2260,7 @@ describe('canonical plugin manifest ingestion', () => {
       managedDependencies: [managedDependency('managed')],
       mcp: {
         servers: [{ id: 'server', title: 'Server', kind: 'dynamic' }],
-        discoverySources: [{ id: 'discovery', title: 'Discovery' }],
+        discoverySources: [{ id: 'discovery', title: 'Discovery', loadedInHappierSessions: true }],
       },
     };
     const required = [
@@ -2441,7 +2441,7 @@ describe('canonical plugin manifest ingestion', () => {
         managedDependencies: [managedDependency('managed')],
         mcp: {
           servers: [{ id: 'server', title: 'Server', kind: 'dynamic' }],
-          discoverySources: [{ id: 'discovery', title: 'Discovery' }],
+          discoverySources: [{ id: 'discovery', title: 'Discovery', loadedInHappierSessions: true }],
         },
       },
     }));

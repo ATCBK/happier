@@ -17,6 +17,7 @@
  */
 import type { JsonValue } from '../../json/strictJsonValue.js';
 import type { AccountScopedCryptoMaterial } from '../../crypto/accountScopedCipher.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import {
   PluginCollectionContentEnvelopeV1Schema,
   PluginCollectionPrivatePayloadV1Schema,
@@ -315,7 +316,7 @@ export function decodePluginCollectionLogicalRowV1<
   TValue extends PluginCollectionLogicalValueV1 = PluginCollectionLogicalValueV1,
 >(input: Readonly<{
   contract: NormalizedPluginAccountCollectionContractV1;
-  isValidLogicalValue: PluginCollectionLogicalValueValidatorV1<TValue>;
+  parseStoredLogicalValue: (value: PluginCollectionLogicalValueV1) => TValue | null;
   row: PluginCollectionRowV1;
   encryptionMode: 'plain' | 'e2ee';
   material: AccountScopedCryptoMaterial | null;
@@ -323,7 +324,7 @@ export function decodePluginCollectionLogicalRowV1<
   let privatePayload: Readonly<Record<string, JsonValue>>;
   try {
     const envelope = assertPluginCollectionContentEnvelopeForModeV1(
-      input.row.content,
+      createStoredReadSchema(PluginCollectionContentEnvelopeV1Schema).parse(input.row.content),
       input.encryptionMode,
     );
     const opened = envelope.t === 'plain'
@@ -343,7 +344,8 @@ export function decodePluginCollectionLogicalRowV1<
   if (!isExactProjection({
     contract: input.contract,
     rowId: input.row.rowId,
-    projection: input.row.projection,
+    projection: Object.fromEntries(input.contract.serverReadable.filter(field => hasOwn(input.row.projection, field))
+      .map(field => [field, input.row.projection[field]!])),
   })) {
     return { status: 'failed', reason: 'projection-mismatch' };
   }
@@ -363,8 +365,8 @@ export function decodePluginCollectionLogicalRowV1<
   if (!hasOwn(logical, input.contract.rowIdField)) {
     setJsonRecordValue(logical, input.contract.rowIdField, input.row.rowId);
   }
-  const value = Object.freeze(logical);
-  if (!input.isValidLogicalValue(value)) {
+  const value = input.parseStoredLogicalValue(Object.freeze(logical));
+  if (value === null) {
     return { status: 'failed', reason: 'row-schema-invalid' };
   }
   return {

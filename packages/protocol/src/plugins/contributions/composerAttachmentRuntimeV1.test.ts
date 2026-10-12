@@ -10,6 +10,12 @@ import {
 } from './composerAttachmentRuntimeV1.js';
 
 describe('composer attachment runtime V1', () => {
+  it('preserves inline attachment text beyond the former reference-context budget', () => {
+    const context = 'Untrusted attachment text\n'.repeat(5_000);
+    const result = { attachments: [{ instanceId: 'attachment-1', status: 'ready', context }] };
+    expect(ComposerAttachmentResolveResultV1Schema.parse(result)).toEqual(result);
+  });
+
   it('keeps V1 Session identity unchanged and admits host-stamped Session or execution-run V2 scope', () => {
     const attachments = [{ instanceId: 'attachment-1', key: 'issue', value: { issueId: '42' } }];
 

@@ -1,5 +1,7 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { InputOptionValueSchema } from '../../inputs/inputFields.js';
+import { QualifiedConnectedAccountRefSchema } from '../../connect/qualifiedConnectedAccountPersistence.js';
 
 import {
   PluginActionDangerLevelV2Schema,
@@ -227,9 +229,16 @@ export const PluginActionConfirmationV2Schema = lazyZodSchema(() => z.object({
 }).strict());
 export type PluginActionConfirmationV2 = z.infer<typeof PluginActionConfirmationV2Schema>;
 
+// Only the purpose-derived field capability may offer Connected Account choices.
+// Other typed choices still carry strict JSON through the neutral value owner.
+const PluginActionStaticOptionValueV2Schema = lazyZodSchema(() => InputOptionValueSchema.refine(
+  value => !QualifiedConnectedAccountRefSchema.safeParse(value).success,
+  { message: 'Static Connected Account choices require the purpose-derived field capability.' },
+));
+
 const PluginActionInputHintsSchemasV2 = createActionInputHintsSchemasWithoutOptionsSource(
   PluginLocalizedStringV2Schema,
-  z.string().trim().min(1),
+  PluginActionStaticOptionValueV2Schema,
 );
 
 const PluginToolInputHintsSchemasV2 = createActionInputHintsSchemasWithStaticOptionsOnly(
@@ -424,6 +433,7 @@ function widgetMatchesInputLeaf(
   // Typed choices carry schema-admitted JSON, not only the incumbent string dialect.
   // The target's pre-dispatch input admission also enforces the resolved type schema.
   if (field.inputType && field.widget === 'select') return true;
+  if (field.inputType && field.widget === 'multiselect') return inputLeaf.type === 'array';
   // Public DSL unions and literals need not emit an explicit type. Each union
   // arm must support the widget; this refinement does not change credential
   // leaf traversal or the exact Connected Account checks above.

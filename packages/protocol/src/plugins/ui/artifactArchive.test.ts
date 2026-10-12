@@ -69,6 +69,17 @@ describe('Plugin UI Artifact archive codec', () => {
     expect(opened?.artifactGraph).toEqual(graph);
     expect(opened?.files.get('hosted-web/hosted/index.html')).toEqual(entryBytes);
     expect(opened?.files.get('hosted-web/hosted/assets/icon.svg')).toEqual(assetBytes);
+    const retainedBody = { ...archive.body, retired: true,
+      files: archive.body.files.map(file => ({ ...file, retired: true })) };
+    const retainedHeader = { ...archive.header, retired: true, artifactGraph: { ...graph, retired: true,
+      files: graph.files.map(file => ({ ...file, retired: true })) } };
+    expect(decodePluginUiArtifactArchiveBodyV1(JSON.stringify(retainedBody))).toEqual(archive.body);
+    expect(openPluginUiArtifactArchiveV1({ pluginId, expectedArtifactDigest: graph.digest,
+      header: retainedHeader, body: retainedBody })).toEqual(opened);
+    expect(() => encodePluginUiArtifactArchiveBodyV1(retainedBody)).toThrow();
+    expect(openPluginUiArtifactArchiveV1({ pluginId, expectedArtifactDigest: graph.digest,
+      header: retainedHeader, body: { ...retainedBody, files: [...retainedBody.files,
+        { relativePath: 'hosted-web/extra.js', bytesBase64: 'ZXh0cmE=' }] } })).toBeNull();
   });
 
   it('fails closed on a tampered file or a different outer link digest', () => {

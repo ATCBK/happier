@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import {
   isAccountScopedBlobCiphertextForKind,
@@ -131,6 +132,7 @@ export const PluginAccountSettingsValuesV1Schema = lazyZodSchema(() => PluginAcc
   }
 }));
 export type PluginAccountSettingsValuesV1 = z.infer<typeof PluginAccountSettingsValuesV1Schema>;
+export const PluginAccountSettingsValuesV1StoredSchema = createStoredReadSchema(PluginAccountSettingsValuesV1Schema);
 
 const PluginAccountSettingsEncryptedCiphertextWriteV1Schema = lazyZodSchema(() => z.string().min(1).superRefine(
   (ciphertext, context) => {
@@ -159,6 +161,7 @@ export const PluginAccountSettingsContentV1Schema = lazyZodSchema(() => z.discri
   }).strict(),
 ]));
 export type PluginAccountSettingsContentV1 = z.infer<typeof PluginAccountSettingsContentV1Schema>;
+export const PluginAccountSettingsContentV1StoredSchema = createStoredReadSchema(PluginAccountSettingsContentV1Schema);
 
 /**
  * Current writers use the cipher-derived bound while the broad reader above
@@ -222,7 +225,7 @@ export const PluginAccountSettingsReadResponseV1Schema = lazyZodSchema(() => z.d
   z.object({
     status: z.literal('present'),
     revision: PluginAccountSettingsRevisionV1Schema,
-    content: PluginAccountSettingsContentV1Schema,
+    content: PluginAccountSettingsContentV1StoredSchema,
   }).strict(),
   z.object({ status: z.literal('absent') }).strict(),
   z.object({

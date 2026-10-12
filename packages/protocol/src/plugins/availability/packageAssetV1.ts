@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { decodeBase64, encodeBase64, readCanonicalPaddedBase64DecodedLength } from '../../crypto/base64.js';
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
@@ -296,11 +297,18 @@ export function encodePackageAssetArchiveBodyV1(body: PackageAssetArchiveBodyV1)
 
 export function decodePackageAssetArchiveBodyV1(value: string): PackageAssetArchiveBodyV1 | null {
   try {
-    const parsed = PackageAssetArchiveBodyV1Schema.safeParse(JSON.parse(value));
-    return parsed.success ? parsed.data : null;
+    const raw: unknown = JSON.parse(value);
+    // Known fields are type checked, but the original logical JSON must reach
+    // the opener: the release digest authenticates annotations too.
+    return isStoredPackageAssetArchiveBodyV1(raw) ? raw : null;
   } catch {
     return null;
   }
+}
+
+function isStoredPackageAssetArchiveBodyV1(value: unknown): value is PackageAssetArchiveBodyV1 {
+  // This shape has no coercions/defaults that change the declared field types.
+  return createStoredReadSchema(PackageAssetArchiveBodyV1Schema).safeParse(value).success;
 }
 
 /**
@@ -313,9 +321,19 @@ export function openPackageAssetArchiveV1(input: Readonly<{
   body: unknown;
 }>): PackageAssetArchiveOpenedV1 | null {
   const expectedDescriptor = PackageAssetArchiveDescriptorV1Schema.safeParse(input.expectedDescriptor);
-  const header = PackageAssetArchiveHeaderV1Schema.safeParse(input.header);
-  const body = PackageAssetArchiveBodyV1Schema.safeParse(input.body);
-  if (!expectedDescriptor.success || !header.success || !body.success) return null;
+  const header = createStoredReadSchema(PackageAssetArchiveHeaderV1Schema).safeParse(input.header);
+  if (!expectedDescriptor.success || !header.success) return null;
+  let rawDigest: PluginUiArtifactDigestV1;
+  try {
+    rawDigest = computePluginUiArtifactSha256DigestV1(
+      new TextEncoder().encode(createCanonicalJsonSigningInput(input.body)),
+    );
+  } catch {
+    return null;
+  }
+  if (rawDigest !== expectedDescriptor.data.archiveDigestSha256) return null;
+  const body = createStoredReadSchema(PackageAssetArchiveBodyV1Schema).safeParse(input.body);
+  if (!body.success) return null;
   if (!descriptorsEqual(header.data.descriptor, expectedDescriptor.data)) return null;
 
   const resources = new Map<string, Uint8Array>();
@@ -342,9 +360,6 @@ export function openPackageAssetArchiveV1(input: Readonly<{
     const bytes = decodeCanonicalBase64(resource.bytesBase64, resource.byteSize);
     if (!bytes || computePluginUiArtifactSha256DigestV1(bytes) !== resource.digestSha256) return null;
     resources.set(resource.resourceId, copyBytes(bytes));
-  }
-  if (computePackageAssetArchiveDigestV1(body.data) !== expectedDescriptor.data.archiveDigestSha256) {
-    return null;
   }
   return Object.freeze({ resources });
 }

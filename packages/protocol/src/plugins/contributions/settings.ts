@@ -141,6 +141,61 @@ export const PluginSettingFieldBindingV2Schema = lazyZodSchema(() => z.union([
   }).strict(),
 ]));
 
+export type PluginSettingStorageBindingV1 = z.infer<typeof PluginSettingFieldBindingV2Schema>;
+type PluginSettingBoundFieldV1 = Readonly<{ key: string; binding?: PluginSettingStorageBindingV1 }>;
+type PluginSettingBoundInputV1 = Readonly<{
+  values: Readonly<Record<string, unknown>>;
+  field: PluginSettingBoundFieldV1;
+  serverIdentityId: string | null;
+}>;
+
+function readPluginSettingBindingRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Readonly<Record<string, unknown>> : null;
+}
+
+/** The declared binding is the sole mapping from a display field to its storage field. */
+export function readPluginSettingBoundValueV1(params: PluginSettingBoundInputV1): unknown {
+  const binding = params.field.binding;
+  if (binding?.kind === 'direct') return params.values[binding.settingId ?? params.field.key];
+  if (binding?.kind === 'perActiveServer') {
+    const byServer = readPluginSettingBindingRecord(params.values[binding.byServerIdSettingId]);
+    if (params.serverIdentityId && byServer && Object.hasOwn(byServer, params.serverIdentityId)) return byServer[params.serverIdentityId];
+    return params.values[binding.fallbackSettingId];
+  }
+  return params.values[params.field.key];
+}
+
+export function resolvePluginSettingBoundSetV1(params: PluginSettingBoundInputV1 & Readonly<{ value: unknown }>):
+  Readonly<{ fieldId: string; value: unknown }> {
+  const binding = params.field.binding;
+  if (binding?.kind === 'direct') return { fieldId: binding.settingId ?? params.field.key, value: params.value };
+  if (binding?.kind !== 'perActiveServer' || !params.serverIdentityId) return {
+    fieldId: binding?.kind === 'perActiveServer' ? binding.fallbackSettingId : params.field.key, value: params.value,
+  };
+  const current = readPluginSettingBindingRecord(params.values[binding.byServerIdSettingId]);
+  const byServer: Record<string, unknown> = current ? { ...current } : {};
+  byServer[params.serverIdentityId] = params.value;
+  return { fieldId: binding.byServerIdSettingId, value: byServer };
+}
+
+export function resolvePluginSettingBoundResetV1(params: PluginSettingBoundInputV1): Readonly<{
+  fieldId: string;
+  mutation: Readonly<{ kind: 'delete' }> | Readonly<{ kind: 'set'; value: Readonly<Record<string, unknown>> }>;
+}> {
+  const binding = params.field.binding;
+  if (binding?.kind !== 'perActiveServer' || !params.serverIdentityId) return {
+    fieldId: binding?.kind === 'perActiveServer' ? binding.fallbackSettingId
+      : binding?.kind === 'direct' ? binding.settingId ?? params.field.key : params.field.key,
+    mutation: { kind: 'delete' },
+  };
+  const current = readPluginSettingBindingRecord(params.values[binding.byServerIdSettingId]);
+  const byServer = { ...current };
+  delete byServer[params.serverIdentityId];
+  return { fieldId: binding.byServerIdSettingId,
+    mutation: Object.keys(byServer).length === 0 ? { kind: 'delete' } : { kind: 'set', value: byServer } };
+}
+
 /**
  * `perActiveServer` is one Account-record binding, not an unbounded cache of
  * server state. These limits are owned with the declaration grammar so every

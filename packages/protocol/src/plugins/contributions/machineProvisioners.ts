@@ -15,7 +15,7 @@ import { ManagedControllerV1Schema } from '../../machines/managed/managedMachine
 import { DevcontainerEffectReviewV1Schema } from '../../machines/managed/devcontainerV1.js';
 import { BillingCapabilitiesV1Schema, RetentionCapabilitiesV1Schema, ProviderPriceV1Schema,
   ManagedPrerequisiteV1Schema, ManagedLocalResourceFactsV1Schema, ProviderNativeOptionFactsV1Schema } from '../../machines/managed/providerFactsV1.js';
-import { AcquireResultV1Schema, ManagedResourceV1Schema, ManagedRecoveryHintV1Schema, ManagedBootstrapCarrierV1Schema, ProviderObservationV1Schema, SharedSavedSecretRefV1Schema, type AcquireResultV1 } from '../../machines/managed/providerFactsV1.js';
+import { AcquireResultV1Schema, ManagedNativeOperationReferenceV1Schema, ManagedResourceV1Schema, ManagedRecoveryHintV1Schema, ManagedBootstrapCarrierV1Schema, ProviderObservationV1Schema, SharedSavedSecretRefV1Schema, type AcquireResultV1 } from '../../machines/managed/providerFactsV1.js';
 import { createProtocolComposableSchema, ProtocolValidationError, defineProtocolObject, defineProtocolString, defineProtocolNumber, defineProtocolArray, defineProtocolLiteral, defineProtocolUnion, defineProtocolJsonValue, normalizePluginJsonSchema, pluginJsonValuesEqual, type ProtocolComposableSchema } from '../actions/protocolComposableSchema.js';
 
 export const MACHINE_PROVISIONER_EFFECT_ROLES_V1 = ['acquire', 'bootstrap', 'exec', 'putFile', 'power', 'destroy', 'rebuild'] as const;
@@ -150,7 +150,10 @@ export function validateMachineProvisionerContributionsV1(value: Readonly<{ mach
         context.addIssue({ code: 'custom', path, message: 'Provisioner role input must use its canonical contract and declared launch/resource schema.' });
       }
       const result = machineProvisionerRoleResultProjection(descriptor, binding.role);
-      if (!pluginJsonValuesEqual(nestedProjection(action.resultSchema), nestedProjection(result))) {
+      const resultMatches = pluginJsonValuesEqual(nestedProjection(action.resultSchema), nestedProjection(result))
+        || binding.role === 'destroy' && pluginJsonValuesEqual(
+          nestedProjection(action.resultSchema), nestedProjection(MachineProvisionerPowerResultV1Schema.jsonSchema));
+      if (!resultMatches) {
         context.addIssue({ code: 'custom', path, message: 'Provisioner role results must use their canonical declared contract.' });
       }
       if (!isClosedSchema(action.inputSchema)) context.addIssue({ code: 'custom', path, message: 'Provisioner role input schemas must be closed.' });
@@ -241,6 +244,15 @@ export const MachineProvisionerPowerResultV1Schema = defineProtocolUnion([
   defineProtocolObject({ kind: defineProtocolLiteral('unknown'), code: defineProtocolString({ minLength: 1 }).optional() }, { policy: 'closed' }),
   defineProtocolObject({ kind: defineProtocolLiteral('refused'), code: defineProtocolString({ minLength: 1 }) }, { policy: 'closed' }),
 ]);
+export const MachineProvisionerDestroyResultV1Schema = defineProtocolUnion([
+  defineProtocolObject({ kind: defineProtocolLiteral('confirmed') }, { policy: 'closed' }),
+  defineProtocolObject({ kind: defineProtocolLiteral('unknown'), code: defineProtocolString({ minLength: 1 }).optional() }, { policy: 'closed' }),
+  defineProtocolObject({ kind: defineProtocolLiteral('refused'), code: defineProtocolString({ minLength: 1 }) }, { policy: 'closed' }),
+  projectRoleSchema(lazyDefinition(() => mini.strictObject({
+    kind: mini.literal('accepted'),
+    nativeOperationRef: ManagedNativeOperationReferenceV1Schema,
+  }))),
+]);
 export const MachineProvisionerPutFileResultV1Schema = MachineProvisionerPowerResultV1Schema;
 export const MachineProvisionerRebuildResultV1Schema = projectRoleSchema(lazyDefinition(() => mini.discriminatedUnion('kind', [
   mini.strictObject({ kind: mini.literal('bound'), resource: ManagedResourceV1Schema }),
@@ -269,7 +281,10 @@ function machineProvisionerRoleResultProjection(descriptor: MachineProvisionerCo
     case 'cleanup': return MachineProvisionerCleanupObservationV1Schema.jsonSchema;
     case 'exec': return MachineProvisionerNativeExecResultV1Schema.jsonSchema;
     case 'putFile': return MachineProvisionerPutFileResultV1Schema.jsonSchema;
-    case 'power': case 'destroy': return MachineProvisionerPowerResultV1Schema.jsonSchema;
+    case 'power': return MachineProvisionerPowerResultV1Schema.jsonSchema;
+    case 'destroy': return descriptor.reconciliation
+      ? destroyResultProjection(descriptor.reconciliation.nativeOperationSchema)
+      : MachineProvisionerPowerResultV1Schema.jsonSchema;
     case 'rebuild': return rebuildResultProjection(descriptor.resourceSchema);
   }
 }
@@ -327,6 +342,28 @@ function defineAcquireResult<TInput, TOutput, NInput, NOutput>(resource: Protoco
     }) : { success: false, error: native.error };
   });
 }
+function destroyResultProjection(nativeOperation: PluginJsonSchemaV2): PluginJsonSchemaV2 {
+  const power = MachineProvisionerPowerResultV1Schema.jsonSchema;
+  const pending = acquireResultProjection(nativeOperation, nativeOperation).oneOf
+    ?.find(variant => variant.properties?.kind?.const === 'pending');
+  if (!pending) throw new Error('Destroy custody requires the canonical pending native-operation envelope.');
+  return normalizePluginJsonSchema({ anyOf: [
+    ...(power.anyOf ?? []),
+    { ...pending, properties: { ...pending.properties,
+      kind: { ...pending.properties!.kind, const: 'accepted' },
+    } },
+  ] });
+}
+function defineDestroyResult<NI, NO>(nativeOperation: ProtocolComposableSchema<NI, NO>) {
+  return createProtocolComposableSchema(destroyResultProjection(nativeOperation.jsonSchema), value => {
+    const canonical = MachineProvisionerDestroyResultV1Schema.safeParse(value);
+    if (!canonical.success || canonical.data.kind !== 'accepted') return canonical;
+    const native = nativeOperation.safeParse(canonical.data.nativeOperationRef.value);
+    return native.success ? MachineProvisionerDestroyResultV1Schema.safeParse({ ...canonical.data,
+      nativeOperationRef: { ...canonical.data.nativeOperationRef, value: native.data },
+    }) : { success: false, error: native.error };
+  });
+}
 function rebuildResultProjection(resource: PluginJsonSchemaV2): PluginJsonSchemaV2 {
   const replacement = acquireResultProjection(resource).oneOf?.filter(variant => ['bound', 'unknown'].includes(String(variant.properties?.kind?.const))) ?? [];
   const refused = MachineProvisionerRebuildResultV1Schema.jsonSchema.oneOf?.find(variant => variant.properties?.kind?.const === 'refused');
@@ -353,6 +390,7 @@ export function defineMachineProvisionerReconciliationSchemas<LI, LO, RI, RO, NI
       managedId: defineProtocolString({ minLength: 1 }), requestId: defineProtocolString({ minLength: 1 }), launch: schemas.launch,
     }, closed) }, closed)]),
     destroyInput: defineProtocolUnion([defineProtocolObject({ resource: schemas.resource }, closed), pending]),
+    destroyResult: defineDestroyResult(schemas.nativeOperation),
     cleanupInput: pending,
     cleanupResult: MachineProvisionerCleanupObservationV1Schema,
     result: defineAcquireResult(schemas.resource, schemas.nativeOperation),

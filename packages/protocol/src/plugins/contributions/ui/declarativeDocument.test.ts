@@ -20,6 +20,45 @@ import { PluginDeclarativeNodeV2Schema } from './v2.js';
 import { PluginDeclarativeProjectedModelV1Schema, PluginDeclarativeProjectedNodeV1Schema, projectPluginDeclarativeModelComparisonV1 } from './declarativeProjectedModelV1.js';
 
 describe('declarative document normalizer v1', () => {
+  it('admits canonical Settings field ids even when a renderer has no field controls', () => {
+    const normalized = normalizePluginDeclarativeDocumentV1({
+      pluginId: 'com.acme.dashboard', actions: [],
+      settings: [{
+        pluginId: 'com.acme.dashboard', id: 'claudeRemoteAgentSdkEnabled',
+        qualifiedId: 'com.acme.dashboard/settings/account/agent/fields/claudeRemoteAgentSdkEnabled',
+        schema: { type: 'boolean' }, secret: false,
+      }],
+      document: { version: 1, root: { kind: 'text', text: 'Subagents' } },
+    });
+    expect(normalized.root).toMatchObject({ kind: 'text', text: 'Subagents' });
+    expect(() => normalizePluginDeclarativeDocumentV1({
+      pluginId: 'com.acme.dashboard', actions: [],
+      settings: [{ pluginId: 'com.acme.dashboard', id: '1invalid', qualifiedId: 'com.acme.dashboard/settings/account/agent/fields/1invalid', schema: { type: 'boolean' }, secret: false }],
+      document: { version: 1, root: { kind: 'text', text: 'Subagents' } },
+    })).toThrow(expect.objectContaining({ code: 'plugin_declarative_setting_inventory_invalid' }));
+  });
+
+  it.each([
+    { kind: 'text', schema: { type: 'string' }, secret: false },
+    { kind: 'number', schema: { type: 'number' }, secret: false },
+    { kind: 'toggle', schema: { type: 'boolean' }, secret: false },
+    { kind: 'select', schema: { type: 'string', enum: ['auto'] }, secret: false, options: [{ value: 'auto', label: 'Auto' }] },
+    { kind: 'secret', schema: { type: 'string' }, secret: true },
+  ])('binds $kind controls through the canonical Settings field-id grammar', ({ kind, schema, secret, ...extra }) => {
+    const settingId = 'agentPreferences.ui_mode/remote-enabled';
+    const qualifiedId = `com.acme.dashboard/settings/account/agent/fields/${encodeURIComponent(settingId)}`;
+    const normalized = normalizePluginDeclarativeDocumentV1({
+      pluginId: 'com.acme.dashboard', actions: [],
+      settings: [{ pluginId: 'com.acme.dashboard', id: settingId, qualifiedId, schema, secret }],
+      document: { version: 1, root: { kind: 'field', label: 'Preference', control: { kind, settingId, ...extra } } },
+    });
+    expect(normalized.root).toMatchObject({ kind: 'field', setting: { id: settingId, qualifiedId } });
+    expect(() => normalizePluginDeclarativeDocumentV1({
+      pluginId: 'com.acme.dashboard', actions: [], settings: [],
+      document: { version: 1, root: { kind: 'field', label: 'Preference', control: { kind, settingId: 'invalid?field', ...extra } } },
+    })).toThrow(expect.objectContaining({ code: 'plugin_declarative_document_invalid' }));
+  });
+
   it('compares declaration content independently of runtime stamps while preserving authored payloads', () => {
     const identity = { pluginId: 'com.acme.dashboard', localId: 'refresh' };
     const reference = { identity, qualifiedId: 'com.acme.dashboard/refresh' };

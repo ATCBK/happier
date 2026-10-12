@@ -29,9 +29,14 @@ export const PluginDeclarativeMetricNodeV1Schema = lazyZodSchema(() => z.object(
 export const PluginDeclarativeTableNodeV1Schema = lazyZodSchema(() => z.object({ kind: z.literal('table'), label: PluginLocalizedStringV2Schema.optional(),
   data: PluginDeclarativeDataSourceV1Schema, rows: z.array(z.string().min(1)), columns: z.array(column).min(1), incomplete: z.boolean().optional(), mark: mark.optional() }).strict());
 export const PluginDeclarativeRowsNodeV1Schema = lazyZodSchema(() => PluginDeclarativeTableNodeV1Schema.extend({ kind: z.literal('rows') }));
-export const PluginDeclarativeChartNodeV1Schema = lazyZodSchema(() => z.object({ kind: z.literal('chart'), label: PluginLocalizedStringV2Schema,
-  style: z.enum(['bar', 'line']), data: PluginDeclarativeDataSourceV1Schema, rows: z.array(z.string().min(1)),
-  x: PluginDeclarativeDataFieldV1Schema, y: PluginDeclarativeDataFieldV1Schema }).strict());
+const chart = z.object({ kind: z.literal('chart'), label: PluginLocalizedStringV2Schema,
+  data: PluginDeclarativeDataSourceV1Schema, rows: z.array(z.string().min(1)), x: PluginDeclarativeDataFieldV1Schema }).strict();
+/** Legacy x/y is N=1; neutral long rows declare exactly one series/value mapping. */
+export const PluginDeclarativeChartNodeV1Schema = lazyZodSchema(() => z.union([
+  chart.extend({ style: z.enum(['bar', 'line']), y: PluginDeclarativeDataFieldV1Schema }).strict(),
+  chart.extend({ style: z.enum(['bar', 'line', 'area']), series: PluginDeclarativeDataFieldV1Schema,
+    value: PluginDeclarativeDataFieldV1Schema }).strict(),
+]));
 export type PluginDeclarativeDataNodeV1 = z.infer<typeof PluginDeclarativeMetricNodeV1Schema>
   | z.infer<typeof PluginDeclarativeTableNodeV1Schema> | z.infer<typeof PluginDeclarativeRowsNodeV1Schema>
   | z.infer<typeof PluginDeclarativeChartNodeV1Schema>;
@@ -69,9 +74,10 @@ export function readPluginDeclarativeDataRowsV1(value: unknown, path: readonly s
 /** Validate at document admission and again at the Resource output boundary. */
 export function validatePluginDeclarativeDataNodeV1(node: PluginDeclarativeDataNodeV1, output?: unknown): void {
   const fields = node.kind === 'metric' ? [node.value, ...(node.comparison ? [node.comparison.value] : [])]
-    : node.kind === 'chart' ? [node.x, node.y] : [...node.columns.map((entry) => entry.field), ...(node.mark ? [node.mark.field] : [])];
+    : node.kind === 'chart' ? [node.x, ...('y' in node ? [node.y] : [node.series, node.value])] : [...node.columns.map((entry) => entry.field), ...(node.mark ? [node.mark.field] : [])];
   if ((node.kind === 'rows' || node.kind === 'table') && node.mark && node.mark.field.type !== 'boolean') throw new Error('declarative_data_field_invalid');
-  if (node.kind === 'chart' && (node.y.type !== 'number' || node.x.type === 'boolean')) throw new Error('declarative_data_field_invalid');
+  if (node.kind === 'chart' && (node.x.type === 'boolean' || ('y' in node ? node.y.type !== 'number'
+    : node.series.type !== 'string' || node.value.type !== 'number'))) throw new Error('declarative_data_field_invalid');
   if ((node.kind === 'rows' || node.kind === 'table') && node.columns.some((entry) => entry.proportion && entry.field.type !== 'number')) throw new Error('declarative_data_field_invalid');
   if (node.data.kind === 'resource') {
     const inputValidator = compilePluginJsonSchema(node.data.inputSchema);
@@ -89,6 +95,15 @@ export function validatePluginDeclarativeDataNodeV1(node: PluginDeclarativeDataN
   const value = node.data.kind === 'value' ? node.data.value : output;
   const rows = node.kind === 'metric' ? [value] : readPluginDeclarativeDataRowsV1(value, node.rows);
   for (const row of rows) for (const field of fields) readPluginDeclarativeDataFieldV1(row, field);
+  if (node.kind === 'chart' && 'series' in node) {
+    const coordinates = new Set<string>();
+    for (const row of rows) {
+      const key = JSON.stringify([readPluginDeclarativeDataFieldV1(row, node.x), readPluginDeclarativeDataFieldV1(row, node.series)]);
+      // Mapping never aggregates or silently overwrites a displayed observation.
+      if (coordinates.has(key)) throw new Error('declarative_data_chart_duplicate');
+      coordinates.add(key);
+    }
+  }
 }
 
 /** Only displayed scalar fields are copied; undeclared/private output never is. */
@@ -102,7 +117,12 @@ export function freezePluginDeclarativeDataNodeV1(node: PluginDeclarativeDataNod
       comparison: { ...node.comparison, value: { path: ['comparison'], type: node.comparison.value.type } } };
   }
   const rows = readPluginDeclarativeDataRowsV1(value, node.rows);
-  if (node.kind === 'chart') return { ...node, data: { kind: 'value', value: rows.map((row) => ({ x: readPluginDeclarativeDataFieldV1(row, node.x), y: readPluginDeclarativeDataFieldV1(row, node.y) })) }, rows: [], x: { path: ['x'], type: node.x.type }, y: { path: ['y'], type: 'number' } };
+  if (node.kind === 'chart') {
+    if ('y' in node) return { ...node, data: { kind: 'value', value: rows.map((row) => ({ x: readPluginDeclarativeDataFieldV1(row, node.x), y: readPluginDeclarativeDataFieldV1(row, node.y) })) }, rows: [], x: { path: ['x'], type: node.x.type }, y: { path: ['y'], type: 'number' } };
+    return { ...node, data: { kind: 'value', value: rows.map(row => ({ x: readPluginDeclarativeDataFieldV1(row, node.x),
+      series: readPluginDeclarativeDataFieldV1(row, node.series), value: readPluginDeclarativeDataFieldV1(row, node.value) })) },
+      rows: [], x: { path: ['x'], type: node.x.type }, series: { path: ['series'], type: 'string' }, value: { path: ['value'], type: 'number' } };
+  }
   return { ...node, data: { kind: 'value', value: rows.map((row) => ({
     ...Object.fromEntries(node.columns.map((entry, index) => [`c${index}`, readPluginDeclarativeDataFieldV1(row, entry.field)])),
     ...(node.mark ? { mark: readPluginDeclarativeDataFieldV1(row, node.mark.field) } : {}),

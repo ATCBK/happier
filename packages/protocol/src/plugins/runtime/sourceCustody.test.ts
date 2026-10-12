@@ -1,13 +1,116 @@
 import { describe, expect, it } from 'vitest';
+import { performance } from 'node:perf_hooks';
+import { Session } from 'node:inspector/promises';
+import { cloneStrictPluginJsonValue, rehydrateCanonicalProtocolComposableSchema } from '../actions/protocolComposableSchema.js';
 
 import {
   pluginSourceCustodyV1Equal,
   PluginSourceCustodyV1Schema,
   PluginSourceCustodyV1ProtocolSchema,
   normalizePluginSourceCustodyV1,
+  ManagedPluginSourceCustodyV1ProtocolSchema,
+  BundledFirstPartyPluginSourceCustodyV1ProtocolSchema,
+  DevelopmentPluginSourceCustodyV1ProtocolSchema,
 } from './sourceCustody';
 
 describe('PluginSourceCustodyV1', () => {
+  // Owns V8's coverage session, so keep it out of ordinary coverage runs.
+  it.skipIf(process.env.HAPPIER_SOURCE_CUSTODY_PERF !== '1')('does not construct validation errors while admitting valid development custody', async () => {
+    // Measure real V8 execution, not a replacement of the schema or Error class.
+    const session = new Session();
+    session.connect();
+    try {
+      await session.post('Profiler.enable');
+      await session.post('Profiler.startPreciseCoverage', { callCount: true, detailed: true });
+      expect(PluginSourceCustodyV1ProtocolSchema.safeParse({ kind: 'development', registeredRootId: 'root-a' }).success).toBe(true);
+      const coverage = await session.post('Profiler.takePreciseCoverage');
+      const constructorCalls = coverage.result.filter(script => script.url.includes('/plugins/actions/protocolComposableSchema'))
+        .flatMap(script => script.functions)
+        .filter(fn => fn.functionName === 'ProtocolValidationError')
+        .reduce((total, fn) => total + (fn.ranges[0]?.count ?? 0), 0);
+      expect(constructorCalls).toBe(0);
+      expect(PluginSourceCustodyV1ProtocolSchema.safeParse({ kind: 'development', registeredRootId: 7 }).success).toBe(false);
+      const refusedCoverage = await session.post('Profiler.takePreciseCoverage');
+      const refusedConstructorCalls = refusedCoverage.result.filter(script => script.url.includes('/plugins/actions/protocolComposableSchema'))
+        .flatMap(script => script.functions).filter(fn => fn.functionName === 'ProtocolValidationError')
+        .reduce((total, fn) => total + (fn.ranges[0]?.count ?? 0), 0);
+      expect(refusedConstructorCalls).toBeGreaterThan(0);
+    } finally {
+      await session.post('Profiler.stopPreciseCoverage');
+      session.disconnect();
+    }
+  });
+  it('preserves portable union admission and failure diagnostics for every custody arm', () => {
+    const portable = rehydrateCanonicalProtocolComposableSchema(PluginSourceCustodyV1ProtocolSchema.jsonSchema);
+    expect(portable).not.toBeNull();
+    for (const value of [
+      { kind: 'managed', immutableGenerationId: 'generation-a', installSource: 'archive' },
+      { kind: 'bundled_first_party', packagedRuntime: { kind: 'pinned_runner_snapshot', snapshotId: 'snapshot-a' } },
+      { kind: 'development', registeredRootId: 'root-a' },
+      { kind: 'development', registeredRootId: 'root-a', extra: true },
+      { kind: 'development', registeredRootId: 7 },
+      { kind: 'unknown' },
+      null,
+    ]) {
+      const actual = PluginSourceCustodyV1ProtocolSchema.safeParse(value);
+      const expected = portable!.safeParse(value);
+      expect(actual.success).toBe(expected.success);
+      if (actual.success && expected.success) expect(actual.data).toEqual(expected.data);
+      if (!actual.success && !expected.success) expect(actual.error.issues).toEqual(expected.error.issues);
+    }
+  });
+
+  it.skipIf(process.env.HAPPIER_SOURCE_CUSTODY_PERF !== '1')('measures custody admission against eager arm probing in the same process', () => {
+    // Original union algorithm, using the real unchanged member parsers. This
+    // opt-in control is not another production validator or a time budget.
+    const eagerAdmission = (value: unknown) => {
+      const input = cloneStrictPluginJsonValue(value, 'value');
+      for (const schema of [ManagedPluginSourceCustodyV1ProtocolSchema,
+        BundledFirstPartyPluginSourceCustodyV1ProtocolSchema, DevelopmentPluginSourceCustodyV1ProtocolSchema]) {
+        const parsed = schema.safeParse(input);
+        if (parsed.success) {
+          const data = parsed.data === input ? input : cloneStrictPluginJsonValue(parsed.data, 'value');
+          return Object.freeze({ success: true, data }).success;
+        }
+      }
+      return false;
+    };
+    const values = [
+      { kind: 'managed', immutableGenerationId: 'generation-a', installSource: 'archive' },
+      { kind: 'bundled_first_party', packagedRuntime: { kind: 'cli_version_root', versionRootId: 'version-a' } },
+      { kind: 'bundled_first_party', packagedRuntime: { kind: 'pinned_runner_snapshot', snapshotId: 'snapshot-a' } },
+      { kind: 'development', registeredRootId: 'root-a' },
+    ];
+    const measurements = values.map(value => {
+      const ownerAdmission = (input: unknown) => PluginSourceCustodyV1ProtocolSchema.safeParse(input).success;
+      for (let index = 0; index < 100; index += 1) {
+        expect(eagerAdmission(value)).toBe(true);
+        expect(ownerAdmission(value)).toBe(true);
+      }
+      const measure = (admit: (value: unknown) => boolean) => {
+        const started = performance.now();
+        for (let index = 0; index < 1000; index += 1) {
+          if (!admit(value)) throw new Error('Benchmark input was not admitted');
+        }
+        return performance.now() - started;
+      };
+      const eagerSamples: number[] = [];
+      const ownerSamples: number[] = [];
+      for (let sample = 0; sample < 5; sample += 1) {
+        if (sample % 2 === 0) {
+          eagerSamples.push(measure(eagerAdmission));
+          ownerSamples.push(measure(ownerAdmission));
+        } else {
+          ownerSamples.push(measure(ownerAdmission));
+          eagerSamples.push(measure(eagerAdmission));
+        }
+      }
+      const median = (samples: number[]) => [...samples].sort((a, b) => a - b)[2]!;
+      return { kind: value.kind, packagedKind: value.packagedRuntime?.kind,
+        eagerMs: median(eagerSamples), ownerMs: median(ownerSamples), eagerSamples, ownerSamples };
+    });
+    console.info(JSON.stringify({ sourceCustodyAdmission: measurements }));
+  });
   it.each([
     { kind: 'managed', immutableGenerationId: 'generation-a', installSource: 'npm' },
     {

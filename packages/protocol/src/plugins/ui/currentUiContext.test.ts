@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1,
-  CURRENT_UI_CONTEXT_MAX_COMMANDS_V1,
-  CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1,
   CurrentUiCommandDeclarationV1Schema,
   CurrentUiCommandDescriptorV1Schema,
   CurrentUiContextBoundedIncompletenessV1Schema,
@@ -18,9 +16,7 @@ import {
 } from '../../index.js';
 
 describe('current UI context contract', () => {
-  it('owns the author-visible bounds and explicit bounded-incompleteness marker', () => {
-    expect(CURRENT_UI_CONTEXT_MAX_COMMANDS_V1).toBe(32);
-    expect(CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1).toBe(8_192);
+  it('owns the strict explicit incompleteness marker', () => {
     expect(CurrentUiContextBoundedIncompletenessV1Schema.parse(
       CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1,
     )).toEqual({ incomplete: true });
@@ -30,7 +26,7 @@ describe('current UI context contract', () => {
     }).success).toBe(false);
   });
 
-  it('publishes one closed, bounded enrichment and snapshot grammar', () => {
+  it('publishes one closed enrichment and snapshot grammar', () => {
     const command = {
       title: 'Open review details',
       command: {
@@ -68,7 +64,7 @@ describe('current UI context contract', () => {
     expect(RootPluginUiContextEnrichmentV1Schema).toBe(PluginUiContextEnrichmentV1Schema);
   });
 
-  it('accepts exactly the command limit and rejects the next command', () => {
+  it('preserves complete command inventories through enrichment and descriptor snapshots', () => {
     const command = {
       title: 'Open review details',
       command: {
@@ -77,36 +73,21 @@ describe('current UI context contract', () => {
       },
     } as const;
 
-    expect(PluginUiContextEnrichmentV1Schema.safeParse({
-      commands: Array.from({ length: CURRENT_UI_CONTEXT_MAX_COMMANDS_V1 }, () => command),
-    }).success).toBe(true);
-    expect(PluginUiContextEnrichmentV1Schema.safeParse({
-      commands: Array.from({ length: CURRENT_UI_CONTEXT_MAX_COMMANDS_V1 + 1 }, () => command),
-    }).success).toBe(false);
+    const commands = Array.from({ length: 96 }, () => command);
+    expect(PluginUiContextEnrichmentV1Schema.parse({ commands }).commands).toEqual(commands);
+    const descriptors = commands.map((entry, index) => ({ id: `command-${index}`, title: entry.title }));
+    expect(CurrentUiContextSnapshotV1Schema.parse({
+      navigation: { area: 'settings', screen: 'usage' }, commands: descriptors,
+    }).commands).toEqual(descriptors);
   });
 
-  it('enforces the aggregate context limit in serialized UTF-8 bytes', () => {
-    const utf8Bytes = (value: unknown): number =>
-      new TextEncoder().encode(JSON.stringify(value)).byteLength;
-    const emptyDetailBytes = utf8Bytes({ detail: '' });
-    const exactBound = {
-      detail: 'x'.repeat(CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1 - emptyDetailBytes),
-    };
-    expect(utf8Bytes(exactBound)).toBe(CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1);
-    expect(PluginUiContextEnrichmentV1Schema.safeParse(exactBound).success).toBe(true);
-
-    // Each euro sign is one JavaScript code unit but three UTF-8 bytes, so a
-    // code-unit bound would incorrectly admit this aggregate payload.
-    const multiByteOverflow = {
-      detail: '€'.repeat(Math.ceil(CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1 / 3)),
-    };
-    expect(JSON.stringify(multiByteOverflow).length).toBeLessThan(
-      CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1,
-    );
-    expect(utf8Bytes(multiByteOverflow)).toBeGreaterThan(
-      CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1,
-    );
-    expect(PluginUiContextEnrichmentV1Schema.safeParse(multiByteOverflow).success).toBe(false);
+  it('preserves strict context data independently of semantic launch-input budgets', () => {
+    const enrichment = { entity: { kind: 'usage', label: 'Usage', reference: { keys: '€'.repeat(8_192) } },
+      detail: { inventory: '€'.repeat(8_192) } };
+    expect(PluginUiContextEnrichmentV1Schema.parse(enrichment)).toEqual(enrichment);
+    expect(CurrentUiContextSnapshotV1Schema.parse({
+      navigation: { area: 'settings', screen: 'usage' }, ...enrichment, commands: [],
+    }).detail).toEqual(enrichment.detail);
   });
 
   it('rejects callbacks, unknown command kinds, and semantic payloads in opaque descriptors', () => {

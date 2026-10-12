@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  MAX_PLUGIN_SEARCH_ITEMS_V1,
   MAX_PLUGIN_SEARCH_ITEM_COMMAND_UTF8_BYTES_V1,
-  MAX_PLUGIN_SEARCH_QUERY_UTF8_BYTES_V1,
   PluginSearchProviderContributionV1Schema,
   PluginSearchQueryV1Schema,
   PluginSearchResultV1Schema,
@@ -179,28 +177,33 @@ describe('plugin search query and result schemas', () => {
       .toEqual(['items', 'truncated']);
   });
 
-  it('bounds the query and the requested row count', () => {
+  it('accepts caller-selected query and page sizes while keeping inputs strict', () => {
     expect(PluginSearchQueryV1Schema.safeParse({ query: 'pr', limit: 8 }).success).toBe(true);
     expect(PluginSearchQueryV1Schema.safeParse({ query: '', limit: 8 }).success).toBe(false);
     expect(PluginSearchQueryV1Schema.safeParse({
-      query: 'a'.repeat(MAX_PLUGIN_SEARCH_QUERY_UTF8_BYTES_V1 + 1),
+      query: 'a'.repeat(1024),
       limit: 8,
-    }).success).toBe(false);
+    }).success).toBe(true);
     expect(PluginSearchQueryV1Schema.safeParse({
       query: 'pr',
-      limit: MAX_PLUGIN_SEARCH_ITEMS_V1 + 1,
-    }).success).toBe(false);
+      limit: 100,
+    }).success).toBe(true);
+    expect(PluginSearchQueryV1Schema.safeParse({ query: 'pr', limit: 0 }).success).toBe(false);
     expect(PluginSearchQueryV1Schema.safeParse({ query: 'pr', limit: 8, scope: 'all' }).success).toBe(false);
   });
 
-  /**
-   * The bound counts UTF-8 bytes, not characters: a code-point bound would
-   * admit a query three or four times over what the transport was measured for.
-   */
-  it('rejects an oversized multibyte query the character count would admit', () => {
-    const emoji = '😀'.repeat(MAX_PLUGIN_SEARCH_QUERY_UTF8_BYTES_V1 / 4 + 1);
-    expect(emoji.length).toBeLessThan(MAX_PLUGIN_SEARCH_QUERY_UTF8_BYTES_V1);
-    expect(PluginSearchQueryV1Schema.safeParse({ query: emoji, limit: 8 }).success).toBe(false);
+  it('admits long multibyte queries and display labels through the cold Action boundary', () => {
+    const query = '😀'.repeat(300);
+    const validateQuery = compilePluginJsonSchema(PluginSearchQueryV1Schema.jsonSchema);
+    expect(validateQuery({ query, limit: 100 })).toBe(true);
+    const result = { items: Array.from({ length: 100 }, (_, index) => ({
+      id: `${query}-${index}`,
+      title: query,
+      subtitle: query,
+      command: { kind: 'executeAction', action: 'open-entry' },
+    })), truncated: true };
+    expect(PluginSearchResultV1Schema.safeParse(result).success).toBe(true);
+    expect(compilePluginJsonSchema(PluginSearchResultV1Schema.jsonSchema)(result)).toBe(true);
   });
 
   it('carries bounded host-renderable rows and the incumbent semantic command', () => {
@@ -279,7 +282,7 @@ describe('plugin search query and result schemas', () => {
     ]);
   });
 
-  it('refuses arbitrary activation payloads, scores and unbounded results', () => {
+  it('refuses arbitrary activation payloads and scores', () => {
     const item = {
       id: 'entry-1',
       title: 'Fix the crash',
@@ -294,13 +297,6 @@ describe('plugin search query and result schemas', () => {
       truncated: false,
     }).success).toBe(false);
     expect(PluginSearchResultV1Schema.safeParse({ items: [item] }).success).toBe(false);
-    expect(PluginSearchResultV1Schema.safeParse({
-      items: Array.from({ length: MAX_PLUGIN_SEARCH_ITEMS_V1 + 1 }, (_unused, index) => ({
-        ...item,
-        id: `entry-${index}`,
-      })),
-      truncated: false,
-    }).success).toBe(false);
     expect(PluginSearchResultV1Schema.safeParse({
       items: [{
         ...item,

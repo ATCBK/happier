@@ -14,7 +14,6 @@ import { PluginIdSchema } from '../pluginId.js';
 import { PluginUiArtifactDigestV1Schema } from '../ui/artifactIntegrity.js';
 import { PluginManifestV2Schema } from '../manifest/v2.js';
 import {
-  PluginJsonSchemaV2Schema,
   type PluginJsonSchemaV2,
   type PluginJsonValueV2,
 } from '../contributions/publicTypes.js';
@@ -1290,28 +1289,29 @@ export function isPluginCollectionOptionalPrivateSchemaAdditionV1(input: Readonl
   ));
 }
 
-function normalizeSchema(value: PluginJsonSchemaV2, isCollectionRoot = true): PluginJsonSchemaV2 {
-  if (Array.isArray(value)) return value.map((schema) => normalizeSchema(schema, false)) as never;
+function normalizeSchema(value: PluginJsonSchemaV2): PluginJsonSchemaV2 {
   const object = value as Record<string, unknown>;
   const normalized: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(object).sort(([left], [right]) => compareCanonicalText(left, right))) {
-    if (key === 'properties' && item && typeof item === 'object' && !Array.isArray(item)) {
+    if ((key === 'properties' || key === 'definitions' || key === '$defs') && item && typeof item === 'object') {
       normalized[key] = Object.fromEntries(Object.entries(item as Record<string, PluginJsonSchemaV2>)
         .sort(([left], [right]) => compareCanonicalText(left, right))
-        .map(([property, schema]) => [property, normalizeSchema(schema, false)]));
+        .map(([property, schema]) => [property, normalizeSchema(schema)]));
     } else if ((key === 'required' || key === 'enum') && Array.isArray(item)) {
       normalized[key] = [...item].sort((left, right) => compareCanonicalText(canonicalJson(left), canonicalJson(right)));
-    } else if (Array.isArray(item)) {
-      normalized[key] = item.map((entry) => entry && typeof entry === 'object'
-        ? normalizeSchema(entry as PluginJsonSchemaV2, false)
-        : entry);
-    } else if (item && typeof item === 'object') {
-      normalized[key] = normalizeSchema(item as PluginJsonSchemaV2, false);
+    } else if ((key === 'anyOf' || key === 'oneOf' || key === 'allOf') && Array.isArray(item)) {
+      normalized[key] = item.map((entry) => normalizeSchema(entry as PluginJsonSchemaV2));
+    } else if ((key === 'propertyNames' || key === 'additionalProperties' || key === 'items' || key === 'not')
+      && item && typeof item === 'object') {
+      normalized[key] = normalizeSchema(item as PluginJsonSchemaV2);
     } else {
       normalized[key] = item;
     }
   }
-  return (isCollectionRoot ? PluginCollectionSchemaV1Schema : PluginJsonSchemaV2Schema).parse(normalized);
+  // The contribution parser already validates and clones the complete tree.
+  // Reordering schema keys/sets does not need another recursive admission;
+  // const/default objects are JSON data, not schemas.
+  return normalized as PluginJsonSchemaV2;
 }
 
 export function getPluginCollectionScalarKindV1(input: Readonly<{

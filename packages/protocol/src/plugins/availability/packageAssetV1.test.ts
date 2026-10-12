@@ -4,7 +4,11 @@ import {
   createPackageAssetArchiveV1,
   openPackageAssetArchiveV1,
   PackageAssetArchiveDescriptorV1Schema,
+  decodePackageAssetArchiveBodyV1,
+  encodePackageAssetArchiveBodyV1,
 } from './packageAssetV1.js';
+import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
+import { computePluginUiArtifactSha256DigestV1 } from '../ui/artifactIntegrity.js';
 
 function manifest(resources: readonly Record<string, unknown>[]): Record<string, unknown> {
   return {
@@ -100,6 +104,25 @@ describe('Package Asset archive v1', () => {
         ['zeta', new Uint8Array([9, 8, 7])],
       ]),
     });
+    const retainedBody = { ...archive!.body, retired: true,
+      resources: archive!.body.resources.map(resource => ({ ...resource, retired: true })) };
+    const expectedDescriptor = { ...archive!.descriptor,
+      archiveDigestSha256: computePluginUiArtifactSha256DigestV1(
+        new TextEncoder().encode(createCanonicalJsonSigningInput(retainedBody))) };
+    const retainedHeader = { ...archive!.header, retired: true,
+      descriptor: { ...expectedDescriptor, retired: true,
+        resources: expectedDescriptor.resources.map(resource => ({ ...resource, retired: true })) } };
+    // Digest authentication owns the complete original logical JSON, before
+    // ignored annotations can be removed from the typed resource projection.
+    const decoded = decodePackageAssetArchiveBodyV1(JSON.stringify(retainedBody));
+    expect(decoded).not.toBeNull();
+    expect(openPackageAssetArchiveV1({ expectedDescriptor, header: retainedHeader, body: decoded }))
+      .toEqual({ resources: new Map([['alpha', new Uint8Array([4, 5])], ['zeta', new Uint8Array([9, 8, 7])]]) });
+    expect(openPackageAssetArchiveV1({ expectedDescriptor: archive!.descriptor,
+      header: archive!.header, body: retainedBody })).toBeNull();
+    expect(openPackageAssetArchiveV1({ expectedDescriptor, header: retainedHeader,
+      body: { ...retainedBody, retired: false } })).toBeNull();
+    expect(() => encodePackageAssetArchiveBodyV1(retainedBody)).toThrow();
     expect(openPackageAssetArchiveV1({
       expectedDescriptor: {
         ...archive!.descriptor,

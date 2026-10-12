@@ -116,7 +116,7 @@ describe('canonical Voice provider declarations', () => {
       });
     }
   });
-  it('keeps refined Voice setting field references in both JSON dialects', () => {
+  it('keeps closed Voice setting field schemas reachable in both JSON dialects', () => {
     const object = (value: unknown): Record<string, unknown> => {
       if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected JSON Schema object');
       return value as Record<string, unknown>;
@@ -127,9 +127,13 @@ describe('canonical Voice provider declarations', () => {
       const definitions = object(target === 'draft-7' ? manifest.definitions : manifest.$defs);
       const dereference = (value: unknown): Record<string, unknown> => {
         const node = object(value);
-        return typeof node.$ref === 'string' && node.$ref.startsWith(prefix)
-          ? object(definitions[node.$ref.slice(prefix.length)])
-          : node;
+        if (typeof node.$ref === 'string' && node.$ref.startsWith(prefix)) {
+          return dereference(definitions[node.$ref.slice(prefix.length)]);
+        }
+        // Draft-7 wraps a reference with siblings in allOf; reusable
+        // settings can contain more than one such reference layer.
+        if (Array.isArray(node.allOf) && node.allOf.length === 1) return dereference(node.allOf[0]);
+        return node;
       };
       const contributions = dereference(object(manifest.properties).contributes);
       const providers = dereference(object(contributions.properties).voiceProviders);
@@ -138,15 +142,14 @@ describe('canonical Voice provider declarations', () => {
       for (const variant of items.oneOf) {
         const provider = dereference(variant);
         const settingsReference = object(object(provider.properties).settings);
-        const settings = dereference(Array.isArray(settingsReference.allOf) ? settingsReference.allOf[0] : settingsReference);
+        const settings = dereference(settingsReference);
         const fields = dereference(object(settings.properties).fields);
         const field = dereference(fields.items);
-        if (target === 'draft-7') {
-          expect(field).toHaveProperty('allOf');
-          expect(field).not.toHaveProperty('$ref');
-        } else {
-          expect(field).toHaveProperty('$ref');
-          expect(field).not.toHaveProperty('allOf');
+        const variants = Array.isArray(field.anyOf) ? field.anyOf.map(dereference) : [field];
+        for (const variant of variants) {
+          expect(variant.type).toBe('object');
+          expect(variant.additionalProperties).toBe(false);
+          expect(Object.keys(object(variant.properties))).toEqual(expect.arrayContaining(['id', 'schema', 'presentation']));
         }
       }
     }

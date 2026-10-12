@@ -6,7 +6,7 @@ import { PluginUiJsonValueV1Schema } from '../contributions/ui/json.js';
 
 /** Closed host-read identity. Action admission still owns caller policy and input validation. */
 export const PluginUiHostReadReferenceV1Schema = lazyZodSchema(() => z.object({
-  hostRead: z.enum(['usage.query', 'connectedServices.quota.get']),
+  hostRead: z.enum(['usage.query', 'connectedServices.quota.get', 'connectedServices.pools.selection.get']),
   input: PluginUiJsonValueV1Schema,
 }).strict());
 export type PluginUiHostReadReferenceV1 = z.infer<typeof PluginUiHostReadReferenceV1Schema>;

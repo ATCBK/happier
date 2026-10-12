@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { PluginDeclarativeDocumentV1Schema } from './declarativeDocumentAuthoringV1.js';
 import { SessionSurfaceDeclarativeDocumentV1Schema } from '../../../sessions/board/declarative/authoring.js';
 import { freezePluginDeclarativeDataNodeV1 } from './declarativeDataV1.js';
+import { normalizePluginDeclarativeDocumentV1 } from './declarativeDocument.js';
+import { PluginDeclarativeProjectedNodeV1Schema } from './declarativeProjectedModelV1.js';
 
 const metricDocument = {
   version: 1,
@@ -16,6 +18,40 @@ const metricDocument = {
 };
 
 describe('declarative typed data admission', () => {
+  it('admits stacked neutral rows and freezes only x, series and value for Session replay', () => {
+    const root = { kind: 'chart', label: 'Orders', style: 'area', rows: ['samples'],
+      x: { path: ['day'], type: 'string' }, series: { path: ['channel'], type: 'string' }, value: { path: ['amount'], type: 'number' },
+      data: { kind: 'resource', resource: { pluginId: 'com.acme.orders', localId: 'orders' },
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        outputSchema: { type: 'object', properties: { samples: { type: 'array', items: { type: 'object', properties: {
+          day: { type: 'string' }, channel: { type: 'string' }, amount: { type: 'number' }, token: { type: 'string' },
+        }, required: ['day', 'channel', 'amount'], additionalProperties: false } } }, required: ['samples'], additionalProperties: false } },
+    };
+    const document = PluginDeclarativeDocumentV1Schema.safeParse({ version: 1, root });
+    expect(document.success).toBe(true);
+    if (!document.success || document.data.root.kind !== 'chart') throw new Error('Expected chart');
+    const frozen = freezePluginDeclarativeDataNodeV1(document.data.root, { samples: [
+      { day: 'Mon', channel: 'Online', amount: 0.00004, token: 'secret' },
+      { day: 'Mon', channel: 'Shop', amount: 7, token: 'secret' },
+    ] });
+    expect(frozen.data).toEqual({ kind: 'value', value: [
+      { x: 'Mon', series: 'Online', value: 0.00004 }, { x: 'Mon', series: 'Shop', value: 7 },
+    ] });
+    expect(SessionSurfaceDeclarativeDocumentV1Schema.safeParse({ version: 1, root: frozen }).success).toBe(true);
+    const normalized = normalizePluginDeclarativeDocumentV1({
+      pluginId: 'com.acme.orders', occurrenceId: 'mounted-orders', actions: [],
+      document: { version: 1, root: frozen },
+    });
+    expect(PluginDeclarativeProjectedNodeV1Schema.parse(normalized.root)).toEqual(normalized.root);
+    for (const change of [
+      { style: 'pie' }, { options: { hidden: true } }, { y: { path: ['token'], type: 'number' } },
+      { series: { path: ['missing'], type: 'string' } }, { value: { path: ['token'], type: 'number' } },
+      { series: { path: ['channel'], type: 'number' } }, { url: 'https://example.com' }, { expression: 'amount * 2' },
+    ]) expect(PluginDeclarativeDocumentV1Schema.safeParse({ version: 1, root: { ...root, ...change } }).success).toBe(false);
+    expect(() => freezePluginDeclarativeDataNodeV1(document.data.root, { samples: [
+      { day: 'Mon', channel: 'Online', amount: 1 }, { day: 'Mon', channel: 'Online', amount: 2 },
+    ] })).toThrow('declarative_data_chart_duplicate');
+  });
   it('admits and freezes metric comparisons without carrying undisplayed output', () => {
     const root = { ...metricDocument.root,
       comparison: { value: { path: ['change'], type: 'string' }, label: 'vs last week', meaning: 'good' },

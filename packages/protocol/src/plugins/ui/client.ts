@@ -31,8 +31,6 @@ export { PluginUiJsonValueV1Schema } from '../contributions/ui/json.js';
 export type { PluginUiJsonValueV1 } from '../contributions/ui/json.js';
 export {
   CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1,
-  CURRENT_UI_CONTEXT_MAX_COMMANDS_V1,
-  CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1,
   CurrentUiCommandDeclarationV1Schema,
   CurrentUiCommandDescriptorV1Schema,
   CurrentUiContextBoundedIncompletenessV1Schema,

@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 import { PluginUiHostMethodV1Schema } from './hostApiDefinition.js';
+import { PluginUiNewSessionSeedOriginV1Schema, StoredPluginUiNewSessionSeedOriginV1Schema } from './newSessionSeedOrigin.js';
 
 import {
   PluginUiAcquireComposerInputLockRequestV1Schema,
@@ -48,6 +49,39 @@ const surface = {
   platform: 'web',
   channel: 'internal',
 } as const;
+
+describe('qualified Project new-Session origin', () => {
+  it('accepts closed ordinary dashboard/file/companion provenance and projects stored extras without granting route authority', () => {
+    const origin = { kind: 'project', purpose: 'session', accountId: 'account-a', page: 'overview',
+      workspace: { serverId: 'home-a', workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' },
+      layoutId: 'release-dashboard', surface: 'tabs', companion: 'files',
+      resource: { kind: 'file', path: 'src/a.ts', anchor: { kind: 'fileLine', startLine: 3 } },
+    };
+    expect(PluginUiNewSessionSeedOriginV1Schema.safeParse(origin).success).toBe(true);
+    expect(PluginUiNewSessionSeedOriginV1Schema.safeParse({ ...origin, href: '/foreign' }).success).toBe(false);
+    expect(PluginUiNewSessionSeedOriginV1Schema.safeParse({ ...origin, resource: { ...origin.resource, href: '/foreign' } }).success).toBe(false);
+    expect(StoredPluginUiNewSessionSeedOriginV1Schema.parse({ ...origin, future: true,
+      resource: { ...origin.resource, future: true, anchor: { ...origin.resource.anchor, future: true } },
+    })).toEqual(origin);
+    expect(StoredPluginUiNewSessionSeedOriginV1Schema.safeParse({ ...origin, workspace: { ...origin.workspace, rootPath: '' } }).success).toBe(false);
+    const attached = { ...origin, attachedDashboard: { sourceId: 'team-source', artifactId: 'shared-dashboard', serverId: 'dashboard-home' } };
+    expect(PluginUiNewSessionSeedOriginV1Schema.safeParse(attached).success).toBe(true);
+    expect(StoredPluginUiNewSessionSeedOriginV1Schema.parse({ ...attached,
+      attachedDashboard: { ...attached.attachedDashboard, future: true },
+    })).toEqual(attached);
+  });
+  it('retains only the incumbent qualified plugin companion target and opaque instance identity', () => {
+    const origin = { kind: 'project', purpose: 'session', accountId: 'account-a', page: 'overview',
+      workspace: { serverId: 'home-a', workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' },
+      companion: { kind: 'plugin', destination: { pluginId: 'acme.preview', localId: 'project-review' }, instanceKey: 'review-a' },
+    };
+    expect(PluginUiNewSessionSeedOriginV1Schema.safeParse(origin).success).toBe(true);
+    expect(PluginUiNewSessionSeedOriginV1Schema.safeParse({ ...origin, companion: { ...origin.companion, launchInput: { grant: true } } }).success).toBe(false);
+    expect(StoredPluginUiNewSessionSeedOriginV1Schema.parse({ ...origin, companion: { ...origin.companion,
+      future: true, destination: { ...origin.companion.destination, future: true },
+    } })).toEqual(origin);
+  });
+});
 
 describe('linked Session catalog identity', () => {
   it('accepts absent identity and strict catalog identity but rejects undeclared identity fields', () => {

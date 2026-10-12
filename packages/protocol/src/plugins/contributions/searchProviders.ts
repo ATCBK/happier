@@ -7,8 +7,8 @@ import {
   defineProtocolLiteral,
   defineProtocolNumber,
   defineProtocolObject,
+  defineProtocolString,
   defineProtocolUnion,
-  defineProtocolUtf8String,
   type ProtocolSchemaOutput,
 } from '../actions/protocolComposableSchema.js';
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
@@ -34,30 +34,9 @@ import { PLUGIN_UI_ICON_TOKENS_V1 } from './ui/tokens.js';
  * Everything a provider needs beyond `{ id, action }` already belongs to the
  * referenced Action: title, description, icon, availability, execution target,
  * currentness and cancellation. The host owns debounce, minimum query length,
- * empty-query policy, section order, row caps and rendering. Neither side is
+ * empty-query policy, section order, requested page size and rendering. Neither side is
  * restated here.
  */
-
-/**
- * The bounds below are the incumbent bounded-page family's, not new numbers.
- *
- * `composerReferenceProviders.ts` already answers "how much may one typed query
- * and one bounded page of rows carry across this transport" — 256 query bytes,
- * 32 rows and a 128-code-point label. A search response is the same shape of
- * thing over the same transport, so it inherits those answers rather than
- * inventing a second set for one product to reason about. Only the subtitle
- * differs: a search row's context line carries a repository and a state where a
- * composer candidate's carries a short description.
- */
-
-/** One typed query carries at most this much text; the host bounds the field. */
-export const MAX_PLUGIN_SEARCH_QUERY_UTF8_BYTES_V1 = 256;
-/** One provider section renders at most this many rows. */
-export const MAX_PLUGIN_SEARCH_ITEMS_V1 = 32;
-/** A provider-local row identity is opaque to the host and bounded like every other contribution id. */
-export const MAX_PLUGIN_SEARCH_ITEM_ID_UTF8_BYTES_V1 = 256;
-export const MAX_PLUGIN_SEARCH_TITLE_CODE_POINTS_V1 = 128;
-export const MAX_PLUGIN_SEARCH_SUBTITLE_CODE_POINTS_V1 = 256;
 
 /**
  * A row's activation target is bounded by the boundary it crosses, not by a
@@ -98,12 +77,9 @@ export type PluginSearchProviderContributionV1 = z.infer<
  * this vertical.
  */
 export const PluginSearchQueryV1Schema = defineProtocolObject({
-  query: defineProtocolUtf8String({
-    maxUtf8Bytes: MAX_PLUGIN_SEARCH_QUERY_UTF8_BYTES_V1,
-    minLength: 1,
-  }),
-  /** The host's row cap for this section. A provider may return fewer, never more. */
-  limit: defineProtocolNumber({ integer: true, minimum: 1, maximum: MAX_PLUGIN_SEARCH_ITEMS_V1 }),
+  query: defineProtocolString({ minLength: 1 }),
+  /** The caller's requested page size; the host truncates excess rows honestly. */
+  limit: defineProtocolNumber({ integer: true, minimum: 1 }),
 }, { policy: 'closed' });
 export type PluginSearchQueryV1 = ProtocolSchemaOutput<typeof PluginSearchQueryV1Schema>;
 
@@ -145,21 +121,9 @@ const protocolBoolean = defineProtocolUnion([
  */
 export const PluginSearchItemV1Schema = defineProtocolObject({
   /** Stable within the provider. The host namespaces it before it becomes a row identity. */
-  id: defineProtocolUtf8String({
-    maxUtf8Bytes: MAX_PLUGIN_SEARCH_ITEM_ID_UTF8_BYTES_V1,
-    minLength: 1,
-  }),
-  title: defineProtocolUtf8String({
-    // Code points bound what the row shows; bytes bound what it costs.
-    maxUtf8Bytes: MAX_PLUGIN_SEARCH_TITLE_CODE_POINTS_V1 * 4,
-    minLength: 1,
-    maxLength: MAX_PLUGIN_SEARCH_TITLE_CODE_POINTS_V1,
-  }),
-  subtitle: defineProtocolUtf8String({
-    maxUtf8Bytes: MAX_PLUGIN_SEARCH_SUBTITLE_CODE_POINTS_V1 * 4,
-    minLength: 1,
-    maxLength: MAX_PLUGIN_SEARCH_SUBTITLE_CODE_POINTS_V1,
-  }).optional(),
+  id: defineProtocolString({ minLength: 1 }),
+  title: defineProtocolString({ minLength: 1 }),
+  subtitle: defineProtocolString({ minLength: 1 }).optional(),
   icon: searchItemIconToken.optional(),
   command: searchItemCommand,
 }, { policy: 'closed' });
@@ -171,7 +135,7 @@ export type PluginSearchItemV1 = ProtocolSchemaOutput<typeof PluginSearchItemV1S
  * renders that fact rather than implying the reader has seen everything.
  */
 export const PluginSearchResultV1Schema = defineProtocolObject({
-  items: defineProtocolArray(PluginSearchItemV1Schema, { maxItems: MAX_PLUGIN_SEARCH_ITEMS_V1 }),
+  items: defineProtocolArray(PluginSearchItemV1Schema),
   truncated: protocolBoolean,
 }, { policy: 'closed' });
 export type PluginSearchResultV1 = ProtocolSchemaOutput<typeof PluginSearchResultV1Schema>;

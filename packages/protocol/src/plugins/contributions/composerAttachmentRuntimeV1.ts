@@ -14,7 +14,6 @@ import { PluginExecutionScopeV1Schema, type PluginExecutionScopeV1 } from '../in
 import { PendingLocalIdSchema } from '../../sessions/pending/pendingLocalId.js';
 import type { JsonValue } from '../../json/strictJsonValue.js';
 import type { PluginJsonValueV2 } from './publicTypes.js';
-import { ComposerReferenceContextV1Schema } from './composerReferenceProviders.js';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
 const ComposerAttachmentMessageV1Schema = lazyZodSchema(() => z.string().min(1).max(512));
@@ -163,7 +162,7 @@ export type ComposerAttachmentResolveRequestV2<
 const ComposerAttachmentResolveReadyOutcomeV1Schema = lazyZodSchema(() => z.object({
   instanceId: ComposerAttachmentInstanceIdV1Schema,
   status: z.literal('ready'),
-  context: ComposerReferenceContextV1Schema.optional(),
+  context: z.string().min(1).optional(),
   data: ComposerAttachmentValueV1Schema.optional(),
 }).strict());
 const ComposerAttachmentResolveBlockedOutcomeV1Schema = lazyZodSchema(() => z.object({

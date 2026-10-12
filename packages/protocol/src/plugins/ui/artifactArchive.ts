@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
 import {
@@ -185,7 +186,7 @@ export function decodePluginUiArtifactArchiveBodyV1(
   value: string,
 ): PluginUiArtifactArchiveBodyV1 | null {
   try {
-    const parsed = PluginUiArtifactArchiveBodyV1Schema.safeParse(JSON.parse(value));
+    const parsed = createStoredReadSchema(PluginUiArtifactArchiveBodyV1Schema).safeParse(JSON.parse(value));
     return parsed.success ? parsed.data : null;
   } catch {
     return null;
@@ -202,8 +203,8 @@ export function openPluginUiArtifactArchiveV1(input: Readonly<{
   header: unknown;
   body: unknown;
 }>): PluginUiArtifactArchiveOpenedV1 | null {
-  const header = PluginUiArtifactArchiveHeaderV1Schema.safeParse(input.header);
-  const body = PluginUiArtifactArchiveBodyV1Schema.safeParse(input.body);
+  const header = createStoredReadSchema(PluginUiArtifactArchiveHeaderV1Schema).safeParse(input.header);
+  const body = createStoredReadSchema(PluginUiArtifactArchiveBodyV1Schema).safeParse(input.body);
   const expectedArtifactDigest = PluginUiArtifactDigestV1Schema.safeParse(
     input.expectedArtifactDigest,
   );

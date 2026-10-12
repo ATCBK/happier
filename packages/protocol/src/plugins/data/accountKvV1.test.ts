@@ -26,6 +26,22 @@ import {
 import { sealAccountScopedBlobCiphertext } from '../../crypto/accountScopedCipher.js';
 
 describe('Plugin Account KV v1', () => {
+  it('opens retained encrypted row annotations and preserves arbitrary logical JSON data', () => {
+    const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(2) };
+    const payload = { v: 1, retired: true, values: {
+      theme: { version: 3, retired: true, value: { arbitrary: { retained: true } } },
+      removed: { version: 4, deleted: true, retired: true },
+    } };
+    const ciphertext = sealAccountScopedBlobCiphertext({ kind: 'plugin_account_kv_private_payload', material,
+      payload, randomBytes: length => new Uint8Array(length).fill(3) });
+    expect(openPluginAccountStoragePrivatePayloadV1({ material, ciphertext })).toEqual({ v: 1, values: {
+      theme: { version: 3, value: { arbitrary: { retained: true } } }, removed: { version: 4, deleted: true },
+    } });
+    expect(PluginAccountStorageRowV1Schema.safeParse(payload).success).toBe(false);
+    expect(clonePluginAccountKvRowV1(payload)).toEqual({ v: 1, values: {
+      theme: { version: 3, value: { arbitrary: { retained: true } } }, removed: { version: 4, deleted: true },
+    } });
+  });
   it('uses the Protocol strict-JSON grammar without its own depth or node quota', () => {
     let deepValue: unknown = 'leaf';
     for (let depth = 0; depth < 64; depth += 1) {

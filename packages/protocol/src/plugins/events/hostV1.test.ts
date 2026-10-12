@@ -18,6 +18,14 @@ import {
 } from './hostV1.js';
 
 describe('Host Events V1 catalog', () => {
+  it('admits only an Account-scoped content-free Automation source invalidation', () => {
+    const eventId = '@happier/automation/event-sources-invalidated';
+    expect(HostEventTargetV1Schema.safeParse({ eventId, scope: { kind: 'account' } }).success).toBe(true);
+    expect(HostEventTargetV1Schema.safeParse({ eventId, scope: { kind: 'session', sessionId: 'session-1' } }).success).toBe(false);
+    expect(parseHostEventPayloadV1(eventId, {})).toEqual({});
+    expect(() => parseHostEventPayloadV1(eventId, { sourceConfig: {} })).toThrow();
+  });
+
   it('is the exhaustive literal union of the canonical Agent session runtime event producer', () => {
     const expected = AGENT_SESSION_RUNTIME_EVENT_KINDS_V1.map(
       (kind) => `@happier/runtime/${kind}`,
@@ -26,9 +34,10 @@ describe('Host Events V1 catalog', () => {
     expect(HOST_EVENT_CATALOG_V1.map((entry) => entry.id)).toEqual([
       ...expected,
       HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1,
+      '@happier/automation/event-sources-invalidated',
     ]);
-    expect(new Set(HOST_EVENT_CATALOG_V1.map((entry) => entry.id)).size).toBe(expected.length + 1);
-    expect(HOST_EVENT_CATALOG_V1).toHaveLength(AGENT_SESSION_RUNTIME_EVENT_KINDS_V1.length + 1);
+    expect(new Set(HOST_EVENT_CATALOG_V1.map((entry) => entry.id)).size).toBe(expected.length + 2);
+    expect(HOST_EVENT_CATALOG_V1).toHaveLength(AGENT_SESSION_RUNTIME_EVENT_KINDS_V1.length + 2);
     const runtimeEntries = HOST_EVENT_CATALOG_V1.filter((entry) => entry.id.startsWith('@happier/runtime/'));
     expect(runtimeEntries.every((entry) => (
       entry.canonicalProducer === 'centralized-host-session-runtime'

@@ -28,6 +28,12 @@ function fingerprint(overrides: Partial<Parameters<typeof createUiSurfaceExecuta
  * govern currentness elsewhere (Lane 08.01 §8).
  */
 describe('createUiSurfaceExecutableSecurityFingerprintV1', () => {
+  it('includes the effective open policy in both executable and capability fingerprints', () => {
+    expect(fingerprint({ network: 'open' })).not.toBe(fingerprint({ network: 'none' }));
+    const open = normalizeUiSurfaceCapabilityRequestV1({ network: 'open' })!;
+    const none = normalizeUiSurfaceCapabilityRequestV1({ network: 'none' })!;
+    expect(createUiSurfaceRequestedCapabilitiesDigestV1(open)).not.toBe(createUiSurfaceRequestedCapabilitiesDigestV1(none));
+  });
   it('covers every bundle asset and entrypoint while ignoring file insertion order', () => {
     const bundle = artifactHtmlBundleFromBodyV1('<script src="app.js"></script>');
     const script = { mime: 'application/javascript', contentBase64: 'YWxlcnQoMSk=' };

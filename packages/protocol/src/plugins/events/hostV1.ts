@@ -4,6 +4,8 @@ import {
 } from '../../runtime/agentSessionV1.js';
 import {
   AutomationHostEventScopeV1Schema,
+  AutomationEventSourcesInvalidatedHostEventV1Schema,
+  HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1,
   AutomationRunStateChangedHostEventV1Schema,
   HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1,
   HAPPIER_RUNTIME_HOST_EVENT_PREFIX_V1,
@@ -16,6 +18,7 @@ import {
   isHostEventIdV1,
   isRuntimeHostEventIdV1,
   type AutomationHostEventScopeV1,
+  type AutomationEventSourcesInvalidatedHostEventV1,
   type AutomationRunStateChangedHostEventV1,
   type HostEventCatalogEntryV1,
   type HostEventIdV1,
@@ -28,6 +31,8 @@ export {
   AUTOMATION_RUN_CANCELLED_AFTER_DISPATCH_PERMITTED_CAUSE_V1,
   AUTOMATION_RUN_CANCELLED_WHILE_RUNNING_CAUSE_V1,
   AutomationHostEventScopeV1Schema,
+  AutomationEventSourcesInvalidatedHostEventV1Schema,
+  HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1,
   AutomationRunStateChangedHostEventV1Schema,
   HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1,
   HAPPIER_RUNTIME_HOST_EVENT_PREFIX_V1,
@@ -39,6 +44,7 @@ export {
   RuntimeHostEventIdV1Schema,
   isAuthoritativeAutomationRunCancellationCauseV1,
   type AutomationHostEventScopeV1,
+  type AutomationEventSourcesInvalidatedHostEventV1,
   type AutomationRunStateChangedHostEventV1,
   type HostEventCatalogEntryV1,
   type HostEventIdV1,
@@ -56,18 +62,21 @@ type RuntimeHostEventPayloadByIdV1 = {
 
 export type HostEventPayloadByIdV1 = RuntimeHostEventPayloadByIdV1 & Readonly<{
   [HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1]: AutomationRunStateChangedHostEventV1;
+  [HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1]: AutomationEventSourcesInvalidatedHostEventV1;
 }>;
 
 export type HostEventScopeByIdV1 = {
   readonly [Id in RuntimeHostEventIdV1]: HostEventScopeV1;
 } & Readonly<{
   [HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1]: AutomationHostEventScopeV1;
+  [HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1]: AutomationHostEventScopeV1;
 }>;
 
 type HostEventDeliveryScopeByIdV1 = {
   readonly [Id in RuntimeHostEventIdV1]: Readonly<{ kind: 'session'; sessionId: string }>;
 } & Readonly<{
   [HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1]: AutomationHostEventScopeV1;
+  [HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1]: AutomationHostEventScopeV1;
 }>;
 
 export type HostEventTargetV1<Id extends HostEventIdV1 = HostEventIdV1> =
@@ -101,6 +110,11 @@ export function parseHostEventPayloadV1<Id extends HostEventIdV1>(
 ): HostEventPayloadByIdV1[Id] {
   if (!isHostEventIdV1(eventId)) {
     throw new Error(`Unknown Host Event id '${eventId}'`);
+  }
+  if (eventId === HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1) {
+    const invalidation = AutomationEventSourcesInvalidatedHostEventV1Schema.safeParse(payload);
+    if (invalidation.success) return invalidation.data as HostEventPayloadByIdV1[Id];
+    throw new Error(`Invalid payload for Host Event '${eventId}'`);
   }
   if (eventId === HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1) {
     const automation = AutomationRunStateChangedHostEventV1Schema.safeParse(payload);

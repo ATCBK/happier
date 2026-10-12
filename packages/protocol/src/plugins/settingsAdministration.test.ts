@@ -6,6 +6,24 @@ import {
 } from './settingsAdministration.js';
 
 describe('plugin Settings administration action inputs', () => {
+  it('preserves explicit binding partition instead of resolving it after approval', () => {
+    for (const bindingServerIdentityId of [null, 'srv_settings_1']) {
+      const input = { pluginId: 'acme.settings', scope: { kind: 'account' }, target: { kind: 'account' },
+        localId: 'endpoint', value: 'https://service.example', expectedRevision: '7', bindingServerIdentityId };
+      expect(PluginSettingsAdministrationActionInputSchemasV1['plugins.settings.set'].safeParse(input))
+        .toMatchObject({ success: true, data: { bindingServerIdentityId } });
+    }
+  });
+  it('preserves the selected secret origin instead of resolving it after approval', () => {
+    const input = { pluginId: 'acme.settings', localId: 'token',
+      secretDaemonTarget: { kind: 'daemon', serverIdentityId: 'srv_settings_1', machineId: 'machine-1' },
+      canonicalOrigin: 'https://service-a.example', expectedRevision: 'same-revision' };
+    expect(PluginSettingsAdministrationActionInputSchemasV1['plugins.settings.secret.delete'].safeParse(input))
+      .toMatchObject({ success: true, data: { canonicalOrigin: input.canonicalOrigin } });
+    expect(PluginSettingsAdministrationActionInputSchemasV1['plugins.settings.secret.delete'].safeParse({
+      ...input, canonicalOrigin: 'https://service-a.example/path',
+    }).success).toBe(false);
+  });
   it('requires one exact target for a scope-selected CAS mutation', () => {
     const schema = PluginSettingsAdministrationActionInputSchemasV1['plugins.settings.set'];
 

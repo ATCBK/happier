@@ -71,6 +71,7 @@ export function createUiSurfaceExecutableSecurityFingerprintV1(
     source: PluginHostedHtmlSourceV1;
     isolationProfileVersion: number;
     networkOrigins: readonly string[];
+    network?: NormalizedUiSurfaceCapabilityRequestV1['network'];
   }>,
 ): string {
   const source = PluginHostedHtmlSourceV1Schema.parse(input.source);
@@ -83,6 +84,7 @@ export function createUiSurfaceExecutableSecurityFingerprintV1(
       source.files[path].contentBase64,
     ]),
     String(input.isolationProfileVersion),
+    input.network ?? (input.networkOrigins.length > 0 ? 'origins' : 'none'),
     ...[...input.networkOrigins].sort(),
   ]);
 }
@@ -104,6 +106,7 @@ export function createUiSurfaceRequestedCapabilitiesDigestV1(
     'actions',
     ...capabilities.actions.map(formatUiSurfaceActionRequestV1),
     'networkOrigins',
+    capabilities.network,
     ...capabilities.networkOrigins,
   ]);
 }

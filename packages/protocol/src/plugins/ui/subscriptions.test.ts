@@ -7,7 +7,7 @@ import {
 
 describe('plugin UI resource subscriptions', () => {
   it('admits closed host read references through the incumbent subscription target', () => {
-    for (const hostRead of ['usage.query', 'connectedServices.quota.get']) {
+    for (const hostRead of ['usage.query', 'connectedServices.quota.get', 'connectedServices.pools.selection.get']) {
       const resource = { hostRead, input: { queries: [] } };
       expect(PluginUiResourceSubscriptionRequestV1Schema.safeParse({ resource, subscriptionId: 'host' }).success).toBe(true);
       expect(PluginUiResourceSubscriptionRequestV1Schema.safeParse({ resource: { ...resource, accountId: 'foreign' }, subscriptionId: 'host' }).success).toBe(false);

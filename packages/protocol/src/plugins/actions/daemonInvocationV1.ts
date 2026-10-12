@@ -10,6 +10,7 @@ import { ComposerRefV1Schema, type ComposerRefV1 } from '../ui/composer.js';
 import { PluginUiSelectedActionInputCarrierV1Schema } from '../ui/selectedActionInput.js';
 import { PluginUiRuntimeOccurrenceIdV1Schema } from '../ui/targetedContributions.js';
 import { asProtocolZod } from './internalProtocolZodAdapter.js';
+import { PluginSourceCustodyV1Schema } from '../runtime/sourceCustody.js';
 
 const PluginContributionLocalIdSchema = asProtocolZod(CanonicalPluginContributionLocalIdSchema);
 const PluginIdWireSchema = asProtocolZod(PluginIdSchema);
@@ -24,6 +25,7 @@ export const DaemonPluginStructuredMessageActionMountedBindingSchema = lazyZodSc
   pluginId: PluginIdWireSchema,
   contributionLocalId: PluginContributionLocalIdSchema,
   occurrenceId: PluginRuntimeOccurrenceIdSchema,
+  sourceCustody: PluginSourceCustodyV1Schema.optional(),
   materializationRef: PluginMachineMaterializationRefV1Schema.optional(),
 }).strict());
 export type DaemonPluginStructuredMessageActionMountedBinding = z.infer<
@@ -38,6 +40,22 @@ export type DaemonPluginHostPresentedComposerCurrentIntentV1 = z.infer<
   typeof DaemonPluginHostPresentedComposerCurrentIntentV1Schema
 >;
 
+const MountedPluginSurfaceInvocationSchema = lazyZodSchema(() => z.object({
+  kind: z.literal('mountedPluginSurface'),
+  mountedBinding: DaemonPluginStructuredMessageActionMountedBindingSchema,
+}).strict());
+const ClientPluginActionInvocationSchema = lazyZodSchema(() => z.object({
+  kind: z.literal('clientPluginAction'),
+  clientActionBinding: DaemonPluginStructuredMessageActionMountedBindingSchema,
+}).strict());
+
+/** Only narrowing plugin claims are admitted on the Account root carrier. */
+export const DaemonPluginMountedInvocationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  MountedPluginSurfaceInvocationSchema,
+  ClientPluginActionInvocationSchema,
+]));
+export type DaemonPluginMountedInvocationV1 = z.infer<typeof DaemonPluginMountedInvocationV1Schema>;
+
 /** Closed provenance carrier; the daemon derives any caller after revalidation. */
 export const DaemonPluginStructuredMessageActionInvocationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.object({
@@ -48,14 +66,8 @@ export const DaemonPluginStructuredMessageActionInvocationV1Schema = lazyZodSche
     kind: z.literal('hostPresentedMessage'),
     currentMessageIntent: MessageActionReferenceV1Schema,
   }).strict(),
-  z.object({
-    kind: z.literal('mountedPluginSurface'),
-    mountedBinding: DaemonPluginStructuredMessageActionMountedBindingSchema,
-  }).strict(),
-  z.object({
-    kind: z.literal('clientPluginAction'),
-    clientActionBinding: DaemonPluginStructuredMessageActionMountedBindingSchema,
-  }).strict(),
+  MountedPluginSurfaceInvocationSchema,
+  ClientPluginActionInvocationSchema,
 ]));
 export type DaemonPluginStructuredMessageActionInvocationV1 = z.infer<
   typeof DaemonPluginStructuredMessageActionInvocationV1Schema

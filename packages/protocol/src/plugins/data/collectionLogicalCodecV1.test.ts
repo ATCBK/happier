@@ -15,8 +15,10 @@ import {
 } from './collectionsV1.js';
 import {
   compilePluginJsonSchema,
+  createPluginJsonSchemaZodValueAdapter,
   isValidPluginJsonSchemaValue,
 } from '../actions/jsonSchemaValidation.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 /**
  * `bindingId` is deliberately server-readable and NOT required: it is the exact
@@ -59,11 +61,28 @@ const validate = compilePluginJsonSchema(contract.schema);
 const isValidLogicalValue = (
   value: PluginCollectionLogicalValueV1,
 ): value is PluginCollectionLogicalValueV1 => isValidPluginJsonSchemaValue(validate, value);
+const storedLogicalSchema = createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(contract.schema));
+const parseStoredLogicalValue = (value: PluginCollectionLogicalValueV1): PluginCollectionLogicalValueV1 | null => {
+  const parsed = storedLogicalSchema.safeParse(value);
+  return parsed.success && parsed.data !== null && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
+    && isValidLogicalValue(parsed.data) ? parsed.data : null;
+};
 
 const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(5) };
 const randomBytes = (length: number): Uint8Array => new Uint8Array(length).fill(3);
 
 describe('plugin Collection logical row codec', () => {
+  it('projects retired stored fields at both transport halves while refusing malformed known values', () => {
+    const row = { rowId: 'delivery-1', revision: 3,
+      projection: { connectionId: 'connection-1', attention: true, bindingId: null, retired: true },
+      content: { t: 'plain' as const, v: { privateNote: 'kept', retired: true } } };
+    expect(decodePluginCollectionLogicalRowV1({ contract, parseStoredLogicalValue, row,
+      encryptionMode: 'plain', material: null })).toEqual({ status: 'decoded', rowId: 'delivery-1', revision: 3,
+      value: { id: 'delivery-1', connectionId: 'connection-1', attention: true, privateNote: 'kept' } });
+    expect(decodePluginCollectionLogicalRowV1({ contract, parseStoredLogicalValue,
+      row: { ...row, content: { t: 'plain', v: { privateNote: 7, retired: true } } },
+      encryptionMode: 'plain', material: null })).toMatchObject({ status: 'failed', reason: 'row-schema-invalid' });
+  });
   it('constructs and measures the exact closed mutation request from logical operations', () => {
     const prepared = preparePluginCollectionLogicalMutationRequestV1({
       contract,
@@ -164,7 +183,7 @@ describe('plugin Collection logical row codec', () => {
 
     const decoded = decodePluginCollectionLogicalRowV1({
       contract,
-      isValidLogicalValue,
+      parseStoredLogicalValue,
       row: {
         rowId: encoded.rowId,
         revision: 4,
@@ -213,7 +232,7 @@ describe('plugin Collection logical row codec', () => {
 
     expect(decodePluginCollectionLogicalRowV1({
       contract,
-      isValidLogicalValue,
+      parseStoredLogicalValue,
       row: {
         rowId: encoded.rowId,
         revision: 1,
@@ -228,7 +247,7 @@ describe('plugin Collection logical row codec', () => {
   it('rejects a row whose projection omits a required server-readable field', () => {
     expect(decodePluginCollectionLogicalRowV1({
       contract,
-      isValidLogicalValue,
+      parseStoredLogicalValue,
       row: {
         rowId: 'delivery-3',
         revision: 1,
@@ -243,7 +262,7 @@ describe('plugin Collection logical row codec', () => {
   it('rejects a projection that is not the contract\'s exact server-readable set', () => {
     expect(decodePluginCollectionLogicalRowV1({
       contract,
-      isValidLogicalValue,
+      parseStoredLogicalValue,
       row: {
         rowId: 'delivery-4',
         revision: 1,
@@ -258,7 +277,7 @@ describe('plugin Collection logical row codec', () => {
   it('rejects a private payload that shadows an admitted projection field', () => {
     expect(decodePluginCollectionLogicalRowV1({
       contract,
-      isValidLogicalValue,
+      parseStoredLogicalValue,
       row: {
         rowId: 'delivery-5',
         revision: 1,
@@ -294,7 +313,7 @@ describe('plugin Collection logical row codec', () => {
 
     expect(decodePluginCollectionLogicalRowV1({
       contract,
-      isValidLogicalValue,
+      parseStoredLogicalValue,
       row: {
         rowId: encoded.rowId,
         revision: 2,
@@ -307,7 +326,7 @@ describe('plugin Collection logical row codec', () => {
 
     expect(decodePluginCollectionLogicalRowV1({
       contract,
-      isValidLogicalValue,
+      parseStoredLogicalValue,
       row: {
         rowId: encoded.rowId,
         revision: 2,
@@ -320,7 +339,7 @@ describe('plugin Collection logical row codec', () => {
 
     expect(decodePluginCollectionLogicalRowV1({
       contract,
-      isValidLogicalValue,
+      parseStoredLogicalValue,
       row: {
         rowId: encoded.rowId,
         revision: 2,

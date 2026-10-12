@@ -10,7 +10,7 @@ describe('target MCP contributions', () => {
         { id: 'dependency', title: 'Dependency', kind: 'static', transport: { kind: 'stdio', executable: { kind: 'managedDependency', id: 'mcp-server' } } },
         { id: 'dynamic', title: 'Dynamic', kind: 'dynamic' },
       ],
-      discoverySources: [{ id: 'discovery', title: 'Discovery' }],
+      discoverySources: [{ id: 'discovery', title: 'Discovery', loadedInHappierSessions: true }],
     });
     expect(result.success).toBe(true);
   });

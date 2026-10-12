@@ -10,11 +10,15 @@ import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 export const HAPPIER_RUNTIME_HOST_EVENT_PREFIX_V1 = '@happier/runtime/' as const;
 export const HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1 =
   '@happier/automation/run-state-changed' as const;
+export const HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1 =
+  '@happier/automation/event-sources-invalidated' as const;
 
 export type HostSemanticEventKindV1 = typeof AGENT_SESSION_RUNTIME_EVENT_KINDS_V1[number];
 export type RuntimeHostEventIdV1 =
   `${typeof HAPPIER_RUNTIME_HOST_EVENT_PREFIX_V1}${HostSemanticEventKindV1}`;
-export type HostEventIdV1 = RuntimeHostEventIdV1 | typeof HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1;
+export type HostEventIdV1 = RuntimeHostEventIdV1
+  | typeof HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1
+  | typeof HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1;
 
 /** Runtime Host Event author scopes deliberately remain separate from Account scope. */
 export type HostEventScopeV1 =
@@ -22,6 +26,12 @@ export type HostEventScopeV1 =
   | Readonly<{ kind: 'session'; sessionId: string }>;
 
 export type AutomationHostEventScopeV1 = Readonly<{ kind: 'account' }>;
+
+/** Lossy wake only: definitions and credentials remain behind their authorized readers. */
+export const AutomationEventSourcesInvalidatedHostEventV1Schema = lazyZodSchema(() => z.object({}).strict());
+export type AutomationEventSourcesInvalidatedHostEventV1 = z.infer<
+  typeof AutomationEventSourcesInvalidatedHostEventV1Schema
+>;
 
 /**
  * The user cancelled a Run whose external execution was already permitted to
@@ -104,6 +114,7 @@ export const RUNTIME_HOST_EVENT_IDS_V1 = Object.freeze(ALL_HOST_SEMANTIC_EVENT_K
 export const HOST_EVENT_IDS_V1 = Object.freeze([
   ...RUNTIME_HOST_EVENT_IDS_V1,
   HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1,
+  HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1,
 ] as const);
 
 const HOST_EVENT_ID_SET_V1 = new Set<string>(HOST_EVENT_IDS_V1);
@@ -147,7 +158,10 @@ export const RuntimeHostEventTargetV1Schema = lazyZodSchema(() => z.object({
 }).strict());
 
 export const AutomationHostEventTargetV1Schema = lazyZodSchema(() => z.object({
-  eventId: z.literal(HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1),
+  eventId: z.enum([
+    HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1,
+    HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1,
+  ]),
   scope: AutomationHostEventScopeV1Schema,
 }).strict());
 
@@ -181,7 +195,17 @@ export type AutomationRunStateChangedHostEventCatalogEntryV1 = Readonly<{
 
 export type HostEventCatalogEntryV1 =
   | RuntimeHostEventCatalogEntryV1
-  | AutomationRunStateChangedHostEventCatalogEntryV1;
+  | AutomationRunStateChangedHostEventCatalogEntryV1
+  | Readonly<{
+    id: typeof HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1;
+    canonicalProducer: 'account-change-feed';
+    sourceProducers: readonly ['account-change-feed'];
+    payloadType: 'AutomationEventSourcesInvalidatedHostEventV1';
+    privacy: 'account';
+    allowedScopes: readonly ['account'];
+    realm: 'daemon';
+    disposition: 'public';
+  }>;
 
 export const HOST_EVENT_CATALOG_V1: readonly HostEventCatalogEntryV1[] = Object.freeze([
   ...ALL_HOST_SEMANTIC_EVENT_KINDS_V1.map((semanticKind): RuntimeHostEventCatalogEntryV1 => Object.freeze({
@@ -200,6 +224,16 @@ export const HOST_EVENT_CATALOG_V1: readonly HostEventCatalogEntryV1[] = Object.
     canonicalProducer: 'automation-run-transition',
     sourceProducers: Object.freeze(['automation-run-transition'] as const),
     payloadType: 'AutomationRunStateChangedHostEventV1',
+    privacy: 'account',
+    allowedScopes: Object.freeze(['account'] as const),
+    realm: 'daemon',
+    disposition: 'public',
+  }),
+  Object.freeze({
+    id: HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1,
+    canonicalProducer: 'account-change-feed',
+    sourceProducers: Object.freeze(['account-change-feed'] as const),
+    payloadType: 'AutomationEventSourcesInvalidatedHostEventV1',
     privacy: 'account',
     allowedScopes: Object.freeze(['account'] as const),
     realm: 'daemon',

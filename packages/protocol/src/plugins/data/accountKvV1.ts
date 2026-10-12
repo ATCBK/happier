@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import {
   getAccountScopedBlobCiphertextBase64LengthV1,
@@ -85,6 +86,7 @@ export const PluginAccountStorageRowV1Schema = lazyZodSchema(() => z.object({
   }
 }));
 export type PluginAccountStorageRowV1 = z.infer<typeof PluginAccountStorageRowV1Schema>;
+export const PluginAccountStorageRowV1StoredSchema = createStoredReadSchema(PluginAccountStorageRowV1Schema);
 
 const PluginAccountStorageEncryptedCiphertextV1Schema = lazyZodSchema(() => z.string().min(1).superRefine(
   (ciphertext, context) => {
@@ -132,7 +134,7 @@ export function openPluginAccountStoragePrivatePayloadV1(params: Readonly<{
     ciphertext: params.ciphertext,
   });
   if (!opened) return null;
-  const parsed = PluginAccountStorageRowV1Schema.safeParse(opened.value);
+  const parsed = PluginAccountStorageRowV1StoredSchema.safeParse(opened.value);
   return parsed.success ? parsed.data : null;
 }
 
@@ -309,7 +311,7 @@ export function createEmptyPluginAccountKvRowV1(): PluginAccountStorageRowV1 {
 export function clonePluginAccountKvRowV1(
   row: PluginAccountStorageRowV1,
 ): PluginAccountStorageRowV1 {
-  return PluginAccountStorageRowV1Schema.parse(row);
+  return PluginAccountStorageRowV1StoredSchema.parse(row);
 }
 
 export function readPluginAccountKvEntryV1(

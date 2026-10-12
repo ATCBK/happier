@@ -27,6 +27,7 @@ export const PluginMcpServerContributionV1Schema = lazyZodSchema(() => z.discrim
 export type PluginMcpServerContributionV1 = z.infer<typeof PluginMcpServerContributionV1Schema>;
 
 export const PluginMcpDiscoverySourceContributionV1Schema = lazyZodSchema(() => McpDisplaySchema.extend({
+  loadedInHappierSessions: z.boolean(),
   resultSchema: PluginJsonSchemaV2Schema.optional(),
 }).strict());
 export type PluginMcpDiscoverySourceContributionV1 = z.infer<typeof PluginMcpDiscoverySourceContributionV1Schema>;

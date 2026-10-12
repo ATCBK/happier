@@ -155,6 +155,28 @@ describe('Collection migration Artifact ownership', () => {
 });
 
 describe('Plugin Account Collection contracts', () => {
+  it('normalizes schema structure without treating structured literals as child schemas', () => {
+    const literal = { properties: { note: 'literal data' }, required: ['z', 'a'], enum: [2, 1] };
+    const contribution = PluginAccountCollectionContributionV1Schema.parse({
+      ...baseCollection,
+      schema: {
+        ...baseCollection.schema,
+        properties: {
+          ...baseCollection.schema.properties,
+          payload: { type: 'object', const: literal, default: literal },
+        },
+      },
+    });
+    const normalized = normalizePluginAccountCollectionContractV1({ pluginId: 'example.literals', contribution });
+
+    expect(normalized.schema.properties?.payload).toEqual({ type: 'object', const: literal, default: literal });
+    expect(contribution.schema.properties?.payload).toEqual({ type: 'object', const: literal, default: literal });
+    expect(normalizePluginAccountCollectionContractV1({
+      pluginId: 'example.literals',
+      contribution: { ...contribution, schema: normalized.schema },
+    }).contractDigest).toBe(normalized.contractDigest);
+  });
+
   it('grants older declared-compatible contracts reads but reserves writes for the exact current ref', () => {
     const sourceReader = normalizePluginAccountCollectionContractV1({
       pluginId: 'example.compat',
