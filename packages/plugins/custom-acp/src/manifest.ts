@@ -8,6 +8,10 @@ export const CUSTOM_ACP_PLUGIN = definePlugin({
   id: 'happier.agent.custom-acp',
   version: '0.0.0',
   displayName: 'Custom ACP Agent',
+  brand: { iconResourceId: 'brand-icon', monochrome: true },
+  resources: {
+    'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+  },
   engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
   entrypoints: { daemon: './.happier-plugin/daemon.js' },
   agents: {
@@ -18,6 +22,7 @@ export const CUSTOM_ACP_PLUGIN = definePlugin({
         primary: 'sessions',
         catalog: { vendorResume: { support: 'supported' } },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
           sessions: {
             open: ['create', 'resume'], delivery: ['newTurn', 'steer', 'followUp'],
             cancel: true, configuration: true, executionRunContext: { versions: [1] },
