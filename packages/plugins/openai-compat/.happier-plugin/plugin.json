@@ -3,6 +3,7 @@
     "accountCollections": [],
     "actions": [],
     "agents": [],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -20,6 +21,7 @@
     "executionRunProfiles": [],
     "hooks": [],
     "inputTypes": [],
+    "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
       "discoverySources": [],
@@ -29,6 +31,7 @@
     "notifications": [],
     "openableContentViewers": [],
     "pluginContributionPoints": [],
+    "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],
@@ -80,8 +83,8 @@
         {
           "locale": "fr",
           "messages": {
-            "settingsVoice.realtimeProviders.speechProcessing.openAiCompatStt": "L’audio destiné à la transcription est envoyé depuis la machine d’exécution sélectionnée vers le point de terminaison compatible OpenAI que vous configurez. Son opérateur peut conserver les données reçues selon ses propres conditions.",
-            "settingsVoice.realtimeProviders.speechProcessing.openAiCompatTts": "Le texte de la réponse destiné à la synthèse vocale est envoyé depuis la machine d’exécution sélectionnée vers le point de terminaison compatible OpenAI que vous configurez. Son opérateur peut conserver les données reçues selon ses propres conditions."
+            "settingsVoice.realtimeProviders.speechProcessing.openAiCompatStt": "L’audio destiné à la transcription est envoyé depuis la machine d’exécution sélectionnée vers le point de terminaison compatible OpenAI que tu configures. Son opérateur peut conserver les données reçues selon ses propres conditions.",
+            "settingsVoice.realtimeProviders.speechProcessing.openAiCompatTts": "Le texte de la réponse destiné à la synthèse vocale est envoyé depuis la machine d’exécution sélectionnée vers le point de terminaison compatible OpenAI que tu configures. Son opérateur peut conserver les données reçues selon ses propres conditions."
           }
         },
         {

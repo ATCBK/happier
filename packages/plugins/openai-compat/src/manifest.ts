@@ -20,6 +20,10 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
   version: '0.0.0',
   displayName: 'OpenAI-compatible Speech',
   description: 'Batch speech-to-text and text-to-speech through a selected-machine OpenAI-compatible endpoint.',
+  brand: { iconResourceId: 'brand-icon', monochrome: true },
+  resources: {
+    'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+  },
   engines: { happier: '^0.0.0' },
   runtime: { apiVersion: 1 },
   entrypoints: {
@@ -60,8 +64,8 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
         {
           locale: 'fr',
           messages: {
-            'settingsVoice.realtimeProviders.speechProcessing.openAiCompatStt': 'L’audio destiné à la transcription est envoyé depuis la machine d’exécution sélectionnée vers le point de terminaison compatible OpenAI que vous configurez. Son opérateur peut conserver les données reçues selon ses propres conditions.',
-            'settingsVoice.realtimeProviders.speechProcessing.openAiCompatTts': 'Le texte de la réponse destiné à la synthèse vocale est envoyé depuis la machine d’exécution sélectionnée vers le point de terminaison compatible OpenAI que vous configurez. Son opérateur peut conserver les données reçues selon ses propres conditions.',
+            'settingsVoice.realtimeProviders.speechProcessing.openAiCompatStt': 'L’audio destiné à la transcription est envoyé depuis la machine d’exécution sélectionnée vers le point de terminaison compatible OpenAI que tu configures. Son opérateur peut conserver les données reçues selon ses propres conditions.',
+            'settingsVoice.realtimeProviders.speechProcessing.openAiCompatTts': 'Le texte de la réponse destiné à la synthèse vocale est envoyé depuis la machine d’exécution sélectionnée vers le point de terminaison compatible OpenAI que tu configures. Son opérateur peut conserver les données reçues selon ses propres conditions.',
           },
         },
         {
