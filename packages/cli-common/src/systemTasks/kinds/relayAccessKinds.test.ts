@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { RelayAccessProvider } from '../../relayAccess/types.js';
+import type { RelayAccessConfig, RelayAccessProvider } from '../../relayAccess/types.js';
 import { RelayAccessConfigV1Schema } from '@happier-dev/protocol/system/tasks/relayAccessConfigV1';
+import { getRelayAccessProvider } from '../../relayAccess/registry.js';
+import { createSystemTasksRunner } from '../interactiveTaskKinds.js';
 
 import {
   createRelayAccessConfigureTaskKind,
@@ -12,6 +14,49 @@ import {
 } from './relayAccessKinds.js';
 
 describe('relay access shared system task kinds', () => {
+  it.each(['status', 'configure'] as const)('returns a credential-free terminal %s snapshot from the real LAN provider', async (operation) => {
+    const config = {
+      providerId: 'lan',
+      url: 'https://user:password@relay.example.test:8443/relay?route=office#status',
+    } as const;
+    let persistedConfig: RelayAccessConfig = config;
+    const deps = {
+      getProvider: getRelayAccessProvider,
+      createExecutionContext: () => ({ env: {}, upstreamUrl: null }),
+    };
+    const kind = operation === 'status'
+      ? createRelayAccessStatusTaskKind({ ...deps, readConfig: async () => persistedConfig })
+      : createRelayAccessConfigureTaskKind({ ...deps, writeConfig: async ({ config: next }) => {
+        persistedConfig = next;
+      } });
+    const taskKind = `relay.access.${operation}.v1`;
+    const runner = createSystemTasksRunner({ kinds: { [taskKind]: kind } });
+
+    await runner.start({
+      taskId: 'relay-status-credentials',
+      kind: taskKind,
+      params: operation === 'status'
+        ? { target: { kind: 'local' } }
+        : { target: { kind: 'local' }, providerId: 'lan', config },
+    });
+
+    expect(await runner.wait({ taskId: 'relay-status-credentials' })).toEqual({
+      protocolVersion: 1,
+      taskId: 'relay-status-credentials',
+      ok: true,
+      data: {
+        configured: true,
+        providerId: 'lan',
+        status: {
+          state: 'enabled',
+          shareUrl: 'https://relay.example.test:8443/relay?route=office#status',
+          details: null,
+        },
+      },
+    });
+    expect(persistedConfig).toEqual(config);
+  });
+
   it('preserves task config normalization across the portable Action config variants', () => {
     for (const config of [
       { providerId: 'localOnly' },

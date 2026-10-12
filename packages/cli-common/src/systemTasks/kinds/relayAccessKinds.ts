@@ -242,7 +242,7 @@ function buildDisabledRelayAccessSnapshot(): RelayAccessTaskSnapshot {
 
 function normalizeRelayAccessStatus(status: RelayAccessStatus): RelayAccessStatusSnapshot {
   const shareUrl = typeof status.shareUrl === 'string' && status.shareUrl.trim().length > 0
-    ? status.shareUrl.trim()
+    ? redactSensitiveSystemTaskJsonValue(status.shareUrl.trim()) as string
     : null;
   const details = typeof status.details === 'undefined'
     ? null
