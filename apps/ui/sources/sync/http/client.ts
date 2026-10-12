@@ -5,7 +5,7 @@ import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
 import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
 import { redactPublicShareCapabilityUrl } from '@happier-dev/protocol/crypto/publicShareCapabilityUrl';
 import { runtimeFetch } from '@/utils/system/runtimeFetch';
-import { buildRetryLaterProbeResultFromResponse } from '@/sync/runtime/connectivity/retryLaterProbeResult';
+import { buildRetryLaterProbeResultFromResponse, readRetryLaterReason } from '@/sync/runtime/connectivity/retryLaterProbeResult';
 import { sanitizeEndpointErrorMessage } from '@/sync/runtime/connectivity/sanitizeEndpointErrorMessage';
 import {
     peekServerReachabilityScope,
@@ -593,7 +593,11 @@ async function requestAtEndpoint(
                         reportServerReachabilityProbeResult(context.endpointUrl, {
                             status: 'auth_failed', statusCode: 401, errorMessage: 'HTTP 401',
                         }, probeReportScope, usedToken);
-                    } else if (response.status >= 500) {
+                    } else if (response.status === 502 || response.status === 503 || response.status === 504
+                        || readRetryLaterReason(response.headers)) {
+                        // A domain failure still proves this Home answered. Only
+                        // gateway/service failures or explicit readiness evidence
+                        // should suspend unrelated requests behind reachability.
                         reportServerReachabilityProbeResult(context.endpointUrl,
                             buildRetryLaterProbeResultFromResponse(response, `HTTP ${response.status}`),
                             probeReportScope, usedToken);

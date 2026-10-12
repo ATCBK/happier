@@ -68,7 +68,7 @@ describe('serverFetch endpoint supervision', () => {
         expect(actualPhase).toBe('auth_failed');
     });
 
-    it.each([403, 503])('reports domain HTTP %s through canonical Home without treating authorization as authentication', async (status) => {
+    it.each([403, 500, 502, 503, 504])('reports domain HTTP %s through canonical Home without treating authorization as authentication', async (status) => {
         vi.useFakeTimers();
         setRuntimeFetch(async (input) => String(input).endsWith('/v1/sessions')
             ? new Response(null, { status, headers: { 'Retry-After': '2' } })
@@ -81,10 +81,32 @@ describe('serverFetch endpoint supervision', () => {
         await vi.advanceTimersByTimeAsync(0);
         const state = peekServerReachabilityState('https://api.example.test', token);
         const projectedState = endpoint.supervisor.getState();
-        await endpoint.release({ immediate: true });
-        expect(state?.phase).toBe(status === 403 ? 'online' : 'offline');
+        const serviceUnavailable = status === 502 || status === 503 || status === 504;
+        expect(state?.phase).toBe(serviceUnavailable ? 'offline' : 'online');
         expect(projectedState.phase).toBe(state?.phase);
-        if (status === 503) expect(state?.nextRetryAt).toBe(Date.now() + 2000);
+        if (serviceUnavailable) expect(state?.nextRetryAt).toBe(Date.now() + 2000);
+        if (status === 500) {
+            // Approval execution can fail in a domain while its terminal
+            // Artifact write still needs the same responding Home immediately.
+            await expect(client.serverFetch('/v1/artifacts', { method: 'POST' })).resolves.toHaveProperty('status', 200);
+        }
+        await endpoint.release({ immediate: true });
+    });
+
+    it('keeps explicit Home restart evidence even on an internal-error response', async () => {
+        vi.useFakeTimers();
+        setRuntimeFetch(async (input) => String(input).endsWith('/v1/sessions')
+            ? new Response(null, { status: 500, headers: { 'X-Happier-Retry-Reason': 'server_restarting', 'Retry-After': '2' } })
+            : new Response(null, { status: 200 }));
+        const { acquireEndpointSupervisor } = await import('@/sync/runtime/connectivity/endpointSupervisorPool');
+        const { peekServerReachabilityState } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+        const endpoint = await acquireEndpointSupervisor({ serverId: getActiveServerSnapshot().serverId, endpoint: 'https://api.example.test', tokenOverride: token });
+        try {
+            const { serverFetch } = await import('./client');
+            await expect(serverFetch('/v1/sessions')).resolves.toHaveProperty('status', 500);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(peekServerReachabilityState('https://api.example.test', token)).toMatchObject({ phase: 'offline', nextRetryAt: Date.now() + 2000 });
+        } finally { await endpoint.release({ immediate: true }); }
     });
 
     it('keeps the request pending under canonical offline supervision until caller cancellation', async () => {
