@@ -160,7 +160,7 @@ export function LookChoices(props: Readonly<{ flow: Pick<PersonalizeFlow, 'draft
                         size="small"
                         display="inverted"
                         title={t('personalize.customizeInAppearance')}
-                        onPress={() => router.push(buildSettingHref('/settings/appearance', APPEARANCE_SETTINGS.settings.glassCustomize) as never)}
+                        onPress={() => router.push(buildSettingHref('/settings/appearance', APPEARANCE_SETTINGS.settings.glassElements) as never)}
                     />
                 </View>
             </ChoiceSection>

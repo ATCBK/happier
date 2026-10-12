@@ -72,6 +72,7 @@ export function readPersonalizeChoices(account: Settings, local: Pick<LocalSetti
         glassSettings: {
             glassBlurEnabled: account.glassBlurEnabled,
             glassBlurIntensity: account.glassBlurIntensity,
+            glassTintIntensity: account.glassTintIntensity,
             glassSurfaceMaterials: account.glassSurfaceMaterials,
         },
         transcriptLayout: account.transcriptGroupingMode === 'linear' ? 'linear' : 'turns',
