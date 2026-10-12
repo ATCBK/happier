@@ -28,6 +28,15 @@ async function render() {
 }
 
 describe('SessionScmReviewDetailsView (stale snapshot)', () => {
+    it('uses the shared SCM failure reason when no cached snapshot exists', async () => {
+        snapshotError = { message: 'SCM executable is unavailable', at: 1, errorCode: 'BACKEND_UNAVAILABLE' };
+        fixture.setSnapshot(null, snapshotError);
+        const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
+        const screen = await fixture.render(<SessionScmReviewDetailsView serverId={fixture.home.id} sessionId="s1" scopeId="session:s1" />);
+        const { t } = await import('@/text');
+        expect(screen.getTextContent()).toContain(t('errors.sourceControlUnavailableForSession'));
+        expect(screen.getTextContent()).not.toContain(t('errors.tryAgain'));
+    });
     it('surfaces a failing refresh while keeping the cached review visible', async () => {
         snapshotError = { message: 'RPC method not available', at: 1, errorCode: 'BACKEND_UNAVAILABLE' };
         const screen = await render();

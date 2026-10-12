@@ -98,6 +98,8 @@ export type SessionScmReviewTarget = Readonly<{
     comparison?: SessionScmReviewComparison;
     view?: SessionScmReviewView;
     explain?: boolean;
+    /** Selected evidence identity; the workspace adapter still admits its Home and checkout. */
+    evidenceSessionId?: string;
 }>;
 
 export function resolveSessionScmReviewComparisonLabel(comparison: SessionScmReviewComparison): string {
@@ -141,6 +143,7 @@ export function createSessionScmReviewDetailsTab(target: SessionScmReviewTarget 
             ...(comparison ? { comparison } : {}),
             ...(view ? { view } : {}),
             ...(typeof target.explain === 'boolean' ? { explain: target.explain } : {}),
+            ...(target.evidenceSessionId ? { evidenceSessionId: target.evidenceSessionId } : {}),
         },
     };
 }

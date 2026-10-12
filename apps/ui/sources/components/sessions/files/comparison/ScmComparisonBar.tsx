@@ -9,6 +9,7 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Switch } from '@/components/ui/forms/Switch';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { KeyHint } from '@/components/ui/keyboard/KeyHint';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -32,12 +33,21 @@ export function ScmComparisonBar(props: Readonly<{ leading: React.ReactNode; tra
 export function ScmComparisonStartReview(props: Readonly<{ onPress: () => void; disabled?: boolean; disabledReason?: string | null }>) {
     const { theme } = useUnistyles();
     return <View style={styles.reviewAction}>
+        {/* The reason sits on the bar's own line, before the action it explains: a second line under the button made the bar two rows tall. */}
+        {props.disabledReason ? <Text testID="scm-comparison-review-reason" numberOfLines={1} style={styles.reviewReason}>{props.disabledReason}</Text> : null}
         <RoundButton testID="scm-comparison-start-review" size="small" display="secondary"
             title={t('scmComparison.startReview')} disabled={props.disabled}
             accessibilityHint={props.disabledReason ?? undefined} onPress={props.onPress}
             leading={<Icon name="shield-check" size={ICON_SIZE.xs} color={theme.colors.text.primary} />} />
-        {props.disabledReason ? <Text testID="scm-comparison-review-reason" style={styles.reviewReason}>{props.disabledReason}</Text> : null}
     </View>;
+}
+
+/** The quiet way into a commit proposal for pending changes, beside Start review on every host. */
+export function ScmComparisonProposeCommits(props: Readonly<{ onPress: () => void }>) {
+    const { theme } = useUnistyles();
+    return <RoundButton testID="scm-comparison-propose-commits" size="small" display="inverted"
+        title={t('scmComparison.proposeCommits')} onPress={props.onPress}
+        leading={<Icon name="git-commit" size={ICON_SIZE.xs} color={theme.colors.text.primary} />} />;
 }
 
 /** Files | Walkthrough over one comparison; Commits joins only where the owner offers it. */
@@ -93,6 +103,48 @@ export function ScmComparisonExplainToggle(props: Readonly<{ value: boolean; onC
     );
 }
 
+/** A comparison rail's horizontal inset (Files' changed files, Walkthrough's contents): rows sit inside it. */
+export const SCM_COMPARISON_RAIL_INSET_PX = 8;
+
+/**
+ * The caption heading a comparison rail ("Changed files 9" with the list | tree switch, "Contents 2 of 5
+ * reviewed"). Both views draw this one row at one height, so switching Files and Walkthrough keeps the
+ * caption, its count and the rail's first row exactly where they were.
+ */
+export function ScmComparisonRailCaption(props: Readonly<{
+    title: string;
+    count?: string | null;
+    countTestID?: string;
+    /** Right after the title (Files: the file count) instead of at the end (Walkthrough: progress). */
+    countPlacement?: 'leading' | 'trailing';
+    trailing?: React.ReactNode;
+}>) {
+    const count = props.count ? <Text testID={props.countTestID} style={styles.railCount}>{props.count}</Text> : null;
+    return (
+        <View style={styles.railCaption}>
+            <Text style={styles.railTitle}>{props.title}</Text>
+            {props.countPlacement === 'leading' ? count : null}
+            <View style={styles.grow} />
+            {props.countPlacement === 'leading' ? null : count}
+            {props.trailing}
+        </View>
+    );
+}
+
+/** The rail's foot: the keys this view binds (web only; the caller decides availability). */
+export function ScmComparisonRailKeys(props: Readonly<{ testID?: string; keys: readonly Readonly<{ keys: readonly string[]; label: string }>[] }>) {
+    return (
+        <View testID={props.testID} style={styles.railKeys}>
+            {props.keys.map((entry) => (
+                <View key={entry.label} style={styles.railKey}>
+                    {entry.keys.map((key) => <KeyHint key={key} label={key} />)}
+                    <Text style={styles.railKeyLabel}>{entry.label}</Text>
+                </View>
+            ))}
+        </View>
+    );
+}
+
 const styles = StyleSheet.create((theme) => ({
     bar: {
         flexDirection: 'row',
@@ -108,8 +160,8 @@ const styles = StyleSheet.create((theme) => ({
     },
     leading: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, flexGrow: 1, flexShrink: 1, minWidth: 0 },
     trailing: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    reviewAction: { alignItems: 'flex-end', gap: 4, flexShrink: 1 },
-    reviewReason: { fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() },
+    reviewAction: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 },
+    reviewReason: { fontSize: 12, color: theme.colors.text.secondary, flexShrink: 1, minWidth: 0, ...Typography.default() },
     switchRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     divider: { width: 1, height: 16, backgroundColor: theme.colors.border.default },
     explain: {
@@ -125,4 +177,11 @@ const styles = StyleSheet.create((theme) => ({
     },
     explainOn: { borderColor: theme.colors.accent.blue },
     explainLabel: { fontSize: 14, color: theme.colors.text.primary, ...Typography.default('semiBold') },
+    grow: { flex: 1 },
+    railCaption: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 28, paddingLeft: 12, paddingRight: 4, marginBottom: 6 },
+    railTitle: { fontSize: 12, color: theme.colors.text.secondary, ...Typography.default('semiBold') },
+    railCount: { fontSize: 12, color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'], ...Typography.default('medium') },
+    railKeys: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 12, rowGap: 6, paddingHorizontal: 12, paddingVertical: 12 },
+    railKey: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    railKeyLabel: { fontSize: 12, color: theme.colors.text.tertiary, ...Typography.default() },
 }));

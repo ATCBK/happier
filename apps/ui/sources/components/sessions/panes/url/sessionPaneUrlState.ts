@@ -49,7 +49,7 @@ export type SessionPaneUrlDetailsTarget =
  */
 export const SESSION_PANE_URL_PARAM_KEYS = [
     'right', 'bottom', 'details', 'path', 'sha', 'terminalInstanceId', 'discussionId',
-    'comparison', 'comparisonId', 'turnId', 'checkpointReceiptId', 'evidence', 'head', 'base', 'commit', 'parent', 'view', 'explain', 'pullRequest',
+    'comparison', 'comparisonId', 'turnId', 'checkpointReceiptId', 'evidence', 'head', 'base', 'commit', 'parent', 'view', 'explain', 'pullRequest', 'evidenceSessionId',
     ...FILE_TARGET_ANCHOR_PARAM_KEYS,
 ] as const;
 export type SessionPaneUrlParamKey = (typeof SESSION_PANE_URL_PARAM_KEYS)[number];
@@ -124,15 +124,18 @@ function parseScmReviewTarget(params: Readonly<Record<string, unknown>>): Sessio
     const view = SESSION_SCM_REVIEW_VIEWS.find((candidate) => candidate === viewRaw) ?? null;
     const explainRaw = read('explain');
     const explain = explainRaw === 'true' ? true : explainRaw === 'false' ? false : undefined;
+    const evidenceSessionId = read('evidenceSessionId');
     return {
         ...(comparison ? { comparison: comparisonId ? { ...comparison, comparisonId } : comparison } : null),
         ...(view ? { view } : null),
         ...(typeof explain === 'boolean' ? { explain } : null),
+        ...(evidenceSessionId ? { evidenceSessionId } : null),
     };
 }
 
 function serializeScmReviewTarget(target: SessionScmReviewTarget): Record<string, string> {
     const out: Record<string, string> = {};
+    if (target.evidenceSessionId) out.evidenceSessionId = target.evidenceSessionId;
     const comparison = target.comparison;
     if (comparison) {
         out.comparison = comparison.kind;
@@ -159,13 +162,14 @@ function serializeScmReviewTarget(target: SessionScmReviewTarget): Record<string
 
 /** A stored tab's comparison and view, validated by the same reader a link goes through. */
 export function readSessionScmReviewTarget(resource: unknown): SessionScmReviewTarget {
-    const record = resource && typeof resource === 'object' ? resource as { comparison?: unknown; view?: unknown; explain?: unknown } : {};
+    const record = resource && typeof resource === 'object' ? resource as { comparison?: unknown; view?: unknown; explain?: unknown; evidenceSessionId?: unknown } : {};
     const comparison = record.comparison && typeof record.comparison === 'object' ? record.comparison as SessionScmReviewComparison : undefined;
     const view = typeof record.view === 'string' ? record.view as SessionScmReviewView : undefined;
     return parseScmReviewTarget(serializeScmReviewTarget({
         ...(comparison ? { comparison } : null),
         ...(view ? { view } : null),
         ...(typeof record.explain === 'boolean' ? { explain: record.explain } : null),
+        ...(typeof record.evidenceSessionId === 'string' ? { evidenceSessionId: record.evidenceSessionId } : null),
     }));
 }
 
@@ -433,6 +437,7 @@ export function createSessionPaneDetailsTab(
                 ...(target.comparison ? { comparison: target.comparison } : null),
                 ...(target.view ? { view: target.view } : null),
                 ...(typeof target.explain === 'boolean' ? { explain: target.explain } : null),
+                ...(target.evidenceSessionId ? { evidenceSessionId: target.evidenceSessionId } : null),
             });
             break;
         case 'scmStash':

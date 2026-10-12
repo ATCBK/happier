@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { applySessionPaneUrlState, buildActiveDetailsRouteParams, createSessionPaneDetailsTab, deriveSessionPaneUrlStateFromScopeState, parseSessionPaneUrlState, reconcileSessionPaneScopeFromUrlState, serializeSessionPaneUrlState } from './sessionPaneUrlState';
 
 describe('sessionPaneUrlState', () => {
+    it('roundtrips the explicitly chosen evidence Session without treating it as destination authority', () => {
+        const params = { details: 'scmReview', comparison: 'turnCheckpoint', turnId: 'turn-2', view: 'files', evidenceSessionId: 'chosen-session' };
+        const state = parseSessionPaneUrlState(params);
+        expect(state?.details).toMatchObject({ evidenceSessionId: 'chosen-session' });
+        const tab = createSessionPaneDetailsTab(state!.details!);
+        expect(serializeSessionPaneUrlState(state!)).toEqual(params);
+        expect(buildActiveDetailsRouteParams([tab], tab!.key)).toEqual(params);
+    });
     it.each([true, false])('preserves Files Explain=%s through navigation and the shared pane target', (explain) => {
         const state = parseSessionPaneUrlState({ details: 'scmReview', comparison: 'workingTree', view: 'files', explain: String(explain) });
         expect(state?.details).toMatchObject({ kind: 'scmReview', explain });

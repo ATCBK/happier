@@ -2,10 +2,11 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+import { DiffStat } from '@/components/workspaces/scm/DiffStat';
 
 export type ScmComparisonCoverage = Readonly<{
     fileCount: number;
@@ -44,7 +45,6 @@ export type ScmComparisonHeaderProps = Readonly<{
  * reading, the person's marks) are never merged into one number.
  */
 export const ScmComparisonHeader = React.memo(function ScmComparisonHeader(props: ScmComparisonHeaderProps) {
-    const { theme } = useUnistyles();
     const testID = props.testID ?? 'scm-comparison-header';
     const title = typeof props.title === 'string' && props.title.trim().length > 0 ? props.title.trim() : null;
     const coverage = props.coverage;
@@ -54,13 +54,7 @@ export const ScmComparisonHeader = React.memo(function ScmComparisonHeader(props
         <View testID={testID} style={[styles.header, props.stacked ? styles.headerStacked : null]}>
             <View style={styles.main}>
                 {props.stacked ? null : (
-                    <View style={styles.eyebrow}>
-                        <Icon name="files" size={ICON_SIZE.xs} color={theme.colors.text.tertiary} />
-                        <Text style={styles.eyebrowView}>{props.viewLabel}</Text>
-                        <Text style={styles.eyebrowScope} numberOfLines={1}>
-                            {`· ${props.scopeLabel}${props.scopeDetail ? ` · ${props.scopeDetail}` : ''}`}
-                        </Text>
-                    </View>
+                    <ScmComparisonEyebrow icon="files" viewLabel={props.viewLabel} scope={props.scopeLabel} detail={props.scopeDetail} />
                 )}
                 {title ? <Text accessibilityRole="header" style={[styles.title, props.stacked ? styles.titleStacked : null]}>{title}</Text> : null}
                 <View style={[styles.coverage, props.stacked ? styles.coverageStacked : null]}>
@@ -80,11 +74,9 @@ export const ScmComparisonHeader = React.memo(function ScmComparisonHeader(props
  * of what a model read or what the person marked. Shared by the Files and Walkthrough headers.
  */
 export function ScmComparisonSourceFact(props: Readonly<{ coverage: ScmComparisonCoverage; changeCount?: number | null; testID?: string }>) {
-    const { theme } = useUnistyles();
     const coverage = props.coverage;
     return (
-        <View testID={props.testID} style={styles.fact}>
-            <Icon name="file" size={ICON_SIZE.xs} color={theme.colors.text.tertiary} />
+        <ScmComparisonFact testID={props.testID} icon="file">
             <Text style={styles.factText}>
                 <Text style={styles.factStrong}>{t('scmComparison.fileCount', { count: coverage.fileCount })}</Text>
                 {typeof props.changeCount === 'number' ? (
@@ -93,16 +85,95 @@ export function ScmComparisonSourceFact(props: Readonly<{ coverage: ScmCompariso
                         <Text style={styles.factStrong}>{t('scmComparison.changeCount', { count: props.changeCount })}</Text>
                     </>
                 ) : null}
-                {coverage.linesKnown ? (
+                {coverage.linesKnown && (coverage.added > 0 || coverage.removed > 0) ? (
                     <>
                         <Text style={styles.factText}>{' · '}</Text>
-                        <Text style={styles.added}>{`+${coverage.added.toLocaleString()}`}</Text>
-                        <Text style={styles.factText}>{' '}</Text>
-                        <Text style={styles.removed}>{`−${coverage.removed.toLocaleString()}`}</Text>
+                        <DiffStat added={coverage.added} removed={coverage.removed} />
                     </>
                 ) : null}
             </Text>
+        </ScmComparisonFact>
+    );
+}
+
+/**
+ * The eyebrow over a comparison view's title ("Files · This session · since 09:40"): the view, its
+ * scope, and an optional trailing mark (the Walkthrough's Generated mark). Files and Walkthrough draw
+ * this one line, so switching views keeps the header's first line identical.
+ */
+export function ScmComparisonEyebrow(props: Readonly<{
+    icon: IconName;
+    viewLabel: string;
+    scope: string;
+    detail?: string | null;
+    trailing?: React.ReactNode;
+}>) {
+    const { theme } = useUnistyles();
+    return (
+        <View style={styles.eyebrow}>
+            <Icon name={props.icon} size={ICON_SIZE.xs} color={theme.colors.text.tertiary} />
+            <Text style={styles.eyebrowView}>{props.viewLabel}</Text>
+            <Text style={styles.eyebrowScope} numberOfLines={1}>{`· ${props.scope}${props.detail ? ` · ${props.detail}` : ''}`}</Text>
+            {props.trailing ? <><View style={styles.grow} />{props.trailing}</> : null}
         </View>
+    );
+}
+
+/**
+ * One coverage fact (the source, the model's reading, the person's marks): a glyph and its sentence.
+ * The three notions sit side by side in one line and are never merged into one number. `tone` colours
+ * only the glyph; `icon` accepts an identity mark (the writing agent) in place of a glyph name.
+ */
+export function ScmComparisonFact(props: Readonly<{
+    icon: IconName | React.ReactElement;
+    tone?: 'neutral' | 'success' | 'warning';
+    testID?: string;
+    children: React.ReactNode;
+}>) {
+    const { theme } = useUnistyles();
+    const color = props.tone === 'success' ? theme.colors.state.success.foreground
+        : props.tone === 'warning' ? theme.colors.state.warning.foreground : theme.colors.text.tertiary;
+    return (
+        <View testID={props.testID} style={styles.fact}>
+            {typeof props.icon === 'string' ? <Icon name={props.icon} size={ICON_SIZE.xs} color={color} /> : props.icon}
+            {props.children}
+        </View>
+    );
+}
+
+/**
+ * A translated fact sentence with its counts in primary ink ("Opus 5.5 read all **14**", "You reviewed
+ * **2** of **5**"), as the source fact sets "**9 files**". The counts are found as whole numbers after
+ * `after` (the model's name, which may itself hold digits), so no locale has to split its sentence.
+ */
+export function ScmComparisonFactSentence(props: Readonly<{ sentence: string; counts: readonly number[]; after?: string | null }>) {
+    const start = props.after ? Math.max(0, props.sentence.indexOf(props.after) + props.after.length) : 0;
+    const head = props.sentence.slice(0, start);
+    const tail = props.sentence.slice(start);
+    // Sentences interpolate either the raw number or its locale form; accept both.
+    const wanted = new Set(props.counts.flatMap((count) => [String(count), count.toLocaleString()]));
+    const parts = tail.split(/(\d[\d,.\u202f\u00a0]*)/);
+    return (
+        <Text style={styles.factText}>
+            {head}
+            {parts.map((part, index) => (index % 2 === 1 && wanted.has(part)
+                ? <Text key={index} style={styles.factStrong}>{part}</Text>
+                : part))}
+        </Text>
+    );
+}
+
+/** A fact's words: secondary ink; `strong` sets the count that matters in primary ink. Nest for a strong part. */
+export function ScmComparisonFactText(props: Readonly<{
+    strong?: boolean;
+    testID?: string;
+    accessibilityLiveRegion?: 'polite';
+    children: React.ReactNode;
+}>) {
+    return (
+        <Text testID={props.testID} accessibilityLiveRegion={props.accessibilityLiveRegion} style={props.strong ? styles.factStrong : styles.factText}>
+            {props.children}
+        </Text>
     );
 }
 
@@ -131,12 +202,17 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: 6,
     },
+    grow: {
+        flex: 1,
+    },
     eyebrowView: {
         fontSize: 13,
         color: theme.colors.text.secondary,
         ...Typography.default('semiBold'),
     },
     eyebrowScope: {
+        flexShrink: 1,
+        minWidth: 0,
         fontSize: 13,
         color: theme.colors.text.tertiary,
         ...Typography.default(),
@@ -179,18 +255,6 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
         fontVariant: ['tabular-nums'],
         ...Typography.default('semiBold'),
-    },
-    added: {
-        fontSize: 13,
-        fontVariant: ['tabular-nums'],
-        color: theme.colors.state.success.foreground,
-        ...Typography.default(),
-    },
-    removed: {
-        fontSize: 13,
-        fontVariant: ['tabular-nums'],
-        color: theme.colors.state.danger.foreground,
-        ...Typography.default(),
     },
     accessory: {
         flexShrink: 0,

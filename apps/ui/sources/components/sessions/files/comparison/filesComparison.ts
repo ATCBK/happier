@@ -91,6 +91,8 @@ export function scmComparisonKey(comparison: SessionScmReviewComparison): string
 
 export type FilesComparisonScopeOption = Readonly<{
     comparison: SessionScmReviewComparison | null;
+    /** Admitted by the current workspace adapter, separately from Machine access. */
+    evidenceSessionId?: string;
     /** An unselected source opens its existing admission UI, not a fabricated comparison. */
     sourceKind: SessionScmReviewComparison['kind'];
     /** Pending changes can be explained and committed; every other scope can only be explained. */
@@ -162,6 +164,7 @@ export function listFilesComparisonScopeOptions(
     return options;
 }
 
-export function filesComparisonScopeOptionKey(option: FilesComparisonScopeOption): string {
-    return option.comparison ? scmComparisonKey(option.comparison) : option.sourceKind;
+export function filesComparisonScopeOptionKey(option: Pick<FilesComparisonScopeOption, 'comparison' | 'sourceKind' | 'evidenceSessionId'>): string {
+    const key = option.comparison ? scmComparisonKey(option.comparison) : option.sourceKind;
+    return option.evidenceSessionId ? JSON.stringify([option.evidenceSessionId, key]) : key;
 }

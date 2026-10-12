@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { InputTypePickerHostProvider } from '@/components/sessions/actions/InputTypePickerHostProvider';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
@@ -37,8 +38,7 @@ import {
 } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { createExecutionRunLauncherDetailsTab } from '@/components/sessions/runs/launcher/executionRunLauncherModel';
 import { presentStartReviewDialog } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { ScmComparisonProposeCommits } from '@/components/sessions/files/comparison/ScmComparisonBar';
 import { useChangedFilesData } from '@/hooks/session/files/useChangedFilesData';
 import {
   useWorkspaceRefs,
@@ -76,6 +76,9 @@ import {
   SourceControlUnavailableState,
 } from '@/components/workspaces/scm/states';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
+import { ICON_SIZE } from '@/components/ui/icons/Icon';
+import { resolveExecutionRunAgentMarkId } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -832,20 +835,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
       pending &&
       reviewView !== 'commits' &&
       !commitPlan?.outputs?.commitPlan ? (
-        <RoundButton
-          testID="scm-comparison-propose-commits"
-          size="small"
-          display="inverted"
-          title={t('scmComparison.proposeCommits')}
-          leading={
-            <Icon
-              name="git-commit"
-              size={ICON_SIZE.xs}
-              color={theme.colors.text.primary}
-            />
-          }
-          onPress={() => selectView('commits')}
-        />
+        <ScmComparisonProposeCommits onPress={() => selectView('commits')} />
       ) : null;
     // Files' Explain projects the same walkthrough beside its hunks; it never asks for a second output.
     const walkthroughAnalysis = useSessionScmWalkthrough(
@@ -862,6 +852,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
       serverId: props.serverId ?? null,
       host: { sessionId: props.sessionId },
     });
+    const analysisMarkAgentId = resolveExecutionRunAgentMarkId(walkthroughAnalysis?.latestRun?.backendTarget, theme);
     const marksAvailable =
       marks.record?.comparisonId === walkthroughAnalysis?.comparison?.id &&
       marks.record !== null &&
@@ -930,6 +921,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
         return (
           <SourceControlUnavailableState
             details={snapshotError.message}
+            errorCode={snapshotError.errorCode}
             onRetry={() =>
               void scmStatusSync.invalidateFromUser(
                 props.sessionId,
@@ -1050,6 +1042,8 @@ const SessionWorkingScmReviewDetailsView = React.memo(
     };
 
     return (
+      <InputTypePickerHostProvider enabled={props.active !== false} sessionId={props.sessionId} serverId={props.serverId}
+        contextKey={JSON.stringify([props.serverId, props.sessionId, reviewScope?.machineId, reviewScope?.rootPath])}>
       <WorkspaceScmReviewBody
         activeReviewFile={activeReviewFile}
         comparison={shownComparison}
@@ -1064,6 +1058,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
         rootPath={effectiveSnapshot?.repo.rootPath}
         reading={filesReading}
         modelLabel={walkthroughAnalysis?.producer?.modelId}
+        analysisMark={analysisMarkAgentId ? <AgentIcon agentId={analysisMarkAgentId} size={ICON_SIZE.xs} /> : null}
         marksAvailable={marksAvailable}
         explain={explain}
         onExplainChange={setExplain}
@@ -1112,6 +1107,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
           />
         )}
       />
+      </InputTypePickerHostProvider>
     );
   },
 );
