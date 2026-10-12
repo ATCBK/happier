@@ -101,6 +101,17 @@ function withoutLocalId(execution: Execution): Execution {
 }
 
 describe('compiled Action CLI command dispatch', () => {
+  it('dispatches skill names and ids through the compiled rules Action', async () => {
+    const output = captureConsoleText();
+    try {
+      expect(await run(['skills', 'on'], ['lint', 'review', '--everywhere']))
+        .toEqual([{ actionId: 'skills.rules.set', input: { items: [{ name: 'lint' }, { name: 'review' }],
+          change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } } } }]);
+      expect(await run(['skills', 'inherit'], ['--item-ids', 'skill-1', '--project', 'project-1', '--agent', 'codex']))
+        .toEqual([{ actionId: 'skills.rules.set', input: { items: [{ skillId: 'skill-1' }],
+          change: { kind: 'write', write: { place: { t: 'project', projectKey: 'project-1' }, agentId: 'codex', state: 'inherit' } } } }]);
+    } finally { output.restore(); }
+  });
   it('dispatches MCP reach commands and retained bind aliases through the rules Action', async () => {
     const output = captureConsoleText();
     try {
