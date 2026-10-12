@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dirname, join } from 'node:path';
-import { chmodSync, copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 import cliDistBuildManifest from '@happier-dev/cli-common/cliDistBuildManifest';
@@ -116,6 +116,65 @@ describe('resolveDaemonLaunchSpec', () => {
     delete process.env.HAPPIER_STACK_CLI_ROOT_DIR;
     delete process.env.HAPPIER_STACK_STACK;
     delete process.env.HAPPIER_VARIANT;
+  });
+
+  it('self-restart consumes the selected Stack source launch instead of the inherited incumbent entrypoint', async () => {
+    await withTempDir('daemon-selected-source-', async (root) => {
+      const selected = join(root, 'next', 'src', 'index.mjs');
+      mkdirSync(dirname(selected), { recursive: true });
+      writeFileSync(selected, 'export {};');
+      const statePath = join(root, 'stack.runtime.json');
+      writeFileSync(statePath, JSON.stringify({
+        sourceRuntimeLaunch: { entrypoint: selected, cliDir: join(root, 'next'), env: {
+          HAPPIER_STACK_CLI_ROOT_DIR: join(root, 'next'),
+        } },
+      }));
+      const mod = await import('./resolveDaemonLaunchSpec');
+      const result = await mod.resolveDaemonLaunchSpec(['daemon', 'start-sync'], {
+        NODE_ENV: 'test',
+        HAPPIER_STACK_STACK: 'source-qa', HAPPIER_STACK_RUNTIME_STATE_PATH: statePath,
+        HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: join(root, 'incumbent', 'src', 'index.mjs'),
+        HAPPIER_STACK_CLI_ROOT_DIR: join(root, 'incumbent'), HAPPIER_CLI_ROOT_DIR: join(root, 'incumbent'),
+        HAPPIER_CLI_SUBPROCESS_PREFER_TSX: '0', HAPPIER_DAEMON_STARTUP_SOURCE: 'self-restart',
+      });
+      expect(result.args).toContain(selected);
+      expect(result.env?.HAPPIER_CLI_SUBPROCESS_ENTRYPOINT).toBe(selected);
+      expect(result.env?.HAPPIER_CLI_ROOT_DIR).toBe(join(root, 'next'));
+      expect(result.env?.HAPPIER_STACK_CLI_ROOT_DIR).toBe(join(root, 'next'));
+      expect(result.env?.HAPPIER_CLI_SUBPROCESS_PREFER_TSX).toBe('0');
+      expect(result.env?.HAPPIER_CLI_SUBPROCESS_ALLOW_TSX_FALLBACK).toBe('0');
+      rmSync(selected);
+      await expect(mod.resolveDaemonLaunchSpec(['daemon', 'start-sync'], {
+        NODE_ENV: 'test',
+        HAPPIER_STACK_STACK: 'source-qa', HAPPIER_STACK_RUNTIME_STATE_PATH: statePath,
+        HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: join(root, 'incumbent', 'src', 'index.mjs'),
+        HAPPIER_CLI_SUBPROCESS_PREFER_TSX: '0', HAPPIER_DAEMON_STARTUP_SOURCE: 'self-restart',
+      })).rejects.toThrow(/selected Stack source daemon launch.*unavailable/);
+    });
+  });
+
+  it('retains the incumbent launch when Stack has no selected source bundle', async () => {
+    await withTempDir('daemon-no-source-selection-', async root => {
+      const incumbent = join(root, 'incumbent', 'package-dist', 'index.mjs');
+      mkdirSync(dirname(incumbent), { recursive: true });
+      writeFileSync(incumbent, 'export {};');
+      const statePath = join(root, 'stack.runtime.json');
+      writeFileSync(statePath, '{}');
+      const originalArgv = process.argv;
+      try {
+        process.argv = [process.execPath, incumbent, 'daemon', 'start-sync'];
+        const mod = await import('./resolveDaemonLaunchSpec');
+        const result = await mod.resolveDaemonLaunchSpec(['daemon', 'start-sync'], {
+          NODE_ENV: 'test',
+          HAPPIER_STACK_STACK: 'source-qa', HAPPIER_STACK_RUNTIME_STATE_PATH: statePath,
+          HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: incumbent, HAPPIER_CLI_SUBPROCESS_PREFER_TSX: '0',
+          HAPPIER_DAEMON_STARTUP_SOURCE: 'self-restart',
+        });
+        expect(result.args).toEqual([incumbent, 'daemon', 'start-sync']);
+      } finally {
+        process.argv = originalArgv;
+      }
+    });
   });
 
   it('reuses the current self-contained binary when running from a bundled Windows executable', async () => {

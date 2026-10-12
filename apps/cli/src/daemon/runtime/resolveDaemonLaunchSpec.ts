@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { basename, isAbsolute, join, relative, sep } from 'node:path';
 
 import { parseOptionalBooleanEnv } from '@happier-dev/protocol/env/parseBooleanEnv';
 
@@ -177,10 +177,60 @@ function resolveWindowsSiblingPackagedBinary(packagedEntrypoint: string): string
   return siblingBinaryNativeSeparators;
 }
 
+async function resolveSelectedStackSourceRestart(
+  cliArgs: readonly string[],
+  env: NodeJS.ProcessEnv,
+): Promise<DaemonLaunchSpec | null> {
+  const statePath = String(env.HAPPIER_STACK_RUNTIME_STATE_PATH ?? '').trim();
+  if (!statePath || !hasDaemonStackContext(env)
+    || env.HAPPIER_DAEMON_STARTUP_SOURCE !== 'self-restart'
+    || cliArgs[0] !== 'daemon' || cliArgs[1] !== 'start-sync'
+    || parseOptionalBooleanEnv(env.HAPPIER_CLI_SUBPROCESS_RUNTIME_BACKED) === true
+    || String(env.HAPPIER_CLI_SUBPROCESS_DAEMON_DIST_CLOSURE_FINGERPRINT ?? '').trim()) return null;
+
+  // Stack already owns this retained selection. Read it at successor launch,
+  // rather than letting the incumbent's inherited entrypoint choose its code.
+  const state: unknown = JSON.parse(readFileSync(statePath, 'utf8'));
+  if (!state || typeof state !== 'object' || !('sourceRuntimeLaunch' in state)
+    || state.sourceRuntimeLaunch == null) return null;
+  const launch = state.sourceRuntimeLaunch;
+  if (!launch || typeof launch !== 'object'
+    || !('entrypoint' in launch) || typeof launch.entrypoint !== 'string'
+    || !('cliDir' in launch) || typeof launch.cliDir !== 'string'
+    || !isAbsolute(launch.entrypoint) || !isAbsolute(launch.cliDir)
+    || !existsSync(launch.entrypoint) || !existsSync(launch.cliDir)) {
+    throw new Error('The selected Stack source daemon launch is unavailable; keep the incumbent and rebuild its source bundle.');
+  }
+  const selectedRelativePath = relative(realpathSync(launch.cliDir), realpathSync(launch.entrypoint));
+  if (!selectedRelativePath || selectedRelativePath === '..'
+    || selectedRelativePath.startsWith(`..${sep}`) || isAbsolute(selectedRelativePath)) {
+    throw new Error('The selected Stack source daemon launch is unavailable outside its CLI root.');
+  }
+  const runtimeExecutable = await ensureJavaScriptRuntimeExecutable({
+    isBunRuntime: false, processEnv: env, currentExecPath: process.execPath,
+  });
+  if (!runtimeExecutable) throw new Error('Daemon launch requires a JavaScript runtime, but none could be resolved');
+  return {
+    filePath: runtimeExecutable,
+    args: ['--no-warnings', '--no-deprecation', launch.entrypoint, ...cliArgs],
+    // The source builder's daemon env contains these four launch fields only.
+    // Derive them from the validated selection so no incumbent support root survives.
+    env: {
+      HAPPIER_STACK_CLI_ROOT_DIR: launch.cliDir,
+      HAPPIER_CLI_ROOT_DIR: launch.cliDir,
+      HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: launch.entrypoint,
+      HAPPIER_CLI_SUBPROCESS_PREFER_TSX: '0',
+      HAPPIER_CLI_SUBPROCESS_ALLOW_TSX_FALLBACK: '0',
+    },
+  };
+}
+
 export async function resolveDaemonLaunchSpec(
   cliArgs: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DaemonLaunchSpec> {
+  const selectedSourceRestart = await resolveSelectedStackSourceRestart(cliArgs, env);
+  if (selectedSourceRestart) return selectedSourceRestart;
   // The Stack-admitted closure decides which code a stack daemon runs. It must win over reusing
   // this process's own entrypoint: a daemon started from a last-green pinned runner would
   // otherwise relaunch that same stale runner on every self-restart, while its environment

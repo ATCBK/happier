@@ -11,6 +11,7 @@ import {
   parsePowerShellStartProcessPid,
 } from '@/daemon/platform/windows/visibleConsoleSpawn';
 import { resolveDaemonLaunchSpec } from './resolveDaemonLaunchSpec';
+import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
 import { stripDaemonServiceInstallRequestEnv } from '@/utils/processEnv/stripDaemonServiceInstallRequestEnv';
 
 export type DetachedDaemonStartProcess = ChildProcess & { detachedDaemonPid?: number };
@@ -118,10 +119,10 @@ export async function spawnDetachedDaemonStartSync(
   const { startupSource, ...spawnOptions } = options;
   const requestedEnv = spawnOptions.env ?? process.env;
   const launchSpec = await resolveDaemonLaunchSpec(['daemon', 'start-sync'], requestedEnv);
-  const env = stripDaemonServiceInstallRequestEnv({
+  const env = withProcessOwnerEnvironment(stripDaemonServiceInstallRequestEnv({
     ...requestedEnv,
     ...(launchSpec.env ?? {}),
-  });
+  }), { kind: 'happier' }, requestedEnv.HAPPIER_HOME_DIR);
 
   // Detached daemon is typically spawned via `node <entry> daemon start-sync`, so argv no longer encodes
   // the shim name (`hprev`/`hdev`). Force the lane into the child environment so daemon state files are
