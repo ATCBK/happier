@@ -5,141 +5,113 @@ import {
   DISCORD_MESSAGE_MAXIMUM_CODE_POINTS,
   DISCORD_MESSAGE_NONCE_MAXIMUM_CODE_POINTS,
   DISCORD_SUPPRESS_EMBEDS_FLAG,
-  chunkDiscordMessage,
   classifyDiscordDeliveryResponse,
-  createDiscordMessagePayloads,
+  createDiscordMessagePayload,
 } from './discordDelivery.js';
 
 describe('Discord delivery adapter', () => {
-  it('chunks at Discord’s content bound without splitting a Unicode code point and suppresses accidental mentions', async () => {
-    const content = `${'a'.repeat(DISCORD_MESSAGE_MAXIMUM_CODE_POINTS - 1)}😀x`;
-
-    expect(chunkDiscordMessage(content)).toEqual([
-      `${'a'.repeat(DISCORD_MESSAGE_MAXIMUM_CODE_POINTS - 1)}😀`,
-      'x',
-    ]);
-    expect(await createDiscordMessagePayloads({
+  it('composes one native message without changing core content or enabling accidental mentions', async () => {
+    const content = `${'a'.repeat(DISCORD_MESSAGE_MAXIMUM_CODE_POINTS - 1)}😀`;
+    expect(await createDiscordMessagePayload({
       content,
       suppressEmbeds: true,
       replyToMessageId: 'upstream-1',
-      noncePrefix: 'delivery-1',
-    })).toEqual([
-      {
-        content: `${'a'.repeat(DISCORD_MESSAGE_MAXIMUM_CODE_POINTS - 1)}😀`,
-        allowed_mentions: { parse: [] },
-        flags: DISCORD_SUPPRESS_EMBEDS_FLAG,
-        message_reference: { message_id: 'upstream-1', fail_if_not_exists: false },
-        nonce: expect.any(String),
-        enforce_nonce: true,
-      },
-      {
-        content: 'x',
-        allowed_mentions: { parse: [] },
-        flags: DISCORD_SUPPRESS_EMBEDS_FLAG,
-        message_reference: { message_id: 'upstream-1', fail_if_not_exists: false },
-        nonce: expect.any(String),
-        enforce_nonce: true,
-      },
-    ]);
+      deliveryKey: 'delivery-1',
+    })).toEqual({
+      content,
+      allowed_mentions: { parse: [] },
+      flags: DISCORD_SUPPRESS_EMBEDS_FLAG,
+      message_reference: { message_id: 'upstream-1', fail_if_not_exists: false },
+      nonce: expect.any(String),
+      enforce_nonce: true,
+    });
   });
 
   it('uses an enforced bounded nonce for every nonblank delivery key', async () => {
-    expect(await createDiscordMessagePayloads({
+    expect(await createDiscordMessagePayload({
       content: 'A bounded message',
       suppressEmbeds: false,
-      noncePrefix: 'delivery-1',
-    })).toEqual([
-      {
-        content: 'A bounded message',
-        allowed_mentions: { parse: [] },
-        nonce: expect.any(String),
-        enforce_nonce: true,
-      },
-    ]);
+      deliveryKey: 'delivery-1',
+    })).toEqual({
+      content: 'A bounded message',
+      allowed_mentions: { parse: [] },
+      nonce: expect.any(String),
+      enforce_nonce: true,
+    });
 
-    expect(await createDiscordMessagePayloads({
+    expect(await createDiscordMessagePayload({
       content: 'A bounded message',
       suppressEmbeds: false,
-      noncePrefix: 'x'.repeat(23),
-    })).toEqual([
-      {
-        content: 'A bounded message',
-        allowed_mentions: { parse: [] },
-        nonce: expect.any(String),
-        enforce_nonce: true,
-      },
-    ]);
+      deliveryKey: 'x'.repeat(23),
+    })).toEqual({
+      content: 'A bounded message',
+      allowed_mentions: { parse: [] },
+      nonce: expect.any(String),
+      enforce_nonce: true,
+    });
 
-    expect(await createDiscordMessagePayloads({
+    expect(await createDiscordMessagePayload({
       content: 'A bounded message',
       suppressEmbeds: false,
-      noncePrefix: 'x'.repeat(24),
-    })).toEqual([
-      {
-        content: 'A bounded message',
-        allowed_mentions: { parse: [] },
-        nonce: expect.any(String),
-        enforce_nonce: true,
-      },
-    ]);
+      deliveryKey: 'x'.repeat(24),
+    })).toEqual({
+      content: 'A bounded message',
+      allowed_mentions: { parse: [] },
+      nonce: expect.any(String),
+      enforce_nonce: true,
+    });
   });
 
-  it('derives a bounded enforced nonce from the complete opaque delivery key for every chunk', async () => {
+  it('derives a bounded enforced nonce from each complete opaque core delivery key', async () => {
     const sharedPrefix = `channels:delivery:v1:${'a'.repeat(42)}`;
     const firstDeliveryKey = `${sharedPrefix}1`;
     const secondDeliveryKey = `${sharedPrefix}2`;
     expect(firstDeliveryKey).toHaveLength(64);
 
-    const first = await createDiscordMessagePayloads({
-      content: 'a'.repeat(DISCORD_MESSAGE_MAXIMUM_CODE_POINTS + 1),
-      suppressEmbeds: false,
-      noncePrefix: firstDeliveryKey,
-    });
-    const repeated = await createDiscordMessagePayloads({
+    const first = await createDiscordMessagePayload({
       content: 'A bounded message',
       suppressEmbeds: false,
-      noncePrefix: firstDeliveryKey,
+      deliveryKey: firstDeliveryKey,
     });
-    const whitespaceDistinct = await createDiscordMessagePayloads({
+    const repeated = await createDiscordMessagePayload({
       content: 'A bounded message',
       suppressEmbeds: false,
-      noncePrefix: ` ${firstDeliveryKey}`,
+      deliveryKey: firstDeliveryKey,
     });
-    const distinct = await createDiscordMessagePayloads({
+    const whitespaceDistinct = await createDiscordMessagePayload({
       content: 'A bounded message',
       suppressEmbeds: false,
-      noncePrefix: secondDeliveryKey,
+      deliveryKey: ` ${firstDeliveryKey}`,
+    });
+    const distinct = await createDiscordMessagePayload({
+      content: 'A bounded message',
+      suppressEmbeds: false,
+      deliveryKey: secondDeliveryKey,
     });
 
-    const firstChunkNonce = first[0]?.nonce;
-    const secondChunkNonce = first[1]?.nonce;
-    const repeatedNonce = repeated[0]?.nonce;
-    const whitespaceDistinctNonce = whitespaceDistinct[0]?.nonce;
-    const distinctNonce = distinct[0]?.nonce;
-    expect(first[0]?.enforce_nonce).toBe(true);
-    expect(first[1]?.enforce_nonce).toBe(true);
-    expect(firstChunkNonce).toEqual(expect.any(String));
-    expect(secondChunkNonce).toEqual(expect.any(String));
+    const firstNonce = first.nonce;
+    const repeatedNonce = repeated.nonce;
+    const whitespaceDistinctNonce = whitespaceDistinct.nonce;
+    const distinctNonce = distinct.nonce;
+    expect(first.enforce_nonce).toBe(true);
+    expect(firstNonce).toEqual(expect.any(String));
     expect(repeatedNonce).toEqual(expect.any(String));
     expect(whitespaceDistinctNonce).toEqual(expect.any(String));
     expect(distinctNonce).toEqual(expect.any(String));
     if (
-      typeof firstChunkNonce !== 'string'
-      || typeof secondChunkNonce !== 'string'
+      typeof firstNonce !== 'string'
       || typeof repeatedNonce !== 'string'
       || typeof whitespaceDistinctNonce !== 'string'
       || typeof distinctNonce !== 'string'
     ) {
-      throw new Error('Expected every Discord delivery chunk to receive an enforced nonce.');
+      throw new Error('Expected every Discord delivery to receive an enforced nonce.');
     }
 
-    expect(Array.from(firstChunkNonce)).toHaveLength(DISCORD_MESSAGE_NONCE_MAXIMUM_CODE_POINTS);
-    expect(Array.from(secondChunkNonce)).toHaveLength(DISCORD_MESSAGE_NONCE_MAXIMUM_CODE_POINTS);
-    expect(firstChunkNonce).toBe(repeatedNonce);
-    expect(firstChunkNonce).not.toBe(secondChunkNonce);
-    expect(firstChunkNonce).not.toBe(whitespaceDistinctNonce);
-    expect(firstChunkNonce).not.toBe(distinctNonce);
-    expect(firstChunkNonce).not.toContain(firstDeliveryKey);
+    expect(Array.from(firstNonce)).toHaveLength(DISCORD_MESSAGE_NONCE_MAXIMUM_CODE_POINTS);
+    expect(firstNonce).toBe(repeatedNonce);
+    expect(firstNonce).not.toBe(whitespaceDistinctNonce);
+    expect(firstNonce).not.toBe(distinctNonce);
+    expect(firstNonce).not.toContain(firstDeliveryKey);
   });
 
   it('returns archive recovery only for Discord’s exact archived-thread evidence', () => {

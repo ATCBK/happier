@@ -91,6 +91,37 @@ function channelsCallerContext(input: Readonly<{
 }
 
 describe('Discord Channels provider Actions', () => {
+  it('refuses unsupported new threads before any Discord request', async () => {
+    const request = vi.fn(async () => { throw new Error('Unsupported starts must not call Discord'); });
+    const { context } = channelsCallerContext({ request });
+    await expect(deliverDiscordMessage({
+      v: 1, connectionId: 'connection-1', providerConnectionKey: 'discord:application:application-1',
+      providerConfigVersion: 1, providerConfig: { applicationId: 'application-1', botUserId: 'discord-bot-1' }, credentialRef,
+      endpoint: { kind: 'direct', audience: 'direct', id: 'discord:channel:direct-1' },
+      content: { text: 'Brief', html: '<p>Brief</p>' }, deliveryKey: 'start-1',
+      newThread: { recipients: ['principal-1'], subject: 'Brief' },
+      mentionPolicy: 'suppress', linkPreviewPolicy: 'suppress',
+    }, context)).resolves.toEqual({ kind: 'notReady', reason: 'unsupported' });
+    expect(request).not.toHaveBeenCalled();
+  });
+  it('reads retained connection identity while ignoring retired provider configuration fields', () => {
+    const retained = {
+      providerConnectionKey: 'discord:application:application-1',
+      providerConfigVersion: 1,
+      providerConfig: { applicationId: 'application-1', botUserId: 'discord-bot-1', retiredBotAlias: 'old' },
+      credentialRef,
+    };
+    expect(readDiscordConnectionConfiguration(retained)).toEqual({
+      applicationId: 'application-1', botUserId: 'discord-bot-1',
+    });
+    expect(readDiscordConnectionConfiguration({
+      ...retained, providerConfig: { ...retained.providerConfig, applicationId: '' },
+    })).toMatchObject({ kind: 'notReady', reason: 'invalidConfiguration' });
+    expect(readDiscordConnectionConfiguration({
+      ...retained, credentialRef: { ...credentialRef, service: { ...credentialRef.service, pluginId: 'other.plugin' } },
+    })).toMatchObject({ kind: 'notReady', reason: 'credentialInvalid' });
+  });
+
   it('requires a current Channels connection for the selected bot before arming an Event source', async () => {
     const { context } = channelsCallerContext({
       async request(request) {
@@ -382,7 +413,7 @@ describe('Discord Channels provider Actions', () => {
         providerConfig: { applicationId: 'application-1', botUserId: 'discord-bot-1' },
         credentialRef,
         endpoint: { kind: 'direct', audience: 'direct', id: 'discord:channel:channel-1' },
-        content: 'reply',
+        content: { text: 'reply' },
         deliveryKey: `delivery-materialize-${scenario.name}`,
         mentionPolicy: 'suppress',
         linkPreviewPolicy: 'suppress',
@@ -427,7 +458,7 @@ describe('Discord Channels provider Actions', () => {
         providerConfig: { applicationId: 'application-1', botUserId: 'discord-bot-1' },
         credentialRef,
         endpoint: { kind: 'direct', audience: 'direct', id: 'discord:channel:channel-1' },
-        content: 'reply',
+        content: { text: 'reply' },
         deliveryKey: `delivery-materialize-${scenario.name}`,
         mentionPolicy: 'suppress',
         linkPreviewPolicy: 'suppress',
@@ -477,7 +508,7 @@ describe('Discord Channels provider Actions', () => {
         providerConfig: { applicationId: 'application-1', botUserId: 'discord-bot-1' },
         credentialRef,
         endpoint: { kind: 'direct', audience: 'direct', id: 'discord:channel:channel-1' },
-        content: 'reply',
+        content: { text: 'reply' },
         deliveryKey: `delivery-identity-${scenario.name}`,
         mentionPolicy: 'suppress',
         linkPreviewPolicy: 'suppress',
@@ -684,7 +715,7 @@ describe('Discord Channels provider Actions', () => {
     });
   });
 
-  it('maps only Discord archive evidence to endpointArchived after an exact-account send', async () => {
+  it.each([undefined, 0, 1])('keeps each core chunk %s reply reference and maps only exact Discord archive evidence', async (chunkIndex) => {
     const deliveryKey = `channels:delivery:v1:${'a'.repeat(43)}`;
     const requests: Array<Readonly<{
       url: string;
@@ -724,8 +755,9 @@ describe('Discord Channels provider Actions', () => {
         id: 'discord:channel:channel-1',
         parentId: 'discord:channel:parent-1',
       },
-      content: 'Hello <@123>',
+      content: { text: 'Hello <@123>' },
       deliveryKey,
+      ...(chunkIndex === undefined ? {} : { chunkIndex }),
       replyContext: { replyToMessageId: 'message-1' },
       mentionPolicy: 'suppress',
       linkPreviewPolicy: 'suppress',
@@ -757,8 +789,9 @@ describe('Discord Channels provider Actions', () => {
     expect(payload.nonce).not.toContain(deliveryKey);
   });
 
-  it('retains a later received POST 5xx as outcomeUnknown without resuming a chunked delivery', async () => {
+  it('does not split a core delivery when Discord refuses its oversized content', async () => {
     let postCount = 0;
+    const postedContents: string[] = [];
     const { context } = channelsCallerContext({
       async request(request) {
         if (request.url.endsWith('/oauth2/applications/@me')) return jsonResponse({ id: 'application-1' });
@@ -766,9 +799,11 @@ describe('Discord Channels provider Actions', () => {
         if (request.url.endsWith('/channels/channel-1')) return jsonResponse({ id: 'channel-1', type: 0 });
         if (request.url.endsWith('/channels/channel-1/messages')) {
           postCount += 1;
-          return postCount === 1
-            ? jsonResponse({ id: 'message-1', channel_id: 'channel-1' })
-            : jsonResponse({ message: 'Discord is unavailable' }, 503);
+          const payload = JSON.parse(new TextDecoder().decode(request.body)) as { content: string };
+          postedContents.push(payload.content);
+          return Array.from(payload.content).length > 2_000
+            ? jsonResponse({ message: 'Invalid Form Body' }, 400)
+            : jsonResponse({ id: `message-${postCount}`, channel_id: 'channel-1' });
         }
         throw new Error(`Unexpected Discord request: ${request.url}`);
       },
@@ -786,19 +821,20 @@ describe('Discord Channels provider Actions', () => {
       },
       credentialRef,
       endpoint: { kind: 'shared', audience: 'shared', id: 'discord:channel:channel-1' },
-      content: 'a'.repeat(2_001),
+      content: { text: 'a'.repeat(2_001) },
       deliveryKey: 'delivery-later-post-5xx',
       mentionPolicy: 'suppress',
       linkPreviewPolicy: 'providerDefault',
     }, context as Parameters<typeof deliverDiscordMessage>[1])).resolves.toEqual({
-      kind: 'outcomeUnknown',
-      providerMessageIds: ['message-1'],
+      kind: 'notDelivered',
+      retry: 'never',
     });
 
-    expect(postCount).toBe(2);
+    expect(postCount).toBe(1);
+    expect(postedContents).toEqual(['a'.repeat(2_001)]);
   });
 
-  it('retains accepted chunks as partial when cancellation wins before a later chunk POST', async () => {
+  it('keeps cancellation before the native message POST safely retryable', async () => {
     const controller = new AbortController();
     let postCount = 0;
     const { context } = channelsCallerContext({
@@ -807,7 +843,7 @@ describe('Discord Channels provider Actions', () => {
         if (request.url.endsWith('/oauth2/applications/@me')) return jsonResponse({ id: 'application-1' });
         if (request.url.endsWith('/users/@me')) return jsonResponse({ id: 'discord-bot-1', username: 'Happier', bot: true });
         if (request.url.endsWith('/channels/channel-1')) {
-          if (postCount === 1) controller.abort();
+          controller.abort();
           return jsonResponse({ id: 'channel-1', type: 0 });
         }
         if (request.url.endsWith('/channels/channel-1/messages')) {
@@ -830,17 +866,57 @@ describe('Discord Channels provider Actions', () => {
       },
       credentialRef,
       endpoint: { kind: 'shared', audience: 'shared', id: 'discord:channel:channel-1' },
-      content: 'a'.repeat(2_001),
-      deliveryKey: 'delivery-cancelled-after-first-chunk',
+      content: { text: 'a'.repeat(2_000) },
+      deliveryKey: 'delivery-cancelled-before-post',
       mentionPolicy: 'suppress',
       linkPreviewPolicy: 'providerDefault',
     }, context as Parameters<typeof deliverDiscordMessage>[1])).resolves.toEqual({
-      kind: 'partial',
-      providerMessageIds: ['message-1'],
-      failedChunk: 1,
-      retrySafe: false,
+      kind: 'notDelivered',
+      retry: 'safe',
     });
 
+    expect(postCount).toBe(0);
+  });
+
+  it.each(['serverFailure', 'cancelledAfterPost'] as const)('keeps %s after the native POST ambiguous without resending', async (failure) => {
+    const controller = new AbortController();
+    let postCount = 0;
+    const { context } = channelsCallerContext({
+      signal: controller.signal,
+      async request(request) {
+        if (request.url.endsWith('/oauth2/applications/@me')) return jsonResponse({ id: 'application-1' });
+        if (request.url.endsWith('/users/@me')) return jsonResponse({ id: 'discord-bot-1', username: 'Happier', bot: true });
+        if (request.url.endsWith('/channels/channel-1')) return jsonResponse({ id: 'channel-1', type: 0 });
+        if (request.url.endsWith('/channels/channel-1/messages')) {
+          postCount += 1;
+          if (failure === 'cancelledAfterPost') {
+            const error = new Error('delivery retired after POST');
+            controller.abort(error);
+            throw error;
+          }
+          return jsonResponse({ message: 'Discord is unavailable' }, 503);
+        }
+        throw new Error(`Unexpected Discord request: ${request.url}`);
+      },
+    });
+
+    await expect(deliverDiscordMessage({
+      v: 1,
+      connectionId: 'connection-1',
+      providerConnectionKey: 'discord:application:application-1',
+      providerConfigVersion: 1,
+      providerConfig: {
+        applicationId: 'application-1',
+        botUserId: 'discord-bot-1',
+        inviteUrl: 'https://discord.com/oauth2/authorize?client_id=application-1&scope=bot&permissions=274877975552',
+      },
+      credentialRef,
+      endpoint: { kind: 'shared', audience: 'shared', id: 'discord:channel:channel-1' },
+      content: { text: 'one core chunk' },
+      deliveryKey: `delivery-${failure}`,
+      mentionPolicy: 'suppress',
+      linkPreviewPolicy: 'providerDefault',
+    }, context)).resolves.toEqual({ kind: 'outcomeUnknown' });
     expect(postCount).toBe(1);
   });
 
@@ -874,7 +950,7 @@ describe('Discord Channels provider Actions', () => {
         inviteUrl: 'https://discord.com/oauth2/authorize?client_id=application-1&scope=bot&permissions=274877975552',
       },
       credentialRef,
-      content: 'Hello',
+      content: { text: 'Hello' },
       mentionPolicy: 'suppress' as const,
       linkPreviewPolicy: 'providerDefault' as const,
     };

@@ -2,7 +2,6 @@ import type {
   ConversationObservationAddressingEvidenceV1,
   ConversationResolvedEndpointV1,
 } from '@happier-dev/channels-protocol/v1';
-import { MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES } from '@happier-dev/channels-protocol/v1';
 
 import { createDiscordChannelEndpointId } from './discordPluginConstants.js';
 
@@ -142,10 +141,6 @@ function readForwardedSnapshotBody(payload: JsonRecord): DiscordForwardedSnapsho
   ) return { kind: 'unsupported' };
   if (hasEntries(message.attachments) || hasEntries(message.embeds)) return { kind: 'unsupported' };
   return message.content ? { kind: 'supported', content: message.content } : { kind: 'unsupported' };
-}
-
-function exceedsIngressTextLimit(text: string): boolean {
-  return new TextEncoder().encode(text).byteLength > MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES;
 }
 
 function includesString(value: unknown, expected: string): boolean {
@@ -333,9 +328,6 @@ export function parseDiscordMessageDispatch(input: Readonly<{
     || (!input.context.messageContentIntentEnabled && !isAllowedWithoutMessageContent(endpoint, addressingEvidence))
   ) {
     return { ...routingEvidence, kind: 'routableNonAdmission', reason: 'unsupportedContent' };
-  }
-  if (exceedsIngressTextLimit(content)) {
-    return { ...routingEvidence, kind: 'routableNonAdmission', reason: 'messageTooLarge' };
   }
 
   return {

@@ -40,7 +40,7 @@ import {
 } from './discordAutomationEvent.js';
 
 const CHANNELS_CORE_PLUGIN_ID = 'happier.channels';
-const RECONCILIATION_INTERVAL_MS = 30_000;
+const RECOVERY_INTERVAL_MS = 30_000;
 const STOP_WAIT_MS = 2_000;
 // Discord permits 1,000 Gateway session starts per 24-hour window. A
 // connection reservation permits one Discord application key per Account, so
@@ -337,7 +337,7 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
   const workerFactory = options.workerFactory ?? startDiscordGatewayWorker;
   const identifyConcurrency = createDiscordIdentifyConcurrency();
   const resolveRuntimeFacts = options.resolveRuntimeFacts ?? requireDiscordGatewayRuntimeFactsFromCoreSnapshot;
-  const reconciliationIntervalMs = options.reconciliationIntervalMs ?? RECONCILIATION_INTERVAL_MS;
+  const reconciliationIntervalMs = options.reconciliationIntervalMs ?? RECOVERY_INTERVAL_MS;
   const stopWaitMs = options.stopWaitMs ?? STOP_WAIT_MS;
   if (!Number.isSafeInteger(reconciliationIntervalMs) || reconciliationIntervalMs <= 0) {
     throw new Error('Discord Gateway reconciliation interval must be a positive safe integer.');
@@ -363,12 +363,19 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
   let supervisorAbort: AbortController | null = null;
   let runPromise: Promise<void> | null = null;
   let disposed = false;
+  let invalidateSupervisor = (): void => {};
+  let recoveryAt: number | undefined;
+
+  const retryReconciliation = (): void => {
+    recoveryAt = clock.now() + reconciliationIntervalMs;
+  };
 
   const addFact = (snapshot: ConversationProviderConnectionReconciliationSnapshotV1, fact: PendingTransportFact): void => {
     const key = connectionFactKey(snapshot);
     const facts = pendingFacts.get(key) ?? [];
     if (!facts.some((candidate) => sameFact(candidate, fact))) {
       pendingFacts.set(key, [...facts, fact]);
+      invalidateSupervisor();
     }
   };
 
@@ -425,6 +432,9 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
     // then the unchanged fingerprint remains terminal.
     if (result.kind === 'terminal') terminalReasonByFingerprint.set(entry.fingerprint, result.reason);
     if (result.kind === 'blocked') blockedUntilByFingerprint.set(entry.fingerprint, result.retryAtMs);
+    if (result.kind === 'notReady') {
+      blockedUntilByFingerprint.set(entry.fingerprint, clock.now() + reconciliationIntervalMs);
+    }
     if (result.kind === 'messageContentIntentRecoveryRequired' && result.source === 'gateway4014') {
       blockedUntilByFingerprint.set(
         entry.fingerprint,
@@ -598,6 +608,15 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
         }
       } finally {
         if (workers.get(snapshot.connectionId) === entry) workers.delete(snapshot.connectionId);
+        // A worker that stops unexpectedly is no longer healthy. Reuse the
+        // existing recovery interval, without shortening an explicit provider
+        // retry deadline or retiring a terminal authentication memo.
+        if (!entry.controller.signal.aborted && entry.stopIntent === null
+          && !terminalReasonByFingerprint.has(fingerprint)
+          && !blockedUntilByFingerprint.has(fingerprint)) {
+          blockedUntilByFingerprint.set(fingerprint, clock.now() + reconciliationIntervalMs);
+        }
+        invalidateSupervisor();
       }
     })();
   };
@@ -619,10 +638,14 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
           { signal: context.signal },
         );
       } catch {
+        retryReconciliation();
         return false;
       }
       const parsed = ConversationTransportFactReportResultV1Schema.safeParse(result);
-      if (!parsed.success) return false;
+      if (!parsed.success) {
+        retryReconciliation();
+        return false;
+      }
       if (parsed.data.kind === 'staleAuthority') {
         pendingFacts.delete(key);
         return false;
@@ -693,6 +716,7 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
   };
 
   const reconcile = async (context: BackgroundServiceContext): Promise<void> => {
+    recoveryAt = undefined;
     let source: unknown;
     try {
       source = await context.services.actions.execute(
@@ -705,11 +729,13 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
       );
     } catch {
       await stopWorkersForAuthorityLoss([...workers.values()]);
+      retryReconciliation();
       return;
     }
     const parsed = ConversationProviderConnectionsSnapshotV1Schema.safeParse(source);
     if (!parsed.success) {
       await stopWorkersForAuthorityLoss([...workers.values()]);
+      retryReconciliation();
       return;
     }
 
@@ -718,6 +744,7 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
     for (const listed of Object.values(parsed.data)) {
       const read = await readCurrentConnection(listed, context);
       if (read.kind === 'readFailed') {
+        retryReconciliation();
         // The list proves the connection exists; only its authoritative read
         // failed. Stopping its worker is an authority loss, not a removal.
         const entry = workers.get(listed.connectionId);
@@ -787,6 +814,7 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
       if (terminalReasonByFingerprint.has(fingerprint)) continue;
       const blockedUntil = blockedUntilByFingerprint.get(fingerprint);
       if (blockedUntil !== undefined && clock.now() < blockedUntil) continue;
+      blockedUntilByFingerprint.delete(fingerprint);
       const runtime = resolveRuntimeFacts(snapshot);
       startWorker(snapshot, runtime, context);
     }
@@ -804,6 +832,21 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
     const abortFromContext = (): void => controller.abort(context.signal.reason);
     if (context.signal.aborted) abortFromContext();
     else context.signal.addEventListener('abort', abortFromContext, { once: true });
+    let invalidated = true;
+    let resumeWait: (() => void) | undefined;
+    const wake = (): void => {
+      invalidated = true;
+      resumeWait?.();
+    };
+    invalidateSupervisor = wake;
+    controller.signal.addEventListener('abort', wake, { once: true });
+    // Hints carry no state. Subscribe before the authoritative read and retain
+    // invalidations during it, so a configuration change cannot be lost at the
+    // read-to-wait boundary.
+    const connectionsChanged = context.services.events.plugin.subscribe(
+      { pluginId: CHANNELS_CORE_PLUGIN_ID, localId: 'connections-invalidated-v1' },
+      wake,
+    );
     // The selected Connected Account is a separate authority whose credential
     // material can change without changing any fact in the core reconciliation
     // snapshot. This resync is the only signal that tells the supervisor a
@@ -814,20 +857,39 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
         for (const [fingerprint, reason] of terminalReasonByFingerprint) {
           if (reason === 'authenticationFailed') terminalReasonByFingerprint.delete(fingerprint);
         }
+        wake();
       },
     );
     runPromise = (async () => {
       try {
         while (!controller.signal.aborted) {
+          invalidated = false;
           await reconcile({ ...context, signal: controller.signal });
           if (controller.signal.aborted) break;
+          if (invalidated) continue;
+          const deadlines = [...blockedUntilByFingerprint.values()].filter(at => at > clock.now());
+          if (recoveryAt !== undefined) deadlines.push(recoveryAt);
+          const deadline = deadlines.length === 0 ? undefined : Math.min(...deadlines);
+          const waitController = new AbortController();
           try {
-            await clock.sleep(reconciliationIntervalMs, controller.signal);
+            const changed = new Promise<void>(resolve => { resumeWait = resolve; });
+            if (invalidated || controller.signal.aborted) resumeWait?.();
+            if (deadline === undefined) await changed;
+            else await Promise.race([
+              changed,
+              clock.sleep(Math.max(0, deadline - clock.now()), waitController.signal),
+            ]);
           } catch {
             if (!controller.signal.aborted) throw new Error('Discord Gateway reconciliation wait failed.');
+          } finally {
+            resumeWait = undefined;
+            waitController.abort();
           }
         }
       } finally {
+        invalidateSupervisor = () => {};
+        controller.signal.removeEventListener('abort', wake);
+        await connectionsChanged.dispose();
         await credentialResync.dispose();
         context.signal.removeEventListener('abort', abortFromContext);
         stopAllWorkers('generationRetired');

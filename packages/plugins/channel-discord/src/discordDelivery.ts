@@ -60,55 +60,43 @@ export function boundedDiscordRetryAfterMs(body: unknown): number | undefined {
     : Math.min(MAX_CONVERSATION_RETRY_AFTER_MS, Math.floor(retryAfterSeconds * 1_000));
 }
 
-async function discordNonceForChunk(noncePrefix: string | undefined, index: number): Promise<string | undefined> {
-  if (noncePrefix === undefined) return undefined;
+async function discordNonceForDelivery(deliveryKey: string | undefined): Promise<string | undefined> {
+  if (deliveryKey === undefined) return undefined;
   // Discord's Create Message endpoint accepts nonce strings only up to 25
-  // characters. Hash the complete opaque custody key plus the chunk index in
+  // characters. Hash the complete opaque custody key in
   // a provider-specific domain: truncating the raw key would alias distinct
   // delivery obligations, while this 150-bit base64url value remains bounded.
   const subtle = globalThis.crypto?.subtle;
   if (subtle === undefined) throw new Error('Web Crypto is required for Discord delivery nonces.');
-  const input = `${DISCORD_DELIVERY_NONCE_DOMAIN}:${JSON.stringify([noncePrefix, index])}`;
+  // Retain the existing single-message nonce encoding for the custody key.
+  const input = `${DISCORD_DELIVERY_NONCE_DOMAIN}:${JSON.stringify([deliveryKey, 0])}`;
   const digest = await subtle.digest('SHA-256', stableArrayBuffer(UTF8.encode(input)));
   return encodeUnpaddedBase64Url(new Uint8Array(digest)).slice(0, DISCORD_MESSAGE_NONCE_MAXIMUM_CODE_POINTS);
 }
 
-export function chunkDiscordMessage(content: string): readonly string[] {
-  if (!content) throw new Error('Discord message content is required.');
-  const codePoints = Array.from(content);
-  const chunks: string[] = [];
-  for (let offset = 0; offset < codePoints.length; offset += DISCORD_MESSAGE_MAXIMUM_CODE_POINTS) {
-    chunks.push(codePoints.slice(offset, offset + DISCORD_MESSAGE_MAXIMUM_CODE_POINTS).join(''));
-  }
-  return chunks;
-}
-
-export async function createDiscordMessagePayloads(input: Readonly<{
+export async function createDiscordMessagePayload(input: Readonly<{
   content: string;
   suppressEmbeds: boolean;
   replyToMessageId?: string;
-  noncePrefix?: string;
-}>): Promise<readonly DiscordMessageCreatePayload[]> {
+  deliveryKey?: string;
+}>): Promise<DiscordMessageCreatePayload> {
+  if (!input.content) throw new Error('Discord message content is required.');
   const replyToMessageId = input.replyToMessageId === undefined
     ? undefined
     : requireNonEmpty(input.replyToMessageId, 'Discord reply message ID');
-  const noncePrefix = input.noncePrefix === undefined
+  const deliveryKey = input.deliveryKey === undefined
     ? undefined
-    : requireNonEmpty(input.noncePrefix, 'Discord nonce prefix');
-  const payloads: DiscordMessageCreatePayload[] = [];
-  for (const [index, content] of chunkDiscordMessage(input.content).entries()) {
-    const nonce = await discordNonceForChunk(noncePrefix, index);
-    payloads.push({
-      content,
-      allowed_mentions: { parse: [] },
-      ...(input.suppressEmbeds ? { flags: DISCORD_SUPPRESS_EMBEDS_FLAG } : {}),
-      ...(replyToMessageId === undefined
-        ? {}
-        : { message_reference: { message_id: replyToMessageId, fail_if_not_exists: false } }),
-      ...(nonce === undefined ? {} : { nonce, enforce_nonce: true }),
-    });
-  }
-  return payloads;
+    : requireNonEmpty(input.deliveryKey, 'Discord delivery key');
+  const nonce = await discordNonceForDelivery(deliveryKey);
+  return {
+    content: input.content,
+    allowed_mentions: { parse: [] },
+    ...(input.suppressEmbeds ? { flags: DISCORD_SUPPRESS_EMBEDS_FLAG } : {}),
+    ...(replyToMessageId === undefined
+      ? {}
+      : { message_reference: { message_id: replyToMessageId, fail_if_not_exists: false } }),
+    ...(nonce === undefined ? {} : { nonce, enforce_nonce: true }),
+  };
 }
 
 export function classifyDiscordNonArchivedDeliveryResponse(_input: Readonly<{

@@ -1,5 +1,7 @@
 import {
+  assertConversationChannelsCoreCallerV1,
   ConversationConnectionTestInputV1Schema,
+  classifyConversationProviderMaterializationFailureV1,
   ConversationConnectionTestResultV1Schema,
   ConversationDeliveryInputV1Schema,
   ConversationDeliveryResultV1Schema,
@@ -13,16 +15,16 @@ import {
   type ConversationProviderFailureV1,
   type ConversationProviderSetupResultV1,
 } from '@happier-dev/channels-protocol/v1';
-import { isPluginError, PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import {
   QualifiedConnectedAccountRefSchema,
   type ConnectedAccountRef,
 } from '@happier-dev/plugin-sdk/connected-accounts';
-import { defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
+import { createProtocolStoredReadSchema, defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 
 import { createDiscordBotApi, type DiscordApiFailure, type DiscordBotApi, type DiscordBotIdentity } from './discordApi.js';
 import {
-  createDiscordMessagePayloads,
+  createDiscordMessagePayload,
   type DiscordDeliveryResult,
   type DiscordMessageCreatePayload,
 } from './discordDelivery.js';
@@ -44,7 +46,6 @@ import {
   readDiscordChannelEndpointId,
 } from './discordPluginConstants.js';
 
-const CHANNELS_CORE_PLUGIN_ID = 'happier.channels';
 const DISCORD_CONNECTION_KEY_PREFIX = 'discord:application:';
 
 type DiscordSetupInput = Readonly<{ credentialRef: ConnectedAccountRef }>;
@@ -53,18 +54,17 @@ export type DiscordConnectionConfiguration = Readonly<{
   applicationId: string;
   botUserId: string;
 }>;
+const storedDiscordConnectionConfigSchema = createProtocolStoredReadSchema(defineProtocolObject({
+  applicationId: defineProtocolString(),
+  botUserId: defineProtocolString(),
+  inviteUrl: defineProtocolString().optional(),
+}, { policy: 'closed' }));
 
 export function assertDiscordChannelsCoreCaller(context: PluginInvocationContext): void {
-  if (
-    context.surface !== 'plugin'
-    || context.caller?.kind !== 'plugin'
-    || context.caller.pluginId !== CHANNELS_CORE_PLUGIN_ID
-  ) {
-    throw new PluginError({
-      code: 'discord_channels_core_caller_required',
-      message: 'Discord Channel provider operations must be invoked by the Channels core plugin.',
-    });
-  }
+  assertConversationChannelsCoreCallerV1(context, {
+    code: 'discord_channels_core_caller_required',
+    message: 'Discord Channel provider operations must be invoked by the Channels core plugin.',
+  });
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -94,32 +94,7 @@ function isDiscordCredential(credentialRef: ConnectedAccountRef | null): credent
     && credentialRef.service.localId === DISCORD_BOT_CONNECTED_ACCOUNT_ID;
 }
 
-function throwIfAborted(signal: AbortSignal): void {
-  if (!signal.aborted) return;
-  throw signal.reason ?? new Error('Discord Channel provider operation was cancelled.');
-}
 
-function materializationFailure(error: unknown): ConversationProviderFailureV1 {
-  if (isPluginError(error)) {
-    // The exact-account host uses this refusal when the invocation generation
-    // is no longer current. It cannot become an independent delivery retry.
-    if (error.code === 'plugin_final_generation_retired') throw error;
-    // The host's unavailable Connected Accounts service has not reached
-    // Discord. Its default error is non-retryable, so retain the known
-    // no-effect delivery boundary rather than treating it as bad credentials.
-    if (error.retryable || error.code === 'plugin_service_unavailable') {
-      return { kind: 'notReady', reason: 'network' };
-    }
-    return {
-      kind: 'notReady',
-      reason: 'credentialInvalid',
-      diagnostic: 'The selected Discord bot account could not be materialized.',
-    };
-  }
-  // No Discord request began, so an unclassified materializer failure is
-  // still safe for the delivery owner to retry.
-  return { kind: 'notReady', reason: 'network' };
-}
 
 function failureFromApi(result: DiscordApiFailure): ConversationProviderFailureV1 {
   return {
@@ -149,14 +124,13 @@ function readConnectionConfig(input: Readonly<{
   if (input.providerConfigVersion !== 1 || !isRecord(input.providerConfig)) {
     return invalidConfiguration('Discord Channel connection configuration is unsupported.');
   }
-  const config = input.providerConfig;
-  const hasInviteUrl = Object.hasOwn(config, 'inviteUrl');
+  const parsed = storedDiscordConnectionConfigSchema.safeParse(input.providerConfig);
+  if (!parsed.success) return invalidConfiguration('Discord Channel connection configuration is invalid.');
+  const config = parsed.data;
   if (
-    (Object.keys(config).length !== 2 && Object.keys(config).length !== 3)
-    || !nonEmptyString(config.applicationId)
+    !nonEmptyString(config.applicationId)
     || !nonEmptyString(config.botUserId)
-    || (Object.keys(config).length === 3 && !hasInviteUrl)
-    || (hasInviteUrl && (!nonEmptyString(config.inviteUrl) || config.inviteUrl !== buildDiscordInviteUrl(config.applicationId)))
+    || (config.inviteUrl !== undefined && (!nonEmptyString(config.inviteUrl) || config.inviteUrl !== buildDiscordInviteUrl(config.applicationId)))
     || input.providerConnectionKey !== `${DISCORD_CONNECTION_KEY_PREFIX}${config.applicationId}`
   ) {
     return invalidConfiguration('Discord Channel connection configuration is invalid.');
@@ -168,7 +142,7 @@ function readConnectionConfig(input: Readonly<{
 }
 
 /**
- * Reuses the action owner’s strict connection/credential validation for the
+ * Reuses the action owner’s stored connection/credential validation for the
  * Gateway background worker. It exposes only immutable Discord identity facts,
  * never a Channels binding or mutable policy selection.
  */
@@ -196,7 +170,7 @@ export async function materializeExactDiscordBotToken(
       // plugin may only compare that current host-owned binding.
       { signal: context.signal, expectedAccount: credentialRef },
     );
-    throwIfAborted(context.signal);
+    context.signal.throwIfAborted();
     const token = materialized.kind === 'environment'
       ? materialized.env[DISCORD_BOT_TOKEN_ENVIRONMENT_KEY]?.trim()
       : undefined;
@@ -205,8 +179,8 @@ export async function materializeExactDiscordBotToken(
     }
     return token;
   } catch (error) {
-    if (context.signal.aborted) throw error;
-    return materializationFailure(error);
+    return classifyConversationProviderMaterializationFailureV1(error, context.signal,
+      'The selected Discord bot account could not be materialized.');
   }
 }
 
@@ -234,7 +208,7 @@ async function readyConnection(
   const api = await createExactDiscordBotApi(context, input.credentialRef!);
   if ('kind' in api) return api;
   const identity = await api.getIdentity({ signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if ('kind' in identity) return failureFromApi(identity);
   const config = input.providerConfig as Readonly<{ applicationId: string; botUserId: string }>;
   if (
@@ -282,7 +256,7 @@ async function verifyCurrentDiscordEndpointPermissions(input: Readonly<{
   } else {
     permissionChannel = input.channel;
   }
-  throwIfAborted(input.signal);
+  input.signal.throwIfAborted();
   if (permissionChannel === null) {
     return invalidConfiguration('Discord did not confirm the current parent channel for this target.');
   }
@@ -304,7 +278,7 @@ async function verifyCurrentDiscordEndpointPermissions(input: Readonly<{
     { guildId, userId: input.botUserId },
     { signal: input.signal },
   );
-  throwIfAborted(input.signal);
+  input.signal.throwIfAborted();
   if (member === null) {
     return {
       kind: 'notReady',
@@ -315,7 +289,7 @@ async function verifyCurrentDiscordEndpointPermissions(input: Readonly<{
   if ('kind' in member) return failureFromApi(member);
 
   const roles = await input.api.getGuildRoles({ guildId }, { signal: input.signal });
-  throwIfAborted(input.signal);
+  input.signal.throwIfAborted();
   if (isDiscordApiFailure(roles)) return failureFromApi(roles);
   const verification = verifyDiscordEndpointPermissions({
     endpointKind: input.channel.kind,
@@ -395,7 +369,7 @@ export async function setupDiscordChannels(
     throw new PluginError({ code: `discord_bot_${api.reason}`, message: api.diagnostic ?? 'Discord is unavailable.' });
   }
   const identity = await api.getIdentity({ signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if ('kind' in identity) {
     const failure = failureFromApi(identity);
     throw new PluginError({ code: `discord_bot_${failure.reason}`, message: failure.diagnostic ?? 'Discord is unavailable.' });
@@ -405,7 +379,7 @@ export async function setupDiscordChannels(
   // it verifies that a selected bot can obtain it before core creates a socket
   // connection that would otherwise fail only in the background service.
   const gateway = await api.getGatewayBot({ signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if ('kind' in gateway) {
     const failure = failureFromApi(gateway);
     throw new PluginError({ code: `discord_gateway_${failure.reason}`, message: failure.diagnostic ?? 'Discord Gateway is unavailable.' });
@@ -426,7 +400,7 @@ export async function testDiscordConnection(input: unknown, context: PluginInvoc
   const ready = await readyConnection(context, connection);
   if ('kind' in ready) return ready;
   const gateway = await ready.api.getGatewayBot({ signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if ('kind' in gateway) return failureFromApi(gateway);
   return ConversationConnectionTestResultV1Schema.parse({
     kind: 'ready',
@@ -447,7 +421,7 @@ export async function resolveDiscordEndpoint(input: unknown, context: PluginInvo
     return ConversationEndpointResolveResultV1Schema.parse({ kind: 'resolved', candidates: [] });
   }
   const channel = await ready.api.getChannel({ channelId }, { signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if (channel?.kind === 'notReady') return failureFromApi(channel);
   if (channel !== null) {
     const permissionFailure = await verifyCurrentDiscordEndpointPermissions({
@@ -471,6 +445,7 @@ export async function resolveDiscordEndpoint(input: unknown, context: PluginInvo
 export async function deliverDiscordMessage(input: unknown, context: PluginInvocationContext): Promise<ConversationDeliveryResultV1> {
   assertDiscordChannelsCoreCaller(context);
   const request = ConversationDeliveryInputV1Schema.parse(input);
+  if (request.newThread !== undefined) return { kind: 'notReady', reason: 'unsupported' };
   const ready = await readyConnection(context, request);
   if ('kind' in ready) return preSendFailureResult(ready);
   const channelId = readDiscordChannelEndpointId(request.endpoint.id);
@@ -491,90 +466,50 @@ export async function deliverDiscordMessage(input: unknown, context: PluginInvoc
   ) {
     return { kind: 'notDelivered', retry: 'never' };
   }
-  let payloads: readonly DiscordMessageCreatePayload[];
+  let payload: DiscordMessageCreatePayload;
   try {
-    payloads = await createDiscordMessagePayloads({
-      content: request.content,
+    payload = await createDiscordMessagePayload({
+      content: request.content.text,
       suppressEmbeds: request.linkPreviewPolicy === 'suppress',
       ...(replyToMessageId === undefined ? {} : { replyToMessageId }),
-      noncePrefix: request.deliveryKey,
+      deliveryKey: request.deliveryKey,
     });
   } catch {
     return { kind: 'notDelivered', retry: 'safe' };
   }
-  const providerMessageIds: string[] = [];
-  const cancelledBeforeChunk = (failedChunk: number): ConversationDeliveryResultV1 =>
-    providerMessageIds.length === 0
-      ? { kind: 'notDelivered', retry: 'safe' }
-      : ConversationDeliveryResultV1Schema.parse({
-        kind: 'partial', providerMessageIds, failedChunk, retrySafe: false,
-      });
-  for (const [index, payload] of payloads.entries()) {
-    if (context.signal.aborted) {
-      return cancelledBeforeChunk(index);
-    }
-    let currentChannel: Awaited<ReturnType<typeof ready.api.getChannel>>;
-    try {
-      currentChannel = await ready.api.getChannel({ channelId }, { signal: context.signal });
-    } catch (error) {
-      if (!context.signal.aborted) throw error;
-      return cancelledBeforeChunk(index);
-    }
-    if (context.signal.aborted) {
-      return cancelledBeforeChunk(index);
-    }
-    if (currentChannel !== null && currentChannel.kind === 'notReady') {
-      return providerMessageIds.length === 0
-        ? resolveEndpointLookupFailure(currentChannel)
-        : ConversationDeliveryResultV1Schema.parse({
-          kind: 'partial', providerMessageIds, failedChunk: index, retrySafe: false,
-        });
-    }
-    const currentEndpoint = currentChannel === null
-      ? undefined
-      : resolveDiscordEndpointCandidates({ query: channelId, knownChannels: [currentChannel] })[0];
-    if (
-      currentEndpoint === undefined
-      || currentEndpoint.kind !== request.endpoint.kind
-      || currentEndpoint.audience !== request.endpoint.audience
-      || currentEndpoint.id !== request.endpoint.id
-      || currentEndpoint.parentId !== request.endpoint.parentId
-    ) {
-      return providerMessageIds.length === 0
-        ? { kind: 'notDelivered', retry: 'never' }
-        : ConversationDeliveryResultV1Schema.parse({
-          kind: 'partial', providerMessageIds, failedChunk: index, retrySafe: false,
-        });
-    }
-    let result: DiscordDeliveryResult;
-    try {
-      // Discord's normal archived-thread send may auto-unarchive. We never
-      // PATCH a thread speculatively; only exact archive refusal maps to the
-      // core-owned recovery outcome. No verified MANAGE_THREADS fact is held
-      // in this provider action, so it cannot offer that stronger recovery.
-      result = await ready.api.sendMessage({ channelId, payload, canManageThreads: false }, { signal: context.signal });
-    } catch {
-      return ConversationDeliveryResultV1Schema.parse({
-        kind: 'outcomeUnknown',
-        ...(providerMessageIds.length === 0 ? {} : { providerMessageIds }),
-      });
-    }
-    if (result.kind === 'sent') {
-      providerMessageIds.push(result.messageId);
-      continue;
-    }
-    if (providerMessageIds.length === 0) {
-      return ConversationDeliveryResultV1Schema.parse(resolveDeliveryResult(result));
-    }
-    if (result.kind === 'outcomeUnknown') {
-      return ConversationDeliveryResultV1Schema.parse({
-        kind: 'outcomeUnknown',
-        providerMessageIds,
-      });
-    }
-    return ConversationDeliveryResultV1Schema.parse({
-      kind: 'partial', providerMessageIds, failedChunk: index, retrySafe: false,
-    });
+  if (context.signal.aborted) return { kind: 'notDelivered', retry: 'safe' };
+  let currentChannel: Awaited<ReturnType<typeof ready.api.getChannel>>;
+  try {
+    currentChannel = await ready.api.getChannel({ channelId }, { signal: context.signal });
+  } catch (error) {
+    if (!context.signal.aborted) throw error;
+    return { kind: 'notDelivered', retry: 'safe' };
   }
-  return ConversationDeliveryResultV1Schema.parse({ kind: 'delivered', providerMessageIds });
+  if (context.signal.aborted) return { kind: 'notDelivered', retry: 'safe' };
+  if (currentChannel !== null && currentChannel.kind === 'notReady') {
+    return resolveEndpointLookupFailure(currentChannel);
+  }
+  const currentEndpoint = currentChannel === null
+    ? undefined
+    : resolveDiscordEndpointCandidates({ query: channelId, knownChannels: [currentChannel] })[0];
+  if (
+    currentEndpoint === undefined
+    || currentEndpoint.kind !== request.endpoint.kind
+    || currentEndpoint.audience !== request.endpoint.audience
+    || currentEndpoint.id !== request.endpoint.id
+    || currentEndpoint.parentId !== request.endpoint.parentId
+  ) {
+    return { kind: 'notDelivered', retry: 'never' };
+  }
+  let result: DiscordDeliveryResult;
+  try {
+    // Discord's normal archived-thread send may auto-unarchive. We never
+    // PATCH a thread speculatively; only exact archive refusal maps to the
+    // core-owned recovery outcome. No verified MANAGE_THREADS fact is held
+    // in this provider action, so it cannot offer that stronger recovery.
+    result = await ready.api.sendMessage({ channelId, payload, canManageThreads: false }, { signal: context.signal });
+  } catch {
+    return { kind: 'outcomeUnknown' };
+  }
+  return ConversationDeliveryResultV1Schema.parse(resolveDeliveryResult(result));
 }

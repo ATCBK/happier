@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES } from '@happier-dev/channels-protocol/v1';
 
 import { parseDiscordMessageDispatch } from './discordMessage.js';
 
@@ -315,21 +314,19 @@ describe('Discord message parser', () => {
     })).toMatchObject({ kind: 'routableNonAdmission', reason: 'unsupportedContent' });
   });
 
-  it('withholds a text body that exceeds the public ingress bound while retaining its authenticated routing shell', () => {
+  it('preserves provider text beyond the former generic ingress ceiling', () => {
     const parsed = parseDiscordMessageDispatch({
       event: 'MESSAGE_CREATE',
-      payload: message({ content: 'x'.repeat(MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES + 1) }),
+      payload: message({ content: 'x'.repeat(65536 + 1) }),
       channel: { kind: 'shared', channelId: 'channel-1' },
       context,
     });
 
     expect(parsed).toMatchObject({
-      kind: 'routableNonAdmission',
-      reason: 'messageTooLarge',
+      kind: 'message',
       occurrenceId: 'discord:message:message-1',
       endpoint: { id: 'discord:channel:channel-1' },
-      message: { id: 'message-1' },
+      message: { id: 'message-1', text: 'x'.repeat(65536 + 1) },
     });
-    expect(parsed).not.toHaveProperty('message.text');
   });
 });

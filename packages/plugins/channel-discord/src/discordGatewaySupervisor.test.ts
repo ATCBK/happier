@@ -57,6 +57,7 @@ function backgroundContext(
     actions: Partial<PluginInvocationContext['services']['actions']>;
     connectedAccounts: Partial<PluginInvocationContext['services']['connectedAccounts']>;
     http: Partial<PluginInvocationContext['services']['http']>;
+    events?: Partial<PluginInvocationContext['services']['events']>;
   }>,
   signal: AbortSignal = new AbortController().signal,
 ): BackgroundServiceContext {
@@ -75,6 +76,7 @@ function backgroundContext(
     // fixture supplies one rather than letting an absent boundary look like
     // supervisor behavior.
     services: {
+      events: { plugin: { subscribe: () => ({ dispose() {} }) } },
       ...services,
       logger: {
         debug: vi.fn(),
@@ -346,6 +348,64 @@ describe('Discord Gateway supervisor', () => {
     expect(requireDiscordGatewayRuntimeFactsFromCoreSnapshot(
       snapshot({ requiresFullSharedMessageContent: false }),
     )).toEqual({ requiresFullSharedMessageContent: false });
+  });
+
+  it('parks a configured connection census and wakes on Channels invalidation without losing an in-read change', async () => {
+    vi.useFakeTimers();
+    const generation = new AbortController();
+    const supervisor = createDiscordGatewaySupervisor();
+    let invalidate: (() => void) | undefined;
+    let current = snapshot({ enabled: false });
+    const listedEpochs: number[] = [];
+    const actions = {
+      execute: vi.fn(async (action: Readonly<{ localId: string }>) => {
+        if (action.localId === CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionsList) {
+          listedEpochs.push(current.authorityEpoch);
+          if (listedEpochs.length === 2) {
+            current = snapshot({ enabled: false, authorityEpoch: 9 });
+            invalidate?.();
+          }
+        }
+        return { [current.connectionId]: current };
+      }),
+    };
+    const disposeWatch = vi.fn();
+    const background = backgroundContext({
+      actions,
+      connectedAccounts: { watch: () => ({ dispose() {} }) },
+      http: {},
+      events: { plugin: {
+        emit: vi.fn(),
+        subscribe: (_ref, listener) => {
+          invalidate = () => { void listener({
+            ref: { pluginId: 'happier.channels', localId: 'connections-invalidated-v1' },
+            payload: {}, sequence: 1,
+          }); };
+          return { dispose: disposeWatch };
+        },
+      } },
+    }, generation.signal);
+    const running = supervisor.run(background);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(listedEpochs).toEqual([7]);
+      await vi.advanceTimersByTimeAsync(90_000);
+      console.info('FIX-WAKE Discord measurement', {
+        startupLists: 1,
+        listsPerMinute: (listedEpochs.length - 1) / 1.5,
+      });
+      expect(listedEpochs).toEqual([7]);
+      current = snapshot({ enabled: false, authorityEpoch: 8 });
+      invalidate?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(listedEpochs).toEqual([7, 8, 9]);
+    } finally {
+      generation.abort();
+      await running;
+      await supervisor.dispose();
+      vi.useRealTimers();
+    }
+    expect(disposeWatch).toHaveBeenCalledOnce();
   });
 
   it('re-reads each listed connection before starting its worker, so stale list evidence cannot select a Gateway generation', async () => {
@@ -1722,6 +1782,7 @@ describe('Discord Gateway supervisor', () => {
   });
 
   it('retries an authentication-failed connection after the host reports a Connected Account credential resync', async () => {
+    const generation = new AbortController();
     // Gateway close 4004 means the selected bot token is wrong. Repairing it
     // inside the same Connected Account changes nothing the core reconciliation
     // snapshot carries, so the connection fingerprint is byte-identical and
@@ -1729,10 +1790,12 @@ describe('Discord Gateway supervisor', () => {
     const workerResults: DiscordGatewayWorkerResult[] = [
       { kind: 'terminal', reason: 'authenticationFailed' },
     ];
-    const workerFactory = vi.fn(() => ({
-      result: Promise.resolve(workerResults.shift() ?? ({ kind: 'stopped' } as const)),
-      stop: vi.fn(),
-    }));
+    const workerFactory = vi.fn(() => {
+      // Stop a broken immediate-restart loop at its first duplicate attempt;
+      // this is test cancellation, not a production retry or capacity bound.
+      if (workerFactory.mock.calls.length > 2) generation.abort(new Error('unexpected immediate restart'));
+      return { result: Promise.resolve(workerResults.shift() ?? ({ kind: 'stopped' } as const)), stop: vi.fn() };
+    });
     const supervisor = createDiscordGatewaySupervisor({
       workerFactory,
       reconciliationIntervalMs: 3_600_000,
@@ -1763,7 +1826,6 @@ describe('Discord Gateway supervisor', () => {
       )),
       openWebSocket: vi.fn(),
     };
-    const generation = new AbortController();
     const { background } = supervisorBackgroundHarness({
       supervisor,
       connectedAccounts,
@@ -1781,7 +1843,6 @@ describe('Discord Gateway supervisor', () => {
 
     expect(credentialResyncListeners).toHaveLength(1);
     for (const listener of credentialResyncListeners) listener();
-    await supervisor.reconcile(background);
     await vi.waitFor(() => expect(workerFactory).toHaveBeenCalledTimes(2));
 
     generation.abort(new Error('Discord plugin generation retired.'));
