@@ -54,10 +54,6 @@ describe('managed creation presentation', () => {
         expect(managedCreationState(unsubmitted, { controller: { name: 'MacBook Pro', online: true }, provider: 'Hetzner' }))
             .toEqual({ kind: 'creationWaiting', name: 'Guest' });
         expect(managedCreationState(unsubmitted)).toEqual({ kind: 'creationWaiting', name: 'Guest' });
-        const starting: ManagedMachineV1 = { ...machine, desired: 'start',
-            submittedNativeEffect: { intentRevision: 1, requestId: 'start-request', intent: 'start', controller: machine.controller },
-            observation: { availability: 'present', observedAt: 10, power: 'stopped', storage: 'retained' } };
-        expect(managedCreationState(starting, { provider: 'Hetzner' })).toMatchObject({ kind: 'powerPending', provider: 'Hetzner' });
     });
     it('keeps cancellation cleanup visible and only treats confirmed absence as ended', () => {
         const canceled = { ...machine, creationState: 'canceled' as const, cleanup: { disposition: 'pending' as const, reason: 'late_allocation' } };
@@ -85,6 +81,7 @@ describe('managed creation presentation', () => {
             submittedNativeEffect: { intentRevision: 1, requestId: 'start-request', intent: 'start', controller: machine.controller },
             observation: { availability: 'present', observedAt: 10, power: 'stopped', storage: 'retained' } };
         expect(managedCreationState(starting).kind).toBe('powerPending');
+        expect(managedCreationState(starting, { provider: 'Hetzner' })).toMatchObject({ kind: 'powerPending', provider: 'Hetzner' });
         expect(managedCreationState({ ...starting, observation: { ...starting.observation!, power: 'running' } }).kind).toBe('resourceReady');
     });
 });

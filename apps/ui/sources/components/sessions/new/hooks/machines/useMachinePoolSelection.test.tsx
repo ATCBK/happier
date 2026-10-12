@@ -1,7 +1,9 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { TokenStorage, type HomeCredentialMutationEvent } from '@/auth/storage/tokenStorage';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderHook } from '@/dev/testkit';
 import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUtils';
 import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
@@ -16,20 +18,6 @@ vi.mock('@/platform/randomUUID', () => ({
     randomUUID: () => `fallback-request-key-${++mintedRequestKeys.count}`,
 }));
 
-const credentialMutations = vi.hoisted(() => ({
-    listeners: new Set<(event: HomeCredentialMutationEvent) => void>(),
-}));
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/auth/storage/tokenStorage')>();
-    return {
-        ...actual,
-        subscribeHomeCredentialMutations: (listener: (event: HomeCredentialMutationEvent) => void) => {
-            credentialMutations.listeners.add(listener);
-            return () => credentialMutations.listeners.delete(listener);
-        },
-    };
-});
-
 const boundary = {
     serverId: '',
     backgroundServerId: '',
@@ -37,6 +25,7 @@ const boundary = {
     responders: [] as Array<() => Promise<Response>>,
 };
 const initialStorageState = getStorage().getState();
+let localStorage: ReturnType<typeof installLocalStorageMock>;
 
 function poolSelection() {
     return {
@@ -59,6 +48,8 @@ function poolSelection() {
 
 describe('useMachinePoolSelection', () => {
     beforeEach(async () => {
+        // Browser persistence is the boundary; credential readers and mutation notifications stay real.
+        localStorage = installLocalStorageMock();
         resetServerFeaturesClientForTests();
         getStorage().setState(initialStorageState, true);
         boundary.serverId = (await upsertAndActivateServer({
@@ -72,12 +63,10 @@ describe('useMachinePoolSelection', () => {
         boundary.requests.length = 0;
         boundary.responders.length = 0;
         mintedRequestKeys.count = 0;
-        credentialMutations.listeners.clear();
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (serverUrl) => ({
-            token: `header.${Buffer.from(JSON.stringify({
-                sub: serverUrl.includes('background') ? 'account-b' : 'account-a',
-            })).toString('base64')}.signature`,
-        }));
+        expect(await TokenStorage.setCredentialsForServerUrl('https://machine-pool-selection.test',
+            { serverId: boundary.serverId }, { token: createAccountTokenForTests('account-a') })).toBe(true);
+        expect(await TokenStorage.setCredentialsForServerUrl('https://machine-pool-selection-background.test',
+            { serverId: boundary.backgroundServerId }, { token: createAccountTokenForTests('account-b') })).toBe(true);
         const features = buildServerFeaturesResponse();
         vi.stubGlobal('fetch', vi.fn(async () => Response.json({
             ...features,
@@ -112,6 +101,7 @@ describe('useMachinePoolSelection', () => {
         resetServerFeaturesClientForTests();
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
+        localStorage.restore();
     });
 
     it('binds resolution to the captured Home and commits its exact Machine once', async () => {
@@ -559,10 +549,9 @@ describe('useMachinePoolSelection', () => {
         await vi.waitFor(() => expect(boundary.requests).toHaveLength(1));
 
         // An unrelated Home's Account replacement must not retire Home B's request.
-        for (const listener of credentialMutations.listeners) listener({
-            kind: 'credentials_set',
-            serverId: boundary.serverId,
-            serverUrl: 'https://machine-pool-selection.test',
+        await act(async () => {
+            expect(await TokenStorage.setCredentialsForServerUrl('https://machine-pool-selection.test',
+                { serverId: boundary.serverId }, { token: createAccountTokenForTests('replacement-account-a') })).toBe(true);
         });
         expect(hook.getCurrent().status.kind).toBe('resolving');
 
@@ -609,10 +598,9 @@ describe('useMachinePoolSelection', () => {
             });
             await vi.waitFor(() => expect(boundary.requests).toHaveLength(1));
 
-            for (const listener of credentialMutations.listeners) listener({
-                kind: 'credentials_set',
-                serverId: boundary.backgroundServerId,
-                serverUrl: 'https://machine-pool-selection-background.test',
+            await act(async () => {
+                expect(await TokenStorage.setCredentialsForServerUrl('https://machine-pool-selection-background.test',
+                    { serverId: boundary.backgroundServerId }, { token: createAccountTokenForTests('replacement-account-b') })).toBe(true);
             });
             await act(async () => {
                 if (settlement === 'success') {

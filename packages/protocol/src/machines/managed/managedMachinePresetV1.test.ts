@@ -50,11 +50,8 @@ describe('managed preset recipe contracts', () => {
       patch: { environment: null } })).toMatchObject({ patch: { environment: null } });
   });
   it('validates contributed choices once and drops stored extras without relaxing mutation admission', () => {
-    const factory: unknown = Reflect.get(protocol, 'createManagedMachinePresetV1Schema');
-    expect(factory).toBeTypeOf('function');
-    if (typeof factory !== 'function') throw new Error('The preset validator is missing');
     // The contribution supplies its launch schema; all surrounding host admission stays real.
-    const schema = factory(z.object({ cores: z.number().int().positive() }).strict());
+    const schema = protocol.createManagedMachinePresetV1Schema(z.object({ cores: z.number().int().positive() }).strict());
     const preset = {
       id: 'preset-a', homeId: 'home-a', revision: 1, name: 'My VM',
       owner: { kind: 'account', accountId: 'owner' },

@@ -333,6 +333,7 @@ describe('daemon managed Machine Action factory', () => {
             locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 }, normalizedModulePath: 'runtime.mjs', loadMode: 'immutable-js' });
         const runner = { pid: 42, processStartTimeMs: 123, processCommandHash: '5'.repeat(64), snapshotIdentity: 'fixture' };
         const tracked: TrackedSession = { pid: 41, sessionRunnerPid: runner.pid, startedBy: 'daemon', happySessionId: sessionId,
+            runnerProcessIdentity: runner,
             processStartTimeMs: runner.processStartTimeMs, processCommandHash: runner.processCommandHash, runnerAgentSourceCustodyV1: retained.sourceCustody,
             activeTurnId: 'turn', agentRuntimeDaemonServiceAdmittedTurnId: 'turn', agentRuntimeDaemonServiceAdmittedInputId: 'input',
             agentRuntimeDaemonServiceAdmittedUserMessageSeq: 1, agentRuntimeDaemonServiceAdmittedUserMessageSeqs: [1] };
@@ -377,13 +378,13 @@ describe('daemon managed Machine Action factory', () => {
             const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
             if (phase === 'turn-ended-during-mint') await applyTrackedSessionTurnLifecycle({ trackedSessions: [tracked], sessionId,
                 event: 'assistant_message_end', turnId: 'turn', updateSessionMarkerActiveTurn: async () => true });
-            return { status: 200, data: { v: 1, token: 'accepted-session-proof', binding: {
+            return { status: 200, data: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'accepted-session-proof', binding: {
                 serverIdentityId: 'srv_home', accountId: 'account', custodianAccountId: 'account', machineId: 'controller',
                 installationId: installation.installationId, authentication: { kind: 'account', tokenEpoch: 0 }, accountEncryptionMode: 'plain',
                 actionId, requestId: sessionActionOrigin.requestId, target, sessionActionOrigin,
                 sessionActionSource: { machineId: 'controller', installationId: installation.installationId },
                 requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
-            } } };
+            } }) };
         });
         const acceptedCurrentness = createDaemonApprovalExecutionOriginCurrentnessFromCredentials({ credentials: sourceCredentials,
             machineId: 'controller', serverId: configuration.activeServerId, serverApiUrl: serverUrl,
@@ -412,6 +413,7 @@ describe('daemon managed Machine Action factory', () => {
                 return await acceptedCurrentness!({ origin, actionInput: input, signal: operation.signal });
             },
         };
+        expect(currentTurn()).toBe(true);
         const prepared = await prepareExternalActionRequesterAccountAuthorization(args);
         if (phase === 'turn-ended-during-mint') {
             expect(prepared).toBeNull();
@@ -426,7 +428,7 @@ describe('daemon managed Machine Action factory', () => {
         await expect(applyTrackedSessionTurnLifecycle({ trackedSessions: [tracked], sessionId, event: 'assistant_message_end', turnId: 'turn',
             updateSessionMarkerActiveTurn: async () => true })).resolves.toMatchObject({ status: 'recorded', activeTurnId: null });
         expect(currentTurn()).toBe(false);
-        if (phase === 'source-replaced') tracked.processStartTimeMs = runner.processStartTimeMs + 1;
+        if (phase === 'source-replaced') tracked.runnerProcessIdentity = { ...runner, processStartTimeMs: runner.processStartTimeMs + 1 };
         if (phase === 'permission-withdrawn') currentPermission = 'default';
         if (phase === 'managed-retired') homeCurrent = false;
         if (phase === 'operation-canceled') operation.abort();

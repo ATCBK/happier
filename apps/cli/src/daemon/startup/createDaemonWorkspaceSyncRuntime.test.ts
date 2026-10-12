@@ -1,5 +1,6 @@
 import { MUTAGEN_ENGINE_VERSION } from '@happier-dev/cli-common/firstPartyRuntime';
 import type { ActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { MachineWorkSummaryV1Schema } from '@happier-dev/protocol/machines/machineWorkSummaryV1';
 import { access, mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -188,14 +189,14 @@ function boundaries(options: Readonly<{
 }
 
 describe('createDaemonWorkspaceSyncRuntime', () => {
-  it('reconciles an authoritative empty Project snapshot before the graph row exists', async () => {
+  it('composes the live relationship reader into work summary before graph creation, during withdrawal and after recovery', async () => {
     const harness = boundaries();
     harness.publishSnapshot(snapshot([], 'absent'));
     const runtime = createDaemonWorkspaceSyncRuntime(harness.deps);
     const inventory = createManagedActivityInventory({ producers: [runtime.managedWorkspaceSync.activity!] });
-    const readSummary = async () => projectMachineWorkSummary({ inventory: await inventory.read(),
+    const readSummary = async () => MachineWorkSummaryV1Schema.parse(projectMachineWorkSummary({ inventory: await inventory.read(),
       target: { serverId: 'server-1', machineId: 'machine-1', installationId: 'installation' },
-      custodianAccountId: 'alice', requesterIdentities: new Map() });
+      custodianAccountId: 'alice', requesterIdentities: new Map() }));
     try {
       await runtime.start();
       await runtime.whenProjectsSettled({ graphRevision: 'absent', scopeKey: 'account-1' });
@@ -206,6 +207,16 @@ describe('createDaemonWorkspaceSyncRuntime', () => {
       await runtime.whenProjectsSettled({ graphRevision: 'absent', scopeKey: 'account-1' });
       expect(await readSummary()).toEqual({ kind: 'current', requesters: [] });
       expect(harness.command).not.toHaveBeenCalledWith(expect.objectContaining({ t: 'create' }), expect.anything());
+      harness.activateRelationships();
+      await runtime.whenProjectsSettled({ graphRevision: 1, scopeKey: 'account-1' });
+      expect(await runtime.managedWorkspaceSync.get(relationship.relationshipId)).toMatchObject({ state: 'watching' });
+      // Sync work is retention-only; its real presence must not invent requester task counts.
+      expect(await readSummary()).toEqual({ kind: 'current', requesters: [] });
+      harness.publishSnapshot(null);
+      expect(await readSummary()).toEqual({ kind: 'unavailable' });
+      harness.publishSnapshot(snapshot());
+      await runtime.whenProjectsSettled({ graphRevision: 1, scopeKey: 'account-1' });
+      expect(await readSummary()).toEqual({ kind: 'current', requesters: [] });
     } finally {
       inventory.dispose();
       await runtime.stop();
