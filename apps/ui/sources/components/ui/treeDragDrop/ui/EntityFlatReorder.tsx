@@ -23,8 +23,9 @@ import { useTreeDropAutoscroll } from '../autoscroll/useTreeDropAutoscroll';
 import { entityFlatPositionAtIndex, resolveEntityFlatRowPosition } from '../geometry/entityFlatListStrategy';
 import { ENTITY_STAGED_MOVE_DOCK_PLACEMENT, EntityDragGripTrigger, EntityStagedMoveDock, useEntityStagedMoveHints, type EntityDragGripKeyEvent } from './EntityReleasePreview';
 import { EntityDropSettledFeedback } from './EntityDropSettledFeedback';
-import { describeEntityDropOutcome } from './entityDropOutcome';
+import { useEntityDropOutcome } from './entityDropOutcome';
 import { TreeDropIndicatorLine } from './TreeDropIndicatorLine';
+import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 
 export type EntityFlatReorderBinding = Readonly<{
     scope: EntityDragScopeV1 | null;
@@ -40,7 +41,8 @@ function entityReorderActionFailure(code?: string): EntityDropOutcomeV1 {
     const unknown = !code || code === 'outcome_unknown' || code === 'server_unreachable' || code === 'action_failed';
     return { status: unknown ? 'unknown' : 'refused', reason: {
         code: code ?? 'reorder_outcome_unknown',
-        message: t(unknown ? 'entityDragDrop.preview.unknownDetail' : 'entityDragDrop.reasons.generic'),
+        message: resolveActionExecutionFailureMessage({ ok: false, errorCode: code },
+            t(unknown ? 'entityDragDrop.preview.unknownDetail' : 'entityDragDrop.reasons.generic'))!,
     } };
 }
 
@@ -151,8 +153,9 @@ export function EntityFlatReorderList(props: Readonly<{
     }, [runtime, scrollRef, viewportTopY, viewportHeight, scrollOffsetY, contentHeight]);
     const getBounds = React.useCallback(() => readWindowBounds(node.current) ?? nativeBounds.current, []);
     React.useEffect(() => { void measure(); }, [measure, props.scrollOffsetY, props.viewportHeightPx, props.contentHeightPx]);
-    useAnimatedReaction(() => props.scrollMetrics ? [props.scrollMetrics.offsetY.value, props.scrollMetrics.contentHeight.value] : null,
-        (metrics, previous) => { if (metrics && (metrics[0] !== previous?.[0] || metrics[1] !== previous?.[1])) scheduleOnRN(measure); }, [measure, props.scrollMetrics]);
+    const scrollMetrics = props.scrollMetrics;
+    useAnimatedReaction(() => scrollMetrics ? [scrollMetrics.offsetY.value, scrollMetrics.contentHeight.value] : null,
+        (metrics, previous) => { if (metrics && (metrics[0] !== previous?.[0] || metrics[1] !== previous?.[1])) scheduleOnRN(measure); }, [measure, scrollMetrics]);
     const autoscroll = React.useCallback((pointer: WindowPointer) => {
         pointerY.value = pointer.y;
     }, [pointerY]);
@@ -374,7 +377,7 @@ function FlatFeedback(props: Readonly<{ context: FlatContext; testID: string }>)
     const hints = useEntityStagedMoveHints();
     const ours = props.context.binding.items.some(item => rowSourceId(props.context, item.id) === snapshot.sourceId);
     const staged = ours && (snapshot.phase === 'carrying' || snapshot.phase === 'pending');
-    const outcome = staged ? describeEntityDropOutcome(snapshot) : null;
+    const outcome = useEntityDropOutcome(staged ? snapshot : null);
     const keyboard = props.context.runtime.getPointer() === null;
     return <>
         {outcome && keyboard ? <View pointerEvents="none" style={ENTITY_STAGED_MOVE_DOCK_PLACEMENT}>

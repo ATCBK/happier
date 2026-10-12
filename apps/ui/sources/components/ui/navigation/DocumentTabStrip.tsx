@@ -138,6 +138,8 @@ export type DocumentTabStripProps<T extends DocumentTabItem> = Readonly<{
     activeEmphasis?: 'raised' | 'quiet';
     /** `bar` and `rail`: a tab's menu, from a right click or a long press. */
     onTabMenu?: (key: string, event: unknown) => void;
+    /** Retire an open press menu when this tab becomes the carried source. */
+    onDismissTabMenu?: (key: string) => void;
     /** `bar` only: the tablist's own height (30 in the title strip, 28 in a pane's own strip). */
     barTabHeightPx?: number;
     entityDragDrop?: DocumentTabEntityDragDrop;
@@ -189,9 +191,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         paddingLeft: M.tabPaddingStartPx,
-        paddingRight: 2,
+        paddingRight: theme.space.s2,
         minHeight: M.tabHeightPx,
     },
     tabActive: {
@@ -215,7 +217,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
         flexDirection: 'row',
         alignItems: 'baseline',
-        gap: 6,
+        gap: theme.space.s6,
     },
     tabSubtitle: {
         ...M.tabSubtitle,
@@ -248,6 +250,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: B.stripGapPx,
+        // One gap's room after the last tab, inside the clip, so the end-of-strip insertion mark
+        // (DnD lab C2) shows without the strip reflowing when a carry starts.
+        paddingRight: B.stripGapPx,
         overflow: 'hidden',
     },
     barTab: {
@@ -297,16 +302,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: 2,
         flexDirection: 'row',
     },
-    /** Where a kept tab will land at the end of the strip (DnD lab C2 tab slot). */
-    barDropSlot: {
-        width: B.tabMinWidthPx,
-        flexShrink: 1,
-        minWidth: 0,
-        borderRadius: B.tabRadiusPx,
-        borderWidth: 1,
-        borderColor: theme.colors.state.active.border,
-        backgroundColor: theme.colors.state.active.background,
-    },
     /** The tab an already-open item goes to (lab C2s "Already open somewhere"). */
     barTabGoToRing: {
         position: 'absolute',
@@ -341,18 +336,18 @@ const stylesheet = StyleSheet.create((theme) => ({
     barPinSeparator: {
         width: StyleSheet.hairlineWidth,
         height: 16,
-        marginHorizontal: 5,
+        marginHorizontal: theme.space.s4,
         backgroundColor: theme.colors.border.strong,
         flexShrink: 0,
     },
     barTrailing: {
         paddingRight: B.tabPaddingEndPx,
-        paddingLeft: 2,
+        paddingLeft: theme.space.s2,
     },
     railContent: {
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 12,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s12,
     },
     railTab: {
         borderRadius: B.tabHeightPx / 2,
@@ -452,8 +447,6 @@ export function DocumentTabStrip<T extends DocumentTabItem>(props: DocumentTabSt
                     />
                     </React.Fragment>
                 ))}
-                {props.dropSlot ? <View testID="document-tab-drop-slot" style={[styles.barDropSlot, { height: props.barTabHeightPx ?? B.tabHeightPx }]}
-                    accessibilityElementsHidden importantForAccessibility="no-hide-descendants" /> : null}
             </View>
         );
     }
@@ -697,6 +690,10 @@ function stopPropagation(event: unknown) {
     }
 }
 
+function documentTabSourceId(bindingId: string, tabKey: string): string {
+    return JSON.stringify(['document-tab', bindingId, tabKey, 'source']);
+}
+
 /**
  * One tab of the bar variant. Its own hover state reveals close in the reserved trailing slot, so the
  * tab never changes width under the pointer (workspace lab: "hover never changes width").
@@ -727,6 +724,23 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
     };
     const [hovered, setHovered] = React.useState(false);
     const { tab, strip } = props;
+    const draggedDuringPress = React.useRef(false);
+    const dismissMenu = React.useRef(strip.onDismissTabMenu);
+    dismissMenu.current = strip.onDismissTabMenu;
+    const runtime = strip.entityDragDrop?.runtime;
+    const sourceId = strip.entityDragDrop ? documentTabSourceId(strip.entityDragDrop.id, tab.key) : null;
+    React.useEffect(() => {
+        if (!runtime || !sourceId) return;
+        return runtime.subscribe(() => {
+            const snapshot = runtime.getSnapshot();
+            if (snapshot.sourceId === sourceId && snapshot.phase === 'carrying' && !draggedDuringPress.current) {
+                // Latch until the next press: RN Web's pending long-press can fire
+                // after dragend has already settled the canonical carry.
+                draggedDuringPress.current = true;
+                dismissMenu.current?.(tab.key);
+            }
+        });
+    }, [runtime, sourceId, tab.key]);
     const safeTabKey = toTestIdSafeValue(tab.key);
     const presentation = strip.resolveTabPresentation?.(tab) ?? null;
     const pinned = tab.isPinned;
@@ -761,7 +775,8 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
             <DocumentTabWebPressable
                 ref={(target) => props.registerFocusTarget(target as { focus?: () => void } | null)}
                 onPress={() => strip.onActivate(tab.key)}
-                onLongPress={openMenu}
+                onPressIn={() => { draggedDuringPress.current = false; }}
+                onLongPress={openMenu ? (event) => { if (!draggedDuringPress.current) openMenu(event); } : undefined}
                 hitSlop={props.rail ? RAIL_HIT_SLOP : undefined}
                 {...(Platform.OS === 'web' && openMenu ? { onContextMenu: openMenu } : null)}
                 onKeyDown={Platform.OS === 'web'
@@ -858,7 +873,8 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
         </View>
     );
     return strip.entityDragDrop
-        ? <DocumentEntityTab tab={tab} binding={strip.entityDragDrop} gapPx={B.stripGapPx} first={props.index === 0}>{content}</DocumentEntityTab>
+        ? <DocumentEntityTab tab={tab} binding={strip.entityDragDrop} gapPx={B.stripGapPx} first={props.index === 0}
+            endMark={strip.dropSlot === true && props.index === strip.tabs.length - 1}>{content}</DocumentEntityTab>
         : content;
 }
 
@@ -883,10 +899,16 @@ function DocumentEntityTab(props: Readonly<{
     /** The strip's gap: the insertion mark sits in the gap before this tab. */
     gapPx: number;
     first: boolean;
+    /**
+     * A kept tab lands after this, the strip's last tab (DnD lab C2 tab slot). The same mark as a
+     * gap insertion, drawn past the tab's end, so the strip never reflows while the pointer crosses
+     * between the pane centre and its edges.
+     */
+    endMark?: boolean;
     children: React.ReactNode;
 }>) {
     const { tab, binding } = props;
-    const sourceId = JSON.stringify(['document-tab', binding.id, tab.key, 'source']);
+    const sourceId = documentTabSourceId(binding.id, tab.key);
     const targetId = JSON.stringify(['document-tab', binding.id, tab.key, 'target']);
     const host = React.useRef<unknown>(null);
     const nativeBounds = React.useRef<WindowBounds | null>(null);
@@ -923,8 +945,9 @@ function DocumentEntityTab(props: Readonly<{
         host.current = node;
         sourceRef(node);
         dropRef(node);
-        binding.runtime.refresh();
-    }, [binding.runtime, sourceRef, dropRef]);
+        // Styling wrappers can detach/reattach the same host during a feedback
+        // commit. Registration and measured layout own refresh, not transient refs.
+    }, [sourceRef, dropRef]);
     const state = useEntityDropTargetState(binding.runtime, targetId);
     const allowed = state?.phase === 'carrying' && state.admission?.status === 'allowed';
     return <View ref={attach} collapsable={false} onLayout={() => {
@@ -935,6 +958,11 @@ function DocumentEntityTab(props: Readonly<{
             style={[stylesheet.entityTabInsertion, { left: props.first ? 0 : -(props.gapPx / 2) - 1 }]}>
             <TreeDropIndicatorLine orientation="vertical" indentPx={0}
                 visual={{ kind: 'line', targetId: tab.key, edge: 'top', depth: 0 }} />
+        </View> : null}
+        {props.endMark ? <View pointerEvents="none" testID="document-tab-drop-slot"
+            style={[stylesheet.entityTabInsertion, { right: -(props.gapPx / 2) - 1 }]}>
+            <TreeDropIndicatorLine orientation="vertical" indentPx={0}
+                visual={{ kind: 'line', targetId: tab.key, edge: 'bottom', depth: 0 }} />
         </View> : null}
     </View>;
 }

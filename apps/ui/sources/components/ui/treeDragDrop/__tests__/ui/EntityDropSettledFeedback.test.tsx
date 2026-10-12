@@ -96,9 +96,16 @@ describe('EntityDropSettledFeedback (lab ST4 late refusal)', () => {
         await screen.unmount();
     });
 
-    it('leaves other rows and an applied move alone', async () => {
+    it('answers an applied move with one flash on the landed row and no line (lab ST6)', async () => {
         const { screen } = await lateSettlement({ status: 'applied' });
         expect(screen.findHostByTestId('row-settled')).toBeNull();
+        expect(screen.findHostByTestId('row-landed')).not.toBeNull();
+        await screen.unmount();
+    });
+
+    it('flashes nothing for a refusal that never left its place', async () => {
+        const { screen } = await lateSettlement({ status: 'refused', reason: { code: 'changed', message: 'Moved' } });
+        expect(screen.findHostByTestId('row-landed')).toBeNull();
         await screen.unmount();
     });
 });

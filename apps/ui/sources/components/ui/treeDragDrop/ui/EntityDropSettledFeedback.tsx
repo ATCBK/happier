@@ -21,6 +21,7 @@ import { useTreeDropFlashHighlight } from './useTreeDropFlashHighlight';
  * The runtime's settled verdict ends with its feedback; this keeps only its words, in a per-realm
  * presentation store, until the person's next interaction: the next carry anywhere, or (web) the
  * next press or key in the window. Touch has no window-wide signal, so the line offers Dismiss there.
+ * An applied move keeps no words: its row flashes once where it landed (lab ST6), in every motion mode.
  */
 
 type SettledNotice = Readonly<{
@@ -71,12 +72,17 @@ function createSettledNoticeStore(runtime: EntityDragDropRuntime): SettledNotice
         }
         if (snapshot.phase !== 'settled' || !snapshot.sourceId || !snapshot.item) return;
         const verdict: HappierDropVerdict = { phase: snapshot.phase, admission: snapshot.admission, outcome: snapshot.outcome };
-        if (!describeEntityDropSettled(verdict)) return;
+        if (!landedAt(verdict) && !describeEntityDropSettled(verdict)) return;
         const title = runtime.describeSource(snapshot.sourceId)?.title
             ?? (carried?.sourceId === snapshot.sourceId ? carried.title : null);
         set({ sourceId: snapshot.sourceId, item: snapshot.item, itemTitle: title, verdict });
     });
     return { get: () => notice, subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, dismiss: () => set(null) };
+}
+
+/** An applied move: the row it moved flashes once where it landed (lab ST6), with no words. */
+function landedAt(verdict: HappierDropVerdict): boolean {
+    return verdict.admission?.status === 'allowed' && verdict.outcome?.status === 'applied';
 }
 
 function settledNotices(runtime: EntityDragDropRuntime): SettledNoticeStore {
@@ -110,16 +116,18 @@ function useSettledNotice(runtime: EntityDragDropRuntime, match: EntityDropSettl
 }
 
 /** Mounted only while a notice shows, so idle rows carry no animation driver. */
-function SettledFlash(props: Readonly<{ style?: StyleProp<ViewStyle> }>): React.ReactElement {
+function SettledFlash(props: Readonly<{ style?: StyleProp<ViewStyle>; testID?: string }>): React.ReactElement {
     const { theme } = useUnistyles();
     const flash = useTreeDropFlashHighlight();
     const trigger = flash.trigger;
-    // Once, when the line appears: the row answers "it came back here" (and is the reduced-motion cue).
+    // Once, when the row's notice appears: it answers "it landed here" or "it came back here", and is
+    // the reduced-motion cue (opacity only; nothing travels).
     React.useEffect(() => { trigger(); }, [trigger]);
     const animatedStyle = useAnimatedStyle(() => ({ opacity: flash.progress.value }));
     return (
         <Animated.View
             pointerEvents="none"
+            testID={props.testID}
             style={[
                 { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: theme.colors.state.active.background },
                 props.style,
@@ -141,13 +149,15 @@ export function EntityDropSettledFeedback(props: Readonly<{
 }>): React.ReactElement {
     const notice = useSettledNotice(props.runtime, props.match);
     const settled = notice ? describeEntityDropSettled(notice.verdict, notice.itemTitle) : null;
+    const landed = notice ? landedAt(notice.verdict) : false;
     const outcome = notice?.verdict.outcome;
     const dismiss = settledNotices(props.runtime).dismiss;
     return (
         <View>
             <View>
                 {props.children}
-                {settled ? <SettledFlash key={notice?.sourceId} style={props.flashStyle} /> : null}
+                {settled || landed ? <SettledFlash key={notice?.sourceId} style={props.flashStyle}
+                    testID={props.testID && landed ? `${props.testID}-landed` : undefined} /> : null}
             </View>
             {settled ? (
                 <View style={props.lineStyle}>

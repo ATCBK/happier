@@ -10,7 +10,56 @@ import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entity
 
 installPanelCommonModuleMocks();
 
+function TabPressMenuFixture(props: Readonly<{ runtime: ReturnType<typeof createEntityDragDropRuntime>; variant: 'bar' | 'rail' }>) {
+    const [menu, setMenu] = React.useState<string | null>(null);
+    const scope = { serverId: 'home', accountId: 'account' };
+    const menuLifecycle = {
+        onTabMenu: (key: string) => setMenu(key),
+        onDismissTabMenu: (key: string) => setMenu(current => current === key ? null : current),
+    };
+    return <View>
+        <DocumentTabStrip {...menuLifecycle} variant={props.variant}
+            tabs={[{ key: 'anchor', title: 'Anchor', isPinned: false, isPreview: false }]}
+            activeTabKey="anchor" accessibilityLabel="Documents"
+            onActivate={() => {}} onPin={() => {}} onUnpin={() => {}} onClose={() => {}}
+            renderLeadingIcon={() => null} tabNativeId={id => id} panelNativeId={id => id}
+            testIds={{ tab: id => `press-menu-${id}` }}
+            entityDragDrop={{ runtime: props.runtime, id: 'press-menu', scope, acceptedKinds: ['workspace-tab'],
+                getItem: tabId => ({ kind: 'workspace-tab', scope, tabId }),
+                resolve: () => ({ status: 'refused', reason: { code: 'no-change', message: 'Already here' } }),
+                execute: async () => ({ status: 'applied' }),
+            }} />
+        {menu ? <View testID="open-tab-menu" /> : null}
+    </View>;
+}
+
 describe('DocumentTabStrip actions', () => {
+    it.each(['bar', 'rail'] as const)('retires the %s press menu on a real carry and suppresses that press through drag end', async (variant) => {
+        const runtime = createEntityDragDropRuntime();
+        const screen = await renderScreen(<TabPressMenuFixture runtime={runtime} variant={variant} />);
+        const tab = () => {
+            const node = screen.findHostByTestId('press-menu-anchor');
+            if (!node) throw new Error('Missing tab press boundary');
+            return node;
+        };
+        await act(async () => { tab().props.onPressIn?.({}); tab().props.onLongPress({}); });
+        expect(screen.findAllByTestId('open-tab-menu')).toHaveLength(1);
+        const pendingLongPress = tab().props.onLongPress;
+        await act(async () => { runtime.begin(JSON.stringify(['document-tab', 'press-menu', 'anchor', 'source']), 'pointer'); });
+        expect(runtime.getSnapshot().phase).toBe('carrying');
+        expect(screen.findAllByTestId('open-tab-menu')).toHaveLength(0);
+        await act(async () => { pendingLongPress({}); });
+        expect(screen.findAllByTestId('open-tab-menu')).toHaveLength(0);
+        await act(async () => { runtime.cancel(); pendingLongPress({}); });
+        expect(screen.findAllByTestId('open-tab-menu')).toHaveLength(0);
+        await act(async () => { tab().props.onPressIn?.({}); tab().props.onLongPress({}); });
+        expect(screen.findAllByTestId('open-tab-menu')).toHaveLength(1);
+        await act(async () => { runtime.begin(JSON.stringify(['document-tab', 'press-menu', 'anchor', 'source']), 'pointer'); });
+        expect(screen.findAllByTestId('open-tab-menu')).toHaveLength(0);
+        await act(async () => { runtime.cancel(); tab().props.onContextMenu({}); });
+        expect(screen.findAllByTestId('open-tab-menu')).toHaveLength(1);
+        await screen.unmount();
+    });
     it('keeps active strip and raised tabs as ink within the containing material', async () => {
         const { AppShellMaterialFrame } = await import('@/components/navigation/shell/AppShellMaterialFrame');
         const { GlassMaterialSettingsProvider } = await import('@/components/ui/glass/useGlassMaterialSettings');

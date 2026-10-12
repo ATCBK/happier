@@ -42,6 +42,16 @@ export type TreeDropOverlayProps = Readonly<{
     shared: TreeDropOverlaySharedValues;
     /** Per-depth horizontal indent applied to the reorder line. */
     indentPx: number;
+    /**
+     * How far a row's visible frame (its sheet, hover fill and selection chip) sits in from the
+     * measured row bounds on each side. The outline lies on that frame and the line stays inside it,
+     * so neither indicator runs past the sheet into the column edge (DnD lab E1s).
+     */
+    frameInsetPx?: number;
+    /** The line's own inset inside the frame on each side: it starts at the rows' text edge. */
+    lineInsetPx?: number;
+    /** The corner of the row frame the outline lies on, so the two coincide. */
+    outlineRadius?: number;
     testID?: string;
     style?: StyleProp<ViewStyle>;
 }>;
@@ -49,8 +59,11 @@ export type TreeDropOverlayProps = Readonly<{
 /** High z-index so the overlay always paints above list rows/headers. */
 const TREE_DROP_OVERLAY_Z_INDEX = 1000;
 
-/** Peak extra scale applied to the outline by the appear-flash (subtle pop). */
-const TREE_DROP_OUTLINE_FLASH_SCALE = 0.04;
+/**
+ * Peak extra scale applied to the outline by the appear-flash: a breath, not a jump. A sidebar row
+ * is ~360px wide, so this grows it ~3px a side for one press beat. Never under reduced motion.
+ */
+const TREE_DROP_OUTLINE_FLASH_SCALE = 0.015;
 
 const stylesheet = StyleSheet.create(() => ({
     root: {
@@ -68,6 +81,8 @@ const stylesheet = StyleSheet.create(() => ({
 
 export function TreeDropOverlay(props: TreeDropOverlayProps): React.ReactElement {
     const { shared, indentPx } = props;
+    const frameInset = props.frameInsetPx ?? 0;
+    const lineInset = frameInset + (props.lineInsetPx ?? 0);
     const styles = stylesheet;
     const reducedMotion = useReducedMotionPreference();
     const flash = useTreeDropFlashHighlight();
@@ -118,17 +133,18 @@ export function TreeDropOverlay(props: TreeDropOverlayProps): React.ReactElement
                 : null
         ),
         (current, previous) => {
-            if (current !== null && current !== previous) {
+            if (current !== null && current !== previous && !reducedMotion) {
                 flash.trigger();
             }
         },
+        [reducedMotion],
     );
 
     const lineStyle = useAnimatedStyle(() => {
         const isLine = shared.overlayVisible.value > 0
             && shared.overlayKind.value === TREE_DROP_OVERLAY_KIND_LINE;
-        const indent = Math.max(0, shared.overlayDepth.value * indentPx);
-        const width = Math.max(0, shared.overlayRight.value - shared.overlayLeft.value - indent);
+        const indent = lineInset + Math.max(0, shared.overlayDepth.value * indentPx);
+        const width = Math.max(0, shared.overlayRight.value - shared.overlayLeft.value - indent - lineInset);
         return {
             top: displayTop.value,
             left: displayLeft.value + indent,
@@ -141,14 +157,14 @@ export function TreeDropOverlay(props: TreeDropOverlayProps): React.ReactElement
     const outlineStyle = useAnimatedStyle(() => {
         const isOutline = shared.overlayVisible.value > 0
             && shared.overlayKind.value === TREE_DROP_OVERLAY_KIND_OUTLINE;
-        const width = Math.max(0, shared.overlayRight.value - shared.overlayLeft.value);
+        const width = Math.max(0, shared.overlayRight.value - shared.overlayLeft.value - frameInset * 2);
         // `flash.progress` peaks at 1 right after a nest target appears/changes,
         // then settles to 0: map it to a subtle scale pop so the outline reads
         // as actively landing on the new container.
         const flashScale = 1 + TREE_DROP_OUTLINE_FLASH_SCALE * flash.progress.value;
         return {
             top: displayTop.value,
-            left: displayLeft.value,
+            left: displayLeft.value + frameInset,
             width,
             height: shared.overlayHeight.value,
             opacity: isOutline ? 1 : 0,
@@ -182,6 +198,7 @@ export function TreeDropOverlay(props: TreeDropOverlayProps): React.ReactElement
             >
                 <TreeDropOutline
                     visual={{ kind: 'outline', targetId: '' }}
+                    radius={props.outlineRadius}
                     style={outlineFillStyle}
                 />
             </Animated.View>

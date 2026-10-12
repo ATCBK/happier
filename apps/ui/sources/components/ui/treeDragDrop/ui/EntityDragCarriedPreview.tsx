@@ -16,7 +16,7 @@ import { useEntityDragDropSnapshot, useEntityDragPointer } from '../entityDragDr
 import type { EntityDragDropRuntime } from '../entityDragDropTypes';
 import { useEntityDropSettledNotices } from './EntityDropSettledFeedback';
 import { useEntityDragFeel } from './entityDragFeel';
-import { describeEntityDropOutcome } from './entityDropOutcome';
+import { useEntityDropOutcome } from './entityDropOutcome';
 import { EntityReleasePreviewCard } from './EntityReleasePreview';
 
 /**
@@ -42,6 +42,7 @@ const TOUCH_CARD_INSET_PX = 14;
 
 function CarriedCardContent(props: EntityDragCarriedPreviewProps & Readonly<{ side: 'right' | 'left' }>): React.ReactElement | null {
     const snapshot = useEntityDragDropSnapshot(props.runtime);
+    const outcome = useEntityDropOutcome(snapshot, snapshot.sourceId ? props.runtime.describeSource(snapshot.sourceId)?.title ?? null : null);
     const returning = snapshot.phase === 'settled' && snapshot.outcome?.status === 'refused';
     if ((snapshot.phase !== 'carrying' && snapshot.phase !== 'pending' && !returning) || !snapshot.sourceId) return null;
     // Identity comes from the carried source itself, read when the verdict changes.
@@ -52,7 +53,7 @@ function CarriedCardContent(props: EntityDragCarriedPreviewProps & Readonly<{ si
         <EntityReleasePreviewCard
             identity={identity}
             // The one outcome presenter: a late refusal returns with the words its source line keeps.
-            outcome={describeEntityDropOutcome(snapshot, description.title)}
+            outcome={outcome}
             density={props.density}
             side={props.side}
             testID={props.testID}

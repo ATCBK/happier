@@ -34,6 +34,14 @@ const carry: EntityDragItemV1 = { kind: 'home-section', scope, sectionId: 'movin
 const destination = { groupId: 'group', anchorId: null, placement: 'after' };
 
 describe('shared layout DnD admission', () => {
+    it('treats a group over its own body as unchanged, but still refuses nesting into another group', () => {
+        const carried: EntityDragItemV1 = { kind: 'widget-layout-group', scope, ref: { surface, instanceId: group.id } };
+        const other = { ...group, id: 'other' };
+        const resolve = (groupId: string) => resolveWidgetLayoutEntityDrop({ item: carried, surface,
+            items: [group, other], canEdit: true, destination: { groupId, anchorId: null, placement: 'after' }, preview });
+        expect(resolve(group.id)).toMatchObject({ status: 'refused', reason: { code: 'same-position' } });
+        expect(resolve(other.id)).toMatchObject({ status: 'refused', reason: { code: 'widget_group_nesting_forbidden' } });
+    });
     const adjacentCases = (['child', 'standalone', 'whole-group', 'last-child'] as const).flatMap(sourceKind =>
         (['before', 'after'] as const).flatMap(sourceSide =>
             (['widget', 'group'] as const).flatMap(anchorKind =>
@@ -295,7 +303,7 @@ describe('shared layout DnD admission', () => {
             const pointer = { x: 50, y };
             expect(target.resolve({ item: carry, pointer, destination: resolveWidgetCardPointerDestination('child', group.id, bounds, pointer), input: 'pointer' }))
                 .toMatchObject({ status: 'allowed', effect: { input: { to: { groupId: group.id, index } },
-                    preview: { glyph, verb: t('widgetFrame.moveIntoGroupNamed', { group: t('widgetFrame.groupUntitled') }), consequence: t(key, { target: 'Child' }), target: 'Child' } } });
+                    preview: { glyph, verb: t('widgetFrame.moveIntoGroupNamed', { group: t('widgetFrame.groupUntitled') }), consequence: `${t(key, { target: 'Child' })} · ${t('widgetFrame.intoGroupKeepsSize', { size: t('widgetAdd.sizes.small') })}`, target: 'Child' } } });
         }
     });
     it('retains the resolved edge preview when the group target refuses an unchanged position', () => {
@@ -309,11 +317,12 @@ describe('shared layout DnD admission', () => {
         const items = [named, widget('moving'), widget('wide', 'full')];
         const resolve = (item: EntityDragItemV1, to: unknown) => resolveWidgetLayoutEntityDrop({ item, surface, items, canEdit: true,
             preview: { verb: 'Organize', target: 'Child' }, destination: to });
-        // Into: the preview names the group and the place, and says it shows plain there.
+        // Into: the preview names the group and the place, and says it shows plain there at the size it keeps.
+        const keeps = t('widgetFrame.intoGroupKeepsSize', { size: t('widgetAdd.sizes.small') });
         expect(resolve(carry, { groupId: 'group', anchorId: 'child', placement: 'after' })).toMatchObject({ status: 'allowed', effect: { preview: {
-            verb: t('widgetFrame.moveIntoGroupNamed', { group: 'happier' }), consequence: t('widgetFrame.intoGroupBelow', { target: 'Child' }) } } });
+            verb: t('widgetFrame.moveIntoGroupNamed', { group: 'happier' }), consequence: `${t('widgetFrame.intoGroupBelow', { target: 'Child' })} · ${keeps}` } } });
         expect(resolve(carry, { groupId: 'group', anchorId: null, placement: 'after' })).toMatchObject({ status: 'allowed', effect: { preview: {
-            verb: t('widgetFrame.moveIntoGroupNamed', { group: 'happier' }), consequence: t('widgetFrame.intoGroupEnd') } } });
+            verb: t('widgetFrame.moveIntoGroupNamed', { group: 'happier' }), consequence: `${t('widgetFrame.intoGroupEnd')} · ${keeps}` } } });
         // Inside: order only; the container does not change, so the verb stays the edge.
         const child: EntityDragItemV1 = { kind: 'home-section', scope, sectionId: 'child' };
         expect(resolve(child, { groupId: 'group', anchorId: 'second', placement: 'after' })).toMatchObject({ status: 'allowed', effect: { preview: {
@@ -366,6 +375,19 @@ describe('shared layout DnD admission', () => {
         expect(unavailable.options).toEqual([expect.objectContaining({ label: 'website', disabled: true, detail: t('widgetFrame.groupRefusedWidth') })]);
         // Beside the group stays available.
         expect(sections.filter(section => section !== unavailable).flatMap(section => section.options)).toHaveLength(2);
+    });
+    it('says the size a widget keeps inside the group, and names both groups in the nesting way forward (lab wgdnd 1 and 6, F4 D-19)', () => {
+        const named: WidgetLayoutGroupV1 = { ...group, title: 'happier', children: [widget('child'), widget('second')] };
+        const other: WidgetLayoutGroupV1 = { ...group, id: 'other', title: 'This week', children: [widget('other-child')] };
+        const items = [named, other, widget('moving')];
+        expect(resolveWidgetLayoutEntityDrop({ item: carry, surface, items, canEdit: true, preview: { verb: 'Organize', target: 'Child' },
+            destination: { groupId: 'group', anchorId: 'child', placement: 'after' } })).toMatchObject({ status: 'allowed', effect: { preview: {
+            consequence: `${t('widgetFrame.intoGroupBelow', { target: 'Child' })} · ${t('widgetFrame.intoGroupKeepsSize', { size: t('widgetAdd.sizes.small') })}` } } });
+        const whole: EntityDragItemV1 = { kind: 'widget-layout-group', scope, ref: { surface, instanceId: 'other' } };
+        const target = widgetGroupDropTarget({ surface, items, group: named, name: 'happier' });
+        expect(target.resolve({ item: whole, pointer: null, destination: { groupId: 'group', anchorId: null, placement: 'after' }, input: 'chooser' }))
+            .toMatchObject({ status: 'refused', reason: { code: 'widget_group_nesting_forbidden',
+                message: t('widgetFrame.groupRefusedNestingNamed', { group: 'This week', target: 'happier' }) } });
     });
     it('names an untitled group the way its host does', () => {
         expect(resolveWidgetLayoutEntityDrop({ item: carry, surface, items: [group, widget('moving')], canEdit: true, preview, destination,

@@ -1,5 +1,4 @@
 import * as React from 'react';
-import type { StyleProp, ViewStyle } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierDropInsertionLine } from '@happier-dev/plugin-ui/presentation';
 
@@ -11,7 +10,7 @@ export type TreeDropIndicatorLineProps = Readonly<{
     /** `vertical`: the insertion mark between two items laid out in a row (a tab strip). */
     orientation?: 'horizontal' | 'vertical';
     testID?: string;
-    style?: StyleProp<ViewStyle>;
+    style?: React.ComponentProps<typeof HappierDropInsertionLine>['style'];
 }>;
 
 /** Happier core's binding of the one insertion line (plugin-ui): the theme accent and a tree's indent. */

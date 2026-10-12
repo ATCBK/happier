@@ -8,6 +8,8 @@ import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionP
 import { createEntityDragDropRuntime } from '../../entityDragDropRuntime';
 import { EntityDragCarriedPreview } from '../../ui/EntityDragCarriedPreview';
 import type { WindowBounds } from '../../treeDragDropTypes';
+import { storage } from '@/sync/domains/state/storage';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 
 const motion = vi.hoisted(() => ({ springs: [] as number[], completions: [] as ((finished?: boolean) => void)[] }));
 vi.mock('react-native', async () => {
@@ -43,6 +45,46 @@ afterEach(() => {
 });
 
 describe('EntityDragCarriedPreview refusal settlement', () => {
+    it('shows the canonical Home disconnection without settling or replaying a pending drop', async () => {
+        const previous = storage.getState();
+        const applied = getAppliedActiveServerSnapshot();
+        const available = isAppliedActiveServerRuntimeAvailable();
+        const runtime = createEntityDragDropRuntime();
+        const scope = { serverId: 'home-a', accountId: 'account-a' };
+        let finish!: (outcome: EntityDropOutcomeV1) => void;
+        runtime.registerSource({ id: 'source', scope, getItem: () => ({ kind: 'home-section', scope, sectionId: 'widgets' }),
+            isCurrent: () => true, describe: () => ({ title: 'Widgets' }) });
+        const execute = vi.fn(async () => new Promise<EntityDropOutcomeV1>(resolve => { finish = resolve; }));
+        runtime.registerTarget({ id: 'target', scope, acceptedKinds: ['home-section'],
+            getBounds: () => ({ x: 0, y: 0, width: 100, height: 100 }), execute,
+            resolve: () => ({ status: 'allowed', effect: { actionId: 'home.hub.layout.update', input: {}, preview: { verb: 'Move above', target: 'Sessions' } } }) });
+        publishAppliedActiveServerSnapshot({ serverId: scope.serverId, serverUrl: 'https://home-a.test', generation: 1 });
+        storage.setState({ endpointStatus: 'online', socketStatus: 'connected' });
+        const screen = await renderScreen(<EntityDragCarriedPreview runtime={runtime} testID="pending-home-card" />);
+        let result!: Promise<EntityDropOutcomeV1 | null>;
+        try {
+            await act(async () => { const carry = runtime.begin('source')!; carry.move({ x: 50, y: 50 }); result = carry.release(); });
+            await act(async () => { storage.setState({ endpointStatus: 'offline' }); });
+            expect(screen.getTextContent()).toContain("Can't reach this Home");
+            expect(screen.findHostByTestId('pending-home-card')!.props.dataSet.outcome).toBe('quiet');
+            expect(runtime.getSnapshot().phase).toBe('pending');
+            await act(async () => { publishAppliedActiveServerSnapshot({ serverId: 'other-home', serverUrl: 'https://other-home.test', generation: 2 }); });
+            expect(screen.findHostByTestId('pending-home-card')!.props.dataSet.outcome).toBe('pending');
+            await act(async () => { publishAppliedActiveServerSnapshot({ serverId: scope.serverId, serverUrl: 'https://home-a.test', generation: 3 }, false); });
+            expect(screen.findHostByTestId('pending-home-card')!.props.dataSet.outcome).toBe('pending');
+            await act(async () => { publishAppliedActiveServerSnapshot({ serverId: scope.serverId, serverUrl: 'https://home-a.test', generation: 3 }); });
+            expect(screen.findHostByTestId('pending-home-card')!.props.dataSet.outcome).toBe('quiet');
+            await act(async () => { storage.setState({ endpointStatus: 'online' }); });
+            expect(screen.findHostByTestId('pending-home-card')!.props.dataSet.outcome).toBe('pending');
+            await act(async () => { finish({ status: 'applied' }); await result; });
+            expect(await result).toEqual({ status: 'applied' });
+            expect(execute).toHaveBeenCalledTimes(1);
+        } finally {
+            await screen.unmount();
+            storage.setState(previous, true);
+            publishAppliedActiveServerSnapshot(applied, available);
+        }
+    });
     it.each(['spring', 'reduced', 'interrupted'] as const)('keeps the owner reason through %s return feedback', async (mode) => {
         const reducedMotion = mode === 'reduced';
         setReducedMotionPreferenceOverride(reducedMotion);

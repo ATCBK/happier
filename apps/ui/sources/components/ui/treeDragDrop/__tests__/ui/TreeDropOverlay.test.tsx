@@ -2,6 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 import { TreeDropOverlay } from '../../ui/TreeDropOverlay';
 import {
     TREE_DROP_OVERLAY_KIND_LINE,
@@ -188,5 +189,42 @@ describe('TreeDropOverlay', () => {
 
         const outlineStyle = flattenStyle(screen.findByTestId('tree-drop-overlay-outline')?.props.style);
         expect(readScale(outlineStyle)).toBe(1);
+    });
+
+    it('keeps the outline still under reduced motion: it appears, it never pops', async () => {
+        setReducedMotionPreferenceOverride(true);
+        try {
+            const screen = await renderScreen(
+                <TreeDropOverlay
+                    shared={buildSharedValues({ kind: TREE_DROP_OVERLAY_KIND_OUTLINE, visible: 1, top: 200 })}
+                    indentPx={8}
+                    testID="tree-drop-overlay"
+                />,
+            );
+            const outlineStyle = flattenStyle(screen.findByTestId('tree-drop-overlay-outline')?.props.style);
+            expect(outlineStyle.opacity).toBe(1);
+            expect(readScale(outlineStyle)).toBe(1);
+        } finally {
+            setReducedMotionPreferenceOverride(null);
+        }
+    });
+
+    it('draws inside the row frame: the line from the text edge, the outline on the row', async () => {
+        const shared = buildSharedValues({ kind: TREE_DROP_OVERLAY_KIND_LINE, left: 0, right: 380, depth: 1 });
+        const screen = await renderScreen(
+            <TreeDropOverlay shared={shared} indentPx={8} frameInsetPx={10} lineInsetPx={12} testID="tree-drop-overlay" />,
+        );
+        const lineStyle = flattenStyle(screen.findByTestId('tree-drop-overlay-line')?.props.style);
+        // 10 (row frame) + 12 (text edge) + 1 * 8 (depth) = 30; it ends 22 in from the right edge.
+        expect(lineStyle.left).toBe(30);
+        expect(lineStyle.width).toBe(380 - 30 - 22);
+
+        shared.overlayKind.value = TREE_DROP_OVERLAY_KIND_OUTLINE;
+        const outline = await renderScreen(
+            <TreeDropOverlay shared={shared} indentPx={8} frameInsetPx={10} lineInsetPx={12} testID="tree-drop-overlay" />,
+        );
+        const outlineStyle = flattenStyle(outline.findByTestId('tree-drop-overlay-outline')?.props.style);
+        expect(outlineStyle.left).toBe(10);
+        expect(outlineStyle.width).toBe(360);
     });
 });

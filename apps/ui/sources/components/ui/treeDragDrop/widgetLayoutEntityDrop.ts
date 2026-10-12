@@ -93,12 +93,16 @@ export function resolveWidgetLayoutEntityDrop(input: Readonly<{
     const group = position.groupId ? input.items.find(item => item.kind === 'group' && item.id === position.groupId) : undefined;
     if (position.groupId && (!group || group.kind !== 'group')) return refused('widget_group_not_found');
     // A group's own refusals name the group that cannot take it (lab wgdnd 5, 6).
-    const cannotEnter = (code: string) => {
+    const cannotEnter = (code: string, wayForward?: string) => {
         if (group?.kind === 'group') preview = { ...preview, glyph: 'refused', verb: t('widgetFrame.cantPutInGroup', { group: groupName(group) }) };
-        return refused(code);
+        return wayForward ? { status: 'refused' as const, reason: { code, message: wayForward }, preview } : refused(code);
     };
+    // A group carried over a group: the way forward names both ("Drop This week above or below happier").
+    const nestingWayForward = () => sourcePlacement?.kind === 'group' && group?.kind === 'group'
+        ? t('widgetFrame.groupRefusedNestingNamed', { group: groupName(sourcePlacement), target: groupName(group) }) : undefined;
     if (sourcePlacement?.kind === 'group' || input.item.kind === 'widget-layout-group') {
-        if (position.groupId) return cannotEnter('widget_group_nesting_forbidden');
+        if (sameSurface && position.groupId === ref.instanceId) return refused('same-position');
+        if (position.groupId) return cannotEnter('widget_group_nesting_forbidden', nestingWayForward());
         if (!sameSurface) return refused('unsupported_widget_transfer');
     }
     if (group?.kind === 'group') {
@@ -117,9 +121,13 @@ export function resolveWidgetLayoutEntityDrop(input: Readonly<{
         && (area === undefined || !!sourcePlacement && ((sourceParent ?? sourcePlacement).area ?? 'main') === area);
     // What the release does to membership (lab wgdnd 1-4): into a group, inside it, out of it, or a whole group.
     if (group?.kind === 'group' && sourceParent?.id !== group.id) {
+        const place = position.anchorId === null ? t('widgetFrame.intoGroupEnd')
+            : t(position.placement === 'before' ? 'widgetFrame.intoGroupAbove' : 'widgetFrame.intoGroupBelow', { target: input.preview.target });
+        // A widget keeps its size inside the group (lab wgdnd 1 "· stays Small").
+        const keeps = sourcePlacement?.kind === 'widget'
+            ? t('widgetFrame.intoGroupKeepsSize', { size: t(`widgetAdd.sizes.${sourcePlacement.size ?? 'medium'}`) }) : null;
         preview = { ...preview, verb: t('widgetFrame.moveIntoGroupNamed', { group: groupName(group) }),
-            consequence: position.anchorId === null ? t('widgetFrame.intoGroupEnd')
-                : t(position.placement === 'before' ? 'widgetFrame.intoGroupAbove' : 'widgetFrame.intoGroupBelow', { target: input.preview.target }) };
+            consequence: keeps ? `${place} · ${keeps}` : place };
     } else if (group?.kind === 'group') preview = { ...preview, consequence: t('widgetFrame.reorderInGroupDetail') };
     else if (sourceParent) preview = { ...preview, consequence: t('widgetFrame.outOfGroupDetail', { group: groupName(sourceParent) }) };
     else if (sourcePlacement?.kind === 'group') preview = { ...preview, consequence: t('widgetFrame.wholeGroupDetail', { count: sourcePlacement.children.length }) };
