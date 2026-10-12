@@ -1,7 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen as renderScreenAtHost, standardCleanup } from '@/dev/testkit';
+import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
+import { OverlayPortalProvider, OverlayPortalHost } from '@/components/ui/popover/OverlayPortal';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { ConnectedServicePoolSelectionGetRequestV1Schema } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
 import { getPreferredLanguage, preloadTranslationsForSettings, setPreferredLanguageFromSettings, t } from '@/text';
@@ -23,7 +25,8 @@ import {
 } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import type { UsageWidgetBodyModel } from '../../useUsageWidgetResource';
 
-// The Action front door is the network/daemon boundary; everything beneath the bodies stays real.
+// Machine RPC is the genuine transport boundary. The two reset-start cases below still substitute
+// the internal Action front door: their witness/privacy UI assertions do not prove admission/custody.
 const execute = vi.hoisted(() => vi.fn());
 const selectionTransport = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
@@ -40,7 +43,10 @@ vi.mock(
   }),
 );
 vi.mock('react-native', async () =>
-  (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock(),
+  (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock({ platformOS: 'ios' }, {
+    Platform: { isPad: true },
+    useWindowDimensions: () => ({ width: 1000, height: 800, scale: 1, fontScale: 1 }),
+  }),
 );
 vi.mock('@expo/vector-icons', async () =>
   (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock(),
@@ -48,17 +54,6 @@ vi.mock('@expo/vector-icons', async () =>
 vi.mock('react-native-unistyles', async () =>
   (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock(),
 );
-// The portal cannot position against a real window in the host renderer; the open leaf stays real.
-vi.mock('@/components/ui/popover/Popover', () => ({
-  Popover: (props: {
-    open: boolean;
-    children: (render: {
-      maxHeight: number;
-      maxWidth: number;
-    }) => React.ReactNode;
-  }) => (props.open ? props.children({ maxHeight: 480, maxWidth: 360 }) : null),
-}));
-
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const service = {
@@ -70,12 +65,15 @@ const query = normalizeUsageQuery({});
 let previousSnapshot = getAppliedActiveServerSnapshot();
 let comparisonHome: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 let previousAvailable = isAppliedActiveServerRuntimeAvailable();
+let restoreFrameBoundary: (() => void) | undefined;
 beforeEach(() => {
+  restoreFrameBoundary = withPopoverWebGlobals();
   previousSnapshot = getAppliedActiveServerSnapshot();
   previousAvailable = isAppliedActiveServerRuntimeAvailable();
 });
 afterEach(async () => {
   standardCleanup();
+  restoreFrameBoundary?.();
   execute.mockReset();
   selectionTransport.mockReset();
   comparisonHome?.dispose(); comparisonHome = undefined;
@@ -190,8 +188,17 @@ function bodyProps(
 }
 
 const wrap = (node: React.ReactElement) => (
-  <InjectedAuthProvider credentials={null}>{node}</InjectedAuthProvider>
+  <InjectedAuthProvider credentials={null}>
+    <OverlayPortalProvider>{node}<OverlayPortalHost /></OverlayPortalProvider>
+  </InjectedAuthProvider>
 );
+
+// Native measurement is the physical boundary; Popover open/close, placement and portal owners run.
+const renderScreen = (node: Parameters<typeof renderScreenAtHost>[0]) => renderScreenAtHost(node, {
+  createNodeMock: () => ({
+    measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(200, 200, 120, 32),
+  }),
+});
 
 it('shows the canonical capacity weather and insufficient model/reset basis inside the existing plan fit body', async () => {
   const now = Date.now();
@@ -312,31 +319,6 @@ it('lists every reported window with its projection beside other widgets, withou
   expect(own.findByTestId('own.reported')).toBeTruthy();
   expect(own.findByTestId('own.legend')).toBeFalsy();
   expect(quiet.getTextContent().split(t('usage.board.plans.paceNotDerived')).length - 1).toBe(1);
-});
-
-it('lists every reported window with its projection beside other widgets, without the burn-up or disclosures', async () => {
-  const now = Date.now();
-  const read = quotaRead('work', now, [{ meterId: 'weekly', label: 'Weekly', usedPct: 30,
-    resetAtMs: now + DAY, windowDurationMs: 7 * DAY }, { meterId: 'daily', label: 'Daily', usedPct: 10,
-    resetAtMs: now + HOUR, windowDurationMs: DAY }]);
-  const unknown = { ...read.current!.meters[0]!, meterId: 'unknown', label: 'Unknown allowance',
-    usedPct: null, utilizationPct: null };
-  const partial = ConnectedServiceQuotaGetResultV1Schema.parse({ ...read,
-    current: { ...read.current, meters: [...read.current!.meters, unknown] } });
-  const { WidgetPresentationProvider } = await import('@happier-dev/plugin-ui');
-  const { UsageProjectionsWidget } = await import('../UsageProjectionsWidget');
-  const screen = await renderScreen(wrap(<WidgetPresentationProvider value={{ size: 'medium',
-    footprint: { columns: 2, columnSpan: 1, rowSpan: 2, width: 'half', height: 'regular' }, geometry: { width: 520, height: 260 } }}>
-    <UsageProjectionsWidget {...bodyProps([partial])} id="usage_projections" testID="proj" />
-  </WidgetPresentationProvider>));
-  // Lab wgusage-CD "Limits": the meters are the body, read at a glance.
-  expect(screen.findByTestId('proj.window.work.weekly')).toBeTruthy();
-  expect(screen.findByTestId('proj.window.work.daily')).toBeTruthy();
-  expect(screen.findAllByType(BurnUpChart)).toHaveLength(0);
-  expect(screen.findByTestId('proj.reported-header')).toBeFalsy();
-  // The unreported window is one quiet count; its row lives on the Plans view.
-  expect(screen.findByTestId('proj.unreported')).toBeTruthy();
-  expect(screen.findByTestId('proj.window.work.unknown')).toBeFalsy();
 });
 
 it('shows attributed API-equivalent account value and a qualified price multiple without claiming paid savings', async () => {
