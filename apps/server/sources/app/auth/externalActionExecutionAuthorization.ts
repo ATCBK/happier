@@ -61,6 +61,8 @@ import { readExternalActionPendingResetStartPurpose, isExternalActionPendingRese
 import { SessionBoardMutationV1Schema } from '@happier-dev/protocol/sessions/board/mutations';
 import { SessionSystemRecordAddressSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordAddress';
 import { projectExternalActionPendingResetStartAdmissionV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { SCM_REVIEWED_MARKS_KV_PREFIX, buildScmReviewedMarksKey } from '@happier-dev/protocol/scm/reviewedMarks';
+import { KvMutationRequestSchema } from '@/app/kv/kvMutate';
 
 export type VerifiedExternalActionPrincipal = VerifiedApiTokenPrincipal
     | (Extract<ExternalActionServerPrincipalV1, { authentication: unknown }>
@@ -652,6 +654,31 @@ function isQuotaReadHttpPurpose(proof: ExternalActionExecutionRequestProof): boo
     }
 }
 
+/** Personal review Actions use the existing Account currentness and KV owners. */
+function isScmReviewedMarksHttpPurpose(proof: ExternalActionExecutionRequestProof): boolean {
+    const url = new URL(proof.path, 'http://home.invalid');
+    if (url.search !== '' || url.hash !== '') return false;
+    const isReviewedKey = (key: string): boolean => {
+        if (!key.startsWith(SCM_REVIEWED_MARKS_KV_PREFIX)) return false;
+        try {
+            return buildScmReviewedMarksKey(decodeURIComponent(key.slice(SCM_REVIEWED_MARKS_KV_PREFIX.length))) === key;
+        } catch { return false; }
+    };
+    const method = proof.method.toUpperCase();
+    if (method === 'POST' && url.pathname === '/v1/kv') {
+        const request = KvMutationRequestSchema.strict().safeParse(proof.body);
+        return request.success && request.data.mutations.every(mutation => isReviewedKey(mutation.key));
+    }
+    if (method !== 'GET' || proof.body !== undefined) return false;
+    if (url.pathname === '/v1/account/encryption/currentness') return true;
+    const prefix = '/v1/kv/';
+    if (!url.pathname.startsWith(prefix)) return false;
+    try {
+        const key = decodeURIComponent(url.pathname.slice(prefix.length));
+        return url.pathname === prefix + encodeURIComponent(key) && isReviewedKey(key);
+    } catch { return false; }
+}
+
 export async function verifyExternalActionDomainExecutionRequest(
     proof: ExternalActionExecutionRequestProof,
 ): Promise<VerifiedExternalActionExecutionRequest | null> {
@@ -725,6 +752,16 @@ export async function verifyExternalActionDomainExecutionRequest(
                 || child.data.handoffPreflight && path === bindExternalActionExecutionAuthorizationHttpPathV1('session.handoff'))) return null;
     } else if (verified.binding.actionId === 'connectedServices.quota.get') {
         if (verified.effectActionId !== verified.binding.actionId || !isQuotaReadHttpPurpose(proof)) return null;
+    } else if (verified.binding.actionId === 'scm.diffSummary.reviewed.mark'
+        || verified.binding.actionId === 'scm.diffSummary.reviewed.unmark'
+        || verified.binding.actionId === 'scm.diffSummary.result.delete'
+        || verified.binding.actionId === 'scm.diffSummary.result.clear') {
+        // A collaborator cannot borrow the custodian's Account material. The
+        // daemon comparison owner validates exact occurrences before this CAS;
+        // the Home keeps mode admission and Account isolation authoritative.
+        if (verified.effectActionId !== verified.binding.actionId
+            || verified.binding.accountId !== verified.binding.custodianAccountId
+            || !isScmReviewedMarksHttpPurpose(proof)) return null;
     } else if (verified.binding.actionId === 'session.board.item.upsert') {
         const target = verified.binding.target;
         const origin = verified.binding.sessionActionOrigin;

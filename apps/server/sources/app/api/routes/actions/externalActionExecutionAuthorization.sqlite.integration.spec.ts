@@ -53,6 +53,8 @@ import { enableAuthentication } from "@/app/api/utils/enableAuthentication";
 import { requirePresentUser } from "@/app/api/utils/requirePresentUser";
 import { registerAccountEncryptionRoutes } from "@/app/api/routes/account/registerAccountEncryptionRoutes";
 import { registerAccountSettingsRoutes } from "@/app/api/routes/account/registerAccountSettingsRoutes";
+import { kvRoutes } from '@/app/api/routes/kv/kvRoutes';
+import { SCM_REVIEWED_MARKS_KV_PREFIX, buildScmReviewedMarksKey } from '@happier-dev/protocol/scm/reviewedMarks';
 import { homeGovernanceRoutes } from "@/app/api/routes/home/homeGovernanceRoutes";
 import { featuresRoutes } from "@/app/api/routes/features/featuresRoutes";
 import { registerSessionListingRoutes } from "@/app/api/routes/session/registerSessionListingRoutes";
@@ -255,6 +257,7 @@ describe("external Action execution authorization", () => {
         featuresRoutes(app);
         registerAccountEncryptionRoutes(app);
         registerAccountSettingsRoutes(app);
+        kvRoutes(app);
         registerSessionListingRoutes(app);
         registerSessionMessageRoutes(app);
         registerSessionFollowSourceRoutes(app);
@@ -401,6 +404,103 @@ describe("external Action execution authorization", () => {
             }),
         };
     }
+
+    it.each(['scm.diffSummary.reviewed.mark', 'scm.diffSummary.reviewed.unmark',
+        'scm.diffSummary.result.delete', 'scm.diffSummary.result.clear'] as const)(
+    'admits personal reviewed-mark currentness and CAS without granting unrelated Account access for %s', async actionId => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const { app } = await createApp(fixture.team.id);
+        const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
+        const comparisonId = 'a'.repeat(64);
+        const reference = { cwd: '/workspace', resultId: 'saved-result', expectedRevision: 0 };
+        const input = actionId === 'scm.diffSummary.result.clear' ? { results: [{ ...reference, comparisonId }] }
+            : actionId === 'scm.diffSummary.result.delete' ? reference
+                : { v: 2, cwd: '/workspace', comparisonId, source: { kind: 'workingTree' }, changeRefs: ['captured-change'] };
+        const envelope = { ...fixture.envelope, input };
+        try {
+            const issued = await app.inject({ method: 'POST', url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId),
+                headers: { authorization: `Bearer ${token}` }, payload: { v: 1, machineId: fixture.machine.id, envelope } });
+            expect(issued.statusCode, issued.body).toBe(200);
+            const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(issued.json());
+            authorizationRequests.set(authorization.token, { target: authorization.binding.target,
+                installationId: fixture.machine.installationId!, requestId: authorization.binding.requestId });
+            const request = (method: 'GET' | 'POST', path: string, body?: unknown, effectActionId: string = actionId) => app.inject({
+                method, url: path, ...(body === undefined ? {} : { payload: body }),
+                headers: machineHeaders({ authorizationToken: authorization.token, method, path, body,
+                    effectActionId, privateKey: fixture.keyPair.secretKey }),
+            });
+            const currentness = await request('GET', '/v1/account/encryption/currentness');
+            expect(currentness.statusCode, currentness.body).toBe(200);
+            expect(currentness.json()).toMatchObject({ mode: 'plain' });
+            const key = buildScmReviewedMarksKey(comparisonId);
+            const path = `/v1/kv/${encodeURIComponent(key)}`;
+            expect((await request('GET', path)).statusCode).toBe(404);
+            const value = Buffer.from(JSON.stringify({ t: 'plain', v: { v: 1, comparisonId,
+                reviewedChangeRefs: ['captured-change'] } })).toString('base64');
+            const mutation = { mutations: [{ key, value, version: -1 }] };
+            const saved = await request('POST', '/v1/kv', mutation);
+            expect(saved.statusCode, saved.body).toBe(200);
+            expect(saved.json()).toEqual({ success: true, results: [{ key, version: 0 }] });
+            expect((await request('GET', path)).json()).toEqual({ key, value, version: 0 });
+            expect((await request('POST', '/v1/kv', { mutations: [{ key, value: Buffer.from('stale-ciphertext').toString('base64'), version: 0 }] })).statusCode).toBe(400);
+            for (const [method, deniedPath, body] of [
+                ['GET', '/v1/account/encryption', undefined],
+                ['GET', '/v2/account/settings', undefined],
+                ['GET', '/v1/account/encryption/currentness?accountId=other', undefined],
+                ['GET', '/v1/kv', undefined],
+                ['GET', '/v1/kv/other', undefined],
+                ['GET', `${path}?accountId=other`, undefined],
+                ['POST', '/v1/kv', { mutations: [{ key: 'other', value, version: -1 }] }],
+                ['POST', '/v1/kv', { mutations: [...mutation.mutations, { key: 'other', value, version: -1 }] }],
+                ['POST', '/v1/kv', { mutations: [{ key: SCM_REVIEWED_MARKS_KV_PREFIX, value, version: -1 }] }],
+                ['POST', '/v1/kv', { mutations: [{ key: SCM_REVIEWED_MARKS_KV_PREFIX + '%61', value, version: -1 }] }],
+                ['POST', '/v1/kv', { mutations: [{ key: SCM_REVIEWED_MARKS_KV_PREFIX + '%gg', value, version: -1 }] }],
+                ['POST', '/v1/kv', { ...mutation, accountId: 'other' }],
+                ['POST', '/v1/kv?accountId=other', mutation],
+            ] as const) expect((await request(method, deniedPath, body)).statusCode, `${deniedPath} ${JSON.stringify(body)}`).toBe(401);
+            // Malformed bodies are rejected by HTTP validation before its auth
+            // hook. Exercise native-purpose admission directly for these proofs.
+            for (const [method, deniedPath, body] of [
+                ['POST', '/v1/kv', { mutations: [] }],
+                ['GET', '/v1/account/encryption/currentness', {}],
+                ['PUT', '/v1/kv', mutation],
+            ] as const) {
+                expect(await verifyExternalActionDomainExecutionRequest({ authorizationToken: authorization.token, effectActionId: actionId,
+                    encodedTarget: encodeExternalActionResolvedTargetV1(authorization.binding.target), method, path: deniedPath, body,
+                    machineSignature: signExternalActionMachineRequestV1({ authorizationToken: authorization.token, effectActionId: actionId,
+                        target: authorization.binding.target, installationId: fixture.machine.installationId!,
+                        requestId: authorization.binding.requestId, method, path: deniedPath, body, privateKey: fixture.keyPair.secretKey }) })).toBeNull();
+            }
+            const differentEffect = actionId === 'scm.diffSummary.reviewed.unmark' ? 'scm.diffSummary.reviewed.mark' : 'scm.diffSummary.reviewed.unmark';
+            expect((await request('GET', path, undefined, differentEffect)).statusCode).toBe(401);
+            await db.account.update({ where: { id: fixture.account.id }, data: { encryptionMode: 'e2ee' } });
+            // Incompatible Account/Machine mode retires the signed origin;
+            // direct Account admission independently rejects its unknown mode.
+            expect((await request('GET', '/v1/account/encryption/currentness')).statusCode).toBe(401);
+            expect((await request('POST', '/v1/kv', { mutations: [{ key, value, version: 0 }] })).statusCode).toBe(401);
+            const inconsistent = await app.inject({ method: 'GET', url: '/v1/account/encryption/currentness',
+                headers: { authorization: `Bearer ${token}` } });
+            expect(inconsistent.statusCode, inconsistent.body).toBe(400);
+            expect(inconsistent.json()).toMatchObject({ error: 'migration-required' });
+            await db.account.update({ where: { id: fixture.account.id }, data: { tokenEpoch: { increment: 1 } } });
+            expect((await request('GET', '/v1/account/encryption/currentness')).statusCode).toBe(401);
+        } finally { await app.close(); }
+    });
+
+    it('does not lend a custodian Account to a Machine collaborator for personal review Actions', async () => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const custodian = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' } });
+        await db.machine.update({ where: { id: fixture.machine.id }, data: { accountId: custodian.id } });
+        await inTx(tx => setMachineAccessGrantInTx(tx, { actorAccountId: custodian.id, machineId: fixture.machine.id,
+            principal: { kind: 'account', accountId: fixture.account.id }, level: 'admin' }));
+        expect(await resolveMachineAccess({ actorAccountId: fixture.account.id, machineId: fixture.machine.id }))
+            .toMatchObject({ owned: false, role: 'manage', custodianAccountId: custodian.id, accessState: 'ready' });
+        for (const actionId of ['scm.diffSummary.reviewed.mark', 'scm.diffSummary.reviewed.unmark',
+            'scm.diffSummary.result.delete', 'scm.diffSummary.result.clear'] as const) {
+            expect(await resolveMachineAdmission({ actorAccountId: fixture.account.id, machineId: fixture.machine.id, actionId }))
+                .toMatchObject({ kind: 'denied' });
+        }
+    });
 
     it('admits only the native quota read purposes under the captured U3 root', async () => {
         const fixture = await createFixture({ qualifiedPat: false });
