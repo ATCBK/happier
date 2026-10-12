@@ -1,19 +1,31 @@
-import { digest } from '@/platform/digest';
+import { sha256 } from '@noble/hashes/sha2';
+import { bytesToHex } from '@noble/hashes/utils';
+
 import type { ModelPackManifest } from '@/voice/modelPacks/manifest';
 
 import type { InstallerFs, Progress } from './types';
 import { filePathParts } from './paths';
 import { createTimeoutPromise, raceWithAbort } from './network';
 
-function toHex(bytes: Uint8Array): string {
-  let out = '';
-  for (const b of bytes) out += b.toString(16).padStart(2, '0');
-  return out;
-}
+// Model files are tens to hundreds of MB; whole-file reads exceed Android's per-app JS heap, so
+// files are hashed through bounded reads.
+const HASH_READ_CHUNK_BYTES = 1024 * 1024;
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const out = await digest('SHA-256', bytes);
-  return toHex(out).toLowerCase();
+async function sha256FileHex(file: any): Promise<string> {
+  const hash = sha256.create();
+  const handle = file.open();
+  try {
+    while (true) {
+      const chunk: Uint8Array = handle.readBytes(HASH_READ_CHUNK_BYTES);
+      if (chunk.length === 0) break;
+      hash.update(chunk);
+      // `readBytes` is synchronous; yield between chunks so hashing does not block the JS thread.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  } finally {
+    handle.close();
+  }
+  return bytesToHex(hash.digest());
 }
 
 async function writeResponseToFile(opts: {
@@ -26,31 +38,24 @@ async function writeResponseToFile(opts: {
   const total = contentLength ? Number(contentLength) : 0;
   let loaded = 0;
 
-  const body: any = (opts.response as any).body;
-  const reader = body?.getReader?.();
-  const writable: WritableStream | null = (opts.file as any).writableStream?.() ?? null;
-  const writer = writable ? (writable as any).getWriter?.() : null;
+  const reader = opts.response.body?.getReader();
+  // Buffering the whole response would exceed the JS heap for large model files.
+  if (!reader) throw new Error('model_pack_download_stream_unavailable');
 
-  if (reader && writer) {
-    type ReadResult = ReadableStreamReadResult<Uint8Array>;
+  const writer = (opts.file.writableStream() as WritableStream<Uint8Array>).getWriter();
+  try {
     while (true) {
-      const result = await raceWithAbort(opts.signal, [reader.read() as Promise<ReadResult>]);
-      const { done, value } = result;
+      const { done, value } = await raceWithAbort(opts.signal, [reader.read()]);
       if (done) break;
-      if (value) {
-        await writer.write(value);
-        loaded += value.length ?? value.byteLength ?? 0;
-        opts.onProgress?.({ loaded, total });
-      }
+      await writer.write(value);
+      loaded += value.byteLength;
+      opts.onProgress?.({ loaded, total });
     }
     await writer.close();
-    return { loaded, total: total || loaded };
+  } catch (error) {
+    await writer.abort(error).catch(() => {});
+    throw error;
   }
-
-  const buf = new Uint8Array(await raceWithAbort(opts.signal, [opts.response.arrayBuffer()]));
-  loaded = buf.length;
-  (opts.file as any).write(buf);
-  opts.onProgress?.({ loaded, total: total || loaded });
   return { loaded, total: total || loaded };
 }
 
@@ -80,8 +85,7 @@ async function downloadAndVerifyFile(opts: {
   const file = new opts.fs.File(dir, filename);
   if (file.exists) {
     try {
-      const bytes = await file.bytes();
-      const actual = await sha256Hex(bytes);
+      const actual = await sha256FileHex(file);
       if (actual === opts.entry.sha256.toLowerCase()) return;
       file.delete();
     } catch {
@@ -110,8 +114,7 @@ async function downloadAndVerifyFile(opts: {
 
     await writeResponseToFile({ response, file, signal: opts.signal, onProgress: opts.onProgress });
 
-    const bytes = await file.bytes();
-    const actual = await sha256Hex(bytes);
+    const actual = await sha256FileHex(file);
     if (actual !== opts.entry.sha256.toLowerCase()) {
       try {
         file.delete();

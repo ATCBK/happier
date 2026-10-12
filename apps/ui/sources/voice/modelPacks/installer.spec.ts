@@ -2,6 +2,18 @@ import { describe, expect, it } from 'vitest';
 
 import { ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
 
+function openBytes(data: Uint8Array) {
+  let offset = 0;
+  return {
+    readBytes(length: number) {
+      const chunk = data.slice(offset, offset + length);
+      offset += chunk.length;
+      return chunk;
+    },
+    close() {},
+  };
+}
+
 describe('modelPacks installer (native)', () => {
   it('reports progress without exceeding total (streaming body)', async () => {
     const { createHash } = await import('node:crypto');
@@ -52,6 +64,9 @@ describe('modelPacks installer (native)', () => {
         });
       }
       async bytes() {
+        return this.bytesSync();
+      }
+      bytesSync() {
         const arr = writes.get(this.uri) ?? [];
         const total = arr.reduce((acc, b) => acc + b.length, 0);
         const out = new Uint8Array(total);
@@ -65,6 +80,9 @@ describe('modelPacks installer (native)', () => {
       async text() {
         const buf = await this.bytes();
         return new TextDecoder().decode(buf);
+      }
+      open() {
+        return openBytes(this.bytesSync());
       }
       write(data: string | Uint8Array) {
         const buf = typeof data === 'string' ? new TextEncoder().encode(data) : data;
@@ -197,6 +215,9 @@ describe('modelPacks installer (native)', () => {
         });
       }
       async bytes() {
+        return this.bytesSync();
+      }
+      bytesSync() {
         const arr = writes.get(this.uri) ?? [];
         const total = arr.reduce((acc, b) => acc + b.length, 0);
         const out = new Uint8Array(total);
@@ -211,6 +232,9 @@ describe('modelPacks installer (native)', () => {
         const buf = await this.bytes();
         return new TextDecoder().decode(buf);
       }
+      open() {
+        return openBytes(this.bytesSync());
+      }
       delete() {
         writes.delete(this.uri);
       }
@@ -218,6 +242,7 @@ describe('modelPacks installer (native)', () => {
 
     const manifestUrl = 'https://github.com/happier-dev/happier-assets/releases/download/model-packs/example__manifest.json';
     const expectedDownloadPrefix = 'https://github.com/happier-dev/happier-assets/releases/download/model-packs/';
+    const requestedFileUrls: string[] = [];
 
     const fetchImpl = async (url: string) => {
       if (url.includes('__manifest.json')) {
@@ -236,11 +261,20 @@ describe('modelPacks installer (native)', () => {
                 sha256: expectedSha,
                 sizeBytes: bytes.length,
               },
+              {
+                // GitHub stores uploaded asset names with `!` replaced by `.`, so the published
+                // asset name cannot be re-derived from the pack-relative path.
+                path: 'espeak-ng-data/voices/!v/Alex',
+                url: 'https://github.com/happier/happier-assets/releases/download/model-packs/example__espeak-ng-data__voices__.v__Alex?v=1',
+                sha256: expectedSha,
+                sizeBytes: bytes.length,
+              },
             ],
           }),
         } as any;
       }
 
+      requestedFileUrls.push(url);
       if (!url.startsWith(expectedDownloadPrefix)) {
         throw new Error(`unexpected_file_url:${url}`);
       }
@@ -277,6 +311,175 @@ describe('modelPacks installer (native)', () => {
         fetch: fetchImpl as any,
       },
     );
+
+    expect(requestedFileUrls).toEqual([
+      `${expectedDownloadPrefix}example__model.onnx`,
+      `${expectedDownloadPrefix}example__espeak-ng-data__voices__.v__Alex`,
+    ]);
+  });
+
+  describe('large files', () => {
+    // Native `File.bytes()` materializes the whole file in the JS heap, which exceeds Android's
+    // per-app heap for model files (tens to hundreds of MB). This boundary fake makes whole-file
+    // reads fail and only supports bounded reads through `File.open().readBytes(length)`.
+    function createBoundedReadFs(files: Map<string, Uint8Array>) {
+      class Directory {
+        uri: string;
+        exists = true;
+        constructor(...uris: any[]) {
+          const [base, name] = uris;
+          this.uri = base?.uri && typeof name === 'string' ? `${base.uri}/${name}` : `file:///docs/modelPacks/${String(uris[uris.length - 1] ?? '')}`;
+        }
+        create() {}
+        delete() {}
+      }
+
+      class File {
+        uri: string;
+        constructor(base: any, name: string) {
+          this.uri = `${typeof base === 'string' ? base : base.uri}/${name}`;
+        }
+        get exists() {
+          return files.has(this.uri);
+        }
+        create() {
+          if (!files.has(this.uri)) files.set(this.uri, new Uint8Array());
+        }
+        delete() {
+          files.delete(this.uri);
+        }
+        write(data: string | Uint8Array) {
+          files.set(this.uri, typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data));
+        }
+        async text() {
+          return new TextDecoder().decode(files.get(this.uri) ?? new Uint8Array());
+        }
+        async bytes(): Promise<Uint8Array> {
+          throw new Error('whole_file_read_exceeds_js_heap');
+        }
+        writableStream() {
+          const uri = this.uri;
+          return new WritableStream<Uint8Array>({
+            write(chunk) {
+              const prev = files.get(uri) ?? new Uint8Array();
+              const next = new Uint8Array(prev.length + chunk.length);
+              next.set(prev, 0);
+              next.set(chunk, prev.length);
+              files.set(uri, next);
+            },
+          });
+        }
+        open() {
+          return openBytes(files.get(this.uri) ?? new Uint8Array());
+        }
+      }
+
+      return { Directory, File, Paths: { document: 'file:///docs/' } };
+    }
+
+    function streamingResponse(bytes: Uint8Array) {
+      let done = false;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (k: string) => (k.toLowerCase() === 'content-length' ? String(bytes.length) : null) },
+        body: {
+          getReader() {
+            return {
+              async read() {
+                if (done) return { done: true, value: undefined };
+                done = true;
+                return { done: false, value: bytes };
+              },
+            };
+          },
+        },
+      };
+    }
+
+    async function sha256Hex(bytes: Uint8Array) {
+      const { createHash } = await import('node:crypto');
+      return createHash('sha256').update(Buffer.from(bytes)).digest('hex');
+    }
+
+    it('verifies existing and downloaded files without whole-file reads', async () => {
+      const existing = new Uint8Array([1, 2, 3]);
+      const downloaded = new Uint8Array([4, 5, 6, 7]);
+      const files = new Map<string, Uint8Array>([['file:///docs/modelPacks/example/existing.bin', existing]]);
+      const requested: string[] = [];
+
+      await ensureModelPackInstalled(
+        {
+          packId: 'example',
+          mode: 'download_if_missing',
+          manifestUrl: 'https://example.com/manifest.json',
+          timeoutMs: 5000,
+          signal: new AbortController().signal,
+        },
+        {
+          fs: createBoundedReadFs(files) as any,
+          fetch: (async (url: string) => {
+            if (url.includes('manifest.json')) {
+              return {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                  packId: 'example',
+                  kind: 'stt_sherpa',
+                  model: 'zipformer',
+                  version: 'v1',
+                  files: [
+                    { path: 'existing.bin', url: 'https://example.com/existing.bin', sha256: await sha256Hex(existing), sizeBytes: existing.length },
+                    { path: 'downloaded.bin', url: 'https://example.com/downloaded.bin', sha256: await sha256Hex(downloaded), sizeBytes: downloaded.length },
+                  ],
+                }),
+              };
+            }
+            requested.push(url);
+            return streamingResponse(downloaded);
+          }) as any,
+        },
+      );
+
+      expect(requested).toEqual(['https://example.com/downloaded.bin']);
+      expect(files.get('file:///docs/modelPacks/example/downloaded.bin')).toEqual(downloaded);
+    });
+
+    it('still rejects a downloaded file whose sha256 does not match', async () => {
+      const files = new Map<string, Uint8Array>();
+
+      await expect(
+        ensureModelPackInstalled(
+          {
+            packId: 'example',
+            mode: 'download_if_missing',
+            manifestUrl: 'https://example.com/manifest.json',
+            timeoutMs: 5000,
+            signal: new AbortController().signal,
+          },
+          {
+            fs: createBoundedReadFs(files) as any,
+            fetch: (async (url: string) => {
+              if (url.includes('manifest.json')) {
+                return {
+                  ok: true,
+                  status: 200,
+                  json: async () => ({
+                    packId: 'example',
+                    kind: 'stt_sherpa',
+                    model: 'zipformer',
+                    version: 'v1',
+                    files: [{ path: 'model.bin', url: 'https://example.com/model.bin', sha256: 'a'.repeat(64), sizeBytes: 4 }],
+                  }),
+                };
+              }
+              return streamingResponse(new Uint8Array([4, 5, 6, 7]));
+            }) as any,
+          },
+        ),
+      ).rejects.toThrow(/model_pack_sha256_mismatch/);
+      expect(files.has('file:///docs/modelPacks/example/model.bin')).toBe(false);
+    });
   });
 
   it('rejects pack manifests that contain unsafe paths', async () => {
@@ -388,6 +591,21 @@ describe('modelPacks installer (native)', () => {
       async bytes() {
         return files.get(this.uri) ?? new Uint8Array();
       }
+      open() {
+        return openBytes(files.get(this.uri) ?? new Uint8Array());
+      }
+      writableStream() {
+        const uri = this.uri;
+        return new WritableStream<Uint8Array>({
+          write(chunk) {
+            const prev = files.get(uri) ?? new Uint8Array();
+            const next = new Uint8Array(prev.length + chunk.length);
+            next.set(prev, 0);
+            next.set(chunk, prev.length);
+            files.set(uri, next);
+          },
+        });
+      }
       write(data: string | Uint8Array) {
         const buf = typeof data === 'string' ? new TextEncoder().encode(data) : data;
         files.set(this.uri, new Uint8Array(buf));
@@ -447,7 +665,7 @@ describe('modelPacks installer (native)', () => {
         ok: true,
         status: 200,
         headers: { get: () => '1' },
-        arrayBuffer: async () => new Uint8Array([1]).buffer,
+        body: new Blob([new Uint8Array([1])]).stream(),
       } as any;
     };
 

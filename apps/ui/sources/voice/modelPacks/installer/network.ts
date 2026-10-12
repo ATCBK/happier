@@ -52,9 +52,12 @@ function rewriteGithubReleaseManifestFileUrls(manifest: ModelPackManifest, manif
   const base = `${url.origin}/${owner}/${repo}/releases/download/${tag}/`;
   const version = typeof (manifest as any)?.buildId === 'string' && (manifest as any).buildId.trim() ? (manifest as any).buildId.trim() : null;
 
+  // Only the release location is rewritten; the asset name comes from the manifest's own URL because
+  // GitHub sanitizes uploaded asset names (e.g. `!` becomes `.`), so it cannot be re-derived from `path`.
   const files = manifest.files.map((f) => {
-    const fileName = `${manifest.packId}__${String(f.path).split('/').join('__')}`;
-    const rewritten = `${base}${encodeURIComponent(fileName)}${version ? `?v=${encodeURIComponent(version)}` : ''}`;
+    const assetName = decodeURIComponent(new URL(f.url).pathname.split('/').pop() ?? '');
+    if (!assetName) return f;
+    const rewritten = `${base}${encodeURIComponent(assetName)}${version ? `?v=${encodeURIComponent(version)}` : ''}`;
     return { ...f, url: rewritten };
   });
 
