@@ -1,12 +1,13 @@
 {
   "v": 1,
   "contributionKey": "happier.agent.claude/anthropic",
-  "reviewedAt": "2026-09-22",
+  "reviewedAt": "2026-10-12",
   "sources": [
     { "id": "api-overview", "kind": "official-doc", "url": "https://platform.claude.com/docs/en/api/overview", "accessedAt": "2026-08-12", "revision": "current-2026-08-12" },
     { "id": "models-api", "kind": "official-doc", "url": "https://platform.claude.com/docs/en/api/models/list", "accessedAt": "2026-08-12", "revision": "current-2026-08-12" },
     { "id": "models-overview", "kind": "official-doc", "url": "https://platform.claude.com/docs/en/models/overview", "accessedAt": "2026-09-22", "revision": "current-2026-09-22" },
-    { "id": "claude-curated-catalog", "kind": "repository-history", "locator": "packages/plugins/claude/src/agent/models.ts", "accessedAt": "2026-08-12", "revision": "shared-curated-fallback-at-implementation" }
+    { "id": "claude-curated-catalog", "kind": "repository-history", "locator": "packages/plugins/claude/src/agent/models.ts", "accessedAt": "2026-08-12", "revision": "shared-curated-fallback-at-implementation" },
+    { "id": "usage-haiku-label", "kind": "product-decision", "locator": ".project/plans/2026-10-09-usage-insights-program/lanes/FIX-M.md", "accessedAt": "2026-10-12", "revision": "FIX-M-requested-observed-model-identity-and-catalog-label" }
   ],
   "facts": [
     { "path": "catalog.probes.anthropic.anthropic-models", "sourceIds": ["models-api", "api-overview"], "status": "verified" },
@@ -21,6 +22,7 @@
     { "path": "catalog.staticModels.claude-opus-4-7", "sourceIds": ["models-overview", "claude-curated-catalog"], "status": "verified" },
     { "path": "catalog.staticModels.claude-opus-4-6", "sourceIds": ["models-overview", "claude-curated-catalog"], "status": "verified" },
     { "path": "catalog.staticModels.claude-sonnet-4-6", "sourceIds": ["models-overview", "claude-curated-catalog"], "status": "verified" },
+    { "path": "catalog.staticModels.claude-haiku-5-5", "sourceIds": ["usage-haiku-label"], "status": "verified" },
     { "path": "catalog.staticModels.claude-haiku-4-5", "sourceIds": ["models-overview", "claude-curated-catalog"], "status": "verified" },
     { "path": "catalog.staticModels.claude-opus-4-5", "sourceIds": ["models-overview", "claude-curated-catalog"], "status": "verified" },
     { "path": "catalog.staticModels.claude-sonnet-4-5", "sourceIds": ["models-overview", "claude-curated-catalog"], "status": "verified" },

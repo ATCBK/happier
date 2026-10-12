@@ -13,6 +13,13 @@ function ultracodeOption(id: string) {
     return model(id).modelOptions?.find((option) => option.id === 'ultracode') ?? null;
 }
 
+describe('CLAUDE_STATIC_MODELS usage labels', () => {
+    it('publishes Haiku 5.5 under its own catalog identity', () => {
+        expect(model('claude-haiku-5-5')).toMatchObject({ id: 'claude-haiku-5-5', name: 'Haiku 5.5' });
+        expect(model('claude-haiku-4-5')).toMatchObject({ id: 'claude-haiku-4-5', name: 'Haiku 4.5' });
+    });
+});
+
 describe('CLAUDE_STATIC_MODELS ultracode option', () => {
     it('offers the ultracode boolean option only on xhigh-capable models', () => {
         for (const id of ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-mythos-5', 'claude-opus-4-8', 'claude-opus-4-7']) {
