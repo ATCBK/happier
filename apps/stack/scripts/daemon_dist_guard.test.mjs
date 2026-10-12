@@ -163,6 +163,7 @@ test('watch startup admits the newest ready immutable runner when the mutable CL
 
   let buildCalls = 0;
   const probes = [];
+  let workspaceChecks = 0;
   const result = await ensureHappierCliDistExists(
     {
       cliBin,
@@ -177,7 +178,7 @@ test('watch startup admits the newest ready immutable runner when the mutable CL
       probeCliDistRuntimeImportImpl: async (entrypoint) => {
         probes.push(entrypoint);
       },
-      readCliWorkspaceRuntimeIdentityImpl: () => ({ fingerprint: 'e'.repeat(64) }),
+      readCliWorkspaceRuntimeIdentityImpl: () => { workspaceChecks++; return { fingerprint: 'e'.repeat(64) }; },
       resolveNewestReadyPinnedSnapshotLocationImpl: () => ({
         snapshotEntrypoint,
         fingerprint: snapshot.fingerprint,
@@ -186,6 +187,7 @@ test('watch startup admits the newest ready immutable runner when the mutable CL
   );
 
   assert.equal(buildCalls, 0);
+  assert.equal(workspaceChecks, 0, 'a ready immutable runner must be selected before inspecting new workspace inputs');
   assert.deepEqual(probes, [snapshotEntrypoint]);
   assert.equal(result.ok, true);
   assert.equal(result.current, true);
