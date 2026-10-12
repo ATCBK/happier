@@ -1,20 +1,22 @@
 import { chmodSync, existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { spawn, spawnSync, ChildProcess, type SpawnOptions } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it, onTestFailed, onTestFinished, vi } from 'vitest';
-import { bundleInstalledPackageWithRuntimeDependencies, bundleWorkspacePackagesWithRuntimeDependencies } from '@happier-dev/cli-common/workspaces';
+import { bundleWorkspacePackagesWithRuntimeDependencies } from '@happier-dev/cli-common/workspaces';
+import { build } from 'esbuild';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 
 import { launchBorrowedTerminalProcess } from './borrowedTerminalProcess';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { isPidAlive, waitForProcessExit } from '@/testkit/process/spawn';
 import { bindProcessLogger, Logger } from '@/ui/logger';
 import { waitForCondition } from '@/testkit/async/waitFor';
+import { resolveProcessCustodySupportExecutable } from '@/subprocess/supervision/processCustody';
 
 describe('launchBorrowedTerminalProcess', () => {
   it('exposes the actual launcher process generation only after native startup admission', async () => {
@@ -40,7 +42,7 @@ describe('launchBorrowedTerminalProcess', () => {
       expect(launched.launcherIdentity?.processInstanceFingerprint).toBeTruthy();
       expect(Object.isFrozen(launched.launcherIdentity)).toBe(true);
     } finally {
-      if (launcherPid) await killProcessTree({ pid: launcherPid });
+      if (launcherPid) await terminateProcessTree({ pid: launcherPid });
       await launched?.whenExited.catch(() => undefined);
       await rm(directory, { recursive: true, force: true });
     }
@@ -64,7 +66,7 @@ describe('launchBorrowedTerminalProcess', () => {
           attempts += 1;
           if (attempts === 1) return firstBoundary;
           await secondBoundary;
-          await killProcessTree(child);
+          await terminateProcessTree(child);
         },
       });
       const first = launched.terminate();
@@ -83,7 +85,7 @@ describe('launchBorrowedTerminalProcess', () => {
       expect(attempts).toBe(2);
     } finally {
       releaseSecond();
-      if (launcherPid) await killProcessTree({ pid: launcherPid });
+      if (launcherPid) await terminateProcessTree({ pid: launcherPid });
       await launched?.whenExited.catch(() => undefined);
       await rm(directory, { recursive: true, force: true });
     }
@@ -173,6 +175,7 @@ describe('launchBorrowedTerminalProcess', () => {
   describe('controller lifetime', () => {
     let assetsDirectory: string;
     let runnerPath: string;
+    let fixtureHelperPath: string | undefined;
     beforeAll(async () => {
       // All runtime pairs consume the same read-only current-source assets. Copying
       // their identical dependency closure per case adds no isolation or coverage.
@@ -183,15 +186,31 @@ describe('launchBorrowedTerminalProcess', () => {
         await cp(resolve('scripts', filename), join(scriptsDirectory, filename));
       }
       const nodeModulesDirectory = join(assetsDirectory, 'node_modules');
-      bundleInstalledPackageWithRuntimeDependencies({
-        packageName: 'ps-list', resolveFromPackageJsonPath: resolve('package.json'),
-        destNodeModulesDir: nodeModulesDirectory,
+      await writeFile(join(assetsDirectory, 'package.json'), JSON.stringify({
+        type: 'module', imports: { '#process-census': './src/process-census.mjs' },
+      }));
+      await mkdir(join(assetsDirectory, 'src'));
+      await build({
+        entryPoints: [resolve('src/processes/census/processCensus.ts')],
+        outfile: join(assetsDirectory, 'src', 'process-census.mjs'), bundle: true, platform: 'node', format: 'esm',
+        external: ['@happier-dev/*'], alias: { '@': resolve('src') },
       });
+      if (process.platform === 'darwin' || process.platform === 'win32') {
+        const helper = resolveProcessCustodySupportExecutable();
+        if (!helper) throw new Error('Native process census helper must be staged before the source lifetime fixture');
+        const supportDirectory = join(assetsDirectory, 'tools', 'unpacked');
+        await mkdir(supportDirectory, { recursive: true });
+        fixtureHelperPath = join(supportDirectory, basename(helper));
+        await cp(helper, fixtureHelperPath);
+      }
       bundleWorkspacePackagesWithRuntimeDependencies({ bundles: [{
         packageName: '@happier-dev/cli-common',
         srcDir: resolve('../../packages/cli-common'),
         destDir: join(nodeModulesDirectory, '@happier-dev/cli-common'),
       }] });
+      const census = await import(pathToFileURL(join(assetsDirectory, 'src', 'process-census.mjs')).href) as typeof import('@/processes/census/processCensus');
+      const snapshot = await census.readProcessCensus({ freshness: 'fresh' });
+      if (snapshot.status !== 'ok') throw new Error(`Source lifetime census unavailable: ${snapshot.reason}`);
       runnerPath = join(scriptsDirectory, 'terminal_launch_spec_runner.cjs');
     });
     afterAll(async () => {
@@ -232,13 +251,13 @@ describe('launchBorrowedTerminalProcess', () => {
         await expect(waitForProcessExit(launcher!.pid!, { timeoutMs: 10_000 })).resolves.toBe(true);
       } finally {
         cancellation.abort();
-        if (launcher?.pid && isPidAlive(launcher.pid)) await killProcessTree(launcher);
+        if (launcher?.pid && isPidAlive(launcher.pid)) await terminateProcessTree(launcher);
         await startup.catch(() => undefined);
         await rm(directory, { recursive: true, force: true });
       }
     });
     it('reports controller-loss cleanup failure with a fixed diagnostic, without native launch values', async () => {
-      if (process.platform === 'win32') return; // Real unavailable POSIX discovery commands.
+      if (process.platform !== 'darwin') return; // Real native-helper denial, isolated to this copied fixture.
       const directory = await mkdtemp(join(tmpdir(), 'happier-terminal-guardian-'));
       const pidPath = join(directory, 'native.pid');
       const mod = createRequire(import.meta.url)(runnerPath) as {
@@ -246,6 +265,8 @@ describe('launchBorrowedTerminalProcess', () => {
       };
       const controller = new AbortController();
       const previousPath = process.env.PATH;
+      const withheldHelperPath = `${fixtureHelperPath!}.withheld`;
+      let helperWithheld = false;
       let ownedPid: number | undefined;
       let diagnostic = '';
       const consoleError = vi.spyOn(console, 'error').mockImplementation((...values: unknown[]) => {
@@ -253,6 +274,10 @@ describe('launchBorrowedTerminalProcess', () => {
       });
       let cleanupPromise: Promise<void> | undefined;
       const cleanup = () => cleanupPromise ??= (async () => {
+        if (helperWithheld) {
+          await rename(withheldHelperPath, fixtureHelperPath!);
+          helperWithheld = false;
+        }
         if (previousPath === undefined) delete process.env.PATH;
         else process.env.PATH = previousPath;
         consoleError.mockRestore();
@@ -272,6 +297,9 @@ describe('launchBorrowedTerminalProcess', () => {
         }, controller.signal);
         await waitForCondition(() => existsSync(pidPath), { timeoutMs: 10_000, label: 'native guardian fixture startup' });
         ownedPid = Number(readFileSync(pidPath, 'utf8'));
+        await rename(fixtureHelperPath!, withheldHelperPath);
+        helperWithheld = true;
+        // Native discovery uses the absolute copied helper; PATH alone only denies signal utilities.
         process.env.PATH = '';
         controller.abort();
         await native;
@@ -374,12 +402,12 @@ describe('launchBorrowedTerminalProcess', () => {
       let tree: { launcher: number; provider: number; descendant: number; env: Record<string, string> } | undefined;
       let cleanup: Promise<void> | undefined;
       const cleanOwnedProcesses = () => cleanup ??= (async () => {
-        if (tree && isPidAlive(tree.launcher)) await killProcessTree({ pid: tree.launcher });
-        else if (tree && isPidAlive(tree.provider)) await killProcessTree({ pid: tree.provider });
-        if (tree && isPidAlive(tree.descendant)) await killProcessTree({ pid: tree.descendant });
-        if (independentServicePid && isPidAlive(independentServicePid)) await killProcessTree({ pid: independentServicePid });
-        if (controller.exitCode === null && controller.signalCode === null) await killProcessTree(controller);
-        await killProcessTree(sentinel);
+        if (tree && isPidAlive(tree.launcher)) await terminateProcessTree({ pid: tree.launcher });
+        else if (tree && isPidAlive(tree.provider)) await terminateProcessTree({ pid: tree.provider });
+        if (tree && isPidAlive(tree.descendant)) await terminateProcessTree({ pid: tree.descendant });
+        if (independentServicePid && isPidAlive(independentServicePid)) await terminateProcessTree({ pid: independentServicePid });
+        if (controller.exitCode === null && controller.signalCode === null) await terminateProcessTree(controller);
+        await terminateProcessTree(sentinel);
         await rm(directory, { recursive: true, force: true });
       })();
       onTestFinished(cleanOwnedProcesses);

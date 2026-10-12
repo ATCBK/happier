@@ -301,6 +301,7 @@ export function createPtyTerminalHostAdapter(params?: Readonly<{
       });
       const term = spawnEnv.TERM ?? 'xterm-256color';
       const screen = createVirtualTerminalScreen({ cols, rows });
+      await ptyProvider.prepare?.();
       const pty = ptyProvider.spawn({
         file: command,
         args: [...opts.spawnArgv.slice(1)],

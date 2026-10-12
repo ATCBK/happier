@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createHappierTempDir, getHappierTempDirOwnerPath } from '@happier-dev/cli-common/tempDirs';
 
 import { resolveCliRuntimeAssetPath } from '@/packagedRuntime/assets/resolveCliRuntimeAssetPath';
 import { requireJavaScriptRuntimeExecutable } from '@/packagedRuntime/js/requireJavaScriptRuntimeExecutable';
@@ -53,7 +53,7 @@ export async function createTerminalLaunchSpec(input: Readonly<{
   const runtimeExecutable = await requireJavaScriptRuntimeExecutable({
     isBunRuntime: isBun(), targetLabel: 'Terminal launch',
   });
-  const dir = await mkdtemp(join(tmpdir(), 'happier-terminal-launch-'));
+  const dir = createHappierTempDir({ purpose: 'terminal-launch' });
   const specPath = join(dir, 'launch.json');
   const spawnResultPath = input.reportNativeSpawn ? join(dir, 'native-startup.json') : undefined;
   const discard = async () => {
@@ -67,6 +67,7 @@ export async function createTerminalLaunchSpec(input: Readonly<{
     await remove(() => unlink(specPath));
     if (spawnResultPath) await remove(() => unlink(spawnResultPath));
     await remove(() => rmdir(dir));
+    if (failures.length === 0) await remove(() => unlink(getHappierTempDirOwnerPath(dir)));
     if (failures.length > 0) {
       logger.infoFile('[terminal] Launch artifact cleanup incomplete (terminal_launch_cleanup_incomplete)');
       if (failures.length === 1) throw failures[0];

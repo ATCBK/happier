@@ -22,11 +22,6 @@ function parseIntEnv(raw: unknown, fallback: number, bounds: Readonly<{ min: num
 export function readDaemonTerminalPtyConfig(env: NodeJS.ProcessEnv): DaemonTerminalPtyConfig {
   const enabled = parseBooleanEnv(env.HAPPIER_DAEMON_TERMINAL_ENABLED, true);
 
-  const maxSessions = parseIntEnv(env.HAPPIER_DAEMON_TERMINAL_MAX_SESSIONS, 20, { min: 1, max: 100 });
-  const idleTimeoutMs = parseIntEnv(env.HAPPIER_DAEMON_TERMINAL_IDLE_TIMEOUT_MS, 30 * 60_000, {
-    min: 10_000,
-    max: 24 * 60 * 60_000,
-  });
   const bufferMaxBytes = parseIntEnv(env.HAPPIER_DAEMON_TERMINAL_BUFFER_MAX_BYTES, 1_000_000, {
     min: 64_000,
     max: 50_000_000,
@@ -61,8 +56,6 @@ export function readDaemonTerminalPtyConfig(env: NodeJS.ProcessEnv): DaemonTermi
   return {
     enabled,
     sessionManager: {
-      maxSessions,
-      idleTimeoutMs,
       bufferMaxBytes,
       bufferMaxEvents,
       bufferRetentionMs,

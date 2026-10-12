@@ -14,7 +14,7 @@ export type HostFiniteTerminalOutcome = Readonly<{
  * attachment projection remain with the calling machine or Project owner. */
 export async function executeHostFiniteTerminalProcess(input: Readonly<{
   operation: HostFiniteTerminalOperation;
-  terminalSessions: Pick<TerminalPtySessionManager, 'ensure' | 'waitForExit' | 'requestStop'>;
+  terminalSessions: Pick<TerminalPtySessionManager, 'prepare' | 'ensure' | 'waitForExit' | 'requestStop'>;
   requesterAccountId: string;
   terminalCustody?: TerminalPtyCustody;
   terminalKey: string;
@@ -32,6 +32,8 @@ export async function executeHostFiniteTerminalProcess(input: Readonly<{
   if (signal.aborted) return failure('no_launch', 'cancelled');
   let terminal: ReturnType<TerminalPtySessionManager['ensure']>;
   try {
+    await input.terminalSessions.prepare?.();
+    if (signal.aborted) return failure('no_launch', 'cancelled');
     terminal = input.terminalSessions.ensure({ terminalKey: input.terminalKey, cwd: input.launch.cwd,
       requesterAccountId: input.requesterAccountId, holdUntilExit: true,
       ...(input.terminalCustody ? { custody: input.terminalCustody } : {}),

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,9 @@ import { join, resolve } from 'node:path';
 import vm from 'node:vm';
 
 import { describe, expect, it, vi } from 'vitest';
+import { build } from 'esbuild';
+import { bundleCliSourceSidecars, readWorkspacePackages } from '@happier-dev/cli-common/sourceRuntimeEntries';
+import { createHappierTempDir, getHappierTempDirOwnerPath, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 
 function createRunnerScriptHarness() {
   const scriptPath = resolve(__dirname, '../../../scripts/terminal_launch_spec_runner.cjs');
@@ -48,6 +51,27 @@ function createRunnerScriptHarness() {
 }
 
 describe('terminal_launch_spec_runner.cjs', () => {
+  it('stages a standalone runner that removes its consumed marked handoff without package resolution', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-staged-terminal-runner-test-'));
+    const directory = createHappierTempDir({ purpose: 'terminal-launch', root });
+    const marker = getHappierTempDirOwnerPath(directory);
+    try {
+      const repoDir = resolve(__dirname, '../../../../..');
+      const outputDir = join(root, 'scripts');
+      await bundleCliSourceSidecars({ repoDir, outputDir, build,
+        workspacePackages: await readWorkspacePackages(repoDir),
+        requireFromProject: createRequire(join(repoDir, 'apps/cli/package.json')) });
+      const specPath = join(directory, 'launch.json');
+      await writeFile(specPath, JSON.stringify({ command: process.execPath,
+        args: ['-e', 'process.exit(0)'], cwd: root, env: {} }));
+      await promisify(execFile)(process.execPath, [join(outputDir, 'terminal_launch_spec_runner.cjs'), specPath]);
+      await expect(stat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await removeHappierTempDirAsync(directory);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it('does not turn a genuine native spawn receipt into a startup failure on a later process error', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-terminal-launch-'));
     const receipt = join(directory, 'native-startup.json');

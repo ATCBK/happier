@@ -1,10 +1,11 @@
-import psList from 'ps-list';
 import { basename } from 'node:path';
 import { processInstanceFingerprintMatches, readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 import { readProcessRunState } from '@/daemon/processRunState';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import type { HerdrProcessInfo } from '@/integrations/herdr/client';
 import { logger } from '@/ui/logger';
+import { readProcessCensus } from '@/processes/census/processCensus';
+import { ancestorsOf, indexCensus } from '@/processes/tree/processTree';
 import type { BorrowedTerminalProcessIdentity } from './borrowedTerminalProcess';
 
 /** Native process custody is independent of the borrowed shell's lifetime. */
@@ -20,7 +21,7 @@ export async function retireTerminalClientProcess(identity: BorrowedTerminalProc
     const state = await readTerminalClientProcessState(identity);
     if (state === 'dead') return;
     if (state !== 'alive') throw new Error('terminal_native_client_custody_unknown');
-    await killProcessTree({ pid: identity.pid });
+    await terminateProcessTree({ pid: identity.pid });
 }
 
 /** Invocation is the exact, already platform-normalized private attach preparation. */
@@ -39,16 +40,11 @@ export async function proveTerminalClientCustody(input: Readonly<{
     };
     if (await readTerminalClientProcessState(input.launcher) !== 'alive') return reject('launcher_not_alive');
     if (!input.processes.shellPid) return reject('missing_shell');
-    const parents = new Map((await psList()).map(process => [process.pid, process.ppid]));
-    const descendsFrom = (pid: number, ancestor: number): boolean => {
-        const seen = new Set<number>();
-        while (pid > 1 && !seen.has(pid)) {
-            if (pid === ancestor) return true;
-            seen.add(pid);
-            pid = parents.get(pid) ?? 0;
-        }
-        return false;
-    };
+    const snapshot = await readProcessCensus({ freshness: 'fresh', fields: [] });
+    if (snapshot.status !== 'ok') return reject('ancestry_unavailable');
+    const processTree = indexCensus(snapshot.rows);
+    const descendsFrom = (pid: number, ancestor: number): boolean => pid === ancestor
+        || ancestorsOf(processTree, pid).some(row => row.pid === ancestor);
     const foreground = input.processes.foregroundProcesses;
     const launcher = foreground.find(process => process.pid === input.launcher.pid);
     if (!launcher || !launcher.argv.some(arg => basename(arg) === 'terminal_launch_spec_runner.cjs')) return reject('launcher_not_foreground');

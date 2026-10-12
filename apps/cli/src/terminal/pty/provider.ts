@@ -10,7 +10,10 @@ import type { ProcessCustodySpawnSpec, resolveProcessCustodyRuntimeExecutable } 
 import { createNodePtyRelayProvider } from './nodeRelay';
 import { createUtf8StreamDecoder } from './decode';
 import { createPythonPtyRelayProvider } from './pythonRelay';
-import { withWindowsFiniteCustody } from './windowsCustody';
+import { withWindowsFiniteCustody, withWindowsInteractiveCustody } from './windowsCustody';
+import { SpawnFailureError, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
+import { buildCgroupProcessLaunchSpec, prepareCgroupProcessLaunchScope, type LinuxProcessLaunchScope } from '@/daemon/platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
+import { createHappierLinuxScopeName } from '@/daemon/platform/linux/systemdUserResourceGovernor';
 
 export type Disposable = Readonly<{ dispose: () => void }>;
 
@@ -61,6 +64,8 @@ export type PtySpawnParams = Readonly<{
 
 export type PtyProvider = Readonly<{
   spawn: (params: PtySpawnParams) => PtyProcess;
+  /** Prepares the native containment context before the synchronous spawn boundary. */
+  prepare?: () => Promise<void>;
 }>;
 
 type NativePtyProcess = Omit<PtyProcess, 'onData' | 'onDataBytes'> & Readonly<{
@@ -424,8 +429,10 @@ export function createNodePtyProvider(params?: Readonly<{
   argv?: readonly string[];
   currentExecPath?: string;
   resolveProcessCustodyRuntimeExecutable?: typeof resolveProcessCustodyRuntimeExecutable;
+  readSpawnFailureLimits?: SpawnFailureLimitsReader;
 }>): PtyProvider {
   const platform = params?.platform ?? process.platform;
+  const readSpawnFailureLimits = params?.readSpawnFailureLimits;
   const currentExecPath = params?.currentExecPath ?? process.execPath;
   const requireBase = resolvePtyProviderRequireBase({
     argv: params?.argv,
@@ -495,9 +502,22 @@ export function createNodePtyProvider(params?: Readonly<{
   let loggedNativeMissingFallback = false;
   let loggedNativeFailureFallback = false;
   let loggedSecondaryNativeFallback = false;
+  let linuxScope: LinuxProcessLaunchScope | null = null;
+  let preparation: Promise<void> | null = null;
+  const prepare = (): Promise<void> => preparation ??= platform === 'linux'
+    ? prepareCgroupProcessLaunchScope({ environment: params?.env ?? process.env }).then(scope => { linuxScope = scope; })
+    : Promise.resolve();
 
-  return withWindowsFiniteCustody({
-    spawn: (params) => {
+  const provider = withWindowsFiniteCustody({
+    spawn: (spawnParams) => {
+      const unit = createHappierLinuxScopeName(spawnParams.options.env?.HAPPIER_PROCESS_OWNER);
+      const scoped = linuxScope && unit && Array.isArray(spawnParams.args)
+        ? buildCgroupProcessLaunchSpec({ scope: linuxScope, unit, launchSpec: {
+          filePath: spawnParams.file, args: spawnParams.args,
+          env: Object.fromEntries(Object.entries(spawnParams.options.env ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+        } }) : null;
+      const params = scoped ? { ...spawnParams, file: scoped.filePath, args: scoped.args,
+        options: { ...spawnParams.options, env: scoped.env } } : spawnParams;
       let lastError: unknown = null;
       if (!preferred) {
         if (fallbackProvider) {
@@ -507,7 +527,8 @@ export function createNodePtyProvider(params?: Readonly<{
             });
             loggedNativeMissingFallback = true;
           }
-          return fallbackProvider.spawn(params);
+          try { return fallbackProvider.spawn(params); }
+          catch (error) { throw new SpawnFailureError(error, { platform, syscall: 'spawn', limits: readSpawnFailureLimits?.() }); }
         }
         throw new Error('terminal_pty_provider_missing');
       }
@@ -517,7 +538,7 @@ export function createNodePtyProvider(params?: Readonly<{
           { platform, backendName: preferred.id },
         ), platform);
       } catch (e) {
-        lastError = e;
+        lastError = new SpawnFailureError(e, { platform, ...(platform !== 'win32' ? { syscall: platform === 'darwin' ? 'posix_spawn' as const : 'forkpty' as const } : {}), limits: readSpawnFailureLimits?.() });
         if (fallback) {
           if (!loggedSecondaryNativeFallback) {
             logger.debug('[terminal-pty] preferred PTY backend failed, trying secondary native backend', {
@@ -533,7 +554,7 @@ export function createNodePtyProvider(params?: Readonly<{
               { platform, backendName: fallback.id },
             ), platform);
           } catch (fallbackError) {
-            lastError = fallbackError;
+            lastError = new SpawnFailureError(fallbackError, { platform, ...(platform !== 'win32' ? { syscall: platform === 'darwin' ? 'posix_spawn' as const : 'forkpty' as const } : {}), limits: readSpawnFailureLimits?.() });
           }
         }
         if (fallbackProvider) {
@@ -545,10 +566,18 @@ export function createNodePtyProvider(params?: Readonly<{
             });
             loggedNativeFailureFallback = true;
           }
-          return fallbackProvider.spawn(params);
+          try { return fallbackProvider.spawn(params); }
+          catch (error) { throw new SpawnFailureError(error, { platform, syscall: 'spawn', limits: readSpawnFailureLimits?.() }); }
         }
         throw lastError;
       }
     },
   }, { platform, resolveProcessCustodyRuntimeExecutable: params?.resolveProcessCustodyRuntimeExecutable });
+  const resolveWindowsCustody = params?.resolveProcessCustodyRuntimeExecutable;
+  const interactiveProvider = withWindowsInteractiveCustody(provider, { platform,
+    ...(resolveWindowsCustody ? {
+      resolveExecutable: () => resolveWindowsCustody('win32'),
+    } : {}),
+  });
+  return { ...interactiveProvider, prepare };
 }

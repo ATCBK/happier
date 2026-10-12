@@ -5,13 +5,13 @@ import { describe, expect, it } from 'vitest';
 import { probeProcessGroupLiveness } from '@happier-dev/cli-common/process';
 
 import { isPidAlive } from '@/testkit/process/spawn';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { createTerminalPtySessionManager, type TerminalPtySessionManagerConfig } from './sessions';
 import { createPythonPtyRelayProvider, resolvePythonPtyRelayExecutable } from './pythonRelay';
 import type { PtyExitEvent, PtyProvider } from './provider';
 
 const config: TerminalPtySessionManagerConfig = {
-  maxSessions: 1, idleTimeoutMs: 0, bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
+  bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
   bufferRetentionMs: 600_000, urlParseBufferLimit: 32_768, maxWriteChunkBytes: 16_384,
   defaultCols: 80, defaultRows: 24,
 };
@@ -20,8 +20,8 @@ const config: TerminalPtySessionManagerConfig = {
 // their platform owner suites and the program's native release checks.
 describe.skipIf(process.platform === 'win32')('finite PTY process custody', () => {
   it.each([
-    { name: 'does not release finite capacity on natural parent exit while its non-detached descendant is alive', jobControl: false },
-    { name: 'does not release finite capacity while a non-disowned same-session job-control descendant is alive', jobControl: true },
+    { name: 'retains finite custody on natural parent exit while its non-detached descendant is alive', jobControl: false },
+    { name: 'retains finite custody while a non-disowned same-session job-control descendant is alive', jobControl: true },
   ])('$name', async ({ jobControl }) => {
     const native = createPythonPtyRelayProvider({ env: process.env, platform: process.platform });
     if (!native) throw new Error('POSIX PTY relay is unavailable');
@@ -162,8 +162,9 @@ describe.skipIf(process.platform === 'win32')('finite PTY process custody', () =
         expect(manager.isFiniteHeld(accepted.terminalId)).toBe(true);
         expect(settlementReported).toBe(false);
         expect(manager.ensure({ terminalKey: 'capacity-after-parent-exit', cwd: process.cwd() }))
-          .toMatchObject({ ok: false, errorCode: 'terminal_busy' });
-        expect(carrierPids).toHaveLength(1);
+          .toMatchObject({ ok: true });
+        expect(carrierPids).toHaveLength(2);
+        expect(manager.isFiniteHeld(accepted.terminalId)).toBe(true);
         // Only the test owns this release channel; no timer/output silence ends
         // the descendant or supplies a process-terminal fact.
         releaseSocket = createConnection({ host: '127.0.0.1', port: releasePort! });
@@ -189,7 +190,7 @@ describe.skipIf(process.platform === 'win32')('finite PTY process custody', () =
       // All targets are exact newly-created fixture processes. Prefer the
       // actual tree owner; the child remains addressable after root reparenting.
       for (const pid of [descendantPid, parentPid, ...carrierPids]) {
-        if (pid && isPidAlive(pid)) await killProcessTree({ pid });
+        if (pid && isPidAlive(pid)) await terminateProcessTree({ pid });
       }
       manager.dispose();
     }
@@ -213,7 +214,7 @@ describe.skipIf(process.platform === 'win32')('finite PTY process custody', () =
     } finally { manager.dispose(); }
   });
 
-  it('stops a real descendant tree before releasing finite capacity and retains its output', async () => {
+  it('stops a real descendant tree before releasing finite custody and retains its output', async () => {
     const native = createPythonPtyRelayProvider({ env: process.env, platform: process.platform });
     if (!native) throw new Error('POSIX PTY relay is unavailable');
     let descendantPid: number | null = null;
@@ -246,7 +247,8 @@ describe.skipIf(process.platform === 'win32')('finite PTY process custody', () =
       expect(descendantPid).not.toBeNull();
       expect(isPidAlive(descendantPid!)).toBe(true);
       expect(manager.ensure({ terminalKey: 'capacity-probe', cwd: process.cwd() }))
-        .toMatchObject({ ok: false, errorCode: 'terminal_busy' });
+        .toMatchObject({ ok: true });
+      expect(manager.isFiniteHeld(accepted.terminalId)).toBe(true);
       const exited = manager.waitForExit({ terminalId: accepted.terminalId });
       expect(await manager.requestStop({ terminalId: accepted.terminalId }))
         .toMatchObject({ kind: expect.stringMatching(/^(requested|exited)$/u) });
@@ -258,7 +260,7 @@ describe.skipIf(process.platform === 'win32')('finite PTY process custody', () =
       expect(retained.events.some((event) => event.t === 'data' && event.data.includes('descendant:'))).toBe(true);
     } finally {
       manager.dispose();
-      if (descendantPid && isPidAlive(descendantPid)) await killProcessTree({ pid: descendantPid });
+      if (descendantPid && isPidAlive(descendantPid)) await terminateProcessTree({ pid: descendantPid });
     }
   });
 });

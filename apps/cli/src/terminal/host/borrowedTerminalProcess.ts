@@ -3,7 +3,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { logger } from '@/ui/logger';
 import { createTerminalLaunchSpec, discardFailedTerminalLaunch } from './launchSpec';
 
@@ -129,7 +129,7 @@ export async function launchBorrowedTerminalProcess(params: Readonly<{
   });
 
   const terminateProcess = params.terminateProcess
-    ?? (async (target: ChildProcess) => await killProcessTree(target));
+    ?? (async (target: ChildProcess) => await terminateProcessTree(target));
   let termination: Promise<void> | null = null;
   const processInstanceFingerprint = typeof child.pid === 'number'
     ? readProcessInstanceFingerprintSync(child.pid)
