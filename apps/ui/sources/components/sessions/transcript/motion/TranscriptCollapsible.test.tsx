@@ -255,6 +255,28 @@ describe('TranscriptCollapsible', () => {
         expect(hoistedAnimatedSpies.timingSpy).toHaveBeenCalledTimes(1);
     });
 
+    it('leaves settled expanded content uncapped so a giant tool body shows in full', async () => {
+        // The height cap only drives the expand/collapse animation. Kept after it settles, it
+        // clipped every expanded body past 10,000px — a Find mark there could never be shown.
+        const runtime: any = {
+            gate: { isFresh: vi.fn(() => true), consumeFreshness: vi.fn(() => true), markPainted: vi.fn(), markSeen: vi.fn(), isSeen: vi.fn() },
+            config: { preset: 'subtle', freshnessMs: 60_000, animateNewItemsEnabled: true, animateToolExpandCollapseEnabled: true,
+                animateToolExpandCollapseFreshOnly: false, animateThinkingEnabled: true },
+        };
+        const { TranscriptCollapsible } = await import('./TranscriptCollapsible');
+        const { renderScreen } = await import('@/dev/testkit');
+        const view = (expanded: boolean) => <TranscriptMotionContext.Provider value={runtime}>
+            <TranscriptCollapsible id="t1" createdAt={1} expanded={expanded}><div /></TranscriptCollapsible>
+        </TranscriptMotionContext.Provider>;
+        const cap = (tree: renderer.ReactTestRenderer) => tree.root.findByType('AnimatedView' as never).props.style.maxHeight;
+        const mountedOpen = (await renderScreen(view(true))).tree;
+        expect(cap(mountedOpen)).toBeUndefined();
+        const toggled = (await renderScreen(view(false))).tree;
+        expect(cap(toggled)).toBeDefined();
+        await act(async () => { toggled.update(view(true)); });
+        expect(cap(toggled)).toBeUndefined();
+    });
+
     it('does not animate when fresh-only gate rejects', async () => {
         const gate = { isFresh: vi.fn(() => false), consumeFreshness: vi.fn(() => false), markPainted: vi.fn(), markSeen: vi.fn(), isSeen: vi.fn() };
         const runtime: any = {

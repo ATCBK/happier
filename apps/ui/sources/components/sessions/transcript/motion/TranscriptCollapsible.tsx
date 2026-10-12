@@ -17,6 +17,8 @@ export const TranscriptCollapsible = React.memo(function TranscriptCollapsible(p
 
     const progress = React.useRef(new Animated.Value(props.expanded ? 1 : 0)).current;
     const [shouldRenderChildren, setShouldRenderChildren] = React.useState<boolean>(props.expanded);
+    // The height cap exists only for the expand/collapse animation; settled open content is never clipped.
+    const [heightCapped, setHeightCapped] = React.useState<boolean>(!props.expanded);
     const didMountRef = React.useRef(false);
     const shouldAnimateLastToggleRef = React.useRef(false);
     const latestRuntimeRef = React.useRef(runtime);
@@ -52,8 +54,10 @@ export const TranscriptCollapsible = React.memo(function TranscriptCollapsible(p
                 notifyCurrentRowLayoutMutation({ reason: 'expand', sourceId: currentId });
                 setShouldRenderChildren(true);
                 progress.setValue(1);
+                setHeightCapped(false);
             } else {
                 notifyCurrentRowLayoutMutation({ reason: 'collapse', sourceId: currentId });
+                setHeightCapped(true);
                 progress.setValue(0);
                 setShouldRenderChildren(false);
             }
@@ -78,19 +82,24 @@ export const TranscriptCollapsible = React.memo(function TranscriptCollapsible(p
             shouldAnimateLastToggleRef.current = shouldAnimate;
             if (!shouldAnimate) {
                 progress.setValue(1);
+                setHeightCapped(false);
                 return;
             }
+            setHeightCapped(true);
             Animated.timing(progress, {
                 toValue: 1,
                 duration,
                 easing: motionTokens.easing.standard,
                 useNativeDriver: false,
-            }).start();
+            }).start(({ finished }) => {
+                if (finished) setHeightCapped(false);
+            });
             return;
         }
 
         const shouldAnimate = shouldAnimateLastToggleRef.current === true;
         shouldAnimateLastToggleRef.current = false;
+        setHeightCapped(true);
         if (!shouldAnimate) {
             notifyCurrentRowLayoutMutation({ reason: 'collapse', sourceId: currentId });
             progress.setValue(0);
@@ -117,7 +126,7 @@ export const TranscriptCollapsible = React.memo(function TranscriptCollapsible(p
         <Animated.View
             style={{
                 overflow: 'hidden',
-                maxHeight,
+                maxHeight: heightCapped ? maxHeight : undefined,
                 opacity,
                 transform: [{ translateY }],
             }}
