@@ -35,6 +35,7 @@ import { useProviderAccountUsageSnapshots } from '@/hooks/server/connectedServic
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { act } from 'react-test-renderer';
+import * as platformDigest from '@/platform/digest';
 
 const scmTransport = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
@@ -69,6 +70,28 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route']) 
 }
 
 describe('usage query captured Resource adapter', () => {
+  it('admits usage content only after the asynchronous platform digest completes', async () => {
+    const captured = await context(request => request.path === '/v2/usage/query' ? Response.json(value) : undefined);
+    storage.setState({ profileScope: captured.accountLifetime.scope,
+      profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId }) });
+    const digestGate = createDeferred<void>();
+    const originalDigest = platformDigest.digest;
+    const digest = vi.spyOn(platformDigest, 'digest').mockImplementation(async (algorithm, bytes) => {
+      await digestGate.promise;
+      return await originalDigest(algorithm, bytes);
+    });
+    const entry = getUsageQueryResourceStore(captured)
+      .getEntry({ hostRead: 'usage.query', input: { queries: [{ period: { relative: '7days' } }] } });
+    const release = entry.subscribe(() => {}, false);
+    try {
+      await expect.poll(() => digest.mock.calls.length).toBeGreaterThan(0);
+      expect(entry.getSnapshot().value).toBeUndefined();
+      digestGate.resolve();
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      expect(entry.getSnapshot().value).toBeDefined();
+    } finally { digestGate.resolve(); release(); }
+  });
+
   it('re-prices retained history when captured Account price settings change without altering reported costs', async () => {
     const tokens = { input: 1_000_000, output: 500_000, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1_500_000 };
     const cost = { reportedUsd: 7, estimatedUsd: 3, currency: 'USD' };

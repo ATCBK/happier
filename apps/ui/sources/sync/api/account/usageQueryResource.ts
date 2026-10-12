@@ -10,6 +10,7 @@ import { ConnectedServicePoolSelectionGetResponseV1Schema, type ConnectedService
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { isMachineReplaced } from '@happier-dev/protocol/machines/identity/canonicalMachineId';
 import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
+import { computePluginUiArtifactSha256Digest } from '@/sync/domains/plugins/ui/artifactIntegrity';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -629,16 +630,20 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                 if (reference.hostRead === 'connectedServices.quota.get') {
                     const result = await readUiQuota(sharedContext, ConnectedServiceQuotaGetInputV1Schema.parse(reference.input), options?.signal);
                     const bytes = new TextEncoder().encode(JSON.stringify(result));
-                    return { contentType: 'application/json', bytes, digest: computePluginUiArtifactSha256DigestV1(bytes) };
+                    const digest = await computePluginUiArtifactSha256Digest(bytes);
+                    requireCurrent(sharedContext, options?.signal);
+                    return { contentType: 'application/json', bytes, digest };
                 }
                 if (reference.hostRead !== 'usage.query') throw Object.assign(new Error('Unsupported host read'), { code: 'unsupported_method' });
                 const entry = owner.store.getEntry(reference);
                 const retained = entry.getSnapshot().value;
                 const previous = retained ? decodeUsageQueryResource(retained) : undefined;
-                const contentFor = (batch: UsageQueryBatchResult): ResourceContent => {
+                const contentFor = async (batch: UsageQueryBatchResult): Promise<ResourceContent> => {
                     requireCurrent(sharedContext, options?.signal);
                     const bytes = new TextEncoder().encode(JSON.stringify(batch));
-                    const content = { contentType: 'application/json', bytes, digest: computePluginUiArtifactSha256DigestV1(bytes) };
+                    const digest = await computePluginUiArtifactSha256Digest(bytes);
+                    requireCurrent(sharedContext, options?.signal);
+                    const content = { contentType: 'application/json', bytes, digest } as const;
                     const current = entry.getSnapshot().value;
                     // Reconcile each revision against the same entry's admitted
                     // value so unrelated slices keep their selected references.
@@ -646,13 +651,24 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                     decodedValues.set(content, retainUsageQueryResultReferences(reconciled, current ? decodeUsageQueryResource(current) : undefined));
                     return content;
                 };
+                let progressContent = Promise.resolve();
                 const result = await executeUsageAction('usage.query', reference.input, {
                     query: (input, actionContext) => readUiUsageQueryBatch(sharedContext, input, actionContext.signal, previous,
-                        { onProgress: batch => options?.onProgress?.(contentFor(batch)) }),
+                        { onProgress: batch => {
+                            progressContent = progressContent.then(async () => {
+                                const content = await contentFor(batch);
+                                options?.onProgress?.(content);
+                            });
+                            // The final read awaits the same chain. Observe a
+                            // prompt rejection now so a slow producer cannot
+                            // turn an eventual read failure into an unhandled one.
+                            void progressContent.catch(() => {});
+                        } }),
                 }, { signal: options?.signal });
                 requireCurrent(sharedContext, options?.signal);
                 if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
-                return contentFor(UsageQueryBatchResultSchema.parse(result.result));
+                await progressContent;
+                return await contentFor(UsageQueryBatchResultSchema.parse(result.result));
             },
             async watchResource(reference, listener, options) {
                 requireCurrent(sharedContext, options?.signal);
