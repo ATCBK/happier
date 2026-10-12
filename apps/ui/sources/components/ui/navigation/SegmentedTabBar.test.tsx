@@ -140,16 +140,17 @@ describe('SegmentedTabBar', () => {
         const activeTheme = dark ? darkTheme : lightTheme;
         materialThemeState.dark = dark;
         try {
-            for (const slidingThumb of [false, true]) {
+            // Before its segment is measured the chosen segment paints itself; after, the shared thumb does.
+            for (const measured of [false, true]) {
                 const screen = await renderScreen(<FloatingSegmentScene>
-                    <SegmentedTabBar tabs={TABS} activeTabId="beta" onSelectTab={() => {}} testIDPrefix="material-seg" slidingThumb={slidingThumb} />
+                    <SegmentedTabBar tabs={TABS} activeTabId="beta" onSelectTab={() => {}} testIDPrefix="material-seg" />
                 </FloatingSegmentScene>);
-                if (slidingThumb) {
+                if (measured) {
                     await act(async () => {
                         requireTab(screen, 'material-seg:beta').props.onLayout({ nativeEvent: { layout: { x: 46, width: 44, y: 2, height: 24 } } });
                     });
                 }
-                const thumb = slidingThumb ? screen.findByTestId('material-seg:thumb')! : requireTabSurface(screen, 'material-seg:beta');
+                const thumb = measured ? screen.findByTestId('material-seg:thumb')! : requireTabSurface(screen, 'material-seg:beta');
                 expect(flattenStyle(thumb.props.style).backgroundColor).toBe(activeTheme.colors.segmentedControl.activeBackground);
                 const gradient = thumb.findAllByType('View' as never).map(node => flattenStyle(node.props.style))
                     .find(style => typeof style.backgroundImage === 'string');
@@ -223,7 +224,7 @@ describe('SegmentedTabBar', () => {
         );
         const regularFrame = flattenStyle(requireTab(regular, 'seg:alpha').props.style);
         const regularSurface = flattenStyle(requireTabSurface(regular, 'seg:alpha').props.style);
-        expect(regularSurface.paddingVertical).toBe(7);
+        expect(regularSurface.paddingVertical).toBe(6);
         expect(regularSurface.minHeight).toBeUndefined();
         expect(regularFrame.minHeight).toBeUndefined();
 
@@ -393,7 +394,7 @@ describe('SegmentedTabBar', () => {
             const surface = flattenStyle(requireTabSurface(screen, 'seg:alpha').props.style);
             expect(surface.minHeight).toBeUndefined();
             expect(flattenStyle(requireTab(screen, 'seg:alpha').props.style).minWidth).toBe(24);
-            expect((surface.paddingVertical as number) * 2 + 14 + 4).toBe(32);
+            expect((surface.paddingVertical as number) * 2 + 16 + 4).toBe(32);
         } finally {
             (Platform as { OS: string }).OS = previousPlatform;
         }
@@ -519,7 +520,14 @@ describe('SegmentedTabBar', () => {
         // The active tab's label should use the active text color.
         const activeLabelFlat = flattenStyle(screen.findByTestId('seg:beta')?.findByType('Text' as never).props.style);
         expect(activeLabelFlat.color).toBe(theme.colors.text.primary);
-        expect(activeLabelFlat.fontWeight).toBe('600');
+        // The chosen label is drawn in the semibold face itself. A numeric weight over the regular
+        // Inter face (registered at normal weight) makes the browser synthesize bold (U1 review).
+        const { Typography } = await import('@/constants/Typography');
+        expect(activeLabelFlat.fontFamily).toBe(Typography.default('semiBold').fontFamily);
+        expect(activeLabelFlat.fontWeight).toBeUndefined();
+        // Segment labels are control text: the body role, like a select's value.
+        const { resolveHappierTypeScale } = await import('@happier-dev/plugin-ui/presentation');
+        expect(activeLabelFlat.fontSize).toBe(resolveHappierTypeScale('body', 'web').fontSize);
 
         // Inactive labels should use the secondary text color.
         for (const testID of ['seg:alpha', 'seg:gamma'] as const) {
@@ -529,16 +537,16 @@ describe('SegmentedTabBar', () => {
         }
     });
 
-    it('slidingThumb replaces per-tab active surfaces with one shared thumb (D-R3-5)', async () => {
+    it('slides one shared thumb between segments by default, and paints the chosen segment until it is measured (D-R3-5)', async () => {
         const { SegmentedTabBar } = await import('./SegmentedTabBar');
         const screen = await renderScreen(
-            <SegmentedTabBar tabs={TABS} activeTabId="beta" onSelectTab={() => {}} testIDPrefix="seg" slidingThumb />,
+            <SegmentedTabBar tabs={TABS} activeTabId="beta" onSelectTab={() => {}} testIDPrefix="seg" />,
         );
 
-        // No per-tab active background: the active tab must NOT carry the
-        // activeBackground color (the thumb owns the active surface).
-        const activeFlat = flattenStyle(requireTabSurface(screen, 'seg:beta').props.style);
-        expect(activeFlat.backgroundColor).not.toBe(theme.colors.surface.base);
+        // First paint: the selection is visible at once (no frame without a chosen segment).
+        expect(screen.findByTestId('seg:thumb')).toBeFalsy();
+        expect(flattenStyle(requireTabSurface(screen, 'seg:beta').props.style).backgroundColor)
+            .toBe(theme.colors.segmentedControl.activeBackground);
         // Selection state + label emphasis still apply.
         expect(screen.findByTestId('seg:beta')?.props.accessibilityState).toEqual({ selected: true, disabled: false });
         const activeLabelFlat = flattenStyle(screen.findByTestId('seg:beta')?.findByType('Text' as never).props.style);
@@ -551,6 +559,9 @@ describe('SegmentedTabBar', () => {
             beta!.props.onLayout({ nativeEvent: { layout: { x: 46, width: 44, y: 2, height: 24 } } });
         });
         expect(screen.findByTestId('seg:thumb')).toBeTruthy();
+        // Measured: the thumb owns the chosen surface, the segment no longer paints its own.
+        expect(flattenStyle(requireTabSurface(screen, 'seg:beta').props.style).backgroundColor)
+            .not.toBe(theme.colors.segmentedControl.activeBackground);
     });
 
     it('content sizing hugs labels instead of splitting the row equally (D-R3-3)', async () => {

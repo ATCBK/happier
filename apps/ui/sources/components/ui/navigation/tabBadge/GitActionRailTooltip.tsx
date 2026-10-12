@@ -8,10 +8,10 @@ import { t } from '@/text';
 import { formatExactCount, formatScmDiffBadge } from './tabBadgeModel';
 
 const styles = StyleSheet.create((theme) => ({
-    content: { gap: 4 },
-    label: { ...Typography.default(), fontSize: 12, lineHeight: 16, color: theme.colors.text.primary },
-    branch: { ...Typography.default(), fontSize: 12, lineHeight: 16, color: theme.colors.text.secondary },
-    lines: { flexDirection: 'row', gap: 4 },
+    content: { gap: theme.space.s4 },
+    label: {  ...Typography.variant('meta'),  color: theme.colors.text.primary },
+    branch: {  ...Typography.variant('meta'),  color: theme.colors.text.secondary },
+    lines: { flexDirection: 'row', gap: theme.space.s4 },
     added: { color: theme.colors.versionControl.added.foreground },
     removed: { color: theme.colors.versionControl.removed.foreground },
 }));

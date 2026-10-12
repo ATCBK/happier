@@ -21,6 +21,7 @@ import {
 
 import { shadowLevelStyle } from '@/shadowElevation';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { GradientSurface, type SurfaceGradient } from '@/components/ui/surfaces/GradientSurface';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -108,6 +109,8 @@ export type SegmentedTab<T extends string = string> = Readonly<{
     count?: string;
     /** A short recommendation or availability badge, included in the accessible name. */
     badge?: string;
+    /** This option's own test id, when its owner already names it (otherwise `${testIDPrefix}:${id}`). */
+    testID?: string;
 }>;
 
 export type SegmentedTabBarProps<T extends string = string> = Readonly<{
@@ -133,13 +136,6 @@ export type SegmentedTabBarProps<T extends string = string> = Readonly<{
      */
     overflow?: Readonly<{ label: string; testID?: string }>;
     /**
-     * Animate ONE shared thumb that spring-translates between segments instead
-     * of swapping each tab's own active background (design-vision toggles:
-     * "sliding segmented thumb, not text-swap"). Motion-gated: at the minimal
-     * level the thumb jumps without a spring.
-     */
-    slidingThumb?: boolean;
-    /**
      * `'equal'` (default): segments share the row width evenly.
      * `'content'`: each segment hugs its label so short labels never
      * ellipsize (e.g. a "Tokens/Cost" metric toggle).
@@ -147,6 +143,12 @@ export type SegmentedTabBarProps<T extends string = string> = Readonly<{
     segmentSizing?: 'equal' | 'content';
     /** Optional active-label style override for specific consumers */
     activeLabelStyle?: StyleProp<TextStyle>;
+    /**
+     * `only` (default): when every tab has a glyph, the glyphs replace the labels. `leading`: each
+     * glyph leads its label even then, for a choice whose words are short and whose glyphs alone
+     * would not say enough (the Look panel's Horizon and Wallpaper).
+     */
+    iconPlacement?: 'only' | 'leading';
     /** Expand each segment to the platform touch-target floor when its consumer owns enough room. */
     targetSize?: 'platform';
     /** Accessible name for the group. */
@@ -177,7 +179,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexGrow: 0,
         minWidth: 0,
     },
-    tabCaption: { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0, maxWidth: '100%' },
+    tabCaption: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, minWidth: 0, maxWidth: '100%' },
     containerContent: {
         width: 'auto',
         maxWidth: '100%',
@@ -332,14 +334,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     tabSurfaceContent: {
         paddingHorizontal: HAPPIER_SEGMENTED_METRICS.segmentPaddingHorizontalPx,
     },
+    // The chosen segment has no ring: its fill and shadow carry the selection.
     tabActive: {
-        borderColor: theme.colors.border.strong,
         backgroundColor: theme.colors.segmentedControl.activeBackground,
         ...shadowLevelStyle(theme.colors.shadowLevels[1]),
     },
     thumb: {
         borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.border.strong,
+        borderColor: 'transparent',
         position: 'absolute',
         top: SEGMENT_TRACK_PADDING_PX,
         bottom: SEGMENT_TRACK_PADDING_PX,
@@ -378,12 +380,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     tabCount: {
         color: theme.colors.text.tertiary,
-        fontWeight: '400',
+        // Regular even inside the chosen (semibold) label: the face, not a numeric weight.
+        ...Typography.default(),
         fontVariant: ['tabular-nums'],
     },
     tabLabelActive: {
         color: theme.colors.text.primary,
-        fontWeight: HAPPIER_SEGMENTED_METRICS.labelActiveFontWeight,
+        // The semibold face itself; a numeric weight over the regular face would synthesize bold.
+        ...Typography.default(HAPPIER_SEGMENTED_METRICS.labelActiveEmphasis),
     },
 }));
 
@@ -394,6 +398,8 @@ const stylesheet = StyleSheet.create((theme) => ({
  */
 function SlidingThumb(props: Readonly<{
     rect: TabRect;
+    /** The chosen segment. The thumb travels only when the choice changes; layout settling snaps. */
+    tabId: string;
     compact: boolean;
     plain?: boolean;
     testID?: string;
@@ -405,10 +411,16 @@ function SlidingThumb(props: Readonly<{
     const reduced = motion.level === 'minimal';
     const thumbX = useSharedValue(props.rect.x);
     const thumbWidth = useSharedValue(props.rect.width);
+    const placedTabId = React.useRef(props.tabId);
 
     React.useEffect(() => {
         const { x, width } = props.rect;
-        if (reduced) {
+        const choiceChanged = placedTabId.current !== props.tabId;
+        placedTabId.current = props.tabId;
+        // Motion explains a change of choice. The same segment re-measured (the row settling its equal
+        // widths on arrival, a resize) is not a change and lands in place, so a first partial
+        // measurement never draws a narrow thumb that then grows (DESIGN-14 D13).
+        if (reduced || !choiceChanged) {
             // Reduce-motion: position without travel.
             thumbX.value = x;
             thumbWidth.value = width;
@@ -416,7 +428,7 @@ function SlidingThumb(props: Readonly<{
         }
         thumbX.value = withSpring(x, INSTRUMENT_SPRINGS.standard);
         thumbWidth.value = withSpring(width, INSTRUMENT_SPRINGS.standard);
-    }, [props.rect, reduced, thumbX, thumbWidth]);
+    }, [props.rect, props.tabId, reduced, thumbX, thumbWidth]);
 
     const animatedStyle = useAnimatedStyle(() => ({
         transform: [{ translateX: thumbX.value }],
@@ -447,12 +459,14 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
     const plain = props.presentation === 'plain';
     const compact = pills || plain ? false : props.compact;
     const disabled = props.disabled === true;
-    const slidingThumb = !pills && (plain || props.slidingThumb === true);
+    // Every segmented bar slides one shared thumb to the choice (ui-craft: the indicator follows the
+    // choice rather than cross-fading between separate highlights); pills have no track to slide in.
+    const slidingThumb = !pills;
     const valueChoice = props.role === 'radiogroup';
     const contentSized = pills || plain || props.segmentSizing === 'content';
     // Icons replace labels only when the whole bar is iconic; a half-iconic row reads as broken.
     // Page tabs keep both: the glyph leads its label.
-    const iconOnly = !plain && props.tabs.length > 0 && props.tabs.every((tab) => tab.icon != null);
+    const iconOnly = !plain && props.iconPlacement !== 'leading' && props.tabs.length > 0 && props.tabs.every((tab) => tab.icon != null);
     const overflow = props.overflow;
     const [rowWidth, setRowWidth] = React.useState<number | null>(null);
     const [measured, setMeasured] = React.useState<Readonly<Record<string, number>>>({});
@@ -582,16 +596,21 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                 // The tabs' natural widths, with and without glyphs, measured off-screen so the visible
                 // row can decide what fits without first drawing a row that does not.
                 <View style={styles.measureLayer} pointerEvents="none" aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-                    {props.tabs.map((tab) => (
-                        <React.Fragment key={tab.id}>
-                            <View onLayout={(event) => recordMeasure(`i:${tab.id}`, event)}>
-                                <PlainTabCaption tab={tab} icon active={false} measuring />
-                            </View>
-                            <View onLayout={(event) => recordMeasure(`l:${tab.id}`, event)}>
-                                <PlainTabCaption tab={tab} icon={false} active={false} measuring />
-                            </View>
-                        </React.Fragment>
-                    ))}
+                    {props.tabs.map((tab) => {
+                        // The selected tab draws its label in the active weight, which is wider: measured
+                        // regular, the row that "fits" would cut the selected name short ("Overvi…").
+                        const active = isHappierTabSelected(props.activeTabId, tab.id);
+                        return (
+                            <React.Fragment key={tab.id}>
+                                <View onLayout={(event) => recordMeasure(`i:${tab.id}`, event)}>
+                                    <PlainTabCaption tab={tab} icon active={active} measuring segmented={!plain} />
+                                </View>
+                                <View onLayout={(event) => recordMeasure(`l:${tab.id}`, event)}>
+                                    <PlainTabCaption tab={tab} icon={false} active={active} measuring segmented={!plain} />
+                                </View>
+                            </React.Fragment>
+                        );
+                    })}
                     <View onLayout={(event) => recordMeasure('more', event)}>
                         <PlainTabCaption tab={{ id: OVERFLOW_KEY, label: overflow.label }} icon={false} active={false} measuring more />
                     </View>
@@ -613,6 +632,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                 {slidingThumb && activeRect ? (
                     <SlidingThumb
                         rect={activeRect}
+                        tabId={String(props.activeTabId)}
                         compact={compact === true}
                         plain={plain}
                         testID={props.testIDPrefix ? `${props.testIDPrefix}:thumb` : undefined}
@@ -621,7 +641,9 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                 {visibleTabs.map((tab, tabIndex) => {
                     const active = isHappierTabSelected(props.activeTabId, tab.id);
                     const tabDisabled = disabled || tab.disabled === true;
-                    const showOwnActiveSurface = active && !slidingThumb;
+                    // Until the chosen segment is measured it paints itself, so the selection is visible on
+                    // the first frame; the thumb then mounts at that rect and takes the surface over.
+                    const showOwnActiveSurface = active && (!slidingThumb || activeRect === null);
                     const tabName = [tab.label, tab.count, tab.badge].filter(Boolean).join(' ');
                     const unavailableReason = tab.disabled === true ? tab.unavailableReason : undefined;
                     const webKeyDownProps = Platform.OS === 'web'
@@ -634,7 +656,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                 if (node) tabRefs.current.set(tab.id, node);
                                 else tabRefs.current.delete(tab.id);
                             }}
-                            testID={props.testIDPrefix ? `${props.testIDPrefix}:${tab.id}` : undefined}
+                            testID={tab.testID ?? (props.testIDPrefix ? `${props.testIDPrefix}:${tab.id}` : undefined)}
                             disabled={tabDisabled}
                             onPress={() => {
                                 if (tabDisabled) return;
@@ -693,7 +715,8 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                 ) : (
                                     <View style={styles.tabCaption}>
                                     {/* A mark that identifies one option (a dashboard's owner) leads its label. */}
-                                    {tab.icon ? <View style={styles.tabIcon}>{tab.icon}</View> : null}
+                                    {/* In a bar that fits itself, glyphs drop first when the names don't fit with them. */}
+                                    {tab.icon && (!overflow || fit.icons) ? <View style={styles.tabIcon}>{tab.icon}</View> : null}
                                     <Text
                                         // Value choices keep their full names visible when the row
                                         // stacks into a narrow slot; view tabs remain single-line.
@@ -745,6 +768,8 @@ function PlainTabCaption(props: Readonly<{
     active: boolean;
     /** Off-screen measuring copy: drawn with the surface's own padding so widths match. */
     measuring?: boolean;
+    /** Measure as a content-sized segment on the track (its padding and label), not a plain page tab. */
+    segmented?: boolean;
     more?: boolean;
 }>) {
     const styles = stylesheet;
@@ -753,13 +778,15 @@ function PlainTabCaption(props: Readonly<{
         <View style={[styles.tabCaption, styles.plainCaption]}>
             {props.icon && props.tab.icon ? <View style={styles.tabIcon}>{props.tab.icon}</View> : null}
             {props.more ? <Icon name="dots-three" size={ICON_SIZE.sm} color={theme.colors.text.secondary} /> : null}
-            <Text numberOfLines={1} style={[styles.tabLabel, styles.plainLabel, props.active ? styles.tabLabelActive : null]}>
+            <Text numberOfLines={1} style={[styles.tabLabel, props.segmented ? null : styles.plainLabel, props.active ? styles.tabLabelActive : null]}>
                 {props.tab.label}
                 {props.tab.count ? <Text style={styles.tabCount}>{` ${props.tab.count}`}</Text> : null}
             </Text>
         </View>
     );
-    return props.measuring ? <View style={[styles.tabSurface, styles.plainSurface]}>{caption}</View> : caption;
+    return props.measuring
+        ? <View style={[styles.tabSurface, props.segmented ? styles.tabSurfaceContent : styles.plainSurface]}>{caption}</View>
+        : caption;
 }
 
 /** The tabs that no longer fit, in one menu; it is the selected tab's place while that tab is inside. */

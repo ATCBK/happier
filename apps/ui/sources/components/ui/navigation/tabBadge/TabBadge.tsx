@@ -26,7 +26,7 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 8,
         height: 8,
         borderRadius: 4,
-        paddingHorizontal: 2,
+        paddingHorizontal: theme.space.s2,
         right: -6,
     },
     compactText: {
@@ -35,7 +35,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     diffChipCompact: {
         height: 8,
-        paddingHorizontal: 2,
+        paddingHorizontal: theme.space.s2,
         gap: 1,
     },
     countBadgeNeutral: {
@@ -73,7 +73,7 @@ const styles = StyleSheet.create((theme) => ({
         right: -11,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 2,
+        gap: theme.space.s2,
         height: 12,
         paddingHorizontal: 3,
         borderRadius: 6,

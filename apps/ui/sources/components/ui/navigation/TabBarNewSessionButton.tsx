@@ -35,6 +35,10 @@ import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 /** The sidebar placement's circle: a comfortable pointer target that stays small over the list. */
 const SIDEBAR_DIAMETER_PX = 44;
+/** How far the sidebar's "+" floats in from the list's bottom-right corner. */
+export const SIDEBAR_NEW_SESSION_INSET_PX = 12;
+/** The height the sidebar's "+" occupies at the list's foot; anything docked there rides above it. */
+export const SIDEBAR_NEW_SESSION_FOOTPRINT_PX = SIDEBAR_NEW_SESSION_INSET_PX + SIDEBAR_DIAMETER_PX;
 
 /** Matches the bar's capsule; both clamp to a full pill at any height. */
 const CAPSULE_RADIUS = 999;
