@@ -11,6 +11,7 @@ type PatchKind = 'env' | 'header';
 
 function describeValueRef(valueRef: McpValueRefV1): string {
     if (valueRef.t === 'literal') return t('settings.mcpServersValueSourceLiteral');
+    if (valueRef.t === 'sessionAttested') return valueRef.field;
     return t('settings.mcpServersValueSourceSavedSecret');
 }
 

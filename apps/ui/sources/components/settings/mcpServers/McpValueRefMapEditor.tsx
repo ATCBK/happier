@@ -25,6 +25,7 @@ function describeValueRef(
     if (valueRef.t === 'literal') {
         return t('settings.mcpServersValueSourceLiteral');
     }
+    if (valueRef.t === 'sessionAttested') return valueRef.field;
     const secretId = valueRef.secretId;
     const secretName = catalogEntries.find((entry) => entry.ref === secretId)?.name
         ?? secrets.find((s) => s.id === secretId)?.name
