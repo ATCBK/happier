@@ -73,7 +73,7 @@ function mutableConfigurationForTest(): {
 describe('updateAccountSettingsV2WithRetry', () => {
   it.each(['immutable', 'callback'] as const)('reuses a validated unchanged plain baseline for less CPU than parsing its bytes twice (%s)', async (kind) => {
     const credentials = createTokenOnlyCredentialsStub();
-    const raw = { schemaVersion: 6, reviewPromptLikedApp: false, unrelated: { retained: true } };
+    const raw = { schemaVersion: 6, analyticsOptOut: false, unrelated: { retained: true } };
     const deps = {
         // Only Account HTTP/cache boundaries are replaced; opener, mutation,
         // encryption-mode admission and schema parsing remain real.
@@ -84,10 +84,10 @@ describe('updateAccountSettingsV2WithRetry', () => {
       };
     const update = () => kind === 'immutable'
       ? updateAccountSettingsV2WithRetry({ credentials, deps,
-        mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: false }] } })
+        mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: false }] } })
       : updateAccountSettingsV2OnceAgainstLatest({ credentials, deps, mutate: (value) => value });
     expect(await update()).toMatchObject({ status: 'unchanged', version: 5,
-      settings: { reviewPromptLikedApp: false, unrelated: { retained: true } } });
+      settings: { analyticsOptOut: false, unrelated: { retained: true } } });
     for (let warm = 0; warm < 20; warm += 1) { await update(); accountSettingsParse(raw); accountSettingsParse(raw); }
     const samples = [];
     for (let sample = 0; sample < 3; sample += 1) {
@@ -111,11 +111,11 @@ describe('updateAccountSettingsV2WithRetry', () => {
     const result = await updateAccountSettingsV2OnceAgainstLatest({
       credentials: createTokenOnlyCredentialsStub(),
       mutate: raw => {
-        raw.reviewPromptLikedApp = value;
+        raw.analyticsOptOut = value;
         return raw;
       },
       deps: {
-        fetchSettings: async () => ({ content: { t: 'plain', v: { reviewPromptLikedApp: true } }, version: 5 }),
+        fetchSettings: async () => ({ content: { t: 'plain', v: { analyticsOptOut: true } }, version: 5 }),
         resolveAccountEncryptionMode: resolvePlainAccountEncryptionMode,
         updateSettings: async request => {
           submitted.push(request);
@@ -127,9 +127,9 @@ describe('updateAccountSettingsV2WithRetry', () => {
     // Legacy fields retain the canonical parser's permissive projection;
     // this optimization must neither reuse stale validation nor tighten it.
     expect(result).toMatchObject({ status: 'applied', version: 6, settings: {
-      reviewPromptLikedApp: accountSettingsParse({ reviewPromptLikedApp: value }).reviewPromptLikedApp,
+      analyticsOptOut: accountSettingsParse({ analyticsOptOut: value }).analyticsOptOut,
     } });
-    expect(submitted).toEqual([{ expectedVersion: 5, content: { t: 'plain', v: { reviewPromptLikedApp: value } } }]);
+    expect(submitted).toEqual([{ expectedVersion: 5, content: { t: 'plain', v: { analyticsOptOut: value } } }]);
   });
 
   it.each(['owner cutover', 'one-shot mutation'] as const)('refuses a captured %s when Profile authority activates without a Settings version advance', async operation => {
@@ -227,7 +227,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
       credentials: createTokenOnlyCredentialsStub(),
       prepareMutation: () => {
         prepared += 1;
-        return { operations: [{ op: 'set', key: 'rolesV1', value: { overrides: {} } }] };
+        return { operations: [{ op: 'set', key: 'featureToggles', value: {} }] };
       },
       deps: {
         fetchSettings: async () => ({ content, version }),
@@ -269,7 +269,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     expect(committed.v.favoriteMachines).toEqual(['existing', 'new']);
   });
 
-  it('preserves an explicitly prepared empty roles root while keeping other defaults absent', async () => {
+  it('preserves an explicitly prepared empty feature map while keeping other defaults absent', async () => {
     const calls: Array<{ expectedVersion: number; content: AccountSettingsStoredContentEnvelope | null }> = [];
     let prepared = 0;
     const result = await updateAccountSettingsV2OnceAgainstLatest({
@@ -277,7 +277,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
       prepareMutation: async (raw) => {
         prepared += 1;
         expect(raw).toEqual({ customFutureField: 'retained' });
-        return { operations: [{ op: 'set', key: 'rolesV1', value: { overrides: {} } }] };
+        return { operations: [{ op: 'set', key: 'featureToggles', value: {} }] };
       },
       deps: {
         fetchSettings: async () => ({ content: { t: 'plain', v: { customFutureField: 'retained' } }, version: 7 }),
@@ -287,7 +287,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     });
     expect(result).toMatchObject({ status: 'applied', version: 8 });
     expect(prepared).toBe(1);
-    expect(calls).toEqual([{ expectedVersion: 7, content: { t: 'plain', v: { customFutureField: 'retained', rolesV1: { overrides: {} } } } }]);
+    expect(calls).toEqual([{ expectedVersion: 7, content: { t: 'plain', v: { customFutureField: 'retained', featureToggles: {} } } }]);
   });
   const originalServerUrl = configuration.serverUrl;
   const originalApiServerUrl = configuration.apiServerUrl;
@@ -311,7 +311,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     const updateSettings = vi.fn();
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
-      mutation: { operations: [{ op: 'reset', key: 'reviewPromptLikedApp' }] },
+      mutation: { operations: [{ op: 'reset', key: 'analyticsOptOut' }] },
       deps: {
         fetchSettings: async () => ({
           content: { t: 'plain', v: accountSettingsParse({ schemaVersion: 2 }) },
@@ -332,7 +332,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
       signal: controller.signal,
-      mutation: { operations: [{ op: 'reset', key: 'reviewPromptLikedApp' }] },
+      mutation: { operations: [{ op: 'reset', key: 'analyticsOptOut' }] },
       deps: { fetchSettings },
     })).resolves.toEqual({ status: 'cancelled', submitted: false });
     expect(fetchSettings).not.toHaveBeenCalled();
@@ -346,8 +346,8 @@ describe('updateAccountSettingsV2WithRetry', () => {
       mutation: {
         operations: [{
           op: 'set',
-          key: 'mcpServersSettingsV1',
-          value: { v: 1, strictMode: true, servers: [], bindings: [] },
+          key: 'analyticsOptOut',
+          value: true,
         }],
       },
       deps: {
@@ -367,7 +367,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.expectedVersion).toBe(5);
     expect(calls[0]?.content?.t).toBe('plain');
-    expect((calls[0]?.content as any)?.v?.mcpServersSettingsV1).toEqual({ v: 1, strictMode: true, servers: [], bindings: [] });
+    expect(calls[0]?.content).toMatchObject({ t: 'plain', v: { analyticsOptOut: true } });
   });
 
   it('updates plain v2 content with token-only credentials without writing a raw durable cache', async () => {
@@ -379,7 +379,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     const result = await updateAccountSettingsV2WithRetry({
       credentials: createTokenOnlyCredentialsStub(),
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => ({
           content: { t: 'plain', v: accountSettingsParse({ schemaVersion: 2 }) },
@@ -396,7 +396,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
       expectedVersion: 5,
       content: {
         t: 'plain',
-        v: expect.objectContaining({ reviewPromptLikedApp: true }),
+        v: expect.objectContaining({ analyticsOptOut: true }),
       },
     });
     expect(writeCache).not.toHaveBeenCalled();
@@ -410,7 +410,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     await updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => ({ content: null, version: 0 }),
         resolveAccountEncryptionMode: async () => 'plain',
@@ -422,7 +422,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
       expectedVersion: 0,
       content: {
         t: 'plain',
-        v: { reviewPromptLikedApp: true },
+        v: { analyticsOptOut: true },
       },
     });
   });
@@ -432,7 +432,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createTokenOnlyCredentialsStub(),
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => ({ content: null, version: 0 }),
         resolveAccountEncryptionMode: async () => 'e2ee',
@@ -449,7 +449,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
   it('returns a locked result for retained encrypted settings when token-only credentials lack material', async () => {
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createTokenOnlyCredentialsStub(),
-      mutation: { operations: [{ op: 'reset', key: 'reviewPromptLikedApp' }] },
+      mutation: { operations: [{ op: 'reset', key: 'analyticsOptOut' }] },
       deps: {
         fetchSettings: async () => ({
           content: { t: 'encrypted', c: 'retained-e2ee-settings' },
@@ -468,7 +468,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => ({
           content: { t: 'encrypted', c: 'not-a-readable-account-settings-ciphertext' },
@@ -488,7 +488,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
   it('returns retryable unavailable before mutating when the Settings fetch cannot reach the server', async () => {
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => {
           throw Object.assign(new Error('connection reset'), { code: 'ECONNRESET' });
@@ -617,7 +617,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
   it('decrypts encrypted v2 content, applies mutation, and posts encrypted content back', async () => {
     const credentials = createLegacyCredentialsStub();
-    const initial = { ...accountSettingsParse({ schemaVersion: 2 }), reviewPromptLikedApp: false };
+    const initial = { ...accountSettingsParse({ schemaVersion: 2 }), analyticsOptOut: false };
     const initialCiphertext = sealAccountScopedBlobCiphertext({
       kind: 'account_settings',
       material: { type: 'legacy', secret: credentials.encryption.secret },
@@ -629,7 +629,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     await updateAccountSettingsV2WithRetry({
       credentials,
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => ({
           content: { t: 'encrypted', c: initialCiphertext },
@@ -654,7 +654,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
       material: { type: 'legacy', secret: credentials.encryption.secret },
       ciphertext: postedCiphertext,
     });
-    expect(opened?.value).toMatchObject({ reviewPromptLikedApp: true });
+    expect(opened?.value).toMatchObject({ analyticsOptOut: true });
   });
 
   it('reapplies one immutable mutation to the fresh base after a CAS conflict', async () => {
@@ -664,7 +664,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     await updateAccountSettingsV2WithRetry({
       credentials,
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => ({
           content: { t: 'plain', v: accountSettingsParse({ schemaVersion: 2 }) },
@@ -692,7 +692,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     expect(calls[1]?.expectedVersion).toBe(2);
     expect((calls[1]?.content as any)?.v).toMatchObject({
       otherKey: 'changed',
-      reviewPromptLikedApp: true,
+      analyticsOptOut: true,
     });
   });
 
@@ -709,7 +709,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     const result = await updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       maxAttempts: 10,
       deps: {
         fetchSettings: async () => ({
@@ -730,7 +730,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     const result = await updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => ({
           content: {
@@ -759,7 +759,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     const initial = {
       schemaVersion: 2,
       customFutureField: { preserved: true },
-      reviewPromptLikedApp: false,
+      analyticsOptOut: false,
     };
     const initialCiphertext = sealAccountScopedBlobCiphertext({
       kind: 'account_settings',
@@ -772,7 +772,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     await updateAccountSettingsV2WithRetry({
       credentials,
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => ({
           content: { t: 'encrypted', c: initialCiphertext },
@@ -798,7 +798,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     expect(opened?.value).toEqual({
       schemaVersion: 2,
       customFutureField: { preserved: true },
-      reviewPromptLikedApp: true,
+      analyticsOptOut: true,
     });
   });
 
@@ -819,7 +819,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     await updateAccountSettingsV2WithRetry({
       credentials,
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => ({
           content: { t: 'encrypted', c: initialCiphertext },
@@ -845,7 +845,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     expect(opened?.value).toEqual({
       schemaVersion: 2,
       customFutureField: { preserved: true },
-      reviewPromptLikedApp: true,
+      analyticsOptOut: true,
     });
   });
 
@@ -866,7 +866,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     const result = await updateAccountSettingsV2WithRetry({
       credentials,
-      mutation: { operations: [{ op: 'reset', key: 'reviewPromptLikedApp' }] },
+      mutation: { operations: [{ op: 'reset', key: 'analyticsOptOut' }] },
       deps: {
         fetchSettings: async () => ({
           content: { t: 'encrypted', c: initialCiphertext },
@@ -896,7 +896,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
     })).resolves.toEqual({
       status: 'unavailable',
       retryable: true,
@@ -912,7 +912,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
     })).resolves.toEqual({ status: 'unavailable', retryable: true });
   });
 
@@ -943,7 +943,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     const result = await updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
     });
 
     expect(result).toMatchObject({ status: 'applied', version: 6 });
@@ -962,7 +962,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     expect(postSpy).toHaveBeenCalledWith(
       'http://127.0.0.1:3005/v2/account/settings',
       expect.objectContaining({
-        content: { t: 'plain', v: expect.objectContaining({ reviewPromptLikedApp: true }) },
+        content: { t: 'plain', v: expect.objectContaining({ analyticsOptOut: true }) },
         expectedVersion: 5,
       }),
       expect.objectContaining({
@@ -984,7 +984,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     await updateAccountSettingsV2WithRetry({
       credentials,
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         resolveCachePath,
         writeCache,
@@ -1060,7 +1060,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
       credentials,
       expectedVersion: 5,
       shouldCommit: () => commitCurrent,
-      mutate: (settings) => ({ ...settings, reviewPromptLikedApp: true }),
+      mutate: (settings) => ({ ...settings, analyticsOptOut: true }),
       deps: {
         fetchSettings: async () => ({ content: { t: 'encrypted', c: initialContent }, version: 5 }),
         resolveAccountEncryptionMode: resolveE2eeAccountEncryptionMode,
@@ -1108,7 +1108,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
       signal: controller.signal,
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => ({ content: { t: 'plain', v: {} }, version: 5 }),
         resolveAccountEncryptionMode: resolvePlainAccountEncryptionMode,
@@ -1133,7 +1133,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
       signal: controller.signal,
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => ({ content: { t: 'plain', v: {} }, version: 5 }),
         resolveAccountEncryptionMode: resolvePlainAccountEncryptionMode,
@@ -1150,7 +1150,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
       fetchCount += 1;
       return fetchCount === 1
         ? { content: { t: 'plain' as const, v: {} }, version: 5 }
-        : { content: { t: 'plain' as const, v: { reviewPromptLikedApp: true } }, version: 6 };
+        : { content: { t: 'plain' as const, v: { analyticsOptOut: true } }, version: 6 };
     });
     const updateSettings = vi.fn(async (): Promise<AccountSettingsV2UpdateResponse> => {
       controller.abort();
@@ -1160,7 +1160,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
       signal: controller.signal,
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings,
         resolveAccountEncryptionMode: resolvePlainAccountEncryptionMode,
@@ -1231,7 +1231,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
       signal: controller.signal,
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings,
         resolveAccountEncryptionMode: resolvePlainAccountEncryptionMode,
@@ -1242,7 +1242,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     expect(fetchSettings).toHaveBeenCalledTimes(2);
   });
 
-  it('returns typed invalid tooLarge for an oversized plain canonical document before submitting it', async () => {
+  it('returns typed invalid tooLarge for an oversized plain Account feature map before submitting it', async () => {
     const updateSettings = vi.fn(async (): Promise<AccountSettingsV2UpdateResponse> => ({
       success: true,
       version: 6,
@@ -1253,8 +1253,8 @@ describe('updateAccountSettingsV2WithRetry', () => {
       mutation: {
         operations: [{
           op: 'set',
-          key: 'providerSettingsV1',
-          value: { payload: 'x'.repeat(300 * 1024) },
+          key: 'featureToggles',
+          value: Object.fromEntries(Array.from({ length: 2000 }, (_, index) => [`futureFeature${index}`, true] as const)),
         }],
       },
       deps: {
@@ -1274,7 +1274,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
-      mutation: { operations: [{ op: 'reset', key: 'reviewPromptLikedApp' }] },
+      mutation: { operations: [{ op: 'reset', key: 'analyticsOptOut' }] },
       deps: {
         fetchSettings: async () => ({
           content: {
@@ -1290,7 +1290,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     expect(updateSettings).not.toHaveBeenCalled();
   });
 
-  it('returns typed invalid tooLarge for an oversized encrypted canonical document before submitting it', async () => {
+  it('returns typed invalid tooLarge for an oversized encrypted Account feature map before submitting it', async () => {
     const credentials = createLegacyCredentialsStub();
     const initialCiphertext = sealAccountScopedBlobCiphertext({
       kind: 'account_settings',
@@ -1308,8 +1308,8 @@ describe('updateAccountSettingsV2WithRetry', () => {
       mutation: {
         operations: [{
           op: 'set',
-          key: 'providerSettingsV1',
-          value: { payload: 'x'.repeat(300 * 1024) },
+          key: 'featureToggles',
+          value: Object.fromEntries(Array.from({ length: 2000 }, (_, index) => [`futureFeature${index}`, true] as const)),
         }],
       },
       deps: {
@@ -1333,7 +1333,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
 
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createLegacyCredentialsStub(),
-      mutation: { operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }] },
+      mutation: { operations: [{ op: 'set', key: 'analyticsOptOut', value: true }] },
       deps: {
         fetchSettings: async () => ({ content: { t: 'plain', v: {} }, version: 5 }),
         resolveAccountEncryptionMode: resolvePlainAccountEncryptionMode,

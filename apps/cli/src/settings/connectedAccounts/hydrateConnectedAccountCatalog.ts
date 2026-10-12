@@ -41,7 +41,7 @@ export function refreshActiveConnectedAccountCatalog(input: Readonly<{
     }
   }
   let work!: Promise<ConnectedAccountCatalogSnapshotV1>;
-  work = (async () => {
+  work = (async (): Promise<ConnectedAccountCatalogSnapshotV1> => {
     while (true) {
       if (!context) reloadAfterPending.delete(workKey);
       let catalog: ConnectedAccountCatalogSnapshotV1;
@@ -84,7 +84,8 @@ export async function readActiveConnectedAccountCatalog(input: Parameters<typeof
   const current = input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
   if (current?.scopeKey !== expectedScope) return { status: 'unavailable' as const, reason: 'scope-retired' as const };
   const catalog = readConnectedAccountCatalogFromSnapshot(current, input.key);
-  return catalog.status === 'loading' ? refreshActiveConnectedAccountCatalog(input) : catalog;
+  return catalog.status === 'loading' || catalog.status === 'unavailable'
+    ? refreshActiveConnectedAccountCatalog(input) : catalog;
 }
 
 /** Existing Account observer only refreshes domains already demanded by a live consumer. */

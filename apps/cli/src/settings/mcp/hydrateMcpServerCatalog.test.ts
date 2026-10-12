@@ -16,6 +16,8 @@ import { createDeferred } from '@/testkit/async/deferred';
 import { prepareActiveMcpServerCatalog, refreshActiveMcpServerCatalog, refreshActiveMcpServerCatalogAfterChange } from './hydrateMcpServerCatalog';
 import { createCliMcpServerStore } from './mcpServerStore';
 import { createMcpServerActionExecuteV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import { McpRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
+import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 import { McpServerCatalogRowMutationV1Schema, openMcpServerCatalogContentV1, type McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
@@ -198,40 +200,14 @@ describe('CLI MCP catalog Account publication', () => {
     expect(getActiveAccountSettingsSnapshot()?.rawSettings).toEqual(raw);
   });
 
-  it('captures exact binding state: refuses a restore in another Home with the same binding and revision', async () => {
-    const credentials = seedAccount();
-    let revision = 10;
-    let catalog: McpServerCatalogV1 = { v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio',
-      stdio: { command: 'echo', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }],
-      bindings: [{ id: 'binding', serverId: 'server', enabled: false, target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }] };
-    mockAccountReads(async () => ({ status: 'present', revision, content: { t: 'plain', v: catalog } }));
-    vi.spyOn(axios, 'post').mockImplementation(async (_url, body) => {
-      const mutation = McpServerCatalogRowMutationV1Schema.parse(body);
-      if (mutation.expectedRevision !== revision) return { status: 409, data: { status: 'conflict', revision } };
-      if (mutation.content?.t !== 'plain') throw new Error('Expected plain catalog');
-      catalog = mutation.content.v;
-      return { status: 200, data: { status: 'updated', revision: ++revision, cursor: revision } };
-    });
-    await refreshActiveMcpServerCatalog({ credentials });
-    const otherHome = createCliMcpServerStore({ credentials, serverId: 'home-b' });
-    const execute = createMcpServerActionExecuteV1({ readCatalog: () => otherHome.readCatalog(),
-      mutate: (change, expectedRevision) => otherHome.mutate(change, expectedRevision),
-      machine: async () => { throw new Error('Unexpected Machine effect'); } });
-    const context = { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
-    await expect(execute({ actionId: 'mcp.bindings.enable', input: { bindingId: 'binding', expectedRevision: 10,
-      expectedEnabled: false, expectedScope: { serverId: 'home-a', accountId: 'mcp-account' } }, context }))
-      .rejects.toMatchObject({ code: 'server_scope_mismatch' });
-    expect(revision).toBe(10);
-    expect(catalog.bindings[0]?.enabled).toBe(false);
-  });
-
-  it('captures exact binding state through the public Action and conditionally restores at the durable row CAS', async () => {
+  it('returns committed rules for Undo and refuses a lost catalog CAS without changing configuration', async () => {
     const credentials = seedAccount();
     let revision = 9;
     let catalog: McpServerCatalogV1 = { v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio',
-      stdio: { command: 'echo', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }],
-      bindings: [{ id: 'binding', serverId: 'server', enabled: true, target: { t: 'allMachines' },
-        overrides: { envPatch: { PRIVATE: { t: 'literal', v: 'private-config' } } }, createdAt: 1, updatedAt: 1 }] };
+      stdio: { command: 'echo', args: [] }, env: {}, createdAt: 1, updatedAt: 1,
+      configOverrides: [{ target: { t: 'machine', machineId: 'm' }, envPatch: { PRIVATE: { t: 'literal', v: 'private-config' } } }] }],
+      bindings: [{ id: 'binding', serverId: 'server', enabled: true, target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }] };
+    const originalServers = catalog.servers;
     mockAccountReads(async () => ({ status: 'present', revision, content: { t: 'plain', v: catalog } }));
     let raceAtWrite = false;
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
@@ -249,40 +225,24 @@ describe('CLI MCP catalog Account publication', () => {
       mutate: (change, expectedRevision) => store.mutate(change, expectedRevision),
       machine: async () => { throw new Error('Unexpected machine effect'); } });
     const context = { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
-    expect(await execute({ actionId: 'mcp.bindings.disable', input: { bindingId: 'binding', expectedRevision: 9,
-      captureBefore: true }, context })).toEqual({ ok: true, result: { status: 'updated', revision: 10, cursor: 10,
-      reversal: { scope: { serverId: 'home-a', accountId: 'mcp-account' }, bindingId: 'binding', before: true,
-        applied: false, revision: 10 } } });
+    const changed = await execute({ actionId: 'mcp.rules.set', input: { items: [{ serverId: 'server' }],
+      change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'off' } } }, context });
+    expect(changed).toMatchObject({ ok: true, result: { ok: true, revision: 10,
+      items: [{ serverId: 'server', rules: [{ id: 'binding', enabled: false }], previous: [{ id: 'binding', enabled: true }] }] } });
+    expect(catalog.servers).toEqual(originalServers);
     expect(catalog.bindings[0]?.enabled).toBe(false);
-    expect(await execute({ actionId: 'mcp.bindings.disable', input: { bindingId: 'binding', expectedRevision: 10,
-      captureBefore: true }, context })).toEqual({ ok: true, result: { status: 'updated', revision: 11, cursor: 11,
-      reversal: { scope: { serverId: 'home-a', accountId: 'mcp-account' }, bindingId: 'binding', before: false,
-        applied: false, revision: 11 } } });
-    const otherHome = createCliMcpServerStore({ credentials, serverId: 'home-b' });
-    const executeInOtherHome = createMcpServerActionExecuteV1({ readCatalog: () => otherHome.readCatalog(),
-      mutate: (change, expectedRevision) => otherHome.mutate(change, expectedRevision),
-      machine: async () => { throw new Error('Unexpected Machine effect'); } });
-    await expect(executeInOtherHome({ actionId: 'mcp.bindings.enable', input: { bindingId: 'binding', expectedRevision: 11,
-      expectedEnabled: false, expectedScope: { serverId: 'home-a', accountId: 'mcp-account' } }, context }))
-      .rejects.toMatchObject({ code: 'server_scope_mismatch' });
-    expect(catalog.bindings[0]?.enabled).toBe(false);
-    expect(await execute({ actionId: 'mcp.bindings.enable', input: { bindingId: 'binding', expectedRevision: 11,
-      expectedEnabled: true }, context })).toEqual({ ok: true, result: { status: 'conflict', revision: 11 } });
-    expect(catalog.bindings[0]?.enabled).toBe(false);
-    expect(await execute({ actionId: 'mcp.bindings.enable', input: { bindingId: 'binding', expectedRevision: 11,
-      expectedEnabled: false, expectedScope: { serverId: 'home-a', accountId: 'mcp-account' } }, context }))
-      .toEqual({ ok: true, result: { status: 'updated', revision: 12, cursor: 12 } });
+    const receipt = McpRulesSetOutputV1Schema.parse(changed.ok ? changed.result : null);
+    if (!receipt.ok) throw new Error('Expected committed rule receipt');
+    const restored = await execute({ actionId: 'mcp.rules.set', input: { items: [{ serverId: 'server' }],
+      change: { kind: 'replace', rules: reachRulesToDraftsV1(receipt.items[0]!.previous) } }, context });
+    expect(restored).toMatchObject({ ok: true, result: { ok: true, revision: 11 } });
     expect(catalog.bindings[0]?.enabled).toBe(true);
-    expect(await execute({ actionId: 'mcp.bindings.disable', input: { bindingId: 'binding', expectedRevision: 11,
-      expectedEnabled: true }, context })).toEqual({ ok: true, result: { status: 'conflict', revision: 12 } });
     raceAtWrite = true;
-    expect(await execute({ actionId: 'mcp.bindings.disable', input: { bindingId: 'binding', expectedRevision: 12,
-      captureBefore: true }, context })).toEqual({ ok: true, result: { status: 'conflict', revision: 13 } });
+    expect(await execute({ actionId: 'mcp.rules.set', input: { items: [{ serverId: 'server' }],
+      change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'off' } } }, context }))
+      .toEqual({ ok: true, result: { ok: false, code: 'conflict' } });
     expect(catalog.bindings[0]?.enabled).toBe(true);
-    await refreshActiveMcpServerCatalog({ credentials });
-    expect(await execute({ actionId: 'mcp.bindings.disable', input: { bindingId: 'binding', expectedRevision: 13 }, context }))
-      .toEqual({ ok: true, result: { status: 'updated', revision: 14, cursor: 14 } });
-    expect(catalog.bindings[0]?.enabled).toBe(false);
+    expect(catalog.servers).toEqual(originalServers);
   });
 
   it('publishes row-only changes without advancing preference revision or rewriting the retained root', async () => {
@@ -377,7 +337,7 @@ describe('CLI MCP catalog Account publication', () => {
     const captured = getActiveAccountSettingsSnapshot()?.mcpServerCatalog;
     if (captured?.status !== 'ready' || !captured.catalog.servers[0]) throw new Error('Fixture is not admitted');
     const mutation = createCliMcpServerStore({ credentials }).mutate({ kind: 'server-update',
-      entry: { ...captured.catalog.servers[0], title: 'Updated without a UI' }, bindings: [] }, captured.revision);
+      entry: { ...captured.catalog.servers[0], title: 'Updated without a UI' } }, captured.revision);
     try {
       expect(await Promise.race([rowMutationIssued.promise.then(() => 'mutation'),
         repeatedHistory.promise.then(() => 'maintenance')])).toBe('mutation');

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { randomUUID } from 'node:crypto';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { classifyHomeDomainHttpMutationFailureV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { AccountSettingsV2GetResponseSchema, AccountSettingsV2UpdateResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
@@ -221,6 +222,7 @@ function createCapturedStore(input: Readonly<{
       if (expectedRevision !== undefined && snapshot.revision !== expectedRevision) return { status: 'conflict' as const,
         revision: snapshot.revision };
       return commitMcpServerCatalogMutationV1({ catalog: snapshot.catalog, revision: snapshot.revision, change, scope,
+        ctx: { nowMs: Date.now(), newId: randomUUID },
         writeCatalog: async value => {
           const publishMutation = await input.prepareMutationPublication?.();
           const result = await writeCatalog(value);
