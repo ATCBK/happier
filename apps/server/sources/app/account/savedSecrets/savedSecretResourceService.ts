@@ -43,6 +43,7 @@ import { NotificationChannelCatalogMutationV1Schema, readLegacyNotificationChann
 import { readNotificationChannelCatalogInTx, mutateNotificationChannelCatalogInTx, validateNotificationChannelReferenceCensusInTx } from '@/app/account/notifications/channelRows';
 import type { Prisma } from "@prisma/client";
 import { isDeepStrictEqual } from "node:util";
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import * as privacyKit from "privacy-kit";
 import { writeAccountSettingsInTx } from "@/app/accountSettings/writeAccountSettingsInTx";
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
@@ -1836,35 +1837,42 @@ function rejectSavedSecretCatalogMutation(result: Readonly<{ status: string }>):
 async function mutateSavedSecretCatalogsInTx(tx: Tx, input: Readonly<{
     accountId: string; authentication?: TeamOperationAuthenticationContext; mutations: SavedSecretCatalogMutationsV1;
     savedSecretRefs?: ReadonlyMap<string, string>;
-}>): Promise<void> {
+}>): Promise<Partial<SavedSecretCatalogRevisionsV1>> {
     const actor = { accountId: input.accountId, authentication: input.authentication };
+    const revisions: Partial<SavedSecretCatalogRevisionsV1> = {};
+    const capture = (key: keyof SavedSecretCatalogRevisionsV1, result: Readonly<{ status: string; revision?: number }>) => {
+        rejectSavedSecretCatalogMutation(result);
+        if (result.revision === undefined) throw new SavedSecretResourceTransactionAbort('references_invalid');
+        revisions[key] = result.revision;
+    };
     if (input.mutations.mcp) {
         const { mutateMcpServerCatalogRowInTx } = await import('@/app/account/mcp/serverRows');
-        rejectSavedSecretCatalogMutation(await mutateMcpServerCatalogRowInTx(tx, { ...actor, ...input.mutations.mcp }));
+        capture('mcp', await mutateMcpServerCatalogRowInTx(tx, { ...actor, ...input.mutations.mcp }));
     }
     if (input.mutations.acp) {
         const { mutateConfiguredAgentCatalogRowInTx, transferConfiguredAgentCatalogSourceInTx } = await import('@/app/account/agents/configuredAgentRows');
         const mutation = input.mutations.acp;
         if (mutation.expectedRevision === 'absent' && mutation.source && mutation.sourceSettingsVersion !== undefined) {
-            rejectSavedSecretCatalogMutation(await transferConfiguredAgentCatalogSourceInTx(tx, { ...actor,
+            capture('acp', await transferConfiguredAgentCatalogSourceInTx(tx, { ...actor,
                 mutation: { ...mutation, expectedRevision: 'absent', source: mutation.source, sourceSettingsVersion: mutation.sourceSettingsVersion },
                 savedSecretRefs: input.savedSecretRefs }));
-        } else rejectSavedSecretCatalogMutation(await mutateConfiguredAgentCatalogRowInTx(tx, { ...actor, ...mutation }));
+        } else capture('acp', await mutateConfiguredAgentCatalogRowInTx(tx, { ...actor, ...mutation }));
     }
     if (input.mutations.providerConnections) {
         const { mutateProviderConnectionsRowInTx } = await import('@/app/account/providers/connectionRows');
-        rejectSavedSecretCatalogMutation(await mutateProviderConnectionsRowInTx(tx, { ...actor, ...input.mutations.providerConnections }));
+        capture('providerConnections', await mutateProviderConnectionsRowInTx(tx, { ...actor, ...input.mutations.providerConnections }));
     }
     if (input.mutations.connectedConfigurations) {
         const { mutateConnectedAccountCatalogRowInTx } = await import('@/app/account/connectedAccounts/configurationRows');
-        rejectSavedSecretCatalogMutation(await mutateConnectedAccountCatalogRowInTx(tx,
+        capture('connectedConfigurations', await mutateConnectedAccountCatalogRowInTx(tx,
             { ...actor, key: 'configurations', ...input.mutations.connectedConfigurations }));
     }
     if (input.mutations.connectedPurposes) {
         const { mutateConnectedAccountCatalogRowInTx } = await import('@/app/account/connectedAccounts/configurationRows');
-        rejectSavedSecretCatalogMutation(await mutateConnectedAccountCatalogRowInTx(tx,
+        capture('connectedPurposes', await mutateConnectedAccountCatalogRowInTx(tx,
             { ...actor, key: 'purposes', ...input.mutations.connectedPurposes }));
     }
+    return revisions;
 }
 
 function savedSecretPromotionResources(input: PromoteSavedSecretResourceInput): readonly CreateSavedSecretResourceInput[] {
@@ -1906,7 +1914,8 @@ async function validatePersonalPromotionSourcesInTx(tx: Tx, input: PromoteSavedS
     const snapshots = machines.map(machine => machine.environmentSetup);
     const carriers = [...presets.map(preset => preset.environment), ...snapshots];
     if (removed.some(secretId => carriers.some(value => listSavedSecretReferenceCarrierPathsV1(value, { secretId }).length > 0))) return false;
-    const snapshotEnvironments = snapshots.map(setup => setup !== null && typeof setup === 'object' && !Array.isArray(setup) ? setup.environment ?? null : null);
+    const snapshotEnvironments = snapshots.map(setup => setup !== null && typeof setup === 'object' && !Array.isArray(setup)
+        && 'environment' in setup ? (setup as Prisma.JsonObject).environment ?? null : null);
     if (snapshots.some((setup, index) => [...mapped].some(secretId =>
         listSavedSecretReferenceCarrierPathsV1(setup, { secretId }).length !== listSavedSecretReferenceCarrierPathsV1(snapshotEnvironments[index], { secretId }).length))) return false;
     const environments = [...presets.map(preset => preset.environment), ...snapshotEnvironments];
@@ -2002,16 +2011,16 @@ async function promoteCatalogOnlySavedSecretResourcesInTx(tx: Tx, input: Promote
         const receipt = await readSavedSecretCatalogCensusInTx(tx, { accountId: input.accountId, accountMode: census.accountMode,
             captures: postCaptures, destinationOnly: true });
         if (!resourcesBound || !receipt.ok || savedSecretCatalogMutationKeys.some(key => mutations[key]
-            && !isDeepStrictEqual(receipt.value.contents[key]?.content, mutations[key]!.content))) return current;
+            && !sameStrictJsonValue(receipt.value.contents[key]?.content, mutations[key]!.content))) return current;
         if (remote) {
             const row = await readRemoteHostCatalogRowInTx(tx, { accountId: input.accountId });
             if (row.status !== 'present' || row.revision !== receiptValue(fence.account.settingsVersion).remoteHostRevision
-                || !isDeepStrictEqual(row.content, remote.content)) return current;
+                || !sameStrictJsonValue(row.content, remote.content)) return current;
         }
         if (notification) {
             const row = await readNotificationChannelCatalogInTx(tx, { accountId: input.accountId });
             if (row.status !== 'present' || row.revision !== receiptValue(fence.account.settingsVersion).notificationChannelRevision
-                || !isDeepStrictEqual(row.content, notification.content)) return current;
+                || !sameStrictJsonValue(row.content, notification.content)) return current;
         }
         const resourcesReceipt = await proveSavedSecretPromotionResourcesInTx(tx, input);
         if (!resourcesReceipt.ok) return resourcesReceipt;
@@ -2046,6 +2055,7 @@ function isPromotedMachineEnvironmentRewritable(value: Prisma.JsonValue, sourceI
 
 function rewritePromotedMachineEnvironment(value: Prisma.JsonValue, promotions: ReadonlyMap<string, Readonly<{ ref: string; revision: number }>>): Prisma.InputJsonObject | null {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+    const source = value as Prisma.JsonObject;
     const reached = [...promotions.keys()].filter(secretId => listSavedSecretReferenceCarrierPathsV1(value, { secretId }).length > 0);
     if (reached.length === 0) return null;
     const parsed = MachineEnvironmentV1ReadSchema.safeParse(value);
@@ -2056,7 +2066,7 @@ function rewritePromotedMachineEnvironment(value: Prisma.JsonValue, promotions: 
         const promoted = promotions.get(binding.ref);
         return [key, promoted ? { ref: promoted.ref, revision: promoted.revision } : binding];
     }));
-    return { ...value, secretRefs: { ...parsed.data.secretRefs, bindings } };
+    return { ...source, secretRefs: { ...parsed.data.secretRefs, bindings } };
 }
 
 /** Personal ids are scoped to the controller/custodian Account, including Team-owned presets. */
@@ -2076,8 +2086,9 @@ async function rewritePromotedMachineReferencesInTx(tx: Tx, accountId: string,
     const machines = await tx.managedMachine.findMany({ where: { custodianAccountId: accountId } });
     for (const machine of machines) {
         const setup = machine.environmentSetup;
-        if (setup === null || typeof setup !== 'object' || Array.isArray(setup) || setup.environment === undefined) continue;
-        const environment = rewritePromotedMachineEnvironment(setup.environment, promotions);
+        if (setup === null || typeof setup !== 'object' || Array.isArray(setup)
+            || !('environment' in setup) || setup.environment === undefined) continue;
+        const environment = rewritePromotedMachineEnvironment((setup as Prisma.JsonObject).environment, promotions);
         if (!environment) continue;
         const changed = await tx.managedMachine.updateMany({ where: { id: machine.id, environmentSetup: { equals: setup } },
             data: { environmentSetup: { ...setup, environment } } });
@@ -2138,8 +2149,8 @@ export async function promoteSavedSecretResourceInTx(
             ...(remote ? { remoteHostRevision: remoteRevision } : {}),
             ...(notification ? { notificationChannelRevision: notificationRevision } : {}) };
         if (remote && rowRevision(remoteRow) !== remote.expectedRevision || notification && rowRevision(notificationRow) !== notification.expectedRevision) {
-            if (remote && (remoteRow?.status !== 'present' || remoteRow.revision !== remoteRevision || !isDeepStrictEqual(remoteRow.content, remote.content))
-                || notification && (notificationRow?.status !== 'present' || notificationRow.revision !== notificationRevision || !isDeepStrictEqual(notificationRow.content, notification.content))) return { ok: false, error: 'references_conflict' };
+            if (remote && (remoteRow?.status !== 'present' || remoteRow.revision !== remoteRevision || !sameStrictJsonValue(remoteRow.content, remote.content))
+                || notification && (notificationRow?.status !== 'present' || notificationRow.revision !== notificationRevision || !sameStrictJsonValue(notificationRow.content, notification.content))) return { ok: false, error: 'references_conflict' };
             const census = await readSavedSecretReferenceCensusInTx(tx, { ...input, referenceCensus: { ...input.referenceCensus,
                 ...(remote && remoteRevision !== undefined ? { remoteHosts: { revision: remoteRevision, resourceRefs: remote.referencedSavedSecretRevisions.map(capture => formatSharedSavedSecretRefV1(capture.resourceId)) } } : {}),
                 ...(notification && notificationRevision !== undefined ? { notificationChannels: { revision: notificationRevision, resourceRefs: notification.savedSecretRevisions.map(capture => capture.resourceRef) } } : {}) } });
@@ -2190,7 +2201,7 @@ export async function promoteSavedSecretResourceInTx(
                 expectedProfileTransferRevision: parsedCensus.data.profileTransferRevision ?? 'absent',
                 next: { kind: 'v2', content: input.nextSettings } });
             if (current.status === 'profile_transfer_mismatch') throw new SavedSecretResourceTransactionAbort('references_conflict');
-            if (current.status !== 'version_mismatch' || !isDeepStrictEqual(current.currentContent, input.nextSettings)) throw new SavedSecretResourceTransactionAbort('settings_conflict');
+            if (current.status !== 'version_mismatch' || !sameStrictJsonValue(current.currentContent, input.nextSettings)) throw new SavedSecretResourceTransactionAbort('settings_conflict');
         }
         const resourcesReceipt = await proveSavedSecretPromotionResourcesInTx(tx, input);
         if (!resourcesReceipt.ok) return resourcesReceipt;
@@ -2211,19 +2222,26 @@ export async function promoteSavedSecretResourceInTx(
                 rows: parsedCensus.data.profiles.rows.map(row => ({ ...row, revision: row.revision + (changedRows.has(row.id) ? 1 : 0) })),
             } } });
         if (!retryCensus.ok) return retryCensus;
-        if (retryCensus.value.rows.some(row => changedRows.has(row.id) && !isDeepStrictEqual(row.content, changedRows.get(row.id)!.content))) return { ok: false, error: 'references_conflict' };
-        if (savedSecretCatalogMutationKeys.some(key => parsedCatalogMutations.data[key]
-            && !isDeepStrictEqual(retryCensus.value.catalogContents[key]?.content, parsedCatalogMutations.data[key]!.content))) return { ok: false, error: 'references_conflict' };
+        if (retryCensus.value.rows.some(row => changedRows.has(row.id) && !sameStrictJsonValue(row.content, changedRows.get(row.id)!.content))) return { ok: false, error: 'references_conflict' };
+        const catalogRevisions: Partial<SavedSecretCatalogRevisionsV1> = {};
+        for (const key of savedSecretCatalogMutationKeys) if (parsedCatalogMutations.data[key]) {
+            const captured = retryCensus.value.catalogContents[key];
+            if (typeof captured?.revision !== 'number' || !sameStrictJsonValue(captured.content, parsedCatalogMutations.data[key]!.content)) {
+                return { ok: false, error: 'references_conflict' };
+            }
+            catalogRevisions[key] = captured.revision;
+        }
         if (parsedRemote?.success) {
             const row = await readRemoteHostCatalogRowInTx(tx, { accountId: input.accountId });
-            if (row.status !== 'present' || row.revision !== remoteHostRevision || !isDeepStrictEqual(row.content, parsedRemote.data.content)) return { ok: false, error: 'references_conflict' };
+            if (row.status !== 'present' || row.revision !== remoteHostRevision || !sameStrictJsonValue(row.content, parsedRemote.data.content)) return { ok: false, error: 'references_conflict' };
         }
         if (parsedNotification?.success) {
             const row = await readNotificationChannelCatalogInTx(tx, { accountId: input.accountId });
-            if (row.status !== 'present' || row.revision !== notificationChannelRevision || !isDeepStrictEqual(row.content, parsedNotification.data.content)
+            if (row.status !== 'present' || row.revision !== notificationChannelRevision || !sameStrictJsonValue(row.content, parsedNotification.data.content)
                 || !await validateNotificationPromotionReferencesInTx(tx, input, parsedNotification.data)) return { ok: false, error: 'references_conflict' };
         }
         return { ok: true, value: { resourceId: input.resourceId, settingsVersion: fence.account.settingsVersion,
+            ...(Object.keys(catalogRevisions).length ? { catalogRevisions } : {}),
             ...(notificationChannelRevision === undefined ? {} : { notificationChannelRevision }),
             ...(remoteHostRevision === undefined ? {} : { remoteHostRevision }) } };
     }
@@ -2247,7 +2265,7 @@ export async function promoteSavedSecretResourceInTx(
     for (const key of savedSecretCatalogMutationKeys) if (parsedCatalogMutations.data[key]
         && parsedCensus.data.catalogs?.[key] !== parsedCatalogMutations.data[key]!.expectedRevision) return { ok: false, error: 'references_invalid' };
     await createSavedSecretPromotionResourcesInTx(tx, input);
-    await mutateSavedSecretCatalogsInTx(tx, { accountId: input.accountId, authentication: input.authentication,
+    const catalogRevisions = await mutateSavedSecretCatalogsInTx(tx, { accountId: input.accountId, authentication: input.authentication,
         mutations: parsedCatalogMutations.data, savedSecretRefs });
     let remoteHostRevision: number | undefined;
     let notificationChannelRevision: number | undefined;
@@ -2275,6 +2293,7 @@ export async function promoteSavedSecretResourceInTx(
         if (guard.status !== 'updated') throw new SavedSecretResourceTransactionAbort(guard.status === 'conflict' ? 'references_conflict' : 'references_invalid');
     }
     if (unchangedSettings) return { ok: true, value: { resourceId: input.resourceId, settingsVersion: input.expectedSettingsVersion,
+        ...(Object.keys(catalogRevisions).length ? { catalogRevisions } : {}),
         ...(notificationChannelRevision === undefined ? {} : { notificationChannelRevision }),
         ...(remoteHostRevision === undefined ? {} : { remoteHostRevision }) } };
     const settingsWrite = await writeAccountSettingsInTx({
@@ -2292,6 +2311,7 @@ export async function promoteSavedSecretResourceInTx(
         throw new SavedSecretResourceTransactionAbort("settings_invalid");
     }
     return { ok: true, value: { resourceId: input.resourceId, settingsVersion: settingsWrite.version,
+        ...(Object.keys(catalogRevisions).length ? { catalogRevisions } : {}),
         ...(notificationChannelRevision === undefined ? {} : { notificationChannelRevision }),
         ...(remoteHostRevision === undefined ? {} : { remoteHostRevision }) } };
 }

@@ -35,7 +35,7 @@ import * as resourceService from './savedSecretResourceService';
 import { createArtifactTx, updateArtifactTx } from '@/app/artifacts/artifactWriteService';
 import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
 import { mutateProfileTransferInTx, readProfileTransferControlInTx } from '@/app/account/profiles/profileTransferRows';
-import { mutateProfileRowsInTx } from '@/app/account/profiles/profileRows';
+import { mutateProfileRowsInTx, readProfileReferenceGuardInTx } from '@/app/account/profiles/profileRows';
 import { prepareAcpCatalogTransferV2 } from '@happier-dev/protocol/acp/catalog/transferAcpCatalogV2';
 import { KIRO_ACP_STDERR_RULES } from '@happier-dev/plugins-kiro/agent/acp/transport';
 import { mutateRemoteHostCatalogRowInTx } from '@/app/account/remoteHosts/remoteHostRows';
@@ -277,8 +277,15 @@ describe("Saved Secret resource service (SQLite integration)", () => {
             return { owner, input, record: prepared.record };
         };
         const first = await prepare();
-        expect(await inTx(tx => promoteSavedSecretResourceInTx(tx, first.input)))
-            .toEqual({ ok: true, value: { resourceId: first.input.resourceId, settingsVersion: 8 } });
+        const receipt = await inTx(tx => promoteSavedSecretResourceInTx(tx, first.input));
+        expect(await inTx(tx => readProfileReferenceGuardInTx(tx, { accountId: first.owner.id }))).toEqual({ status: 'ready', revision: 0 });
+        expect(await inTx(tx => resourceService.readSavedSecretReferenceCensusInTx(tx, { ...first.input,
+            expectedSettingsVersion: 8, referenceCensus: { ...first.input.referenceCensus,
+                catalogs: { ...first.input.referenceCensus.catalogs, acp: 0 }, profiles: { referenceGuardRevision: 0, rows: [] } } })))
+            .toMatchObject({ ok: true });
+        const retriedReceipt = await inTx(tx => promoteSavedSecretResourceInTx(tx, first.input));
+        const acknowledged = { ok: true, value: { resourceId: first.input.resourceId, settingsVersion: 8, catalogRevisions: { acp: 0 } } };
+        expect([receipt, retriedReceipt]).toEqual([acknowledged, acknowledged]);
         const row = await db.userKVStore.findUniqueOrThrow({ where: { accountId_key: { accountId: first.owner.id, key } } });
         expect(row.version).toBe(0);
         expect(row.value && JSON.parse(Buffer.from(row.value).toString('utf8'))).toEqual({ t: 'plain', v: first.record });
