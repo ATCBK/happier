@@ -40,6 +40,7 @@ export const CODEBUDDY_PLUGIN = definePlugin({
       primary: 'sessions',
       catalog: { vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume } },
       capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+        skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
         sessions: {
           open: ['create', 'resume'], delivery: ['newTurn', 'followUp'], cancel: true,
           configuration: true, executionRunContext: { versions: [1] },
