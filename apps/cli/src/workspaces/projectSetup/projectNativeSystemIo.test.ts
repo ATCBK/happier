@@ -19,6 +19,35 @@ async function fixture() {
 }
 
 describe('installed native tool producer', () => {
+    it('resolves an already installed Yarn package behind Corepack without executing its shim or downloading', async () => {
+        const root = await fixture();
+        const corepack = join(root, 'corepack');
+        const cache = join(root, 'corepack-cache');
+        const yarn = join(cache, 'v1/yarn/1.22.22');
+        vi.stubEnv('COREPACK_HOME', cache);
+        await mkdir(join(corepack, 'dist'), { recursive: true });
+        await mkdir(join(yarn, 'bin'), { recursive: true });
+        const shim = join(corepack, 'dist/yarn.js');
+        const entrypoint = join(yarn, 'bin/yarn.js');
+        await writeFile(shim, '#!/usr/bin/env node\nthrow new Error("must not execute Corepack");\n', { mode: 0o755 });
+        await writeFile(join(corepack, 'package.json'), JSON.stringify({ name: 'corepack', version: '0.36.0', bin: { yarn: 'dist/yarn.js' } }));
+        await writeFile(entrypoint, '#!/usr/bin/env node\nthrow new Error("inspection must not execute Yarn");\n', { mode: 0o755 });
+        await writeFile(join(yarn, 'package.json'), JSON.stringify({ name: 'yarn', version: '1.22.22', bin: { yarn: 'bin/yarn.js' } }));
+        await writeFile(join(yarn, '.corepack'), JSON.stringify({ locator: { name: 'yarn', reference: '1.22.22' }, bin: { yarn: './bin/yarn.js' } }));
+        await writeFile(join(cache, 'lastKnownGood.json'), JSON.stringify({ yarn: '1.22.22+sha512.installed' }));
+        if (process.platform === 'win32') {
+            await mkdir(join(root, 'bin/node_modules'), { recursive: true });
+            await symlink(corepack, join(root, 'bin/node_modules/corepack'), 'junction');
+            vi.stubEnv('PATHEXT', '.CMD;.EXE');
+            await writeFile(join(root, 'bin/yarn.cmd'), '@echo off\r\nexit /b 1\r\n');
+        } else await symlink(shim, join(root, 'bin/yarn'));
+        expect(await projectNativeSystemIo.resolveTool('yarn', { cwd: root }))
+            .toMatchObject({ executablePath: process.execPath, args: [entrypoint], version: '1.22.22' });
+        // An incomplete native installation remains unavailable; the probe never
+        // invokes Corepack to fill its existing cache.
+        await rm(join(yarn, '.corepack'));
+        expect(await projectNativeSystemIo.resolveTool('yarn', { cwd: root })).toBeNull();
+    });
     it.each(['npm', 'yarn', 'pnpm'])('resolves installed %s metadata through managed JS runtime without executing the package or trusting the requested version', async tool => {
         const root = await fixture();
         const pkg = process.platform === 'win32' ? join(root, 'bin', 'node_modules', tool) : join(root, 'installed', tool);
