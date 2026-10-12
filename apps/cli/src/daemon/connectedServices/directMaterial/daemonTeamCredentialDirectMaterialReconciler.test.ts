@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ActionExecutorDeps } from '@happier-dev/protocol';
+import { accountSettingsParse, type ActionExecutorDeps } from '@happier-dev/protocol';
 import {
   NO_TEAM_CAPABILITIES_V1,
   TeamCredentialResourcePageV1Schema,
@@ -16,7 +16,18 @@ vi.mock('./teamCredentialDirectMaterialHttp', () => ({
   upsertTeamCredentialDirectMaterial: vi.fn(),
 }));
 
-import { createDaemonTeamCredentialDirectMaterialReconciler } from './daemonTeamCredentialDirectMaterialReconciler';
+import { createDaemonTeamCredentialDirectMaterialReconciler, subscribeTeamCredentialDirectMaterialSourceChanges } from './daemonTeamCredentialDirectMaterialReconciler';
+import {
+  clearActiveAccountSettingsSnapshot,
+  commitActiveNotificationChannelCatalog,
+  commitActiveProviderConnectionsCatalog,
+  commitActiveSavedSecretCatalog,
+  getActiveAccountSettingsSnapshotLifetimeToken,
+  getActiveAccountSettingsSnapshot,
+  resetActiveAccountSettingsSnapshotForTests,
+  setActiveAccountSettingsSnapshot,
+} from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import {
   fetchTeamCredentialDirectMaterialPreparation,
 } from './teamCredentialDirectMaterialHttp';
@@ -144,6 +155,45 @@ function reconciler(homeDomainAction: NonNullable<ActionExecutorDeps['homeDomain
 
 describe('daemon Team credential direct-material reconciler', () => {
   beforeEach(() => { vi.mocked(fetchTeamCredentialDirectMaterialPreparation).mockReset(); });
+
+  it('wakes for source authority and Account lifetime changes without reconciling unrelated catalog publications', () => {
+    resetActiveAccountSettingsSnapshotForTests();
+    setActiveAccountSettingsSnapshot({
+      source: 'network',
+      settings: accountSettingsParse({}),
+      settingsVersion: 1,
+      loadedAtMs: 1,
+      settingsSecretsReadKeys: [],
+      scopeKey: 'source-account',
+    });
+    const observed: string[] = [];
+    const unsubscribe = subscribeTeamCredentialDirectMaterialSourceChanges((_previous, next) => {
+      observed.push(next === null ? 'account-cleared' : next.savedSecretCatalogState ?? 'provider-authority');
+    });
+    const incumbent = { scopeKey: 'source-account', lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
+    const providerCatalog = { status: 'ready' as const, revision: 1, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
+    try {
+      commitActiveNotificationChannelCatalog({ ...incumbent, catalog: { status: 'ready', revision: 1, channels: [], diagnostics: [] } });
+      expect(observed).toEqual([]);
+      commitActiveProviderConnectionsCatalog({ ...incumbent, catalog: providerCatalog });
+      expect(observed).toEqual(['provider-authority']);
+      commitActiveNotificationChannelCatalog({ ...incumbent, catalog: { status: 'ready', revision: 2, channels: [], diagnostics: [] } });
+      expect(observed).toEqual(['provider-authority']);
+      setActiveAccountSettingsSnapshot({
+        ...getActiveAccountSettingsSnapshot()!,
+        settings: accountSettingsParse({ analyticsOptOut: true }),
+        settingsVersion: 2,
+      });
+      expect(observed).toEqual(['provider-authority']);
+      commitActiveSavedSecretCatalog({ ...incumbent, resources: [], state: 'temporarily_unavailable' });
+      expect(observed).toEqual(['provider-authority', 'temporarily_unavailable']);
+      clearActiveAccountSettingsSnapshot();
+      expect(observed).toEqual(['provider-authority', 'temporarily_unavailable', 'account-cleared']);
+    } finally {
+      unsubscribe();
+      resetActiveAccountSettingsSnapshotForTests();
+    }
+  });
 
   // The administration list is paginated, so an owned direct resource beyond
   // the first page must still be reconciled instead of silently reported clean.

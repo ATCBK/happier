@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { computeTeamCredentialSourceMemberKeyV1 } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
 import { TeamCredentialResourcePageV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import type { TeamCredentialResourceSummaryV1, TeamCredentialSourceBindingV1, TeamCredentialSourceMemberV1, TeamCredentialDirectMaterialCensusInputV1, TeamCredentialDirectMaterialCensusOutputV1, TeamCredentialDirectMaterialReconcileInputV1, TeamCredentialDirectMaterialReconcileOutputV1 } from '@happier-dev/protocol/teams';
@@ -22,6 +23,32 @@ import {
   withdrawTeamCredentialDirectMaterial,
 } from './teamCredentialDirectMaterialHttp';
 import { reconcileTeamCredentialDirectMaterial } from './reconcileTeamCredentialDirectMaterial';
+import {
+  subscribeActiveAccountSettingsSnapshotChanges,
+  type ActiveAccountSettingsSnapshot,
+  type ActiveAccountSettingsSnapshotListener,
+} from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+
+// These are the Account facts read by Provider direct-source admission and
+// connected-account materialization. Other opened catalogs share the snapshot
+// publication cut but do not change credential material.
+const directMaterialSourceSnapshotFields = [
+  'scopeKey', 'source',
+  'providerConnectionsCatalog', 'savedSecretResources', 'savedSecretCatalogState',
+  'connectedConfigurationCatalog',
+] as const satisfies readonly (keyof ActiveAccountSettingsSnapshot)[];
+
+export function subscribeTeamCredentialDirectMaterialSourceChanges(
+  listener: ActiveAccountSettingsSnapshotListener,
+): () => void {
+  return subscribeActiveAccountSettingsSnapshotChanges((previous, next) => {
+    if (previous && next
+      && directMaterialSourceSnapshotFields.every(field => previous[field] === next[field])
+      && isDeepStrictEqual(previous.settings.secrets, next.settings.secrets)
+      && isDeepStrictEqual(previous.settingsSecretsReadKeys, next.settingsSecretsReadKeys)) return;
+    listener(previous, next);
+  });
+}
 
 type HomeDomainAction = NonNullable<ActionExecutorDeps['homeDomainAction']>;
 

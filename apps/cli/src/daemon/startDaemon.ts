@@ -203,6 +203,7 @@ import {
 import { createDaemonConnectedAccountPurposeBindingRuntime } from './connectedServices/purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
 import {
   createDaemonTeamCredentialDirectMaterialReconciler,
+  subscribeTeamCredentialDirectMaterialSourceChanges,
 } from './connectedServices/directMaterial/daemonTeamCredentialDirectMaterialReconciler';
 import { createHttpTeamCredentialDirectMaterialClient } from './connectedServices/directMaterial/teamCredentialDirectMaterialClient';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
@@ -257,7 +258,6 @@ import { resolveProviderContributionRegistryView } from '@/providers/registry';
 import { createProviderOperationLifetime } from '@/providers/operationLifetime';
 import {
   getActiveAccountSettingsSnapshot,
-  subscribeActiveAccountSettingsSnapshotChanges,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { hydrateSavedSecretCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { createManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
@@ -1621,7 +1621,7 @@ export async function startDaemon(
         // Account lifetime from the snapshot, which publishes only on change;
         // Team grant, recipient and connected-service facts arrive through the
         // AccountChange wake attached with the machine client below.
-        teamCredentialDirectMaterialChangeCleanup = subscribeActiveAccountSettingsSnapshotChanges(
+        teamCredentialDirectMaterialChangeCleanup = subscribeTeamCredentialDirectMaterialSourceChanges(
           reconcileDirectMaterialBestEffort,
         );
         reconcileDirectMaterialBestEffort();
