@@ -21,6 +21,8 @@ import { enforceSessionPublicLinkExternalSharingPolicyInTx } from "@/app/session
 import { isPublicSessionShareActive } from "@/app/share/publicSessionSharePublication";
 import { removeUnsafeSessionFollowEdgesForAccessChangeInTx } from "@/app/session/follow/sessionFollowEdgeService";
 import { removeUnsafeSessionReportsToEdgesForAccessChangeInTx } from "@/app/session/relations/sessionReportsToService";
+import { readHomeConfigEnvInTx } from "@/app/home/settings/homeSettings";
+import { readHomeConfigEnvOrigin } from "@/app/home/settings/homeConfigOverlay";
 function equalBytes(left: Uint8Array | null, right: Uint8Array | null): boolean {
     if (left === null || right === null)
         return left === right;
@@ -71,7 +73,7 @@ export async function deleteSessionPublicShare(input: Pick<SessionPublicShareWri
             });
         });
         return { type: "ok" as const };
-    });
+    }, { /* Share token/key rotation and effective access cleanup must share one mutation snapshot. */ isolationLevel: "Serializable" });
     return result;
 }
 export type SessionPublicShareWrite = Readonly<{
@@ -85,6 +87,8 @@ export type SessionPublicShareWrite = Readonly<{
     maxUses?: number;
     isConsentRequired?: boolean;
     networkOff?: boolean;
+    /** The operation's effective Home snapshot, also used by its response projection. */
+    configEnv?: NodeJS.ProcessEnv;
 }>;
 export async function writeSessionPublicShare(input: SessionPublicShareWrite) {
     const { userId, sessionId, authentication, encryptedDataKey, expiresAt, maxUses, isConsentRequired, networkOff } = input;
@@ -177,6 +181,7 @@ export async function writeSessionPublicShare(input: SessionPublicShareWrite) {
             mode: sessionEncryptionMode, material: token,
             keyDerivation: nextKeyDerivation,
             encryptedDataKey, expiresAt, maxUses, isConsentRequired, networkOff,
+            configEnv: input.configEnv,
         });
         if (written.type !== "ok")
             return written;
@@ -203,7 +208,7 @@ export async function writeSessionPublicShare(input: SessionPublicShareWrite) {
             });
         });
         return { type: 'ok' as const, publicShare };
-    });
+    }, { /* Share token/key rotation and effective access cleanup must share one mutation snapshot. */ isolationLevel: "Serializable" });
     return result;
 }
 type ShareRow = NonNullable<Awaited<ReturnType<typeof db.publicSessionShare.findUnique>>>;
@@ -229,6 +234,7 @@ async function persistStoredContentPublicShare(tx: Tx, input: Readonly<{
     maxUses?: number;
     isConsentRequired?: boolean;
     networkOff?: boolean;
+    configEnv?: NodeJS.ProcessEnv;
 }>) {
     const { existing } = input;
     const id = existing?.id ?? randomUUID();
@@ -238,8 +244,9 @@ async function persistStoredContentPublicShare(tx: Tx, input: Readonly<{
         return { type: "error" as const, error: "lookupId required" as const };
     if ((!existing || rotates) && input.keyDerivation !== "fragment_v1")
         return { type: "error" as const, error: "lookupId required" as const };
-    if (input.keyDerivation === "fragment_v1" && (!resolveStoredContentPublicShareSubjectOrigin({ id, artifactId: input.subject.kind === 'artifact' ? input.subject.id : null })
-        || !createLocalServicePublicRateLimitChecker(readLocalServicesFeatureEnv(process.env).publicRateLimitDependency)))
+    const configEnv = input.configEnv ?? await readHomeConfigEnvInTx(tx);
+    if (input.keyDerivation === "fragment_v1" && (!resolveStoredContentPublicShareSubjectOrigin({ id, artifactId: input.subject.kind === 'artifact' ? input.subject.id : null }, configEnv)
+        || !storedContentPublicRateLimiter(configEnv)))
         return { type: "error" as const, error: "public_share_isolation_unavailable" as const };
     if (input.mode === "e2ee" && ((!existing || rotates) && !input.encryptedDataKey)) {
         return { type: "error" as const, error: "encryptedDataKey required" as const };
@@ -277,11 +284,13 @@ const publicRateLimiters = new WeakMap<NodeJS.ProcessEnv, {
 function storedContentPublicRateLimiter(env: NodeJS.ProcessEnv) {
     const dependency = readLocalServicesFeatureEnv(env).publicRateLimitDependency;
     const configuration = JSON.stringify(dependency);
-    const previous = publicRateLimiters.get(env);
+    // Request snapshots are fresh objects; the deployment base owns the limiter lifetime.
+    const owner = readHomeConfigEnvOrigin(env)?.base ?? env;
+    const previous = publicRateLimiters.get(owner);
     if (previous?.configuration === configuration)
         return previous.checker;
     const checker = createLocalServicePublicRateLimitChecker(dependency);
-    publicRateLimiters.set(env, { configuration, checker });
+    publicRateLimiters.set(owner, { configuration, checker });
     return checker;
 }
 export function checkStoredContentPublicShareRateLimit(shareId: string, clientKey: string, env: NodeJS.ProcessEnv = process.env): "allowed" | "limited" | "unavailable" {
@@ -339,5 +348,5 @@ export async function writeArtifactPublicShare(input: Omit<SessionPublicShareWri
         if (result.type === "ok" && result.changed)
             await markAccountChanged(tx, { accountId: input.userId, kind: "artifact", entityId: artifact.id });
         return result;
-    });
+    }, { /* Share token/key rotation and effective access cleanup must share one mutation snapshot. */ isolationLevel: "Serializable" });
 }
