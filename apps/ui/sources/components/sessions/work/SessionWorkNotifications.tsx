@@ -13,8 +13,10 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { t } from '@/text';
 import { WorkNotificationOperation } from './WorkNotificationOperation';
 
-const stylesheet = StyleSheet.create((theme) => ({
-    operations: { minWidth: 0, paddingHorizontal: 12, paddingBottom: 6 },
+const stylesheet = StyleSheet.create(() => ({
+    // On the Work sheet's own row inset, like the Role and Goal rows above it: an extra inset narrowed
+    // the row until its switch dropped beneath the label.
+    operations: { minWidth: 0, paddingBottom: 6 },
 }));
 
 /** This operation never silently routes a foreign Home through the active Account. */
@@ -67,6 +69,6 @@ function NotificationChoice(props: Readonly<{ sessionId: string; sourceTurnId: s
     };
     return <WorkNotificationOperation sourceId={props.sessionId} testIDPrefix={`notify-${props.mode}`}
         title={props.mode === 'turn' ? t('sessionWork.notify.turn') : t('sessionWork.notify.attention')}
-        sets={props.read.sets} ready={props.read.status === 'ready'} machineId={props.read.machineId}
+        sets={props.read.sets} status={props.read.status} machineId={props.read.machineId}
         match={match} add={add} remove={props.read.remove} execute={props.execute} />;
 }

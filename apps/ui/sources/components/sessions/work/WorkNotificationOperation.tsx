@@ -1,12 +1,11 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { StyleSheet } from 'react-native-unistyles';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { WorkflowTriggerSetV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Text } from '@/components/ui/text/Text';
@@ -37,7 +36,8 @@ export function WorkNotificationOperation(
     testIDPrefix: string;
     title: string;
     sets: readonly WorkflowTriggerSetV1[];
-    ready: boolean;
+    /** The trigger owner's read state: a loading row holds its place, a failed one offers nothing. */
+    status: 'loading' | 'ready' | 'failed';
     machineId: string | null;
     match: (set: WorkflowTriggerSetV1) => string | null;
     add: () => Promise<WorkflowTriggerWriteResult>;
@@ -48,7 +48,6 @@ export function WorkNotificationOperation(
     execute?: WorkflowActionExecute;
   }>,
 ) {
-  const { theme } = useUnistyles();
   const [acknowledged, setAcknowledged] =
     React.useState<WorkflowTriggerSetV1 | null>(null);
   const [error, setError] = React.useState(false);
@@ -131,8 +130,9 @@ export function WorkNotificationOperation(
       setError(true);
     }
   };
+  const ready = props.status === 'ready';
   const changeRegistration = async (value: boolean) => {
-    if (pending || value === Boolean(registered) || (!registered && !props.ready)) return;
+    if (pending || value === Boolean(registered) || (!registered && !ready)) return;
     setPending(true);
     try {
       if (value) await register();
@@ -141,22 +141,22 @@ export function WorkNotificationOperation(
       setPending(false);
     }
   };
-  // Until the trigger owner can answer there is nothing this operation could do: offer nothing,
-  // never a disabled control that cannot succeed. An armed or failed operation keeps its state.
-  if (!props.ready && !registered && !needsSetup && !error) return null;
+  // A failed owner read offers nothing: never a disabled control that cannot succeed. While the
+  // owner is still answering, the row's existence is known, so it holds its place with its switch
+  // disabled (no shift when the answer lands). An armed or failed operation keeps its state.
+  if (props.status === 'failed' && !registered && !needsSetup && !error) return null;
   return (
     <View>
       <Item
         testID={id(registered ? '-cancel' : '')}
         title={props.title}
         density="compact"
-        icon={<Icon name="bell" size={18} color={theme.colors.text.secondary} />}
         subtitle={registered ? (
           <Text testID={id('-armed')} accessibilityLiveRegion="polite" style={stylesheet.status}>
             {t('sessionWork.notify.armed')}
           </Text>
         ) : undefined}
-        disabled={pending || (!props.ready && !registered)}
+        disabled={pending || (!ready && !registered)}
         showChevron={false}
         onPress={() => { void changeRegistration(!registered); }}
         rightElementOutsidePressable
@@ -165,7 +165,7 @@ export function WorkNotificationOperation(
             testID={id('-switch')}
             accessibilityLabel={props.title}
             value={Boolean(registered)}
-            disabled={pending || (!props.ready && !registered)}
+            disabled={pending || (!ready && !registered)}
             onValueChange={(value) => { void changeRegistration(value); }}
           />
         )}

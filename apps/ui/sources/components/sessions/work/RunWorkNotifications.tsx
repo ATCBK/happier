@@ -48,7 +48,7 @@ export function RunWorkNotifyOperation(props: Readonly<{
             };
             return <WorkNotificationOperation key={condition} sourceId={props.source.runId} testIDPrefix={`notify-run-${condition}`}
                 title={condition === 'terminal' ? t('sessionWork.notify.run') : t('sessionWork.notify.attention')}
-                sets={props.read.sets} ready={props.read.status === 'ready'} machineId={props.project.machineId}
+                sets={props.read.sets} status={props.read.status} machineId={props.project.machineId}
                 match={match} add={add} remove={(triggerId, automationId) => props.read.remove(automationId, triggerId)} execute={props.execute} />;
         })}
     </View>;

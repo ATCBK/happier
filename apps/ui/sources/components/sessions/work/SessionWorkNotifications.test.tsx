@@ -12,6 +12,7 @@ import {
 } from '@happier-dev/protocol';
 
 import { renderScreen } from '@/dev/testkit';
+import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import type { SessionTriggersRead } from '@/components/workflows/triggers/useSessionTriggers';
 
 // Load the real Account/Action graph during collection, not inside the assertion
@@ -188,7 +189,7 @@ function ownerFixture(
   return {
     read,
     runRead,
-    execute: executor.execute,
+    execute: createFrontDoorActionExecute(executor),
     acceptCreate,
     acceptRemove,
     rows,
@@ -241,7 +242,7 @@ describe('Session Work notification operation', () => {
     ).toHaveLength(0);
   });
 
-  it('offers nothing until the trigger owner can answer, rather than a disabled operation that cannot succeed', async () => {
+  it('keeps the row in place while the trigger owner loads, and offers nothing once it has failed', async () => {
     const owner = ownerFixture();
     const loading: SessionTriggersRead = { ...owner.read, status: 'loading' };
     const screen = await renderScreen(
@@ -252,7 +253,10 @@ describe('Session Work notification operation', () => {
         execute={owner.execute}
       />,
     );
-    expect(screen.findByTestId('notify-attention:session-one')).toBeNull();
+    // The row's existence is known while the owner answers: it holds its place (no shift when it
+    // arrives) with its switch disabled, and nothing is registered from the placeholder.
+    expect(screen.findByTestId('notify-attention:session-one')).not.toBeNull();
+    expect(screen.findByTestId('notify-attention-switch:session-one')?.props.disabled).toBe(true);
     const failed = await renderScreen(
       <SessionWorkNotifyOperation
         sessionId="session-one"
@@ -341,7 +345,7 @@ describe('Run Work notification operation', () => {
     const { Switch } = await import('@/components/ui/forms/Switch');
     expect(screen.root.findAllByType(Switch).map(control => control.props.value)).toEqual([false, false]);
     await act(async () => {
-      screen.root.findAllByType(Switch)[0]!.props.onValueChange(true);
+      screen.root.findAllByType(Switch)[0]!.props.onValueChange!(true);
     });
     expect(screen.root.findAllByType(Switch)[0]!.props.disabled).toBe(true);
     expect(screen.root.findAllByType(Switch)[0]!.props.value).toBe(false);
@@ -363,7 +367,7 @@ describe('Run Work notification operation', () => {
       screen.findByTestId('notify-run-terminal-armed:workflow-one'),
     ).not.toBeNull();
     await act(async () => {
-      screen.root.findAllByType(Switch)[0]!.props.onValueChange(false);
+      screen.root.findAllByType(Switch)[0]!.props.onValueChange!(false);
     });
     expect(screen.root.findAllByType(Switch)[0]!.props.disabled).toBe(true);
     expect(screen.root.findAllByType(Switch)[0]!.props.value).toBe(true);
