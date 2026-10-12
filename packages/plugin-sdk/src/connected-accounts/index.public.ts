@@ -65,6 +65,13 @@ export {
 } from './requestAuth.js';
 export type { ConnectedAccountRequestAuthClientSourceParams } from './requestAuth.js';
 export type { ConnectedAccountRequestAuthClient } from './requestAuth.js';
+export type {
+    ConnectedAccountAuthFailureRequestV1,
+    ConnectedAccountQuotaFailureRequestV1,
+    OAuthBearerLeaseV1,
+    QualifiedConnectedAccountPurposeV1,
+    RequestAuthFailureOutcomeV1,
+} from '../connectedAccounts.js';
 export {
     HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_JSON_ENV,
     HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON_ENV,

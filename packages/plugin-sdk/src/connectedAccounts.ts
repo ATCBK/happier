@@ -189,10 +189,15 @@ export type {
     ConnectedAccountMaterializationRequest,
     ConnectedAccountPurposeId,
     PluginConnectedAccountMaterializationKind,
+    QualifiedConnectedAccountPurposeV1,
     ConnectedAccountPurposeDeclarationV1 as ConnectedAccountPurposeDeclaration,
     QualifiedConnectedAccountPurposeV1 as QualifiedConnectedAccountPurpose,
 } from '@happier-dev/protocol/connect/connected-account-purposes';
 export type {
+    ConnectedAccountAuthFailureRequestV1,
+    ConnectedAccountQuotaFailureRequestV1,
+    OAuthBearerLeaseV1,
+    RequestAuthFailureOutcomeV1,
     ConnectedAccountRequestAuthMaterializationV1 as ConnectedAccountRequestAuthMaterialization,
     ConnectedAccountRequestAuthUseV1 as ConnectedAccountRequestAuthUse,
 } from '@happier-dev/protocol/connect/connected-account-request-auth';
