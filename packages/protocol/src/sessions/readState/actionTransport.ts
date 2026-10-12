@@ -10,13 +10,14 @@ import {
   SessionReadStateRouteInvalidRequestResponseV1Schema,
   SessionReadStateRouteNotFoundResponseV1Schema,
   SessionReadStateRouteNotTrackedResponseV1Schema,
+  SessionReadStateRoutePresentUserRequiredResponseV1Schema,
   SessionReadStateRouteSuccessResponseV1Schema,
   type SessionReadStateActionErrorCodeV1,
 } from './api.js';
 import type { SessionViewerProjectionV1 } from '../personal/viewer.js';
 
 export type SessionReadStateActionTransportFailureV1 = Readonly<{
-  errorCode: SessionReadStateActionErrorCodeV1 | 'unsupported_action' | 'unavailable';
+  errorCode: SessionReadStateActionErrorCodeV1 | 'present_user_required' | 'unsupported_action' | 'unavailable';
   viewer?: SessionViewerProjectionV1;
 }>;
 
@@ -35,6 +36,9 @@ export function projectSessionReadStateActionTransportFailure(
   }
   if (status === 403 && SessionReadStateRouteForbiddenResponseV1Schema.safeParse(payload).success) {
     return { errorCode: 'forbidden' };
+  }
+  if (status === 403 && SessionReadStateRoutePresentUserRequiredResponseV1Schema.safeParse(payload).success) {
+    return { errorCode: 'present_user_required' };
   }
   if (status === 409) {
     const conflict = SessionReadStateRouteNotTrackedResponseV1Schema.safeParse(payload);

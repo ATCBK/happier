@@ -51,6 +51,9 @@ export const SessionReadStateRouteInvalidRequestResponseV1Schema = lazyZodSchema
 export const SessionReadStateRouteForbiddenResponseV1Schema = lazyZodSchema(() => z.object({
   error: z.literal('Forbidden'),
 }).strict());
+export const SessionReadStateRoutePresentUserRequiredResponseV1Schema = lazyZodSchema(() => z.object({
+  error: z.literal('present_user_required'),
+}).strict());
 export const SessionReadStateRouteNotTrackedResponseV1Schema = lazyZodSchema(() => z.object({
   error: z.literal('session_not_tracked'),
   viewer: SessionViewerProjectionV1Schema.optional(),
