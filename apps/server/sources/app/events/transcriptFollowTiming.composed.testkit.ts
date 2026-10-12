@@ -3,7 +3,7 @@ import { performance } from 'node:perf_hooks';
 import { Server, type Socket } from 'socket.io';
 import { io as connect } from 'socket.io-client';
 import tweetnacl from 'tweetnacl';
-import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createExternalActionDaemonDispatchResponse, EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1,
@@ -26,6 +26,7 @@ import { runWithServerHttpBaseUrl } from '../../../../cli/src/api/client/serverH
 import { sealSessionStoredContent, type SessionStoredContentCryptoContext } from '../../../../cli/src/session/transport/encryption/sessionStoredContentCodec';
 import type { Fastify as AppFastify } from '@/app/api/types';
 import { enableAuthentication } from '@/app/api/utils/enableAuthentication';
+import { enableSchemaValidation } from '@/app/api/utils/enableSchemaValidation';
 import { registerExternalActionRoutes } from '@/app/api/routes/actions/registerExternalActionRoutes';
 import { registerSessionMessageRoutes } from '@/app/api/routes/session/registerSessionMessageRoutes';
 import { registerSessionListingRoutes } from '@/app/api/routes/session/registerSessionListingRoutes';
@@ -113,8 +114,7 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
         const pat = await auth.createApiToken({ accountId: owner.id, tokenId: crypto.randomUUID(), label: 'follow harness' });
         const serverIdentityId = await getOrCreateServerIdentityId();
         const raw = Fastify();
-        raw.setValidatorCompiler(validatorCompiler);
-        raw.setSerializerCompiler(serializerCompiler);
+        enableSchemaValidation(raw);
         const app = raw.withTypeProvider<ZodTypeProvider>() as unknown as AppFastify;
         const io = new Server(raw.server, { path: '/v1/updates/' });
         eventRouter.setIo(io);

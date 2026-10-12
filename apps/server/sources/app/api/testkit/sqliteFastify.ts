@@ -1,8 +1,9 @@
 import Fastify from "fastify";
-import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
+import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { API_TOKEN_FULL_GRANT_V1 } from "@happier-dev/protocol";
 import { captureAccountStoredContentCompatibilityForHttpRequest } from "@/app/clientCompatibility/accountStoredContentCompatibility";
 import { enableErrorHandlers } from "../utils/enableErrorHandlers";
+import { enableSchemaValidation } from "../utils/enableSchemaValidation";
 import {
     isRestrictedAuthTokenDeniedForRoute,
     PRESENT_USER_REQUIRED_ERROR,
@@ -15,8 +16,7 @@ export function createAuthenticatedTestApp(
     // the application transport limit, so a body-limit test must be able to
     // reproduce the production application limit explicitly.
     const app = Fastify(options.bodyLimit === undefined ? {} : { bodyLimit: options.bodyLimit });
-    app.setValidatorCompiler(validatorCompiler);
-    app.setSerializerCompiler(serializerCompiler);
+    enableSchemaValidation(app);
     const typed = app.withTypeProvider<ZodTypeProvider>() as any;
     // Route validation failures use the same public error contract as startApi.
     enableErrorHandlers(typed);

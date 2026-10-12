@@ -1,5 +1,5 @@
 import Fastify from "fastify";
-import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
+import type { ZodTypeProvider } from "fastify-type-provider-zod";
 
 import {
     buildProviderAccountUsageRecordId,
@@ -9,13 +9,13 @@ import {
 } from "@happier-dev/protocol";
 
 import { createAppCloseTracker } from "../../testkit/appLifecycle";
+import { enableSchemaValidation } from "../../utils/enableSchemaValidation";
 
 const { trackApp, closeTrackedApps } = createAppCloseTracker();
 
 export function createProviderAccountUsageTestApp() {
     const app = Fastify();
-    app.setValidatorCompiler(validatorCompiler);
-    app.setSerializerCompiler(serializerCompiler);
+    enableSchemaValidation(app);
     const typed = app.withTypeProvider<ZodTypeProvider>() as any;
 
     typed.decorate("authenticate", async (request: any, reply: any) => {

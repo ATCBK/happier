@@ -6,7 +6,7 @@ import {
     SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER,
 } from "@happier-dev/protocol";
 import { log, logger } from "@/utils/logging/log";
-import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
+import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { onShutdown } from "@/utils/process/shutdown";
 import { Fastify } from "./types";
 import { registerEphemeralRunnerRoutes } from "@/app/ephemeralRunner/routes";
@@ -29,6 +29,7 @@ import { accessKeysRoutes } from "./routes/accessKeys/accessKeysRoutes";
 import { enableMonitoring } from "./utils/enableMonitoring";
 import { enableErrorHandlers } from "./utils/enableErrorHandlers";
 import { enableAuthentication } from "./utils/enableAuthentication";
+import { enableSchemaValidation } from "./utils/enableSchemaValidation";
 import { enableOptionalStatics } from "./utils/enableOptionalStatics";
 import { userRoutes } from "./routes/user/userRoutes";
 import { feedRoutes } from "./routes/feed/feedRoutes";
@@ -278,8 +279,7 @@ export async function startApi(params: Readonly<{
     enableOptionalStatics(app);
 
     // Create typed provider
-    app.setValidatorCompiler(validatorCompiler);
-    app.setSerializerCompiler(serializerCompiler);
+    enableSchemaValidation(app);
     const typed = app.withTypeProvider<ZodTypeProvider>() as unknown as Fastify;
 
     // Enable features
