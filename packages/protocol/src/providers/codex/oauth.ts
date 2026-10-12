@@ -2,7 +2,6 @@ export const OPENAI_CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 export const OPENAI_CODEX_AUTH_BASE_URL = 'https://auth.openai.com';
 export const OPENAI_CODEX_AUTHORIZE_URL = `${OPENAI_CODEX_AUTH_BASE_URL}/oauth/authorize`;
 export const OPENAI_CODEX_TOKEN_URL = `${OPENAI_CODEX_AUTH_BASE_URL}/oauth/token`;
-export const OPENAI_CODEX_CALLBACK_URL = 'http://localhost:1455/auth/callback';
 export const OPENAI_CODEX_SCOPES = Object.freeze([
   'openid',
   'profile',
