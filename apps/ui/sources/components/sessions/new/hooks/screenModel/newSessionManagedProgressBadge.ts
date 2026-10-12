@@ -6,7 +6,7 @@ import {
     type ManagedProgressModel,
 } from '@/components/machines/managed/managedComposerBadges';
 import { describeManagedCreationProgress } from '@/components/settings/machines/managed/managedCreationProgressPresentation';
-import { Icon } from '@/components/ui/icons/Icon';
+import { ManagedPresetMark } from '@/components/settings/machines/managed/useManagedProvisionerPresentation';
 import { t } from '@/text';
 import type { NewSessionManagedMachineDraftModel } from '../newSessionScreenModelTypes';
 import { listServerProfiles } from '@/sync/domains/server/serverProfiles';
@@ -40,7 +40,9 @@ export function buildNewSessionManagedProgressBadge(
                 : observedStatus?.tone === 'active' ? 'running' : 'upcoming' }]
         : [];
     return buildManagedProgressStatusBadge({
-        machineName, mark: React.createElement(Icon, { name: 'desktop', size: 16 }),
+        // The provider's own mark, as the picker row that started it drew it (lab m-pick Aprogd).
+        machineName, mark: React.createElement(ManagedPresetMark, { serverId: selection.selection.homeId,
+            preset: { controller: selection.receipt.controller, recipe: selection.receipt.launch }, size: 16 }),
         recipe: selection.receipt.preset?.name ?? '', stages, failed, label,
         ...(failed ? { failureLabel: label, failureTitle: setup ? t('managedMachines.creation.setupFailedTitle', { name: machineName }) : `${machineName} · ${label}` } : {}),
         tone,
