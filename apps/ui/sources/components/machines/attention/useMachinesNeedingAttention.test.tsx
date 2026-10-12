@@ -58,6 +58,7 @@ describe('machines needing attention', () => {
   it('tells apart two machines that share a name, as every list of machines does', async () => {
     const serverId = getActiveServerSnapshot().serverId;
     storage.setState({
+      profileScope: { serverId, accountId: 'attention-account' },
       machines: {},
       machineListByServerId: {
         [serverId]: [shortOnMemory('a1b2c3d4e5'), shortOnMemory('f6e5d4c3b2')],
@@ -76,6 +77,7 @@ describe('machines needing attention', () => {
   it('reads several machines as one fact with one way in, and one machine by its name and reason', async () => {
     const serverId = getActiveServerSnapshot().serverId;
     storage.setState({
+      profileScope: { serverId, accountId: 'attention-account' },
       machines: {},
       machineListByServerId: {
         [serverId]: [shortOnMemory('a1b2c3d4e5'), shortOnMemory('f6e5d4c3b2'), shortOnMemory('0a9b8c7d6e')],

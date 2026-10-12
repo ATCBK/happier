@@ -7,11 +7,13 @@ import { buildSessionListRenderableFromSession } from '@/sync/domains/session/li
 import { act } from 'react-test-renderer';
 import { FeaturesResponseSchema, PluginProjectionV2Schema, QualifiedConnectedAccountProfileV4Schema, type MachineAgentInventoryItem } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import type { ConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { installConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { advanceConnectedAccountDescriptorProjectionState, createConnectedAccountDescriptorProjectionLoadingState } from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
+import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 import { storage } from '@/sync/domains/state/storageStore';
 import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { getActiveServerId, removeServerProfile, resolveServerProfileScopeIdForIdentifier, setActiveServerId, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
-import { machineAgentInventoryStore, EMPTY_MACHINE_AGENTS } from '@/agents/machineAgents/machineAgentInventoryStore';
+import { machineAgentInventoryStore } from '@/agents/machineAgents/machineAgentInventoryStore';
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
 import { profileParse, type Profile } from '@/sync/domains/profiles/profile';
 import { clearDaemonMergedProjectionCacheForTests, loadDaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
@@ -20,6 +22,8 @@ import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machine
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { loadEffectiveHomeViewState, updateEffectiveHomeViewState } from '@/sync/domains/server/selection/homeViewSelectionState';
+import * as sessionListQueryRuntime from '@/sync/domains/session/listing/sessionListQueryRuntime';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -29,11 +33,12 @@ const state = vi.hoisted(() => ({
     push: null as ((route: unknown) => void) | null,
     pluginCapabilities: null as unknown,
     unavailableServerIds: [] as string[],
-    retried: [] as string[],
     serverId: '',
     homeUrl: '',
 }));
 installDisconnectedServerSocketBoundary();
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
@@ -41,13 +46,12 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
 });
 
 const SERVICE = { pluginId: 'happier.example', localId: 'subscription' } as const;
-const SERVICE_ENTRY = {
-    serviceId: 'example-subscription',
-    service: SERVICE,
-    connectCommand: 'happier connect example-subscription',
-    supportsOauth: true,
-    projectedTitle: 'Example subscription',
-} as unknown as ConnectedServiceRegistryEntry;
+const SERVICE_DESCRIPTOR = ConnectedAccountUiProjectionEntryV1Schema.parse({
+    id: SERVICE.localId, pluginId: SERVICE.pluginId, serviceId: 'example-subscription',
+    provenance: 'external', sourceKind: 'plugin', title: 'Example subscription',
+    authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthDeviceCode', outcomeReconciliation: 'none' }] },
+    capabilities: [], availability: { state: 'available', reason: 'enabled' }, diagnostics: [],
+});
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -77,33 +81,13 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
     } });
 });
 
-// Plugin-contributed service descriptors arrive through the app-shell projection.
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => {
-    // Read when rendered: the mock may be loaded before this file's fixtures initialise.
-    const registry = { status: 'ready', get entries() { return [SERVICE_ENTRY]; } };
-    const localize = (_pluginId: string, value: unknown) => (typeof value === 'string' ? value : null);
-    return { useProjectedConnectedServicesRegistry: () => registry, useProjectedPluginLocalizedTextResolver: () => localize };
-});
-
-vi.mock('@/agents/presentation/AgentCatalogIdentityIcon', () => ({
-    AgentCatalogIdentityIcon: () => null,
-}));
-
-// The getting-started model owner decides which selected Homes are not answering (tested at its owner).
-vi.mock('@/components/sessions/guidance/useSessionGettingStartedGuidanceBaseModel', () => ({
-    useSessionGettingStartedGuidanceBaseModel: () => ({ kind: 'create_session', unavailableServerIds: state.unavailableServerIds }),
-}));
-// The other Home's refresh (its transport boundary).
-vi.mock('@/sync/domains/session/listing/sessionListQueryRuntime', () => ({
-    refreshOrdinarySessionList: async (serverId: string) => { state.retried.push(serverId); },
-}));
-
 function pluginsAnswer(pendingChanges: unknown[]) {
     return { protocolVersion: 1, results: { 'tool.plugins': { ok: true, checkedAt: 1, data: { installedPlugins: [], pendingChanges } } } };
 }
 
 const initialStorageState = storage.getState();
 const initialServerId = getActiveServerId();
+const initialHomeView = loadEffectiveHomeViewState();
 let caseNumber = 0;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let studioId: string | undefined;
@@ -130,10 +114,11 @@ afterEach(async () => {
     studioId = undefined;
     clearDaemonMergedProjectionCacheForTests();
     state.unavailableServerIds = [];
-    state.retried = [];
     state.pluginCapabilities = null;
     state.push = null;
+    if (initialHomeView) await updateEffectiveHomeViewState(() => initialHomeView, { scope: 'device' });
     storage.setState(initialStorageState, true);
+    vi.restoreAllMocks();
 });
 
 function account(accountId: string, status: 'connected' | 'needs_reauth') {
@@ -163,24 +148,36 @@ async function renderSection() {
         settings: { ...initialStorageState.settings, machineAdministrationTargetsLocalV1: {
             [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.agents]: target, [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.plugins]: target } },
         machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] }, machineListStatusByServerId: { [home.id]: 'idle' } });
+    if (state.unavailableServerIds.length > 0) {
+        storage.setState({ machineListStatusByServerId: {
+            ...storage.getState().machineListStatusByServerId,
+            ...Object.fromEntries(state.unavailableServerIds.map(serverId => [serverId, 'error' as const])),
+        } });
+        await updateEffectiveHomeViewState(current => ({ ...current,
+            groups: [{ id: 'attention-homes', name: 'Selected Homes', serverIds: [home.id, ...state.unavailableServerIds] }],
+            activeTargetKind: 'group', activeTargetId: 'attention-homes',
+        }), { scope: 'device' });
+    }
     primeServerFeaturesSnapshot({ serverId: home.id, snapshot: { status: 'ready', features } });
     const push = vi.fn();
     state.push = push;
     const lifetime = captureActiveServerAccountScopeLifetime();
     if (!lifetime) throw new Error('The attention fixture Account must be restored');
+    installConnectedAccountDescriptorProjection(advanceConnectedAccountDescriptorProjectionState(
+        createConnectedAccountDescriptorProjectionLoadingState(JSON.stringify([scope.serverId, scope.accountId])),
+        { kind: 'ready', descriptors: [SERVICE_DESCRIPTOR], conflicts: [] },
+    ), lifetime);
     await loadDaemonMergedProjectionInputs({ machineId: machine.id, serverId: home.id, accountLifetime: lifetime });
     rpc.mockClear();
-    const { HubAttentionSection } = await import('./HubAttentionSection');
-    const screen = await renderScreen(<HubAttentionSection />);
-    await flushHookEffects({ cycles: 3 });
     const key = serverAccountScopedResourceKey(scope, 'machine-agents', machine.id);
-    // Home summarizes the inventory's cached answer; it must not launch a CLI sign-in probe.
-    // Publish the prior machine observation through its real owner once credential binding settles.
-    await vi.waitFor(() => expect(machineAgentInventoryStore.read(key)).not.toBe(EMPTY_MACHINE_AGENTS));
+    // Home reads a prior observation: a cache-only reader does not create a loading entry.
     const item: MachineAgentInventoryItem = { agentId: 'claude', title: 'Claude', installed: true, version: '1', latestVersion: '1',
         update: { supported: false, command: null }, signIn: { status: state.loginState === 'logged_out' ? 'signedOut' : 'signedIn', loginSupport: 'status_only' },
         platform: { supported: true }, install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [] };
-    await act(async () => { machineAgentInventoryStore.publish(key, { status: 'ready', items: [item], lastCheckedAt: 1 }); });
+    machineAgentInventoryStore.publish(key, { status: 'ready', items: [item], lastCheckedAt: 1 });
+    const { HubAttentionSection } = await import('./HubAttentionSection');
+    const screen = await renderScreen(<HubAttentionSection />);
+    await flushHookEffects({ cycles: 3 });
     // Reading Home's attention is cache-only: neither the catalog nor the inventory may probe.
     expect(rpc).not.toHaveBeenCalled();
     const actions = screen.findAll((node) => typeof node.props?.testID === 'string'
@@ -271,12 +268,14 @@ describe('HubAttentionSection', () => {
         const studio = await upsertServerProfile({ serverUrl: 'https://studio.example', name: 'Studio' });
         studioId = studio.id;
         state.unavailableServerIds = [studio.id];
+        // Observe the real refresh owner; its behavior and return value are unchanged.
+        const refreshed = vi.spyOn(sessionListQueryRuntime, 'refreshOrdinarySessionList');
         const { screen, actions } = await renderSection();
 
         expect(screen.getTextContent()).toContain('Studio');
         const retry = actions.find((node) => node.props.testID === `settings-overview-attention.home:${studio.id}.action`);
         expect(retry).toBeTruthy();
         await retry!.props.onPress();
-        expect(state.retried).toEqual([studio.id]);
+        expect(refreshed).toHaveBeenCalledWith(studio.id);
     });
 });
