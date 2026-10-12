@@ -306,6 +306,22 @@ test('remote custody preserves payload input when no lifetime pipe is requested'
   await assert.rejects(readFile(join(root, 'remote-exec/input-custody.pid')), { code: 'ENOENT' });
 });
 
+test('remote lifetime custody does not leak its private pipe descriptor to the payload', { skip: process.platform !== 'linux' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-lifeline-fds-' });
+  const child = spawn('/bin/bash', [custody, 'run', join(root, 'remote-exec/fds.pid'), 'fds', '/bin/bash', '-c', `
+    if [ -e /proc/$$/fd/3 ]; then
+      printf 'inherited-lifeline='; readlink /proc/$$/fd/3
+    fi
+    printf 'payload-complete\\n'
+  `], { env: { ...process.env, HAPPIER_REMOTE_EXEC_LIFELINE: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => child.kill('SIGTERM'));
+  let output = '', error = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  child.stderr.on('data', chunk => { error += chunk; });
+  assert.deepEqual(await once(child, 'close'), [0, null], error);
+  assert.equal(output, 'payload-complete\n', error);
+});
+
 test('control input reaches the admitted payload and EOF cancels its process tree', { skip: process.platform === 'win32' }, async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-remote-control-' });
   const pidFile = join(root, 'remote-exec/control-custody.pid');

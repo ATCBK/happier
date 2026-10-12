@@ -94,7 +94,13 @@ async function inspectBorrowedIndependentDevTargetSyncProject(
       args: ['sync', 'list', sessionName, '--template', MUTAGEN_SYNC_LIST_JSON_TEMPLATE],
       env: mutagenRuntime.env,
     });
-    requireSuccessful(result, `${target.name} independent synchronization status`);
+    // The borrowed project's owner keeps synchronizing while a target is
+    // unavailable. Let its consumer supervisor recover that target alongside
+    // healthy services instead of failing the entire project admission.
+    if (result?.code !== 0) {
+      unhealthyTargets.set(target.name, 'unavailable');
+      continue;
+    }
     const status = parseMutagenSyncList(result.out, sessionName);
     if (status.state !== 'ready' && status.state !== 'synchronizing' && status.state !== 'needs-flush') {
       unhealthyTargets.set(target.name, status.state);
@@ -432,7 +438,7 @@ export async function ensurePrimaryStandbySync(
       }
     }
     const captured = await runProcess({ label: 'standby SQLite', command: 'ssh', env: controlEnv,
-      args: [...openSsh.sshArgs, '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'BatchMode=yes', '-T', profile.ssh,
+      args: [...openSsh.sshArgs, '-o', 'BatchMode=yes', '-T', profile.ssh,
         `python3 -c ${shellQuote(script)} capture-agents ${shellQuote(profile.homeDir)}`] });
     requireSuccessful(captured, 'consistent Agent SQLite capture');
     const capture = JSON.parse(captured.out);

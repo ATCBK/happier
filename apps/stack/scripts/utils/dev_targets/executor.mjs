@@ -198,11 +198,14 @@ export async function runDevTargetDependencyBootstrap(
     commandArgs: [
       'node',
       './apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.mjs',
+      '--execution-placement=remote',
       `--validation-kind=${validationKind}`,
       `--component-relative-dir=${componentRelativeDir}`,
     ],
     environment: {
       HAPPIER_STACK_PM_CACHE_BASE_DIR: `${String(target.cliHomeDir).replace(/[\\/]+$/, '')}/cache`,
+      ...(env.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES === '1'
+        ? { HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES: '1' } : {}),
     },
     dependencyAdmission: 'skip',
     provenance: 'skip',

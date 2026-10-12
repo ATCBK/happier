@@ -144,7 +144,8 @@ test('the causal barrier retries known transient transition problems once and re
     : ['--sync-check', 'happier-linux'], { env: { ...env, PROBLEM_MODE: mode, TRANSITION_ERROR: error }, encoding: 'utf8' });
   const errors = ['unable to validate existing file: modification detected',
     'unable to walk to parent path: leaf name does not exist or has incorrect casing',
-    'unable to set staged file permissions: chmod /tmp/staged: no such file or directory'];
+    'unable to set staged file permissions: chmod /tmp/staged: no such file or directory',
+    'unable to relocate staged file: file exists'];
   const inspect = (error, excludedTransitionProblems = 0) => parseMutagenSyncList(JSON.stringify([{
     name: 'happier-linux', paused: false, status: 'watching', successfulCycles: 2,
     alpha: { connected: true, scanned: true }, beta: { connected: true, scanned: true,

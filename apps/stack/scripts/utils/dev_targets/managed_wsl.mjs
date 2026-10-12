@@ -1,6 +1,6 @@
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { runCaptureResult as capture } from '../proc/proc.mjs';
+import { redactFailureDiagnostic, runCaptureResult as capture } from '../proc/proc.mjs';
 import { parseDevTargetsConfig, resolveManagedRuntimeCapacityResources } from './config.mjs';
 import { buildRemoteEnsureDirectoriesCommand, buildRemotePowerShellCommand, powershellQuote } from './remote_commands.mjs';
 import { readSshConfigDirective, renderGuestSshConfig } from './managed_worker.mjs';
@@ -34,12 +34,16 @@ export async function runManagedWslOperation(
   const input = Buffer.from('& {\n' + script + '\n} ' + invocation).toString('base64') + '\n';
   // Stream the script rather than exceeding Windows command-line limits.
   const remoteCommand = buildRemotePowerShellCommand('& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadLine()))))');
+  // Status markers carry the host key required by SSH publication. Capture it
+  // unchanged, but use the shared redactor for both diagnostic output streams.
+  const diagnosticStream = { write: line => process.stderr.write(redactFailureDiagnostic(line, env) + '\n') };
   const result = await runCaptureResult('ssh', [
     '-T', '-F', runtime.host.sshConfigFile, '-o', 'BatchMode=yes',
     runtime.host.ssh, remoteCommand,
-  ], { env, input, ...(action === 'Doctor' ? {} : { streamLabel: 'wsl:' + target.name }) });
+  ], { env, input, ...(action === 'Doctor' ? {} : { streamLabel: 'wsl:' + target.name,
+    stdoutDiagnosticStream: diagnosticStream, stderrDiagnosticStream: diagnosticStream }) });
   if (result.exitCode !== 0) {
-    throw new Error('[dev-targets] WSL ' + action + ' failed: ' + String(result.err ?? result.out ?? '').trim());
+    throw new Error('[dev-targets] WSL ' + action + ' failed: ' + redactFailureDiagnostic(result.err || result.out, env));
   }
   const marker = String(result.out ?? '').match(/^__HAPPIER_WSL__=(.+)$/m);
   if (!marker) throw new Error('[dev-targets] WSL ' + action + ' returned no runtime status');
@@ -50,6 +54,9 @@ export async function runManagedWslOperation(
   if (action !== 'Doctor' && (!status.ok || status.guestToolchain?.ok !== true)) {
     throw new Error('[dev-targets] WSL ' + action + ' did not establish a healthy guest');
   }
+  // Only provisioning consumes this value to publish authenticated known_hosts.
+  // Start/Doctor/Capacity results can reach operator-facing status projections.
+  if (action !== 'Provision') delete status.guestHostKey;
   return status;
 }
 

@@ -6,6 +6,41 @@ import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { provisionManagedWslDevTarget, runManagedWslOperation } from './managed_wsl.mjs';
 import { renderSshConfig } from './provision.mjs';
+import { runCaptureResult } from '../proc/proc.mjs';
+
+test('WSL runtime diagnostics redact host key material while preserving the authenticated status', async t => {
+  const output = [];
+  t.mock.method(process.stdout, 'write', chunk => { output.push(String(chunk)); return true; });
+  t.mock.method(process.stderr, 'write', chunk => { output.push(String(chunk)); return true; });
+  const target = { name: 'fixture', managedRuntime: { kind: 'wsl', instance: 'fixture', user: 'happier',
+    host: { ssh: 'fixture', sshConfigFile: '/fixture/config' },
+    capacity: { mode: 'dedicated', shared: { cpus: 8, memoryGiB: 8 }, dedicated: { cpus: 12, memoryGiB: 12 } } } };
+  const status = { exists: true, status: 'Running', ok: true, guestToolchain: { ok: true }, guestHostKey: 'ssh-ed25519 AAAATEST fixture' };
+  const marker = '__HAPPIER_WSL__=' + JSON.stringify(status);
+  // Replace only the SSH/PowerShell boundary; the real capture and diagnostic
+  // stream must handle split writes and an unterminated final marker.
+  const boundary = exitCode => ({ runCaptureResult: async (_command, _args, options) =>
+    runCaptureResult(process.execPath, ['-e',
+      'console.log("preparing guest"); const marker = process.argv[1]; process.stdout.write(marker.slice(0, 35)); setTimeout(() => { process.stdout.write(marker.slice(35)); if (Number(process.argv[2])) process.stderr.write(marker); process.exitCode = Number(process.argv[2]); }, 10);',
+      marker, String(exitCode)], { ...options, env: process.env }) });
+  const observed = await runManagedWslOperation({ target, action: 'Start' }, boundary(0));
+  assert.equal(observed.guestHostKey === undefined, true, 'runtime status diagnostics must not return host key material');
+  assert.equal(observed.status, status.status);
+  const diagnostics = output.join('');
+  assert.match(diagnostics, /preparing guest/);
+  assert.match(diagnostics, /Running/);
+  assert.equal(diagnostics.includes('AAAATEST'), false, 'streamed diagnostics must exclude host key bytes');
+  output.length = 0;
+  await assert.rejects(runManagedWslOperation({ target, action: 'Start' }, boundary(1)), error => {
+    assert.equal(error.message.includes('AAAATEST'), false, 'failure diagnostics must exclude host key bytes');
+    assert.match(error.message, /WSL Start failed/);
+    return true;
+  });
+  assert.equal(output.join('').includes('AAAATEST'), false, 'failed child output must also be redacted');
+  const provisioned = await runManagedWslOperation({ target, action: 'Provision' }, boundary(0));
+  assert.equal(provisioned.guestHostKey === status.guestHostKey, true, 'SSH publication must retain its authenticated key');
+  assert.equal(output.join('').includes('AAAATEST'), false, 'provisioning diagnostics must also be redacted');
+});
 
 test('WSL provisioning streams the canonical Bun version and preserves an explicit override', async () => {
   const pinnedVersion = (await readFile(new URL('../../provision/.bun-version', import.meta.url), 'utf8')).trim();

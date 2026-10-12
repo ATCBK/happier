@@ -125,7 +125,8 @@ function requireTarget(targets, rawName, command) {
 
 function formatSyncStatus(target, status) {
   const detail = status.lastError || status.error;
-  return `[dev-targets] ${target.name}\t${status.state}${detail ? `\t${detail}` : ''}`;
+  return `[dev-targets] ${target.name}\t${status.state}${detail ? `\t${detail}` : ''}`
+    + (status.recovery === 'rescan' ? '\twill rescan at the next dispatch barrier' : '');
 }
 
 function exitCodeForCommandResult(result) {
@@ -347,9 +348,11 @@ async function main() {
         '  hstack dev-targets doctor [NAME] [--stack=NAME]',
         '  hstack dev-targets status NAME [--stack=NAME]',
         '  hstack dev-targets qa setup NAME --stack=QA_STACK [--json]',
-        '  hstack dev-targets browser start SESSION --stack=QA_STACK --url=QA_UI_URL [--forward-url=LOOPBACK_URL] [--trust-cert=PEM_PATH]',
+        '  hstack dev-targets browser start SESSION --stack=QA_STACK --url=QA_UI_URL [--target=NAME] [--gpu] [--forward-url=LOOPBACK_URL] [--trust-cert=PEM_PATH] [--fake-audio[=WAV_PATH]]',
         '    Keeps the lane browser and CDP forward alive; Ctrl+C closes only this session.',
+        '    --gpu requires --target: headed Chromium on a host with an active GPU display, without software rasterization.',
         '    --trust-cert pins the supplied certificate SPKI for this browser lifetime.',
+        '    --fake-audio uses a synthetic microphone; =WAV_PATH copies controller speech to the worker. Permission is still required.',
         '  hstack dev-targets capacity show NAME [--stack=NAME]',
         '  hstack dev-targets capacity set NAME shared|dedicated [--shared-cpus=N --shared-memory-gib=N --dedicated-cpus=N --dedicated-memory-gib=N] [--force] [--stack=NAME]',
         '  hstack dev-targets sync NAME [--stack=NAME]',
@@ -413,18 +416,22 @@ async function main() {
     return;
   }
   if (command === 'browser' && positionals[1] === 'start') {
+    const targetName = String(kv.get('--target') ?? '').trim();
+    if (flags.has('--target') && !targetName) throw new Error('[dev-targets] browser --target requires a configured host name');
+    const gpu = flags.has('--gpu');
+    if (gpu && !targetName) throw new Error('[dev-targets] browser --gpu requires --target with an active GPU display');
     if (flags.has('--trust-cert') && !kv.get('--trust-cert')) {
       throw new Error('[dev-targets] browser --trust-cert requires a certificate path');
     }
     const { env: stackEnv } = await readStackEnvObject(stackName);
     const browserEnv = { ...process.env, ...stackEnv };
-    const controlled = await resolveControlledQaBrowserTarget({ stackName, env: browserEnv });
+    const controlled = await resolveControlledQaBrowserTarget({ stackName, targetName, env: browserEnv });
     const target = controlled.target;
     const url = String(kv.get('--url') ?? '').trim();
     if (!url) throw new Error('[dev-targets] browser start requires --url from the QA stack UI endpoint');
     await runQaBrowserSession({ target, stackName, stackBaseDir: controlled.authority.producerStackBaseDir,
       sessionName: positionals[2], url, extraUrls: kv.get('--forward-url') ? [kv.get('--forward-url')] : [],
-      trustCertPath: kv.get('--trust-cert'), env: browserEnv });
+      trustCertPath: kv.get('--trust-cert'), fakeAudio: kv.has('--fake-audio') ? kv.get('--fake-audio') : flags.has('--fake-audio'), gpu, env: browserEnv });
     return;
   }
   if (command === 'list') {

@@ -156,6 +156,70 @@ test('SSH primary discovers and forwards declared services through enrolled SSH 
   assert.equal(boundary.terminated.length, 0);
 });
 
+for (const changedField of ['ssh', 'sshConfigFile']) {
+  test(`SSH primary replaces a same-name tunnel when its enrolled ${changedField} changes and reuses an unchanged endpoint`, async t => {
+    const fixture = await createTempFixture(t);
+    const env = { HAPPIER_STACK_HOME_DIR: fixture.path('home'), HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks') };
+    const selected = { ...profile(fixture.path('lima')), mode: 'ssh-dev-target',
+      sshPrimary: { targetName: 'nl2', stackName: 'lane-a' } };
+    const target = { name: 'nl2', platform: 'posix', ssh: 'enrolled-primary-a',
+      sshConfigFile: fixture.path('ssh-config-a'), repoDir: selected.workspaces[0].guestDir,
+      cliHomeDir: '/home/guest/.happier/cli' };
+    const replacementTarget = { ...target,
+      [changedField]: changedField === 'ssh' ? 'enrolled-primary-b' : fixture.path('ssh-config-b') };
+    for (const [stackName, enrolledTarget] of [['lane-a', target], ['lane-b', replacementTarget]]) {
+      await mkdir(fixture.path('stacks', stackName), { recursive: true });
+      await writeFile(fixture.path('stacks', stackName, 'dev-targets.json'), JSON.stringify({
+        version: 3, targets: [enrolledTarget],
+      }));
+    }
+    const livePids = new Set();
+    const marker = 'ssh-nl2:0.3:repo-dev-1234567890';
+    const boundary = tunnelBoundary({ marker, listenerPids: () => [...livePids] });
+    const spawn = boundary.spawn.bind(boundary);
+    boundary.spawn = (...args) => {
+      const child = spawn(...args);
+      child.pid = 730 + boundary.spawned.length;
+      livePids.add(child.pid);
+      return child;
+    };
+    boundary.readFingerprint = pid => `test-process:${pid}`;
+    boundary.observeProcess = async pid => livePids.has(pid)
+      ? { status: 'ok', line: `${pid} ssh HAPPIER_STACK_PROCESS_KIND=execution-host-service-tunnel HAPPIER_STACK_EXECUTION_HOST_TUNNEL=${marker}` }
+      : { status: 'not_found' };
+    const terminate = boundary.terminate.bind(boundary);
+    boundary.terminate = async (pid, options) => {
+      livePids.delete(pid);
+      return await terminate(pid, options);
+    };
+    const input = { profile: selected, workspaceId: '0.3', executor: runtimeExecutor(runtimeProjection()), env, boundary };
+    const first = await ensureExecutionHostServiceTunnel(input);
+    const unchanged = await ensureExecutionHostServiceTunnel(input);
+    assert.equal(unchanged.changed, false);
+    assert.equal(boundary.spawned.length, 1);
+
+    const switchedInput = { ...input, profile: { ...selected,
+      sshPrimary: { targetName: 'nl2', stackName: 'lane-b' } } };
+    const switched = await ensureExecutionHostServiceTunnel(switchedInput);
+    assert.equal(switched.changed, true, 'a healthy tunnel to the previous enrollment must be replaced');
+    assert.equal(switched.statePath, first.statePath);
+    assert.equal(switched.replacementReason, 'forward_plan_changed');
+    assert.deepEqual(boundary.terminated, [{ pid: 731, options: {
+      signal: 'SIGTERM', graceMs: 800, processInstanceFingerprint: 'test-process:731',
+    } }]);
+    assert.equal(boundary.spawned.length, 2);
+    assert.ok(boundary.spawned[1].args.includes(replacementTarget.ssh));
+    assert.ok(boundary.spawned[1].args.includes(replacementTarget.sshConfigFile));
+    const state = JSON.parse(await readFile(switched.statePath, 'utf8'));
+    assert.equal(state.pid, 732);
+    assert.equal(state.sshHost, replacementTarget.ssh);
+    assert.equal(state.sshConfigFile, replacementTarget.sshConfigFile);
+    assert.equal((await ensureExecutionHostServiceTunnel(switchedInput)).changed, false);
+    assert.equal(boundary.spawned.length, 2);
+    assert.deepEqual([...livePids], [732]);
+  });
+}
+
 test('runtime projection reads only the selected guest Stack declaration and maps server backend plus Expo web', async () => {
   const executor = runtimeExecutor(runtimeProjection());
   const result = await inspectExecutionHostStackRuntime({

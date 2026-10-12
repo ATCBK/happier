@@ -314,7 +314,9 @@ if [ "$lifetime_stdin" = 1 ]; then
     exec 4<> "$control_pipe"
     (exec 3<&- 4>&-; exec "$@" < "$control_pipe") &
   else
-    "$@" </dev/null &
+    # The lifeline belongs only to the custody reader. A payload's descendant
+    # tree must not inherit this private descriptor as it launches more work.
+    (exec 3<&-; exec "$@" </dev/null) &
   fi
 else
   "$@" <&0 &

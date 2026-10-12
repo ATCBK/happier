@@ -25,6 +25,7 @@ const SYNC_READINESS_RULES = [
 // scan. Permission denial, unknown or excluded errors remain fail-closed.
 const TRANSIENT_TRANSITION_ERRORS = [
   '(^|: )unable to validate existing file: modification detected$',
+  '(^|: )unable to relocate staged file: file exists$',
   '(^|: )leaf name does not exist( or has incorrect casing)?$',
   'unable to set staged file permissions: .*(: no such file or directory|: The system cannot find the file specified\\.)$',
 ];

@@ -206,7 +206,9 @@ flush_and_check_sync() {
   }
   trap 'cancel_control_flush' HUP INT TERM
   while :; do
-    "$control_path" -- "$@" &
+    # Synchronization progress is diagnostic; callers reserve stdout for the
+    # exact-session health record or their command payload.
+    "$control_path" -- "$@" >&2 &
     control_child=$!
     wait "$control_child"
     status=$?
@@ -284,7 +286,9 @@ case "${1-}" in
     status=$?
     if [ "$status" -eq 2 ]; then
       printf '%s\n' "hstack-dev-target-control: $session_name requesting a fresh scan through the dispatch flush barrier" >&2
-      HSTACK_SYNC_RECOVERY_USED=1 "$control_path" --sync-flush "$session_name" -- mutagen sync flush "$session_name" || exit 1
+      # Flush progress is diagnostic output, not the selector's health record.
+      # Publish only the final exact-session observation on stdout.
+      HSTACK_SYNC_RECOVERY_USED=1 HSTACK_SYNC_CHECK_VERBOSE=0 "$control_path" --sync-flush "$session_name" -- mutagen sync flush "$session_name" >&2 || exit 1
       check_sync_session_clean "$session_name"
       status=$?
     fi

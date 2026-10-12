@@ -638,6 +638,8 @@ async function ensureExecutionHostServiceTunnelUnlocked({
       ...(projection.runtimeStartedAt ? { runtimeStartedAt: projection.runtimeStartedAt } : {}),
     };
   }
+  const hostTransport = projection.forwards.every((forward) => forward.transport === 'host');
+  const resolvedSsh = hostTransport ? null : await resolveExecutionHostWorkspaceConnection(profile, env);
   const marker = tunnelMarker({ profile, workspaceId: workspace.id, stackName: projection.stackName });
   const loaded = await readTunnelState(statePath);
   if (loaded.status === 'invalid') {
@@ -661,6 +663,11 @@ async function ensureExecutionHostServiceTunnelUnlocked({
           && loaded.state.workspaceId === workspace.id
           && loaded.state.stackName === projection.stackName
           && loaded.state.marker === marker
+          && loaded.state.transport === (hostTransport ? 'host' : 'guest')
+          && (hostTransport || (
+            loaded.state.sshHost === resolvedSsh.sshHost
+            && loaded.state.sshConfigFile === resolvedSsh.sshConfigFile
+          ))
           && sameForwards(loaded.state.forwards, projection.forwards);
         const inspection = await inspectSavedTunnel(loaded.state, processBoundary);
         if (samePlan && (inspection.ok || inspection.reason === 'listener_discovery_unavailable')) {
@@ -712,8 +719,6 @@ async function ensureExecutionHostServiceTunnelUnlocked({
       }
     }
     await assertPortsUnclaimed(projection.forwards, processBoundary);
-    const hostTransport = projection.forwards.every((forward) => forward.transport === 'host');
-    const resolvedSsh = hostTransport ? null : await resolveExecutionHostWorkspaceConnection(profile, env);
     const command = hostTransport ? process.execPath : 'ssh';
     const args = hostTransport
       ? [

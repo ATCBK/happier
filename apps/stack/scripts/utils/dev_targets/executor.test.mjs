@@ -128,6 +128,23 @@ test('explicit sync rescans scan-only problems through the existing flush before
   assert.equal(result.state, 'ready');
 });
 
+test('explicit sync recovers a staged relocation collision through the existing flush', async () => {
+  const initial = readyListResult();
+  const sessions = JSON.parse(initial.out);
+  sessions[0].beta.transitionProblems = [{ path: 'apps/website/src/i18n/generated/slices/en.json',
+    error: 'unable to relocate staged file: file exists' }];
+  initial.out = JSON.stringify(sessions);
+  let flushed = false;
+  const result = await syncDevTarget({ target, stackBaseDir: '/tmp/stack', env: {} }, {
+    runCaptureResult: async ({ args }) => {
+      if (args.includes('flush')) { flushed = true; return { ok: true, exitCode: 0, out: '', err: '' }; }
+      return flushed ? readyListResult() : initial;
+    },
+  });
+  assert.equal(flushed, true);
+  assert.equal(result.state, 'ready');
+});
+
 function transitionProblemListResult() {
   return {
     ok: true,
@@ -169,6 +186,7 @@ test('dependency bootstrap delegates to the cancellable remote command owner', a
     commandArgs: [
       'node',
       './apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.mjs',
+      '--execution-placement=remote',
       '--validation-kind=runtime',
       '--component-relative-dir=.',
     ],

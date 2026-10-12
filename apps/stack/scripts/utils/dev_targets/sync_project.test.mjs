@@ -699,7 +699,7 @@ test('Stack default runner captures active independent status for every configur
   assert.equal(result.ownership, 'borrowed');
 });
 
-test('Stack default runner preserves a nonzero independent status exit', async (t) => {
+test('Stack default runner exposes a nonzero independent status exit as target unavailability', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'happier-sync-project-default-runner-failure-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const binDir = await writeMutagenStatusStub(root);
@@ -710,22 +710,21 @@ test('Stack default runner preserves a nonzero independent status exit', async (
     ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER,
   }));
 
-  await assert.rejects(
-    ensureDevTargetSyncProject({
-      stackBaseDir: root,
-      sourceDir: DEV_TARGET_SYNC_EXECUTOR_REPO,
-      targets: [target],
-      ownerId: process.pid,
-      allowIndependentBorrow: true,
-      env: {
-        ...process.env,
-        ...envFor(root),
-        PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
-        FAKE_MUTAGEN_FAIL_SESSION: 'happier-mac',
-      },
-    }),
-    /mac independent synchronization status failed \(code=7\)/,
-  );
+  const result = await ensureDevTargetSyncProject({
+    stackBaseDir: root,
+    sourceDir: DEV_TARGET_SYNC_EXECUTOR_REPO,
+    targets: [target],
+    ownerId: process.pid,
+    allowIndependentBorrow: true,
+    env: {
+      ...process.env,
+      ...envFor(root),
+      PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
+      FAKE_MUTAGEN_FAIL_SESSION: 'happier-mac',
+    },
+  });
+  assert.equal(result.ownership, 'borrowed');
+  assert.equal(result.unhealthyTargets.get(target.name), 'unavailable');
 });
 
 test('independent sync stop releases ownership before pausing so interruption cannot advertise stale ownership', async () => {
