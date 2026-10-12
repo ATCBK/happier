@@ -37,6 +37,8 @@ const reactNativeWebAliases = [
   { find: /^react-dom\/client$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react-dom/client.js') },
   { find: /^react-dom$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react-dom/index.js') },
   { find: /^react-native$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react-native-web/dist/index.js') },
+  // Match plugin-ui's RNW harness: Metro's platform selection does not run in Vite.
+  { find: /^react-native-svg$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react-native-svg/lib/module/elements.web.js') },
 ];
 
 export default defineConfig({

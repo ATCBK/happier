@@ -13,7 +13,6 @@ export const INSPECTOR_APP_SURFACE_ID = 'inspector-app';
  */
 export const INSPECTOR_PAGE_SURFACE_ID = 'inspector-page';
 export const INSPECTOR_BROWSER_PANEL_SURFACE_ID = 'inspector-browser-panel';
-export const INSPECTOR_SERVICES_PANEL_SURFACE_ID = 'inspector-services-panel';
 export const INSPECTOR_RENDERER_ID = 'inspector-renderer';
 export const INSPECTOR_SETTINGS_ID = 'settings';
 export const INSPECTOR_SHOW_DIAGNOSTICS_SETTING_ID = 'show-diagnostics';
@@ -83,15 +82,6 @@ export const INSPECTOR_UI = {
     id: INSPECTOR_BROWSER_PANEL_SURFACE_ID,
     container: 'browserPanel' as const,
     target: { kind: 'browser' as const, browserViewIdPath: '/browser/viewId' },
-    renderer: INSPECTOR_RENDERER_ID,
-    title: {
-      key: 'plugins.inspector.title',
-      fallback: 'Plugin Inspector',
-    },
-  }, {
-    id: INSPECTOR_SERVICES_PANEL_SURFACE_ID,
-    container: 'servicesPanel' as const,
-    target: { kind: 'services' as const },
     renderer: INSPECTOR_RENDERER_ID,
     title: {
       key: 'plugins.inspector.title',
@@ -241,16 +231,16 @@ export const INSPECTOR_UI = {
         messages: {
           ...INSPECTOR_ADDITIONAL_UI_TRANSLATIONS.fr,
           "plugins.inspector.title": "Inspecteur de plugins",
-          "plugins.inspector.description": "Inspectez les plugins installés, les diagnostics et l’état de rechargement.",
+          "plugins.inspector.description": "Inspecte les plugins installés, les diagnostics et l’état de rechargement.",
           "plugins.inspector.settings.showDiagnostics": "Afficher les diagnostics dans l'inspecteur de plug-in",
-          "plugins.inspector.settings.showDiagnostics.description": "Affichez les détails du diagnostic par plug-in dans la surface de l'inspecteur.",
+          "plugins.inspector.settings.showDiagnostics.description": "Affiche les détails du diagnostic par plug-in dans la surface de l'inspecteur.",
           "plugins.inspector.surface.reload": "Recharger",
           "plugins.inspector.surface.reloading": "Rechargement…",
           "plugins.inspector.surface.search": "Rechercher les plugins installés",
           "plugins.inspector.surface.searchPlaceholder": "Rechercher par nom ou ID de plugin",
           "plugins.inspector.surface.inventoryIllustration": "Illustration de l'inventaire des plugins",
           "plugins.inspector.surface.noMatches": "Aucun plugin correspondant",
-          "plugins.inspector.surface.noMatchesDescription": "Essayez un autre nom ou ID de plugin.",
+          "plugins.inspector.surface.noMatchesDescription": "Essaie un autre nom ou ID de plugin.",
           "plugins.inspector.surface.loading": "Chargement…",
           "plugins.inspector.surface.refreshing": "Actualisation de l'inventaire des plugins",
           "plugins.inspector.surface.empty": "Aucun plugin installé.",
@@ -265,7 +255,7 @@ export const INSPECTOR_UI = {
           "plugins.inspector.surface.showActionsContext": "Actions contextuelles de l'inspecteur ouvert",
           "plugins.inspector.surface.selfCheck": "Exécuter l'auto-vérification de l'inspecteur",
           "plugins.inspector.surface.executeSelfCheck": "Exécuter l’auto-vérification de l’inspecteur",
-          "plugins.inspector.surface.selfCheckDescription": "Vérifiez le pont d’action de l’inspecteur.",
+          "plugins.inspector.surface.selfCheckDescription": "Vérifie le pont d’action de l’inspecteur.",
         },
       },
     {

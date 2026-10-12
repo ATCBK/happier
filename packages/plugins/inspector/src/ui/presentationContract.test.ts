@@ -53,6 +53,19 @@ function createInspectorSurfaceContext() {
   });
 }
 
+async function findInventoryRefreshRow(fixture: Awaited<ReturnType<typeof createPluginUiTestkit>>) {
+  // A row's accessible name includes its descriptive subtitle. Locate its
+  // real public semantic control instead of assuming the title is the name.
+  return vi.waitFor(async () => {
+    const roles = await Promise.all([
+      fixture.queryAllByRole('button'), fixture.queryAllByRole('option'),
+    ]);
+    const rows = roles.flat().filter(target => target.name?.startsWith('Refresh with list row'));
+    expect(rows).toHaveLength(1);
+    return rows[0]!;
+  });
+}
+
 function verticalScrollAncestors(element: HTMLElement): HTMLElement[] {
   const ancestors: HTMLElement[] = [];
   for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
@@ -370,6 +383,74 @@ describe('Inspector public presentation contract', () => {
     } finally {
       await fixture.dispose();
     }
+  });
+
+  it('shares the pending inventory read across repeated refresh entrances', async () => {
+    const plugin = { pluginId: 'com.acme.review-assistant', version: '1.0.0', title: 'Review Assistant', enabled: true };
+    let resolveRefresh!: (value: unknown) => void;
+    const pending = new Promise<unknown>(resolve => { resolveRefresh = resolve; });
+    let reads = 0;
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'shared-refresh', mountNonce: 'shared-refresh' },
+      authorPlugin: { id: 'happier.inspector', version: '0.0.0' }, surface: renderSurface,
+      surfaceContext: createInspectorSurfaceContext(), adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+      handlers: { executeAction: async ({ action }: InspectorExecuteActionRequest) => {
+        if (action !== 'plugins.list') return { ok: true };
+        reads += 1;
+        return reads === 1 ? { plugins: [plugin] } : pending;
+      } },
+    });
+    try {
+      await fixture.findByRole('option', { name: 'Review Assistant', state: { selected: false } });
+      await fixture.press(await findInventoryRefreshRow(fixture));
+      await vi.waitFor(() => expect(reads).toBe(2));
+      await fixture.press(await findInventoryRefreshRow(fixture));
+      // This counts real host reads: repeated entrances must join the pending read.
+      expect(reads).toBe(2);
+      await expect(fixture.getByRole('progressbar', { name: 'Refreshing plugin inventory' })).resolves.toBeDefined();
+      await React.act(async () => { resolveRefresh({ plugins: [{ ...plugin, version: '2.0.0' }] }); });
+      await expect(fixture.getByText('com.acme.review-assistant · v2.0.0 · enabled')).resolves.toBeDefined();
+      await expect(fixture.queryByRole('progressbar', { name: 'Refreshing plugin inventory' })).resolves.toBeUndefined();
+    } finally { resolveRefresh({ plugins: [plugin] }); await fixture.dispose(); }
+  });
+
+  it.each(['success', 'failure', 'rejection'] as const)('preserves the post-reload inventory when an older refresh settles with %s', async settlement => {
+    const plugin = { pluginId: 'com.acme.review-assistant', version: '1.0.0', title: 'Review Assistant', enabled: true };
+    let resolveOlder!: (value: unknown) => void;
+    let rejectOlder!: (reason: Error) => void;
+    let resolveNewer!: (value: unknown) => void;
+    const older = new Promise<unknown>((resolve, reject) => { resolveOlder = resolve; rejectOlder = reject; });
+    const newer = new Promise<unknown>(resolve => { resolveNewer = resolve; });
+    let reads = 0;
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: `refresh-${settlement}`, mountNonce: `refresh-${settlement}` },
+      authorPlugin: { id: 'happier.inspector', version: '0.0.0' }, surface: renderSurface,
+      surfaceContext: createInspectorSurfaceContext(), adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+      handlers: { executeAction: async ({ action }: InspectorExecuteActionRequest) => {
+        if (action === 'plugins.reload') return { ok: true, kind: 'plugins_reload', changedPluginIds: [plugin.pluginId], affectedPluginIds: [] };
+        if (action !== 'plugins.list') return { ok: true };
+        reads += 1;
+        return reads === 1 ? { ok: true, kind: 'plugins_list', plugins: [plugin] } : reads === 2 ? older : newer;
+      } },
+    });
+    try {
+      await fixture.press(await fixture.findByRole('option', { name: 'Review Assistant', state: { selected: false } }));
+      await fixture.press(await findInventoryRefreshRow(fixture));
+      await vi.waitFor(() => expect(reads).toBe(2));
+      await fixture.press(await fixture.findByRole('button', { name: 'Reload Review Assistant' }));
+      await vi.waitFor(() => expect(reads).toBe(3));
+      await React.act(async () => { resolveNewer({ ok: true, kind: 'plugins_list', plugins: [{ ...plugin, version: '2.0.0' }] }); });
+      await vi.waitFor(async () => { await expect(fixture.getByText('com.acme.review-assistant · v2.0.0 · enabled')).resolves.toBeDefined(); });
+      await React.act(async () => {
+        if (settlement === 'rejection') rejectOlder(new Error('Older inventory failed'));
+        else resolveOlder(settlement === 'success'
+          ? { ok: true, kind: 'plugins_list', plugins: [plugin] }
+          : { ok: false, kind: 'plugins_list', diagnostics: [{ code: 'older_failure', message: 'Older inventory failed' }] });
+      });
+      await expect(fixture.getByText('com.acme.review-assistant · v2.0.0 · enabled')).resolves.toBeDefined();
+      await expect(fixture.queryByText('Older inventory failed')).resolves.toBeUndefined();
+      expect(document.querySelector('[data-testid="inspector-error"]')).toBeNull();
+    } finally { resolveOlder({ ok: true, kind: 'plugins_list', plugins: [plugin] }); resolveNewer({ ok: true, kind: 'plugins_list', plugins: [plugin] }); await fixture.dispose(); }
   });
 
   it('filters through the public List before virtualization and never reloads a filtered-out selection', async () => {

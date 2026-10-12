@@ -52,7 +52,8 @@ describe('Inspector page anatomy', () => {
     try {
       await expect(fixture.getByText('No plugins installed.')).resolves.toEqual({ content: 'No plugins installed.' });
       expect(headingsIn('inspector-page-header')).toEqual(['Plugin Inspector']);
-      expect(document.querySelector('[data-testid="inspector-location"]')?.textContent).toBe('Overview');
+      // At the page root the location says nothing the title does not; only a sub-page names itself.
+      expect(document.querySelector('[data-testid="inspector-location"]')).toBeNull();
       expect(headingsIn('inspector-self-check-card')).toEqual(['Surface health']);
       expect(headingsIn('inspector-inventory-title')).toEqual(['Plugin inventory']);
       // The pane's compact heading stack is not drawn on the page.

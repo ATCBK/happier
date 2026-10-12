@@ -43,6 +43,7 @@
       }
     ],
     "agents": [],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -60,6 +61,7 @@
     "executionRunProfiles": [],
     "hooks": [],
     "inputTypes": [],
+    "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
       "discoverySources": [],
@@ -69,6 +71,7 @@
     "notifications": [],
     "openableContentViewers": [],
     "pluginContributionPoints": [],
+    "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],
@@ -314,9 +317,9 @@
         {
           "locale": "fr",
           "messages": {
-            "plugins.inspector.description": "Inspectez les plugins installés, les diagnostics et l’état de rechargement.",
+            "plugins.inspector.description": "Inspecte les plugins installés, les diagnostics et l’état de rechargement.",
             "plugins.inspector.settings.showDiagnostics": "Afficher les diagnostics dans l'inspecteur de plug-in",
-            "plugins.inspector.settings.showDiagnostics.description": "Affichez les détails du diagnostic par plug-in dans la surface de l'inspecteur.",
+            "plugins.inspector.settings.showDiagnostics.description": "Affiche les détails du diagnostic par plug-in dans la surface de l'inspecteur.",
             "plugins.inspector.surface.changedPlugins": "Modifiés : {plugins}",
             "plugins.inspector.surface.copyInventory": "Copie l'inventaire des plugins",
             "plugins.inspector.surface.copyReload": "Copier les détails de l'actualisation",
@@ -328,7 +331,7 @@
             "plugins.inspector.surface.loading": "Chargement…",
             "plugins.inspector.surface.navigationActions": "Navigation de l'inspecteur",
             "plugins.inspector.surface.noMatches": "Aucun plugin correspondant",
-            "plugins.inspector.surface.noMatchesDescription": "Essayez un autre nom ou ID de plugin.",
+            "plugins.inspector.surface.noMatchesDescription": "Essaie un autre nom ou ID de plugin.",
             "plugins.inspector.surface.openDiagnostics": "Ouvrir le diagnostic",
             "plugins.inspector.surface.openDocumentation": "Ouvre la documentation du plugin",
             "plugins.inspector.surface.openInspector": "Ouvre la page de l'inspecteur",
@@ -346,7 +349,7 @@
             "plugins.inspector.surface.search": "Rechercher les plugins installés",
             "plugins.inspector.surface.searchPlaceholder": "Rechercher par nom ou ID de plugin",
             "plugins.inspector.surface.selfCheck": "Exécuter l'auto-vérification de l'inspecteur",
-            "plugins.inspector.surface.selfCheckDescription": "Vérifiez le pont d’action de l’inspecteur.",
+            "plugins.inspector.surface.selfCheckDescription": "Vérifie le pont d’action de l’inspecteur.",
             "plugins.inspector.surface.showActions": "Actions de l'inspecteur",
             "plugins.inspector.surface.showActionsContext": "Actions contextuelles de l'inspecteur ouvert",
             "plugins.inspector.title": "Inspecteur de plugins"
@@ -684,20 +687,6 @@
           "target": {
             "browserViewIdPath": "/browser/viewId",
             "kind": "browser"
-          },
-          "title": {
-            "fallback": "Plugin Inspector",
-            "key": "plugins.inspector.title"
-          }
-        },
-        {
-          "container": "servicesPanel",
-          "headerActions": [],
-          "id": "inspector-services-panel",
-          "instancePolicy": "singleton",
-          "renderer": "inspector-renderer",
-          "target": {
-            "kind": "services"
           },
           "title": {
             "fallback": "Plugin Inspector",

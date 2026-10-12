@@ -78,10 +78,17 @@ type InspectorReloadSummary = Readonly<{
   diagnostics?: readonly InspectorPluginDiagnostic[];
 }>;
 
-type InspectorSurfaceError =
-  | Readonly<{ kind: 'inventory'; message: string }>
-  | Readonly<{ kind: 'navigation'; message: string; subPath: string }>
-  | Readonly<{ kind: 'reload'; message: string; pluginId: string }>;
+type InspectorRequestError = Readonly<{
+  message: string;
+  code?: string;
+  diagnostics?: readonly InspectorPluginDiagnostic[];
+}>;
+
+type InspectorSurfaceError = (
+  | Readonly<{ kind: 'inventory' }>
+  | Readonly<{ kind: 'navigation'; subPath: string }>
+  | Readonly<{ kind: 'reload'; pluginId: string }>
+) & InspectorRequestError;
 
 function isPluginSummary(value: unknown): value is InspectorPluginSummary {
   return Boolean(value) && typeof value === 'object'
@@ -89,12 +96,39 @@ function isPluginSummary(value: unknown): value is InspectorPluginSummary {
     && typeof (value as { enabled?: unknown }).enabled === 'boolean';
 }
 
-function readPluginsListResult(result: unknown): readonly InspectorPluginSummary[] {
+function readPluginDiagnostics(value: unknown): readonly InspectorPluginDiagnostic[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry: unknown) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const record = entry as Readonly<Record<string, unknown>>;
+    const code = typeof record.code === 'string' ? record.code : undefined;
+    const message = typeof record.message === 'string' ? record.message : undefined;
+    return code === undefined && message === undefined ? [] : [{
+      ...(code === undefined ? {} : { code }),
+      ...(message === undefined ? {} : { message }),
+    }];
+  });
+}
+
+function readPluginsListResult(result: unknown):
+  | Readonly<{ ok: true; plugins: readonly InspectorPluginSummary[] }>
+  | Readonly<{ ok: false; code?: string; message?: string; diagnostics: readonly InspectorPluginDiagnostic[] }> {
   if (!result || typeof result !== 'object') {
-    return [];
+    return { ok: true, plugins: [] };
   }
-  const plugins = (result as { plugins?: unknown }).plugins;
-  return Array.isArray(plugins) ? plugins.filter(isPluginSummary) : [];
+  const record = result as Readonly<Record<string, unknown>>;
+  if (record.ok === false) {
+    const diagnostics = readPluginDiagnostics(record.diagnostics);
+    const code = diagnostics[0]?.code;
+    const message = diagnostics[0]?.message;
+    return {
+      ok: false,
+      diagnostics,
+      ...(code === undefined ? {} : { code }),
+      ...(message === undefined ? {} : { message }),
+    };
+  }
+  return { ok: true, plugins: Array.isArray(record.plugins) ? record.plugins.filter(isPluginSummary) : [] };
 }
 
 function readReloadResult(result: unknown): InspectorReloadSummary | null {
@@ -115,11 +149,24 @@ function readReloadResult(result: unknown): InspectorReloadSummary | null {
   };
 }
 
-function readErrorMessage(error: unknown): string {
+function readErrorMessage(error: unknown): string | undefined {
   if (error && typeof error === 'object' && 'message' in error && typeof (error as { message?: unknown }).message === 'string') {
     return (error as { message: string }).message;
   }
-  return 'plugin_inspector_request_failed';
+  return undefined;
+}
+
+function readRequestError(error: unknown, fallbackMessage: string): InspectorRequestError {
+  const record = error && typeof error === 'object' ? error as Readonly<Record<string, unknown>> : null;
+  const code = typeof record?.code === 'string' ? record.code : undefined;
+  const diagnostics = readPluginDiagnostics(record?.diagnostics);
+  const message = diagnostics.find((entry) => entry.message && entry.message !== entry.code)?.message
+    ?? readErrorMessage(error);
+  return {
+    message: message && message !== code ? message : fallbackMessage,
+    ...(code === undefined ? {} : { code }),
+    ...(diagnostics.length === 0 ? {} : { diagnostics }),
+  };
 }
 
 function inspectorPluginLabel(plugin: InspectorPluginSummary): string {
@@ -159,6 +206,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
   const [plugins, setPlugins] = React.useState<readonly InspectorPluginSummary[] | null>(null);
   const [selectedPluginId, setSelectedPluginId] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const inventoryRead = React.useRef<Promise<void> | null>(null);
   const [error, setError] = React.useState<InspectorSurfaceError | null>(null);
   const [reloadingPluginId, setReloadingPluginId] = React.useState<string | null>(null);
   const [lastReload, setLastReload] = React.useState<InspectorReloadSummary | null>(null);
@@ -184,34 +232,57 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
     try {
       await hostApi.openSurface('inspector-page', undefined, { subPath: nextSubPath });
     } catch (requestError) {
-      setError({ kind: 'navigation', message: readErrorMessage(requestError), subPath: nextSubPath });
+      setError({ kind: 'navigation', ...readRequestError(requestError,
+        text('plugins.inspector.surface.navigationUnavailable', 'Inspector navigation unavailable')), subPath: nextSubPath });
     }
-  }, [canOpenSurface, hostApi]);
+  }, [canOpenSurface, hostApi, text]);
 
-  const refreshPluginList = React.useCallback(async () => {
+  const refreshPluginList = React.useCallback((afterReload = false): Promise<void> => {
+    if (inventoryRead.current && !afterReload) return inventoryRead.current;
     if (!hostApi) {
-      setError({ kind: 'inventory', message: 'host_api_unavailable' });
-      return;
+      setError({ kind: 'inventory', code: 'host_api_unavailable',
+        message: text('plugins.inspector.surface.inventoryUnavailable', 'Plugin inventory unavailable') });
+      return Promise.resolve();
     }
     setLoading(true);
     setError(null);
-    try {
-      const result = await hostApi.executeAction('plugins.list', {});
-      setPlugins(readPluginsListResult(result));
-    } catch (requestError) {
-      setError({ kind: 'inventory', message: readErrorMessage(requestError) });
-    } finally {
-      setLoading(false);
-    }
-  }, [hostApi]);
+    // Ordinary entrances share one read; reload completion requires a new one.
+    // Only that current read may publish inventory, errors or loading state.
+    const read = Promise.resolve().then(async () => {
+      try {
+        const result = await hostApi.executeAction('plugins.list', {});
+        if (inventoryRead.current !== read) return;
+        const inventory = readPluginsListResult(result);
+        if (inventory.ok) {
+          setPlugins(inventory.plugins);
+        } else {
+          setError({ kind: 'inventory', ...readRequestError(inventory,
+            text('plugins.inspector.surface.inventoryUnavailable', 'Plugin inventory unavailable')) });
+        }
+      } catch (requestError) {
+        if (inventoryRead.current !== read) return;
+        setError({ kind: 'inventory', ...readRequestError(requestError,
+          text('plugins.inspector.surface.inventoryUnavailable', 'Plugin inventory unavailable')) });
+      } finally {
+        if (inventoryRead.current === read) {
+          inventoryRead.current = null;
+          setLoading(false);
+        }
+      }
+    });
+    inventoryRead.current = read;
+    return read;
+  }, [hostApi, text]);
 
   React.useEffect(() => {
     void refreshPluginList();
+    return () => { inventoryRead.current = null; };
   }, [refreshPluginList]);
 
   const reloadPlugin = React.useCallback(async (pluginId: string) => {
     if (!hostApi) {
-      setError({ kind: 'reload', message: 'host_api_unavailable', pluginId });
+      setError({ kind: 'reload', code: 'host_api_unavailable', pluginId,
+        message: text('plugins.inspector.surface.reloadUnavailable', 'Plugin reload failed') });
       return;
     }
     setReloadingPluginId(pluginId);
@@ -225,13 +296,14 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
       // The reload action result is the canonical completion signal. Refetch
       // the list from that result instead of adding a second event path for
       // the same information.
-      await refreshPluginList();
+      await refreshPluginList(true);
     } catch (requestError) {
-      setError({ kind: 'reload', message: readErrorMessage(requestError), pluginId });
+      setError({ kind: 'reload', ...readRequestError(requestError,
+        text('plugins.inspector.surface.reloadUnavailable', 'Plugin reload failed')), pluginId });
     } finally {
       setReloadingPluginId(null);
     }
-  }, [hostApi, refreshPluginList]);
+  }, [hostApi, refreshPluginList, text]);
 
   const retryError = React.useCallback(() => {
     if (!error) return;
@@ -285,7 +357,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
           <Text value={inspectorPluginLabel(plugin)} variant="label" />
           <Text
             value={`${plugin.pluginId}${plugin.version ? ` · v${plugin.version}` : ''} · ${inspectorPluginStatus(plugin)}`}
-            variant="caption"
+            variant="micro"
             tone="secondary"
           />
           {(plugin.diagnostics ?? []).length > 0 ? (
@@ -301,37 +373,37 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
     </List.Item>
   ), [rowDirection]);
 
+  // The page header's secondary actions: one quiet ⋯ menu beside the Run-on chip, never loose text links.
   const quickMenus = (
-    <Row gap="small" wrap align="center" style={{ flexDirection: rowDirection }}>
-      <Menu
-        testID="inspector-quick-actions-menu"
-        open={quickActionsMenuOpen}
-        onOpenChange={setQuickActionsMenuOpen}
-        trigger={text('plugins.inspector.surface.quickMenu', 'Quick menu')}
-        triggerTextVariant="caption"
-        triggerTextTone="muted"
-        triggerAccessibilityLabel={text(
-          'plugins.inspector.surface.openQuickMenu',
-          'Open Inspector quick menu',
-        )}
-        items={quickActionItems}
-        onSelect={selectQuickAction}
-      />
-      <ContextMenu
-        testID="inspector-quick-actions-context-menu"
-        open={quickActionsContextMenuOpen}
-        onOpenChange={setQuickActionsContextMenuOpen}
-        trigger={text('plugins.inspector.surface.contextMenu', 'Context menu')}
-        triggerTextVariant="caption"
-        triggerTextTone="muted"
-        triggerAccessibilityLabel={text(
-          'plugins.inspector.surface.openContextMenu',
-          'Open Inspector context menu',
-        )}
-        items={quickActionItems}
-        onSelect={selectQuickAction}
-      />
-    </Row>
+    <Menu
+      testID="inspector-quick-actions-menu"
+      open={quickActionsMenuOpen}
+      onOpenChange={setQuickActionsMenuOpen}
+      trigger={text('plugins.inspector.surface.quickMenu', 'Quick menu')}
+      triggerIcon="more"
+      triggerAccessibilityLabel={text(
+        'plugins.inspector.surface.openQuickMenu',
+        'Open Inspector quick menu',
+      )}
+      items={quickActionItems}
+      onSelect={selectQuickAction}
+    />
+  );
+  // The context menu is a gallery specimen of the ContextMenu family, so it lives in the gallery.
+  const contextMenuSpecimen = (
+    <ContextMenu
+      testID="inspector-quick-actions-context-menu"
+      open={quickActionsContextMenuOpen}
+      onOpenChange={setQuickActionsContextMenuOpen}
+      trigger={text('plugins.inspector.surface.contextMenu', 'Context menu')}
+      triggerAppearance="control"
+      triggerAccessibilityLabel={text(
+        'plugins.inspector.surface.openContextMenu',
+        'Open Inspector context menu',
+      )}
+      items={quickActionItems}
+      onSelect={selectQuickAction}
+    />
   );
   const selfCheckAction = (
     <Action.Execute
@@ -358,9 +430,8 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
       tone={selfCheckStatus.tone}
     />
   );
-  const locationLabel = subPath && subPath.length > 0
-    ? subPath
-    : text('plugins.inspector.surface.pageOverview', 'Overview');
+  // Only a sub-page names its location; at the root it would repeat what the title already says.
+  const locationLabel = subPath && subPath.length > 0 ? subPath : null;
 
   // On its full page the Inspector is a configuration-style page: the public
   // page header and titled sections draw the same anatomy as Happier's own
@@ -375,7 +446,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
         descriptionKey="plugins.inspector.description"
         leading={<BrandMark size="medium" externallyLabelled />}
         meta={[
-          { key: 'location', text: locationLabel, testID: 'inspector-location' },
+          ...(locationLabel ? [{ key: 'location', text: locationLabel, testID: 'inspector-location' }] : []),
           ...(plugins ? [{
             key: 'count',
             text: text('plugins.inspector.surface.pluginCount', '{count} plugins', { count: plugins.length }),
@@ -463,7 +534,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
                 <Text
                   valueKey="plugins.inspector.surface.selfCheckDescription"
                   fallback="Verify the Inspector action bridge."
-                  variant="caption"
+                  variant="micro"
                   tone="secondary"
                 />
                 <Row gap="small" wrap align="center" justify="space-between" style={{ flexDirection: rowDirection }}>
@@ -495,7 +566,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
                   'plugins.inspector.surface.inventoryDescription',
                   'Search admitted plugins, inspect diagnostics, and reload one development plugin at a time.',
                 )}
-                variant="caption"
+                variant="micro"
                 tone="secondary"
               />
             </Stack>
@@ -517,7 +588,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
                   'Registry: {status}',
                   { status: lastReload.registryStatus },
                 )}
-                variant="caption"
+                variant="micro"
                 tone="secondary"
               />
             ) : null}
@@ -587,10 +658,11 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
               'plugins.inspector.surface.componentGalleryDescription',
               'Reference controls for validating the public Plugin UI interaction families.',
             )}
-            variant="caption"
+            variant="micro"
             tone="secondary"
           />
         </Stack>
+        <Row gap="small" wrap align="center">{contextMenuSpecimen}</Row>
         <List accessibilityLabel={text('plugins.inspector.surface.quickActions', 'Inspector quick actions')}>
           <List.Section title={text('plugins.inspector.surface.inventoryActions', 'List and icon actions')}>
             <ItemGroup accessibilityLabel={text('plugins.inspector.surface.quickActions', 'Inspector quick actions')}>
