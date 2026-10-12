@@ -21,11 +21,13 @@ import type { AutomationRunNowController } from './useAutomationRunNowController
 import type { ItemGroupVirtualizedSegment } from '@/components/ui/lists/ItemGroup.dividers';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { formatAutomationErrorMessage } from '@/components/automations/automationErrorFormatting';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 
-const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+// The drawn control height, grown to the touch floor where the primary pointer is a finger.
+const minimumInteractiveTargetSize = Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS));
 const MAX_VISIBLE_TRIGGER_SUMMARY_LINES = 3;
 
 type Props = Readonly<{

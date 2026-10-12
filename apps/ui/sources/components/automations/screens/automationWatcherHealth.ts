@@ -6,6 +6,7 @@ import {
 import { t } from '@/text';
 import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
 import type { MachineWithReplacement } from '@/sync/domains/machines/identity/machineIdentityTypes';
+import { isMachineOnline } from '@/utils/sessions/machineUtils';
 
 /**
  * Whether a persisted `checkpointedPull` watcher can still observe events.
@@ -41,7 +42,9 @@ export function resolveAutomationWatcherHealth(params: Readonly<{
     const { machine } = params;
     if (!machine) return Object.freeze({ kind: params.machineListSettled ? 'machineUnknown' : 'machineChecking' });
 
-    const presence = resolveMachinePickerPresence(machine, params.nowMs);
+    // Only identity retirement comes from the picker; watcher health describes
+    // the daemon heartbeat, independently of this client's request reachability.
+    const presence = resolveMachinePickerPresence(machine, params.nowMs, null);
     if (presence.status === 'revoked' || presence.status === 'replaced') {
         return Object.freeze({ kind: 'machineUnavailable', status: presence.status });
     }
@@ -57,7 +60,7 @@ export function resolveAutomationWatcherHealth(params: Readonly<{
         return Object.freeze({ kind: 'installationReplaced' });
     }
 
-    if (presence.status === 'offline') return Object.freeze({ kind: 'machineOffline' });
+    if (!isMachineOnline(machine, params.nowMs)) return Object.freeze({ kind: 'machineOffline' });
     return Object.freeze({ kind: 'observing' });
 }
 

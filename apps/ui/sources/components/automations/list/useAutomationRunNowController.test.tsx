@@ -34,14 +34,15 @@ const modalAlertSpy = vi.hoisted(() => vi.fn(async () => {}));
 // schema admission, Action dispatch and transient-command behavior remain real.
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
     const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+    const { createActionExecutorBoundaryFixture } = await import('@/dev/testkit/fixtures/actionExecutorBoundary');
     const { createActionExecutor } = await import('@happier-dev/protocol/actions/actionExecutor');
     const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/actionSettings');
     const { isApprovalRequiredByActionsSettings } = await import('@happier-dev/protocol/actions/actionApprovalPolicy');
     const settings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'workflow.trigger.run_now': ['ui'] } });
-    return { ...original, createFrontDoorActionExecute: () => original.createFrontDoorActionExecute(createActionExecutor({
+    return { ...original, createFrontDoorActionExecute: () => original.createFrontDoorActionExecute(createActionExecutor(createActionExecutorBoundaryFixture({
         isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context),
         workflowAction: async (args) => runAutomationNowMock('automationId' in args.input ? args.input.automationId : null),
-    })) };
+    }))) };
 });
 vi.mock('@/modal', () => ({ Modal: { alert: modalAlertSpy } }));
 vi.mock('@/text', async () => {

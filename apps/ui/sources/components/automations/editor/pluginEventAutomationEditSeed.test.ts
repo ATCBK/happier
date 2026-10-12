@@ -3,6 +3,7 @@ import {
     AutomationSourceSelectorIdV1Schema,
     AutomationTriggerIdSchema,
     sealAutomationTriggerDefinitionStoredEnvelopeV1,
+    type PluginJsonValueV2,
 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -20,6 +21,7 @@ await loadSyncSingletonForTests();
 function eventDefinition(
     revision = 4,
     observationKind: 'checkpointedPull' | 'socket' = 'checkpointedPull',
+    storedFields: Readonly<Record<string, PluginJsonValueV2>> = {},
 ) {
     const eventRef = { pluginId: 'acme.github', localId: 'issue-opened' };
     const sourceSelectorId = AutomationSourceSelectorIdV1Schema.parse('11111111-1111-4111-8111-111111111111');
@@ -41,6 +43,7 @@ function eventDefinition(
             displayLabel: 'acme/widgets',
             filter: null,
             maximumObservationAgeMs: null,
+            ...storedFields,
         },
     }));
     const detail = AutomationDefinitionDetailSchema.parse({
@@ -78,6 +81,15 @@ function eventDefinition(
 }
 
 describe('pluginEventAutomationEditSeed', () => {
+    it('opens retained event definitions without discarding opaque source config', () => {
+        const sourceConfig = { repository: 'acme/widgets', retired: { nativeField: 'opaque-source-value' } };
+        const definition = eventDefinition(4, 'checkpointedPull', { sourceConfig, retired: { enabled: true } });
+        const privateDetail = readPluginEventAutomationPrivateDetail(definition, triggerId, { mode: 'plain' });
+        expect(privateDetail?.storedDefinition).toEqual({
+            v: 1, sourceInstanceId: 'repository:42', sourceConfig, displayLabel: 'acme/widgets', filter: null, maximumObservationAgeMs: null,
+        });
+        expect(readPluginEventAutomationEditSeed(definition, triggerId, { mode: 'plain' })?.source.sourceConfig).toEqual(sourceConfig);
+    });
     it('opens a saved event through Sync currentness and exact private transport, without plaintext Account keys', async () => {
         const { sync } = await import('@/sync/sync');
         const { apiSocket } = await import('@/sync/api/session/apiSocket');
