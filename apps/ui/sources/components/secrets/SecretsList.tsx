@@ -228,7 +228,7 @@ export function SecretsList(props: SecretsListProps) {
                                 // activation on every surface that embeds this list.
                                 rightElementOutsidePressable
                                 rightElement={(
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s12 }}>
                                         {props.onSetDefaultId && (
                                             <ItemRowActions
                                                 title={t('secrets.defaultLabel')}
@@ -348,16 +348,15 @@ export function SecretsList(props: SecretsListProps) {
 
 const stylesheet = StyleSheet.create((theme) => ({
     fieldLabel: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     textInput: {
         ...Typography.default('regular'),
         backgroundColor: theme.colors.input.background,
         borderRadius: 10,
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
         paddingVertical: Platform.select({ ios: 8, default: 10 }),
         fontSize: Platform.select({ ios: 16, default: 16 }),
         lineHeight: Platform.select({ ios: 20, default: 22 }),

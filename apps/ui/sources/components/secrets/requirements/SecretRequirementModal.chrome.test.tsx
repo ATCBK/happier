@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { installModalComponentCommonModuleMocks } from '@/modal/components/modalComponentTestHelpers';
 import { createPassThroughModule } from '@/dev/testkit/mocks/components';
 import {
     findTestInstanceByTypeContainingText,
@@ -19,9 +18,10 @@ let observedSharedEntries: unknown;
 let observedListProps: Record<string, unknown> = {};
 
 // Parameterized copy keeps its params, so the machine a message names is observable.
-installModalComponentCommonModuleMocks({
-    text: async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock(),
-});
+// These factories are hoisted before the static testkit's imports reach text.
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: () => null,
@@ -31,9 +31,10 @@ vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getActiveServerId: () => null,
-}));
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/serverProfiles')).createPartialServerProfilesModuleMock(importOriginal, {
+        getActiveServerId: () => null,
+    }));
 
 vi.mock('@/hooks/machine/useMachineEnvPresence', () => ({
     useMachineEnvPresence: () => ({
@@ -48,11 +49,12 @@ const renderedItemTitles = vi.hoisted(() => [] as string[]);
 
 vi.mock('@/sync/domains/state/storage', () => ({
     ...createStorageModuleStub({
-        useMachine: () => machineState.value,
+        useServerScopedMachine: () => machineState.value,
     }),
 }));
 
-vi.mock('@/utils/sessions/machineUtils', () => ({
+vi.mock('@/utils/sessions/machineUtils', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/sessions/machineUtils')>(),
     isMachineOnline: () => false,
 }));
 
@@ -203,7 +205,9 @@ describe('SecretRequirementModal', () => {
         // The list must not disable shared rows for a Profile default: that was
         // the retired 0.2-coexistence hold on persisted Profile references.
         expect(observedListProps.allowSharedSelection).not.toBe(false);
-        (observedListProps.onSelectId as (id: string) => void)('happier:shared-secret:v1:shared-a');
+        await React.act(async () => {
+            (observedListProps.onSelectId as (id: string) => void)('happier:shared-secret:v1:shared-a');
+        });
         expect(onSetDefaultSecretId).toHaveBeenCalledWith('happier:shared-secret:v1:shared-a');
         expect(onResolve).toHaveBeenCalledWith({
             action: 'selectSaved', envVarName: 'OPENAI_API_KEY',

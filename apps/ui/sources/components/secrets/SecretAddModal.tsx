@@ -89,14 +89,14 @@ export function SecretAddModal(props: SecretAddModalProps) {
 
                 <View style={{ height: 16 }} />
 
-                <View style={{ flexDirection: 'row', gap: 12 }}>
+                <View style={{ flexDirection: 'row', gap: theme.space.s12 }}>
                     <View style={{ flex: 1 }}>
                         <Pressable
                             onPress={props.onClose}
                             style={({ pressed }) => ({
                                 backgroundColor: theme.colors.surface.base,
                                 borderRadius: 10,
-                                paddingVertical: 12,
+                                paddingVertical: theme.space.s12,
                                 alignItems: 'center',
                                 opacity: pressed ? motionTokens.press.opacitySubtle : 1,
                             })}
@@ -113,7 +113,7 @@ export function SecretAddModal(props: SecretAddModalProps) {
                             style={({ pressed }) => ({
                                 backgroundColor: theme.colors.button.primary.background,
                                 borderRadius: 10,
-                                paddingVertical: 12,
+                                paddingVertical: theme.space.s12,
                                 alignItems: 'center',
                                 opacity: (!name.trim() || value.length === 0) ? 0.5 : (pressed ? motionTokens.press.opacitySubtle : 1),
                             })}
@@ -141,8 +141,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexShrink: 1,
     },
     header: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -150,37 +150,35 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderBottomColor: theme.colors.border.default,
     },
     headerTitle: {
-        fontSize: 17,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     body: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
     },
     inputContainer: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
     },
     helpText: {
         color: theme.colors.text.secondary,
         fontSize: Platform.select({ ios: 15, default: 14 }),
         lineHeight: 20,
         letterSpacing: Platform.select({ ios: -0.24, default: 0.1 }),
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
         ...Typography.default(),
     },
     fieldLabel: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     textInput: {
         ...Typography.default('regular'),
         backgroundColor: theme.colors.input.background,
         borderRadius: 10,
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
         paddingVertical: Platform.select({ ios: 10, default: 12 }),
         fontSize: Platform.select({ ios: 17, default: 16 }),
         lineHeight: Platform.select({ ios: 22, default: 24 }),

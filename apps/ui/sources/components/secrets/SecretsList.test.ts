@@ -10,6 +10,7 @@ import {
 } from '@/dev/testkit';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { SavedSecretCatalogEntryV1 } from '@happier-dev/protocol';
+import { SavedSecretCatalogEntryV1Schema } from '@happier-dev/protocol';
 import { SecretsList } from './SecretsList';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -154,14 +155,14 @@ describe('SecretsList', () => {
         // will spend. The Home already projects the recipient-safe owner and the
         // access that grants the row; a row that shows only "Ready" makes two
         // identically named secrets from two different Teams indistinguishable.
-        const viaTeam = {
+        const viaTeam = SavedSecretCatalogEntryV1Schema.parse({
             ref: 'happier:shared-secret:v1:shared-team', source: 'shared_resource', relationship: 'recipient',
             name: 'Deploy key', kind: 'apiKey', encryptionMode: null,
             owner: { kind: 'account', accountId: 'owner-a', firstName: 'Ada', lastName: null, username: null, avatarUrl: null },
             accessSources: [{ kind: 'team', teamId: 'team-1', name: 'Platform' }],
             audience: null, ownerAccountId: null, revision: 2, materialStatus: 'ready',
             capabilities: { use: true, rename: false, rotate: false, manageAccess: false, delete: false },
-        } as const satisfies SavedSecretCatalogEntryV1;
+        });
         const direct = {
             ...viaTeam,
             ref: 'happier:shared-secret:v1:shared-direct',

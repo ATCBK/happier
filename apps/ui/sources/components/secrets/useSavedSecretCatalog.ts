@@ -156,7 +156,7 @@ export function useSavedSecretCatalog(options?: Readonly<{
                     },
                 });
             } finally { context.dispose(); }
-            if (result.ok || result.reason === 'outcome_unknown') await refreshSavedSecretCatalog(scope).catch(() => undefined);
+            if (!result.ok && result.reason === 'outcome_unknown') await refreshSavedSecretCatalog(scope).catch(() => undefined);
             return result.ok;
         } catch (error) {
             Modal.alert(
@@ -191,7 +191,7 @@ export function useSavedSecretCatalog(options?: Readonly<{
                 aborted: () => ({ ok: false, reason: 'changed' }),
             })
             : await execute();
-        if (result.ok || result.reason === 'outcome_unknown') await refreshSavedSecretCatalog(scope).catch(() => undefined);
+        if (!result.ok && result.reason === 'outcome_unknown') await refreshSavedSecretCatalog(scope).catch(() => undefined);
         return result.ok ? result.resourceRef : null;
     }, [scope, scopeIsActive, sharedEnabled]);
     const renamePersonal = React.useCallback(async (secret: SavedSecret, directName?: string) => {

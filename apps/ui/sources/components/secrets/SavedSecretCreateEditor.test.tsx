@@ -10,7 +10,7 @@ const confirmDisclosure = vi.hoisted(() => vi.fn(async () => true));
 const createResource = vi.hoisted(() => vi.fn());
 
 installSettingsViewCommonModuleMocks({
-    storage: importOriginal => importOriginal(),
+    storage: 'real',
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({ spies: { confirm: confirmDisclosure } }).module;
@@ -241,13 +241,14 @@ describe('SavedSecretCreateEditor', () => {
     it('adds a personal secret through the personal writer unless Shared is chosen', async () => {
         const onCreatePersonal = vi.fn(async () => 'personal-new');
         const onCreated = vi.fn(async () => {});
+        const requestApproval = vi.fn();
         const { SavedSecretCreateEditor } = await import('./SavedSecretCreateEditor');
         const screen = await renderScreen(
             <SavedSecretCreateEditor
                 scope={scopeA}
                 onCreatePersonal={onCreatePersonal}
                 approvalPending={false}
-                requestApproval={vi.fn()}
+                requestApproval={requestApproval}
                 onCancel={vi.fn()}
                 onCreated={onCreated}
             />,
@@ -260,7 +261,10 @@ describe('SavedSecretCreateEditor', () => {
         await flushHookEffects();
         await screen.pressByTestIdAsync('saved-secret-create-submit');
 
-        expect(onCreatePersonal).toHaveBeenCalledWith({ name: 'Local key', value: 'local-value' });
+        expect(onCreatePersonal).toHaveBeenCalledWith(
+            { name: 'Local key', value: 'local-value' },
+            { onApprovalPending: requestApproval },
+        );
         expect(createResource).not.toHaveBeenCalled();
         expect(onCreated).toHaveBeenCalledWith('personal-new', 'personal');
     });
@@ -331,3 +335,6 @@ describe('SavedSecretCreateEditor', () => {
         expect(screen.findByTestId('saved-secret-create-submit')?.props.disabled).toBe(false);
     });
 });
+// Native filesystem classes are an OS boundary, not part of this source-driven UI journey.
+vi.mock('expo-file-system', async () =>
+    (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);

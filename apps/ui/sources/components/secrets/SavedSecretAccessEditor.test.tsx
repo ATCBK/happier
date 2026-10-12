@@ -11,7 +11,7 @@ import { installSettingsViewCommonModuleMocks } from '@/components/settings/sett
 const confirmDisclosure = vi.hoisted(() => vi.fn(async () => true));
 
 installSettingsViewCommonModuleMocks({
-    storage: importOriginal => importOriginal(),
+    storage: 'real',
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({ spies: { confirm: confirmDisclosure } }).module;
@@ -364,3 +364,6 @@ describe('SavedSecretAccessEditor', () => {
         expect(screen.findByTestId('saved-secret-access-save')).toBeTruthy();
     });
 });
+// Native filesystem classes are an OS boundary, not part of this source-driven UI journey.
+vi.mock('expo-file-system', async () =>
+    (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);

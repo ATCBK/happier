@@ -16,8 +16,12 @@ import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalo
 import { ItemListStatic } from '@/components/ui/lists/ItemList';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Item } from '@/components/ui/lists/Item';
-import { useMachine } from '@/sync/domains/state/storage';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { useServerScopedMachine } from '@/sync/domains/state/storage';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
@@ -150,13 +154,20 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
     }, [normalizedSecretEnvVarName, props.secretEnvVarNames]);
 
     const [activeEnvVarName, setActiveEnvVarName] = React.useState(() => normalizedSecretEnvVarName);
-    const activeServerId = getActiveServerId();
+    const activeServerId = Object.prototype.hasOwnProperty.call(props, 'accountScope')
+        ? props.accountScope?.serverId ?? '' : getActiveServerId();
+    const { binding } = useServerCredentialAccountScopeBinding(activeServerId);
+    const machineScope = binding?.isCurrent() && (!props.accountScope || areServerAccountScopesEqual(binding.scope, props.accountScope))
+        ? binding.scope : null;
     const envPresence = useMachineEnvPresence(
         props.machineId,
         secretEnvVarNames,
         { ttlMs: 2 * 60_000, serverId: activeServerId },
     );
-    const machine = useMachine(props.machineId ?? '');
+    const machine = useServerScopedMachine(activeServerId, props.machineId ?? '');
+    const observedMachines = React.useMemo(() => machine ? [machine] : [], [machine]);
+    const presenceNowMs = useMachinePresenceNowMs(observedMachines);
+    const reachabilityRevision = useMachineReachabilityRevision(Boolean(machine));
 
     const variant: SecretRequirementModalVariant = props.variant ?? 'requirement';
 
@@ -201,8 +212,8 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
     const machineNameColor = React.useMemo(() => {
         if (!props.machineId) return theme.colors.text.secondary;
         if (!machine) return theme.colors.text.secondary;
-        return isMachineOnline(machine) ? theme.colors.status.connected : theme.colors.status.disconnected;
-    }, [machine, props.machineId, theme.colors.status.connected, theme.colors.status.disconnected, theme.colors.text.secondary]);
+        return isMachineReachable(machineScope, machine, presenceNowMs) ? theme.colors.status.connected : theme.colors.status.disconnected;
+    }, [machine, machineScope, presenceNowMs, reachabilityRevision, props.machineId, theme.colors.status.connected, theme.colors.status.disconnected, theme.colors.text.secondary]);
 
     const allowedSources = React.useMemo(() => {
         const sources: Array<'machine' | 'saved' | 'once'> = [];
@@ -661,7 +672,7 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
 
                     {selectedSource === 'once' && props.allowSessionOnly !== false && (
                         <ItemGroup title={t('profiles.requirements.sections.useOnceTitle')} description={t('profiles.requirements.sections.useOnceFooter')}>
-                            <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 16 }}>
+                            <View style={{ paddingHorizontal: theme.space.s16, paddingTop: theme.space.s12, paddingBottom: theme.space.s16 }}>
                                 <Text style={styles.fieldLabel}>{t('profiles.requirements.sections.useOnceLabel')}</Text>
                                 <TextInput
                                     ref={sessionOnlyInputRef}
@@ -738,10 +749,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     header: {
         paddingHorizontal: Platform.select({ ios: 32, default: 24 }),
         paddingTop: 14,
-        paddingBottom: 12,
+        paddingBottom: theme.space.s12,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border.default,
     },
@@ -752,10 +763,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default('semiBold'),
     },
     headerSubtitle: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        marginTop: 2,
-        ...Typography.default(),
+        marginTop: theme.space.s2,
     },
     scrollWrap: {
         position: 'relative',
@@ -770,13 +780,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingBottom: 18,
     },
     scrollContentModal: {
-        paddingTop: 12,
+        paddingTop: theme.space.s12,
     },
     helpContainer: {
         width: '100%',
         paddingHorizontal: Platform.select({ ios: 32, default: 24 }),
         paddingTop: 14,
-        paddingBottom: 8,
+        paddingBottom: theme.space.s8,
         alignSelf: 'center',
     },
     helpText: {
@@ -788,28 +798,25 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     primaryButton: {
         borderRadius: 10,
-        paddingVertical: 10,
+        paddingVertical: theme.space.s10,
         alignItems: 'center',
         justifyContent: 'center',
     },
     primaryButtonText: {
-        fontSize: 13,
-        fontWeight: '600',
-        ...Typography.default('semiBold'),
+        ...Typography.variant('body', 'semiBold'),
     },
     fieldLabel: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
-        marginBottom: 4,
+        marginBottom: theme.space.s4,
     },
     textInput: {
         backgroundColor: theme.colors.input.background,
         borderRadius: 10,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
         color: theme.colors.text.primary,
         ...Typography.default(),
     },
