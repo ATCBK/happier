@@ -1,8 +1,10 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 
 import { McpValueRefV1Schema, type McpValueRefV1 } from '../../mcp/servers/settingsV1.js';
 import { PluginAgentAcpStderrRulesV2Schema } from '../../plugins/contributions/agentAcpStderrRules.js';
+import { PinnedArchiveAssetsByPlatformSchema, PinnedArchivePlatformSchema } from '../../installables/sourceKind.js';
 
 const ACP_CATALOG_ID_REGEX = /^[a-z0-9][a-z0-9._-]*$/;
 const ACP_ENV_KEY_REGEX = /^[A-Z_][A-Z0-9_]*$/;
@@ -58,13 +60,24 @@ export const AcpBackendCompatibilityV1Schema = lazyZodSchema(() => z.object({
   }).strict(),
 }).strict());
 
+export const AcpBackendLaunchV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('command'), command: z.string().min(1), args: z.array(z.string()).default([]) }).strict(),
+  z.object({ kind: z.literal('npm'), package: z.string().min(1), version: z.string().min(1),
+    bin: z.string().min(1).optional(), args: z.array(z.string()).default([]) }).strict(),
+  z.object({ kind: z.literal('archive'), version: z.string().min(1),
+    assetsByPlatform: PinnedArchiveAssetsByPlatformSchema, args: z.array(z.string()).default([]),
+    envByPlatform: z.partialRecord(PinnedArchivePlatformSchema, z.record(z.string(), z.string())).optional() }).strict(),
+  z.object({ kind: z.literal('uv'), package: z.string().min(1), version: z.string().min(1),
+    command: z.string().min(1).optional(), args: z.array(z.string()).default([]) }).strict(),
+]));
+export type AcpBackendLaunchV1 = z.infer<typeof AcpBackendLaunchV1Schema>;
+
 export const AcpBackendDefinitionV1Schema = lazyZodSchema(() => z.object({
   id: AcpCatalogIdV1Schema,
   name: AcpCatalogIdV1Schema,
   title: z.string().min(1),
   description: z.string().min(1).optional(),
-  command: z.string().min(1),
-  args: z.array(z.string()).default([]),
+  launch: AcpBackendLaunchV1Schema,
   env: z.record(AcpEnvKeyV1Schema, McpValueRefV1Schema).default({}),
   auth: AcpBackendAuthConfigV1Schema.optional(),
   runtime: AcpConfiguredRuntimeV1Schema.optional(),
@@ -80,9 +93,22 @@ export const AcpBackendDefinitionV1Schema = lazyZodSchema(() => z.object({
   }),
   createdAt: z.number(),
   updatedAt: z.number(),
-}));
+}).strict());
 
 export type AcpBackendDefinitionV1 = z.infer<typeof AcpBackendDefinitionV1Schema>;
+
+/** Persistence ingress only: fold the released command/args carrier into the one current launch. */
+export function foldStoredAcpBackendLaunchV1(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.hasOwn(raw, 'launch')) return raw;
+  const { command, args, ...fields } = raw as Record<string, unknown>;
+  return { ...fields, launch: { kind: 'command', command, ...(args === undefined ? {} : { args }) } };
+}
+
+defineStoredReadProjection(AcpBackendDefinitionV1Schema, () => z.preprocess(
+  foldStoredAcpBackendLaunchV1,
+  createStoredReadSchema(AcpBackendDefinitionV1Schema.extend({})),
+));
+export const AcpBackendDefinitionV1StoredSchema = createStoredReadSchema(AcpBackendDefinitionV1Schema);
 
 export const AcpCatalogSettingsV1Schema = lazyZodSchema(() => z.preprocess(
   (raw) => {
@@ -114,5 +140,6 @@ export const AcpCatalogSettingsV1Schema = lazyZodSchema(() => z.preprocess(
 ));
 
 export type AcpCatalogSettingsV1 = z.infer<typeof AcpCatalogSettingsV1Schema>;
+export const AcpCatalogSettingsV1StoredSchema = createStoredReadSchema(AcpCatalogSettingsV1Schema);
 
 export type AcpCatalogEnvValueRefV1 = McpValueRefV1;

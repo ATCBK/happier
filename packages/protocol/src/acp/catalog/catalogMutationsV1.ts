@@ -4,10 +4,12 @@ import { AcpCatalogRecordV1Schema, AcpCatalogRowMutationV1Schema } from './catal
 
 import {
   AcpBackendDefinitionV1Schema,
+  AcpBackendLaunchV1Schema,
   AcpBackendCapabilitiesV1Schema,
   AcpConfiguredRuntimeV1Schema,
   AcpBackendCompatibilityV1Schema,
   AcpCatalogSettingsV1Schema,
+  AcpCatalogSettingsV1StoredSchema,
   type AcpBackendDefinitionV1,
   type AcpCatalogSettingsV1,
 } from './settingsV1.js';
@@ -22,7 +24,7 @@ import {
 
 /** The stored catalog, or an empty one when the stored value is missing or unreadable. */
 export function normalizeAcpCatalogSettingsV1(raw: unknown): AcpCatalogSettingsV1 {
-  const parsed = AcpCatalogSettingsV1Schema.safeParse(raw);
+  const parsed = AcpCatalogSettingsV1StoredSchema.safeParse(raw);
   return parsed.success ? parsed.data : { v: 2, backends: [] };
 }
 
@@ -35,8 +37,7 @@ export const AcpBackendAuthoringInputV1Schema = lazyZodSchema(() => z.object({
   name: z.string(),
   title: z.string(),
   description: z.string().optional(),
-  command: z.string(),
-  args: z.array(z.string()).optional(),
+  launch: AcpBackendLaunchV1Schema,
   env: AcpBackendDefinitionV1Schema.shape.env.optional(),
   auth: z.object({
     support: z.string(),
@@ -80,7 +81,9 @@ export type AcpBackendDeleteResultV1 =
 function readWritableCatalog(raw: unknown): AcpCatalogSettingsV1 | null {
   if (raw === undefined) return { v: 2, backends: [] };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const parsed = AcpCatalogSettingsV1Schema.safeParse(raw);
+  const stored = AcpCatalogSettingsV1StoredSchema.safeParse(raw);
+  // Stored annotations are not fresh mutation operands; re-admit only the known projection.
+  const parsed = stored.success ? AcpCatalogSettingsV1Schema.safeParse(stored.data) : stored;
   return parsed.success ? parsed.data : null;
 }
 
@@ -92,7 +95,7 @@ function trimmedOrUndefined(value: string | undefined): string | undefined {
 /** The authored field an issue belongs to: `id`, `auth.docsUrl`, or `env` for any variable. */
 function resolveIssueField(path: readonly PropertyKey[]): string {
   const [head, next] = path;
-  if (head === 'auth' && typeof next === 'string') return `auth.${next}`;
+  if ((head === 'auth' || head === 'launch') && typeof next === 'string') return `${head}.${next}`;
   return String(head ?? '');
 }
 
@@ -122,7 +125,7 @@ export function applyAcpBackendUpsertV1(input: Readonly<{
     name: authored.name.trim(),
     title: authored.title.trim(),
     description: trimmedOrUndefined(authored.description),
-    command: authored.command.trim(),
+    launch: authored.launch.kind === 'command' ? { ...authored.launch, command: authored.launch.command.trim() } : authored.launch,
     auth: authored.auth
       ? {
         ...authored.auth,

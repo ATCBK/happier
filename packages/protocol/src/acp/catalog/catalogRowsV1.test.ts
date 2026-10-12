@@ -4,13 +4,15 @@ import { AccountEncryptionMigrateAcpCatalogDirectiveV1Schema, ACP_CATALOG_ACCOUN
 import { sealAccountScopedBlobCiphertext } from '../../crypto/accountScopedCipher.js';
 import { formatSharedSavedSecretRefV1 } from '../../account/settings/savedSecretReferenceV1.js';
 
-const definition = { id: 'custom', name: 'custom', title: 'Custom', command: 'custom-agent', args: [], env: {},
+const definition = { id: 'custom', name: 'custom', title: 'Custom', launch: { kind: 'command' as const, command: 'custom-agent', args: [] }, env: {},
     capabilities: { supportsLoadSession: false, supportsModes: 'unknown' as const, supportsModels: 'unknown' as const, supportsConfigOptions: 'unknown' as const, promptImageSupport: 'unknown' as const },
     createdAt: 1, updatedAt: 1 };
 
 describe('Account ACP catalog rows', () => {
     it('retains canonical definition defaults while closing current row fields', () => {
-        const { capabilities: _capabilities, env: _env, args: _args, ...minimal } = definition;
+        const { capabilities: _capabilities, env: _env, launch, ...fields } = definition;
+        const { args: _args, ...minimalLaunch } = launch;
+        const minimal = { ...fields, launch: minimalLaunch };
         expect(openAcpCatalogContentV1({ mode: 'plain', material: null,
             content: { t: 'plain', v: { v: 1, definitions: [minimal] } } }))
             .toEqual({ status: 'opened', record: { v: 1, definitions: [definition] } });

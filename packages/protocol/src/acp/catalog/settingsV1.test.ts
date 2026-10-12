@@ -1,10 +1,42 @@
 import { describe, expect, it } from 'vitest';
 
-import { AcpCatalogSettingsV1Schema } from './settingsV1.js';
+import { AcpBackendDefinitionV1Schema, AcpCatalogSettingsV1Schema, AcpCatalogSettingsV1StoredSchema } from './settingsV1.js';
+import { openAcpCatalogContentV1 } from './catalogRowsV1.js';
 
 describe('AcpCatalogSettingsV1Schema', () => {
+  // Captured from ../0.2 at cd2bb4d853a259ae00ebc3e5981224e3e4bb5380.
+  const predecessorDefinition = {
+    id: 'kiro', name: 'kiro', title: 'Kiro', command: 'kiro-cli', args: ['acp'],
+    env: {}, createdAt: 1, updatedAt: 2,
+  };
+
+  it('reads predecessor commands as typed launches without keeping the old writer fields', () => {
+    const read = AcpCatalogSettingsV1StoredSchema.parse({ v: 2, backends: [predecessorDefinition] });
+    expect(read.backends[0]).toMatchObject({ launch: { kind: 'command', command: 'kiro-cli', args: ['acp'] } });
+    expect(read.backends[0]).not.toHaveProperty('command');
+    expect(read.backends[0]).not.toHaveProperty('args');
+    expect(AcpBackendDefinitionV1Schema.safeParse(predecessorDefinition).success).toBe(false);
+    expect(openAcpCatalogContentV1({ mode: 'plain', material: null,
+      content: { t: 'plain', v: { v: 1, definitions: [predecessorDefinition] } },
+    })).toMatchObject({ status: 'opened', record: { definitions: [{ launch: read.backends[0]!.launch }] } });
+  });
+
+  it('writes pinned typed npm, binary and uv launches', () => {
+    const { command: _command, args: _args, ...fields } = predecessorDefinition;
+    for (const launch of [
+      { kind: 'npm', package: '@vendor/agent', version: '1.2.3', args: ['--acp'] },
+      { kind: 'archive', version: '1.2.3', args: [], assetsByPlatform: {
+        'linux-x64': { archiveUrl: 'https://example.com/agent.tar.gz', executableSubpath: 'agent' },
+      } },
+      { kind: 'uv', package: 'agent', version: '1.2.3', args: ['--acp'] },
+    ]) {
+      const result = AcpBackendDefinitionV1Schema.safeParse({ ...fields, launch });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toMatchObject({ launch });
+    }
+  });
   it('accepts and strips released provider-auth and transport carriers at persisted ingress', () => {
-    const result = AcpCatalogSettingsV1Schema.safeParse({
+    const result = AcpCatalogSettingsV1StoredSchema.safeParse({
       v: 2,
       backends: [
         {
@@ -61,10 +93,8 @@ describe('AcpCatalogSettingsV1Schema', () => {
           id: 'dup',
           name: 'dup',
           title: 'One',
-          command: 'agent-a',
-          args: [],
+          launch: { kind: 'command', command: 'agent-a', args: [] },
           env: {},
-          transportProfile: 'generic',
           capabilities: {
             supportsLoadSession: false,
             supportsModes: 'no',
@@ -78,10 +108,8 @@ describe('AcpCatalogSettingsV1Schema', () => {
           id: 'dup',
           name: 'dup-two',
           title: 'Two',
-          command: 'agent-b',
-          args: [],
+          launch: { kind: 'command', command: 'agent-b', args: [] },
           env: {},
-          transportProfile: 'generic',
           capabilities: {
             supportsLoadSession: false,
             supportsModes: 'no',
@@ -105,10 +133,8 @@ describe('AcpCatalogSettingsV1Schema', () => {
           id: 'backend',
           name: 'backend',
           title: 'Backend',
-          command: 'agent',
-          args: [],
+          launch: { kind: 'command', command: 'agent', args: [] },
           env: {},
-          transportProfile: 'generic',
           capabilities: {
             supportsLoadSession: false,
             supportsModes: 'no',
@@ -122,10 +148,8 @@ describe('AcpCatalogSettingsV1Schema', () => {
           id: 'backend-two',
           name: 'backend',
           title: 'Backend Two',
-          command: 'agent-two',
-          args: [],
+          launch: { kind: 'command', command: 'agent-two', args: [] },
           env: {},
-          transportProfile: 'generic',
           capabilities: {
             supportsLoadSession: false,
             supportsModes: 'no',

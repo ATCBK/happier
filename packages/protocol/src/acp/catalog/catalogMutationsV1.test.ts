@@ -18,8 +18,7 @@ const existing = {
     id: 'backend-1',
     name: 'backend-1',
     title: 'Backend 1',
-    command: 'kiro-cli',
-    args: ['acp'],
+    launch: { kind: 'command' as const, command: 'kiro-cli', args: ['acp'] },
     env: {},
     capabilities: {
         supportsLoadSession: true,
@@ -96,7 +95,7 @@ describe('ACP catalog mutations', () => {
             compatibility: { source: 'acp-catalog-v2' as const, authStatus: { statusCommand: ['kiro-cli', 'whoami', '--format', 'json'], parser: 'kiroWhoamiJson' as const } },
         };
         const result = applyAcpBackendUpsertV1({ settings: { v: 2, backends: [retained] },
-            backend: { id: existing.id, name: existing.name, title: 'Updated', command: existing.command }, nowMs: 2 });
+            backend: { id: existing.id, name: existing.name, title: 'Updated', launch: existing.launch }, nowMs: 2 });
         expect(result).toMatchObject({ ok: true, backend: { runtime: retained.runtime, compatibility: retained.compatibility } });
     });
 
@@ -107,7 +106,7 @@ describe('ACP catalog mutations', () => {
             'unreadable',
         ]) {
             expect(applyAcpBackendUpsertV1({ settings,
-                backend: { id: 'backend-2', name: 'backend-2', title: 'Second', command: 'custom-cli' }, nowMs: 2 }))
+                backend: { id: 'backend-2', name: 'backend-2', title: 'Second', launch: { kind: 'command' as const, command: 'custom-cli', args: [] } }, nowMs: 2 }))
                 .toMatchObject({ ok: false, code: 'acp_catalog_unavailable' });
             expect(applyAcpBackendDeleteV1({ settings, backendId: existing.id }))
                 .toMatchObject({ ok: false, code: 'acp_catalog_unavailable' });
@@ -127,16 +126,27 @@ describe('ACP catalog mutations', () => {
         expect(normalizeAcpCatalogSettingsV1({ v: 2, backends: [{ id: 'Bad Id' }] })).toEqual({ v: 2, backends: [] });
     });
 
+    it('keeps retained runtime preferences with retired nested fields when reading and editing the catalog', () => {
+        const runtime = { stderrRules: { suppress: [{ includes: ['quiet'] }] } };
+        const retained = { v: 2, backends: [{ ...existing, runtime: { ...runtime, retired: true,
+            stderrRules: { suppress: [{ includes: ['quiet'], retired: true }] } } }] };
+        expect(normalizeAcpCatalogSettingsV1(retained)).toEqual({ v: 2, backends: [{ ...existing, runtime }] });
+        expect(applyAcpBackendUpsertV1({ settings: retained, backend: existing, nowMs: 2 })).toMatchObject({ ok: true });
+        expect(applyAcpBackendUpsertV1({ settings: { ...retained, backends: [{ ...existing,
+            runtime: { stderrRules: { suppress: 'invalid' } } }] }, backend: existing, nowMs: 2 }))
+            .toMatchObject({ ok: false, code: 'acp_catalog_unavailable' });
+    });
+
     it('trims an authored backend, stamps a new one and appends it', () => {
         const result = applyAcpBackendUpsertV1({
             settings: stored,
-            backend: { id: ' backend-2 ', name: ' backend-2 ', title: ' Backend 2 ', command: ' custom-cli ', args: ['acp'], description: '  ' },
+            backend: { id: ' backend-2 ', name: ' backend-2 ', title: ' Backend 2 ', launch: { kind: 'command' as const, command: ' custom-cli ', args: ['acp'] }, description: '  ' },
             nowMs: 50,
         });
 
         expect(result).toEqual({
             ok: true,
-            backend: expect.objectContaining({ id: 'backend-2', name: 'backend-2', title: 'Backend 2', command: 'custom-cli', createdAt: 50, updatedAt: 50 }),
+            backend: expect.objectContaining({ id: 'backend-2', name: 'backend-2', title: 'Backend 2', launch: { kind: 'command', command: 'custom-cli', args: ['acp'] }, createdAt: 50, updatedAt: 50 }),
             settings: { v: 2, backends: [existing, expect.objectContaining({ id: 'backend-2' })] },
         });
         if (!result.ok) throw new Error('expected ok');
@@ -146,7 +156,7 @@ describe('ACP catalog mutations', () => {
     it('replaces an existing backend in place and keeps its creation time', () => {
         const result = applyAcpBackendUpsertV1({
             settings: stored,
-            backend: { id: 'backend-1', name: 'backend-1', title: 'Renamed', command: 'kiro-cli' },
+            backend: { id: 'backend-1', name: 'backend-1', title: 'Renamed', launch: { kind: 'command' as const, command: 'kiro-cli', args: [] } },
             nowMs: 99,
         });
         if (!result.ok) throw new Error('expected ok');
@@ -157,13 +167,13 @@ describe('ACP catalog mutations', () => {
     it('preserves exact launch and login argv while normalizing authored command fields', () => {
         const args = ['  x  ', '', 'two  words', '\t'];
         const loginArgs = ['', ' login ', 'two\twords', '  '];
-        const backend = { ...existing, title: 'Renamed', command: ' kiro-cli ', args,
+        const backend = { ...existing, title: 'Renamed', launch: { kind: 'command', command: ' kiro-cli ', args },
             auth: { support: 'login_terminal', loginCommand: { command: ' kiro-login ', args: loginArgs } },
         };
         const result = applyAcpBackendUpsertV1({ settings: stored, backend, nowMs: 2 });
-        expect(result).toMatchObject({ ok: true, backend: { command: 'kiro-cli', args,
+        expect(result).toMatchObject({ ok: true, backend: { launch: { kind: 'command', command: 'kiro-cli', args },
             auth: { loginCommand: { command: 'kiro-login', args: loginArgs } } },
-            settings: { backends: [{ id: existing.id, args, auth: { loginCommand: { args: loginArgs } } }] },
+            settings: { backends: [{ id: existing.id, launch: { args }, auth: { loginCommand: { args: loginArgs } } }] },
         });
     });
 
@@ -178,9 +188,9 @@ describe('ACP catalog mutations', () => {
     });
 
     it('rejects an invalid backend and a duplicate name with typed codes', () => {
-        expect(applyAcpBackendUpsertV1({ settings: stored, backend: { id: 'Bad Id', name: 'x', title: 't', command: 'c' }, nowMs: 1 }))
+        expect(applyAcpBackendUpsertV1({ settings: stored, backend: { id: 'Bad Id', name: 'x', title: 't', launch: { kind: 'command' as const, command: 'c', args: [] } }, nowMs: 1 }))
             .toMatchObject({ ok: false, code: 'acp_backend_invalid' });
-        expect(applyAcpBackendUpsertV1({ settings: stored, backend: { id: 'backend-3', name: 'backend-1', title: 't', command: 'c' }, nowMs: 1 }))
+        expect(applyAcpBackendUpsertV1({ settings: stored, backend: { id: 'backend-3', name: 'backend-1', title: 't', launch: { kind: 'command' as const, command: 'c', args: [] } }, nowMs: 1 }))
             .toEqual({ ok: false, code: 'acp_backend_name_conflict', message: 'Duplicate ACP backend name: backend-1', fields: ['name'] });
     });
 
@@ -188,7 +198,7 @@ describe('ACP catalog mutations', () => {
         const result = applyAcpBackendUpsertV1({
             settings: stored,
             backend: {
-                id: 'Bad Id', name: 'bad-id', title: ' ', command: '',
+                id: 'Bad Id', name: 'bad-id', title: ' ', launch: { kind: 'command' as const, command: '', args: [] },
                 env: { 'lower-case': { t: 'literal', v: 'x' } },
                 auth: { support: 'login_terminal', docsUrl: 'not a url' },
             },
@@ -196,13 +206,13 @@ describe('ACP catalog mutations', () => {
         });
         expect(result).toMatchObject({ ok: false, code: 'acp_backend_invalid' });
         if (result.ok) throw new Error('expected a refusal');
-        expect([...result.fields].sort()).toEqual(['auth.docsUrl', 'command', 'env', 'id', 'title']);
+        expect([...result.fields].sort()).toEqual(['auth.docsUrl', 'env', 'id', 'launch.command', 'title']);
     });
 
     it('refuses to create a backend over an existing id instead of replacing it', () => {
         const created = applyAcpBackendUpsertV1({
             settings: stored,
-            backend: { id: 'backend-1', name: 'another', title: 'Another', command: 'c' },
+            backend: { id: 'backend-1', name: 'another', title: 'Another', launch: { kind: 'command' as const, command: 'c', args: [] } },
             nowMs: 1,
             mode: 'create',
         });
@@ -210,7 +220,7 @@ describe('ACP catalog mutations', () => {
         // Upsert (the action's default) still replaces by id.
         expect(applyAcpBackendUpsertV1({
             settings: stored,
-            backend: { id: 'backend-1', name: 'backend-1', title: 'Again', command: 'c' },
+            backend: { id: 'backend-1', name: 'backend-1', title: 'Again', launch: { kind: 'command' as const, command: 'c', args: [] } },
             nowMs: 1,
         })).toMatchObject({ ok: true });
     });

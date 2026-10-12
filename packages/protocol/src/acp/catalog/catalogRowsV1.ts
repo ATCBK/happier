@@ -11,7 +11,7 @@ import { listSavedSecretReferenceCarrierPathsV1 } from '../../account/settings/s
 
 import { isAccountScopedBlobCiphertextForKind } from '../../crypto/accountScopedCipherEnvelope.js';
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext, type AccountScopedCryptoMaterial } from '../../crypto/accountScopedCipher.js';
-import { AcpCatalogSettingsV1Schema } from './settingsV1.js';
+import { AcpCatalogSettingsV1StoredSchema } from './settingsV1.js';
 
 export const ACP_CATALOG_ACCOUNT_ROW_KEY_V1 = '@happier/account/acp/v1/catalog' as const;
 export const ACP_CATALOG_ROWS_ROUTE_V1 = '/v1/account/entity-rows/acp' as const;
@@ -30,7 +30,7 @@ export function readFreshAcpCatalogSourceV1(rawSettings: unknown): Readonly<{ st
   const raw = Reflect.get(rawSettings, 'acpCatalogSettingsV1');
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { status: 'unavailable', reason: 'invalid-stored-content' };
   if (Reflect.get(raw, 'v') !== 2 || !Array.isArray(Reflect.get(raw, 'backends'))) return { status: 'unavailable', reason: 'invalid-stored-content' };
-  const parsed = AcpCatalogSettingsV1Schema.safeParse(raw);
+  const parsed = AcpCatalogSettingsV1StoredSchema.safeParse(raw);
   if (!parsed.success) return { status: 'unavailable', reason: 'invalid-stored-content' };
   if (parsed.data.backends.length === 0 && listSavedSecretReferenceCarrierPathsV1(raw).length > 0) return { status: 'unavailable', reason: 'invalid-stored-content' };
   return parsed.data.backends.length === 0 ? { status: 'ready', record: empty }

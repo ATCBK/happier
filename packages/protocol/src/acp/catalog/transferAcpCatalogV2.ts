@@ -4,18 +4,18 @@ import { listSavedSecretReferenceCarrierPathsV1, parseSavedSecretRefV1 } from '.
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { PluginAgentAcpStderrRulesV2Schema, type PluginAgentAcpStderrRulesV2 } from '../../plugins/contributions/agentAcpStderrRules.js';
-import { AcpBackendAuthConfigV1Schema, AcpBackendDefinitionV1Schema, type AcpBackendDefinitionV1 } from './settingsV1.js';
+import { AcpBackendAuthConfigV1Schema, AcpBackendDefinitionV1Schema, foldStoredAcpBackendLaunchV1, type AcpBackendDefinitionV1 } from './settingsV1.js';
 import { AcpCatalogRecordV1Schema, listAcpCatalogSavedSecretRefsV1, type AcpCatalogDiagnosticV1, type AcpCatalogRecordV1 } from './catalogRowsV1.js';
 
 // Observed predecessor 37a6541578749067b49d4579be8c752c9591b8c8. These selectors
 // are read only at this ingress; current runtime authority is declarative rules.
-const predecessorDefinition = createStoredReadSchema(lazyZodSchema(() => AcpBackendDefinitionV1Schema.extend({
+const predecessorDefinition = z.preprocess(foldStoredAcpBackendLaunchV1, createStoredReadSchema(lazyZodSchema(() => AcpBackendDefinitionV1Schema.extend({
   auth: AcpBackendAuthConfigV1Schema.extend({
     statusCommand: z.array(z.string()).optional(),
     parser: z.enum(['unknown', 'exitCodeOnly', 'stdoutNonEmpty', 'kiroWhoamiJson']).optional(),
   }).optional(),
   transportProfile: z.enum(['generic', 'kiro']).default('generic'),
-})));
+}))));
 const predecessorInventory = createStoredReadSchema(lazyZodSchema(() => z.object({
   v: z.literal(2), backends: z.array(z.unknown()),
 })));
@@ -106,7 +106,7 @@ export function prepareAcpCatalogTransferV2(input: Readonly<{
     const { transportProfile, auth, ...current } = definition;
     const env: AcpBackendDefinitionV1['env'] = {};
     for (const [name, value] of Object.entries(definition.env)) {
-      if (value.t === 'literal') { env[name] = value; continue; }
+      if (value.t !== 'savedSecret') { env[name] = value; continue; }
       try {
         const ref = parseSavedSecretRefV1(value.secretId);
         const secretId = ref.kind === 'shared_resource' ? value.secretId : input.savedSecretRefs?.get(value.secretId);

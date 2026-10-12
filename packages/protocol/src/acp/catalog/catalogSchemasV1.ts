@@ -1,28 +1,32 @@
 import { z } from 'zod';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { createStoredReadSchema } from '../../json/storedReadSchema.js';
+import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { parseSavedSecretRefV1 } from '../../account/settings/savedSecretReferenceV1.js';
 import { AccountSettingsCleanupV1Schema } from '../../account/settings/accountSettingsStoredContentEnvelope.js';
-import { AcpBackendDefinitionV1Schema, AcpBackendAuthConfigV1Schema, AcpBackendCapabilitiesV1Schema, AcpCatalogCommandV1Schema, AcpEnvKeyV1Schema } from './settingsV1.js';
+import { AcpBackendDefinitionV1Schema, AcpBackendAuthConfigV1Schema, AcpBackendCapabilitiesV1Schema, AcpCatalogCommandV1Schema, AcpEnvKeyV1Schema, foldStoredAcpBackendLaunchV1 } from './settingsV1.js';
+import { McpValueRefV1Schema } from '../../mcp/servers/settingsV1.js';
 
 
-const activeSavedSecretReference = lazyZodSchema(() => z.string().min(1).refine(value => {
-  try { return parseSavedSecretRefV1(value).kind === 'shared_resource'; }
+const activeValueReference = lazyZodSchema(() => McpValueRefV1Schema.refine(value => {
+  if (value.t !== 'savedSecret') return true;
+  try { return parseSavedSecretRefV1(value.secretId).kind === 'shared_resource'; }
   catch { return false; }
 }, 'Active ACP credentials require a shared SavedSecret resource'));
 
-/** Current executable declarations are closed; retained recipes are never silently normalized into this shape. */
-export const AcpCatalogRecordV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1),
-  definitions: z.array(AcpBackendDefinitionV1Schema.extend({
+const AcpCatalogDefinitionV1Schema = lazyZodSchema(() => AcpBackendDefinitionV1Schema.extend({
     auth: AcpBackendAuthConfigV1Schema.extend({ loginCommand: AcpCatalogCommandV1Schema.strict().optional() }).strict().optional(),
     capabilities: AcpBackendCapabilitiesV1Schema.strict().default(() => AcpBackendDefinitionV1Schema.shape.capabilities.parse(undefined)),
-    env: z.record(AcpEnvKeyV1Schema, z.discriminatedUnion('t', [
-      z.object({ t: z.literal('literal'), v: z.string() }).strict(),
-      z.object({ t: z.literal('savedSecret'), secretId: activeSavedSecretReference }).strict(),
-    ])).default(() => AcpBackendDefinitionV1Schema.shape.env.parse(undefined)),
-  }).strict()),
+    env: z.record(AcpEnvKeyV1Schema, activeValueReference).default(() => AcpBackendDefinitionV1Schema.shape.env.parse(undefined)),
+  }).strict());
+defineStoredReadProjection(AcpCatalogDefinitionV1Schema, () => z.preprocess(
+  foldStoredAcpBackendLaunchV1, createStoredReadSchema(AcpCatalogDefinitionV1Schema.extend({})),
+));
+
+/** Current executable declarations are closed; predecessor launch fields are folded only at stored ingress. */
+export const AcpCatalogRecordV1Schema = lazyZodSchema(() => z.object({
+  v: z.literal(1),
+  definitions: z.array(AcpCatalogDefinitionV1Schema),
 }).strict().superRefine((record, context) => {
   const ids = new Set<string>();
   const names = new Set<string>();

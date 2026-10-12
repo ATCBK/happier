@@ -28,6 +28,21 @@ function predecessorSource() {
 }
 
 describe('prepareAcpCatalogTransferV2', () => {
+  it('preserves symbolic Session references without treating them as saved secrets', () => {
+    const source = predecessorSource();
+    const rawSettings = { ...source, acpCatalogSettingsV1: { ...source.acpCatalogSettingsV1,
+      backends: [{ ...source.acpCatalogSettingsV1.backends[1], env: {
+        SESSION: { t: 'sessionAttested', field: 'sessionId' },
+      } }],
+    } };
+    expect(readAcpCatalogTransferSourceV2({ rawSettings, sourceSettingsVersion: 17 }))
+      .toMatchObject({ status: 'ready', references: [] });
+    expect(prepareAcpCatalogTransferV2({ rawSettings, sourceSettingsVersion: 17 }))
+      .toMatchObject({ status: 'ready', record: { definitions: [{ env: {
+        SESSION: { t: 'sessionAttested', field: 'sessionId' },
+      } }] } });
+  });
+
   it('retains the complete ordered definition and remaps only proven secret references', () => {
     const rawSettings = predecessorSource();
     const before = structuredClone(rawSettings);
@@ -40,7 +55,8 @@ describe('prepareAcpCatalogTransferV2', () => {
     expect(prepared.sourceSettingsVersion).toBe(17);
     expect(prepared.record.definitions.map(definition => definition.id)).toEqual(['configured-kiro', 'generic']);
     expect(prepared.record.definitions[0]).toMatchObject({
-      name: 'configured-kiro', title: 'Configured Kiro', description: 'Custom launch', command: 'custom-kiro-cli', args: ['acp'],
+      name: 'configured-kiro', title: 'Configured Kiro', description: 'Custom launch',
+      launch: { kind: 'command', command: 'custom-kiro-cli', args: ['acp'] },
       env: { REGION: { t: 'literal', v: 'eu' }, TOKEN: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1('resource-token') } },
       auth: { support: 'login_terminal', machineLoginKey: 'my-login', docsUrl: 'https://example.test/auth',
         loginCommand: { command: 'custom-kiro-cli', args: ['login'] }, envVars: ['TOKEN'] },
@@ -130,7 +146,9 @@ describe('readAcpCatalogTransferSourceV2', () => {
       references: [{ path: 'backends[0].env.TOKEN', secretId: 'old-token' }] });
     if (opened.status !== 'ready') return;
     expect(opened.definitions.map(definition => definition.id)).toEqual(['configured-kiro', 'generic', 'shared']);
-    expect(opened.definitions[0]).toMatchObject(rawSettings.acpCatalogSettingsV1.backends[0]!);
+    const { command, args, ...retainedFields } = rawSettings.acpCatalogSettingsV1.backends[0]!;
+    expect(opened.definitions[0]).toMatchObject({ ...retainedFields,
+      launch: { kind: 'command', command, args } });
     expect(opened.definitions[0]).not.toHaveProperty('runtime');
     expect(opened.definitions[0]).not.toHaveProperty('compatibility');
     expect(opened.definitions[2]?.env.TOKEN).toEqual({ t: 'savedSecret', secretId: sharedRef });
