@@ -198,6 +198,8 @@ import { useMaterializedTemporaryComputerSessionRecovery } from '@/components/se
 import { useMachineAgent } from '@/agents/machineAgents/useMachineAgents';
 import { useEventCallback } from '@/hooks/ui/useEventCallback';
 import { Modal } from '@/modal';
+import { useSessionModelUnarm } from '@/providers/session/useSessionModelUnarm';
+import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { useTeamCredentialSelectionCoordinator } from '@/components/sessions/teamCredentials/useTeamCredentialSelectionCoordinator';
 import { resourceHasAvailableTeamCredentialProviderModel } from '@/components/sessions/teamCredentials/teamCredentialProviderModelCurrentness';
 import { useScmSessionAutoRefresh } from '@/scm/refresh/useScmSessionAutoRefresh';
@@ -8218,7 +8220,7 @@ function SessionViewLoadedContent({
         ]);
         // D15: a route or model picked while the session runs is armed for the next message, exactly
         // like an Agent switch — the send control names it and the send applies it before dispatch.
-        // The arm IS the session's pending model selection, so un-arming is picking the current one again.
+        // The arm IS the session's pending model selection; its explicit cancel is the un-arm Action below.
         const armedRouteSourceLabel = effectiveModelTransitionActionRequired && session.active === true
             ? sessionConnectedServicesAuthSwitch.armedRouteSourceLabel
                 ?? (providerBindingBanner?.kind === 'changed' ? providerBindingBanner.providerName : null)
@@ -8227,6 +8229,18 @@ function SessionViewLoadedContent({
             () => armedRouteSourceLabel ? { sourceLabel: armedRouteSourceLabel } : null,
             [armedRouteSourceLabel],
         );
+        // D15's explicit cancel: the Session's own un-arm Action restores the applied route and model;
+        // nothing is sent and the draft stays. A refusal is said, never swallowed.
+        const { unarm: unarmSessionModel } = useSessionModelUnarm({ sessionId, serverId: sessionRouteServerId });
+        const [unarmRoutePending, setUnarmRoutePending] = React.useState(false);
+        const unarmRoute = React.useCallback(() => {
+            setUnarmRoutePending(true);
+            void unarmSessionModel().then((result) => {
+                if (!result.ok) {
+                    Modal.alert(t('common.error'), resolveActionExecutionFailureMessage(result, t('common.requestFailed')) ?? t('common.requestFailed'));
+                }
+            }).finally(() => setUnarmRoutePending(false));
+        }, [unarmSessionModel]);
         // The picker is built before this hook resolves the Agent's own account, so its heading reads it here.
         const sessionNativeSourceLabel = sessionConnectedServicesAuthSwitch.nativeSourceLabel;
         const existingSessionModelPickerWithNativeSource = React.useMemo(() => existingSessionModelPicker ? (
@@ -8737,6 +8751,8 @@ function SessionViewLoadedContent({
                 } : undefined}
                 armedContinuationTarget={armedContinuationTarget}
                 armedRouteContinuation={armedRouteContinuation}
+                onUnarmRoute={armedRouteContinuation && hasWriteAccess ? unarmRoute : null}
+                unarmRoutePending={unarmRoutePending}
                 composeAgentPickerOptions={embedded ? undefined : composeAgentPickerOptionsWithRoles}
                 inputPresentation={embeddedComposerControlsOnly ? 'controlsOnly' : undefined}
                 {...(embeddedComposerControls ? {

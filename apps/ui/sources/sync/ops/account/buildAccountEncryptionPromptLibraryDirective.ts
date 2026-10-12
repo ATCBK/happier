@@ -13,7 +13,7 @@ export function restoreAccountEncryptionPromptLibrarySettingsSources(params: Rea
   rawSettings: Readonly<Record<string, unknown>>;
 }>): Record<string, unknown> {
   const settings: Record<string, unknown> = { ...params.settings };
-  const roots = new Set<string>([...Object.values(PROMPT_LIBRARY_RETAINED_ROOTS_V1), ...LEGACY_ROLE_GUIDANCE_HISTORY_ROOTS_V1,
+  const roots = new Set<string>([...Object.values(PROMPT_LIBRARY_RETAINED_ROOTS_V1).filter(root => root !== null), ...LEGACY_ROLE_GUIDANCE_HISTORY_ROOTS_V1,
     ...RETIRED_ACCOUNT_SETTINGS_ROOT_KEYS, ...CONNECTED_PRESENTATION_SOURCE_ROOTS_V1,
     ...CONNECTED_ACKNOWLEDGEMENTS_SOURCE_ROOTS_V1, CONNECTED_DISCLOSURE_SOURCE_ROOT_V1]);
   // Preserve source absence even before ordinary writers retire these roots.
