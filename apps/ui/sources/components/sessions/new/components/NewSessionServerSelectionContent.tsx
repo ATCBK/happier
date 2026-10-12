@@ -1,3 +1,4 @@
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
@@ -228,7 +229,7 @@ export function NewSessionServerSelectionContent(props: NewSessionServerSelectio
                         return (
                             <Item
                                 key={serverId}
-                                title={profile.name}
+                                title={resolveHomeDisplayLabel(profile, serverId)}
                                 subtitle={statusLabel}
                                 icon={(
                                     <Icon

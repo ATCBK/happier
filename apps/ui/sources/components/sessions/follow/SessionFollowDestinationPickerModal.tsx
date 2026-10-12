@@ -1,9 +1,11 @@
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import type { SessionListQueryV1 } from '@happier-dev/protocol';
 import * as React from 'react';
 import { View } from 'react-native';
 
 import { SelectionList, type SelectionListOption, type SelectionListStep } from '@/components/ui/selectionList';
-import { SelectionListSkeletonRow } from '@/components/ui/selectionList/SelectionListSkeletonRow';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
+import { SELECTION_LIST_SKELETON_ROW_SHAPE } from '@/components/ui/selectionList/_constants';
 import { Text } from '@/components/ui/text/Text';
 import { Item } from '@/components/ui/lists/Item';
 import type { CustomModalInjectedProps } from '@/modal';
@@ -113,7 +115,7 @@ export const SessionFollowDestinationPickerModal = React.memo(function SessionFo
     const contextTitle = buildSessionFollowPickerContextTitle({
         actionTitle: title,
         sessionTitle: fixedSession ? getSessionName(fixedSession) : null,
-        homeName: homeProfile?.name ?? null,
+        homeName: resolveHomeDisplayLabel(homeProfile, fixedAddress.serverId),
     });
     const [saving, setSaving] = React.useState(false);
     const [failed, setFailed] = React.useState(false);
@@ -276,7 +278,7 @@ export const SessionFollowDestinationPickerModal = React.memo(function SessionFo
                     accessibilityRole="progressbar"
                     accessibilityLabel={t('sessionsList.queryInitialLoadingTitle')}
                 >
-                    {[0, 1, 2, 3].map((index) => <SelectionListSkeletonRow key={index} index={index} />)}
+                    <SkeletonRows rows={4} {...SELECTION_LIST_SKELETON_ROW_SHAPE} />
                 </View>
             ) : undefined}
             autoFocusInputOnWeb

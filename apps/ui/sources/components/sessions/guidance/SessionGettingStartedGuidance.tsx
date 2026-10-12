@@ -19,7 +19,7 @@ import {
     useAppAccountIdentity,
     useThisComputerConnection,
 } from '@/components/settings/machines/localControl/useThisComputerConnection';
-import { formatAccountLabel } from '@/sync/domains/server/relayDrift/thisComputerConnection';
+import { resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 
 import type { SessionGettingStartedDecisionKind } from './gettingStartedModel';
 import { Text } from '@/components/ui/text/Text';
@@ -257,7 +257,7 @@ function ConnectMachinePrimaryCardContent(props: Readonly<{
     const styles = stylesheet;
     const { status } = useLocalDaemonControl();
     const connection = useThisComputerConnection(status);
-    const { accountId, accountLabel } = useAppAccountIdentity();
+    const { accountLabel } = useAppAccountIdentity();
     const presentation = connection ? presentThisComputerConnection(connection) : null;
     const openThisComputer = React.useCallback(() => {
         router.push(SETTINGS_ROUTES.machinesThisComputer);
@@ -269,7 +269,7 @@ function ConnectMachinePrimaryCardContent(props: Readonly<{
             <Text style={styles.subtitle}>
                 {presentation?.description ?? t('machine.thisComputer.noComputers', {
                     home: props.targetLabel,
-                    appAccount: formatAccountLabel(accountLabel, accountId) ?? t('status.unknown'),
+                    appAccount: resolveViewerAccountDisplayName(accountLabel),
                 })}
             </Text>
             <View style={styles.buttonWrapper}>
