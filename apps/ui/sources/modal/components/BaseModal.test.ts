@@ -71,7 +71,8 @@ describe('BaseModal (web)', () => {
         const style = flattenStyleProp(container?.props?.style);
         expect(style.minHeight).toBe('100%');
         expect(style.justifyContent).toBe('flex-start');
-        expect(style.paddingTop).toBe(24 * 2);
+        // A command surface starts about an eighth down the window (lab `.am-card.pal`), never above the gap.
+        expect(style.paddingTop).toBe('max(48px, 12vh)');
         expect(style.paddingBottom).toBe(24 * 2);
         expect(style.boxSizing).toBe('border-box');
 
@@ -154,12 +155,12 @@ describe('BaseModal (web)', () => {
 
         const overlay = screen.findAll((node) => {
             const style = flattenStyleProp((node.props as any)?.style);
-            return style.backdropFilter === 'blur(var(--happier-glass-floating-blur, 2px))';
+            return style.backdropFilter === 'blur(min(var(--happier-glass-floating-blur, 2px), 2px))';
         })?.[0];
         const style = flattenStyleProp((overlay?.props as any)?.style);
 
-        expect(style.WebkitBackdropFilter).toBe('blur(var(--happier-glass-floating-blur, 2px))');
-        expect(style.backdropFilter).toBe('blur(var(--happier-glass-floating-blur, 2px))');
+        expect(style.WebkitBackdropFilter).toBe('blur(min(var(--happier-glass-floating-blur, 2px), 2px))');
+        expect(style.backdropFilter).toBe('blur(min(var(--happier-glass-floating-blur, 2px), 2px))');
         expect(style.backgroundColor).toBe('rgba(255, 255, 255, 0.52)');
         expect(style.opacity).toBeUndefined();
         expect(String(style.transition)).not.toContain('opacity');
@@ -246,55 +247,6 @@ describe('BaseModal (web)', () => {
 
         const child = screen.findByType('Child' as any);
         expect((child as any)?.parent?.type).not.toBe('div');
-    });
-
-    it('forces document.body pointer events back to auto while a web modal is visible and restores them on unmount', async () => {
-        const { BaseModal } = await import('./BaseModal');
-
-        const originalDocument = (globalThis as any).document;
-        const originalMutationObserver = (globalThis as any).MutationObserver;
-        const bodyStyle = { pointerEvents: 'none' };
-        type ObserverCallback = (records: unknown[], observer: unknown) => void;
-        let observerCallback: ObserverCallback | null = null;
-
-        class FakeMutationObserver {
-            constructor(callback: ObserverCallback) {
-                observerCallback = callback;
-            }
-
-            observe() {}
-
-            disconnect() {}
-        }
-
-        (globalThis as any).document = {
-            body: {
-                style: bodyStyle,
-            },
-            addEventListener: vi.fn(),
-            removeEventListener: vi.fn(),
-        };
-        (globalThis as any).MutationObserver = FakeMutationObserver;
-
-        try {
-            const screen = await renderBaseModalScreen(BaseModal);
-
-            expect(bodyStyle.pointerEvents).toBe('auto');
-
-            bodyStyle.pointerEvents = 'none';
-            if (observerCallback == null) {
-                throw new Error('expected MutationObserver callback');
-            }
-            (observerCallback as (records: unknown[], observer: unknown) => void)([], {});
-            expect(bodyStyle.pointerEvents).toBe('auto');
-
-            await screen.unmount();
-
-            expect(bodyStyle.pointerEvents).toBe('none');
-        } finally {
-            (globalThis as any).document = originalDocument;
-            (globalThis as any).MutationObserver = originalMutationObserver;
-        }
     });
 
     it('applies zIndexBase to the overlay and content so stacked modals layer correctly', async () => {

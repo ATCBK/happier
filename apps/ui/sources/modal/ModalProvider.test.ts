@@ -72,6 +72,9 @@ function showCustomModal(Modal: { show: (config: { component: React.ComponentTyp
     });
 }
 
+// Collect the provider graph before the first behavior-test deadline starts.
+await import('./ModalProvider');
+
 describe('ModalProvider', () => {
     beforeEach(() => {
         vi.useRealTimers();

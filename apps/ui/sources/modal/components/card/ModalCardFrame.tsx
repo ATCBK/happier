@@ -9,10 +9,13 @@ import { SurfaceRim } from '@/components/ui/surfaces/SurfaceRim';
 import { surfaceUsesRim } from '@/components/ui/surfaces/surfaceEdgeTreatment';
 import { RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
+import { ContainedPageScopeProvider } from '@/components/ui/lists/listPresentation';
 import { ModalCardBody } from './ModalCardBody';
 import { ModalCardHeader } from './ModalCardHeader';
 import { SheetGrabber, useSheetDismiss, useSheetDrag } from './sheetDragDismiss';
 import { useModalCardDimensions, type ModalCardDimensionOptions, type ModalCardSizePreset } from './useModalCardDimensions';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 type ModalCardFrameProps = Readonly<{
     children: React.ReactNode;
@@ -103,6 +106,7 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
     const sheet = props.presentation === 'sheet';
     const fullscreen = props.presentation === 'fullscreen';
     const bodyScroll = props.bodyScroll ?? 'none';
+    const reducedMotion = useReducedMotionPreference();
     const dimensions = useModalCardDimensions({
         ...props.dimensions,
         size: props.size ?? props.dimensions?.size,
@@ -135,6 +139,13 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                     : {
                         width: dimensions.width,
                         maxWidth: dimensions.width,
+                        // A card whose owner changes its width (a command surface widening for a detail
+                        // column) travels to the new width instead of jumping; reduced motion snaps.
+                        ...(Platform.OS === 'web' ? {
+                            transitionProperty: 'width, max-width',
+                            transitionDuration: `${reducedMotion ? 0 : motionTokens.durationMs.base}ms`,
+                            transitionTimingFunction: motionTokens.easingCss.standard,
+                        } as unknown as ViewStyle : null),
                     },
                 scrollHost === 'body' || fullscreen
                     ? {
@@ -144,7 +155,7 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                 props.style,
             ]}
         >
-            <GlassSurface surfaceGroup="floating" enabled={!fullscreen && props.material !== 'solid'}
+            <GlassSurface surfaceGroup="floating" dialog enabled={!fullscreen && props.material !== 'solid'}
                 solidColor={fullscreen ? theme.colors.surface.base : undefined} style={[
                 fullscreen ? styles.fullscreenSurface : styles.clipSurface,
                 scrollHost === 'body' || fullscreen ? { flex: 1 } : null,
@@ -171,6 +182,8 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                     />
                 ) : null}
 
+                {/* A card (not fullscreen) is a contained scope: page lists inside take its width (R-APP-7). */}
+                <ContainedPageScopeProvider contained={!fullscreen}>
                 {bodyScroll === 'auto' ? (
                     <ScrollView
                         testID="modal-card-body-scroll"
@@ -188,6 +201,7 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                         {props.children}
                     </ModalCardBody>
                 )}
+                </ContainedPageScopeProvider>
 
                 {props.footer != null ? (
                     <View testID="modal-card-footer" style={[styles.footer, props.footerStyle]}>

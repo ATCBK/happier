@@ -33,6 +33,7 @@ export interface ConfirmModalConfig extends BaseModalConfig {
     type: 'confirm';
     title: string;
     message?: string;
+    messageParagraphs?: readonly Readonly<{ text: string; irreversible?: boolean }>[];
     cancelText?: string;
     confirmText?: string;
     destructive?: boolean;
@@ -180,6 +181,7 @@ export interface IModal {
         cancelText?: string;
         confirmText?: string;
         destructive?: boolean;
+        messageParagraphs?: ConfirmModalConfig['messageParagraphs'];
         focusReturnRef?: FocusReturnRef;
     }): Promise<boolean>;
     prompt(title: string, message?: string, options?: {

@@ -40,6 +40,8 @@ export type WebOverlayFocusReturnStrategy =
     | Readonly<{
         kind: 'provided';
         ref: FocusReturnRef;
+        /** Geometry anchors may not be focusable; capture the opening control before containment. */
+        fallback?: 'activation-time';
     }>
     | Readonly<{
         kind: 'pre-mutation';
@@ -58,6 +60,8 @@ export function useWebOverlayFocusContainment(options: WebOverlayFocusContainmen
     const contextFallbackRef = useFocusReturnFallbackRef<FocusReturnTarget>();
     const returnTargetRef = React.useRef<FocusReturnTarget>(null);
     const fallbackRef = options.fallbackRef ?? contextFallbackRef;
+    const activationTimeFallback = options.focusReturn.kind === 'provided'
+        && options.focusReturn.fallback === 'activation-time';
     const preMutationFocusReturnRef = options.focusReturn.kind === 'pre-mutation'
         ? options.focusReturn.ref
         : null;
@@ -77,6 +81,9 @@ export function useWebOverlayFocusContainment(options: WebOverlayFocusContainmen
         const container = options.containerRef.current;
         if (!container || isWithinInertSubtree(container)) return;
 
+        const activationTarget = activationTimeFallback
+            ? readDocumentFocusReturnTarget(document)
+            : null;
         returnTargetRef.current = options.focusReturn.kind === 'activation-time'
             ? readDocumentFocusReturnTarget(document)
             : options.focusReturn.kind === 'provided'
@@ -109,10 +116,14 @@ export function useWebOverlayFocusContainment(options: WebOverlayFocusContainmen
                 const fallbackTarget = isEligibleFocusTarget(fallbackRef?.current)
                     ? fallbackRef.current
                     : null;
-                restoreFocusToBestTarget(
+                const eligibleActivationTarget = isEligibleFocusTarget(activationTarget)
+                    ? activationTarget
+                    : null;
+                if (restoreFocusToBestTarget(
                     { current: eligibleReturnTarget },
-                    { current: fallbackTarget },
-                );
+                    { current: eligibleActivationTarget },
+                )) return;
+                restoreFocusToBestTarget({ current: fallbackTarget });
             };
             restoreReleasedFocus();
             // This release runs inside a React commit. When the shell stays in the document (a modal
@@ -128,6 +139,7 @@ export function useWebOverlayFocusContainment(options: WebOverlayFocusContainmen
         };
     }, [
         fallbackRef,
+        activationTimeFallback,
         options.active,
         options.containerRef,
         options.focusReturn.kind,

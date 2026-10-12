@@ -1,7 +1,7 @@
 import { Platform, Alert } from 'react-native';
 import { t } from '@/text';
 import type { FocusReturnRef } from '@/keyboard/focusReturn';
-import { AlertButton, ModalConfig, CustomModalConfig, IModal, type CustomModalShowConfig, type CustomModalComponentType, type CustomModalInjectedProps } from './types';
+import { AlertButton, ModalConfig, CustomModalConfig, IModal, type ConfirmModalConfig, type CustomModalShowConfig, type CustomModalComponentType, type CustomModalInjectedProps } from './types';
 
 type ModalProviderFunctions = Readonly<{
     showModal: (config: Omit<ModalConfig, 'id'>) => string;
@@ -149,11 +149,12 @@ class ModalManagerClass implements IModal {
             cancelText?: string;
             confirmText?: string;
             destructive?: boolean;
+            messageParagraphs?: ConfirmModalConfig['messageParagraphs'];
             focusReturnRef?: FocusReturnRef;
         }
     ): Promise<boolean> {
-        if (Platform.OS === 'web') {
-            // Show custom web modal
+        if (Platform.OS === 'web' || options?.messageParagraphs) {
+            // The shared app dialog also owns structured consequences on native platforms.
             if (!this.showModalFn) {
                 console.error('ModalManager not initialized. Make sure ModalProvider is mounted.');
                 return false;
@@ -163,6 +164,7 @@ class ModalManagerClass implements IModal {
                 type: 'confirm',
                 title,
                 message,
+                messageParagraphs: options?.messageParagraphs,
                 cancelText: options?.cancelText,
                 confirmText: options?.confirmText,
                 destructive: options?.destructive,

@@ -74,6 +74,22 @@ describe('Modal.prompt', () => {
         await expect(promise).resolves.toBe(true);
     });
 
+    it('keeps structured irreversible consequences in the app confirmation on iOS', async () => {
+        const { Modal } = await import('./ModalManager');
+        const { Alert } = await import('react-native');
+        vi.mocked(Alert.alert).mockClear();
+        let modalType: string | null = null;
+        Modal.setFunctions((config) => { modalType = config.type; return 'archive-confirm'; }, () => {}, () => {});
+        const promise = Modal.confirm('Archive Team', 'Kept\nLinks stop', {
+            messageParagraphs: [{ text: 'Kept' }, { text: 'Links stop', irreversible: true }],
+            destructive: true,
+        });
+        expect(Alert.alert).not.toHaveBeenCalled();
+        expect(modalType).toBe('confirm');
+        Modal.resolveConfirm('archive-confirm', false);
+        await expect(promise).resolves.toBe(false);
+    });
+
     it('uses custom modal alert path on web', async () => {
         platformState.os = 'web';
 

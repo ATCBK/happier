@@ -22,7 +22,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 16,
         paddingTop: 20,
         paddingBottom: 16,
-        alignItems: 'center',
+        // Stretch, not centre: a centred text item sizes to its longest word, so an unbroken token
+        // (a path, an id) would overflow the card. The text itself stays centred.
+        alignItems: 'stretch',
     },
     title: {
         fontSize: 17,
@@ -82,6 +84,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     destructiveText: {
         color: theme.colors.state.danger.foreground,
     },
+    irreversibleText: {
+        color: theme.colors.state.warning.foreground,
+    },
 }));
 
 export function WebAlertModal({ config, onClose, onConfirm, showBackdrop = true, zIndexBase }: WebAlertModalProps) {
@@ -135,7 +140,15 @@ export function WebAlertModal({ config, onClose, onConfirm, showBackdrop = true,
                     <Text style={[styles.title, Typography.default('semiBold')]}>
                         {config.title}
                     </Text>
-                    {config.message && (
+                    {isConfirm && config.messageParagraphs ? config.messageParagraphs.map((paragraph, index) => (
+                        <Text key={index} style={[
+                            styles.message,
+                            Typography.default(paragraph.irreversible ? 'semiBold' : undefined),
+                            paragraph.irreversible ? styles.irreversibleText : null,
+                        ]}>
+                            {paragraph.text}
+                        </Text>
+                    )) : config.message && (
                         <Text style={[styles.message, Typography.default()]}>
                             {config.message}
                         </Text>

@@ -86,6 +86,54 @@ function ReturnFallback() {
 }
 
 describe('BaseModal over a route modal (web)', () => {
+    it.each(['route-first', 'app-first'] as const)('releases outside pointer locking when overlapping dialogs close %s', async (closeOrder) => {
+        const previousPointerEvents = document.body.style.pointerEvents;
+        document.body.style.pointerEvents = '';
+        const container = document.createElement('div');
+        document.body.append(container);
+        const routeRoot = createRoot(container);
+        const appContainer = document.createElement('div');
+        document.body.append(appContainer);
+        const appRoot = createRoot(appContainer);
+        const renderApp = (visible: boolean) => <BaseModal visible={visible} closeOnBackdrop={false}>
+            <button data-testid="overlapping-dialog-action">Queue for after turn</button>
+        </BaseModal>;
+        try {
+            await act(async () => {
+                routeRoot.render(<RadixDialog.Root open>
+                    <RadixDialog.Portal>
+                        <RadixDialog.Content aria-describedby={undefined}>
+                            <RadixDialog.Title>Session settings</RadixDialog.Title>
+                        </RadixDialog.Content>
+                    </RadixDialog.Portal>
+                </RadixDialog.Root>);
+            });
+            expect(document.body.style.pointerEvents).toBe('none');
+            await act(async () => { appRoot.render(renderApp(true)); });
+            const action = document.querySelector<HTMLElement>('[data-testid="overlapping-dialog-action"]')!;
+            expect(action.closest<HTMLElement>('[aria-modal="true"]')!.style.pointerEvents).toBe('auto');
+            if (closeOrder === 'route-first') {
+                await act(async () => { routeRoot.render(null); });
+                await act(async () => { appRoot.render(renderApp(false)); });
+            } else {
+                await act(async () => { appRoot.render(renderApp(false)); });
+                // A still-open route dialog must retain its outside lock.
+                expect(document.body.style.pointerEvents).toBe('none');
+                await act(async () => { routeRoot.render(null); });
+            }
+            await act(async () => { appRoot.render(null); });
+            expect(document.querySelector('[role="dialog"]')).toBeNull();
+            expect(document.body.style.pointerEvents).toBe('');
+            expect(getComputedStyle(document.body).pointerEvents).not.toBe('none');
+            expect(getComputedStyle(document.documentElement).pointerEvents).not.toBe('none');
+        } finally {
+            await act(async () => { appRoot.unmount(); routeRoot.unmount(); });
+            appContainer.remove();
+            container.remove();
+            document.body.style.pointerEvents = previousPointerEvents;
+        }
+    });
+
     it('cancels a provider-hosted autofocus prompt and returns focus to its opener', async () => {
         const container = document.createElement('div');
         document.body.append(container);

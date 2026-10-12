@@ -25,6 +25,7 @@ import { ESCAPE_LAYER_PRIORITIES, EscapeLayerProvider, useEscapeLayer } from '@/
 import { type FocusReturnRef, useRestoreFocusToTrigger } from '@/keyboard/focusReturn';
 import { visuallyHiddenDomStyle } from '@/components/ui/accessibility/visuallyHiddenStyle';
 import { SheetDismissProvider } from './card/sheetDragDismiss';
+import { MODAL_Z_INDEX } from '@/components/ui/overlays/overlayLayers';
 
 const BASE_MODAL_FOCUS_RETURN = { kind: 'activation-time' } as const;
 
@@ -33,83 +34,12 @@ const WEB_MODAL_CARD_BOUNDARY_SELECTOR = '[data-happy-modal-card-boundary]';
 
 // On web, stop events from propagating to expo-router's modal overlay
 // which intercepts clicks when it applies pointer-events: none to body
+/** How far down the window a top-placed command surface starts (lab `.am-card.pal`: about an eighth). */
+const COMMAND_SURFACE_TOP_SHARE_VH = 12;
 const stopPropagation = (e: { stopPropagation: () => void }) => e.stopPropagation();
 const webEventHandlers = isWeb
     ? { onClick: stopPropagation, onPointerDown: stopPropagation, onTouchStart: stopPropagation }
     : {};
-const WEB_MODAL_BODY_POINTER_EVENTS_STATE_KEY = '__happyWebModalBodyPointerEventsState';
-
-type WebModalBodyPointerEventsState = {
-    activeCount: number;
-    observer: MutationObserver | null;
-    previousInlinePointerEvents: string;
-};
-
-function getWebModalBodyPointerEventsState(): WebModalBodyPointerEventsState {
-    const globalObject = globalThis as typeof globalThis & {
-        [WEB_MODAL_BODY_POINTER_EVENTS_STATE_KEY]?: WebModalBodyPointerEventsState;
-    };
-
-    const existing = globalObject[WEB_MODAL_BODY_POINTER_EVENTS_STATE_KEY];
-    if (existing) return existing;
-
-    const nextState: WebModalBodyPointerEventsState = {
-        activeCount: 0,
-        observer: null,
-        previousInlinePointerEvents: '',
-    };
-    globalObject[WEB_MODAL_BODY_POINTER_EVENTS_STATE_KEY] = nextState;
-    return nextState;
-}
-
-function setWebModalBodyPointerEventsAuto(doc: Document): void {
-    if (doc.body?.style == null) return;
-    if (doc.body.style.pointerEvents !== 'auto') {
-        doc.body.style.pointerEvents = 'auto';
-    }
-}
-
-function installWebModalBodyPointerEventsBypass(): () => void {
-    if (typeof document === 'undefined' || document.body?.style == null) {
-        return () => {};
-    }
-
-    const doc = document;
-    const state = getWebModalBodyPointerEventsState();
-
-    if (state.activeCount === 0) {
-        state.previousInlinePointerEvents = doc.body.style.pointerEvents ?? '';
-        setWebModalBodyPointerEventsAuto(doc);
-
-        if (typeof MutationObserver !== 'undefined') {
-            state.observer = new MutationObserver(() => {
-                if (state.activeCount <= 0) return;
-                setWebModalBodyPointerEventsAuto(doc);
-            });
-            state.observer.observe(doc.body, {
-                attributes: true,
-                attributeFilter: ['style'],
-            });
-        }
-    }
-
-    state.activeCount += 1;
-
-    return () => {
-        const currentState = getWebModalBodyPointerEventsState();
-        currentState.activeCount = Math.max(0, currentState.activeCount - 1);
-
-        if (currentState.activeCount > 0) {
-            setWebModalBodyPointerEventsAuto(doc);
-            return;
-        }
-
-        currentState.observer?.disconnect();
-        currentState.observer = null;
-        doc.body.style.pointerEvents = currentState.previousInlinePointerEvents;
-        currentState.previousInlinePointerEvents = '';
-    };
-}
 
 type ClosestCapableEventTarget = EventTarget & {
     closest: (selector: string) => Element | null;
@@ -151,6 +81,8 @@ interface BaseModalProps {
     scrollHost?: 'overlay' | 'body';
     webPortalTarget?: ModalPortalTarget;
     focusReturnRef?: FocusReturnRef;
+    /** On web, retain the opening control when the provided geometry anchor cannot receive focus. */
+    focusReturnFallback?: 'activation-time';
 }
 
 export function BaseModal({
@@ -166,6 +98,7 @@ export function BaseModal({
     scrollHost = 'overlay',
     webPortalTarget = null,
     focusReturnRef,
+    focusReturnFallback,
 }: BaseModalProps) {
     const { theme } = useUnistyles();
     // A bottom sheet that closes on its scrim also closes by dragging it down (its frame draws the grabber).
@@ -173,7 +106,7 @@ export function BaseModal({
     const sheetChildren = <SheetDismissProvider onDismiss={sheetDismiss}>{children}</SheetDismissProvider>;
     const { blurEnabled: materialBlurEnabled } = useGlassBlurSetting();
     const insets = useChromeSafeAreaInsets();
-    const baseZ = zIndexBase ?? 100000;
+    const baseZ = zIndexBase ?? MODAL_Z_INDEX;
     const inheritedWebPortalTarget = useModalPortalTarget();
     const [modalPortalTarget, setModalPortalTarget] = React.useState<HTMLElement | null>(null);
     const modalPortalHostRef = React.useRef<HTMLDivElement | null>(null);
@@ -204,7 +137,7 @@ export function BaseModal({
         active: isWeb && visible && modalPresence.present,
         containerRef: webContentShellRef,
         focusReturn: focusReturnRef
-            ? { kind: 'provided', ref: focusReturnRef }
+            ? { kind: 'provided', ref: focusReturnRef, fallback: focusReturnFallback }
             : BASE_MODAL_FOCUS_RETURN,
     });
     const restoreNativeFocus = useRestoreFocusToTrigger(focusReturnRef);
@@ -221,13 +154,6 @@ export function BaseModal({
         const node = modalPortalHostRef.current;
         if (!node) return;
         setModalPortalTarget((prev) => prev ?? node);
-    }, [visible]);
-
-    useEffect(() => {
-        if (!isWeb) return;
-        if (!visible) return;
-
-        return installWebModalBodyPointerEventsBypass();
     }, [visible]);
 
     const escapeLayer = useEscapeLayer({
@@ -337,7 +263,9 @@ export function BaseModal({
             flexDirection: 'column',
             justifyContent: placement === 'fullscreen' ? 'flex-start' : placement === 'bottom' ? 'flex-end' : webPlacement === 'top' ? 'flex-start' : 'center',
             alignItems: placement !== 'center' ? 'stretch' : 'center',
-            paddingTop: placement === 'fullscreen' ? 0 : webPlacement === 'top' ? Math.max(insets.top, topPlacementGap) : insets.top,
+            // A command surface (⌘K, Browse) floats in the upper third, Spotlight-style, not under the title strip:
+            // a share of the window's height, never less than the fixed gap.
+            paddingTop: placement === 'fullscreen' ? 0 : webPlacement === 'top' ? `max(${Math.max(insets.top, topPlacementGap)}px, ${COMMAND_SURFACE_TOP_SHARE_VH}vh)` : insets.top,
             // A bottom sheet reaches the edge; it pads the safe area inside itself.
             paddingBottom: placement !== 'center' ? 0 : webPlacement === 'top' ? Math.max(insets.bottom, topPlacementGap) : insets.bottom,
             paddingLeft: placement === 'fullscreen' ? 0 : insets.left,
@@ -380,6 +308,7 @@ export function BaseModal({
                     <div
                         ref={webContentShellRef}
                         role="dialog"
+                        data-happy-modal-layer=""
                         aria-modal="true"
                         aria-label={modalAccessibilityLabel}
                         tabIndex={-1}
@@ -420,6 +349,7 @@ export function BaseModal({
                                     <OverlayMotionFrame
                                         visible={visible}
                                         kind="modal"
+                                        direction={placement === 'bottom' ? 'bottom' : undefined}
                                         pointerEvents={visible ? 'auto' : 'none'}
                                         style={[
                                             styles.content,
@@ -512,6 +442,7 @@ export function BaseModal({
                     <OverlayMotionFrame
                         visible={visible}
                         kind="modal"
+                        direction={placement === 'bottom' ? 'bottom' : undefined}
                         pointerEvents="box-none"
                         style={[
                             styles.content,
@@ -555,8 +486,8 @@ export function BaseModal({
 const styles = StyleSheet.create(() => ({
     portalRoot: {
         ...StyleSheet.absoluteFillObject,
-        zIndex: 100000,
-        elevation: 100000,
+        zIndex: MODAL_Z_INDEX,
+        elevation: MODAL_Z_INDEX,
     },
       container: {
           flex: 1,

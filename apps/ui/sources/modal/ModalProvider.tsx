@@ -8,6 +8,7 @@ import { CustomModal } from './components/CustomModal';
 import { OverlayPortalHost, OverlayPortalProvider } from '@/components/ui/popover';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { readDocumentFocusReturnTarget } from '@/keyboard/focusReturn';
+import { MODAL_Z_INDEX, MODAL_Z_INDEX_STEP, SCREEN_OVERLAY_Z_INDEX } from '@/components/ui/overlays/overlayLayers';
 
 const ModalContext = createContext<ModalContextValue | undefined>(undefined);
 // Consumers that only need presentation context must not receive titles,
@@ -225,9 +226,9 @@ export function ModalProvider({ active = true, children }: ModalProviderProps) {
         modal.visible ? index : topIndex
     ), -1);
     const visibleModalKind = topVisibleIndex >= 0 ? state.modals[topVisibleIndex]?.type ?? null : null;
-    const zIndexStep = 10;
-    const zIndexBase = 100000;
-    const screenOverlayPortalZIndex = zIndexBase - 10000;
+    const zIndexStep = MODAL_Z_INDEX_STEP;
+    const zIndexBase = MODAL_Z_INDEX;
+    const screenOverlayPortalZIndex = SCREEN_OVERLAY_Z_INDEX;
 
     return (
         <OverlayPortalProvider>
