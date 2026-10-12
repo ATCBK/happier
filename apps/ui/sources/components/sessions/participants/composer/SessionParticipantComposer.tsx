@@ -95,6 +95,12 @@ import { resolveWorkspaceTargetForSession } from '@/sync/domains/session/resolve
 import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 
+/**
+ * Thrown by a prepared-submission handler that kept the draft and already shows what happens next
+ * (a chooser, an inline state): the composer keeps the draft and says nothing more.
+ */
+export class ParticipantComposerSubmissionHeld extends Error {}
+
 export type ParticipantComposerPreparedSubmission = Readonly<{
     text: string;
     displayText?: string;
@@ -812,6 +818,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                         );
                         return { status: 'accepted' };
                     } catch (error) {
+                        if (error instanceof ParticipantComposerSubmissionHeld) return { status: 'rejected' };
                         const failureLabelKey = getSessionInputFailureLabelKey(error);
                         Modal.alert(
                             t('common.error'),
