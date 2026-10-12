@@ -31,6 +31,11 @@ describe("sessionRoutes session turns", () => {
             latestTurnStatus: "completed",
             latestTurnStatusObservedAt: 123,
             lastRuntimeIssue: null,
+            pendingRequestProjection: {
+                pendingPermissionRequestCount: 0,
+                pendingUserActionRequestCount: 0,
+                pendingRequestObservedAt: null,
+            },
             rollbackEligibleTurnStarts: [3, 7],
             participantCursors: [
                 { accountId: "u1", cursor: 10 },
@@ -73,6 +78,9 @@ describe("sessionRoutes session turns", () => {
             latestTurnStatus: "completed",
             latestTurnStatusObservedAt: 123,
             lastRuntimeIssue: null,
+            pendingPermissionRequestCount: 0,
+            pendingUserActionRequestCount: 0,
+            pendingRequestObservedAt: null,
             rollbackEligibleTurnStarts: [3, 7],
         });
         expect(buildUpdateSessionUpdate).toHaveBeenNthCalledWith(2, "s1", 11, expect.any(String), undefined, undefined, {
@@ -80,6 +88,9 @@ describe("sessionRoutes session turns", () => {
             latestTurnStatus: "completed",
             latestTurnStatusObservedAt: 123,
             lastRuntimeIssue: null,
+            pendingPermissionRequestCount: 0,
+            pendingUserActionRequestCount: 0,
+            pendingRequestObservedAt: null,
             rollbackEligibleTurnStarts: [3, 7],
         });
         expect(emitUpdate).toHaveBeenCalledTimes(2);
