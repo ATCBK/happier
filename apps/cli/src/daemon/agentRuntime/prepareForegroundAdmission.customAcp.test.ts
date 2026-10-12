@@ -20,7 +20,7 @@ describe('Custom ACP foreground instance admission', () => {
       const credentials = { token: 'custom-acp-foreground', encryption: null } as const;
       vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
       const definitions = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: ['definition-a', 'definition-b'].map(id => ({
-        id, name: id, title: id, command: `command-${id}`, args: [id], env: {}, capabilities: {}, createdAt: 1, updatedAt: 1,
+        id, name: id, title: id, launch: { kind: 'command' as const, command: `command-${id}`, args: [id] }, env: {}, capabilities: {}, createdAt: 1, updatedAt: 1,
       })) });
       const publish = (record = definitions) => setActiveAccountSettingsSnapshot({
         source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1, loadedAtMs: 1,

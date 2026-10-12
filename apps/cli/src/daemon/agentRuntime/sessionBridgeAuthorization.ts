@@ -4,6 +4,7 @@ import { chmod, lstat, mkdir, readdir, realpath } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { resolveReleaseRingScopedBasename } from '@/cli/runtime/publicReleaseChannel';
 import {
@@ -312,7 +313,7 @@ async function readStrictAgentRuntimeDaemonServiceAuthorityDocument(
       return null;
     }
     const document =
-      AgentRuntimeDaemonServiceAuthorityDocumentV2Schema.safeParse(
+      createStoredReadSchema(AgentRuntimeDaemonServiceAuthorityDocumentV2Schema).safeParse(
         JSON.parse(await readPrivateBearerFile(input.path)),
       );
     if (
@@ -551,7 +552,7 @@ export async function removeAgentRuntimeDaemonServiceAuthorityIfOwned(
   return await withAuthorityMutationLock(input.path, async () => {
     try {
       const document =
-        AgentRuntimeDaemonServiceAuthorityDocumentV2Schema.safeParse(
+        createStoredReadSchema(AgentRuntimeDaemonServiceAuthorityDocumentV2Schema).safeParse(
           JSON.parse(await readPrivateBearerFile(input.path)),
         );
       if (

@@ -91,6 +91,10 @@ describe('Agent runtime session bridge authorization', () => {
     for (const invalidId of [`${sessionId}s`, ' lead', 'lead ']) {
       await expect(publishAgentRuntimeDaemonServiceAuthority({ ...input, sessionId: invalidId })).rejects.toThrow();
     }
+    const retained = JSON.parse(await readFile(path, 'utf8'));
+    await writeFile(path, JSON.stringify({ ...retained, retired: true,
+      runner: { ...retained.runner, retired: true }, retainedAgent: { ...retained.retainedAgent, retired: true },
+    }));
     expect((await readAgentRuntimeDaemonServiceAuthority(input))?.sessionId).toBe(sessionId);
   });
   it('carries the selected runtime through bootstrap and Session creation into the real opener', async () => {
