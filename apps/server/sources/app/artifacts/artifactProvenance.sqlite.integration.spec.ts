@@ -292,7 +292,7 @@ describe('Artifact private provenance (real SQLite and HTTP)', () => {
             expect(shared.statusCode, shared.body).toBe(200);
             for (const accountId of [undefined, stranger.id]) {
                 const publicRead = await app.inject({ method: 'GET', url: `/v1/public-shares/${lookupId}/content`, headers: {
-                    host: new URL(shared.json().isolatedOrigin).host, ...(accountId ? headers(accountId) : {}),
+                    host: new URL(shared.json().viewerOrigin).host, ...(accountId ? headers(accountId) : {}),
                 } });
                 expect(publicRead.statusCode, publicRead.body).toBe(200);
                 const publicBody = publicRead.json().content.body;
