@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { PluginManifestV2Schema, PluginManagedDependencyContributionV2Schema, projectMachineAgentsDetectResponse } from '@happier-dev/protocol';
 import { PLUGIN_MANIFEST as ANTIGRAVITY_MANIFEST } from '@happier-dev/plugins-antigravity/manifest';
 import { PLUGIN_MANIFEST as CODEX_MANIFEST } from '@happier-dev/plugins-codex/manifest';
+import { PLUGIN_MANIFEST as CUSTOM_ACP_MANIFEST } from '@happier-dev/plugins-custom-acp/manifest';
 
 import { createProbeTempDir, writeExecutableScript } from '@/capabilities/probes/agentModelsProbe.testkit';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
@@ -14,6 +15,9 @@ import { projectManifestAgentContribution } from '@/plugins/projection/registry/
 import { projectBuiltInAgents } from '@/plugins/projection/registry/builtIn/agents';
 import { BUNDLED_FIRST_PARTY_AGENT_REGISTRATION_BINDINGS } from '@/plugins/projection/registry/sources/generatedBundledPlugins';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
+import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { buildCliCapabilityData } from '@/capabilities/probes/cliBase';
 import { detectCliSnapshotOnDaemonPath } from './cliSnapshot';
@@ -22,7 +26,7 @@ afterEach(() => vi.unstubAllEnvs());
 
 describe('machine agent inventory on the daemon', () => {
     beforeAll(async () => {
-        const manifests = [ANTIGRAVITY_MANIFEST, CODEX_MANIFEST].map((manifest) => PluginManifestV2Schema.parse(manifest));
+        const manifests = [ANTIGRAVITY_MANIFEST, CODEX_MANIFEST, CUSTOM_ACP_MANIFEST].map((manifest) => PluginManifestV2Schema.parse(manifest));
         const agents = projectBuiltInAgents({
             manifestAgents: manifests.flatMap((manifest) => manifest.contributes.agents.map((definition) => ({
                 ...projectManifestAgentContribution({
@@ -34,6 +38,12 @@ describe('machine agent inventory on the daemon', () => {
             registrationBindings: BUNDLED_FIRST_PARTY_AGENT_REGISTRATION_BINDINGS.filter((binding) => manifests.some((manifest) => binding.identity.pluginId === manifest.id)),
         });
         const registry = {
+            claimReleaseLessDeclarations: async () => undefined,
+            projectManagedServices: createManagedServicesOwner({
+                processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+                dependencies: createUnavailablePluginServices().managedServices.dependencies,
+                resolveScope: () => null,
+            }),
             contributes: createResolvedContributionRegistry({
                 agents, activationTargets: [],
                 managedDependencies: manifests.flatMap((manifest) => manifest.contributes.managedDependencies.map((definition) => ({
@@ -55,6 +65,30 @@ describe('machine agent inventory on the daemon', () => {
         });
     });
     afterAll(async () => { await pluginReloadController.shutdown(); });
+
+    it('keeps healthy native CLI facts when a sibling Agent has no native CLI probe', async () => {
+        const fixture = await createProbeTempDir('happier-agent-inventory-sibling');
+        try {
+            vi.stubEnv('HAPPIER_HOME_DIR', fixture.dir);
+            vi.stubEnv('HOME', fixture.dir);
+            vi.stubEnv('USERPROFILE', fixture.dir);
+            vi.stubEnv('PATH', '');
+            const cliPath = join(fixture.dir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
+            await writeExecutableScript(cliPath, process.platform === 'win32' ? '@echo off\r\necho 1.2.3\r\n' : '#!/bin/sh\necho 1.2.3\n');
+            vi.stubEnv('HAPPIER_CODEX_PATH', cliPath);
+            const snapshot = await detectCliSnapshotOnDaemonPath({ includeLoginStatus: true, bypassCache: true });
+            const data = buildCliCapabilityData({ request: { id: 'cli.codex' }, entry: snapshot.clis.codex });
+            expect(projectMachineAgentsDetectResponse({
+                agents: [{ agentId: 'codex', title: 'Codex' }],
+                response: { protocolVersion: 1, results: { 'cli.codex': { ok: true, data } } },
+            }).items).toMatchObject([{ agentId: 'codex', installed: true, version: '1.2.3' }]);
+            expect(snapshot.clis['custom-acp']).toMatchObject({
+                available: false, detectionError: { code: 'cli-detection-failed' },
+            });
+        } finally {
+            await fixture.cleanup();
+        }
+    });
 
     it('reports the installed ACP dependency separately when the Antigravity CLI is missing', async () => {
         const fixture = await createProbeTempDir('happier-agent-inventory');

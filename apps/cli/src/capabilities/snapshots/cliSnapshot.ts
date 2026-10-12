@@ -4,6 +4,7 @@ import { join, delimiter as PATH_DELIMITER } from 'path';
 
 import { AGENTS } from '@/agent/catalog/registry';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
+import type { AgentCliLaunchSpec } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
 import type { CliDetectSpec } from '@/agent/catalog/types';
 import type { CliAuthStatus } from '@/capabilities/cliAuth/types';
 import { CapabilityError } from '@/capabilities/errors';
@@ -288,7 +289,15 @@ async function resolveCliVersionArgsToTry(name: DetectCliName): Promise<Array<st
     return spec.map((v) => [...v]);
 }
 
-async function probeCliExecution(params: { name: DetectCliName; resolvedPath: string; timeoutMs: number; env?: NodeJS.ProcessEnv; signal?: AbortSignal; execFile?: typeof execFileWithDeadline }): Promise<Readonly<{ installed?: boolean; version: string | null; detectionError?: DetectCliEntry['detectionError'] }>> {
+export type RunResolvedAgentCliVersionCommand = (input: Readonly<{
+    agentId: string;
+    launch: AgentCliLaunchSpec;
+    args: readonly string[];
+    timeoutMs: number;
+    signal?: AbortSignal;
+}>) => Promise<Readonly<{ stdout: string; stderr: string }>>;
+
+async function probeCliExecution(params: { name: DetectCliName; resolvedPath: string; timeoutMs: number; env?: NodeJS.ProcessEnv; signal?: AbortSignal; execFile?: typeof execFileWithDeadline; launch?: AgentCliLaunchSpec; runVersionCommand?: RunResolvedAgentCliVersionCommand }): Promise<Readonly<{ installed?: boolean; version: string | null; detectionError?: DetectCliEntry['detectionError'] }>> {
     let installed = false;
     let interrupted = false;
     let detectedVersion: string | null = null;
@@ -333,10 +342,19 @@ async function probeCliExecution(params: { name: DetectCliName; resolvedPath: st
             options: ExecFileBestEffortOptions,
         ): Promise<{ stdout: string; stderr: string; error: unknown | null }> => {
             try {
-                const { stdout, stderr } = await (params.execFile ?? execFileWithDeadline)(file, args, options);
+                const { stdout, stderr } = params.launch && params.runVersionCommand
+                    ? await params.runVersionCommand({
+                        agentId: params.name,
+                        launch: params.launch,
+                        args: args.slice(params.launch.args.length),
+                        timeoutMs,
+                        signal: params.signal,
+                    })
+                    : await (params.execFile ?? execFileWithDeadline)(file, args, options);
                 installed = true;
                 return { stdout: asString(stdout), stderr: asString(stderr), error: null };
             } catch (error) {
+                if (params.runVersionCommand) throw error;
                 if (error instanceof ExecFileTerminationError) throw error;
                 params.signal?.throwIfAborted();
                 if (isTransientExecFileError(error)) interrupted = true;
@@ -378,6 +396,19 @@ async function probeCliExecution(params: { name: DetectCliName; resolvedPath: st
 	            const second = await probeSemverOnce(file, args, options);
 	            return second.semver;
         };
+
+        if (params.launch && params.runVersionCommand) {
+            for (const args of argsToTry) {
+                const semver = await probeSemverWithRetry(params.launch.command, [...params.launch.args, ...args], {
+                    timeout: timeoutMs,
+                    windowsHide: true,
+                    signal: params.signal,
+                });
+                detectedVersion = semver ?? detectedVersion;
+                if (semver && installed) return result(semver);
+            }
+            return result(detectedVersion);
+        }
 
         if (needsJavaScriptRuntime) {
             const runtimeExecutable = params.env
@@ -431,10 +462,36 @@ async function probeCliExecution(params: { name: DetectCliName; resolvedPath: st
 
         return result(detectedVersion);
     } catch (error) {
+        if (params.runVersionCommand) throw error;
         if (error instanceof ExecFileTerminationError) throw error;
         params.signal?.throwIfAborted();
         return result(null);
     }
+}
+
+/** Reads version facts for an already-resolved Agent CLI without resolving another executable. */
+export async function probeResolvedAgentCliVersion(params: Readonly<{
+    agentId: string;
+    launch: AgentCliLaunchSpec;
+    env: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    runVersionCommand: RunResolvedAgentCliVersionCommand;
+}>): Promise<string | null> {
+    params.signal?.throwIfAborted();
+    const probe = await probeCliExecution({
+        name: params.agentId,
+        resolvedPath: params.launch.resolvedPath,
+        launch: params.launch,
+        runVersionCommand: params.runVersionCommand,
+        timeoutMs: resolveCliSnapshotProbeTimeoutMs(true),
+        env: params.env,
+        signal: params.signal,
+    });
+    params.signal?.throwIfAborted();
+    if (probe.detectionError) {
+        throw new CapabilityError(probe.detectionError.message, probe.detectionError.code);
+    }
+    return probe.version;
 }
 
 /** Fresh install verification uses the same resolver and version probe as inventory. */
@@ -604,7 +661,7 @@ export async function detectCliSnapshotOnDaemonPath(data: DetectCliRequest): Pro
         ? requestedCliNames
         : Object.keys(AGENTS) as DetectCliName[];
 
-    const pairs = await Promise.all(
+    const observations = await Promise.allSettled(
         names.map(async (name) => {
             const [resolved, setupFacts] = await Promise.all([resolveCliPathForName(name), detectAgentSetupFacts(name)]);
             if (!resolved) {
@@ -702,7 +759,14 @@ export async function detectCliSnapshotOnDaemonPath(data: DetectCliRequest): Pro
         }
     }
 
-    const pairEntries = Object.fromEntries(pairs) as Partial<Record<DetectCliName, DetectCliEntry>>;
+    // A catalog Agent may have no native CLI, or its own probe may fail. That
+    // observation cannot invalidate another Agent's completed install/auth facts.
+    const pairEntries = Object.fromEntries(observations.map((observation, index) => observation.status === 'fulfilled'
+        ? observation.value
+        : [names[index], {
+            available: false,
+            detectionError: { code: 'cli-detection-failed', message: 'Agent CLI detection failed' },
+        } satisfies DetectCliEntry])) as Partial<Record<DetectCliName, DetectCliEntry>>;
 
     return {
         path: pathEnv,
