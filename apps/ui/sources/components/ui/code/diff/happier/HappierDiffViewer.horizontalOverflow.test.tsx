@@ -91,7 +91,7 @@ describe('Happier diff viewers horizontal overflow', () => {
         expect(codeLinesView.props.showInactiveCommentAffordance).toBe(false);
     });
 
-    it('uses a gesture-handler ScrollView for no-wrap text diffs on Android', async () => {
+    it('uses the platform ScrollView for no-wrap text diffs on Android', async () => {
         const { HappierTextDiffViewer } = await import('./HappierTextDiffViewer');
 
         const screen = await renderScreen(
@@ -103,13 +103,13 @@ describe('Happier diff viewers horizontal overflow', () => {
             />,
         );
 
-        const scrollView = screen.tree.findByType('GestureHandlerScrollView' as any);
+        expect(screen.findAllByType('GestureHandlerScrollView' as any)).toHaveLength(0);
+        const scrollView = screen.tree.findByType('ScrollView' as any);
         expect(scrollView.props.horizontal).toBe(true);
         expect(scrollView.props.nestedScrollEnabled).toBe(true);
-        expect(scrollView.props.disallowInterruption).toBe(true);
     });
 
-    it('uses a gesture-handler ScrollView for no-wrap unified diffs on Android', async () => {
+    it('uses the platform ScrollView for no-wrap unified diffs on Android', async () => {
         const { HappierUnifiedDiffViewer } = await import('./HappierUnifiedDiffViewer');
 
         const screen = await renderScreen(
@@ -120,9 +120,9 @@ describe('Happier diff viewers horizontal overflow', () => {
             />,
         );
 
-        const scrollView = screen.tree.findByType('GestureHandlerScrollView' as any);
+        expect(screen.findAllByType('GestureHandlerScrollView' as any)).toHaveLength(0);
+        const scrollView = screen.tree.findByType('ScrollView' as any);
         expect(scrollView.props.horizontal).toBe(true);
         expect(scrollView.props.nestedScrollEnabled).toBe(true);
-        expect(scrollView.props.disallowInterruption).toBe(true);
     });
 });
