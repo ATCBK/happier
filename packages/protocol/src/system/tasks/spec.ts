@@ -69,9 +69,16 @@ function isSystemTaskJsonValue(
   }
 }
 
-export const SystemTaskJsonValueSchema = lazyZodSchema(() => z.custom<SystemTaskJsonValue>(
-  (value): value is SystemTaskJsonValue => isSystemTaskJsonValue(value),
-  'Expected a JSON-safe value',
+// An unconstrained JSON Schema admits every JSON value, exactly the wire
+// vocabulary here. Keep the in-process guard before returning the value so
+// cycles, non-finite numbers and non-plain objects still fail without recursive
+// Zod parsing or changing the payload's identity.
+export const SystemTaskJsonValueSchema = lazyZodSchema(() => z.unknown().transform(
+  (value, ctx): SystemTaskJsonValue => {
+    if (isSystemTaskJsonValue(value)) return value;
+    ctx.addIssue({ code: 'custom', message: 'Expected a JSON-safe value' });
+    return z.NEVER;
+  },
 ));
 
 export const SystemTaskSpecSchema = lazyZodSchema(() => z.object({
