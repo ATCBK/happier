@@ -3763,7 +3763,11 @@ test('dev target supervisor borrows producer synchronization before remote boots
         .every((call) => call.args.includes('-F')),
     );
     assert.ok(tunnelSpawn.args.includes('ControlPath=none'), 'the forward retains its own stop custody');
-    assert.equal(workerSpawn.args.includes('ControlMaster=no'), true, 'runtime workers retain independent lifecycle transport');
+    assert.equal(workerSpawn.args.includes('ControlMaster=no'), false, 'runtime workers reuse the configured master without owning its lifetime');
+    assert.equal(calls.filter(call => call.kind === 'run' && call.command === 'ssh'
+      && !String(call.args.at(-1)).includes('stack stop')
+      && !String(call.args.at(-1)).includes('stack.runtime.json'))
+      .some(call => call.args.includes('ControlPath=none')), false, 'ordinary readiness and bootstrap commands reuse the configured master');
     assert.equal(
       calls.some((call) => call.command === 'mutagen' && call.args.includes('flush')),
       false,

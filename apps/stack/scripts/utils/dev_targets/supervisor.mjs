@@ -423,13 +423,10 @@ export async function startStackDevTargets(
     }, { runProcess });
     if (sourceSnapshot) logger.info?.(`[dev-targets] synchronization admission elapsedMs=${Date.now() - startupStartedAt}`);
     const { projectFile } = syncProject;
-    // Lifecycle bootstrap, readiness and workers must remain reachable when
-    // synchronization or jobs saturate the shared SSH master. Keep Mutagen's
-    // transport unchanged; the supervisor owns these independent connections.
-    const openSsh = {
-      ...syncProject.openSsh,
-      sshArgs: ['-o', 'ControlMaster=no', '-o', 'ControlPath=none', ...syncProject.openSsh.sshArgs],
-    };
+    // Commands and workers own their channels, not the configured master.
+    // Native control transport recovers a refused session before dispatch.
+    // Foreground forwards and retirement retain their own transport custody.
+    const openSsh = syncProject.openSsh;
     const retireRemoteTarget = (target, options, { probeBeforeStop = true } = {}) => retireStackDevTarget({
       target, options, sshArgs: openSsh.sshArgs, env: infraEnv, probeBeforeStop,
     }, { runProcess, logger });

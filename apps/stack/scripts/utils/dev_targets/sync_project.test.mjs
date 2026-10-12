@@ -12,6 +12,7 @@ import {
   releaseIndependentDevTargetSyncProject,
   runDevTargetControlProcess,
   prepareDevTargetOpenSsh,
+  inspectPrimaryStandbySync,
 } from './sync_project.mjs';
 import { DEV_TARGET_SYNC_EXECUTOR_REPO, DEV_TARGET_MUTAGEN_IGNORE_PATHS, renderMutagenProject, resolveMutagenSessionName } from './mutagen_project.mjs';
 import { resolveDevTargetMutagenRuntime } from './mutagen_runtime.mjs';
@@ -28,6 +29,22 @@ const target = {
   repoDir: '/Users/dev/happier',
   cliHomeDir: '/Users/dev/.happier',
 };
+
+test('standby capture status reuses the configured SSH transport', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-standby-status-ssh-' });
+  const capturedAt = '2026-10-12T07:30:00.000Z';
+  const result = await inspectPrimaryStandbySync({ stackBaseDir: root, sourceDir: DEV_TARGET_SYNC_EXECUTOR_REPO,
+    target, env: envFor(root) }, {
+    runProcess: async ({ command, args }) => {
+      if (command === 'mutagen') return { code: 0, out: '[]' };
+      assert.equal(command, 'ssh');
+      assert.equal(args.includes('ControlPath=none'), false, 'a metadata query is not a credential proof');
+      return { code: 0, out: JSON.stringify({ capturedAt, agentSqliteCount: 2 }) };
+    },
+  });
+  assert.equal(result.agentSqliteCapturedAt, capturedAt);
+  assert.equal(result.agentSqliteCount, 2);
+});
 
 test('project reconciliation removes orphan writers by identifier before resuming or rotating the repository project', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-sync-orphan-writers-' });

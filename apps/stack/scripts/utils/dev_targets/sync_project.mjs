@@ -493,7 +493,7 @@ export async function inspectPrimaryStandbySync(
   const script = await readFile(new URL('../execution_host/guest_backup.py', import.meta.url), 'utf8');
   const sshConfigFile = resolveDevTargetSshConfigFile(target, { stackBaseDir, env });
   const capture = await runProcess({ label: '', command: 'ssh', env: runtime.env,
-    args: [...(sshConfigFile ? ['-F', sshConfigFile] : []), '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'BatchMode=yes', '-T', target.ssh,
+    args: [...(sshConfigFile ? ['-F', sshConfigFile] : []), '-o', 'BatchMode=yes', '-T', target.ssh,
       `python3 -c ${shellQuote(script)} capture-status`] });
   requireSuccessful(capture, 'Agent capture freshness');
   const metadata = JSON.parse(capture.out);
