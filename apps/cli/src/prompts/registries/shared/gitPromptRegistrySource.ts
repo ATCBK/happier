@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { removeHappierTempDir } from '@happier-dev/cli-common/tempDirs';
 import { basename, join, relative, resolve, sep } from 'node:path';
 
 import type {
@@ -66,7 +67,7 @@ export async function scanGitPromptRegistrySource(args: Readonly<{
         return haystack.includes(query);
       });
   } finally {
-    rmSync(cloneDirectory, { recursive: true, force: true });
+    removeHappierTempDir(cloneDirectory);
   }
 }
 
@@ -130,6 +131,6 @@ export async function fetchGitPromptRegistryItem(args: Readonly<{
       error: error instanceof Error ? error.message : 'failed to fetch registry item',
     };
   } finally {
-    rmSync(cloneDirectory, { recursive: true, force: true });
+    removeHappierTempDir(cloneDirectory);
   }
 }

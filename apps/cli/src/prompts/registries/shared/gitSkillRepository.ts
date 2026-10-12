@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, realpathSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createHappierTempDir, removeHappierTempDir } from '@happier-dev/cli-common/tempDirs';
 
 function runGit(args: readonly string[], cwd?: string): string {
   return execFileSync('git', args, {
@@ -29,12 +29,12 @@ function isResolvedPathInsideRoot(rootPath: string, candidatePath: string): bool
 }
 
 export function clonePromptRegistryRepositoryToTempDir(repositoryUrl: string): string {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'happier-prompt-registry-clone-'));
+  const tempRoot = createHappierTempDir({ purpose: 'prompt-registry-clone' });
   try {
     runGit(['clone', '--depth', '1', normalizeRepositoryUrl(repositoryUrl), tempRoot]);
     return tempRoot;
   } catch (error) {
-    rmSync(tempRoot, { recursive: true, force: true });
+    removeHappierTempDir(tempRoot);
     throw error;
   }
 }
