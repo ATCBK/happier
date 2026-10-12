@@ -86,7 +86,7 @@ describe('Summary model discovery', () => {
             accountId: 'summary-discovery-account', accountEncryptionMode: 'plain', currentAccount: true });
         const scope = { serverId: homeId, accountId: 'summary-discovery-account' };
         const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: configured ? [{ id: target.backendId,
-            name: target.backendId, title: 'Review Bot', command: 'review-cli', args: ['acp'], env: {}, createdAt: 1, updatedAt: 1 }] : [] });
+            name: target.backendId, title: 'Review Bot', launch: { kind: 'command' as const, command: 'review-cli', args: ['acp'] }, env: {}, createdAt: 1, updatedAt: 1 }] : [] });
         homes.answer(homeId, ACP_CATALOG_ROWS_ROUTE_V1, { body: AcpCatalogRowReadResponseV1Schema.parse({
             status: 'present', revision: 1, content: { t: 'plain', v: record },
         }) });
@@ -103,7 +103,7 @@ describe('Summary model discovery', () => {
         const menu = () => screen.findAll(node => node.type === DropdownMenu)[0];
         const diagnostic = () => JSON.stringify({ paths: homes.requests.map(request => request.path), rpc: rpc.requests,
             catalog: getAcpCatalogSnapshot(scope), projection: readCachedDaemonMergedProjectionCacheEntry({ machineId: machine.id, serverId: homeId }),
-            items: menu().props.items });
+            items: menu().props.items.map(({ id, title, disabled, subtitle }: { id: string; title: string; disabled?: boolean; subtitle?: string }) => ({ id, title, disabled, subtitle })) });
         const id = `backend-discovery:${buildBackendTargetKeyV2(target)}`;
         await vi.waitFor(() => expect(menu().props.items.find((item: { id: string }) => item.id === id),
             diagnostic()).toBeDefined());

@@ -105,8 +105,8 @@ function describeRefusal(
                         : t('settingsAgents.customAcp.errors.shortNameInvalid');
                 break;
             }
-            case 'command':
-                errors.command = draft.command.trim().length === 0
+            case 'launch.command':
+                errors.command = draft.launch.kind === 'command' && draft.launch.command.trim().length === 0
                     ? t('settingsAgents.customAcp.errors.commandRequired')
                     : t('settingsAgents.customAcp.errors.fieldInvalid');
                 break;
@@ -377,7 +377,7 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
                     onPress: save,
                 }}
                 actions={(
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                         <PageHeaderMenu testID={`${TEST_ID}.menu`} actions={menuActions} />
                     </View>
                 )}
@@ -491,8 +491,9 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
                     rightElement={(
                         <FieldTextInput
                             testID={`${TEST_ID}.command`}
-                            value={draft.command}
-                            onChangeText={(text) => update('command', (current) => ({ ...current, command: text }))}
+                            value={draft.launch.kind === 'command' ? draft.launch.command : ''}
+                            onChangeText={(text) => update('command', (current) => current.launch.kind === 'command'
+                                ? { ...current, launch: { ...current.launch, command: text } } : current)}
                             accessibilityLabel={t('settingsAgents.customAcp.commandTitle')}
                             placeholder="kiro-cli"
                             monospace
@@ -508,8 +509,9 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
                     rightElement={(
                         <StringListField
                             testID={`${TEST_ID}.args`}
-                            values={draft.args}
-                            onChange={(args) => update(null, (current) => ({ ...current, args }))}
+                            values={draft.launch.args}
+                            onChange={(args) => update(null, (current) => current.launch.kind === 'command'
+                                ? { ...current, launch: { ...current.launch, args } } : current)}
                             itemLabel={(position) => t('settingsAgents.customAcp.argumentLabel', { position })}
                             removeLabel={(position) => t('settingsAgents.customAcp.removeArgument', { position })}
                             addLabel={t('settingsAgents.customAcp.addArgument')}
