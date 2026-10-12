@@ -12,6 +12,8 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({ v: 1, totals: { eve
   cost: { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' } } });
 const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, agents: ['a', 'b'] });
 
+// Check the supplied authenticated transport ports before adapting this fixture
+// to the cross-family executor; unrelated family ports are unreachable here.
 describe('personal usage Action execution', () => {
   it('resolves Usage filter choices from admitted accounting instead of execution target identities', async () => {
     const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, breakdowns: {
@@ -21,23 +23,24 @@ describe('personal usage Action execution', () => {
       source: [{ key: 'native', label: 'Native', ...accounting.totals }],
     } });
     // The authenticated accounting transport is the boundary; option/key/admission logic is real.
-    const deps = { machinesList: async () => ({ items: [{ id: 'machine-1', label: 'Laptop' }, { id: 'unaccounted', label: 'Another machine' }] }),
+    const deps: Partial<ActionExecutorDeps> = { machinesList: async () => ({ items: [{ id: 'machine-1', label: 'Laptop' }, { id: 'unaccounted', label: 'Another machine' }] }),
       usageActions: { query: async (request: { queries: ReturnType<typeof normalizeUsageQuery>[] }) =>
-      resolveUsagePageAggregation({ queries: request.queries, accounting: request.queries.map(query => ({ query, value, status: 'available' as const })) }) } } as ActionExecutorDeps;
+      resolveUsagePageAggregation({ queries: request.queries, accounting: request.queries.map(query => ({ query, value, status: 'available' as const })) }) } };
     for (const [field, expected] of [['agents', { value: 'claude', label: 'Claude' }],
       ['machines', { value: 'machine-1', label: 'Laptop' }], ['projects', { value: 'project-1', label: 'App' }],
       ['sources', { value: 'native', label: 'Native' }]] as const) {
-      expect(await resolveInputOptions({ deps, ctx: { surface: 'ui', serverId: 'home-1' }, actionId: null,
+      expect(await resolveInputOptions({ deps: deps as ActionExecutorDeps, ctx: { surface: 'ui', serverId: 'home-1' }, actionId: null,
         optionsSourceId: `usage.filters.${field}`, input: {}, readFailure: () => null,
         resolveSessionId: () => null, reviewScope: () => undefined })).toEqual({ ok: true, result: [expected] });
     }
   });
   it('publishes Coach evidence states through the same admitted query Action', async () => {
     const coachQuery = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
-    const executor = createActionExecutor({ usageActions: {
+    const deps: Partial<ActionExecutorDeps> = { usageActions: {
       query: async input => resolveUsagePageAggregation({ queries: input.queries,
         accounting: [{ query: coachQuery, value: accounting, status: 'available', asOfMs: 200 }] }),
-    } } as ActionExecutorDeps);
+    } };
+    const executor = createActionExecutor(deps as ActionExecutorDeps);
     expect(await executor.execute('usage.query', { queries: [coachQuery] }, { surface: 'cli' }))
       .toMatchObject({ ok: true, result: { results: [{ coach: {
         period: { startMs: 100, endMs: 200 },
@@ -61,10 +64,11 @@ describe('personal usage Action execution', () => {
           nameWithOwner: 'owner/repo', urlSafety: { allowedSchemes: ['https:'] } },
         number: 1, title: 'Work', url: 'https://github.com/owner/repo/pull/1', baseBranch: 'main', headBranch: 'feature', state: 'open',
       } };
-    const executor = createActionExecutor({ usageActions: {
+    const deps: Partial<ActionExecutorDeps> = { usageActions: {
       query: async input => resolveUsagePageAggregation({ queries: input.queries,
         accounting: [{ query: workQuery, value, status: 'available' }], work: [{ query: workQuery, status: 'partial', evidence: [witness] }] }),
-    } } as ActionExecutorDeps);
+    } };
+    const executor = createActionExecutor(deps as ActionExecutorDeps);
     expect(await executor.execute('usage.query', { queries: [workQuery, other] }, { surface: 'cli' }))
       .toMatchObject({ ok: true, result: { v: 1, results: expect.arrayContaining([
         expect.objectContaining({ requestedQuery: workQuery, work: expect.objectContaining({ allocations: [expect.objectContaining({ contribution,
@@ -73,20 +77,22 @@ describe('personal usage Action execution', () => {
       ]) } });
   });
   it('treats reversed batches as the same canonical set of independently resolved slices', async () => {
-    const executor = createActionExecutor({ usageActions: {
+    const deps: Partial<ActionExecutorDeps> = { usageActions: {
       query: async request => resolveUsagePageAggregation({ queries: request.queries }),
-    } } as ActionExecutorDeps);
+    } };
+    const executor = createActionExecutor(deps as ActionExecutorDeps);
     const pinned = { ...query, period: { startMs: 0, endMs: 100 } };
     const first = await executor.execute('usage.query', { queries: [query, pinned] }, { surface: 'cli' });
     const second = await executor.execute('usage.query', { queries: [pinned, query, query] }, { surface: 'cli' });
     expect(first).toEqual(second);
   });
   it('returns deduplicated complete identities and independent snapshot slices without awaiting pending sources', async () => {
-    const executor = createActionExecutor({ usageActions: {
+    const deps: Partial<ActionExecutorDeps> = { usageActions: {
       // Authenticated read transport is the boundary; query/key/aggregation logic stays real.
       query: async request => resolveUsagePageAggregation({ queries: request.queries,
         accounting: [{ query, status: 'available', value: accounting }], quota: { status: 'pending' } }),
-    } } as ActionExecutorDeps);
+    } };
+    const executor = createActionExecutor(deps as ActionExecutorDeps);
     const pinned = { ...query, period: { startMs: 0, endMs: 100 } };
     const result = await executor.execute('usage.query', { queries: [query, { ...query, agents: ['b', 'a', 'a'] }, pinned] }, { surface: 'cli' });
     expect(result).toMatchObject({ ok: true, result: { results: expect.arrayContaining([
@@ -95,18 +101,20 @@ describe('personal usage Action execution', () => {
     ]) } });
   });
   it('refuses incomplete or foreign slice sets instead of presenting unrequested accounting', async () => {
-    const executor = createActionExecutor({ usageActions: {
+    const deps: Partial<ActionExecutorDeps> = { usageActions: {
       query: async () => resolveUsagePageAggregation({ queries: [normalizeUsageQuery({ agents: ['foreign'] })],
         accounting: [{ query: normalizeUsageQuery({ agents: ['foreign'] }), status: 'available', value: accounting }] }),
-    } } as ActionExecutorDeps);
+    } };
+    const executor = createActionExecutor(deps as ActionExecutorDeps);
     expect(await executor.execute('usage.query', { queries: [query] }, { surface: 'mcp' }))
       .toMatchObject({ ok: false, errorCode: 'usage_query_result_invalid' });
   });
   it('exports selected facts through the same authorized read and the single canonical byte serializer', async () => {
-    const executor = createActionExecutor({ usageActions: {
+    const deps: Partial<ActionExecutorDeps> = { usageActions: {
       query: async request => resolveUsagePageAggregation({ queries: request.queries,
         accounting: [{ query, status: 'available', value: accounting, asOfMs: 150 }] }),
-    } } as ActionExecutorDeps);
+    } };
+    const executor = createActionExecutor(deps as ActionExecutorDeps);
     const request = { query, format: 'json' as const, fields: ['totals' as const] };
     const result = await executor.execute('usage.export', request, { surface: 'cli' });
     expect(result).toMatchObject({ ok: true, result: { mediaType: 'application/json', fields: ['totals'], asOfMs: 150 } });
@@ -117,23 +125,26 @@ describe('personal usage Action execution', () => {
   });
   it('keeps typed read denial and late cancellation from disclosing file or accounting bytes', async () => {
     const controller = new AbortController();
-    const denied = createActionExecutor({ usageActions: {
+    const deniedDeps: Partial<ActionExecutorDeps> = { usageActions: {
       query: async () => ({ ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' }),
-    } } as ActionExecutorDeps);
+    } };
+    const denied = createActionExecutor(deniedDeps as ActionExecutorDeps);
     expect(await denied.execute('usage.export', { query, format: 'json', fields: ['totals'] }, { surface: 'cli' }))
       .toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
-    const retired = createActionExecutor({ usageActions: {
+    const retiredDeps: Partial<ActionExecutorDeps> = { usageActions: {
       query: async request => { controller.abort(); return resolveUsagePageAggregation({ queries: request.queries,
         accounting: [{ query, status: 'available', value: accounting }] }); },
-    } } as ActionExecutorDeps);
+    } };
+    const retired = createActionExecutor(retiredDeps as ActionExecutorDeps);
     expect(await retired.execute('usage.query', { queries: [query] }, { surface: 'cli', signal: controller.signal }))
       .toMatchObject({ ok: false, errorCode: 'cancelled' });
   });
   it('reports unknown accounting freshness without substituting the export clock', async () => {
-    const executor = createActionExecutor({ usageActions: {
+    const deps: Partial<ActionExecutorDeps> = { usageActions: {
       query: async request => resolveUsagePageAggregation({ queries: request.queries,
         accounting: [{ query, status: 'available', value: accounting }] }),
-    } } as ActionExecutorDeps);
+    } };
+    const executor = createActionExecutor(deps as ActionExecutorDeps);
     expect(await executor.execute('usage.export', { query, format: 'json', fields: ['totals'] }, { surface: 'cli' }))
       .toMatchObject({ ok: true, result: { asOfMs: null, fileName: 'usage.json' } });
   });
