@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile, chmod, copyFile, cp, readdir, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,8 +20,6 @@ import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '@/plugins/projection/regist
 import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { createCliCapabilitiesService } from './capabilities';
-import { fileURLToPath } from 'node:url';
-import { bundlePluginDaemonRuntime } from '@/plugins/authoring/bundleDaemonRuntime';
 
 const loadMarketplaceIndexSourceMock = vi.hoisted(() => vi.fn());
 
@@ -122,24 +120,6 @@ vi.mock('@/terminal/prompts/promptConfirmYesNo', () => ({
     promptConfirmYesNo: (...args: unknown[]) => promptConfirmYesNoMock(...args),
 }));
 
-async function writeManagedRuntimeFixture(homeDir: string): Promise<void> {
-    const binDir = join(homeDir, 'tools', 'js-runtime', 'current', 'bin');
-    const runtimeDir = join(homeDir, 'tools', 'js-runtime', 'current', 'runtime');
-    const wrapperPath = join(binDir, process.platform === 'win32' ? 'happier-js-runtime.cmd' : 'happier-js-runtime');
-    const runtimePath = process.platform === 'win32'
-        ? join(runtimeDir, 'node.exe')
-        : join(runtimeDir, 'bin', 'node');
-    await mkdir(binDir, { recursive: true });
-    await mkdir(join(runtimePath, '..'), { recursive: true });
-    if (process.platform === 'win32') {
-        await copyFile(process.execPath, runtimePath);
-        await writeFile(wrapperPath, '@echo off\r\n"%~dp0..\\runtime\\node.exe" %*\r\n', 'utf8');
-    } else {
-        await symlink(process.execPath, runtimePath);
-        await writeFile(wrapperPath, '#!/bin/sh\nexec "${0%/*}/../runtime/bin/node" "$@"\n', 'utf8');
-        await chmod(wrapperPath, 0o755);
-    }
-}
 
 function createDevelopmentCatalogEntry(pluginRoot: string): PluginCatalogEntry {
     return {
@@ -174,26 +154,6 @@ function createDevelopmentCatalogEntry(pluginRoot: string): PluginCatalogEntry {
     };
 }
 
-async function linkPluginAuthorDependency(
-    projectRoot: string,
-    packageName: string,
-    source: string,
-): Promise<void> {
-    const destination = join(projectRoot, 'node_modules', ...packageName.split('/'));
-    await mkdir(join(destination, '..'), { recursive: true });
-    await symlink(source, destination, process.platform === 'win32' ? 'junction' : 'dir');
-}
-
-async function copyNativeTypeScriptAuthorDependency(projectRoot: string): Promise<void> {
-    const sourceScope = fileURLToPath(new URL('../../../../../node_modules/@typescript', import.meta.url));
-    const destinationScope = join(projectRoot, 'node_modules', '@typescript');
-    await mkdir(destinationScope, { recursive: true });
-    const installedPackages = (await readdir(sourceScope))
-        .filter((name) => name === 'native' || name.startsWith('typescript-'));
-    for (const name of installedPackages) {
-        await cp(join(sourceScope, name), join(destinationScope, name), { recursive: true });
-    }
-}
 
 // Boundary fixtures only: remote marketplace retrieval and daemon/process/user interaction.
 // The in-process exact-install and user-change owners remain real in this suite.
@@ -1355,182 +1315,14 @@ describe('createCliCapabilitiesService tool.plugins', () => {
         }
     });
 
-    it('registers a local development source through the daemon development-root owner', async () => {
-        const home = await createTempDir('happier-cli-capabilities-develop-');
-        const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
-        envScope.patch({ HAPPIER_HOME_DIR: home });
-        reloadConfiguration();
-        const sourceRootPath = join(home, 'workspace', 'acme-plugin');
-        controlDaemonPluginDevelopmentMock.mockResolvedValue({
-            kind: 'status',
-            status: { roots: [], plugins: [] },
-        });
-
-        try {
-            const service = await createCliCapabilitiesService();
-            const described = service.describe() as CapabilitiesDescribeResponse;
-            expect(described.capabilities.find((capability) => capability.id === 'tool.plugins')?.methods)
-                .toEqual(expect.objectContaining({ develop: expect.any(Object) }));
-
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'develop',
-                params: { sourceRootPath },
-            })).resolves.toMatchObject({
-                ok: true,
-                result: {
-                    action: 'develop',
-                    sourceRootPath,
-                    status: { roots: [], plugins: [] },
-                },
-            });
-            expect(controlDaemonPluginDevelopmentMock).toHaveBeenCalledWith({
-                kind: 'registerExplicit',
-                rootPath: sourceRootPath,
-            });
-            expect(requestDaemonPluginChangeMock).not.toHaveBeenCalled();
-            expect(runPluginAuthorToolchainMock).not.toHaveBeenCalled();
-            expect(promptConfirmYesNoMock).not.toHaveBeenCalled();
-            expect(decideDaemonPluginChangeMock).not.toHaveBeenCalled();
-
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'develop',
-                params: {},
-            })).resolves.toMatchObject({
-                ok: false,
-                error: { code: 'plugin_source_missing' },
-            });
-        } finally {
-            envScope.restore();
-            reloadConfiguration();
-            await removeTempDir(home);
-        }
-    });
-
-    it('unregisters a local development source through the same daemon owner', async () => {
-        const sourceRootPath = '/workspace/acme-plugin';
-        controlDaemonPluginDevelopmentMock.mockResolvedValue({
-            kind: 'status',
-            status: { roots: [], plugins: [] },
-        });
+    it.each(['develop', 'unregisterDevelopment', 'test', 'pack'])('rejects retired development capability %s', async (method) => {
         const service = await createCliCapabilitiesService();
-
+        const described = service.describe() as CapabilitiesDescribeResponse;
+        expect(described.capabilities.find((capability) => capability.id === 'tool.plugins')?.methods)
+            .not.toHaveProperty(method);
         await expect(service.invoke({
-            id: 'tool.plugins',
-            method: 'unregisterDevelopment',
-            params: { sourceRootPath },
-        })).resolves.toMatchObject({
-            ok: true,
-            result: { action: 'unregisterDevelopment', sourceRootPath },
-        });
-        expect(controlDaemonPluginDevelopmentMock).toHaveBeenCalledWith({
-            kind: 'unregisterExplicit',
-            rootPath: sourceRootPath,
-        });
-        expect(requestDaemonPluginChangeMock).not.toHaveBeenCalled();
-    });
-
-    it('registers a scaffolded development source through the daemon development-root owner', async () => {
-        const home = await createTempDir('happier-cli-capabilities-develop-authorized-');
-        const parent = await mkdtemp(join(tmpdir(), 'happier-plugin-capabilities-develop-authorized-'));
-        const pluginRoot = join(parent, 'plugin');
-        const pluginId = 'acme.capabilities-develop';
-        const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
-        envScope.patch({ HAPPIER_HOME_DIR: home, PATH: '' });
-        reloadConfiguration();
-
-        try {
-            const scaffold = await scaffoldLocalPlugin({
-                targetDir: pluginRoot,
-                pluginId,
-                displayName: 'Capabilities develop',
-            });
-            expect(scaffold.ok).toBe(true);
-            if (!scaffold.ok) return;
-
-            controlDaemonPluginDevelopmentMock.mockResolvedValueOnce({
-                kind: 'status',
-                status: { roots: [], plugins: [] },
-            });
-
-            const service = await createCliCapabilitiesService();
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'develop',
-                params: { sourceRootPath: pluginRoot, pluginId },
-            })).resolves.toMatchObject({
-                ok: true,
-                result: {
-                    action: 'develop',
-                    sourceRootPath: pluginRoot,
-                    status: { roots: [], plugins: [] },
-                },
-            });
-
-            expect(controlDaemonPluginDevelopmentMock).toHaveBeenCalledWith({
-                kind: 'registerExplicit',
-                rootPath: pluginRoot,
-            });
-            expect(requestDaemonPluginChangeMock).not.toHaveBeenCalled();
-            expect(runPluginAuthorToolchainMock).not.toHaveBeenCalled();
-        } finally {
-            envScope.restore();
-            reloadConfiguration();
-            await rm(parent, { recursive: true, force: true });
-            await removeTempDir(home);
-        }
-    });
-
-    it('returns a daemon development-root registration failure without attempting client-side preparation', async () => {
-        const home = await createTempDir('happier-cli-capabilities-develop-revoked-');
-        const parent = await mkdtemp(join(tmpdir(), 'happier-plugin-capabilities-develop-revoked-'));
-        const pluginRoot = join(parent, 'plugin');
-        const pluginId = 'acme.capabilities-revoked';
-        const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
-        envScope.patch({ HAPPIER_HOME_DIR: home, PATH: '' });
-        reloadConfiguration();
-
-        try {
-            const scaffold = await scaffoldLocalPlugin({
-                targetDir: pluginRoot,
-                pluginId,
-                displayName: 'Capabilities revoked',
-            });
-            expect(scaffold.ok).toBe(true);
-            if (!scaffold.ok) return;
-
-            controlDaemonPluginDevelopmentMock.mockResolvedValueOnce({
-                kind: 'failed',
-                code: 'plugin_development_root_invalid',
-                message: 'Development root is unavailable',
-                status: { roots: [], plugins: [] },
-            });
-
-            const service = await createCliCapabilitiesService();
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'develop',
-                params: { sourceRootPath: pluginRoot, pluginId },
-            })).resolves.toMatchObject({
-                ok: false,
-                error: { code: 'plugin_development_root_invalid' },
-            });
-
-            expect(runPluginAuthorToolchainMock).not.toHaveBeenCalled();
-            expect(controlDaemonPluginDevelopmentMock).toHaveBeenCalledWith({
-                kind: 'registerExplicit',
-                rootPath: pluginRoot,
-            });
-            expect(requestDaemonPluginChangeMock).not.toHaveBeenCalled();
-            expect(promptConfirmYesNoMock).not.toHaveBeenCalled();
-            expect(decideDaemonPluginChangeMock).not.toHaveBeenCalled();
-        } finally {
-            envScope.restore();
-            reloadConfiguration();
-            await rm(parent, { recursive: true, force: true });
-            await removeTempDir(home);
-        }
+            id: 'tool.plugins', method, params: { sourceRootPath: '/workspace/plugin' },
+        })).resolves.toMatchObject({ ok: false, error: { code: 'unsupported-method' } });
     });
 });
 
@@ -1556,7 +1348,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
         runPluginAuthorToolchainMock.mockClear();
     });
 
-    it('projects only approved development sources and runs test and pack against the daemon-re-read source root', async () => {
+    it('projects development status and scaffolds through the remaining creation capability', async () => {
         const home = await createTempDir('happier-cli-capabilities-plugin-development-');
         const parent = await mkdtemp(join(tmpdir(), 'happier-plugin-development-source-'));
         const pluginRoot = join(parent, 'plugin');
@@ -1571,43 +1363,6 @@ describe('createCliCapabilitiesService tool.plugins', () => {
             });
             expect(scaffold.ok).toBe(true);
             if (!scaffold.ok) return;
-            await copyNativeTypeScriptAuthorDependency(pluginRoot);
-            await linkPluginAuthorDependency(
-                pluginRoot,
-                '@happier-dev/plugin-sdk',
-                fileURLToPath(new URL('../../../../../packages/plugin-sdk', import.meta.url)),
-            );
-            await linkPluginAuthorDependency(
-                pluginRoot,
-                '@types/node',
-                fileURLToPath(new URL('../../../../../node_modules/@types/node', import.meta.url)),
-            );
-            await bundlePluginDaemonRuntime(pluginRoot);
-            await writeManagedRuntimeFixture(home);
-            await createPluginStateStore({ happyHomeDir: home }).write({
-                t: 'happier_plugin_state_v1',
-                schemaVersion: 1,
-                plugins: {
-                    'acme.development-actions': {
-                        source: {
-                            kind: 'path',
-                            locator: pluginRoot,
-                            resolvedPath: pluginRoot,
-                            manifestPath: join(pluginRoot, '.happier-plugin', 'plugin.json'),
-                            trustPolicy: 'prompt',
-                            installPolicy: 'link',
-                            devWatch: true,
-                        },
-                        compatibility: { status: 'compatible', diagnostics: [] },
-                        install: { mode: 'link', manifestVersion: '0.1.0' },
-                        state: { enabled: true },
-                    },
-                },
-            });
-
-            // Detection consumes the daemon catalog projection. The
-            // predecessor-store fixture above exists only for the independent
-            // test/pack re-read and has no generated manifest in the author root.
             const service = await createCliCapabilitiesService({
                 readPluginCatalog: async () => Object.freeze([
                     createDevelopmentCatalogEntry(pluginRoot),
@@ -1630,8 +1385,6 @@ describe('createCliCapabilitiesService tool.plugins', () => {
             expect(described.capabilities.find((capability) => capability.id === 'tool.plugins')).toMatchObject({
                 methods: expect.objectContaining({
                     create: expect.any(Object),
-                    test: expect.any(Object),
-                    pack: expect.any(Object),
                 }),
             });
             await expect(service.detect({
@@ -1681,30 +1434,6 @@ describe('createCliCapabilitiesService tool.plugins', () => {
             await expect(readFile(join(createdRoot, 'src', 'index.ts'), 'utf8'))
                 .resolves.toContain("id: \"acme.created-from-settings\"");
 
-            const testResult = await service.invoke({
-                id: 'tool.plugins',
-                method: 'test',
-                params: { pluginId: 'acme.development-actions', sourceRootPath: '/client/must-not-own-source' },
-            });
-            expect(
-                testResult,
-                testResult.ok ? undefined : testResult.error.message,
-            ).toMatchObject({
-                ok: true,
-                result: { action: 'test', pluginId: 'acme.development-actions' },
-            });
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'pack',
-                params: { pluginId: 'acme.development-actions', sourceRootPath: '/client/must-not-own-source' },
-            })).resolves.toMatchObject({
-                ok: true,
-                result: {
-                    action: 'pack',
-                    pluginId: 'acme.development-actions',
-                    archivePath: expect.stringMatching(/\.tgz$/u),
-                },
-            });
 
         } finally {
             envScope.restore();

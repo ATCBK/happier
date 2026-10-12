@@ -47,6 +47,7 @@ function createRuntimeRegistry(
     contributes: ResolvedExecutablePluginRuntimeRegistry['contributes'],
 ): ResolvedExecutablePluginRuntimeRegistry {
     return {
+        claimReleaseLessDeclarations: async () => undefined,
         contributes,
         resolveCaptureSource: unexpectedCaptureSourceResolution,
         resolveProjectNativeAdapter: unexpectedProjectNativeAdapterResolution,

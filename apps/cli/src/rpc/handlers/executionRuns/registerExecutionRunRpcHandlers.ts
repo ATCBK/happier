@@ -143,7 +143,7 @@ export type ExecutionRunRpcHandlerContext = Readonly<{
   onExecutionRunVoiceAgentWelcomed?: (run: ExecutionRunPublicState, welcomedEpoch: number) => void | Promise<void>;
   resolveAccountSettings?: () => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
   /** Settings snapshot bound to the runtime owner's Account/Home, never ambient active state. */
-  resolveAccountSettingsSnapshot?: () => Promise<ActiveAccountSettingsSnapshot | null>;
+  resolveAccountSettingsSnapshot?: ConstructorParameters<typeof ExecutionRunHostBridge>[0]['resolveAccountSettingsSnapshot'];
   resolveManagedPurposeBindingIntent?: ConstructorParameters<typeof ExecutionRunHostBridge>[0]['resolveManagedPurposeBindingIntent'];
   readModelProjection?: ConstructorParameters<typeof ExecutionRunHostBridge>[0]['readModelProjection'];
   prepareManagedEndpoint?: ConstructorParameters<typeof ExecutionRunHostBridge>[0]['prepareManagedEndpoint'];
@@ -459,12 +459,19 @@ export function registerExecutionRunRpcHandlers(
 
   rpc.registerHandler(
     SESSION_RPC_METHODS.EXECUTION_RUN_USER_TRANSCRIPT_COMMIT_V1,
-    async (request: unknown) => {
+    async (request: unknown, rpcContext) => {
       if (!isExecutionRunsEnabled()) {
         return { ok: false, error: 'Execution runs disabled', errorCode: 'execution_run_not_allowed' };
       }
       const parsed = ExecutionRunUserTranscriptCommitRequestSchema.safeParse(request);
       if (!parsed.success) return invalidParams();
+      await manager.recoverRetainedRuns();
+      const run = manager.get(parsed.data.runId);
+      if (!run || run.sessionId !== ctx.sessionId) {
+        return { ok: false, error: 'Execution run not found', errorCode: 'execution_run_not_found' };
+      }
+      const refusal = admitExecutionRunCallerTurn(run, rpcContext?.callerAuthority);
+      if (refusal) return refusal;
       if (!manager.commitUserTranscript) {
         return { ok: false, error: 'Transcript commit unavailable', errorCode: 'execution_run_not_allowed' };
       }

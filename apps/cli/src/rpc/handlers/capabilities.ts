@@ -1,5 +1,8 @@
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
+import { readStoredCredentials } from '@/persistence';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { AgentCatalogEntry } from '@/agent/catalog/types';
+import type { InstalledPluginCapabilityEntryV1 } from '@happier-dev/protocol/capabilities';
 import { ConnectedServicesProviderStateSharingSettingsV1Schema } from '@happier-dev/protocol';
 import { createCapabilityChecklists } from '@/capabilities/checklists';
 import { buildDetectContext } from '@/capabilities/context/buildDetectContext';
@@ -8,6 +11,7 @@ import { tmuxCapability } from '@/capabilities/registry/toolTmux';
 import { windowsTerminalCapability } from '@/capabilities/registry/toolWindowsTerminal';
 import { executionRunsCapability } from '@/capabilities/registry/toolExecutionRuns';
 import { systemTasksCapability } from '@/capabilities/registry/toolSystemTasks';
+import { createAcpAgentInventoryCapability } from '@/capabilities/registry/machineAgentsInventory';
 import { ghDepCapability } from '@/capabilities/registry/depGh';
 import { azDepCapability } from '@/capabilities/registry/depAz';
 import {
@@ -90,20 +94,13 @@ import { readCurrentDaemonPluginCatalog } from '@/plugins/daemon/currentCatalog'
 import { setInstalledPluginEnabled } from '@/plugins/store/enabled';
 import { ManagedResourceDispositionV1Schema, type ManagedResourceDispositionV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { runPluginAuthorToolchain } from '@/plugins/authoring/toolchain';
-import { packLocalPlugin } from '@/plugins/packaging/pack';
 import { scaffoldLocalPlugin } from '@/plugins/scaffold/scaffold';
 import { resolveInvokerName } from '@/cli/runtime/resolveInvokerName';
 
 const DEFAULT_PROBE_MODELS_TIMEOUT_MS = 30_000;
 
 /** Installed inventory served to the Plugins UI; omit daemon-only catalog detail. */
-type InstalledPluginCapabilityEntry = Omit<
-    PluginCatalogEntry,
-    'manifest' | 'manifestPath' | 'contributionIntrospection'
->;
-
-function projectInstalledPluginCapabilityEntry(entry: PluginCatalogEntry): InstalledPluginCapabilityEntry {
+function projectInstalledPluginCapabilityEntry(entry: PluginCatalogEntry): InstalledPluginCapabilityEntryV1 {
     return {
         pluginId: entry.pluginId,
         desiredGeneration: entry.desiredGeneration,
@@ -213,6 +210,7 @@ async function resolveConnectedServiceProbeEnvironment(params: Readonly<{
         sessionDirectory: params.cwd,
         connectedServicesBindingsRaw: params.connectedServices,
         materializationKey: materializationIdentity.id,
+        probePurpose: 'probe',
         activeServerDir: configuration.activeServerDir,
         baseDir: materializationBaseDir,
         credentials: params.credentials,
@@ -414,7 +412,7 @@ async function invokeCliPreflightMethod(
     const { cwd, timeoutMs } = resolveCliProbeInvokeParams(params);
     const parsedConnectedServices = ConnectedServiceBindingsV2IngressSchema.safeParse(params?.connectedServices);
     const connectedServices = parsedConnectedServices.success ? parsedConnectedServices.data : null;
-    if (method === 'probeCatalogs' && params?.connectedServices != null && !parsedConnectedServices.success) {
+    if (params?.connectedServices != null && !parsedConnectedServices.success) {
         return { ok: false, error: { code: 'connected-service-preflight-failed', message: 'Could not prepare the selected connected-service account for this probe.' } };
     }
     const connectedServiceSelections = parseConnectedServiceBindingSelections(connectedServices);
@@ -435,7 +433,7 @@ async function invokeCliPreflightMethod(
                 + readDeclaredCatalogConnectedAccountServiceIds(dependencies.agentCatalogEntry).length) > 0
             ? agentId
             : null;
-    if (method === 'probeCatalogs' && hasConnectedServiceSelection && !materializationAgentId) {
+    if (hasConnectedServiceSelection && !materializationAgentId) {
         return { ok: false, error: { code: 'connected-service-preflight-failed', message: 'Could not prepare the selected connected-service account for this probe.' } };
     }
     const preflightAdapter = method === 'probePassiveRealtimeSetup'
@@ -747,11 +745,7 @@ type PluginMarketplaceCapabilityMethod =
     | 'uninstall'
     | 'forgetTrust'
     | 'create'
-    | 'develop'
-    | 'unregisterDevelopment'
     | 'edit'
-    | 'test'
-    | 'pack'
     | 'changeStatus';
 
 function resolveMarketplaceActionMethod(method: string): PluginMarketplaceCapabilityMethod | null {
@@ -765,11 +759,7 @@ function resolveMarketplaceActionMethod(method: string): PluginMarketplaceCapabi
         || method === 'uninstall'
         || method === 'forgetTrust'
         || method === 'create'
-        || method === 'develop'
-        || method === 'unregisterDevelopment'
         || method === 'edit'
-        || method === 'test'
-        || method === 'pack'
         || method === 'changeStatus'
     ) {
         return method;
@@ -797,58 +787,8 @@ async function invokePluginChangeStatusAction(
     const status = await readUserPluginChangeStatus({ pendingChangeId });
     return { ok: true, result: { action: 'changeStatus', pendingChangeId, status } };
 }
-
-/** Registers an explicit trusted development root through the daemon owner. */
-async function invokePluginDevelopAction(
-    params: Record<string, unknown> | undefined,
-): Promise<CapabilitiesInvokeResponse> {
-    const sourceRootPath = typeof params?.sourceRootPath === 'string' ? params.sourceRootPath.trim() : '';
-    if (!sourceRootPath) {
-        return { ok: false, error: { message: 'sourceRootPath is required', code: 'plugin_source_missing' } };
-    }
-    const sdkRegistryOrigin = typeof params?.sdkRegistryOrigin === 'string'
-        ? params.sdkRegistryOrigin.trim()
-        : '';
-    const result = await controlDaemonPluginDevelopment({
-        kind: 'registerExplicit',
-        rootPath: sourceRootPath,
-        ...(sdkRegistryOrigin ? { sdkRegistryOrigin } : {}),
-    });
-    if (result.kind !== 'failed') {
-        return { ok: true, result: { action: 'develop', sourceRootPath, status: result.status } };
-    }
-    return {
-        ok: false,
-        error: {
-            message: result.message,
-            code: result.code,
-        },
-    };
-}
-
-/** Forgets one exact explicit development root through the daemon owner. */
-async function invokePluginDevelopmentUnregisterAction(
-    params: Record<string, unknown> | undefined,
-): Promise<CapabilitiesInvokeResponse> {
-    const sourceRootPath = typeof params?.sourceRootPath === 'string' ? params.sourceRootPath.trim() : '';
-    if (!sourceRootPath) {
-        return { ok: false, error: { message: 'sourceRootPath is required', code: 'plugin_source_missing' } };
-    }
-    const result = await controlDaemonPluginDevelopment({
-        kind: 'unregisterExplicit',
-        rootPath: sourceRootPath,
-    });
-    if (result.kind === 'failed') {
-        return { ok: false, error: { message: result.message, code: result.code } };
-    }
-    return {
-        ok: true,
-        result: { action: 'unregisterDevelopment', sourceRootPath, status: result.status },
-    };
-}
-
 async function invokePluginDevelopmentAction(
-    action: Extract<PluginMarketplaceCapabilityMethod, 'create' | 'edit' | 'test' | 'pack'>,
+    action: Extract<PluginMarketplaceCapabilityMethod, 'create' | 'edit'>,
     params: Record<string, unknown> | undefined,
 ): Promise<CapabilitiesInvokeResponse> {
     if (action === 'create') {
@@ -937,53 +877,13 @@ async function invokePluginDevelopmentAction(
     }
 
     const sourceRootPath = entry.source.locator;
-    if (action === 'edit') {
-        return {
-            ok: true,
-            result: {
-                action,
-                pluginId,
-                sourceRootPath,
-                sessionDirectory: entry.source.resolvedPath,
-            },
-        };
-    }
-    if (action === 'test') {
-        const result = await runPluginAuthorToolchain({
-            operation: 'test',
-            projectRoot: sourceRootPath,
-        });
-        if (!result.ok) {
-            return {
-                ok: false,
-                error: {
-                    message: result.diagnostics.map((diagnostic) => diagnostic.message).join('\n'),
-                    code: result.diagnostics[0]?.code ?? 'plugin-author-test-failed',
-                },
-            };
-        }
-        return { ok: true, result: { action, pluginId, sourceRootPath } };
-    }
-
-    const result = await packLocalPlugin({ locator: sourceRootPath });
-    if (!result.ok) {
-        return {
-            ok: false,
-            error: {
-                message: result.diagnostics.map((diagnostic) => diagnostic.message).join('\n'),
-                code: 'plugin-pack-failed',
-            },
-        };
-    }
     return {
         ok: true,
         result: {
             action,
             pluginId,
             sourceRootPath,
-            archivePath: result.archivePath,
-            archiveDigest: result.archiveDigest,
-            digestPath: result.digestPath,
+            sessionDirectory: entry.source.resolvedPath,
         },
     };
 }
@@ -997,19 +897,11 @@ async function invokePluginMarketplaceAction(
         return { ok: false, error: { message: `Unsupported method: ${method}`, code: 'unsupported-method' } };
     }
 
-    if (action === 'develop') {
-        return await invokePluginDevelopAction(params);
-    }
-
-    if (action === 'unregisterDevelopment') {
-        return await invokePluginDevelopmentUnregisterAction(params);
-    }
-
     if (action === 'changeStatus') {
         return await invokePluginChangeStatusAction(params);
     }
 
-    if (action === 'create' || action === 'edit' || action === 'test' || action === 'pack') {
+    if (action === 'create' || action === 'edit') {
         return await invokePluginDevelopmentAction(action, params);
     }
 
@@ -1284,11 +1176,7 @@ function createPluginMarketplaceCapability(
                 uninstall: { title: 'Uninstall' },
                 forgetTrust: { title: 'Forget trust' },
                 create: { title: 'Create' },
-                develop: { title: 'Develop' },
-                unregisterDevelopment: { title: 'Stop development' },
                 edit: { title: 'Edit' },
-                test: { title: 'Test' },
-                pack: { title: 'Pack' },
                 changeStatus: { title: 'Plugin change status' },
             },
         },
@@ -1305,7 +1193,7 @@ function createPluginMarketplaceCapability(
             // travel out of band.
             return {
                 installedPlugins: installedPlugins.map(projectInstalledPluginCapabilityEntry),
-                developmentActions: { create: true, develop: true, unregister: true },
+                developmentActions: { create: true },
                 developmentStatus: developmentResult.status,
                 pendingChanges: pendingChanges.changes,
             };
@@ -1359,6 +1247,7 @@ export async function createCliCapabilitiesService(dependencies: Readonly<{
         detect: async () => ({ supportsInputPermissionIntent: hasSessionAgentTransition() }),
     }] : [];
     const explicitCapabilities: Capability[] = [
+        createAcpAgentInventoryCapability(),
         ...daemonCapabilities,
         tmuxCapability,
         windowsTerminalCapability,
@@ -1435,8 +1324,17 @@ export function registerCapabilitiesHandlers(
         return (await getService()).describe();
     });
 
-    rpcHandlerManager.registerHandler<CapabilitiesDetectRequest, CapabilitiesDetectResponse>(RPC_METHODS.CAPABILITIES_DETECT, async (data) => {
-        return await (await getService()).detect(data);
+    rpcHandlerManager.registerHandler<CapabilitiesDetectRequest, CapabilitiesDetectResponse>(RPC_METHODS.CAPABILITIES_DETECT, async (data, ingress) => {
+        let accountId: string | undefined;
+        if (ingress?.machineAdmission) {
+            if (ingress.verifyMachineAdmissionCurrent && !ingress.signal.aborted && await ingress.verifyMachineAdmissionCurrent()) {
+                accountId = ingress.machineAdmission.actorAccountId;
+            }
+        } else {
+            const credentials = await readStoredCredentials();
+            accountId = credentials ? readAccountIdFromToken(credentials.token) ?? undefined : undefined;
+        }
+        return await (await getService()).detect(data, { accountId });
     });
 
     rpcHandlerManager.registerHandler<CapabilitiesInvokeRequest, CapabilitiesInvokeResponse>(RPC_METHODS.CAPABILITIES_INVOKE, async (data, context) => {

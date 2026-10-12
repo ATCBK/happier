@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, openWorkflowAcceptedSnapshotStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1, PluginInstallationManifestPublisherHeaderV1Schema, PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1, WorkflowActionFailureV1Schema, WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
@@ -12,8 +13,10 @@ import { Server } from 'socket.io';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { decodeBase64, encodeBase64, encrypt, decrypt } from '@/api/encryption';
 import type { RpcRequest } from '@/api/rpc/types';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
+import * as daemonControlClient from '@/daemon/controlClient';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { updateSettings } from '@/persistence';
@@ -100,7 +103,14 @@ const run = { sourceArtifactId: null, ownerAccountId: 'account-1', visibleTeamId
     updatedAt: '2026-01-01T00:00:00.000Z',
 };
 
-async function createBoundaryHarness(holdRetainedSource?: () => Promise<void>, savedDefinition: WorkflowDefinitionV1 = waitDefinition) {
+const transportKey = new Uint8Array(32).fill(7);
+const encryptedTransport = { mode: 'e2ee' as const, cipher: {
+    encryptRaw: async (value: unknown) => encodeBase64(encrypt(transportKey, 'legacy', value)),
+    decryptRaw: async (value: string) => decrypt(transportKey, 'legacy', decodeBase64(value)),
+} };
+
+async function createBoundaryHarness(holdRetainedSource?: () => Promise<void>, savedDefinition: WorkflowDefinitionV1 = waitDefinition,
+    encryptedMachineTransport = false) {
     resetInMemoryAccountSettingsContextForTests();
     const directory = await mkdtemp(join(tmpdir(), 'workflow-rpc-project-'));
     temporaryDirectories.push(directory);
@@ -124,7 +134,10 @@ async function createBoundaryHarness(holdRetainedSource?: () => Promise<void>, s
     }));
     const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
     const rpcHandlerManager = new RpcHandlerManager({
-        scopePrefix: project.machineId, encryptionMode: 'plain', logger: () => {},
+        scopePrefix: project.machineId,
+        ...(encryptedMachineTransport ? { encryptionMode: 'e2ee' as const, encryptionKey: transportKey, encryptionVariant: 'legacy' as const }
+            : { encryptionMode: 'plain' as const }),
+        logger: () => {},
     });
     let acceptedEnvelope: string | undefined;
     const storageOperations: Readonly<Record<string, unknown>>[] = [];
@@ -288,6 +301,91 @@ describe('UI Workflow targeted Action RPC boundary', () => {
         await runtimeRegistryLease?.release();
         runtimeRegistryLease = null;
         await pluginReloadController.shutdown();
+    });
+
+    it.each([
+        { name: 'Wait-only', definition: waitDefinition },
+        { name: 'Agent', definition: { version: 1, inputs: [], defaults: {
+            agentTarget: semanticInput.source.definition.defaults.agentTarget,
+        }, blocks: [{ kind: 'step', id: 'work', document: { text: 'Reply READY', references: [], attachments: [] },
+            input: [], result: { kind: 'text' } }] } satisfies WorkflowDefinitionV1 },
+    ])('admits a saved $name workflow through UI, server forwarding and encrypted daemon RPC', async ({ definition }) => {
+        const boundary = await createBoundaryHarness(undefined, definition, true);
+        const { createUiWorkflowActionTransport } = await import('../../../../ui/sources/sync/ops/actions/workflowActionTransport');
+        const sockets = new Server(createServer());
+        try {
+            // Substitute adapter discovery/delivery only. Forwarding, the
+            // correlated cipher, Action handler and admission owners stay real.
+            const target = { id: 'daemon-socket', data: { clientType: 'machine-scoped', machineId: boundary.project.machineId },
+                timeout: () => ({ emitWithAck: async (_event: string, request: unknown) =>
+                    boundary.rpcHandlerManager.handleRequest(request as RpcRequest) }) };
+            const fetchSockets = async () => [target];
+            vi.spyOn(sockets, 'in').mockReturnValue({ fetchSockets,
+                timeout: () => ({ fetchSockets }) } as unknown as ReturnType<Server['in']>);
+            const execute = createUiWorkflowActionTransport({
+                account: { serverId: 'server-1', accountId: 'account-1', assertCurrent: () => {} },
+                resolveFallbackMachineId: () => null,
+                transport: async request => callSocketRpc({
+                    socket: { connected: true, emit: () => {}, emitWithAck: async (_event, payload) => {
+                        const call = payload as SocketRpcRequestPayload;
+                        return forwardRpcCall({ io: sockets, targetUserId: 'account-1', method: call.method,
+                            callParams: call.params, callerAuthority: 'present_user' });
+                    } },
+                    target: { kind: 'machine', id: request.machineId }, method: request.method,
+                    params: request.payload, content: encryptedTransport, timeoutMs: request.operationTimeoutMs,
+                }),
+            });
+            const input = { runId, source: { kind: 'saved' as const, definitionId,
+                revision: { headerVersion: 1, bodyVersion: 1 } }, inputs: {} };
+            const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'server-1', runtimeAccountId: 'account-1',
+                externalActionTarget: { kind: 'machine' as const, machineId: boundary.project.machineId, project: boundary.project } };
+            expect(await execute({ actionId: 'workflow.run.start', input, context })).toEqual({ run, admission: 'created' });
+            const accepted = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+                envelope: parseWorkflowStoredContentEnvelopeV1(boundary.readCommittedEnvelope()!)!,
+                binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId } });
+            expect(accepted).toMatchObject({ kind: 'available', content: { authoredDefinition: definition,
+                materializedLeaves: [{ kind: definition.blocks[0]?.kind }] } });
+            // Rejoin the same committed effect rather than admitting another Run.
+            expect(await execute({ actionId: 'workflow.run.start', input, context })).toEqual({ run, admission: 'existing' });
+            expect(boundary.storageOperations.filter(operation => operation.operation === 'admit')).toHaveLength(1);
+        } finally {
+            await boundary.rpcHandlerManager.waitForIdle();
+            await sockets.close();
+        }
+    });
+
+    it('admits the saved Action-only For-each using the actual credentialed CLI materializer and native catalog', async () => {
+        const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [{
+            kind: 'loop', id: 'loop-1',
+            repetition: { kind: 'items', items: { kind: 'literal', value: ['first', 'second'] }, execution: 'sequential', failurePolicy: 'fail_stop' },
+            body: [{ kind: 'action', id: 'action-1', name: 'Read templates', actionId: 'workflow.starters.list', input: {} }],
+        }] };
+        const boundary = await createBoundaryHarness(undefined, definition);
+        const nativeCatalog = createActionExecutor({ isActionApprovalRequired: () => false });
+        // Only the authenticated local daemon HTTP hop is substituted. Its
+        // answering Action executor and the caller's materializer stay real.
+        vi.spyOn(daemonControlClient, 'requestDaemonSignedRootActionExecution').mockImplementation(async (request) => {
+            if (request.actionId !== 'action.spec.get') throw new Error('unexpected_daemon_action');
+            return await nativeCatalog.execute(request.actionId, request.input, { surface: 'cli', authority: 'account_automation' });
+        });
+        const response = await boundary.handlers.get('workflow.run.start')!({
+            v: 1, kind: 'targeted_action_rpc',
+            input: { runId, source: { kind: 'saved', definitionId, revision: { headerVersion: 1, bodyVersion: 1 } }, inputs: {} },
+            target: { kind: 'machine', machineId: boundary.project.machineId, project: boundary.project },
+        });
+        expect(response, JSON.stringify(boundary.boundaryObservations)).toEqual({ run, admission: 'created' });
+        const accepted = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+            envelope: parseWorkflowStoredContentEnvelopeV1(boundary.readCommittedEnvelope()!)!,
+            binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId },
+        });
+        expect(accepted.kind).toBe('available');
+        if (accepted.kind !== 'available') throw new Error('accepted_snapshot_unavailable');
+        expect(accepted.content).toMatchObject({ authoredDefinition: definition, materializedLeaves: [{
+            kind: 'action', blockId: 'action-1', actionInput: {}, actionContract: {
+                inputSchema: { $schema: 'http://json-schema.org/draft-07/schema#' },
+                outputSchema: { $schema: 'http://json-schema.org/draft-07/schema#' },
+            },
+        }] });
     });
 
     it('delivers a late saved-Workflow refusal through UI, server and daemon instead of abandoning a missing Run', async () => {

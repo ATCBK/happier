@@ -26,6 +26,11 @@ type ActivatePurposeBindingsInput = Parameters<
 >[0];
 
 const originalEnv = { ...process.env };
+// Load the real host graph outside the per-operation timeout, as the lazy-preflight testkit does.
+const malformedSelectionModules = [
+  await import('./capabilities'), await import('./encryptedRpc.testkit'),
+  await import('@/configuration'), await import('@/persistence'),
+] as const;
 let tempDir: string | null = null;
 let releaseRuntime: (() => Promise<void>) | null = null;
 
@@ -45,6 +50,50 @@ afterEach(async () => {
 });
 
 describe('capabilities.invoke connected-service preflight', () => {
+  it('refuses a selected account on an unsupported Agent for every discovery method without using native auth', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'happier-capability-unsupported-selection-'));
+    process.env = { ...originalEnv, HAPPIER_HOME_DIR: tempDir, OPENAI_API_KEY: 'ambient-must-not-be-used' };
+    const [capabilities, rpc, config, persistence] = malformedSelectionModules;
+    const readStoredCredentials = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(null);
+    config.reloadConfiguration();
+    const { call } = rpc.createEncryptedRpcTestClient({
+      scopePrefix: 'unsupported-selected-probe', encryptionKey: new Uint8Array(32).fill(7), logger: () => undefined,
+      registerHandlers: (manager) => capabilities.registerCapabilitiesHandlers(manager),
+    });
+    for (const method of ['probeConfigOptions', 'probeModes', 'probeModels', 'probeCatalogs']) {
+      const response = await call(RPC_METHODS.CAPABILITIES_INVOKE, {
+        id: 'cli.auggie', method,
+        params: { cwd: tempDir, connectedServices: { v: 2, bindingsByServiceId: {
+          'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'selected-work' },
+        } } },
+      });
+      expect(response, method).toMatchObject({ ok: false, error: { code: 'connected-service-preflight-failed' } });
+    }
+    expect(readStoredCredentials).not.toHaveBeenCalled();
+  });
+
+  it('refuses malformed selected-account bindings for every discovery method before provider effects', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'happier-capability-invalid-selection-'));
+    process.env = { ...originalEnv, HAPPIER_HOME_DIR: tempDir, OPENAI_API_KEY: 'ambient-must-not-be-used' };
+    const [capabilities, rpc, config, persistence] = malformedSelectionModules;
+    const readStoredCredentials = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(null);
+    config.reloadConfiguration();
+    const { call } = rpc.createEncryptedRpcTestClient({
+      scopePrefix: 'invalid-selected-probe', encryptionKey: new Uint8Array(32).fill(7), logger: () => undefined,
+      registerHandlers: (manager) => capabilities.registerCapabilitiesHandlers(manager),
+    });
+    for (const method of ['probeConfigOptions', 'probeModes', 'probeModels', 'probeCatalogs']) {
+      const response = await call(RPC_METHODS.CAPABILITIES_INVOKE, {
+        id: 'cli.codex', method,
+        params: { cwd: tempDir, timeoutMs: 1_000, connectedServices: { v: 2, bindingsByServiceId: {
+          'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile' },
+        } } },
+      });
+      expect(response, method).toMatchObject({ ok: false, error: { code: 'connected-service-preflight-failed' } });
+    }
+    expect(readStoredCredentials).not.toHaveBeenCalled();
+  });
+
   it.each([
     { source: 'team_resource', resourceId: 'team-resource-brokered', deliveryMode: 'brokered' },
     {

@@ -629,8 +629,8 @@ export function registerPrivateSpawnSessionRpcHandlers(params: Readonly<{
             return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
                 errorMessage: 'Prepared Session handoff runner was not launched' };
         }
-        // Inactive resume deliberately reports a bare success envelope. It is
-        // a different lifecycle operation, not an unresolvable fresh spawn.
+        // Resume preserves the daemon's existing-runner identity or pending
+        // launch nonce; its caller owns readiness observation.
         if (providerSafe || parsed.data.type === 'resume-session') {
             return response;
         }

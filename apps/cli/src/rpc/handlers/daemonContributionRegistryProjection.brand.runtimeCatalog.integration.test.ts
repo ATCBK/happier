@@ -86,6 +86,7 @@ describe('portable plugin brand projection handler', () => {
                 };
         });
         const runtimeRegistry: ResolvedExecutablePluginRuntimeRegistry = {
+            claimReleaseLessDeclarations: async () => undefined,
             contributes: registry,
             generation: 7,
             hookHandlersByHookId: new Map(),

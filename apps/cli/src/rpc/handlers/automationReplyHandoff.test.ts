@@ -202,6 +202,7 @@ function createRegistrar(): Readonly<{
 function createRuntimeRegistry(): ResolvedExecutablePluginRuntimeRegistry {
   const unavailableDependency = async () => { throw new Error('No native dependency installation is available in this fixture'); };
   return {
+    claimReleaseLessDeclarations: async () => undefined,
     projectManagedServices: createManagedServicesOwner({
       processSupervisorHost: { custodyOwner: 'daemon', bind: () => { throw new Error('No native service process is available in this fixture'); } },
       dependencies: { status: unavailableDependency, ensure: unavailableDependency, update: unavailableDependency, remove: unavailableDependency },

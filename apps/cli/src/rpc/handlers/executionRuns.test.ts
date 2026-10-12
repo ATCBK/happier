@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 
 import type { AgentMessage } from '@/agent/core/AgentMessage';
 import type {
@@ -13,6 +14,7 @@ import { createTestExecutionRunHostRuntime } from '@/agent/runtime/bridges/execu
 import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
 import {
   createScmCapabilities,
+  accountSettingsParse,
   FeaturesResponseSchema,
   SCM_OPERATION_ERROR_CODES,
   type ActionId,
@@ -34,6 +36,8 @@ import type { RpcActionExecutor } from './_actionDispatchAdapter';
 import { buildExecutionRunProfileCatalog } from '@/agent/executionRuns/profiles/intentRegistry';
 import { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 import { reloadConfiguration } from '@/configuration';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { clearActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { runGit } from '@/scm/rpc/__tests__/testRpcHarness';
 import { createScmBackendRegistry, type ScmBackendRegistry } from '@/scm/registry';
 import type { ScmBackend, ScmRepoDetection } from '@/scm/types';
@@ -99,6 +103,18 @@ vi.mock('@/persistence', () => ({
   readDaemonState: vi.fn(async () => null),
 }));
 
+// The daemon is outside this Session RPC owner; keep its admission parser real.
+vi.mock('@/daemon/controlHttp', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/daemon/controlHttp')>();
+  const { EXECUTION_RUN_ADMISSION_PATH } = await import('@/daemon/lifecycle/admissionDrain');
+  return {
+    ...actual,
+    daemonPost: async (...args: Parameters<typeof actual.daemonPost>) => args[0] === EXECUTION_RUN_ADMISSION_PATH
+      ? { admitted: true }
+      : actual.daemonPost(...args),
+  };
+});
+
 vi.mock('@/session/transport/http/sessionsHttp', () => ({
   fetchSessionById: vi.fn(),
 }));
@@ -134,6 +150,36 @@ const voiceEnabledServerSnapshot = {
     capabilities: {},
   }),
 } as const satisfies CliServerFeaturesSnapshot;
+
+// Current Voice launch reads the exact Session and Account prompt sources before
+// provider start. Seed those real owners and replace only the HTTP boundary.
+async function prepareTranscriptCommitLaunch() {
+  const credentials = { token: 'transcript-commit-account', encryption: null };
+  setActiveAccountSettingsSnapshot({
+    source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+    settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+    scopeKey: resolveAccountSettingsScopeKey(credentials),
+    promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] },
+  });
+  const { fetchSessionById } = await import('@/session/transport/http/sessionsHttp');
+  vi.mocked(fetchSessionById).mockResolvedValue({
+    id: 'sess_1', seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
+    archivedAt: null, encryptionMode: 'plain', metadataVersion: 0, agentState: null,
+    agentStateVersion: 0, pendingCount: 0, pendingVersion: 0, share: null,
+    metadata: JSON.stringify({ path: defaultExecutionRunTestCwd }), dataEncryptionKey: null,
+  });
+  const get = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+    if (new URL(String(url)).pathname !== '/v1/account/encryption/currentness') {
+      throw new Error(`Unexpected transcript launch HTTP read: ${url}`);
+    }
+    return { status: 200, data: { mode: 'plain', version: 0, signingKeyFingerprint: null,
+      contentKeyFingerprint: null, updatedAt: 0 } };
+  });
+  return { credentials, dispose: () => { get.mockRestore(); clearActiveAccountSettingsSnapshot(); } };
+}
+
+let transcriptLaunch: Awaited<ReturnType<typeof prepareTranscriptCommitLaunch>> | null = null;
+afterEach(() => { transcriptLaunch?.dispose(); transcriptLaunch = null; });
 
 type TestExecutionRunHandlerContext = Parameters<typeof registerExecutionRunHandlersBase>[1] & Readonly<{
   createBackend?: TestExecutionRunRuntimeFactory;
@@ -2562,6 +2608,8 @@ describe('executionRuns session RPC handlers', () => {
   });
 
   it('normalizes the prospective predecessor transcript commit vector once at the RPC seam', async () => {
+    transcriptLaunch = await prepareTranscriptCommitLaunch();
+    const { credentials } = transcriptLaunch;
     const committedUserTurns: Array<Readonly<{ text: string; localId: string }>> = [];
     const client = createEncryptedRpcTestClient({
       scopePrefix: 'sess_1',
@@ -2571,6 +2619,7 @@ describe('executionRuns session RPC handlers', () => {
           sessionId: 'sess_1',
           cwd: process.cwd(),
           parentProvider: 'claude',
+          readPromptCredentials: async () => credentials,
           createBackend: () => createStaticBackend('Unused reply'),
           sendAcp: async () => {},
           transcriptWriter: {
@@ -2593,6 +2642,8 @@ describe('executionRuns session RPC handlers', () => {
       ioMode: 'streaming',
       chatModelId: 'chat',
       commitModelId: 'commit',
+      modelId: 'chat',
+      connectedServices: null,
       idleTtlSeconds: 60,
       initialContext: 'ctx',
       verbosity: 'short',
@@ -2623,6 +2674,8 @@ describe('executionRuns session RPC handlers', () => {
   });
 
   it.each([undefined, 'account_automation'] as const)('rejects %s transcript commit authority before writing Voice user text', async (callerAuthority) => {
+    transcriptLaunch = await prepareTranscriptCommitLaunch();
+    const { credentials } = transcriptLaunch;
     const committedUserTurns: Array<Readonly<{ text: string; localId: string }>> = [];
     const client = createEncryptedRpcTestClient({
       scopePrefix: 'sess_1',
@@ -2630,6 +2683,7 @@ describe('executionRuns session RPC handlers', () => {
       registerHandlers: (rpc) => {
         registerExecutionRunHandlers(rpc, {
           sessionId: 'sess_1', cwd: process.cwd(), parentProvider: 'claude',
+          readPromptCredentials: async () => credentials,
           createBackend: () => createStaticBackend('Unused reply'),
           sendAcp: async () => {},
           transcriptWriter: {
@@ -2646,6 +2700,7 @@ describe('executionRuns session RPC handlers', () => {
       intent: 'voice_agent', backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
       permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
       chatModelId: 'chat', commitModelId: 'commit', idleTtlSeconds: 60, initialContext: 'ctx', verbosity: 'short',
+      modelId: 'chat', connectedServices: null,
       transcript: { persistenceMode: 'persistent', epoch: 4 },
     });
     expect(started.runId, JSON.stringify(started)).toEqual(expect.any(String));

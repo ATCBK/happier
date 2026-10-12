@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AgentSessionToolPolicyShapeV1 } from '@happier-dev/protocol/runtime/permissionIntentV1';
 import { SpawnSessionTerminalSchema } from '@happier-dev/protocol/spawnSession';
 import { AcpConfigOptionOverridesV1Schema } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { AgentExecutionTargetV1Schema } from '@happier-dev/protocol/agents/executionTargetV1';
@@ -11,7 +12,7 @@ import { SessionInitialAccessDraftV1Schema } from '@happier-dev/protocol/session
 import { SessionInitialTriggerAdmissionV1Schema } from '@happier-dev/protocol/sessions/creation/sessionInitialTriggerAdmissionV1';
 import { SessionOriginKindV1Schema, SessionWorkDepthV1Schema, refineSessionCreateOriginFieldsV1 } from '@happier-dev/protocol/sessions/creation/sessionCreateOriginV1';
 import { SessionAttachMetadataIdentityPolicySchema } from '@happier-dev/protocol/sessions/attach/metadataIdentityPolicy';
-import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { readCapabilitySelectionCarrierV1, SessionCapabilitySelectionAuthoringV1Schema } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { SessionInputRequestSchema, SessionMessageProvenanceSchema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionUserMessageSendRequestSchema } from '@happier-dev/protocol/sessions/userMessageRpc';
 import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
@@ -162,20 +163,26 @@ function canonicalizeSpawnDaemonSessionRequestIngress(value: unknown): unknown {
     }
   })();
   if (!runtimeSelection) return value;
+  if (request.capabilitySelection !== undefined && !SessionCapabilitySelectionAuthoringV1Schema.safeParse(request.capabilitySelection).success) return value;
+  const capabilitySelection = readCapabilitySelectionCarrierV1(request);
+  if ((request.capabilitySelection !== undefined || request.mcpSelection !== undefined) && !capabilitySelection) return value;
   const { runtimeDescriptorV1 } = runtimeSelection;
   const {
     agentRuntimeDescriptorV1: _legacyAgentRuntimeDescriptorV1,
     codexBackendMode: _legacyCodexBackendMode,
     experimentalCodexAcp: _legacyExperimentalCodexAcp,
+    mcpSelection: _legacyMcpSelection,
+    capabilitySelection: _capabilitySelection,
     ...rest
   } = request;
 
   return runtimeDescriptorV1
     ? {
       ...rest,
+      ...(capabilitySelection ? { capabilitySelection } : {}),
       runtimeDescriptorV1,
     }
-    : rest;
+    : { ...rest, ...(capabilitySelection ? { capabilitySelection } : {}) };
 }
 
 const SpawnDaemonSessionRequestCompatSchema = z.preprocess(canonicalizeSpawnDaemonSessionRequestIngress, z.object({
@@ -243,6 +250,7 @@ const SpawnDaemonSessionRequestCompatSchema = z.preprocess(canonicalizeSpawnDaem
     AgentSessionStartupInstructionsV1Schema.optional(),
   runtimeDescriptorV1: RuntimeDescriptorV1Schema.optional(),
   permissionMode: SpawnSessionPermissionModeSchema.optional(),
+  ...AgentSessionToolPolicyShapeV1,
   permissionModeUpdatedAt: z.number().int().optional(),
   agentModeId: z.string().trim().min(1).optional(),
   agentModeUpdatedAt: z.number().int().optional(),
@@ -264,7 +272,7 @@ const SpawnDaemonSessionRequestCompatSchema = z.preprocess(canonicalizeSpawnDaem
   connectedServices: ConnectedServicesBindingsIngressSchema,
   connectedServicesUpdatedAt: z.number().int().optional(),
   connectedServiceMaterializationIdentityV1: ConnectedServiceMaterializationIdentityV1Schema.optional(),
-  mcpSelection: SessionMcpSelectionV1Schema.optional(),
+  capabilitySelection: SessionCapabilitySelectionAuthoringV1Schema.optional(),
   transcriptStorage: z.enum(['persisted', 'direct']).optional(),
 }).strict());
 
@@ -442,6 +450,8 @@ const SPAWN_SESSION_OPTION_KEYS = [
   'executionAuthorization',
   'attachMetadataIdentityPolicy',
   'permissionMode',
+  'allowedTools',
+  'unlistedTools',
   'permissionModeUpdatedAt',
   'agentModeId',
   'agentModeUpdatedAt',
@@ -460,7 +470,7 @@ const SPAWN_SESSION_OPTION_KEYS = [
   'connectedServices',
   'connectedServicesUpdatedAt',
   'connectedServiceMaterializationIdentityV1',
-  'mcpSelection',
+  'capabilitySelection',
   'transcriptStorage',
 ] as const satisfies readonly (keyof SpawnSessionOptions)[];
 

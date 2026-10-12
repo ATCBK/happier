@@ -272,12 +272,5 @@ export function registerSessionHandlers(
                 : {}),
         }),
     });
-    if (opts?.transcriptActionExecutor) {
-        registerActionSpecRpcHandlers({
-            rpcHandlerManager: authorizedSessionRpcHandlerManager,
-            actionExecutor: opts.transcriptActionExecutor,
-            actionIds: ['session.role.set'],
-        });
-    }
     return { dispose: async () => { await sessionAttachmentStore?.dispose(); } };
 }

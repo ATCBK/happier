@@ -3,7 +3,7 @@ import { isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { ExecutionRunEnsureOrStartRequestSchema, ExecutionRunEnsureRequestSchema, ExecutionRunActionRequestSchema, ExecutionRunSendRequestSchema } from '@happier-dev/protocol/execution/runs/index';
 import { ExecutionRunCancelTurnRequestSchema } from '@happier-dev/protocol/execution/runs/cancelTurn';
-import { ExecutionRunGetRequestSchema, ExecutionRunListRequestSchema, readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ExecutionRunGetRequestSchema, ExecutionRunListRequestSchema, readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails, ExecutionRunTransportErrorCodeSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { ExecutionRunStartRequestSchema } from '@happier-dev/protocol/execution/runs/startRequest';
 import { ExecutionRunTurnStreamCancelRequestSchema, ExecutionRunTurnStreamStartRequestSchema } from '@happier-dev/protocol/execution/runs/streaming';
 import { ExecutionRunTurnStreamReadRequestSchema } from '@happier-dev/protocol/execution/runs/runPrimitives';
@@ -41,6 +41,8 @@ import {
 import { VoiceAgentError } from '@/agent/voice/agent/VoiceAgentManager';
 import { resolveReviewExecutionRunIntentInput } from '@/agent/reviews/resolveReviewExecutionRunIntentInput';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
+import { normalizeServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { bindRequesterSessionCredentialScope } from '@/persistence';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import {
   createActionSettingsProvider,
@@ -121,6 +123,7 @@ type ExecutionRunRpcActionContext = Readonly<{
   /** The handler's fixed authoritative scope; null is the daemon detached scope. */
   sessionId: string | null;
   cwd: string;
+  serverId?: string;
   serverUrl?: string;
   budgetRegistry?: unknown;
   browserControl?: BrowserDaemonControlRoutes | null;
@@ -482,15 +485,27 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
         && params.context.readRequesterWorkAttributionV1
         ? await params.context.readRequesterWorkAttributionV1()
         : actionOptions?.requesterWorkAttributionV1;
+      let promptCredentials = (sessionId !== null || parsed.data.roleId || parsed.data.intent === 'review')
+        ? await params.context.readPromptCredentials?.() ?? undefined
+        : undefined;
+      if (sessionId !== null && promptCredentials && !promptCredentials.requesterSessionCredentialScope) {
+        // Ordinary Session credentials also need their captured Home. Missing
+        // custody stays unavailable; memory preparation must not select ambient state.
+        promptCredentials = params.context.serverId && params.context.serverUrl
+          ? bindRequesterSessionCredentialScope({ ...promptCredentials }, {
+            serverId: params.context.serverId,
+            serverHttpBaseUrl: normalizeServerHttpBaseUrl(params.context.serverUrl),
+          })
+          : undefined;
+      }
       const started = await params.manager.start({
-        ...(accountSettings ? { accountSettings } : {}),
         ...runStartRequest,
+        accountSettings,
         ...(requesterWorkAttributionV1 ? { requesterWorkAttributionV1 } : {}),
         // The accepted Action context supplies role content and write policy;
         // the public request carries identity only.
         resolvedRole: parsed.data.roleId ? actionOptions?.agentStartContext?.roles[parsed.data.roleId] : undefined,
-        ...((parsed.data.roleId || parsed.data.intent === 'review') && params.context.readPromptCredentials
-          ? { promptCredentials: await params.context.readPromptCredentials() ?? undefined } : {}),
+        promptCredentials,
         workspaceWrites: actionOptions?.workspaceWrites,
         workDepth: actionOptions?.workDepth ?? 0,
         // The outer Action/RPC scope is authoritative; a passthrough field in
@@ -564,10 +579,11 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
           ...(rawDetails !== undefined ? { details: rawDetails } : {}),
         }, runCreation);
       }
+      const transportCode = ExecutionRunTransportErrorCodeSchema.safeParse(code);
       return classifyFailure({
         ok: false,
         error: error instanceof Error ? error.message : 'Execution failed',
-        errorCode: 'execution_run_failed',
+        errorCode: transportCode.success ? transportCode.data : 'execution_run_failed',
         ...(rawDetails !== undefined ? { details: rawDetails } : {}),
       }, runCreation);
     }

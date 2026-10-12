@@ -175,9 +175,10 @@ describe('Voice run caller-turn admission', () => {
     await waiting;
     expect(approval).toMatchObject({ status: 'open', actionId, approval: { flow: 'blocking' } });
     expect(clientOpened).toBe(false);
-    expect(await executor.execute('approval.request.decide', { artifactId: 'voice-open-approval', decision: 'approve' }, {
+    const decision = await executor.execute('approval.request.decide', { artifactId: 'voice-open-approval', decision: 'approve' }, {
       surface: 'ui', authority: 'present_user', serverId: 'home', actionCaller: { kind: 'host' },
-    })).toMatchObject({ ok: true, result: { status: 'approved' } });
+    });
+    expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: { status: 'approved' } });
     const opened = await opening;
     expect(opened, JSON.stringify(opened)).toMatchObject({ ok: true, result: { status: 'completed' } });
     expect(clientOpened).toBe(true);

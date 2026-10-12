@@ -13,7 +13,7 @@ import { readCurrentDaemonPluginCatalog } from '@/plugins/daemon/currentCatalog'
 import { DaemonContributionRegistryProjectionDescribeRequestSchema, DaemonPluginUiTargetedContributionsReadRequestSchema, DaemonContributionRegistryProjectionAutomationEligibleEventsV1Schema, DaemonPluginUiTargetedSurfaceMountV1Schema, DaemonPluginSettingsGetRequestSchema, DaemonPluginSettingsGetResponseSchema, DaemonPluginSettingsSetRequestSchema, DaemonPluginSettingsSetResponseSchema, DAEMON_PLUGIN_UI_RESOURCE_WATCH_DEFAULT_WAIT_MS, DaemonPluginSecretStatusRequestSchema, DaemonPluginSecretStatusResponseSchema, DaemonPluginSecretSetRequestSchema, DaemonPluginSecretSetResponseSchema, DaemonPluginSecretDeleteRequestSchema, DaemonPluginSecretDeleteResponseSchema, DaemonPluginUiResourceReadRequestSchema, DaemonPluginUiResourceReadResponseSchema, DaemonPluginUiResourceWatchOpenRequestSchema, DaemonPluginUiResourceWatchOpenResponseSchema, DaemonPluginUiResourceWatchNextRequestSchema, DaemonPluginUiResourceWatchNextResponseSchema, DaemonPluginUiResourceWatchCloseRequestSchema, DaemonPluginUiResourceWatchCloseResponseSchema, DaemonPluginStructuredMessageActionExecuteResponseSchema, DaemonPluginActionFormConnectedAccountOptionsResolveRequestSchema, DaemonPluginActionSchemasReadRequestSchema, DaemonPluginActionSchemasReadResponseSchema, DaemonPluginActionFormConnectedAccountOptionsResolveResponseSchema, DaemonPluginComposerReferenceSearchRequestSchema, DaemonPluginComposerReferenceSearchResponseSchema, DaemonPluginUiArtifactBytesReadRequestSchema, DaemonPluginUiArtifactBytesReadResponseSchema, PluginUiResourceBindingCapabilityV1Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { DaemonPluginStructuredMessageActionExecuteRequestSchema } from '@happier-dev/protocol/plugins/actions/daemonInvocationV1';
 import type { DaemonPluginSettingsSnapshot, FeatureDecision, DaemonHostedWebFrameCapabilityV1, DaemonReactNativeHostRuntimeIdentityV1, ActionOperationDeclarationV1, DaemonContributionRegistryProjectionDescribeRequest, DaemonContributionRegistryProjectionDescribeResponse, DaemonPluginUiTargetedContributionsReadRequest, DaemonPluginUiTargetedContributionsReadResponse, PluginSettingFieldV2, DaemonPluginUiArtifactBytesReadResponse, DaemonPluginUiTargetedSurfaceMountV1, DaemonPluginStructuredMessageActionInvocationV1, MessageActionReferenceV1, MessageActionResolutionV1, PluginMachineMaterializationExecutionOriginV1, PluginProjectionBrandAssetV2, PluginProjectionV2 } from '@happier-dev/protocol';
-import { PluginMachineMaterializationExecutionOriginV1Schema, arePluginMachineMaterializationRefsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { PluginMachineMaterializationExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { readPluginSettingSecretCustody } from '@happier-dev/protocol/plugins/contributions/settings';
 import { readPluginActionFailureAuthorPayload } from '@happier-dev/protocol/plugins/actions/invocation';
@@ -22,7 +22,6 @@ import {
     isPluginError,
     PluginError,
     type JsonValue,
-    type PluginInvocationCaller,
 } from '@happier-dev/plugin-sdk';
 import type { SecretsService } from '@happier-dev/plugin-sdk/secrets';
 import type { ScopedSettingsService } from '@happier-dev/plugin-sdk/settings';
@@ -86,6 +85,7 @@ import { GENERATED_PLUGIN_UI_ARTIFACTS_ROOT_RELATIVE_PATH } from '@/plugins/inst
 import { PluginContextServiceError } from '@/plugins/runtime/context/errors';
 import type { DeclaredDaemonPluginSecretAdministrationPort } from '@/plugins/runtime/context/secrets';
 import { createPluginInvocationLifetime } from '@/plugins/runtime/invocation/lifetime';
+import { deriveMountedPluginInvocationCaller } from '@/plugins/runtime/invocation/mountedPluginInvocationCaller';
 import {
     assertLocalSettingsDeclarationsAccessible,
     flattenLocalSettingsFields,
@@ -685,168 +685,6 @@ async function resolvePluginExecutionOriginsForProjection(
         if (parsed.success) originsByPluginId[pluginId] = parsed.data;
     }
     return Object.freeze(originsByPluginId);
-}
-
-/**
- * Convert a mounted UI or client Action binding into invocation provenance only after the
- * daemon has matched every component against its current runtime lease. The
- * wire record is a claim from the client, not caller authority.
- */
-async function deriveMountedPluginInvocationCaller(input: Readonly<{
-    request: Readonly<{
-        machineId: string;
-        invocationSurface: 'cli' | 'ui' | 'voice' | 'agent' | 'mcp';
-        invocation?: DaemonPluginStructuredMessageActionInvocationV1;
-    }>;
-    registry: ResolvedExecutablePluginRuntimeRegistry;
-    resolveCurrentPluginMaterializationRef?: NonNullable<
-        ResolvedExecutablePluginRuntimeRegistry['resolveCurrentPluginMaterializationRef']
-    >;
-    options: DaemonContributionRegistryProjectionRegistrationOptions | undefined;
-}>): Promise<
-    | Readonly<{ status: 'absent' }>
-    | Readonly<{ status: 'unavailable' }>
-    | Readonly<{
-        status: 'available';
-        caller: Extract<PluginInvocationCaller, Readonly<{ kind: 'plugin' }>>;
-        /** Re-read live machine identity immediately before target effect. */
-        isMountedCallerCurrent: () => Promise<boolean>;
-    }>
-> {
-    const invocation = input.request.invocation;
-    const binding = invocation?.kind === 'mountedPluginSurface'
-        ? invocation.mountedBinding
-        : invocation?.kind === 'clientPluginAction'
-            ? invocation.clientActionBinding
-            : undefined;
-    if (!binding) return Object.freeze({ status: 'absent' as const });
-    const contributes = input.registry.contributes;
-
-    let machineContext: Readonly<{ serverIdentityId: string; machineId: string }> | null = null;
-    try {
-        machineContext = await input.options?.resolvePluginProjectionExecutionOriginContext?.() ?? null;
-    } catch {
-        return Object.freeze({ status: 'unavailable' as const });
-    }
-    const pluginId = binding.pluginId;
-    const materialization = binding.materializationRef;
-    let occurrenceId: ReturnType<NonNullable<ResolvedExecutablePluginRuntimeRegistry['readPluginOccurrenceId']>> = null;
-    let sourceCustody: ReturnType<NonNullable<ResolvedExecutablePluginRuntimeRegistry['readPluginSourceCustody']>> = null;
-    try {
-        occurrenceId = input.registry.readPluginOccurrenceId?.(pluginId) ?? null;
-        sourceCustody = input.registry.readPluginSourceCustody?.(pluginId) ?? null;
-    } catch {
-        return Object.freeze({ status: 'unavailable' as const });
-    }
-    if (
-        !machineContext
-        || !occurrenceId
-        || !sourceCustody
-        || machineContext.machineId !== input.request.machineId
-        || occurrenceId !== binding.occurrenceId
-        || (materialization !== undefined && materialization.machineId !== machineContext.machineId)
-    ) {
-        return Object.freeze({ status: 'unavailable' as const });
-    }
-    const currentMaterializationId = contributes.materializationIdsByPluginId?.[pluginId];
-    if (
-        (currentMaterializationId === undefined) !== (materialization === undefined)
-        || (materialization !== undefined && (
-            materialization.pluginId !== pluginId
-            || materialization.materializationId !== currentMaterializationId
-        ))
-    ) return Object.freeze({ status: 'unavailable' as const });
-    const initialMachineContext = machineContext;
-
-    let contributionIdentity: Readonly<{ pluginId: string; localId: string }> | null = null;
-    if (invocation?.kind === 'clientPluginAction') {
-        const mountedAction = contributes.actionsById?.get(buildQualifiedPluginContributionKey({
-            pluginId,
-            localId: binding.contributionLocalId,
-        }));
-        if (!mountedAction || !mountedAction.pluginId || !('execution' in mountedAction.definition)) {
-            return Object.freeze({ status: 'unavailable' as const });
-        }
-        const execution = mountedAction.definition.execution;
-        if (
-            typeof execution !== 'object'
-            || execution === null
-            || !('target' in execution)
-            || execution.target !== 'client'
-        ) {
-            return Object.freeze({ status: 'unavailable' as const });
-        }
-        contributionIdentity = {
-            pluginId: mountedAction.pluginId,
-            localId: mountedAction.definition.id,
-        };
-    } else {
-        const mountedContribution = [
-            ...(contributes.uiViewsV2 ?? []),
-            ...(contributes.uiSettingsPagesV2 ?? []),
-            // Plugin manifest ingestion reserves local contribution IDs across
-            // families, so this exact pluginId/localId pair is unambiguous for a
-            // mounted app-shell Voice invocation too.
-            ...(contributes.voiceProviders ?? []),
-        ].find((entry) => (
-            entry.pluginId === pluginId
-            && entry.identity.pluginId === pluginId
-            && entry.identity.localId === binding.contributionLocalId
-        ));
-        if (!mountedContribution) return Object.freeze({ status: 'unavailable' as const });
-        contributionIdentity = mountedContribution.identity;
-    }
-    if (!contributionIdentity) return Object.freeze({ status: 'unavailable' as const });
-
-    return Object.freeze({
-        status: 'available' as const,
-        caller: Object.freeze({
-            kind: 'plugin' as const,
-            pluginId,
-            contribution: Object.freeze({
-                id: contributionIdentity.localId,
-                qualifiedId: buildQualifiedPluginContributionKey(contributionIdentity),
-            }),
-            occurrenceId,
-            sourceCustody,
-            ...(materialization === undefined
-                ? {}
-                : { materialization: Object.freeze({ ...materialization }) }),
-            // Diagnostic provenance only. Target policy receives the independent
-            // invocationSurface below.
-            originSurface: input.request.invocationSurface,
-        }),
-        isMountedCallerCurrent: async (): Promise<boolean> => {
-            let current: Readonly<{ serverIdentityId: string; machineId: string }> | null = null;
-            try {
-                current = await input.options?.resolvePluginProjectionExecutionOriginContext?.() ?? null;
-            } catch {
-                return false;
-            }
-            let liveMaterialization: typeof materialization | null = null;
-            if (materialization !== undefined) {
-                try {
-                    liveMaterialization = input
-                        .resolveCurrentPluginMaterializationRef?.(pluginId)
-                        ?? null;
-                } catch {
-                    return false;
-                }
-            }
-            return current !== null
-                && current.serverIdentityId === initialMachineContext.serverIdentityId
-                && current.machineId === initialMachineContext.machineId
-                && current.machineId === input.request.machineId
-                && input.registry.isPluginOccurrenceCurrent?.(
-                    pluginId,
-                    occurrenceId,
-                ) === true
-                && (materialization === undefined
-                    ? input.registry.contributes.materializationIdsByPluginId?.[pluginId] === undefined
-                    : liveMaterialization !== null
-                        && arePluginMachineMaterializationRefsEqual(liveMaterialization, materialization));
-        },
-    });
 }
 
 /**
@@ -2749,7 +2587,7 @@ export function registerDaemonContributionRegistryProjectionHandler(
                 registry: lease.registry,
                 resolveCurrentPluginMaterializationRef:
                     lease.resolveCurrentPluginMaterializationRef,
-                options: opts,
+                resolveExecutionOriginContext: opts?.resolvePluginProjectionExecutionOriginContext,
             });
             if (mountedCaller.status === 'unavailable') {
                 return DaemonPluginStructuredMessageActionExecuteResponseSchema.parse({
