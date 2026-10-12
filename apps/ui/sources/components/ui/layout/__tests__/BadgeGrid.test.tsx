@@ -34,10 +34,6 @@ vi.mock('@/components/ui/text/Text', () => ({
     ) => React.createElement('Text', props, children),
 }));
 
-vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}) },
-}));
-
 const SAMPLE_ITEMS = [
     { id: 'resume', label: 'Resume', status: 'positive' as const },
     { id: 'sessions', label: 'Sessions', status: 'positive' as const },

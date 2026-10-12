@@ -2,6 +2,9 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
+/** The slot's square side: a page header's mark, and a row's. */
+export const PAGE_HEADER_MARK_SLOT_SIZE_PX = Object.freeze({ page: 44, row: 36 } as const);
+
 /** Bare entity artwork, with stable page/row space and no backing or clipping. */
 export function PageHeaderMarkSlot(props: Readonly<{
     children: React.ReactNode;
@@ -17,13 +20,13 @@ export function PageHeaderMarkSlot(props: Readonly<{
 
 const stylesheet = StyleSheet.create({
     markSlot: {
-        width: 44,
-        height: 44,
+        width: PAGE_HEADER_MARK_SLOT_SIZE_PX.page,
+        height: PAGE_HEADER_MARK_SLOT_SIZE_PX.page,
         alignItems: 'center',
         justifyContent: 'center',
     },
     markSlotRow: {
-        width: 36,
-        height: 36,
+        width: PAGE_HEADER_MARK_SLOT_SIZE_PX.row,
+        height: PAGE_HEADER_MARK_SLOT_SIZE_PX.row,
     },
 });

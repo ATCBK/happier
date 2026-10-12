@@ -1,13 +1,18 @@
+import type { IconName } from '@/components/ui/icons/Icon';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { useNavigation } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
+import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
+import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
+import { readHappierPageOperation } from '@happier-dev/plugin-ui/presentation';
 
 // Context controls can contain an entity's existing overflow (directly, in a View, or
 // in a setting anchor). Lift its operations into the navigation overflow instead of
@@ -28,6 +33,72 @@ function foldContextActions(actions: React.ReactNode) {
                 openRequested ||= menu.props.openRequested === true;
                 return retainControls(menu.props.content);
             }
+            const operation = readHappierPageOperation(node);
+            if (operation) {
+                operations.push({
+                    id: operation.id,
+                    title: operation.title,
+                    ...(operation.testID === undefined ? {} : { testID: operation.testID }),
+                    ...(operation.disabled ? { disabled: true } : {}),
+                    ...(operation.pending ? { loading: true } : {}),
+                    ...(operation.destructive ? { destructive: true } : {}),
+                    onSelect: async () => { await operation.onPress(); },
+                });
+                return null;
+            }
+            // A page's operations become rows of the one menu (DESIGN-15 R4), never a strip of
+            // buttons with a second `⋯` inside it: a toolbar button, a quiet section action, and an
+            // entity row's own overflow, flattened in the order the page shows them.
+            if (node.type === ToolbarButton) {
+                const button = node as React.ReactElement<React.ComponentProps<typeof ToolbarButton>>;
+                const onPress = button.props.onPress;
+                if (!onPress) {
+                    hasContent = true;
+                    return button;
+                }
+                operations.push({
+                    id: button.props.testID ?? button.props.label,
+                    title: button.props.label,
+                    ...(button.props.testID ? { testID: button.props.testID } : {}),
+                    ...(button.props.disabled ? { disabled: true } : {}),
+                    ...(button.props.busy ? { loading: true } : {}),
+                    ...(button.props.tone === 'danger' || button.props.destructive === true ? { destructive: true } : {}),
+                    ...(button.props.active === undefined ? {} : { checked: button.props.active }),
+                    onSelect: () => onPress(),
+                });
+                return null;
+            }
+            if (node.type === SectionActionButton) {
+                const button = node as React.ReactElement<React.ComponentProps<typeof SectionActionButton>>;
+                operations.push({
+                    id: button.props.testID ?? button.props.title,
+                    // The row says what the button says; an accessible name describes the mechanism
+                    // for assistive technology and is not visible copy (DESIGN-16 D7).
+                    title: button.props.title,
+                    ...(button.props.testID ? { testID: button.props.testID } : {}),
+                    ...(button.props.disabled ? { disabled: true } : {}),
+                    ...(button.props.loading ? { loading: true } : {}),
+                    onSelect: () => button.props.onPress(),
+                });
+                return null;
+            }
+            if (node.type === ItemRowActions) {
+                const menu = node as React.ReactElement<React.ComponentProps<typeof ItemRowActions>>;
+                for (const action of menu.props.actions) {
+                    const onPress = action.onPress;
+                    if (!onPress) continue;
+                    operations.push({
+                        id: action.id,
+                        title: action.title,
+                        testID: action.inlineTestID ?? action.id,
+                        ...(action.disabled ? { disabled: true } : {}),
+                        ...(action.destructive ? { destructive: true } : {}),
+                        ...(action.selected === undefined ? {} : { checked: action.selected }),
+                        onSelect: () => onPress(),
+                    });
+                }
+                return null;
+            }
             const element = node as React.ReactElement<{ children?: React.ReactNode; style?: React.ComponentProps<typeof View>['style'] }>;
             if (element.props.children === undefined) {
                 hasContent = true;
@@ -41,11 +112,15 @@ function foldContextActions(actions: React.ReactNode) {
         });
     }
     const content = retainControls(actions);
-    return { operations, content: hasContent ? content : undefined, openRequested };
+    // Destructive operations close the menu, whatever order the page drew them in.
+    const ordered = [...operations.filter(operation => !operation.destructive), ...operations.filter(operation => operation.destructive)];
+    return { operations: ordered, content: hasContent ? content : undefined, openRequested };
 }
 
 export type NavigationHeaderAction = Readonly<{
     title: string;
+    /** A leading glyph for the in-page button ("+" on a "New …" primary). */
+    icon?: IconName;
     onPress: () => void | Promise<unknown>;
     disabled?: boolean;
     loading?: boolean;
@@ -53,6 +128,23 @@ export type NavigationHeaderAction = Readonly<{
 }>;
 
 type HeaderOptionsTarget = Readonly<{ setOptions: (options: Record<string, unknown>) => void }>;
+
+type PageNavigationContextActionsValue = Readonly<{ actions: React.ReactNode; readCurrentActions: () => React.ReactNode }>;
+const PageNavigationContextActions = React.createContext<PageNavigationContextActionsValue | null>(null);
+
+/** Route context stays visible beside a page's phone actions, rather than being overwritten by them. */
+export function PageNavigationContextActionsProvider(props: Readonly<{ actions: React.ReactNode; children: React.ReactNode }>) {
+    const actionsRef = React.useRef(props.actions);
+    actionsRef.current = props.actions;
+    const mountedRef = React.useRef(true);
+    React.useLayoutEffect(() => {
+        mountedRef.current = true;
+        return () => { mountedRef.current = false; };
+    }, []);
+    const readCurrentActions = React.useCallback(() => mountedRef.current ? actionsRef.current : null, []);
+    const value = React.useMemo(() => ({ actions: props.actions, readCurrentActions }), [props.actions, readCurrentActions]);
+    return <PageNavigationContextActions.Provider value={value}>{props.children}</PageNavigationContextActions.Provider>;
+}
 
 /**
  * The one publisher of a page's actions into its navigation header. While `enabled`, context actions
@@ -70,6 +162,7 @@ export function useNavigationHeaderActions(input: Readonly<{
     cancel?: NavigationHeaderAction | null;
     actions?: React.ReactNode;
 }>) {
+    const routeContextActions = React.useContext(PageNavigationContextActions);
     const navigation = useNavigation() as unknown as
         | (HeaderOptionsTarget & { getParent?: () => HeaderOptionsTarget | undefined })
         | null
@@ -93,6 +186,7 @@ export function useNavigationHeaderActions(input: Readonly<{
         if (primary || actions) {
             options.headerRight = () => (
                 <View style={stylesheet.actions}>
+                    {routeContextActions?.actions}
                     {actions ? <PageHeaderMenu actions={foldedActions.operations} content={foldedActions.content}
                         openRequested={foldedActions.openRequested} testID="page-header-actions" /> : null}
                     {primary ? (
@@ -129,13 +223,16 @@ export function useNavigationHeaderActions(input: Readonly<{
         for (const target of targets) target.setOptions(options);
         return () => {
             const cleared: Record<string, unknown> = {};
-            if (primary || actions) cleared.headerRight = undefined;
+            if (primary || actions) {
+                const retainedActions = routeContextActions?.readCurrentActions();
+                cleared.headerRight = retainedActions ? () => retainedActions : undefined;
+            }
             if (cancel) cleared.headerLeft = undefined;
             for (const target of targets) target.setOptions(cleared);
         };
         // `key` carries the structured actions' rendered fields; context nodes keep their own props.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [navigation, key, actions, foldedActions]);
+    }, [navigation, key, actions, foldedActions, routeContextActions]);
 }
 
 /**
@@ -169,14 +266,13 @@ const NavigationHeaderActionsPublisher = React.memo(function NavigationHeaderAct
 
 const stylesheet = StyleSheet.create((theme) => ({
     foldedControls: { flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' },
-    actions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    actions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
     cancel: {
-        paddingHorizontal: 8,
-        paddingVertical: 6,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s6,
     },
     cancelText: {
-        ...Typography.default(),
-        fontSize: 17,
+        ...Typography.variant('label', 'regular'),
         color: theme.colors.text.primary,
     },
 }));

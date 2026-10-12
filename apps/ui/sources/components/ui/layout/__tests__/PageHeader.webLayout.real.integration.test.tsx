@@ -5,11 +5,13 @@ import { createRoot } from 'react-dom/client';
 import { Text, View } from 'react-native';
 import { expect, it, vi } from 'vitest';
 import { HappierPageHeader } from '@happier-dev/plugin-ui/presentation';
-import { measureWebLayout } from '@/dev/testkit/render/measureWebLayout';
+import { installWebLayoutBridge, measureWebLayout } from '@/dev/testkit/render/measureWebLayout';
 
 vi.mock('react-native', async () => vi.importActual('react-native-web'));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+
+installWebLayoutBridge();
 
 it.each([610, 800, 1200])('keeps the title readable beside a long readout in a %spx pane', async width => {
     const host = document.createElement('div');
@@ -96,6 +98,86 @@ it('draws the header overflow with the shared keyboard focus ring, not the brows
         expect(layout.rect('menu.trigger').outlineStyle).toBe('none');
         expect(layout.rect('menu.trigger-surface').outlineStyle).toBe('solid');
         expect(layout.rect('menu.trigger-surface').outlineWidth).toBe(2);
+    } finally {
+        await act(async () => root.unmount());
+        host.remove();
+    }
+});
+
+it.each([1000, 1200])('runs an entity header\'s purpose line under its actions, not in the space beside them, in a %spx pane (lab cforms F2)', async width => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+        await act(async () => root.render(<HappierPageHeader testID="header" columnMaxWidthPx={704}
+            title={<Text testID="name" style={{ fontSize: 24, lineHeight: 30 }}>Fast review</Text>}
+            description={<Text testID="purpose" style={{ fontSize: 14, lineHeight: 20 }}>Used when a new session starts with this profile.</Text>}
+            actions={<View testID="controls" style={{ width: 380, height: 32 }} />} />));
+        const layout = await measureWebLayout(host, { viewport: { width, height: 900 } });
+        const name = layout.rect('name');
+        const controls = layout.rect('controls');
+        const purpose = layout.rect('purpose');
+        // The actions share the title's line only...
+        expect(controls.top).toBeLessThan(name.bottom);
+        // ...and the purpose runs the column beneath them, on one line, from the title's edge.
+        expect(purpose.top).toBeGreaterThanOrEqual(Math.max(name.bottom, controls.bottom) - 1);
+        expect(purpose.height).toBeLessThanOrEqual(20 * 1.5);
+        expect(Math.abs(purpose.left - name.left)).toBeLessThanOrEqual(1);
+    } finally {
+        await act(async () => root.unmount());
+        host.remove();
+    }
+});
+
+it('wraps entity actions beneath a title that needs its width instead of breaking a short name (DESIGN-14 D5)', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+        await act(async () => root.render(<HappierPageHeader testID="header"
+            title={<Text testID="name" style={{ fontSize: 28, lineHeight: 34 }}>Prepare the 0.3 release</Text>}
+            leading={<View style={{ width: 40, height: 40 }} />}
+            actions={<View testID="controls" style={{ width: 300, height: 34 }} />} />));
+        const layout = await measureWebLayout(host, { viewport: { width: 620, height: 900 } });
+        const name = layout.rect('name');
+        const controls = layout.rect('controls');
+        // The name is read on one line...
+        expect(name.height).toBeLessThanOrEqual(34);
+        // ...and the actions that no longer fit beside it sit beneath.
+        expect(controls.top).toBeGreaterThanOrEqual(name.bottom);
+    } finally {
+        await act(async () => root.unmount());
+        host.remove();
+    }
+});
+
+it.each([620, 1200])('keeps mark, title and meta one identity block when the actions wrap, in a %spx pane (DESIGN-15 R1)', async width => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+        await act(async () => root.render(<HappierPageHeader testID="header"
+            title={<Text testID="name" style={{ fontSize: 28, lineHeight: 34 }}>Prepare the 0.3 release</Text>}
+            leading={<View testID="mark" style={{ width: 40, height: 40 }} />}
+            meta={[{ key: 'machine', text: 'NLDW4-5-40-40', testID: 'fact-machine' }, { key: 'started', text: 'Started 01:35' }]}
+            actions={<View testID="controls" style={{ width: 300, height: 34 }} />} />));
+        const layout = await measureWebLayout(host, { viewport: { width, height: 900 }, settle: replay => act(replay) });
+        const name = layout.rect('name');
+        const mark = layout.rect('mark');
+        const meta = layout.rect('header-meta');
+        const controls = layout.rect('controls');
+        // The mark stays beside the identity it names, never down beside the actions.
+        expect(mark.right).toBeLessThanOrEqual(name.left);
+        expect(mark.top).toBeLessThan(name.bottom);
+        // The facts follow the title directly.
+        expect(meta.top - name.bottom).toBeLessThan(12);
+        if (width >= 1200) {
+            // Room for both: the actions share the title's line.
+            expect(controls.top).toBeLessThan(name.bottom);
+        } else {
+            // No room: the actions wrap as one group after the whole identity, never between title and meta.
+            expect(controls.top).toBeGreaterThanOrEqual(meta.bottom);
+        }
     } finally {
         await act(async () => root.unmount());
         host.remove();

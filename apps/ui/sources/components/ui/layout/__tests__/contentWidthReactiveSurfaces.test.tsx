@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { CONTENT_WIDTH_PX_BY_MODE, PAGE_COLUMN_MAX_WIDTH_PX } from '@/components/ui/layout/contentWidthMode';
-import { ListPresentationProvider, PageColumnProvider } from '@/components/ui/lists/listPresentation';
+import { ContainedPageScopeProvider, ListPresentationProvider, PageColumnProvider } from '@/components/ui/lists/listPresentation';
 import { ConstrainedScreenContent } from '@/components/ui/layout/ConstrainedScreenContent';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -122,38 +122,48 @@ describe('surfaces follow the content-width setting without a reload', () => {
         mountCounts.constrainedViews = 0;
     });
 
-    it('lets a wide page opt out while sibling pages and floating surfaces retain the preference', async () => {
-        const renderPage = (ignorePreference: boolean) => (
+    it('keeps a wide page column at its own width whatever the reading-width preference, while floating surfaces follow it', async () => {
+        // A wide column holds a grid or a library, not a reading measure, so the reading-width
+        // preference does not narrow it; a reading column is already narrower than every preference.
+        const page = (
             <ListPresentationProvider value="page">
-                <PageColumnProvider value="wide" preferencePolicy={ignorePreference ? 'ignore' : 'respect'}>
+                <PageColumnProvider value="wide">
                     <ConstrainedScreenContent><></></ConstrainedScreenContent>
-                    {/* A page list may declare its column without replacing the page's preference policy. */}
-                    <PageColumnProvider value="wide">
-                        <ConstrainedScreenContent><></></ConstrainedScreenContent>
-                    </PageColumnProvider>
                     <ListPresentationProvider value="grouped">
                         <ConstrainedScreenContent><></></ConstrainedScreenContent>
                     </ListPresentationProvider>
                 </PageColumnProvider>
+                <PageColumnProvider value="reading">
+                    <ConstrainedScreenContent><></></ConstrainedScreenContent>
+                </PageColumnProvider>
             </ListPresentationProvider>
         );
-        const screen = await renderScreen(renderPage(true));
+        const screen = await renderScreen(page);
         expect(readConstrainedMaxWidths(screen)).toEqual([
-            PAGE_COLUMN_MAX_WIDTH_PX.wide, PAGE_COLUMN_MAX_WIDTH_PX.wide, CONTENT_WIDTH_PX_BY_MODE.compact,
+            PAGE_COLUMN_MAX_WIDTH_PX.wide, CONTENT_WIDTH_PX_BY_MODE.compact, PAGE_COLUMN_MAX_WIDTH_PX.reading,
         ]);
         const mountsAfterFirstPaint = mountCounts.constrainedViews;
 
         await setContentWidthMode('full');
         expect(readConstrainedMaxWidths(screen)).toEqual([
-            PAGE_COLUMN_MAX_WIDTH_PX.wide, PAGE_COLUMN_MAX_WIDTH_PX.wide, Number.POSITIVE_INFINITY,
-        ]);
-
-        await setContentWidthMode('compact');
-        await screen.update(renderPage(false));
-        expect(readConstrainedMaxWidths(screen)).toEqual([
-            CONTENT_WIDTH_PX_BY_MODE.compact, CONTENT_WIDTH_PX_BY_MODE.compact, CONTENT_WIDTH_PX_BY_MODE.compact,
+            PAGE_COLUMN_MAX_WIDTH_PX.wide, Number.POSITIVE_INFINITY, PAGE_COLUMN_MAX_WIDTH_PX.reading,
         ]);
         expect(mountCounts.constrainedViews).toBe(mountsAfterFirstPaint);
+    });
+
+    it('lets a page list inside a card modal take the card as its column (R-APP-7)', async () => {
+        // A card modal body is a contained scope: its page list is not held to the page reading column,
+        // so its sheet starts on the card's own text edge rather than 68px in from the header.
+        const screen = await renderScreen(
+            <ContainedPageScopeProvider>
+                <ListPresentationProvider value="page">
+                    <PageColumnProvider value="reading">
+                        <ConstrainedScreenContent><></></ConstrainedScreenContent>
+                    </PageColumnProvider>
+                </ListPresentationProvider>
+            </ContainedPageScopeProvider>,
+        );
+        expect(readConstrainedMaxWidths(screen)).toEqual([Number.POSITIVE_INFINITY]);
     });
 
     it('re-applies the setting to the shared settings action footer in place', async () => {

@@ -207,11 +207,15 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
 
 function PageHeaderActionButton(props: Readonly<{ action: PageHeaderPrimaryAction; quiet?: boolean }>) {
     const { action } = props;
+    const { theme } = useUnistyles();
     return (
         <RoundButton
             testID={action.testID}
             size="small"
             display={props.quiet ? 'inverted' : undefined}
+            leading={action.icon ? (
+                <Icon name={action.icon} size={ICON_SIZE.xs} color={props.quiet ? theme.colors.text.primary : theme.colors.button.primary.tint} />
+            ) : undefined}
             title={action.title}
             accessibilityLabel={action.title}
             disabled={action.disabled}
@@ -266,7 +270,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     actions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     metaText: {
         ...Typography.default('regular'),

@@ -1,4 +1,5 @@
 import { CONSTRAINED_MAX_WIDTH_PX_BY_VIEWPORT_CLASS } from '@/utils/platform/viewportClass';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 export type UiContentWidthMode = 'compact' | 'medium' | 'full';
 
@@ -24,13 +25,9 @@ export function resolveContentMaxWidthForMode(mode: unknown): number {
  * How wide a configuration page's column may grow. `reading` (every page by default) is a reading
  * measure, so sheets do not stretch into long rows on a wide window; `wide` is for a page whose body
  * is a grid or a dashboard. The column holds the sheets and their 16px inset on each side, so its
- * sheets are the approved lab's 760px / 1000px page less its 44px sides. The content-width preference
- * can only narrow it (`useLayoutMaxWidth`) unless the page explicitly opts out through its shared
- * page-column preference policy.
+ * sheets are the approved lab's 760px / 1000px page less its 44px sides. A page column is a fixed
+ * role: the content-width preference does not narrow it (`useLayoutMaxWidth`).
  */
 export type PageColumn = 'reading' | 'wide';
 
-export const PAGE_COLUMN_MAX_WIDTH_PX = {
-    reading: 704,
-    wide: 944,
-} as const satisfies Record<PageColumn, number>;
+export const PAGE_COLUMN_MAX_WIDTH_PX = HAPPIER_PAGE_METRICS.columnMaxWidthPx satisfies Record<PageColumn, number>;

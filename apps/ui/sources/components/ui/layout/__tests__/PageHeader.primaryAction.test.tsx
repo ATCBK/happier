@@ -24,7 +24,8 @@ const { Stack } = await import('@/components/appShell/workspace/destinationRoute
 const { NavigationHeaderActions } = await import('@/components/ui/layout/NavigationHeaderActions');
 const { PageHeaderMenu } = await import('@/components/ui/layout/PageHeaderEntityParts');
 const { SelectableRow } = await import('@/components/ui/lists/SelectableRow');
-const { View } = await import('react-native');
+const { ActivitySpinner } = await import('@/components/ui/feedback/ActivitySpinner');
+const { Pressable, View } = await import('react-native');
 const { PageHeader: PluginPageHeader } = await import('../../../../../../../packages/plugin-ui/src/components/PageHeader');
 const { Button: PluginButton } = await import('../../../../../../../packages/plugin-ui/src/components/Button');
 const { PluginUiProviderInternal } = await import('../../../../../../../packages/plugin-ui/src/components/PluginUiProvider');
@@ -93,29 +94,52 @@ describe('PageHeader primary action placement', () => {
     });
     it('folds public plugin actions through the host navigation producer and returns them to the body on resize', async () => {
         const action = vi.fn();
-        const context = createSurfaceContext();
+        const remove = vi.fn();
+        const context = createSurfaceContext({ translations: { 'channels.link': 'Link a conversation' } });
         const hostApi = createHostApiStub(context);
-        function PluginPage() {
+        function PluginPage(props: Readonly<{ pending: boolean }>) {
             const showsTitle = useNavigationTitleChromeShowsTitle();
             const pageChrome = { showsTitle, renderNavigationActions: (actions: React.ReactNode) =>
-                <NavigationHeaderActions primary={null} actions={actions} /> };
+                showsTitle ? <NavigationHeaderActions primary={null} actions={actions} /> : <>{actions}</> };
             return <PluginUiProviderInternal hostApi={hostApi} context={context}
                 presentationHost={createPluginUiPrivatePresentationHost(undefined, { pageChrome })}>
                 <PluginPageHeader title="Channels" description="Link conversations." testID="plugin-header"
-                    actions={<PluginButton testID="plugin-link" variant="secondary" title="Link a conversation" onPress={action} />} />
+                    actions={<View>
+                        <PluginButton testID="plugin-remove" variant="destructive" busy={props.pending} title="Remove link" onPress={remove} />
+                        <button data-testid="plugin-enabled">Enabled</button>
+                        <PluginButton testID="plugin-link" variant="secondary" title="Link" titleKey="channels.link"
+                            accessibilityLabel="Open the conversation linker" onPress={action} />
+                    </View>} />
             </PluginUiProviderInternal>;
         }
-        const render = (phone: boolean) => <DestinationInstanceHost tabId="plugin" ref={{ kind: 'settings', params: {} }}
+        const render = (phone: boolean, pending = true) => <DestinationInstanceHost tabId="plugin" ref={{ kind: 'settings', params: {} }}
             pathname="/settings" focused visible phone={phone}
-            navigation={{ push: () => {}, replace: () => {}, back: () => {} }}><PluginPage /></DestinationInstanceHost>;
+            navigation={{ push: () => {}, replace: () => {}, back: () => {} }}><PluginPage pending={pending} /></DestinationInstanceHost>;
         const screen = await renderScreen(render(false));
         expect(screen.findHostByTestId('plugin-link')).not.toBeNull();
         await screen.update(render(true));
         expect(screen.findHostByTestId('plugin-link')).toBeNull();
         await openContextActions(screen);
+        expect(screen.root.findAllByProps({ 'data-testid': 'plugin-enabled' })).toHaveLength(1);
+        const rows = screen.findAllByType(SelectableRow as never);
+        expect(rows.map(row => row.props.title)).toEqual(['Link a conversation', 'Remove link']);
+        expect(rows.at(-1)?.props.disabled).toBe(true);
+        expect(rows.at(-1)?.findAllByType(ActivitySpinner as never)).toHaveLength(1);
+        expect(rows.at(-1)?.findByType(Pressable as never).props.onPress).toBeUndefined();
+        expect(remove).not.toHaveBeenCalled();
+        expect(screen.findAllByType(PageHeaderMenu as never).flatMap(menu => menu.props.actions)
+            .find(operation => operation.id === 'plugin-remove')).toMatchObject({ destructive: true, loading: true });
         await screen.pressByTestIdAsync('plugin-link');
-        expect(action).toHaveBeenCalledOnce();
-        await screen.update(render(false));
+        // Menu operations commit after dismissal, unlike the Button previously retained in content.
+        await act(async () => { await vi.waitFor(() => expect(action).toHaveBeenCalledOnce()); });
+        await screen.update(render(true, false));
+        await openContextActions(screen);
+        const enabledRemove = screen.findAllByType(SelectableRow as never).find(row => row.props.title === 'Remove link');
+        expect(enabledRemove?.props.disabled).not.toBe(true);
+        expect(enabledRemove?.findAllByType(ActivitySpinner as never)).toHaveLength(0);
+        await screen.pressByTestIdAsync('plugin-remove');
+        await act(async () => { await vi.waitFor(() => expect(remove).toHaveBeenCalledOnce()); });
+        await screen.update(render(false, false));
         expect(screen.findHostByTestId('workspace-destination-header')).toBeNull();
         expect(screen.findHostByTestId('plugin-link')).not.toBeNull();
     });

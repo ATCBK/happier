@@ -34,7 +34,7 @@ export function usePageNoticeActive(): boolean {
  */
 export function ListPresentationProvider(props: Readonly<{
     value: ListPresentation;
-    /** A contained column already owns its outer padding; sections add no second page inset. */
+    /** A contained column or widget body already owns its outer padding; sections add no second inset. */
     pageInsets?: PageListInsets;
     /** The page owns the cause and recovery; sections may omit repeats of that cause. */
     pageNoticeActive?: boolean;
@@ -64,31 +64,27 @@ export function usePageListInsets(): PageListInsets {
  * the page that sizes itself to the content column (`useLayoutMaxWidth`) follows it, so the header,
  * sections, bars and footers keep one edge.
  */
-export type PageColumnPreferencePolicy = 'respect' | 'ignore';
+const PageColumnContext = React.createContext<PageColumn>('reading');
 
-type PageColumnPresentation = Readonly<{
-    column: PageColumn;
-    preferencePolicy: PageColumnPreferencePolicy;
-}>;
+/**
+ * A contained surface (a card modal's body) is its page lists' column: a page list inside it takes the
+ * container's width and text edge instead of the page reading column (R-APP-7). Lists keep the scope
+ * across their own presentation scopes; a fullscreen modal does not start one.
+ */
+const ContainedPageScopeContext = React.createContext(false);
 
-const PageColumnContext = React.createContext<PageColumnPresentation>({ column: 'reading', preferencePolicy: 'respect' });
+export function ContainedPageScopeProvider(props: Readonly<{ contained?: boolean; children: React.ReactNode }>) {
+    return <ContainedPageScopeContext.Provider value={props.contained !== false}>{props.children}</ContainedPageScopeContext.Provider>;
+}
 
-export function PageColumnProvider(props: Readonly<{
-    value: PageColumn;
-    /** Opt out for this page only; nested lists inherit the policy unless they explicitly change it. */
-    preferencePolicy?: PageColumnPreferencePolicy;
-    children: React.ReactNode;
-}>) {
-    const inherited = React.useContext(PageColumnContext);
-    const preferencePolicy = props.preferencePolicy ?? inherited.preferencePolicy;
-    const value = React.useMemo(() => ({ column: props.value, preferencePolicy }), [props.value, preferencePolicy]);
-    return <PageColumnContext.Provider value={value}>{props.children}</PageColumnContext.Provider>;
+export function useContainedPageScope(): boolean {
+    return React.useContext(ContainedPageScopeContext);
+}
+
+export function PageColumnProvider(props: Readonly<{ value: PageColumn; children: React.ReactNode }>) {
+    return <PageColumnContext.Provider value={props.value}>{props.children}</PageColumnContext.Provider>;
 }
 
 export function usePageColumn(): PageColumn {
-    return React.useContext(PageColumnContext).column;
-}
-
-export function usePageColumnPreferencePolicy(): PageColumnPreferencePolicy {
-    return React.useContext(PageColumnContext).preferencePolicy;
+    return React.useContext(PageColumnContext);
 }

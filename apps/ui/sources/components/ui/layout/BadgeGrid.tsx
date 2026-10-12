@@ -99,13 +99,11 @@ const stylesheet = StyleSheet.create(() => ({
         flex: 1,
     },
     label: {
-        ...Typography.default('regular'),
-        fontSize: 14,
-        lineHeight: 18,
+        ...Typography.variant('label', 'regular'),
     },
     detail: {
-        ...Typography.default('regular'),
-        fontSize: 12,
-        lineHeight: 16,
+
+        ...Typography.variant('meta'),
+
     },
 }));

@@ -5,8 +5,8 @@ import {
 } from '@/utils/platform/viewportClass';
 import { useLocalSetting } from '@/sync/domains/state/storage';
 import { getStorage } from '@/sync/domains/state/storageStore';
-import { PAGE_COLUMN_MAX_WIDTH_PX, resolveContentMaxWidthForMode } from './contentWidthMode';
-import { useListPresentation, usePageColumn, usePageColumnPreferencePolicy } from '@/components/ui/lists/listPresentation';
+import { PAGE_COLUMN_MAX_WIDTH_PX, resolveContentMaxWidthForMode, type PageColumn } from './contentWidthMode';
+import { useContainedPageScope, useListPresentation, usePageColumn } from '@/components/ui/lists/listPresentation';
 
 function readPreferredContentWidthMode(): unknown {
     return getStorage().getState().localSettings.uiContentWidthMode;
@@ -38,19 +38,23 @@ export const layout = {
 
 /**
  * The content column's width. On a configuration page it is also capped by the page's column
- * (`PageColumn`). A page may opt out of the content-width preference without changing its column
- * or the viewport fitting owner.
+ * (`PageColumn`), a fixed role: the reading-width preference sizes conversations and floating
+ * surfaces, never a page column (a reading column is narrower than every preference; a wide column
+ * holds a grid or a library). The viewport fitting owner still applies.
  * Floating surfaces reset to grouped presentation and keep the plain content width.
  */
-export function useLayoutMaxWidth(): number {
+export function useLayoutMaxWidth(column?: PageColumn | 'conversation'): number {
     const preferredContentWidthMode = useLocalSetting('uiContentWidthMode');
     const presentation = useListPresentation();
     const pageColumn = usePageColumn();
-    const preferencePolicy = usePageColumnPreferencePolicy();
+    const isPage = column ? column !== 'conversation' : presentation === 'page';
+    // In a contained surface (a card modal) the container is a page list's column (R-APP-7).
+    const contained = useContainedPageScope() && column === undefined;
     const contentMaxWidth = resolveConstrainedMaxWidth({ variant: 'content',
-        preferredContentWidthMode: presentation === 'page' && preferencePolicy === 'ignore' ? 'full' : preferredContentWidthMode });
-    return presentation === 'page'
-        ? Math.min(contentMaxWidth, PAGE_COLUMN_MAX_WIDTH_PX[pageColumn])
+        preferredContentWidthMode: isPage ? 'full' : preferredContentWidthMode });
+    if (isPage && contained) return Number.POSITIVE_INFINITY;
+    return isPage
+        ? Math.min(contentMaxWidth, PAGE_COLUMN_MAX_WIDTH_PX[column && column !== 'conversation' ? column : pageColumn])
         : contentMaxWidth;
 }
 

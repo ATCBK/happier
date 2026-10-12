@@ -6,13 +6,15 @@ import { useScrollViewWheelScrollTo } from '@/components/ui/scroll/useScrollView
 import { PopoverScrollSourceProvider } from '@/components/ui/popover';
 import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { KeyboardAwareScrollView } from '@/components/ui/keyboardAvoidance/KeyboardAwareScrollView';
-import { ListPresentationProvider, PageColumnProvider, type ListPresentation } from './listPresentation';
+import { ListPresentationProvider, useContainedPageScope, type ListPresentation } from './listPresentation';
 import type { PageColumn } from '@/components/ui/layout/contentWidthMode';
 import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
+import { useGlassSurfaceColor } from '@/components/ui/glass/useGlassSurfaceColor';
 import { PluginUiScrollActivityProvider } from '@happier-dev/plugin-ui/advanced';
 import { createScrollViewNearViewportTracker } from '@/components/widgets/nearViewport';
 import { RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
 import { useContainingHappierMaterialRole, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { PageFrame } from '@/components/ui/layout/PageFrame';
 
 const BASE_CONTENT_PADDING_BOTTOM = Platform.select({ ios: 34, default: 16 }) ?? 16;
 
@@ -90,12 +92,16 @@ export const ItemList = React.memo(React.forwardRef<ScrollView, ItemListProps>((
     } = props;
 
     const isIOS = Platform.OS === 'ios';
+    // A card modal's body is the column: its page list takes the card's width and text edge (R-APP-7).
+    const contained = useContainedPageScope();
     const isWeb = Platform.OS === 'web';
     const rawOnWheel = onWheel;
     const installWebModalWheelFix = isWeb && isInsideModalBoundary && rawOnWheel == null;
+    const pageColor = presentation === 'page' ? theme.colors.surface.base : theme.colors.background.canvas;
+    const nativePageColor = useGlassSurfaceColor(pageColor, 'content', true, false, true);
 
     const backgroundStyle = materialRole === undefined
-        ? presentation === 'page' ? styles.pageBackground : styles.groupedBackground
+        ? isWeb ? presentation === 'page' ? styles.pageBackground : styles.groupedBackground : { backgroundColor: nativePageColor }
         : { backgroundColor: paintColor(presentation === 'page' ? theme.colors.surface.base : theme.colors.background.canvas, 'transparent') };
     const authoredBackground = RNStyleSheet.flatten(style)?.backgroundColor;
 
@@ -128,8 +134,9 @@ export const ItemList = React.memo(React.forwardRef<ScrollView, ItemListProps>((
         ],
         contentContainerStyle: [
             styles.contentContainer,
+            presentation === 'page' ? { paddingBottom: 0 } : null,
             containerStyle,
-            bottomChromeHeight > 0 ? { paddingBottom: BASE_CONTENT_PADDING_BOTTOM + bottomChromeHeight } : null,
+            bottomChromeHeight > 0 ? { paddingBottom: (presentation === 'page' ? 0 : BASE_CONTENT_PADDING_BOTTOM) + bottomChromeHeight } : null,
         ],
         showsVerticalScrollIndicator: scrollViewProps.showsVerticalScrollIndicator !== undefined
             ? scrollViewProps.showsVerticalScrollIndicator
@@ -148,7 +155,9 @@ export const ItemList = React.memo(React.forwardRef<ScrollView, ItemListProps>((
             : (rawOnWheel ? ({ onWheel: rawOnWheel } as any) : {})),
     };
     const content = presentation === 'page' ? (
-        <RoundButtonSizeScope size="normal">{children}</RoundButtonSizeScope>
+        <PageFrame column={pageColumn} content="sections" testID="page-frame">
+            <RoundButtonSizeScope size="normal">{children}</RoundButtonSizeScope>
+        </PageFrame>
     ) : children;
     const scrollContent = keyboardAware ? (
         <KeyboardAwareScrollView {...scrollProps}>{content}</KeyboardAwareScrollView>
@@ -158,10 +167,8 @@ export const ItemList = React.memo(React.forwardRef<ScrollView, ItemListProps>((
 
     return (
         <PopoverScrollSourceProvider scrollSourceRef={internalRef}>
-            <ListPresentationProvider value={presentation} pageNoticeActive={pageNoticeActive}>
-                <PageColumnProvider value={pageColumn}>
-                    <PluginUiScrollActivityProvider tracker={tracker}>{scrollContent}</PluginUiScrollActivityProvider>
-                </PageColumnProvider>
+            <ListPresentationProvider value={presentation} pageNoticeActive={pageNoticeActive} pageInsets={contained ? 'contained' : undefined}>
+                <PluginUiScrollActivityProvider tracker={tracker}>{scrollContent}</PluginUiScrollActivityProvider>
             </ListPresentationProvider>
         </PopoverScrollSourceProvider>
     );

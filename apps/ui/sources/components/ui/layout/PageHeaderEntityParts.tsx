@@ -37,6 +37,8 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
     testID?: string;
     /** Overrides the trigger's test id (kept for pages with an established one). */
     triggerTestID?: string;
+    /** Names what the menu acts on when one page holds many (a row's "Model 0, More actions"). */
+    accessibilityLabel?: string;
     /**
      * Settings search asked the page for one of this menu's entries: the menu opens so the entry is in
      * view. The page wraps the menu in that setting's `SettingAnchor`, which marks the trigger.
@@ -45,6 +47,7 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
 }>) {
     const { theme } = useUnistyles();
     const [open, setOpen] = React.useState(props.openRequested === true);
+    const content = props.content;
     React.useEffect(() => {
         if (props.openRequested) setOpen(true);
     }, [props.openRequested]);
@@ -70,8 +73,8 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
             // Operations, not a choice: nothing reads as picked when the menu opens (DESIGN-9 N46).
             // Arrow keys still move to the first row.
             allowEmptySelection
-            header={props.content ? <View style={stylesheet.menuContent}>{props.content}</View> : undefined}
-            emptyLabel={props.content ? null : undefined}
+            header={content ? <View style={stylesheet.menuContent}>{content}</View> : undefined}
+            emptyLabel={content ? null : undefined}
             onSelect={(id) => {
                 setOpen(false);
                 return props.actions.find((action) => action.id === id)?.onSelect();
@@ -87,7 +90,7 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
                 <IconButton
                     testID={props.triggerTestID ?? (props.testID ? `${props.testID}.trigger` : undefined)}
                     onPress={toggle}
-                    accessibilityLabel={t('common.moreActions')}
+                    accessibilityLabel={props.accessibilityLabel ?? t('common.moreActions')}
                     iconName="dots-three"
                     iconSize={18}
                     size={32}
@@ -141,19 +144,19 @@ export const PageHeaderStateSwitch = React.memo(function PageHeaderStateSwitch(p
 
 const stylesheet = StyleSheet.create((theme) => ({
     menuContent: {
-        padding: 12,
-        gap: 8,
+        padding: theme.space.s12,
+        gap: theme.space.s8,
     },
     stateSwitch: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     // The header's meta line type (`PageHeader` `metaText`): quiet, beside the control it names.
     stateSwitchLabel: {
-        ...Typography.default('regular'),
-        fontSize: 13,
-        lineHeight: 18,
+
+        ...Typography.variant('body'),
+
         color: theme.colors.text.secondary,
     },
 }));

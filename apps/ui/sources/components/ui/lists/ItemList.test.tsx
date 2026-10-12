@@ -31,6 +31,28 @@ vi.mock('@/components/ui/keyboardAvoidance/KeyboardAwareScrollView', () => ({
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('ItemList', () => {
+    it('frames page children as one named column, while grouped scroll content stays unframed', async () => {
+        const { ItemList } = await import('./ItemList');
+        const { PAGE_COLUMN_MAX_WIDTH_PX } = await import('../layout/contentWidthMode');
+        const { HAPPIER_PAGE_METRICS } = await import('@happier-dev/plugin-ui/presentation');
+        const { useLayoutMaxWidth } = await import('../layout/layout');
+        function WidthProbe() {
+            return React.createElement('WidthProbe', { maxWidth: useLayoutMaxWidth() });
+        }
+        const page = await renderScreen(<ItemList pageColumn="wide"><WidthProbe /></ItemList>);
+        const grouped = await renderScreen(<ItemList presentation="grouped"><React.Fragment>Picker body</React.Fragment></ItemList>);
+        const pageColumn = page.findByTestId('page-frame');
+        expect(pageColumn).not.toBeNull();
+        expect(page.findByType('WidthProbe').props.maxWidth).toBe(PAGE_COLUMN_MAX_WIDTH_PX.wide);
+        // The header measures the full pane to place Back in its gutter; its own inner column caps it.
+        expect(readSurfaceStyleProperty(pageColumn!.props.style, 'maxWidth')).toBeUndefined();
+        expect(readSurfaceStyleProperty(pageColumn!.props.style, 'paddingHorizontal')).toBeUndefined();
+        expect(readSurfaceStyleProperty(pageColumn!.props.style, 'paddingTop')).toBeUndefined();
+        const frameBottom = readSurfaceStyleProperty(pageColumn!.props.style, 'paddingBottom');
+        const scrollBottom = readSurfaceStyleProperty(page.findByType('ScrollView').props.contentContainerStyle, 'paddingBottom');
+        expect(Number(frameBottom ?? 0) + Number(scrollBottom ?? 0)).toBe(HAPPIER_PAGE_METRICS.pagePaddingBottomPx);
+        expect(grouped.findAllByTestId('page-frame')).toHaveLength(0);
+    });
     it('keeps page, grouped and static list grounds clear inside their containing material', async () => {
         const { ItemList, ItemListStatic } = await import('./ItemList');
         const authoredStyle = Object.defineProperty({}, 'backgroundColor', { value: '#112233', enumerable: false });
