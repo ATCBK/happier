@@ -46,7 +46,9 @@ export default defineConfig({
     serverWorkspacePackageSourcesPlugin,
     tsconfigPaths({
       projects: [
-        resolve(__dirname, './tsconfig.json'),
+        // Test import resolution includes composed specs; production compilation
+        // keeps its own expensive-fixture exclusion in the base project.
+        resolve(__dirname, './tsconfig.vitest.json'),
         resolve(__dirname, '../ui/tsconfig.json'),
         resolve(__dirname, '../cli/tsconfig.json'),
       ],

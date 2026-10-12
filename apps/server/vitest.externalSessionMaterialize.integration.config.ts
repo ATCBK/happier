@@ -30,7 +30,7 @@ export default defineConfig({
     serverWorkspacePackageSourcesPlugin,
     tsconfigPaths({
       projects: [
-        resolve(__dirname, './tsconfig.json'),
+        resolve(__dirname, './tsconfig.vitest.json'),
         resolve(__dirname, '../cli/tsconfig.json'),
       ],
     }),

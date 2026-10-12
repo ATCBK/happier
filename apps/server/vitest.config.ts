@@ -42,6 +42,6 @@ export default defineConfig({
   // Otherwise vite-tsconfig-paths may scan the repo and attempt to parse Expo tsconfigs.
   plugins: [
     serverWorkspacePackageSourcesPlugin,
-    tsconfigPaths({ projects: [resolve(__dirname, './tsconfig.json')] }),
+    tsconfigPaths({ projects: [resolve(__dirname, './tsconfig.vitest.json')] }),
   ]
 }); 

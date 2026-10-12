@@ -26,6 +26,6 @@ export default defineConfig({
     // Cross-owner DB contracts exercise the real CLI consumer against server
     // routes. Resolve each importer's own alias without scanning Expo projects.
     plugins: [serverWorkspacePackageSourcesPlugin, tsconfigPaths({ projects: [
-        resolve(__dirname, "./tsconfig.json"), resolve(__dirname, "../cli/tsconfig.json"),
+        resolve(__dirname, "./tsconfig.vitest.json"), resolve(__dirname, "../cli/tsconfig.json"),
     ] })],
 });
