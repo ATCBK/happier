@@ -1,4 +1,5 @@
 import { Platform, type TextStyle } from 'react-native';
+import { HAPPIER_TYPE_WEIGHT, resolveHappierTypeScale, type HappierTypeRole, type HappierTypeEmphasis } from '@happier-dev/plugin-ui/presentation/typeScale';
 
 /**
  * Typography system for Happier app
@@ -110,10 +111,10 @@ export const getLogoFont = () => {
 
 // Font weight mappings for the font families
 export const FontWeights = {
-    regular: '400',
-    medium: '500',
-    semiBold: '500',
-    bold: '600',
+    regular: HAPPIER_TYPE_WEIGHT.regular,
+    medium: HAPPIER_TYPE_WEIGHT.medium,
+    semiBold: HAPPIER_TYPE_WEIGHT.semiBold,
+    bold: HAPPIER_TYPE_WEIGHT.semiBold,
 } as const;
 
 // Style utilities for easy inline usage
@@ -127,32 +128,25 @@ function tabularTypography(): Pick<TextStyle, 'fontVariant'> {
     return { fontVariant: ['tabular-nums'] };
 }
 
+function variantTypography(role: HappierTypeRole, emphasis?: HappierTypeEmphasis) {
+    const { weight, ...metrics } = resolveHappierTypeScale(role, Platform.OS, emphasis);
+    return { ...metrics, ...defaultTypography(weight) };
+}
+
 function eyebrowTypography(): Pick<TextStyle, 'fontFamily' | 'fontWeight' | 'fontSize' | 'lineHeight' | 'letterSpacing' | 'textTransform'> {
     return {
-        ...defaultTypography('semiBold'),
-        fontSize: Platform.select({ ios: 11, default: 12 }),
-        lineHeight: Platform.select({ ios: 14, default: 16 }),
+        ...variantTypography('micro', 'semiBold'),
         letterSpacing: 0.8,
         textTransform: 'uppercase',
     };
 }
 
 function rowTitleTypography(): Pick<TextStyle, 'fontFamily' | 'fontWeight' | 'fontSize' | 'lineHeight' | 'letterSpacing'> {
-    return {
-        ...defaultTypography('semiBold'),
-        fontSize: Platform.select({ ios: 15, default: 14 }),
-        lineHeight: Platform.select({ ios: 20, default: 18 }),
-        letterSpacing: Platform.select({ ios: -0.12, default: -0.08 }),
-    };
+    return variantTypography('label', 'semiBold');
 }
 
 function rowMetaTypography(): Pick<TextStyle, 'fontFamily' | 'fontSize' | 'lineHeight' | 'letterSpacing'> {
-    return {
-        ...defaultTypography('regular'),
-        fontSize: Platform.select({ ios: 13, default: 12 }),
-        lineHeight: Platform.select({ ios: 17, default: 16 }),
-        letterSpacing: Platform.select({ ios: -0.08, default: 0 }),
-    };
+    return variantTypography('meta');
 }
 
 /**
@@ -160,44 +154,31 @@ function rowMetaTypography(): Pick<TextStyle, 'fontFamily' | 'fontSize' | 'lineH
  * above the row meta line (lab c7 `.body`, 14/21) and below the row title in weight.
  */
 function readingTypography(): Pick<TextStyle, 'fontFamily' | 'fontWeight' | 'fontSize' | 'lineHeight' | 'letterSpacing'> {
-    return {
-        ...defaultTypography('regular'),
-        fontSize: Platform.select({ ios: 15, default: 14 }),
-        lineHeight: Platform.select({ ios: 22, default: 21 }),
-        letterSpacing: Platform.select({ ios: -0.12, default: -0.08 }),
-    };
+    return variantTypography('reading');
 }
 
-// One pill label on every platform (lab `.pill`/`.l12-pill`: 11.5 semibold, barely tracked); with the shared
-// badge's 3pt block padding it draws the lab's 20pt status fact.
+// A pill takes the micro role with the semibold face; D3 owns the native iOS size.
 function pillLabelTypography(): Pick<TextStyle, 'fontFamily' | 'fontWeight' | 'fontSize' | 'lineHeight' | 'letterSpacing'> {
-    return {
-        ...defaultTypography('semiBold'),
-        fontSize: 11,
-        lineHeight: 14,
-        letterSpacing: 0.05,
-    };
+    return variantTypography('micro', 'semiBold');
 }
 
 function keyHintTypography(): Pick<TextStyle, 'fontFamily' | 'fontSize' | 'lineHeight' | 'fontVariant'> {
     return {
+        ...variantTypography('micro', 'regular'),
         ...Typography.mono(),
         ...tabularTypography(),
-        fontSize: Platform.select({ ios: 12, default: 11 }),
-        lineHeight: Platform.select({ ios: 16, default: 14 }),
     };
 }
 
 function timestampTypography(): Pick<TextStyle, 'fontFamily' | 'fontSize' | 'lineHeight' | 'fontVariant'> {
     return {
-        ...defaultTypography('regular'),
+        ...variantTypography('micro', 'regular'),
         ...tabularTypography(),
-        fontSize: Platform.select({ ios: 12, default: 11 }),
-        lineHeight: Platform.select({ ios: 16, default: 14 }),
     };
 }
 
 export const Typography = {
+    variant: variantTypography,
     // Default font styles (Inter on every platform)
     default: defaultTypography,
 

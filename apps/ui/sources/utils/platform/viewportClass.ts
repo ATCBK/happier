@@ -1,10 +1,11 @@
-export type ViewportClass = 'compact' | 'medium' | 'expanded' | 'wide';
+import type { HappierViewportClass as ViewportClass } from '@happier-dev/plugin-ui/presentation';
 
-export const VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX = Object.freeze({
-    tabletMin: 600,
-    expandedMin: 840,
-    wideMin: 1200,
-});
+export {
+    HAPPIER_VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX as VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX,
+    resolveHappierViewportClass as resolveViewportClass,
+    resolveHappierViewportMinEdgePx as resolveViewportMinEdgePx,
+    type HappierViewportClass as ViewportClass,
+} from '@happier-dev/plugin-ui/presentation';
 
 export const CONSTRAINED_MAX_WIDTH_PX_BY_VIEWPORT_CLASS = Object.freeze({
     compact: 800,
@@ -12,18 +13,3 @@ export const CONSTRAINED_MAX_WIDTH_PX_BY_VIEWPORT_CLASS = Object.freeze({
     expanded: 1200,
     wide: 1400,
 } satisfies Record<ViewportClass, number>);
-
-export function resolveViewportMinEdgePx(params: Readonly<{ width: number; height: number }>): number {
-    const width = Number(params.width);
-    const height = Number(params.height);
-    if (!Number.isFinite(width) || !Number.isFinite(height)) return 0;
-    return Math.min(Math.abs(width), Math.abs(height));
-}
-
-export function resolveViewportClass(params: Readonly<{ width: number; height: number }>): ViewportClass {
-    const minEdge = resolveViewportMinEdgePx(params);
-    if (minEdge >= VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX.wideMin) return 'wide';
-    if (minEdge >= VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX.expandedMin) return 'expanded';
-    if (minEdge >= VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX.tabletMin) return 'medium';
-    return 'compact';
-}

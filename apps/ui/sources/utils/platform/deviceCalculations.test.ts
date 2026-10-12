@@ -173,6 +173,13 @@ describe('responsive utilities', () => {
             expect(height).toBe(64);
         });
 
+        it('draws the desktop pane band and the phone band at the page metrics pane-header roles', async () => {
+            const { HAPPIER_PAGE_METRICS } = await import('@happier-dev/plugin-ui/presentation');
+            expect(calculateHeaderHeight({ platform: 'web', isLandscape: false })).toBe(HAPPIER_PAGE_METRICS.paneHeaderHeightPx);
+            expect(calculateHeaderHeight({ platform: 'ios', isLandscape: false, isMacCatalyst: true })).toBe(HAPPIER_PAGE_METRICS.paneHeaderHeightPx);
+            expect(calculateHeaderHeight({ platform: 'ios', isPad: false, isLandscape: false })).toBe(HAPPIER_PAGE_METRICS.paneHeaderUnderNativeChromeHeightPx);
+        });
+
         it('should return correct height for iOS iPhone', () => {
             const height = calculateHeaderHeight({
                 platform: 'ios',

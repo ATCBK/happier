@@ -1,5 +1,6 @@
-// Pure calculation functions for viewport sizing.
-// These functions have no dependencies on React Native or platform-specific APIs.
+// Pure calculation functions for viewport sizing: no platform APIs are read here; callers pass the facts.
+
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 import { VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX } from './viewportClass';
 
@@ -53,13 +54,9 @@ export function calculateHeaderHeight(params: {
     const { platform, isLandscape, isPad, deviceType, isMacCatalyst } = params;
     
     // Mac Catalyst: Use dedicated height for desktop environment
-    if (isMacCatalyst) {
-        return 56; // Mac Catalyst: 52 points (slightly taller than iOS for desktop feel)
-    }
-    
-    // Web platform: Use Material Design height
-    if (platform === 'web') {
-        return 56; // Web: 64px for consistency with Material Design
+    // A desktop window (web, Mac Catalyst): the page metrics' pane band.
+    if (isMacCatalyst || platform === 'web') {
+        return HAPPIER_PAGE_METRICS.paneHeaderHeightPx;
     }
     
     if (platform === 'android') {
@@ -74,5 +71,5 @@ export function calculateHeaderHeight(params: {
     if (isPad) {
         return 50; // iPad (iOS 12+): 50 points
     }
-    return 44; // iPhone: 44 points
+    return HAPPIER_PAGE_METRICS.paneHeaderUnderNativeChromeHeightPx; // iPhone: the navigation bar's 44 points
 }

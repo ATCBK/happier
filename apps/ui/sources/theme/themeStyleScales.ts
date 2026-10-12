@@ -53,10 +53,22 @@ const ANDROID_COMPOSER_RADIUS_EXTRA = Platform.OS === 'android' ? 4 : 0;
 
 type Margins = Readonly<{ xs: number; sm: number; md: number; lg: number; xl: number; xxl: number }>;
 
-const DENSITY_SCALES: Readonly<Record<ThemeDensityName, Readonly<{ margins: Margins; transcript: Readonly<{ messageGap: number }> }>>> = {
+/** Value-named spacing steps; legacy margins project these until U7 removes their consumers. */
+export const HAPPIER_SPACE_STEPS = Object.freeze({ s2: 2, s4: 4, s6: 6, s8: 8, s10: 10, s12: 12, s16: 16, s20: 20, s24: 24, s32: 32, s40: 40, s48: 48 } as const);
+export type ThemeSpaceStep = keyof typeof HAPPIER_SPACE_STEPS;
+type Space = Readonly<Record<ThemeSpaceStep, number>>;
+
+// Preserve the existing compact six steps. Added steps interpolate their existing neighbors, rounded
+// down to whole pixels; beyond s24 the existing 4px reduction continues. U1 does not tune density.
+const COMPACT_SPACE: Space = Object.freeze({ s2: 1, s4: 3, s6: 4, s8: 6, s10: 8, s12: 10, s16: 12, s20: 16, s24: 20, s32: 28, s40: 36, s48: 44 });
+function legacyMargins(space: Space): Margins {
+    return { xs: space.s4, sm: space.s8, md: space.s12, lg: space.s16, xl: space.s20, xxl: space.s24 };
+}
+
+const DENSITY_SCALES: Readonly<Record<ThemeDensityName, Readonly<{ space: Space; transcript: Readonly<{ messageGap: number }> }>>> = {
     // Today's spacing and the transcript's 22 px between messages.
-    comfortable: { margins: { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 24 }, transcript: { messageGap: 22 } },
-    compact: { margins: { xs: 3, sm: 6, md: 10, lg: 12, xl: 16, xxl: 20 }, transcript: { messageGap: 14 } },
+    comfortable: { space: HAPPIER_SPACE_STEPS, transcript: { messageGap: 22 } },
+    compact: { space: COMPACT_SPACE, transcript: { messageGap: 14 } },
 };
 
 export type ThemeStyleSelection = Readonly<{
@@ -72,6 +84,7 @@ export type ThemeStyleSelection = Readonly<{
 export type ThemeStyleScales = Readonly<{
     borderRadius: RadiusScale;
     margins: Margins;
+    space: Space;
     finish: ThemeSurfaceFinish;
     parts: Readonly<Record<ThemePartName, Readonly<{ radius: number; finish: ThemeSurfaceFinish }>>>;
     transcript: Readonly<{ messageGap: number }>;
@@ -97,7 +110,8 @@ export function resolveThemeStyleScales(selection: ThemeStyleSelection | null = 
 
     return {
         borderRadius,
-        margins: density.margins,
+        margins: legacyMargins(density.space),
+        space: density.space,
         finish,
         parts,
         transcript: density.transcript,
@@ -128,6 +142,7 @@ function readScales(theme: ThemeStyleScales): ThemeStyleScales {
     return {
         borderRadius: theme.borderRadius,
         margins: theme.margins,
+        space: theme.space,
         finish: theme.finish,
         parts: theme.parts,
         transcript: theme.transcript,
@@ -145,6 +160,7 @@ export function applyThemeStyleScales<T extends ThemeStyleScales>(theme: T, scal
         ...theme,
         borderRadius: scales.borderRadius,
         margins: scales.margins,
+        space: scales.space,
         finish: scales.finish,
         parts: scales.parts,
         transcript: scales.transcript,
