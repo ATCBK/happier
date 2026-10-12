@@ -40,7 +40,7 @@ const VOICE_CONVERSATION_OPTIONAL_METHODS = Object.freeze([
     'dispose',
     'encodePostCancelControls',
     'encodePostBargeInControls',
-] as const);
+] as const satisfies readonly (keyof Extract<RegisteredVoiceProviderRuntime, { kind: 'conversation' }>)[]);
 
 const requireObject = requireStaticRegistrationObject;
 
@@ -415,7 +415,7 @@ const MCP_SERVER_METHODS = Object.freeze([
     'subscribeResource',
     'listPrompts',
     'getPrompt',
-] as const);
+] as const satisfies readonly (keyof PluginMcpServerRuntime)[]);
 
 export function snapshotMcpServerRuntime(
     runtime: PluginMcpServerRuntime,
@@ -439,7 +439,9 @@ const SCM_HOSTING_CAPABILITY_METHODS = Object.freeze({
     pullRequestCheckout: ['resolvePullRequestCheckoutReference'],
     repositoryPublishing: ['describePublishTargets', 'createRepository', 'getRepository'],
     repositoryClone: ['describeCloneTargets'],
-} as const);
+} as const satisfies {
+    [K in keyof HostingProviderRuntime['adapter']]-?: readonly (keyof NonNullable<HostingProviderRuntime['adapter'][K]>)[];
+});
 
 export function snapshotScmHostingProviderRuntime(
     runtime: HostingProviderRuntime,
@@ -512,7 +514,9 @@ const SCM_BACKEND_HANDLER_METHODS = Object.freeze({
         'isAdministrativeWorkspacePath',
         'classifyPortableWorkspacePath',
     ],
-} as const);
+} as const satisfies {
+    [K in keyof BackendRuntime['handlers']]-?: readonly (keyof NonNullable<BackendRuntime['handlers'][K]>)[];
+});
 
 function snapshotScmBackendRuntimeDescriptor(
     value: unknown,
@@ -877,7 +881,7 @@ export function snapshotStaticRegistrationValue<
         case 'projectNativeAdapters': {
             const receiver = requireObject(value, 'Project native adapter');
             const runtime: { -readonly [K in keyof PluginProjectNativeAdapterRuntimeV1]: PluginProjectNativeAdapterRuntimeV1[K] } = {};
-            for (const role of ['detect', 'resolveCommand', 'produceEnvironment'] as const) {
+            for (const role of ['detect', 'resolveCommand', 'produceEnvironment'] as const satisfies readonly (keyof PluginProjectNativeAdapterRuntimeV1)[]) {
                 const callback = captureStaticRegistrationMethod(receiver, role, `Project native adapter.${role}`, false);
                 if (callback !== undefined) Object.assign(runtime, { [role]: callback });
             }
