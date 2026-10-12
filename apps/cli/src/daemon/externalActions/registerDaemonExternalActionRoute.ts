@@ -125,6 +125,8 @@ export function registerDaemonExternalActionRoute(
     currentServerHttpBaseUrl?: string;
     verifyPat: DaemonPatVerifier;
     executor: ExternalActionExecutor;
+    acquirePluginRuntimeRegistryLease?: Parameters<typeof executeExternalAction>[0]['acquirePluginRuntimeRegistryLease'];
+    resolvePluginExecutionOriginContext?: Parameters<typeof executeExternalAction>[0]['resolvePluginExecutionOriginContext'];
     /**
      * Retained as a source-compatible constructor seam for older embeddings.
      * PAT-bound executors are intentionally never selected: Home-bound work
@@ -263,6 +265,8 @@ export function registerDaemonExternalActionRoute(
         prepareRequesterAccountContext: input.prepareRequesterAccountContext,
         resolveTarget: input.resolveTarget,
         executor: input.executor,
+        acquirePluginRuntimeRegistryLease: input.acquirePluginRuntimeRegistryLease,
+        resolvePluginExecutionOriginContext: input.resolvePluginExecutionOriginContext,
         ...(minted?.ok ? { executionAuthorization: minted.authorization } : {}),
         ...(input.externalActionMachineRequestPrivateKey
           ? { externalActionMachineRequestPrivateKey: input.externalActionMachineRequestPrivateKey }

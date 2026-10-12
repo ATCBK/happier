@@ -9,11 +9,18 @@ import {
   SessionAgentSpawnPolicyV1Schema,
   sealSessionOwnerMetadataEnvelopeV1,
   signExternalActionApprovalInputV1,
+  ApprovalRequestV2Schema,
+  ApprovalExecutionOriginV1Schema,
+  ExternalActionExecutionAuthorizationV1Schema,
   type ApprovalExecutionOriginV1,
   type ApprovalRequestV2,
 } from '@happier-dev/protocol';
+import { buildApprovalExecutionOriginV1, createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { decideApprovalRequestTransition } from '@happier-dev/protocol/approvals/approvalRequestTransition';
+import { SessionActionRpcOriginV1Schema } from '@happier-dev/protocol/socketRpc';
 
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
@@ -35,6 +42,87 @@ const origin: ApprovalExecutionOriginV1 = {
 };
 
 describe('daemon approval execution-origin currentness', () => {
+  it.each((['ui', 'session', 'external'] as const).flatMap(kind => [
+    { kind, widening: false }, { kind, widening: true },
+  ]))('executes only an admitted signed $kind narrowed process subset (widening: $widening)', async ({ kind, widening }) => {
+    const keys = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(23));
+    const actionId = 'machines.processes.stop' as const;
+    const target = { kind: 'session' as const, sessionId: 'session-1' };
+    const process = { ref: 'process-one', expect: { level: 'proven' as const,
+      owner: { kind: 'session' as const, sessionId: 'session-1' } } };
+    const actionArgs = { machineId: 'machine-1', targets: [process, { ...process, ref: 'process-two' }] };
+    const narrowedInput = { ...actionArgs, targets: [{ ...process, ...(widening ? { ref: 'process-added' } : {}) }] };
+    const caller = { kind: 'session' as const, sessionId: 'session-1', starterDepth: 0, turnDepth: 0 };
+    const sessionActionOrigin = SessionActionRpcOriginV1Schema.parse({ v: 1, caller,
+      sourceTurnId: 'turn-1', callerPermissionMode: 'yolo', requestId: 'narrowed-choice' });
+    const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-narrowing-proof', binding: {
+      serverIdentityId: 'home-1', accountId: 'account-1', custodianAccountId: 'account-1', installationId: 'installation-1',
+      machineId: 'machine-1', actionId, requestId: 'narrowed-choice', requestEnvelopeDigest: 'a'.repeat(43), target,
+      ...(kind === 'external'
+        ? { principalId: 'account-1', credentialId: '11111111-1111-4111-8111-111111111111', grant: API_TOKEN_FULL_GRANT_V1 }
+        : { authentication: { kind: 'account', tokenEpoch: 7 }, ...(kind === 'session'
+          ? { sessionActionOrigin, sessionActionSource: { machineId: 'machine-1', installationId: 'installation-1' } } : {}) }),
+    } });
+    const executionOrigin = buildApprovalExecutionOriginV1({ actionId, input: actionArgs, targetSessionId: target.sessionId, context: {
+      surface: kind === 'ui' ? 'ui' : kind === 'session' ? 'agent' : 'api',
+      authority: kind === 'ui' ? 'present_user' : 'account_automation',
+      actionCaller: kind === 'session' ? caller : { kind: 'host' }, serverId: 'profile', serverIdentityId: 'home-1',
+      runtimeAccountId: 'account-1', actionRequestId: 'narrowed-choice', externalActionTarget: target,
+      externalActionExecutionAuthorization: authorization,
+      ...(kind === 'external' ? { externalActionCredential: { accountId: 'account-1', principalId: 'account-1',
+        credentialId: '11111111-1111-4111-8111-111111111111', grant: API_TOKEN_FULL_GRANT_V1 } } : {}),
+      ...(kind === 'session' ? { callerPermissionMode: 'yolo',
+        sessionInputSource: { sourceSessionId: caller.sessionId, sourceTurnId: 'turn-1', via: 'action' } } : {}),
+      signExternalActionApprovalInput: ({ input, target: signedTarget }) => signExternalActionApprovalInputV1({
+        authorizationToken: authorization.token, actionId, input, target: signedTarget, privateKey: keys.secretKey }),
+    } });
+    expect(executionOrigin).not.toBeNull();
+    if (!executionOrigin) throw new Error('Canonical signed approval origin was unavailable');
+    let request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'system' }, actionId, actionArgs, summary: 'Stop selected work', executionOriginV1: executionOrigin,
+      approval: { flow: 'deferred', result: 'required' } });
+    const originIsCurrent = createDaemonApprovalExecutionOriginCurrentness({ accountId: 'account-1', machineId: 'machine-1', serverId: 'profile',
+      resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home-1', machineId: 'machine-1' }),
+      resolveTarget: async () => target, listAccountApiTokens: async () => ({ tokens: [] }),
+      externalActionMachinePublicKey: keys.publicKey,
+      // Home authorization/Session permission reads and the native driver are external boundaries;
+      // signature verification, catalog, decision transition and Action replay all remain real.
+      verifyExternalExecutionAuthorization: async () => true, isSessionCallerCurrent: async () => true,
+      resolveCurrentPermissionMode: async () => 'yolo',
+      resolveCurrentSessionAgentSpawnPolicyV1: async () => SessionAgentSpawnPolicyV1Schema.parse({}),
+    });
+    expect(await originIsCurrent({ origin: executionOrigin, request })).toBe(true);
+    const effects: unknown[] = [];
+    const approved: unknown[] = [];
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), approvalsGet: async () => request,
+      approvalsUpdate: async ({ request: value }) => {
+        const transition = decideApprovalRequestTransition(request, value);
+        if (!transition.ok) return transition;
+        request = ApprovalRequestV2Schema.parse(value);
+        if (request.status === 'approved') approved.push(request);
+        return { ok: true };
+      },
+      isApprovalExecutionOriginCurrent: originIsCurrent,
+      machineProcessesAction: async ({ input }) => {
+        effects.push(input);
+        return { status: 'ended', outcomes: [{ ref: process.ref, outcome: 'ended', freedBytes: 4096 }] };
+      },
+    });
+    const result = await executor.execute('approval.request.decide', { artifactId: 'signed-choice', decision: 'approve', narrowedInput },
+      { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
+    if (widening) {
+      expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+      expect(effects).toEqual([]);
+      expect(request.status).toBe('open');
+      expect(request.actionArgs).toEqual(actionArgs);
+      return;
+    }
+    expect(result).toMatchObject({ ok: true, result: { status: 'executed' } });
+    expect(effects).toEqual([narrowedInput]);
+    expect(approved).toEqual([expect.objectContaining({ actionArgs, executionOriginV1: executionOrigin,
+      decision: expect.objectContaining({ authority: 'present_user', narrowedInput }) })]);
+    expect(request.actionArgs).toEqual(actionArgs);
+  });
   it('rechecks signed ordinary Account approval without requiring descriptive PAT fields', async () => {
     const keys = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(19));
     const target = { kind: 'machine' as const, machineId: 'machine-1' };
@@ -193,6 +281,8 @@ describe('daemon approval execution-origin currentness', () => {
       binding: {
         serverIdentityId: 'srv-cryptographic-home',
         accountId: 'account-1',
+        custodianAccountId: 'account-1',
+        installationId: 'installation-1',
         principalId: 'principal-1',
         credentialId: '11111111-1111-4111-8111-111111111111',
         grant: API_TOKEN_FULL_GRANT_V1,
@@ -203,7 +293,7 @@ describe('daemon approval execution-origin currentness', () => {
         target: { kind: 'machine' as const, machineId: 'machine-1' },
       },
     };
-    const externalOrigin = {
+    const externalOrigin = ApprovalExecutionOriginV1Schema.parse({
       ...origin,
       serverId: 'creator-local-profile-id',
       serverIdentityId: authorization.binding.serverIdentityId,
@@ -217,7 +307,7 @@ describe('daemon approval execution-origin currentness', () => {
         input: actionArgs,
         privateKey: keyPair.secretKey,
       }),
-    } as ApprovalExecutionOriginV1;
+    });
     const request: ApprovalRequestV2 = {
       v: 2,
       status: 'approved',
@@ -277,6 +367,8 @@ describe('daemon approval execution-origin currentness', () => {
       binding: {
         serverIdentityId: 'home-1',
         accountId: 'account-1',
+        custodianAccountId: 'account-1',
+        installationId: 'installation-1',
         principalId: 'principal-1',
         credentialId: '11111111-1111-4111-8111-111111111111',
         grant: API_TOKEN_FULL_GRANT_V1,
@@ -357,6 +449,8 @@ describe('daemon approval execution-origin currentness', () => {
       binding: {
         serverIdentityId: 'home-1',
         accountId: 'account-1',
+        custodianAccountId: 'account-1',
+        installationId: 'installation-1',
         principalId: 'account-1',
         credentialId: '11111111-1111-4111-8111-111111111111',
         grant: { ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: ['acme.external/actions/archive-member'] } },

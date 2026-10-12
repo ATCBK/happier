@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { prepareExternalActionResponseEnvelopeV1, ExternalActionActionIdV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeSchema, externalActionTargetsEqualV1, isExternalActionRequestWithinLimit, isExternalActionRequestVersionAllowedForAccountModeV1, projectExternalActionExecutionResultV1, readExternalActionProtectedRequestId } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { openExternalActionRequestV2, prepareExternalActionResponseV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
-import { SIGNED_ROOT_ACTION_OUTPUT_SCHEMAS, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { SIGNED_ROOT_ACTION_OUTPUT_SCHEMAS, PublicActionIdSchema, SignedRootActionIdSchema, isPluginProvenanceOnlyActionId } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionExecuteResult, ActionExecutorContext, ExternalActionResponseEnvelopeV1, ExternalActionTargetV1, PreparedExternalActionResponseEnvelope, ExternalActionEncryptionBindingV2, ExternalActionExecutionAuthorizationV1, ExternalActionServerPrincipalV1, SignedRootActionId } from '@happier-dev/protocol/actions';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { ManagedAcquireInputV1Schema, ManagedAdmissionComputeInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
@@ -13,6 +13,10 @@ import { reconcileExternalActionTarget } from './reconcileExternalActionTarget';
 import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
 import type { ExternalActionRequesterAccountContextPurposeV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import type { ManagedMachinePolicyRequest } from '../startup/managedMachineActionAdapter';
+import { deriveMountedPluginInvocationCaller } from '@/plugins/runtime/invocation/mountedPluginInvocationCaller';
+import { resolvePluginActionCaller } from '@/plugins/runtime/invocation/services/actionCaller';
+import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
+import { isOriginalOwnAccountActionCustody } from '../sessionEncryption/requesterAccountActionProjection';
 
 type PublicOutputValidationResult =
   | Readonly<{ success: true; data: unknown }>
@@ -101,8 +105,9 @@ export type ExecuteExternalActionResult = Readonly<
 
 /**
  * Transport-neutral external Action admission. Authentication and target
- * ownership are supplied by the daemon boundary; callers cannot set Action
- * authority, caller provenance, or execution context through the envelope.
+ * ownership are supplied by the daemon boundary. A mounted-plugin claim can
+ * narrow the caller only after local runtime admission; it cannot supply Action
+ * authority, trusted caller provenance, or execution context.
  */
 export async function executeExternalAction(input: Readonly<{
   actionId: unknown;
@@ -118,6 +123,8 @@ export async function executeExternalAction(input: Readonly<{
   currentSessionId?: string;
   /** Daemon-owned local profile id used for routing; never accepted from the envelope. */
   currentServerId?: string;
+  /** Account admitted by the private receiving host; never an envelope field. */
+  currentAccountId?: string;
   /** Exact Home URL captured by the receiving host, never supplied by the envelope. */
   currentServerHttpBaseUrl?: string;
   /** Exact receiving installation, supplied by the host rather than the envelope. */
@@ -129,6 +136,10 @@ export async function executeExternalAction(input: Readonly<{
   prepareRequesterAccountContext?: PrepareExternalActionRequesterAccountContext;
   resolveTarget: ResolveExternalActionTarget;
   executor: ExternalActionExecutor;
+  /** The daemon's existing runtime lease owner, never chosen by the caller. */
+  acquirePluginRuntimeRegistryLease?: () => Promise<PluginRuntimeRegistryLease>;
+  /** Live receiving Home/Machine identity from the canonical machine owner. */
+  resolvePluginExecutionOriginContext?: Parameters<typeof deriveMountedPluginInvocationCaller>[0]['resolveExecutionOriginContext'];
   /** Host-owned ingress classification; never accepted from an external envelope. */
   surface?: 'ui' | 'cli' | 'mcp';
   /** Home-minted invocation authority relayed or exchanged at admission. */
@@ -174,7 +185,7 @@ export async function executeExternalAction(input: Readonly<{
   const actionId = apiTokenPrincipal
     ? PublicActionIdSchema.safeParse(externalActionId.data)
     : SignedRootActionIdSchema.safeParse(externalActionId.data);
-  if (!actionId.success) {
+  if (!actionId.success || (isPluginProvenanceOnlyActionId(externalActionId.data) && !envelope.data.pluginInvocation)) {
     return {
       kind: 'invalid_request',
       errorCode: 'invalid_action',
@@ -231,11 +242,9 @@ export async function executeExternalAction(input: Readonly<{
   }
 
   let requesterContext: Awaited<ReturnType<PrepareExternalActionRequesterAccountContext>> = null;
+  let pluginRuntimeLease: PluginRuntimeRegistryLease | null = null;
   const prepareOwnAccount = executionAuthorization?.success && input.prepareRequesterAccountContext !== undefined
-    && input.principal.authority === 'present_user' && 'authentication' in executionAuthorization.data.binding
-    && executionAuthorization.data.binding.authentication.kind === 'account'
-    && !executionAuthorization.data.binding.sessionActionOrigin && !executionAuthorization.data.binding.workflowActionOrigin
-    && executionAuthorization.data.binding.accountId === executionAuthorization.data.binding.custodianAccountId;
+    && isOriginalOwnAccountActionCustody(executionAuthorization.data.binding);
   if (executionAuthorization?.success && (executionAuthorization.data.requesterAccountContext || prepareOwnAccount)) {
     const authorization = executionAuthorization.data;
     const current = !input.signal?.aborted && await input.verifyExecutionAuthorization!({ authorization,
@@ -443,12 +452,45 @@ export async function executeExternalAction(input: Readonly<{
     }
     admittedAuthorization = projected;
   }
+  let mountedCaller: Awaited<ReturnType<typeof deriveMountedPluginInvocationCaller>> = { status: 'absent' };
+  if (envelope.data.pluginInvocation) {
+    const invocation = envelope.data.pluginInvocation;
+    const binding = invocation.kind === 'mountedPluginSurface' ? invocation.mountedBinding : invocation.clientActionBinding;
+    try {
+      if (binding.sourceCustody && input.acquirePluginRuntimeRegistryLease && input.resolvePluginExecutionOriginContext
+        && !apiTokenPrincipal && accountPrincipal?.authentication.kind !== 'terminal'
+        && !sessionActionOrigin && !input.signal?.aborted) {
+        pluginRuntimeLease = await input.acquirePluginRuntimeRegistryLease();
+        mountedCaller = await deriveMountedPluginInvocationCaller({
+          request: { machineId: input.currentMachineId, invocationSurface: input.surface ?? 'ui', invocation },
+          registry: pluginRuntimeLease.registry,
+          resolveCurrentPluginMaterializationRef: pluginRuntimeLease.resolveCurrentPluginMaterializationRef,
+          resolveExecutionOriginContext: input.resolvePluginExecutionOriginContext,
+        });
+      }
+      if (mountedCaller.status !== 'available' || !await mountedCaller.isMountedCallerCurrent()) {
+        mountedCaller = { status: 'unavailable' };
+      }
+    } catch { mountedCaller = { status: 'unavailable' }; }
+    if (mountedCaller.status !== 'available') return prepare({ v: 1, actionId: actionId.data,
+      ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
+      execution: { ok: false, errorCode: 'plugin_mounted_caller_unavailable', error: 'plugin_mounted_caller_unavailable' } });
+  }
+  const pluginCaller = mountedCaller.status === 'available' ? resolvePluginActionCaller({
+    plugin: { id: mountedCaller.caller.pluginId }, contribution: mountedCaller.caller.contribution,
+    occurrenceId: mountedCaller.caller.occurrenceId, sourceCustody: mountedCaller.caller.sourceCustody,
+    resolveCurrentPluginMaterializationRef: () => mountedCaller.status === 'available'
+      ? mountedCaller.caller.materialization ?? null : null,
+  }) : null;
+  if (envelope.data.pluginInvocation && !pluginCaller) return prepare({ v: 1, actionId: actionId.data,
+    ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
+    execution: { ok: false, errorCode: 'plugin_mounted_caller_unavailable', error: 'plugin_mounted_caller_unavailable' } });
   const context: ActionExecutorContext = {
-    surface: sessionActionOrigin ? 'agent' : apiTokenPrincipal
+    surface: pluginCaller ? 'plugin' : sessionActionOrigin ? 'agent' : apiTokenPrincipal
       ? 'api'
       : input.surface ?? 'ui',
     authority: input.principal.authority,
-    actionCaller: sessionActionOrigin?.caller ?? { kind: 'host' },
+    actionCaller: pluginCaller ?? sessionActionOrigin?.caller ?? { kind: 'host' },
     ...(sessionActionOrigin ? {
       defaultSessionId: sessionActionOrigin.caller.sessionId,
       callerPermissionMode: sessionActionOrigin.callerPermissionMode,
@@ -489,7 +531,8 @@ export async function executeExternalAction(input: Readonly<{
     // decision never has to infer placement from the Session later.
     ...(target.kind === 'session' ? { defaultSessionMachineId: input.currentMachineId } : {}),
     ...(input.currentServerId !== undefined ? { serverId: input.currentServerId } : {}),
-    ...(accountPrincipal ? { runtimeAccountId: accountPrincipal.accountId } : {}),
+    ...(accountPrincipal ? { runtimeAccountId: accountPrincipal.accountId }
+      : !apiTokenPrincipal && input.currentAccountId ? { runtimeAccountId: input.currentAccountId } : {}),
     ...reconciliation.context,
     ...(reconciliation.executionRunRequiresMachineTarget && target.kind === 'machine'
       ? { executionRunTargetMachineId: target.machineId }
@@ -543,7 +586,9 @@ export async function executeExternalAction(input: Readonly<{
     ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
     execution,
   });
-  } finally { await requesterContext?.dispose(); }
+  } finally {
+    try { await pluginRuntimeLease?.release(); } finally { await requesterContext?.dispose(); }
+  }
 }
 
 function preparedResponse(

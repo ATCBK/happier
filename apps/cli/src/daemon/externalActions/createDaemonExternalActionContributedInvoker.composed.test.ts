@@ -10,7 +10,8 @@ const externalActionTargetResolverMocks = vi.hoisted(() => ({
   fetchAccountMachineReplacements: vi.fn(),
 }));
 
-vi.mock('@/session/transport/http/sessionsHttp', () => ({
+vi.mock('@/session/transport/http/sessionsHttp', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/session/transport/http/sessionsHttp')>()),
   fetchSessionById: externalActionTargetResolverMocks.fetchSessionById,
 }));
 
@@ -20,6 +21,11 @@ vi.mock('@/api/machine/fetchAccountMachineReplacements', () => ({
 
 import {
   API_TOKEN_FULL_GRANT_V1,
+  AccountApiTokenSummaryV1Schema,
+  ActionsSettingsV1Schema,
+  ApprovalExecutionOriginV1Schema,
+  ExternalActionExecutionAuthorizationV1Schema,
+  accountSettingsParse,
   ApiTokenGrantV1Schema,
   buildQualifiedPluginContributionKey,
   createPluginContributionIdentity,
@@ -79,7 +85,18 @@ import { encryptSessionPayload } from '@/session/transport/encryption/sessionEnc
 import { encodeBase64 } from '@/api/encryption';
 import type { PluginActionsServiceSeed } from '@/plugins/runtime/invocation/services/actions';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
-import { createCommittedContributedActionSchemaReader } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
+import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import * as daemonControlClient from '@/daemon/controlClient';
+import { createPluginActionExecutor } from '@/session/actions/createDaemonPluginActionExecutor';
+import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
+import { dispatchBuiltInHappierTool } from '@/agent/tools/happierTools/dispatchBuiltInHappierTool';
+import { executeContributedAction } from '@/plugins/runtime/invocation/actions/executeContributedAction';
+import { setActionApprovalOverride } from '@happier-dev/protocol/actions/actionSettings';
+import { formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { createCommittedContributedActionInvoker, createCommittedContributedActionSchemaReader } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
+import { buildWorkflowActionContext, createWorkflowAcceptedAuthorizationCurrentness } from '@/daemon/workflows/daemonRuntime';
+import { projectOccurrenceBoundExecutablePluginToolCatalog } from '@/plugins/runtime/toolCatalog';
 import { registerActionSpecRpcHandlers } from '@/rpc/handlers/registerActionSpecRpcHandlers';
 
 import {
@@ -124,7 +141,9 @@ function createExternalActionRuntime(
   serviceOwners?: Pick<ReturnType<typeof createProductionPluginInvocationServiceOwners>, 'createServices' | 'resolveHostBinding'>,
   dangerLevel: 'safe' | 'writesRemote' = 'safe',
   activationOnly?: () => void,
+  actionOptions: Readonly<{ localId?: string; surfaces?: readonly ('cli' | 'mcp' | 'agent' | 'plugin')[]; overlappingTool?: true; unavailable?: true }> = {},
 ): ResolvedExecutablePluginRuntimeRegistry {
+  const localId = actionOptions.localId ?? 'inspect';
   const plugin = {
     pluginId,
     pluginRootPath: `/plugins/${pluginId}`,
@@ -146,39 +165,34 @@ function createExternalActionRuntime(
       runtime: { apiVersion: 1 },
       entrypoints: { daemon: './daemon.mjs' },
       contributes: {
-        actions: [{
-          id: 'inspect',
+        actions: (actionOptions.overlappingTool ? ['inspect', 'actions/inspect'] : [localId]).map((id) => ({
+          id,
           title: 'Inspect',
           scopes: [scope],
           // `api` deliberately is not an author-visible Action surface.
-          surfaces: ['cli'],
+          surfaces: actionOptions.surfaces ?? ['cli'],
           execution: { target: 'daemon' },
           dangerLevel,
+          ...(actionOptions.unavailable ? { availability: { when: { fact: 'plugin.enabled', operator: 'equals', value: false } } } : {}),
           ...(dangerLevel === 'safe' ? {} : { confirmation: { title: 'Write', body: 'Write provider state?', confirmLabel: 'Write' } }),
-        }],
+        })),
+        ...(actionOptions.overlappingTool ? { tools: [{ id: 'inspect-tool', action: 'actions/inspect',
+          name: 'acme_inspect', title: 'Inspect nested Action', surfaces: ['cli'] }] } : {}),
       },
     }),
   } satisfies LoadedPlugin;
-  const normalizedAction = buildPluginContributionRegistry({
+  const normalized = buildPluginContributionRegistry({
     loadedPlugins: [plugin],
-  }).actions[0];
+  });
+  const normalizedAction = normalized.actions[0];
   if (!normalizedAction) throw new Error('Expected normalized external Action contribution');
-  const resolvedAction: ResolvedActionContribution = {
-    provenance: 'external',
-    source: { kind: normalizedAction.sourceSpec.kind },
-    pluginId: normalizedAction.pluginId,
-    pluginVersion: normalizedAction.pluginVersion,
-    identity: normalizedAction.identity,
-    pluginRootPath: normalizedAction.pluginRootPath,
-    manifestPath: normalizedAction.manifestPath,
-    daemonEntryPath: normalizedAction.daemonEntryPath,
-    devDaemonEntryPath: normalizedAction.devDaemonEntryPath,
-    sourceSpec: normalizedAction.sourceSpec,
-    localizedPresentation: normalizedAction.localizedPresentation,
-    definition: normalizedAction.definition,
-  };
+  const resolvedActions = normalized.actions.map((entry): ResolvedActionContribution => ({
+    provenance: 'external', source: { kind: entry.sourceSpec.kind },
+    ...entry,
+  }));
   const contributes = createResolvedContributionRegistry({
-    actions: [resolvedAction],
+    actions: resolvedActions,
+    tools: normalized.tools.map((entry) => ({ provenance: 'external' as const, source: { kind: entry.sourceSpec.kind }, ...entry })),
     activationTargets: [{
       provenance: 'external',
       source: { kind: normalizedAction.sourceSpec.kind },
@@ -191,9 +205,9 @@ function createExternalActionRuntime(
     }],
   });
   const actionRegistryKey = buildQualifiedPluginContributionKey(
-    createPluginContributionIdentity({ pluginId, localId: 'inspect' }),
+    createPluginContributionIdentity({ pluginId, localId }),
   );
-  expect(actionRegistryKey).toBe(`${pluginId}/inspect`);
+  expect(actionRegistryKey).toBe(`${pluginId}/${localId}`);
   const actionsById = contributes.actionsById;
   if (!actionsById) throw new Error('Expected indexed external Action contributions');
   const registeredAction = actionsById.get(actionRegistryKey);
@@ -209,22 +223,23 @@ function createExternalActionRuntime(
   const fixtureOccurrenceId = createPluginRuntimeOccurrenceId(pluginId);
   const targetActionInvocations = buildTargetActionInvocationRegistry({
     contributes,
-    targetRegistrations: activationOnly ? [] : [{
+    targetRegistrations: activationOnly ? [] : resolvedActions.map((entry) => ({
       pluginId,
       occurrenceId: fixtureOccurrenceId,
       registration: {
-        family: 'actions',
-        localId: registeredAction.definition.id,
+        family: 'actions' as const,
+        localId: entry.definition.id,
         value: async (_input: JsonValue, context: PluginInvocationContext) => {
           await onActionInvocation?.(context);
           return {
             surface: context.surface,
             caller: context.caller?.kind ?? null,
             sessionId: context.session?.id ?? null,
+            ...(actionOptions.overlappingTool ? { localId: entry.definition.id } : {}),
           };
         },
       },
-    }],
+    })),
     readCurrentPluginOccurrenceId: (currentPluginId) => (
       currentPluginId === pluginId ? fixtureOccurrenceId : null
     ),
@@ -240,8 +255,8 @@ function createExternalActionRuntime(
       platform: 'darwin',
       occurredAtMs: 1,
       status: 'active',
-      required: [{ family: 'actions', localId: registeredAction.definition.id }],
-      bound: [{ family: 'actions', localId: registeredAction.definition.id }],
+      required: resolvedActions.map((entry) => ({ family: 'actions' as const, localId: entry.definition.id })),
+      bound: resolvedActions.map((entry) => ({ family: 'actions' as const, localId: entry.definition.id })),
       diagnostics: [],
     }],
     resolveAuthorizationFacts: (resolvedAction) => ({
@@ -263,9 +278,11 @@ function createExternalActionRuntime(
   });
 
   const runtime = {
+    claimReleaseLessDeclarations: async () => undefined,
     contributes,
     generation: 1,
     targetActionInvocations,
+    readPluginOccurrenceId: (currentPluginId: string) => currentPluginId === pluginId ? fixtureOccurrenceId : null,
     resolveCurrentPluginExecutionOrigin: async (currentPluginId) => (
       resolveCurrentPluginExecutionOrigin
         ? resolveCurrentPluginExecutionOrigin(currentPluginId)
@@ -393,6 +410,218 @@ function createExternalActionIngressExecutor(scope: 'global' | 'session' = 'sess
 
 describe('createDaemonExternalActionContributedInvoker', () => {
   afterEach(() => { vi.restoreAllMocks(); });
+
+  it.each(['host', 'host_ask', 'session', 'retired'] as const)('preserves the accepted workflow caller and canonical approval gate (%s)', async origin => {
+    const previousSettings = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+    if (origin === 'host_ask') process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({ v: 1, actions: {
+      'acme.external/actions/inspect': { approvalRequiredSurfaces: ['plugin'] },
+    } });
+    const seeds: PluginActionsServiceSeed[] = [];
+    const runtime = createExternalActionRuntime('global', 'acme.external', undefined, undefined, undefined,
+      seed => { seeds.push(seed); }, undefined, 'writesRemote', undefined, { surfaces: ['agent', 'plugin'] });
+    const current = createWorkflowAcceptedAuthorizationCurrentness({ accountId: 'account',
+      listAccountApiTokens: async () => { throw new Error('This workflow has no API grant'); },
+      resolveCurrentPluginOccurrenceId: async id => runtime.readPluginOccurrenceId?.(id) ?? null,
+      resolveCurrentPluginSourceCustody: async () => null,
+      isMediatedSourceCurrent: async () => { throw new Error('This workflow has no mediated source'); },
+    });
+    const approve = vi.fn(async (request: TargetActionCurrentIntentRequest) => ({
+      status: 'approved' as const, fingerprint: request.fingerprint,
+    }));
+    const invoker = createCommittedContributedActionInvoker({
+      acquireRuntimeRegistryLease: async () => ({ registry: runtime, source: 'ephemeral',
+        durableRevision: runtime.durableRevision ?? -1, release: async () => {} }),
+      requestCurrentIntent: approve,
+      isWorkflowRunAuthorizationCurrent: current,
+    });
+    const authorization = { admittedPermissionCeiling: 'default' as const,
+      principal: origin === 'session' ? { kind: 'session' as const, sessionId: 'origin' }
+        : origin === 'retired' ? { kind: 'plugin' as const, pluginId: 'acme.retired',
+          sourceCustody: { kind: 'development' as const, registeredRootId: 'retired-root' } }
+          : { kind: 'host' as const } };
+    const context = buildWorkflowActionContext({ runId: 'workflow-run', authorization });
+    try {
+      const result = await invoker({ action: { pluginId: 'acme.external', localId: 'inspect' }, input: {}, context });
+      if (origin === 'retired') {
+        expect(result).toMatchObject({ ok: false, errorCode: 'workflow_authorization_not_current' });
+        expect(seeds).toHaveLength(0);
+      } else {
+        expect(result).toMatchObject({ ok: true });
+        expect(seeds).toHaveLength(1);
+        expect(seeds[0]?.initiatingActionCaller).toEqual(context.actionCaller);
+      }
+      expect(approve).toHaveBeenCalledTimes(origin === 'session' || origin === 'host_ask' ? 1 : 0);
+      if (origin === 'session') expect(approve).toHaveBeenCalledWith(expect.objectContaining({ invocationSurface: 'agent' }));
+      if (origin === 'host_ask') expect(approve).toHaveBeenCalledWith(expect.objectContaining({ invocationSurface: 'background' }));
+    } finally {
+      await runtime.dispose();
+      if (previousSettings === undefined) delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+      else process.env.HAPPIER_ACTIONS_SETTINGS_V1 = previousSettings;
+    }
+  });
+
+  it('refuses a workflow grant revoked while contributed Action confirmation is pending', async () => {
+    const invoked = vi.fn();
+    const runtime = createExternalActionRuntime('global', 'acme.external', invoked, undefined, undefined,
+      undefined, undefined, 'writesRemote', undefined, { surfaces: ['agent', 'plugin'] });
+    const token = AccountApiTokenSummaryV1Schema.parse({ tokenId: '11111111-1111-4111-8111-111111111111',
+      label: 'Workflow', displayPrefix: 'hap_v1_12345678', createdAt: '2026-10-12T00:00:00Z', lastUsedAt: null,
+      expiresAt: null, hasEncryptionAccess: false, hasUnattendedTeamAccess: false, grant: API_TOKEN_FULL_GRANT_V1,
+      parentTokenId: null, activeChildCount: 0, embedConfig: null });
+    let revoked = false;
+    // The Account token-list HTTP port is the boundary; grant currentness and
+    // the contributed Action's policy, confirmation and invocation stay real.
+    const current = createWorkflowAcceptedAuthorizationCurrentness({ accountId: 'account',
+      listAccountApiTokens: async () => ({ tokens: revoked ? [] : [token] }),
+      resolveCurrentPluginOccurrenceId: async () => null, resolveCurrentPluginSourceCustody: async () => null,
+      isMediatedSourceCurrent: async () => { throw new Error('No mediated source'); },
+    });
+    const invoker = createCommittedContributedActionInvoker({
+      acquireRuntimeRegistryLease: async () => ({ registry: runtime, source: 'ephemeral',
+        durableRevision: runtime.durableRevision ?? -1, release: async () => {} }),
+      isWorkflowRunAuthorizationCurrent: current,
+      requestCurrentIntent: async request => {
+        revoked = true;
+        return { status: 'approved', fingerprint: request.fingerprint };
+      },
+    });
+    try {
+      expect(await invoker({ action: { pluginId: 'acme.external', localId: 'inspect' }, input: {},
+        context: buildWorkflowActionContext({ runId: 'workflow-run', authorization: {
+          admittedPermissionCeiling: 'default', principal: { kind: 'api', accountId: 'account',
+            principalId: 'account', credentialId: token.tokenId },
+        } }) })).toMatchObject({ ok: false, errorCode: 'workflow_authorization_not_current', actionHandlerInvocation: 'notStarted' });
+      expect(invoked).not.toHaveBeenCalled();
+    } finally { await runtime.dispose(); }
+  });
+
+  it('keeps projected Tool and discovered Action identities distinct when local IDs overlap the Action namespace', async () => {
+    let invocationCount = 0;
+    const runtime = createExternalActionRuntime('global', 'acme.external', () => { invocationCount += 1; },
+      undefined, undefined, undefined, undefined, 'safe', undefined, { overlappingTool: true });
+    const pluginToolCatalog = projectOccurrenceBoundExecutablePluginToolCatalog(runtime);
+    expect(pluginToolCatalog).toMatchObject([{ actionId: 'acme.external/actions/actions/inspect' }]);
+    const lease = { registry: runtime, source: 'ephemeral', durableRevision: -1, release: async () => {} } satisfies PluginRuntimeRegistryLease;
+    const listDefinitions = createDaemonExternalActionContributedDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
+    const base = createActionExecutor({ listContributedActionDefinitions: listDefinitions,
+      readContributedActionSchemas: createCommittedContributedActionSchemaReader(listDefinitions) } as unknown as ActionExecutorDeps);
+    const executor = createPluginActionExecutor({ base, requestPluginActionExecution: async (request) => request.actionId === 'action.spec.get'
+      ? { matched: true, result: await base.execute('action.spec.get', request.input, { surface: request.surface }) }
+      : executeContributedAction({ runtimeRegistry: runtime, actionId: request.actionId, input: request.input, context: { surface: request.surface },
+        ...(request.expectedContributorOccurrenceId ? { expectedContributorOccurrenceId: request.expectedContributorOccurrenceId } : {}),
+        actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: {} }) }) });
+    const bridge = createActionToolExecutorBridge({ surface: 'cli', executor, pluginToolCatalog });
+    const execute = (actionId: string) => dispatchBuiltInHappierTool({ toolName: 'action_execute', args: { actionId, input: {} },
+      sessionId: 'session-1', surface: 'cli', pluginToolCatalog,
+      deps: { changeTitle: async () => { throw new Error('Unexpected title change'); }, executeActionByToolName: bridge.executeActionByToolName } });
+    await expect(execute('acme.external/actions/inspect')).resolves.toMatchObject({ ok: true, result: { localId: 'inspect' } });
+    await expect(execute(pluginToolCatalog[0]!.actionId)).resolves.toMatchObject({ ok: true, result: { localId: 'actions/inspect' } });
+    await expect(bridge.executeActionByToolName('acme_inspect', {}, 'session-1')).resolves.toMatchObject({ ok: true, result: { localId: 'actions/inspect' } });
+    expect(invocationCount).toBe(3);
+    // A previously delivered catalog snapshot cannot borrow a replacement
+    // contributor's admission, through either the named or generic Tool.
+    const retiredBridge = createActionToolExecutorBridge({ surface: 'cli', executor,
+      pluginToolCatalog: pluginToolCatalog.map((tool) => ({ ...tool,
+        expectedContributorOccurrenceId: createPluginRuntimeOccurrenceId('acme.external') })) });
+    await expect(retiredBridge.executeActionByToolName('acme_inspect', {}, 'session-1')).resolves.toMatchObject({ ok: false });
+    await expect(retiredBridge.executeActionByToolName('action_execute', { actionId: pluginToolCatalog[0]!.actionId, input: {} }, 'session-1')).resolves.toMatchObject({ ok: false });
+    expect(invocationCount).toBe(3);
+  });
+
+  it('keeps generic qualified Actions subject to real catalog and surface admission', async () => {
+    for (const unavailable of [false, true]) {
+      let invoked = false;
+      const runtime = createExternalActionRuntime('global', 'acme.external', () => { invoked = true; },
+        undefined, undefined, undefined, undefined, 'safe', undefined,
+        { surfaces: ['cli'], ...(unavailable ? { unavailable: true } : {}) });
+      const lease = { registry: runtime, source: 'ephemeral', durableRevision: -1, release: async () => {} } satisfies PluginRuntimeRegistryLease;
+      const listDefinitions = createDaemonExternalActionContributedDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
+      const base = createActionExecutor({ listContributedActionDefinitions: listDefinitions,
+        readContributedActionSchemas: createCommittedContributedActionSchemaReader(listDefinitions) } as unknown as ActionExecutorDeps);
+      const executor = createPluginActionExecutor({ base, requestPluginActionExecution: async (request) => request.actionId === 'action.spec.get'
+        ? { matched: true, result: await base.execute('action.spec.get', request.input, { surface: request.surface }) }
+        : executeContributedAction({ runtimeRegistry: runtime, actionId: request.actionId, input: request.input,
+          context: { surface: request.surface }, actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: {} }) }) });
+      const surface = unavailable ? 'cli' : 'mcp';
+      const bridge = createActionToolExecutorBridge({ surface, executor, pluginToolCatalog: [] });
+      await expect(dispatchBuiltInHappierTool({ toolName: 'action_execute', args: { actionId: 'acme.external/actions/inspect', input: {} },
+        sessionId: 'session-1', surface, pluginToolCatalog: [],
+        deps: { changeTitle: async () => { throw new Error('Unexpected title change'); }, executeActionByToolName: bridge.executeActionByToolName } })).resolves.toMatchObject({ ok: false });
+      expect(invoked).toBe(false);
+    }
+  });
+
+  it('executes a discovered qualified Action without a Tool on each host surface under canonical preferences', async () => {
+    for (const localId of ['inspect', 'actions/inspect']) {
+      for (const surface of ['cli', 'mcp', 'agent'] as const) {
+        let invocationCount = 0;
+        const runtime = createExternalActionRuntime('global', 'acme.external', () => { invocationCount += 1; },
+          undefined, undefined, undefined, undefined, 'writesRemote', undefined,
+          { localId, surfaces: ['cli', 'mcp', 'agent'] });
+        expect(runtime.contributes.tools).toHaveLength(0);
+        const lease = { registry: runtime, source: 'ephemeral', durableRevision: -1, release: async () => {} } satisfies PluginRuntimeRegistryLease;
+        const listDefinitions = createDaemonExternalActionContributedDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
+        const actionId = formatQualifiedPluginActionId({ pluginId: 'acme.external', localId });
+        let settings = ActionsSettingsV1Schema.parse({ v: 1, actions: {} });
+        const base = createActionExecutor({ listContributedActionDefinitions: listDefinitions,
+          readContributedActionSchemas: createCommittedContributedActionSchemaReader(listDefinitions) } as unknown as ActionExecutorDeps);
+        const executor = createPluginActionExecutor({
+          base,
+          // Daemon IPC is the boundary. Both catalog admission and handler
+          // dispatch below retain their real normalized registry and policy.
+          requestPluginActionExecution: async (request) => request.actionId === 'action.spec.get'
+            ? { matched: true, result: await base.execute('action.spec.get', request.input, { surface: request.surface, actionsSettings: settings }) }
+            : executeContributedAction({ runtimeRegistry: runtime, actionId: request.actionId, input: request.input,
+              actionsSettings: settings, context: { surface: request.surface },
+              requestCurrentIntent: async () => ({ status: 'rejected', code: 'plugin_action_current_intent_rejected' }) }),
+        });
+        const bridge = createActionToolExecutorBridge({ surface, executor, pluginToolCatalog: [], getActionsSettings: () => settings });
+        const execute = () => dispatchBuiltInHappierTool({ toolName: 'action_execute', args: { actionId, input: {} }, sessionId: 'session-1',
+          surface, pluginToolCatalog: [], getActionsSettings: () => settings,
+          deps: { changeTitle: async () => { throw new Error('Unexpected title change'); }, executeActionByToolName: bridge.executeActionByToolName } });
+        expect(await base.execute('action.spec.get', { id: actionId }, { surface })).toMatchObject({ ok: true, result: { actionSpec: { id: actionId } } });
+        await expect(execute()).resolves.toMatchObject({ ok: false, errorCode: 'plugin_action_current_intent_rejected' });
+        expect(invocationCount).toBe(0);
+        settings = setActionApprovalOverride({ settings, actionId, surface, approvalRequired: false });
+        await expect(execute()).resolves.toMatchObject({ ok: true, result: { surface, caller: null } });
+        expect(invocationCount).toBe(1);
+        settings = ActionsSettingsV1Schema.parse({ v: 1, actions: { [actionId]: { ...settings.actions[actionId], enabled: false } } });
+        await expect(execute()).resolves.toMatchObject({ ok: false, errorCode: 'action_disabled' });
+        expect(invocationCount).toBe(1);
+        settings = ActionsSettingsV1Schema.parse({ v: 1, actions: { [actionId]: { ...settings.actions[actionId], enabled: true } } });
+        settings = setActionApprovalOverride({ settings, actionId, surface, approvalRequired: null });
+        await expect(execute()).resolves.toMatchObject({ ok: false, errorCode: 'plugin_action_current_intent_rejected' });
+        expect(invocationCount).toBe(1);
+      }
+    }
+  });
+
+  it('executes a discovered qualified Action through the real credentialed CLI caller and daemon adapter', async () => {
+    const runtime = createExternalActionRuntime('global');
+    const lease = { registry: runtime, source: 'ephemeral', durableRevision: -1, release: async () => {} } satisfies PluginRuntimeRegistryLease;
+    const listDefinitions = createDaemonExternalActionContributedDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
+    const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: {} });
+    const daemonExecutor = createActionExecutor({ listContributedActionDefinitions: listDefinitions,
+      readContributedActionSchemas: createCommittedContributedActionSchemaReader(listDefinitions) } as unknown as ActionExecutorDeps);
+    // The actual daemon HTTP/IPC boundary alone is replaced; credentialed CLI
+    // context preparation, discovery, dynamic adapter and policy remain real.
+    vi.spyOn(daemonControlClient, 'requestDaemonPluginActionExecution').mockImplementation(async (request) => request.actionId === 'action.spec.get'
+      ? { matched: true, result: await daemonExecutor.execute('action.spec.get', request.input, { surface: request.surface }) }
+      : executeContributedAction({ runtimeRegistry: runtime, actionId: request.actionId, input: request.input,
+        context: { surface: request.surface }, actionsSettings: settings }));
+    const executor = createCliActionExecutorFromCredentials({
+      credentials: { token: 'fixture-cli-token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) } },
+      serverId: 'fixture-home', serverApiUrl: 'https://fixture-home.example.test', serverIdentityId: 'server-external', machineId: 'machine-local',
+      resolveServerFeaturesSnapshot: async () => undefined,
+      actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({ actionsSettingsV1: settings }) }),
+    });
+    const bridge = createActionToolExecutorBridge({ surface: 'cli', executor, pluginToolCatalog: [] });
+    await expect(dispatchBuiltInHappierTool({ toolName: 'action_execute', args: { actionId: 'acme.external/actions/inspect', input: {} },
+      sessionId: 'session-1', surface: 'cli', pluginToolCatalog: [],
+      deps: { changeTitle: async () => { throw new Error('Unexpected title change'); }, executeActionByToolName: bridge.executeActionByToolName } })).resolves.toMatchObject({
+      ok: true, result: { surface: 'cli', caller: null },
+    });
+  });
 
   it('allows a source read but rejects writes under the same current read-only invocation lease', async () => {
     for (const dangerLevel of ['safe', 'writesRemote'] as const) {
@@ -1502,12 +1731,14 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       ...API_TOKEN_FULL_GRANT_V1,
       actions: { families: [], ids: ['acme.external/actions/inspect'] },
     };
-    const authorization = {
+    const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({
       v: 1 as const,
       token: 'home-signed-external-invocation',
       binding: {
         serverIdentityId: 'server-external',
         accountId: 'account-1',
+        custodianAccountId: 'account-1',
+        installationId: 'machine-installation-1',
         principalId: 'principal-1',
         credentialId: '11111111-1111-4111-8111-111111111111',
         machineId: 'machine-local',
@@ -1517,7 +1748,8 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         grant: approvedGrant,
         target,
       },
-    };
+    });
+    if (!('grant' in authorization.binding)) throw new Error('Expected canonical PAT authorization');
     const approvalExecutionOrigin: ApprovalExecutionOriginV1 = {
       ...createApiActionApprovalOrigin(),
       serverIdentityId: authorization.binding.serverIdentityId,
@@ -1530,6 +1762,8 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         privateKey: installationKeyPair.secretKey,
       }),
     };
+    const parsedOrigin = ApprovalExecutionOriginV1Schema.safeParse(approvalExecutionOrigin);
+    expect(parsedOrigin.success, JSON.stringify(parsedOrigin.success ? {} : parsedOrigin.error.issues.map(({ code, path }) => ({ code, path })))).toBe(true);
     let replaySeed: PluginActionsServiceSeed | null = null;
     const runtime = createExternalActionRuntime(
       'global',
@@ -1568,7 +1802,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       }),
     });
 
-    await expect(deferred({
+    const deferredResult = await deferred({
       action: outerInput.action,
       input: outerInput.input,
       approvalExecutionOrigin,
@@ -1589,7 +1823,9 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         externalActionTarget: target,
       },
       signal: new AbortController().signal,
-    })).resolves.toMatchObject({
+    });
+    expect(deferredResult, JSON.stringify({ ok: deferredResult.ok,
+      ...(!deferredResult.ok ? { errorCode: deferredResult.errorCode } : {}) })).toMatchObject({
       ok: true,
       result: { kind: 'approval_request_created', artifactId: 'approval-external-pat-replay' },
     });

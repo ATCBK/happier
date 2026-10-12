@@ -117,7 +117,7 @@ describe('executeExternalAction', () => {
     });
     const run = (requestPrincipal: Parameters<typeof executeExternalAction>[0]['principal']) => executeExternalAction({
       actionId, envelope, principal: requestPrincipal, surface: 'cli', executionAuthorization: authorization,
-      currentMachineId: target.machineId, currentServerId: 'profile', currentInstallationId: 'alice-installation',
+      currentMachineId: target.machineId, currentServerId: 'profile', currentAccountId: 'foreign-controller-account', currentInstallationId: 'alice-installation',
       externalActionMachineRequestPrivateKey: installation.secretKey, verifyExecutionAuthorization: async () => true,
       resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'alice-custodian' } }),
       executor: createActionExecutor(createUnavailableHostActionDeps()),
@@ -154,8 +154,12 @@ describe('executeExternalAction', () => {
       expect(effects).toBe(1);
     } finally { get.mockRestore(); post.mockRestore(); }
   });
-  it('preserves UI Ask through the real private requester credential factory on a foreign installation', async () => {
+  it.each([
+    ['foreign', 'present_user', 'account'], ['own', 'account_automation', 'account'],
+    ['foreign', 'account_automation', 'account'], ['own', 'account_automation', 'terminal'],
+  ] as const)('preserves UI Ask through the real private requester credential factory for %s %s %s', async (custody, authority, authenticationKind) => {
     const accountId = 'bob-private-ask';
+    const custodianAccountId = custody === 'own' ? accountId : 'alice';
     const token = `fixture.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
     const credentials = { token, encryption: null };
     const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(22));
@@ -165,17 +169,19 @@ describe('executeExternalAction', () => {
       controller: { machineId: target.machineId, installationId: 'alice-installation' },
       launch: { provider: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, name: 'Guest', choices: {} },
       retention: { kind: 'until-delete' as const }, wakeOnAcceptedMessage: false } };
-    const principal = { accountId, authority: 'present_user' as const, authentication: { kind: 'account' as const, tokenEpoch: 7 } };
+    const principal = { accountId, authority, authentication: { kind: authenticationKind, tokenEpoch: 7 } };
     const envelope = { v: 1 as const, requestId: 'bob-reviewed-request', input, target };
     const authorization = sealExternalActionRequesterAccountContextV1({
       authorization: { v: 1, token: 'home-admitted-bob', binding: {
         accountId, authentication: principal.authentication, accountEncryptionMode: 'plain', serverIdentityId: 'srv_home',
-        machineId: target.machineId, custodianAccountId: 'alice', installationId: 'alice-installation',
+        machineId: target.machineId, custodianAccountId, installationId: 'alice-installation',
         actionId, requestId: envelope.requestId, target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
       } }, credentials: { token }, purpose: { kind: 'external_action' }, installationPublicKey: installation.publicKey,
       randomBytes: tweetnacl.randomBytes,
     });
-    const storedSettings = { actionsSettingsV1: { v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } } };
+    const storedSettings = { actionsSettingsV1: { v: 1, ...(authority === 'present_user' ? {
+      actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } },
+    } : {}) } };
     const aliceSnapshot = { source: 'network' as const, settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1,
       loadedAtMs: Date.now(), settingsSecretsReadKeys: [], scopeKey: 'alice-custodian' };
     setActiveAccountSettingsSnapshot(aliceSnapshot);
@@ -226,8 +232,8 @@ describe('executeExternalAction', () => {
         result: { kind: 'approval_request_created', actionId } } } });
       expect(effects).toBe(0);
       expect(approvals).toHaveLength(1);
-      expect(approvals[0]).toMatchObject({ status: 'open', executionOriginV1: { surface: 'ui', authority: 'present_user', accountId,
-        externalActionExecutionAuthorization: { binding: { accountId, custodianAccountId: 'alice' } } } });
+      expect(approvals[0]).toMatchObject({ status: 'open', executionOriginV1: { surface: 'ui', authority, accountId,
+        externalActionExecutionAuthorization: { binding: { accountId, custodianAccountId } } } });
       expect(JSON.stringify(approvals[0])).not.toContain(token);
       expect(getActiveAccountSettingsSnapshot()).toBe(aliceSnapshot);
     } finally { get.mockRestore(); post.mockRestore(); resetActiveAccountSettingsSnapshotForTests(); }
@@ -254,6 +260,7 @@ describe('executeExternalAction', () => {
     let row = ProjectAccountRowV1Schema.parse({ key: { kind: 'project-organization', serverId: 'own-home', projectKey: 'project' },
       revision: 2, content: { t: 'plain', v: { key: { kind: 'project-organization', serverId: 'own-home', projectKey: 'project' },
         value: { hidden: true, pinned: false, promptStack: [] } } } });
+    const initialRow = row;
     const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/profile') return { status: 200, data: { id: principal.accountId } };
@@ -305,8 +312,9 @@ describe('executeExternalAction', () => {
       } } });
       expect(JSON.stringify(authorization)).not.toContain('requesterAccountContext');
       expect(getActiveAccountSettingsSnapshot()).toBe(ownSnapshot);
+      row = initialRow;
       expect(await run('account_automation')).toMatchObject({ kind: 'response', response: { execution: {
-        ok: false, errorCode: 'project_visibility_access_denied',
+        ok: true, result: { row: { hidden: false }, revision: 3 },
       } } });
     } finally { get.mockRestore(); post.mockRestore(); resetActiveAccountSettingsSnapshotForTests(); }
   });
@@ -379,9 +387,11 @@ describe('executeExternalAction', () => {
     } finally { get.mockRestore(); post.mockRestore(); }
   });
   it.each([
-    ['current', 'prepare'], ['current', 'execute'], ['newly persisted', 'prepare'], ['newly persisted', 'execute'],
-    ['refused by Home', 'prepare'],
-  ] as const)('preserves signed own-Account UI authority and %s Ask before native %s', async (policy, operation) => {
+    ['current', 'prepare', 'present_user'], ['current', 'execute', 'present_user'],
+    ['newly persisted', 'prepare', 'present_user'], ['newly persisted', 'execute', 'present_user'],
+    ['refused by Home', 'prepare', 'present_user'],
+    ['current', 'execute', 'account_automation'], ['newly persisted', 'prepare', 'account_automation'],
+  ] as const)('preserves signed own-Account UI authority and %s Ask before native %s for %s', async (policy, operation, authority) => {
     vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'auto');
     const accountId = 'ask-fresh-account';
     const token = `fixture.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
@@ -393,7 +403,7 @@ describe('executeExternalAction', () => {
       controller: { machineId: target.machineId, installationId: 'installation' },
       launch: { provider: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, name: 'Guest', choices: {} },
       retention: { kind: 'until-delete' as const }, wakeOnAcceptedMessage: false } };
-    const principal = { accountId, authority: 'present_user' as const, authentication: { kind: 'account' as const, tokenEpoch: 7 } };
+    const principal = { accountId, authority, authentication: { kind: 'account' as const, tokenEpoch: 7 } };
     const envelope = { v: 1 as const, requestId: 'fresh-ask', input, target };
     const authorization = { v: 1 as const, token: 'signed-account-root', binding: {
       accountId, authentication: principal.authentication, accountEncryptionMode: 'plain' as const,
@@ -433,7 +443,7 @@ describe('executeExternalAction', () => {
         serverId: 'profile', serverApiUrl: 'https://home.test', serverIdentityId: 'srv_home',
         externalActionMachineRequestPrivateKey: privateKey, externalActionMachineInstallationId: 'installation',
         managedMachineAction: async request => {
-          expect(request.context).toMatchObject({ surface: 'ui', authority: 'present_user', runtimeAccountId: accountId });
+          expect(request.context).toMatchObject({ surface: 'ui', authority, runtimeAccountId: accountId });
           effects++; return { managedId: 'retained' };
         },
       });
@@ -457,18 +467,21 @@ describe('executeExternalAction', () => {
       expect(result, JSON.stringify(result)).toMatchObject({ kind: 'response', response: { execution: { ok: true, result: { kind: 'approval_request_created', actionId } } } });
       expect(effects).toBe(0);
       expect(savedApprovals).toHaveLength(1);
-      expect(savedApprovals[0]).toMatchObject({ status: 'open', executionOriginV1: { accountId, authority: 'present_user', surface: 'ui' } });
+      expect(savedApprovals[0]).toMatchObject({ status: 'open', executionOriginV1: { accountId, authority, surface: 'ui' } });
     } finally {
       get.mockRestore(); post.mockRestore(); resetActiveAccountSettingsSnapshotForTests(); vi.unstubAllEnvs();
     }
   });
 
   it.each([
-    ['plain', 'machines.managed.acquire', 'own'], ['e2ee', 'machines.managed.acquire', 'own'],
-    ['plain', 'machines.managed.bootstrap.retry', 'own'], ['e2ee', 'machines.managed.bootstrap.retry', 'own'],
-    ['plain', 'machines.managed.acquire', 'admitted requester'], ['e2ee', 'machines.managed.acquire', 'admitted requester'],
-  ] as const)('preserves one exact-Account UI Ask and its registered approved replay for %s %s %s', async (mode, actionId, custody) => {
-    const accountPrincipal = { accountId: 'requester', authority: 'present_user' as const,
+    ['plain', 'machines.managed.acquire', 'own', 'present_user'], ['e2ee', 'machines.managed.acquire', 'own', 'present_user'],
+    ['plain', 'machines.managed.bootstrap.retry', 'own', 'present_user'], ['e2ee', 'machines.managed.bootstrap.retry', 'own', 'present_user'],
+    ['plain', 'machines.managed.acquire', 'admitted requester', 'present_user'], ['e2ee', 'machines.managed.acquire', 'admitted requester', 'present_user'],
+    ['plain', 'machines.managed.acquire', 'own', 'account_automation'], ['e2ee', 'machines.managed.acquire', 'own', 'account_automation'],
+    ['plain', 'machines.managed.acquire', 'admitted requester', 'account_automation'],
+    ['e2ee', 'machines.managed.acquire', 'admitted requester', 'account_automation'],
+  ] as const)('preserves one exact-Account Ask and human replay for %s %s %s %s', async (mode, actionId, custody, authority) => {
+    const accountPrincipal = { accountId: 'requester', authority,
       authentication: { kind: 'account' as const, tokenEpoch: 7 } };
     const target = { kind: 'machine' as const, machineId: 'controller' };
     const input = actionId === 'machines.managed.acquire' ? { selection: { kind: 'one-off' as const,
@@ -499,9 +512,9 @@ describe('executeExternalAction', () => {
       // original input signature, strict Artifact and Action policy stay real.
       verifyExternalExecutionAuthorization: async () => true,
     });
-    const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+    const settings = ActionsSettingsV1Schema.parse({ v: 1, ...(authority === 'present_user' ? { actions: {
       [actionId]: { approvalRequiredSurfaces: ['ui'] },
-    } });
+    } } : {}) });
     const artifacts = new Map<string, ApprovalRequest>();
     const states: string[] = [];
     let effects = 0;
@@ -531,7 +544,7 @@ describe('executeExternalAction', () => {
       actionsSettingsProvider: { getActionsSettings: () => settings, getAccountSettings: () => null },
     }, { ...approvalStore, isApprovalExecutionOriginCurrent: currentness,
       managedMachineAction: async request => {
-        expect(request.context).toMatchObject({ authority: 'present_user', actionRequestId: binding.requestId,
+        expect(request.context).toMatchObject({ authority, actionRequestId: binding.requestId,
           externalActionExecutionAuthorization: authorization, runtimeAccountId: accountPrincipal.accountId });
         effects++;
         return { managedId: 'retained' };
@@ -565,11 +578,16 @@ describe('executeExternalAction', () => {
     const result = admitted.kind === 'response' ? admitted.response.v === 2 && envelope.v === 2
       ? openExternalActionResponseV2({ envelope: admitted.response, binding, material, request: envelope })
       : admitted.response.v === 1 ? admitted.response.execution : null : null;
-    expect(result).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'approval-1', actionId } });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'approval-1', actionId } });
     expect(effects).toBe(0);
     const approval = ApprovalRequestV2Schema.parse(artifacts.get('approval-1'));
-    expect(approval.executionOriginV1).toMatchObject({ authority: 'present_user', surface: 'ui', caller: { kind: 'host' },
+    expect(approval.executionOriginV1).toMatchObject({ authority, surface: 'ui', caller: { kind: 'host' },
       accountId: accountPrincipal.accountId, machineId: target.machineId, requestId: binding.requestId });
+    expect(await client.execute('approval.request.decide', { artifactId: 'approval-1', decision: 'approve' },
+      { surface: 'voice', authority: 'account_automation', serverId: 'profile' }))
+      .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(artifacts.get('approval-1')?.status).toBe('open');
+    expect(effects).toBe(0);
     const decision = await client.execute('approval.request.decide', { artifactId: 'approval-1', decision: 'approve' },
       { surface: 'ui', authority: 'present_user', serverId: 'profile' });
     expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true, result: { managedId: 'retained' } } } });

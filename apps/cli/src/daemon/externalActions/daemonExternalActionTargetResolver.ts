@@ -22,6 +22,7 @@ import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { assertNonEscalatingPermissionMode, resolveEffectivePermissionMode } from '@happier-dev/protocol/actions/permissionPrivilege';
 import { getActionSpec, resolveActionExecutionPlacementForInput, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { ApprovalExecutionOriginV1Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -132,11 +133,10 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
           && origin.sessionInputSource.sourceTurnId === sessionOrigin.sourceTurnId
           && origin.callerPermissionMode === sessionOrigin.callerPermissionMode
           && sameStrictJsonValue(origin.causalPermissionAuthority ?? null, sessionOrigin.causalPermissionAuthority ?? null);
-        const principalMatches = 'authentication' in binding
-          ? (sessionOrigin ? acceptedSession : origin.authority === 'present_user' && origin.surface === 'ui')
-            && origin.principalId === undefined && origin.credentialId === undefined
-          : origin.surface === 'api' && origin.principalId === binding.principalId
-            && origin.credentialId === binding.credentialId;
+        // The strict origin owner binds Account, Session and PAT provenance.
+        // Rechecking its contract preserves a narrowed Account authority rather
+        // than introducing a second human-only interpretation during replay.
+        const principalMatches = ApprovalExecutionOriginV1Schema.safeParse(origin).success;
         if (
           (request ? request.v !== 2 : actionInput === undefined)
           || !origin.externalActionInputSignature

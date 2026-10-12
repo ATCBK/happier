@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { ActionExecuteResult, ActionId } from '@happier-dev/protocol/actions';
-import { computeExternalActionRequestEnvelopeDigestV1, verifyExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionApprovalInputV1, verifyExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { ApprovalRequestV2Schema, requiresExactDaemonApprovalReplay } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { ExternalActionExecutionResultV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions/externalActionApi';
 import { ProjectAccountRowMutationRequestV1Schema, buildProjectAccountRowPhysicalKeyV1, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
@@ -34,6 +34,14 @@ import { verifyExternalActionExecutionAuthorizationCurrent, resolveExternalActio
 import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { executeExternalAction } from './executeExternalAction';
 import { createDaemonApprovalExecutionOriginCurrentness, createDaemonExternalActionTargetResolver } from './daemonExternalActionTargetResolver';
+import { resolveAdmittedRequesterAccountReadRuntime } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { createProjectWorkerAdmission } from '@/workspaces/execution/projectWorkerAdmission';
+import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
+import { createProjectNativeIo } from '@/workspaces/projectSetup/projectNativeIo';
+import { createWorkspaceExecutionConfigClientV1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigClientV1';
+import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { WORKSPACE_EXECUTION_CONFIG_ROUTE_V1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
+import { LocalServiceLauncherSnapshotV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 
 const socketBoundary = vi.hoisted(() => ({ create: vi.fn() }));
 vi.mock('socket.io-client', async importOriginal => {
@@ -54,6 +62,12 @@ async function createHarness(actionId: ActionId, approval: 'ask' | 'allowed' = '
   const directory = await mkdtemp(join(tmpdir(), 'happier-action-composition-'));
   const rootPath = join(directory, 'accepted');
   await mkdir(rootPath); await writeFile(join(rootPath, 'original'), bytes);
+  if (actionId === 'projects.script.run') await writeFile(join(rootPath, 'Makefile'), 'check:\n\t@echo replay-admitted\n');
+  if (actionId === 'localServices.launcher.start') {
+    await mkdir(join(rootPath, '.happier'));
+    await writeFile(join(rootPath, '.happier/project.json'), JSON.stringify({ version: 1,
+      services: { checked: { source: { kind: 'command', command: 'echo service-admitted' } } } }));
+  }
   await writeFile(join(directory, 'outside'), 'outside unchanged');
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL', 'HAPPIER_MACHINE_RPC_WORKING_DIRECTORY']);
   env.patch({ HAPPIER_HOME_DIR: join(directory, 'srv_n2'), HAPPIER_ACTIVE_SERVER_ID: 'srv_n2',
@@ -107,7 +121,10 @@ async function createHarness(actionId: ActionId, approval: 'ask' | 'allowed' = '
     const path = new URL(String(url)).pathname;
     networkPaths.push('FETCH ' + path);
     if (path !== '/v1/features' && path !== '/v1/features/authenticated') throw new Error('Unexpected Home fetch ' + path);
-    return Response.json({ features: {}, capabilities: { serverIdentity: { serverIdentityId: 'srv_n2' } } });
+    return Response.json({ features: actionId === 'localServices.launcher.start' ? { localServices: { enabled: true,
+      inventory: { enabled: true }, launcher: { enabled: true }, actions: { enabled: true }, managed: { enabled: true } },
+      browser: { enabled: true, viewTargets: { enabled: true } } } : {},
+      capabilities: { serverIdentity: { serverIdentityId: 'srv_n2' } } });
   });
   vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
     const path = new URL(String(url)).pathname;
@@ -150,6 +167,8 @@ async function createHarness(actionId: ActionId, approval: 'ask' | 'allowed' = '
   vi.spyOn(axios, 'request').mockImplementation(async request => {
     const path = new URL(String(request.url)).pathname;
     networkPaths.push(String(request.method) + ' ' + path);
+    if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+    if (path === `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`) return { status: 200, data: { status: 'absent' } };
     if (path === '/v1/auth/api-tokens/list') return { status: 200, data: { tokens: [] } };
     if (path === '/v1/projects/sources') {
       if (request.method === 'GET') return { status: 200, data: { ok: true, sources: source ? [source] : [], coverage: { complete: true, nextCursor: null } } };
@@ -172,8 +191,27 @@ async function createHarness(actionId: ActionId, approval: 'ask' | 'allowed' = '
     }
     throw new Error('Unexpected Home request ' + path);
   });
+  const finiteIngress: Array<{ accountId: string; homeId: string; installationId: string; current: boolean }> = [];
+  const workerAdmission = createProjectWorkerAdmission({ machineId: target.machineId,
+    admissionDrain: createDaemonAdmissionDrain(), readPolicy: async () => ({ status: 'ready',
+      policy: { accepting: true, runAtMost: null }, source: 'stored', metadataVersion: 1 }) });
+  const nativeIo = createProjectNativeIo();
+  const workspaceConfig = createWorkspaceExecutionConfigClientV1({ mode: 'plain', material: null, isCurrent: () => true,
+    randomBytes: length => new Uint8Array(length), transport: {
+      read: async () => ({ status: 'absent' }), mutate: async () => { throw new Error('Unexpected config mutation'); },
+    } });
   const client = new ApiMachineClient(token, { id: target.machineId, encryptionMode: 'plain', metadata: null,
-    metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+    metadataVersion: 0, daemonState: null, daemonStateVersion: 0 }, undefined, {
+      createProjectFiniteRuntime: async (ports, ingress) => {
+        const requester = await resolveAdmittedRequesterAccountReadRuntime({ ingress, serverId: 'srv_n2',
+          machineId: target.machineId, installationId: installation.installationId, isInstalledCurrent: () => true });
+        if (!requester) return null;
+        finiteIngress.push({ accountId: requester.accountId, homeId: requester.accountAuthorization.binding.serverIdentityId,
+          installationId: ingress.machineAdmission!.installationId, current: await requester.isCurrent() });
+        return { ...ports, ...requester, workerAdmission, nativeIo: nativeIo.commandIo,
+          environmentIo: nativeIo.environmentIo, resolveWorkspaceExecutionConfig: async () => workspaceConfig };
+      },
+    });
   const manager: unknown = Reflect.get(client, 'rpcHandlerManager');
   if (!(manager instanceof RpcHandlerManager)) throw new Error('Missing production RPC manager');
   const rpc = manager;
@@ -225,9 +263,14 @@ async function createHarness(actionId: ActionId, approval: 'ask' | 'allowed' = '
   const originCurrent = createDaemonApprovalExecutionOriginCurrentness({ accountId: 'account', machineId: target.machineId, serverId: 'srv_n2',
     resolveCurrentMachineExecutionOriginContext: resolveOrigin, resolveTarget, listAccountApiTokens: async () => ({ tokens: [] }),
     externalActionMachinePublicKey: publicKey, verifyExternalExecutionAuthorization: verifyRoot });
+  const api = await ApiClient.create(credentials);
+  const features = actionId === 'localServices.launcher.start' ? await api.getServerFeaturesSnapshot({ refresh: true }) : undefined;
+  api.setServerFeaturesSnapshotProvider(() => features);
+  const runtimeActionExecute = api.createBrowserRuntimeActionExecutor();
   const runtime = await startDaemonSessionControlRuntime({ machineId: target.machineId, credentials,
     serverId: 'srv_n2', serverBaseUrl: params.serverHttpBaseUrl, externalActionAccountId: 'account',
-    api: await ApiClient.create(credentials), connectedServicesMaterializationBaseDir: join(directory, 'connected-services'),
+    api, connectedServicesMaterializationBaseDir: join(directory, 'connected-services'),
+    ...(actionId === 'localServices.launcher.start' ? { runtimeActionExecute, resolveServerFeaturesSnapshot: () => features } : {}),
     daemonSessionMutationCustody: { stageTranscriptEvent: async () => { throw new Error('Unexpected Session event'); },
       stageTranscriptMessage: async () => { throw new Error('Unexpected Session message'); } },
     getConnectedServiceRefreshCoordinator: () => null, getConnectedServiceQuotasCoordinator: () => null,
@@ -244,16 +287,30 @@ async function createHarness(actionId: ActionId, approval: 'ask' | 'allowed' = '
     stopSession: async () => true, requestShutdown() {} }, { actionsSettingsProvider: settings,
     externalActionIngressOwner: installed });
   const store = createCliApprovalsArtifactStore({ credentials, serverId: 'srv_n2' });
-  const deciding = createCliActionExecutorHarness(params, { isApprovalExecutionOriginCurrent: originCurrent,
+  const issuerParams = { ...params, ...(features ? { resolveServerFeaturesSnapshot: () => features } : {}) };
+  const deciding = createCliActionExecutorHarness(issuerParams, { isApprovalExecutionOriginCurrent: originCurrent,
     approvalRequestApprovedReplay: async ({ artifactId }) => ExternalActionExecutionResultV1Schema.parse(
       await rpc.invokeLocal(RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED, { artifactId })) }).executor;
+  const issuer = createCliActionExecutorHarness(issuerParams).executor;
   const artifactId = () => { if (!artifact) throw new Error('Missing approval Artifact'); return String(artifact.id); };
-  return { rootPath, directory, ref, rows, rpcOutcomes, networkPaths, source: () => source, hasApproval: () => artifact !== undefined,
+  return { rootPath, directory, ref, rows, rpcOutcomes, networkPaths, finiteIngress, source: () => source, hasApproval: () => artifact !== undefined,
     approval: async () => ApprovalRequestV2Schema.parse(await store.approvalsGet({ artifactId: artifactId() })),
     decide: (decision: 'approve' | 'reject' | 'cancel', authority: 'present_user' | 'account_automation' = 'present_user') =>
       deciding.execute('approval.request.decide', { artifactId: artifactId(), decision }, { surface: 'ui', authority }),
     replay: () => rpc.invokeLocal(RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED, { artifactId: artifactId() }),
-    async run(input: unknown, surface: 'ui' | 'cli'): Promise<ActionExecuteResult> {
+    localFinite: (input: unknown) => rpc.invokeLocal(PROJECT_FINITE_ACTION_RPC_METHODS_V1['projects.script.run'], input),
+    async serviceInput() {
+      const result = await runtimeActionExecute({ actionId: 'localServices.launcher.snapshot',
+        input: { machineId: target.machineId, scope: 'workspace', workspaceRoot: rootPath }, context: { serverId: 'srv_n2' } });
+      expect(result, JSON.stringify(result)).not.toHaveProperty('errorCode');
+      const snapshot = LocalServiceLauncherSnapshotV1Schema.parse(result);
+      const declaration = snapshot.targets.find(candidate => candidate.declaration);
+      if (!declaration) throw new Error('Accepted Service declaration unavailable');
+      return { machineId: target.machineId,
+        targetId: declaration.id, workspace: { serverId: 'srv_n2', workspaceId: ref.id, machineId: target.machineId, rootPath },
+        declaration: declaration.declaration };
+    },
+    async run(input: unknown, surface: 'ui' | 'cli', proposalAtIssuer = false): Promise<ActionExecuteResult> {
       const authentication = { kind: surface === 'cli' ? 'terminal' as const : 'account' as const, tokenEpoch: 1 };
       const envelope = { v: 1 as const, requestId: 'original-request', target, input };
       const authorization = { v: 1 as const, token: 'synthetic-home-root', binding: { accountId: 'account', custodianAccountId: 'account',
@@ -263,6 +320,22 @@ async function createHarness(actionId: ActionId, approval: 'ask' | 'allowed' = '
       expect(ExternalActionExecutionAuthorizationV1Schema.safeParse(authorization).success).toBe(true);
       expect(ExternalActionRequestEnvelopeSchema.safeParse(envelope).success).toBe(true);
       expect(await resolveOrigin()).toEqual({ serverIdentityId: 'srv_n2', machineId: target.machineId });
+      if (proposalAtIssuer) {
+        // A CLI-issued Ask has not entered the Machine's operation runner.
+        // Replay still enters its actual installed registrar/executor below.
+        const prepared = await prepareRequester?.({ authorization });
+        if (!prepared) throw new Error('Requester admission unavailable');
+        try {
+          return await issuer.execute(actionId, input, { surface, authority: 'account_automation',
+            serverId: 'srv_n2', serverIdentityId: 'srv_n2', runtimeAccountId: 'account',
+            actionRequestId: envelope.requestId, defaultSessionMachineId: target.machineId,
+            externalActionTarget: target, externalActionExecutionAuthorization: prepared.authorization,
+            signExternalActionApprovalInput: args => signExternalActionApprovalInputV1({
+              authorizationToken: args.authorization.token, actionId: args.actionId, input: args.input,
+              target: args.target, privateKey }),
+          });
+        } finally { await prepared.dispose?.(); }
+      }
       const result = await executeExternalAction({ actionId, envelope, principal: { accountId: 'account', authority: 'account_automation', authentication },
         surface, executionAuthorization: authorization, currentMachineId: target.machineId, currentServerId: 'srv_n2',
         currentServerHttpBaseUrl: params.serverHttpBaseUrl, currentInstallationId: installation.installationId,
@@ -279,6 +352,39 @@ async function createHarness(actionId: ActionId, approval: 'ask' | 'allowed' = '
 }
 
 describe('Machine filesystem approval continuity from UI and paired terminal', () => {
+  it('admits approved Machine Service Start replay before its independent native-effect review', async () => {
+    const h = await createHarness('localServices.launcher.start');
+    try {
+      const input = await h.serviceInput();
+      const proposal = await h.run(input, 'cli', true);
+      expect(proposal, JSON.stringify(proposal)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      expect(requiresExactDaemonApprovalReplay(await h.approval())).toBe(true);
+      expect(await h.decide('approve')).toMatchObject({ ok: true });
+      const execution = (await h.approval()).execution;
+      expect(execution, JSON.stringify(execution)).toMatchObject({ ok: true,
+        result: { status: 'denied', reasonCode: 'project_service_effect_review_required' } });
+      expect(h.finiteIngress).toMatchObject([{ accountId: 'account', homeId: 'srv_n2', current: true }]);
+    } finally { await h.close(); }
+  });
+  it('admits approved Machine Project Run replay with the original requester custody through the installed executor', async () => {
+    const h = await createHarness('projects.script.run');
+    try {
+      const input = { workspace: { serverId: h.ref.serverId, workspaceId: h.ref.id,
+        machineId: h.ref.machineId, rootPath: h.rootPath },
+        selection: { kind: 'native', source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } } };
+      expect(await h.run(input, 'cli', true)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      expect(h.finiteIngress).toEqual([]);
+      const approval = await h.approval();
+      expect(requiresExactDaemonApprovalReplay(approval)).toBe(true);
+      expect(await h.decide('approve')).toMatchObject({ ok: true });
+      const settled = await h.approval();
+      expect(settled.execution, JSON.stringify(settled.execution)).toMatchObject({ ok: true, result: { operation: { state: 'accepted' } } });
+      expect(h.finiteIngress).toMatchObject([{ accountId: 'account', homeId: 'srv_n2', current: true }]);
+      expect(h.finiteIngress[0].installationId).toBe(approval.executionOriginV1.externalActionExecutionAuthorization!.binding.installationId);
+      // Unadmitted local invocation remains refused at the actual receiver.
+      expect(await h.localFinite(input)).toMatchObject({ ok: false, errorCode: 'machine_admission_required' });
+    } finally { await h.close(); }
+  });
   it.each(filesystemIds.flatMap(actionId => (['ui', 'cli'] as const).flatMap(surface =>
     (['approve', 'reject'] as const).map(decision => ({ actionId, surface, decision })))))
   ('retains exact $actionId from $surface through $decision using production composition', async ({ actionId, surface, decision }) => {
