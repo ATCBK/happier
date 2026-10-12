@@ -11,6 +11,7 @@ import {
   startPeerMediationLoopback,
   type StartPeerMediationLoopbackInput,
 } from './startLoopback';
+import { startPeerMediationLoopbackServer } from '../loopback/server';
 
 function toBase64Url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('base64url');
@@ -51,6 +52,74 @@ function createServerFeatures(publicKey: Uint8Array): FeaturesResponse {
 }
 
 describe('startPeerMediationLoopback', () => {
+  it('renews a listening endpoint at its lease deadline without reads and withdraws before stop completes', async () => {
+    let now = 2_000;
+    const started = await startPeerMediationLoopback({
+      accountId: 'account_1', machineId: 'machine_1',
+      serverFeatures: createServerFeatures(tweetnacl.sign.keyPair().publicKey),
+      rpcHandlerManager: { invokeLocal: async () => ({ ok: true }) },
+      nowMs: () => now,
+    });
+    if (!started) throw new Error('expected listener');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const changes: (PeerLoopbackEndpointCandidateV1 | null)[] = [];
+    try {
+      const unsubscribe = started.subscribeEndpointChanges(() => changes.push(started.readEndpoint()));
+      const initial = started.readEndpoint();
+      if (!initial) throw new Error('expected endpoint');
+      const ttl = initial.expiresAt - now;
+      now += ttl / 2 - 1;
+      await vi.advanceTimersByTimeAsync(ttl / 2 - 1);
+      expect(started.readEndpoint()).toEqual(initial);
+      expect(changes).toEqual([]);
+      now += 1;
+      expect(started.readEndpoint()).toEqual(initial);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(changes).toEqual([{ ...initial, expiresAt: now + ttl }]);
+      expect(started.readEndpoint()).toEqual({ ...initial, expiresAt: now + ttl });
+      const stopping = started.stop();
+      expect(started.readEndpoint()).toBeNull();
+      expect(changes.at(-1)).toBeNull();
+      await stopping;
+      now += ttl;
+      await vi.advanceTimersByTimeAsync(ttl);
+      expect(started.readEndpoint()).toBeNull();
+      expect(changes).toHaveLength(2);
+      unsubscribe();
+    } finally {
+      await started.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('publishes withdrawal immediately when its listener closes outside the stop handle', async () => {
+    let now = 2_000;
+    let closeListener: (() => Promise<void>) | undefined;
+    const started = await startPeerMediationLoopback({
+      accountId: 'account_1', machineId: 'machine_1',
+      serverFeatures: createServerFeatures(tweetnacl.sign.keyPair().publicKey),
+      rpcHandlerManager: { invokeLocal: async () => ({ ok: true }) },
+      nowMs: () => now,
+      startPeerMediationLoopbackServer: async (options) => {
+        const listener = await startPeerMediationLoopbackServer(options);
+        closeListener = listener.stop;
+        return listener;
+      },
+    });
+    if (!started || !closeListener) throw new Error('expected listener');
+    const changes: (PeerLoopbackEndpointCandidateV1 | null)[] = [];
+    const unsubscribe = started.subscribeEndpointChanges(() => changes.push(started.readEndpoint()));
+    try {
+      await closeListener();
+      expect(changes).toEqual([null]);
+      now = started.endpoint.expiresAt + 1;
+      expect(started.readEndpoint()).toBeNull();
+    } finally {
+      unsubscribe();
+      await started.stop();
+    }
+  });
+
   it('publishes the real listener base URL without a retired probe or Account signing material', async () => {
     const grantKeyPair = tweetnacl.sign.keyPair();
     const started = await startPeerMediationLoopback({

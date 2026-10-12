@@ -49,6 +49,10 @@ export type StartPeerMediationLoopbackInput = Readonly<{
 
 export type StartedPeerMediationMachineRpcLoopback = Readonly<{
   endpoint: PeerLoopbackEndpointCandidateV1;
+  /** Read the current advert without renewing its lease. */
+  readEndpoint: () => PeerLoopbackEndpointCandidateV1 | null;
+  /** Observe lease renewal and listener withdrawal at the endpoint owner. */
+  subscribeEndpointChanges: (listener: () => void) => () => void;
   stop: () => Promise<void>;
 }>;
 
@@ -158,6 +162,7 @@ export async function startPeerMediationLoopback(
     tunnelEnabled ? DIRECT_ROUTE_GRANT_TTL_MS.directTcpTunnel : 0,
     irohMachineAdmission ? DIRECT_ROUTE_GRANT_TTL_MS.loopbackMachineRpcDefault : 0,
   );
+  const endpointTtlMs = input.endpointTtlMs ?? defaultEndpointTtlMs;
   const startPeerMediationLoopbackServer =
     input.startPeerMediationLoopbackServer ?? startPeerMediationLoopbackServerDefault;
   const started = await startPeerMediationLoopbackServer({
@@ -171,7 +176,7 @@ export async function startPeerMediationLoopback(
     },
     trustRoots,
     ...(input.resolveTrustRoots ? { resolveTrustRoots: input.resolveTrustRoots } : {}),
-    endpointExpiresAt: now + (input.endpointTtlMs ?? defaultEndpointTtlMs),
+    endpointExpiresAt: now + endpointTtlMs,
     host: input.host ?? PEER_MEDIATION_MACHINE_RPC_DEFAULT_HOST,
     port: input.port ?? PEER_MEDIATION_MACHINE_RPC_DEFAULT_PORT,
     ...(rpcEnabled
@@ -190,9 +195,59 @@ export async function startPeerMediationLoopback(
     ...(input.observability ? { observability: input.observability } : {}),
   });
 
+  let endpoint = started.endpoint;
+  let stopping: Promise<void> | null = null;
+  let withdrawn = false;
+  let renewalTimer: ReturnType<typeof setTimeout> | null = null;
+  const endpointListeners = new Set<() => void>();
+  const server = started.app.server;
+  const readEndpoint = () => withdrawn || stopping || !server?.listening ? null : endpoint;
+  const clearRenewal = () => {
+    if (renewalTimer !== null) clearTimeout(renewalTimer);
+    renewalTimer = null;
+  };
+  const publishChange = () => {
+    for (const listener of endpointListeners) listener();
+  };
+  const withdraw = () => {
+    if (withdrawn) return;
+    withdrawn = true;
+    clearRenewal();
+    publishChange();
+  };
+  const scheduleRenewal = () => {
+    clearRenewal();
+    if (!readEndpoint() || endpointListeners.size === 0) return;
+    // Preserve the existing half-life renewal policy, leaving the remaining
+    // lease for failed publication recovery. Reads never advance this deadline.
+    renewalTimer = setTimeout(() => {
+      renewalTimer = null;
+      if (!readEndpoint()) return;
+      endpoint = { ...endpoint, expiresAt: nowMs() + endpointTtlMs };
+      scheduleRenewal();
+      publishChange();
+    }, Math.max(0, endpoint.expiresAt - endpointTtlMs / 2 - nowMs()));
+    renewalTimer.unref?.();
+  };
+  server?.once('close', withdraw);
   return {
     endpoint: started.endpoint,
-    stop: started.stop,
+    readEndpoint,
+    subscribeEndpointChanges: (listener) => {
+      endpointListeners.add(listener);
+      if (endpointListeners.size === 1) scheduleRenewal();
+      return () => {
+        endpointListeners.delete(listener);
+        if (endpointListeners.size === 0) clearRenewal();
+      };
+    },
+    stop: () => {
+      if (!stopping) {
+        stopping = Promise.resolve().then(() => started.stop());
+        withdraw();
+      }
+      return stopping;
+    },
     activeFlows: {
       ...(rpcEnabled ? { machine_rpc: true as const } : {}),
       ...(liveStreamEnabled ? { live_stream: true as const } : {}),
