@@ -14,14 +14,15 @@
  * `rootPlacement` — the commit reconstructs the root placement from `edge`.
  */
 
-import type { TreeDropResult, TreeRowKind } from '@/components/ui/treeDragDrop';
+import type { TreeRowKind } from '@/components/ui/treeDragDrop';
 
 import type { SessionListDragIntent } from './_types';
+import type { SessionListTreeDropResult } from '../drop-resolution/sessionListTreeTypes';
 
 export type BuildSessionListDragIntentParams = Readonly<{
     scope?: SessionListDragIntent['scope'];
     /** The final resolved drop result at drop time. */
-    result: TreeDropResult;
+    result: SessionListTreeDropResult;
     /** Stable tree row id of the dragged source. */
     sourceRowId: string;
     /** Structural kind of the dragged source. */
@@ -42,6 +43,7 @@ export function buildSessionListDragIntent(params: BuildSessionListDragIntentPar
         sourceRowId: params.sourceRowId,
         sourceKind: params.sourceKind,
         instructionKind: instruction.kind,
+        ...(instruction.kind === 'blocked' ? { blockedReason: params.result.sessionListBlockReason ?? instruction.reason } : {}),
         targetRowId: hasTarget ? instruction.targetId : null,
         containerId: hasContainer ? instruction.containerId : null,
         parentRowId: hasTarget ? instruction.parentId : null,

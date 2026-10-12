@@ -1,4 +1,5 @@
 import type { ActionId } from '@happier-dev/protocol';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type {
     EntityDragItemV1,
     EntityDragScopeV1,
@@ -15,6 +16,7 @@ import {
     type EntityDragDropRuntime,
     type EntityDropResolveContext,
     type TreeDropVisualGeometry,
+    type TreeInstructionVisual,
     type WindowBounds,
     type WindowPointer,
 } from '@/components/ui/treeDragDrop';
@@ -23,7 +25,7 @@ import { resolvePutUnderEligibility } from '@/components/sessions/work/putUnderC
 import { selectSessionRelationRecords } from '@/components/sessions/work/reportSubtree';
 import { getStorage } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import {
     loadSessionReportsToEligibility,
     type SessionReportsToEligibilitySnapshot,
@@ -74,6 +76,9 @@ export type UseSessionListEntityDragDropInput = Readonly<{
     getCommitContext: (mutationScope?: SessionOrganizationMutationScope) => SessionListBaseCommitContext;
     getListBounds: () => WindowBounds | null;
     getSourceBounds?: (rowId: string) => WindowBounds | null;
+    resolveKeyboardGeometry?: (visual: TreeInstructionVisual) => TreeDropVisualGeometry;
+    onKeyboardGeometry?: (geometry: TreeDropVisualGeometry) => void;
+    onCarryRetired?: () => void;
 }>;
 
 export type SessionListCarry = Readonly<{
@@ -129,11 +134,13 @@ export function readSessionListDestinationIntent(destination: PluginUiJsonValueV
     const value = destination as Readonly<Record<string, unknown>>;
     if (typeof value.sourceRowId !== 'string' || typeof value.instructionKind !== 'string') return null;
     const text = (key: string) => (typeof value[key] === 'string' ? value[key] as string : null);
+    const blockedReason = text('blockedReason');
     return {
         scope,
         sourceRowId: value.sourceRowId,
         sourceKind: value.sourceKind as SessionListDragIntent['sourceKind'],
         instructionKind: value.instructionKind as SessionListDragIntent['instructionKind'],
+        ...(value.instructionKind === 'blocked' && blockedReason ? { blockedReason } : {}),
         targetRowId: text('targetRowId'),
         containerId: text('containerId'),
         parentRowId: text('parentRowId'),
@@ -172,7 +179,7 @@ function previewForAdmission(admission: Extract<SessionListDragAdmission, { ok: 
 }
 
 /** Acknowledged applied/refused or unknown, in the owner's words; never a rewritten cancellation. */
-export function projectActionOutcome(actionId: string, result: Awaited<ReturnType<ReturnType<typeof createDefaultActionExecutor>['execute']>>): EntityDropOutcomeV1 {
+export function projectActionOutcome(actionId: string, result: ActionExecuteResult): EntityDropOutcomeV1 {
     if (!result.ok) {
         if (RELATION_REFUSAL_CODES.has(result.errorCode)) {
             return { status: 'refused', reason: { code: result.errorCode, message: describeReportsToRefusal(result.errorCode) } };
@@ -214,7 +221,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
     /** The topology the current carry started from (pointer or keyboard). */
     const carriedSnapshotRef = React.useRef<SessionListDragSnapshot | null>(null);
     const sourceRef = React.useRef<Readonly<{ sourceId: string; dispose: () => void }> | null>(null);
-    const executor = React.useMemo(() => createDefaultActionExecutor(), []);
+    const { execute: executeMountedAction } = useMountedActionExecution(activeScope);
 
     const buildContext = React.useCallback((mutationScope?: SessionOrganizationMutationScope): CommitSessionListDragIntentContext | null => {
         const current = scopeRef.current;
@@ -243,6 +250,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
     React.useEffect(() => registerMountedSessionListOrganizationAction(createSessionListOrganizationActionAdapter(buildActionContext)), [buildActionContext]);
 
     const resolve = React.useCallback((context: EntityDropResolveContext): EntityDropAdmissionV1 => {
+        if (context.input === 'keyboard') inputRef.current.onKeyboardGeometry?.(NO_GEOMETRY);
         const current = scopeRef.current;
         const refuse = (code: string): EntityDropAdmissionV1 => ({ status: 'refused', reason: describeSessionListDropReason(code) });
         const commitContext = buildContext();
@@ -263,7 +271,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
                 pointerVisualRef.current = NO_GEOMETRY;
                 return refuse(instruction.reason === 'same-position' || instruction.reason === 'no-target'
                     ? SESSION_LIST_NO_TARGET_CODE
-                    : instruction.reason);
+                    : resolved.result.sessionListBlockReason ?? instruction.reason);
             }
             geometry = resolved.geometry;
             intent = buildSessionListDragIntent({
@@ -284,7 +292,14 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
             item: context.item,
             intent,
             context: commitContext,
-            preview: previewForAdmission,
+            preview: admitted => {
+                if (context.input === 'keyboard') {
+                    const visual: TreeInstructionVisual = admitted.effect === 'reports-to'
+                        ? { kind: 'outline', targetId: admitted.lead.rowId } : admitted.result.visual;
+                    inputRef.current.onKeyboardGeometry?.(inputRef.current.resolveKeyboardGeometry?.(visual) ?? NO_GEOMETRY);
+                }
+                return previewForAdmission(admitted);
+            },
             refusedPreview: ({ intent, target }) => intent.instructionKind === 'nest-into' && target?.kind === 'session'
                 ? describeSessionListRefusedPutUnder(rowName(target)) : undefined,
             reason: describeSessionListDropReason,
@@ -297,13 +312,9 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
     const execute = React.useCallback(async (effect: EntityDropEffectV1): Promise<EntityDropOutcomeV1> => {
         const current = scopeRef.current;
         if (!current) return { status: 'refused', reason: describeSessionListDropReason('scope-mismatch') };
-        const result = await executor.execute(effect.actionId as ActionId, effect.input, {
-            surface: 'ui',
-            serverId: current.serverId,
-            expectedAccountId: current.accountId,
-        });
+        const result = await executeMountedAction(effect.actionId as ActionId, effect.input);
         return projectActionOutcome(effect.actionId, result);
-    }, [executor]);
+    }, [executeMountedAction]);
 
     const targetId = scope ? sessionListDropTargetId(scope) : null;
     React.useEffect(() => {
@@ -397,6 +408,8 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
                 factsRef.current?.dispose();
                 factsRef.current = null;
                 pointerVisualRef.current = NO_GEOMETRY;
+                inputRef.current.onKeyboardGeometry?.(NO_GEOMETRY);
+                inputRef.current.onCarryRetired?.();
             }
             if (sourceRef.current === source) sourceRef.current = null;
             retireSource();
@@ -434,6 +447,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
                 carry.choose(targetId, semantic as unknown as PluginUiJsonValueV1);
             },
             end: async (success, pointer) => {
+                inputRef.current.onKeyboardGeometry?.(NO_GEOMETRY);
                 // A late refusal or an unknown result stays on the source row's line (lab ST4), not in an alert.
                 await adapter.end(success, pointer);
                 source.dispose();

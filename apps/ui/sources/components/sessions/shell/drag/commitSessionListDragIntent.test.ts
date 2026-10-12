@@ -97,6 +97,20 @@ function folders(): SessionFoldersV1 {
     };
 }
 
+it('refuses an unanchored root drop into the source current place without an order write', async () => {
+    const { context, spies } = makeContext();
+    const tree = buildSessionListTreeRows({ items: context.latestItems });
+    const sourceRowId = treeRowId.session('server-a', 'root-a');
+    const source = tree.rowMetadataById.get(sourceRowId)!;
+    const result = await commitSessionListDragIntent({ context, intent: {
+        sourceRowId, sourceKind: 'leaf', instructionKind: 'move-to-root', targetRowId: null,
+        containerId: source.rootId, parentRowId: null, depth: 0, edge: null, sourceSnapshotSignature: '',
+    } });
+    expect(result).toEqual({ ok: false, reason: 'no-change' });
+    expect(spies.setSessionListGroupOrderV1).not.toHaveBeenCalled();
+    expect(spies.setSessionFolderAssignment).not.toHaveBeenCalled();
+});
+
 function makeContext(overrides?: Partial<Parameters<typeof commitSessionListDragIntent>[0]['context']>) {
     const sessions = Object.fromEntries((overrides?.latestItems ?? items()).flatMap(item => item.type === 'session'
         ? [[item.sessionId, createSessionFixture({ id: item.sessionId, serverId: item.serverId })] as const] : []));

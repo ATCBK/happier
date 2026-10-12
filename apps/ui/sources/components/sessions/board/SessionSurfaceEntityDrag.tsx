@@ -26,6 +26,10 @@ export type SessionSurfaceEntityBinding = Readonly<{
     isCurrent(): boolean;
     getItem(): EntityDragItemV1 | null;
     title: string;
+    /** The carried card's state line under its title ("analytics replica · Small", "Group · 2 widgets"). */
+    subtitle?: string;
+    /** The carried card's mark before its title, in the source's own icon. */
+    renderMark?: (size: number) => React.ReactNode;
     admitWidgetMovement?: (effect: import('@happier-dev/protocol/plugins/ui').EntityDropEffectV1) => import('@happier-dev/protocol/plugins/ui').EntityDropAdmissionV1;
     widgetMovement?: WidgetEntityMovementPort;
     target?: Omit<EntityDropTarget, 'id' | 'scope' | 'getBounds' | 'isCurrent'>;
@@ -72,7 +76,11 @@ export function useSessionSurfaceEntityDrag(binding: SessionSurfaceEntityBinding
         const current = () => latest.current?.scope.serverId === scope.serverId
             && latest.current.scope.accountId === scope.accountId && latest.current.isCurrent();
         const source = runtime.registerSource({ id: sourceId, scope, isCurrent: current,
-            getItem: () => latest.current?.getItem() ?? null, describe: () => latest.current ? { title: latest.current.title } : null });
+            getItem: () => latest.current?.getItem() ?? null, describe: () => {
+                const current = latest.current;
+                return current ? { title: current.title, ...(current.subtitle ? { subtitle: current.subtitle } : {}),
+                    ...(current.renderMark ? { renderMark: current.renderMark } : {}) } : null;
+            } });
         const target = binding.target ? runtime.registerTarget({ id: targetId, scope, getBounds: bounds, isCurrent: current,
             get parentId() { return latest.current?.target?.parentId; },
             get acceptedKinds() { return latest.current?.target?.acceptedKinds ?? []; },

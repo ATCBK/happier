@@ -63,7 +63,7 @@ import {
     type ApplySessionListTreeDropOperationContext,
     type SessionListTreeDropDestination,
 } from '../commit/applySessionListTreeDropOperation';
-import { buildSessionListGroupOrderAfterTreeDrop, resolveSessionListGroupOrderChildKind } from '../commit/applyGroupOrderUpdate';
+import { buildSessionListGroupOrderAfterTreeDrop, collectDirectChildOrderKeys, resolveSessionListGroupOrderChildKind } from '../commit/applyGroupOrderUpdate';
 import { buildSessionWorkspaceOrderAfterTreeDrop } from '../commit/applyWorkspaceOrderUpdate';
 import { buildSessionListDragSource } from '../drop-resolution/buildSessionListDragSource';
 import { buildSessionListTreeRows } from '../drop-resolution/buildSessionListTreeRows';
@@ -290,6 +290,7 @@ function isNoChangeCommit(params: Readonly<{
     const folderAssignmentChanges = source.metadata.kind === 'session'
         && (source.metadata.folderId ?? null) !== destination.container.folderId;
     if (folderAssignmentChanges) return false;
+    if (source.metadata.containerId !== destination.container.containerId) return false;
 
     if (source.metadata.kind === 'workspace-root') {
         const next = buildSessionWorkspaceOrderAfterTreeDrop({
@@ -320,7 +321,11 @@ function isNoChangeCommit(params: Readonly<{
         childKind,
     });
     return next != null && isOrderMapScopeUnchanged({
-        currentMap: context.sessionListGroupOrderV1,
+        // An absent explicit map still has the list's real rendered order. Materializing that
+        // unchanged order is not a move (including root-edge pointer drops at the own place).
+        currentMap: { ...context.sessionListGroupOrderV1,
+            [destination.container.groupKey]: context.sessionListGroupOrderV1[destination.container.groupKey]
+                ?? collectDirectChildOrderKeys(tree, destination.container.containerId, childKind) },
         next,
     });
 }
@@ -434,6 +439,10 @@ export function resolveSessionListDragIntent(params: Readonly<{
     if (isScopeMismatch({ source: sourceMetadata, container })) {
         return noOp('scope-mismatch');
     }
+    // An unanchored root destination names containment, not "append to this order".
+    // Pointer, staged moves and the same-pane chooser share this no-change verdict.
+    if (intent.instructionKind === 'move-to-root' && intent.edge === null
+        && sourceMetadata.containerId === container.containerId) return noOp('no-change');
 
     // Folder-move cycle guard against the LATEST descendant set.
     if (sourceMetadata.kind === 'folder') {

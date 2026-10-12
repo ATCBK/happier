@@ -20,7 +20,7 @@ function shouldIncludeOrderKey(
     return rowKind === 'folder';
 }
 
-function collectDirectChildOrderKeys(
+export function collectDirectChildOrderKeys(
     tree: SessionListTreeModel,
     containerId: string,
     childKind: SessionListGroupOrderChildKind,

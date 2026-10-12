@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { describeEntityDropOutcome } from '@/components/ui/treeDragDrop/ui/entityDropOutcome';
 
-import { describeSessionListDropReason, describeSessionListDropPreview, type SessionListDropTargetPreview } from './sessionListDropPresentation';
+import { describeSessionListDropReason, describeSessionListDropPreview, describeSessionListRefusedPutUnder, type SessionListDropTargetPreview } from './sessionListDropPresentation';
 import { entityReorderPreview } from '@/components/ui/treeDragDrop/ui/EntityFlatReorder';
 
 // The Session list words its previews and reasons; the one outcome presenter turns them into the card.
@@ -28,7 +28,7 @@ describe('Session-list verdicts through the one outcome presenter', () => {
         const outcome = describeEntityDropOutcome({
             phase: 'carrying',
             admission: { status: 'refused', reason: describeSessionListDropReason('read'),
-                preview: { verb: 'Can’t put under Docs search index', target: 'Docs search index' } },
+                preview: describeSessionListRefusedPutUnder('Docs search index') },
         });
         expect(outcome?.tone).toBe('refused');
         expect(outcome?.title).toBe('Can’t put under Docs search index');
@@ -90,6 +90,14 @@ describe('describeSessionListDropReason', () => {
             expect(reason.code).toBe(code);
             expect(reason.message).not.toBe(code);
             expect(reason.message.length).toBeGreaterThan(0);
+        }
+    });
+
+    it('says why for the structural blocks the list tree emits, never the catch-all', () => {
+        const generic = describeSessionListDropReason('something-new').message;
+        for (const code of ['workspace-scope-mismatch', 'max-depth-exceeded', 'leaf-cannot-be-parent', 'ordering-mode',
+            'feature-disabled', 'scope-unavailable', 'unsupported-item']) {
+            expect(describeSessionListDropReason(code).message, code).not.toBe(generic);
         }
     });
 });

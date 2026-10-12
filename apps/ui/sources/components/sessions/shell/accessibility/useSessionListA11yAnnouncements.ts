@@ -7,6 +7,7 @@ import type {
     SessionListInstructionBlockReason,
     SessionListTreeDropResult,
 } from '../drop-resolution/sessionListTreeTypes';
+import { describeSessionListDropReason } from '../dropPreview/sessionListDropPresentation';
 
 export type SessionListA11yAnnouncementSubject = Readonly<{
     label: string;
@@ -48,6 +49,8 @@ function formatBlockedReason(reason: BlockedReason): string {
 
 function formatSessionListBlockReason(reason: SessionListInstructionBlockReason): string {
     switch (reason) {
+        case 'no-row-above':
+            return describeSessionListDropReason(reason).message;
         case 'feature-disabled':
             return t('sessionsList.dragA11yBlockedFeatureDisabled');
         case 'scope-unavailable':

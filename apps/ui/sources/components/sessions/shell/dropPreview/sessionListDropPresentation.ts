@@ -64,6 +64,7 @@ export const SESSION_LIST_NO_TARGET_CODE = 'no-target';
 
 function reasonMessage(code: string): string {
     switch (code) {
+        case 'no-row-above': return t('entityDragDrop.reasons.noRowAbove');
         case 'read': return t('entityDragDrop.reasons.read');
         case 'input': return t('entityDragDrop.reasons.input');
         case 'pairwise': return t('entityDragDrop.reasons.pairwise');
@@ -86,6 +87,11 @@ function reasonMessage(code: string): string {
             return t('entityDragDrop.reasons.noChange');
         case 'descendant-cycle': return t('entityDragDrop.reasons.descendantCycle');
         case 'max-depth-exceeded': return t('entityDragDrop.reasons.maxDepth');
+        // The tree's structural blocks: each says why, so a refusal never reads "can't · can't".
+        case 'workspace-scope-mismatch': return t('entityDragDrop.reasons.otherGroup');
+        case 'leaf-cannot-be-parent': return t('entityDragDrop.reasons.cantHold');
+        case 'unsupported-item': return t('entityDragDrop.reasons.fixedItem');
+        case 'scope-unavailable': return t('entityDragDrop.reasons.unavailable');
         case 'feature-disabled': return t('entityDragDrop.reasons.foldersOff');
         case 'target-retired':
         case 'source-retired':

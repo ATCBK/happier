@@ -14,6 +14,7 @@ export type SessionListInstructionBlockReason =
     | 'feature-disabled'
     | 'ordering-mode'
     | 'scope-unavailable'
+    | 'no-row-above'
     | 'unsupported-item';
 
 export type SessionListTreeDropResult = TreeDropResult & Readonly<{

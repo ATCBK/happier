@@ -9,6 +9,7 @@ import {
     useTreeDropAutoscroll,
     useTreeDropRegistry,
     windowBoundsToContentBounds,
+    resolveTreeDropVisualGeometry,
     type TreeContentRow,
     type TreeDropMeasurableRef,
     type TreeDropOverlayKind,
@@ -18,7 +19,6 @@ import {
     type WindowPointer,
 } from '@/components/ui/treeDragDrop';
 import { putSessionUnderLead } from '@/components/sessions/work/putSessionUnderLead';
-import { getStorage } from '@/sync/domains/state/storage';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import type { SessionFoldersV1 } from '@/sync/domains/session/folders';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
@@ -35,6 +35,8 @@ import {
 import { buildSessionListDragIntent } from './drag/sessionListDragIntent';
 import { buildSessionListDragSnapshot } from './drag/sessionListDragSnapshot';
 import { resolveSessionListDragPointer } from './drag/resolveSessionListDragPointer';
+import { resolveImplicitDropZoneBounds } from './drag/resolveImplicitDropZoneBounds';
+import { writeSessionListDropOverlayGeometry } from './useSessionInlineDrag';
 import type { SessionListDragSnapshot } from './drag/_types';
 import { buildSessionListDragSource } from './drop-resolution/buildSessionListDragSource';
 import { buildSessionListTreeRows } from './drop-resolution/buildSessionListTreeRows';
@@ -62,13 +64,6 @@ import type {
  * means "put under". Whether that Session takes reports is the domain resolver's verdict, so a
  * refused lead still resolves here and the release preview says why instead of nothing lighting up.
  */
-function canPutSessionUnder(sessionId: string, leadSessionId: string): boolean {
-    if (sessionId === leadSessionId) return false;
-    const sessions = getStorage().getState().sessions;
-    const lead = sessions[leadSessionId];
-    return Boolean(lead) && (lead?.serverId ?? null) === (sessions[sessionId]?.serverId ?? null);
-}
-
 const IDLE_RESOLVED_DROP: UseSessionInlineDragResolvedDrop = Object.freeze({
     result: Object.freeze({
         instruction: Object.freeze({ kind: 'idle' }),
@@ -106,6 +101,7 @@ export type UseSessionListRowInteractionsInput = Readonly<{
     setSessionPinForKey: (sessionKey: string, pinned: boolean) => void;
     setSessionTagsForKey: (sessionKey: string, tags: readonly string[]) => void;
     scrollToOffset?: (offsetY: number) => void;
+    scrollToIndex?: (index: number) => void;
 }>;
 
 export function useSessionListRowInteractions(input: UseSessionListRowInteractionsInput) {
@@ -116,6 +112,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
     const suppressFolderFocusPressUntilRef = React.useRef(0);
 
     const activeDragSnapshotRef = React.useRef<SessionListDragSnapshot | null>(null);
+    const keyboardScrollTargetRef = React.useRef<string | null>(null);
     // Mounted geometry changes (virtualized rows arriving, scroll, resize) re-select the place under a carry.
     const entityDragRuntime = useEntityDragDropRuntime();
     const dropGeometryRegistry = useTreeDropRegistry(entityDragRuntime.refresh);
@@ -213,6 +210,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
 
     const clearDragState = React.useCallback(() => {
         activeDragSnapshotRef.current = null;
+        keyboardScrollTargetRef.current = null;
         setActiveDragSnapshot(null);
         setDraggingSessionKey(null);
         autoscrollActive.value = false;
@@ -302,7 +300,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
         scrollOffsetYRef.current = nextOffset;
         autoscrollScrollOffsetY.value = nextOffset;
         // Scrolling under a still pointer changes the place beneath it.
-        if (carryRef.current) entityDragRuntime.refresh();
+        if (activeDragSnapshotRef.current) entityDragRuntime.refresh();
     }, [autoscrollScrollOffsetY, entityDragRuntime]);
 
     const handleTreeContentSizeChange = React.useCallback((_width: number, height: number) => {
@@ -382,7 +380,9 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
                 pointer,
                 viewport: readViewportMetrics(),
                 canReorderSessionSiblings,
-                canPutSessionUnder,
+                // Geometry names a same-Home candidate from the list topology. The entity
+                // resolver alone admits reportsTo using the canonical relation projection.
+                canPutSessionUnder: () => true,
             });
         } catch {
             return IDLE_RESOLVED_DROP;
@@ -401,12 +401,57 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
                 y: row.bounds.y + viewport.viewportWindowY - viewport.scrollOffsetY,
                 width: row.bounds.width, height: row.bounds.height };
         },
+        resolveKeyboardGeometry: visual => {
+            const snapshot = activeDragSnapshotRef.current;
+            if (!snapshot || visual.kind === 'none') return { kind: 'none' };
+            const content = dropGeometryRegistry.getContentGeometry();
+            const viewport = readViewportMetrics();
+            const row = content.rows.find(row => row.id === visual.targetId);
+            if (!row) {
+                const target = snapshot.topology.rowMetadataById.get(visual.targetId);
+                if (target && keyboardScrollTargetRef.current !== visual.targetId) {
+                    keyboardScrollTargetRef.current = visual.targetId;
+                    input.scrollToIndex?.(target.itemIndex);
+                }
+                return { kind: 'none' };
+            }
+            const top = row.bounds.y - viewport.scrollOffsetY;
+            const edge = visual.kind === 'line' && visual.edge === 'bottom' ? top + row.bounds.height : top;
+            const destinationVisible = visual.kind === 'line'
+                ? edge >= 0 && edge <= viewport.viewportHeight
+                : top < viewport.viewportHeight && top + row.bounds.height > 0;
+            if (!destinationVisible) {
+                const targetY = visual.kind === 'line' && visual.edge === 'bottom'
+                    ? row.bounds.y + row.bounds.height : row.bounds.y;
+                const offset = Math.max(0, targetY - viewport.viewportHeight / 2);
+                const request = `${visual.targetId}:${offset}`;
+                if (keyboardScrollTargetRef.current !== request) {
+                    keyboardScrollTargetRef.current = request;
+                    input.scrollToOffset?.(offset);
+                }
+                return { kind: 'none' };
+            }
+            keyboardScrollTargetRef.current = null;
+            const implicit = resolveImplicitDropZoneBounds({ topologyDropZones: snapshot.topology.dropZones,
+                rows: content.rows, rowMetadataById: snapshot.topology.rowMetadataById });
+            return resolveTreeDropVisualGeometry({ visual, rows: content.rows,
+                dropZones: [...content.dropZones, ...implicit], viewport });
+        },
+        onKeyboardGeometry: geometry => writeSessionListDropOverlayGeometry(dropOverlayShared, geometry),
+        onCarryRetired: clearDragState,
     });
 
     const stagedMove = useSessionListStagedMove({
         getItems: () => listItemsRef.current,
         foldersFeatureEnabled: input.folderActionsEnabled,
-        beginCarry: entityDragDrop.beginCarry,
+        beginCarry: (snapshot, mode) => {
+            const carry = entityDragDrop.beginCarry(snapshot, mode);
+            if (!carry) { clearDragState(); return null; }
+            activeDragSnapshotRef.current = snapshot;
+            setActiveDragSnapshot(snapshot);
+            remeasureAllRegisteredRows();
+            return carry;
+        },
         runtime: entityDragRuntime,
     });
 
@@ -445,9 +490,9 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
             return;
         }
         carryRef.current?.cancel();
-        activeDragSnapshotRef.current = snapshot;
         carryRef.current = entityDragDrop.beginCarry(snapshot, 'pointer');
         if (!carryRef.current) { clearDragState(); return; }
+        activeDragSnapshotRef.current = snapshot;
         setActiveDragSnapshot(snapshot);
         setNativeContextMenuSessionKey(null);
         setDraggingSessionKey(sessionKey);

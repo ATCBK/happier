@@ -215,6 +215,8 @@ export type SessionListDragIntent = Readonly<{
     sourceKind: TreeRowKind;
     /** The resolved tree instruction kind. */
     instructionKind: TreeInstruction['kind'];
+    /** Producer-owned structural refusal, retained by keyboard/chooser transport only. */
+    blockedReason?: string;
     /** Resolved target row id, when the instruction has one. */
     targetRowId: string | null;
     /** Resolved container id the move lands in, when applicable. */

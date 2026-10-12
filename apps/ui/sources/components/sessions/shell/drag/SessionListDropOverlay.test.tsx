@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { HAPPIER_COLLECTION_LIST_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
@@ -76,7 +77,9 @@ describe('SessionListDropOverlay', () => {
 
         const line = screen.findByTestId('session-list-drop-overlay-line');
         const style = flattenStyle(line?.props.style);
-        // left shifts by depth * SESSION_LIST_DROP_OVERLAY_INDENT_PX = 2 * 6 = 12 -> 16 + 12 = 28.
-        expect(style.left).toBe(16 + 2 * SESSION_LIST_DROP_OVERLAY_INDENT_PX);
+        // The line starts at the rows' text edge (the shared column frame), then shifts by depth.
+        expect(style.left).toBe(16 + HAPPIER_COLLECTION_LIST_METRICS.contentInset + 2 * SESSION_LIST_DROP_OVERLAY_INDENT_PX);
+        // It stays inside the sheet: it ends at the text edge on the trailing side too.
+        expect(style.width).toBe(320 - 16 - 2 * HAPPIER_COLLECTION_LIST_METRICS.contentInset - 2 * SESSION_LIST_DROP_OVERLAY_INDENT_PX);
     });
 });

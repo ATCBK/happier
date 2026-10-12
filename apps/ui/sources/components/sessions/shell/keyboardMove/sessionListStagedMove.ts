@@ -1,9 +1,8 @@
 import type { HappierStagedMoveKeyIntent } from '@happier-dev/plugin-ui/presentation';
 
-import type { TreeDropResult } from '@/components/ui/treeDragDrop';
-
 import type {
     SessionListTreeDragSource,
+    SessionListTreeDropResult,
     SessionListTreeModel,
     SessionListTreeRowMetadata,
 } from '../drop-resolution/sessionListTreeTypes';
@@ -26,6 +25,7 @@ export type SessionListStagedPlace =
     | Readonly<{ kind: 'origin' }>
     | Readonly<{ kind: 'line'; slot: number }>
     | Readonly<{ kind: 'under'; rowId: string }>
+    | Readonly<{ kind: 'blocked'; reason: 'no-row-above' }>
     | Readonly<{ kind: 'top-level' }>;
 
 type Input = Readonly<{ tree: SessionListTreeModel; source: SessionListTreeDragSource }>;
@@ -44,7 +44,7 @@ function placeOf(input: Input, state: SessionListStagedMoveState): SessionListSt
     if (state.mode === 'top-level') return { kind: 'top-level' };
     if (state.mode === 'under') {
         const above = candidateRows(input)[state.slot - 1];
-        return above ? { kind: 'under', rowId: above.rowId } : { kind: 'origin' };
+        return above ? { kind: 'under', rowId: above.rowId } : { kind: 'blocked', reason: 'no-row-above' };
     }
     return state.slot === state.originSlot ? { kind: 'origin' } : { kind: 'line', slot: state.slot };
 }
@@ -73,7 +73,7 @@ export function stepSessionListStagedMove(input: Input & Readonly<{
             break;
         }
         case 'in':
-            if (state.mode === 'line' && rows[state.slot - 1]) next = { ...state, mode: 'under' };
+            if (state.mode === 'line') next = { ...state, mode: 'under' };
             break;
         case 'out':
             if (state.mode === 'under') next = { ...state, mode: 'line' };
@@ -89,12 +89,15 @@ function rootContainer(input: Input) {
 }
 
 /** The tree instruction for the staged place, or `null` while it is where it started. */
-export function resolveSessionListStagedMoveResult(input: Input & Readonly<{ state: SessionListStagedMoveState }>): TreeDropResult | null {
+export function resolveSessionListStagedMoveResult(input: Input & Readonly<{ state: SessionListStagedMoveState }>): SessionListTreeDropResult | null {
     const place = placeOf(input, input.state);
     const rows = candidateRows(input);
     switch (place.kind) {
         case 'origin':
             return null;
+        case 'blocked':
+            return { instruction: { kind: 'blocked', reason: 'no-target' },
+                sessionListBlockReason: place.reason, visual: { kind: 'none' } };
         case 'top-level': {
             const container = rootContainer(input);
             return container

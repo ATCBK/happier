@@ -8,6 +8,7 @@ import { HAPPIER_CARRIED_SOURCE_OPACITY } from '@happier-dev/plugin-ui/presentat
 import { useEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropHooks';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import { treeRowId } from './drop-resolution/treeRowId';
+import type { SessionListTreeDropResult } from './drop-resolution/sessionListTreeTypes';
 
 import {
     TREE_DROP_OVERLAY_KIND_LINE,
@@ -20,7 +21,7 @@ import {
 } from '@/components/ui/treeDragDrop';
 
 export type UseSessionInlineDragResolvedDrop = Readonly<{
-    result: TreeDropResult;
+    result: SessionListTreeDropResult;
     geometry: TreeDropVisualGeometry;
 }>;
 
@@ -81,7 +82,7 @@ function hideOverlay(target: TreeDropOverlaySharedValues): void {
     target.overlayKind.value = TREE_DROP_OVERLAY_KIND_NONE;
 }
 
-function writeOverlayGeometry(target: TreeDropOverlaySharedValues, geometry: TreeDropVisualGeometry): void {
+export function writeSessionListDropOverlayGeometry(target: TreeDropOverlaySharedValues, geometry: TreeDropVisualGeometry): void {
     if (geometry.kind === 'none') {
         hideOverlay(target);
         return;
@@ -149,7 +150,7 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
         };
         const fireDragUpdate = (absoluteX: number, absoluteY: number) => {
             const resolved = resolveDropForPointer(absoluteX, absoluteY);
-            writeOverlayGeometry(overlayShared, resolved.geometry);
+            writeSessionListDropOverlayGeometry(overlayShared, resolved.geometry);
             callbacksRef.current.onDragUpdate?.({ sessionKey, groupKey, dataIndex, result: resolved.result });
         };
         const fireDragComplete = (absoluteX: number | null, absoluteY: number | null) => {

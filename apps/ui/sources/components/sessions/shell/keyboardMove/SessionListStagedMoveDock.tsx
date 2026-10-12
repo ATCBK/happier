@@ -3,14 +3,20 @@ import * as React from 'react';
 import { View } from 'react-native';
 
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
+import { SIDEBAR_NEW_SESSION_FOOTPRINT_PX } from '@/components/ui/navigation/TabBarNewSessionButton';
 import { useEntityDragDropSnapshot, type EntityDragDropRuntime } from '@/components/ui/treeDragDrop';
 import { ENTITY_STAGED_MOVE_DOCK_PLACEMENT, EntityStagedMoveDock, useEntityStagedMoveHints } from '@/components/ui/treeDragDrop/ui/EntityReleasePreview';
-import { describeEntityDropOutcome } from '@/components/ui/treeDragDrop/ui/entityDropOutcome';
+import { useEntityDropOutcome } from '@/components/ui/treeDragDrop/ui/entityDropOutcome';
 import { t } from '@/text';
 
 import type { SessionListStagedMoveController, SessionListStagedMoveView } from './useSessionListStagedMove';
 
 type RowKeyHandler = SessionListStagedMoveController['handleRowKey'];
+
+/** The list's foot carries the floating "+" (lab KS): the dock rides just above it, never under it. */
+const styles = {
+    overFloatingNewSession: { bottom: SIDEBAR_NEW_SESSION_FOOTPRINT_PX + ENTITY_STAGED_MOVE_DOCK_PLACEMENT.bottom / 2 },
+} as const;
 
 const SessionListStagedMoveContext = React.createContext<RowKeyHandler | null>(null);
 
@@ -35,19 +41,20 @@ export const SessionListStagedMoveDock = React.memo(function SessionListStagedMo
     const snapshot = useEntityDragDropSnapshot(props.runtime);
     const hints = useEntityStagedMoveHints({ nested: true });
     const staged = props.view.label !== null && (snapshot.phase === 'carrying' || snapshot.phase === 'pending');
+    const described = useEntityDropOutcome(staged ? snapshot : null);
     const outcome: HappierReleaseOutcome | null = staged
-        ? describeEntityDropOutcome(snapshot) ?? { tone: 'quiet', glyph: 'add', title: props.view.label ?? '', detail: t('entityDragDrop.keyboard.hintsA11y') }
+        ? described ?? { tone: 'quiet', glyph: 'add', title: props.view.label ?? '', detail: t('entityDragDrop.keyboard.hintsA11y') }
         : null;
     const announcement = describeHappierDropAnnouncement(outcome);
     return (
         <>
             <PoliteAccessibilityStatus
                 announcement={announcement}
-                transitionKey={String(props.view.step)}
+                transitionKey={JSON.stringify([props.view.step, announcement])}
                 statusTestID="session-list-staged-move-status"
             />
             {outcome ? (
-                <View style={ENTITY_STAGED_MOVE_DOCK_PLACEMENT} pointerEvents="none">
+                <View style={[ENTITY_STAGED_MOVE_DOCK_PLACEMENT, styles.overFloatingNewSession]} pointerEvents="none">
                     <EntityStagedMoveDock outcome={outcome} hints={hints} testID="session-list-staged-move-dock" />
                 </View>
             ) : null}

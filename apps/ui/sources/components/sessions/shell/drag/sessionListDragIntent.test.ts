@@ -98,6 +98,7 @@ describe('buildSessionListDragIntent', () => {
         });
 
         expect(blocked.instructionKind).toBe('blocked');
+        expect(blocked.blockedReason).toBe('descendant-cycle');
         expect(blocked.targetRowId).toBeNull();
         expect(blocked.containerId).toBeNull();
         expect(blocked.depth).toBeNull();

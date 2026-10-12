@@ -5,6 +5,7 @@ import {
     TreeDropOverlay,
     type TreeDropOverlaySharedValues,
 } from '@/components/ui/treeDragDrop';
+import { HAPPIER_COLLECTION_LIST_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 /**
  * Session-list wrapper around the generic list-level `TreeDropOverlay`.
@@ -41,6 +42,11 @@ export function SessionListDropOverlay(props: SessionListDropOverlayProps): Reac
         <TreeDropOverlay
             shared={props.shared}
             indentPx={SESSION_LIST_DROP_OVERLAY_INDENT_PX}
+            // Rows are measured across the column; their sheet sits one gutter in, and their text one
+            // more. The outline lies on the row's frame and the line starts at the text edge (lab E1s).
+            frameInsetPx={HAPPIER_COLLECTION_LIST_METRICS.rowInset}
+            lineInsetPx={HAPPIER_COLLECTION_LIST_METRICS.contentInset - HAPPIER_COLLECTION_LIST_METRICS.rowInset}
+            outlineRadius={HAPPIER_COLLECTION_LIST_METRICS.rowRadius}
             testID={props.testID}
             style={props.style}
         />

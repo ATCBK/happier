@@ -64,7 +64,12 @@ describe('session list staged keyboard move (KS)', () => {
         let state = beginSessionListStagedMove({ tree, source });
         state = stepSessionListStagedMove({ tree, source, state, intent: 'previous' });
         state = stepSessionListStagedMove({ tree, source, state, intent: 'in' });
-        // From "above Fix", there is no row above: → stays on the line.
+        // The dock must explain why "Put under" cannot use the first gap.
+        expect(resolveSessionListStagedMoveResult({ tree, source, state })).toMatchObject({
+            instruction: { kind: 'blocked' }, sessionListBlockReason: 'no-row-above',
+            visual: { kind: 'none' },
+        });
+        state = stepSessionListStagedMove({ tree, source, state, intent: 'out' });
         expect(resolveSessionListStagedMoveResult({ tree, source, state })?.instruction.kind).toBe('reorder-before');
 
         state = beginSessionListStagedMove({ tree, source });

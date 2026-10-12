@@ -124,6 +124,7 @@ export function resolveSessionListEntityDrop(params: Readonly<{
     if (!context.scope || !entityDragScopesEqualV1(item.scope, context.scope)) return refuse('scope-mismatch');
     const sourceRowId = sourceRowIdForItem(item);
     if (!sourceRowId || params.intent.sourceRowId !== sourceRowId) return refuse('unsupported-item');
+    if (params.intent.instructionKind === 'blocked') return refuse(params.intent.blockedReason ?? 'blocked-intent');
     const intent = { ...params.intent, scope: item.scope };
     const tree = resolveSessionListDragTree(context);
     const currentContext = { ...context, latestTree: tree };
