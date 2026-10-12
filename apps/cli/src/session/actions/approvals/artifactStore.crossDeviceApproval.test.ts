@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ApprovalRequestSchema,
@@ -11,6 +14,7 @@ import {
 } from '@happier-dev/protocol';
 import { libsodiumPublicKeyFromSecretKey } from '@/api/encryption';
 import type { Credentials } from '@/persistence';
+import { configuration } from '@/configuration';
 
 import { createCliApprovalsArtifactStore } from './artifactStore';
 
@@ -29,6 +33,7 @@ vi.mock('axios', () => ({
 vi.mock('@/configuration', () => ({
   configuration: {
     apiServerUrl: 'http://127.0.0.1:24599',
+    activeServerDir: '',
   },
 }));
 
@@ -50,7 +55,8 @@ type StoredArtifact = {
 describe('approval Artifact cross-device decision', () => {
   let artifacts: Map<string, StoredArtifact>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    configuration.activeServerDir = await mkdtemp(join(tmpdir(), 'happier-approval-cross-device-'));
     artifacts = new Map();
     mockGet.mockReset();
     mockPost.mockReset();
@@ -114,6 +120,10 @@ describe('approval Artifact cross-device decision', () => {
         },
       };
     });
+  });
+
+  afterEach(async () => {
+    await rm(configuration.activeServerDir, { recursive: true, force: true });
   });
 
   it('decides a creator-profile artifact from another profile on the same Home exactly once', async () => {
