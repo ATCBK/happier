@@ -9,6 +9,8 @@ import type { Socket } from 'node:net';
 import { execFileWithDeadline } from '@happier-dev/cli-common/process';
 
 import { resolveCliRuntimeAssetPath } from '@/packagedRuntime/assets/resolveCliRuntimeAssetPath';
+import { parseProcessOwnerTag, PROCESS_OWNER_ENV_KEY, resolveProcessOwnerScopeKey } from '@/processes/ownerTag';
+import { configuration } from '@/configuration';
 
 /**
  * The one native-custody owner behind SVC09's exact process-tree custody.
@@ -17,7 +19,12 @@ import { resolveCliRuntimeAssetPath } from '@/packagedRuntime/assets/resolveCliR
  * `happier-process-custody` runtime support binary
  * (`tools/unpacked/happier-process-custody`, staged by the daemon-support
  * payload builder):
- * - Windows: generation-unique named Job Objects. The helper creates the job,
+ * - Windows: named Job Objects. Finite/service launch creates a unique job;
+ *   session/interactive-terminal join derives a name from the canonical owner
+ *   tag and transfers its non-inheritable handle to the existing runner/host.
+ *   Losing that owner does not kill members: own-principal tag+tree evidence
+ *   remains the recovery authority after the name ceases to be reopenable.
+ *   For finite/service launch the helper creates the job,
  *   starts the target suspended, assigns it before its first instruction, and
  *   resumes it; this module owns the tagged job identity, the post-assignment
  *   handshake, and terminate/query-by-job with full membership absence proofs.
@@ -43,7 +50,7 @@ import { resolveCliRuntimeAssetPath } from '@/packagedRuntime/assets/resolveCliR
 
 export const PROCESS_CUSTODY_RUNTIME_BINARY_BASE_NAME = 'happier-process-custody';
 
-/** Windows job-custody identity: `winjob:<jobName>`. The name is generation-unique. */
+/** Windows job-custody identity: `winjob:<jobName>`. */
 const WINDOWS_JOB_IDENTITY_PREFIX = 'winjob:';
 /** Darwin native subsecond identity: `darwin-proc:<pid>:<sec>:<usec>`. */
 const DARWIN_NATIVE_IDENTITY_PREFIX = 'darwin-proc:';
@@ -134,25 +141,138 @@ export type ParsedProcessCustodyStartIdentity =
 
 export type ProcessCustodyExecFile = typeof execFileWithDeadline;
 
+export type ProcessCustodySamplingInput = Readonly<{
+    command: 'vitals-sample' | 'process-census';
+    sampledAt: number;
+    args?: readonly string[];
+    signal?: AbortSignal;
+}>;
+export type ProcessCustodySamplingResult =
+    | { state: 'ready'; stdout: string }
+    | { state: 'unavailable'; reason: 'helper_missing' | 'helper_failing' };
+export type ProcessCustodySamplingExecFile = (command: string, args: readonly string[], options: Parameters<typeof execFileWithDeadline>[2]) => Promise<Readonly<{ stdout: string | Buffer; stdoutTruncated?: boolean }>>;
+
+/** Both native samplers use this invocation owner and its minute-boundary recovery rule. */
+export function createProcessCustodySamplingInvoker(options: Readonly<{
+    execFile?: ProcessCustodySamplingExecFile;
+    resolveExecutable?: () => string | null;
+}> = {}): (input: ProcessCustodySamplingInput) => Promise<ProcessCustodySamplingResult> {
+    const nextAttempt = new Map<ProcessCustodySamplingInput['command'], number>();
+    const run = options.execFile ?? execFileWithDeadline;
+    return async (input) => {
+        if (input.sampledAt < (nextAttempt.get(input.command) ?? 0)) return { state: 'unavailable', reason: 'helper_failing' };
+        const executable = (options.resolveExecutable ?? resolveProcessCustodySupportExecutable)();
+        if (!executable) return { state: 'unavailable', reason: 'helper_missing' };
+        try {
+            const result = await run(executable, [input.command, ...(input.args ?? [])], {
+                encoding: 'utf8', timeout: CUSTODY_RUNTIME_EXEC_TIMEOUT_MS, signal: input.signal,
+                windowsHide: true,
+                ...(input.command === 'process-census' ? { maxBuffer: Infinity } : {}),
+            });
+            if (result.stdoutTruncated) throw new Error('Native sampling output was truncated');
+            nextAttempt.delete(input.command);
+            return { state: 'ready', stdout: String(result.stdout) };
+        } catch {
+            nextAttempt.set(input.command, (Math.floor(input.sampledAt / 60_000) + 1) * 60_000);
+            return { state: 'unavailable', reason: 'helper_failing' };
+        }
+    };
+}
+
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 const CUSTODY_RUNTIME_EXEC_TIMEOUT_MS = 10_000;
-const CUSTODY_TERMINATE_TIMEOUT_MS = 5_000;
+export const CUSTODY_TERMINATE_TIMEOUT_MS = 5_000;
 
 function isPositiveSafeInteger(value: unknown): value is number {
     return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
 /**
- * Generation-unique job name. The UUID comes from the spawning operation's own
- * instance identity, so two spawns can never negotiate custody over one job,
- * and the helper refuses an already-existing job name fail-closed.
+ * Canonical owner-tag names for existing-owner joins; incumbent finite/service
+ * launch retains its generation-unique, path-safe invocation identity.
  */
 export function createWindowsJobCustodyName(instanceId: string): string {
+    if (parseProcessOwnerTag(instanceId)) {
+        return `Local\\happier-owner-${Buffer.from(instanceId, 'utf8').toString('base64url')}`;
+    }
     const normalized = instanceId.trim();
     if (!normalized || /[^\w-]/u.test(normalized)) {
         throw new TypeError('Windows job custody requires a path-safe instance identity');
     }
     return `Local\\happier-svc09-${normalized}`;
+}
+
+/** Only canonical owner-tag names participate in the new holder projection. */
+export function parseWindowsJobCustodyOwnerTag(jobName: string): string | null {
+    const prefix = 'Local\\happier-owner-';
+    if (!jobName.startsWith(prefix)) return null;
+    const encoded = jobName.slice(prefix.length);
+    if (!/^[A-Za-z0-9_-]+$/.test(encoded)) return null;
+    const tag = Buffer.from(encoded, 'base64url').toString('utf8');
+    if (!parseProcessOwnerTag(tag) || createWindowsJobCustodyName(tag) !== jobName) return null;
+    return tag;
+}
+
+export type ProcessCustodyJoinedJob = Readonly<{
+    state: 'joined'; jobName: string; pid: number; holderPid: number;
+    holderStartTimeMs: number; holderHandle: string;
+}>;
+export type ProcessCustodyJobJoinOutcome = ProcessCustodyJoinedJob | Readonly<{ state: 'unavailable' }>;
+
+/** The helper transfers the Job handle into this existing long-lived owner. */
+export async function joinProcessCustodyJob(input: Readonly<{
+    pid: number; holderPid: number; ownerTag: string;
+    platform?: NodeJS.Platform; executablePath?: string | null; execFile?: ProcessCustodyExecFile;
+}>): Promise<ProcessCustodyJobJoinOutcome> {
+    if ((input.platform ?? process.platform) !== 'win32' || !parseProcessOwnerTag(input.ownerTag)
+        || !isPositiveSafeInteger(input.pid) || input.pid <= 1 || !isPositiveSafeInteger(input.holderPid) || input.holderPid <= 1) return { state: 'unavailable' };
+    const executable = input.executablePath === undefined ? resolveProcessCustodySupportExecutable('win32') : input.executablePath;
+    if (!executable) return { state: 'unavailable' };
+    const jobName = createWindowsJobCustodyName(input.ownerTag);
+    try {
+        const { stdout } = await (input.execFile ?? execFileWithDeadline)(executable, [
+            'job-join', `--job=${jobName}`, `--pid=${input.pid}`, `--holder-pid=${input.holderPid}`,
+        ], { encoding: 'utf8', timeout: CUSTODY_RUNTIME_EXEC_TIMEOUT_MS, windowsHide: true });
+        const value: unknown = JSON.parse(String(stdout));
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return { state: 'unavailable' };
+        const result = value as Record<string, unknown>;
+        if (Object.keys(result).length !== 7 || result.v !== 1 || result.state !== 'joined' || result.job !== jobName
+            || result.pid !== input.pid || result.holderPid !== input.holderPid || !isPositiveSafeInteger(result.holderStartTimeMs)
+            || typeof result.holderHandle !== 'string' || !/^[1-9][0-9]*$/.test(result.holderHandle)
+            || BigInt(result.holderHandle) >= 0xffffffffffffffffn) return { state: 'unavailable' };
+        return { state: 'joined', jobName, pid: input.pid, holderPid: input.holderPid,
+            holderStartTimeMs: result.holderStartTimeMs, holderHandle: result.holderHandle };
+    } catch { return { state: 'unavailable' }; }
+}
+
+/** A terminal exit releases its host-held handle; the native owner checks PID generation. */
+export async function releaseProcessCustodyJobHandle(input: Readonly<{
+    custody: ProcessCustodyJoinedJob; executablePath?: string | null; execFile?: ProcessCustodyExecFile;
+}>): Promise<boolean> {
+    const executable = input.executablePath === undefined ? resolveProcessCustodySupportExecutable('win32') : input.executablePath;
+    if (!executable) return false;
+    try {
+        const { stdout } = await (input.execFile ?? execFileWithDeadline)(executable, [
+            'job-release', `--holder-pid=${input.custody.holderPid}`, `--holder-handle=${input.custody.holderHandle}`,
+            `--holder-start-time-ms=${input.custody.holderStartTimeMs}`,
+        ], { encoding: 'utf8', timeout: CUSTODY_RUNTIME_EXEC_TIMEOUT_MS, windowsHide: true });
+        const result: unknown = JSON.parse(String(stdout));
+        return !!result && typeof result === 'object' && !Array.isArray(result)
+            && Object.keys(result).length === 2 && 'v' in result && result.v === 1 && 'state' in result && result.state === 'released';
+    } catch { return false; }
+}
+
+// One physical runner lifetime owns one Job. Initial binding reuses earliest
+// startup's pending/result custody; a Session swap must not create nested Jobs.
+let currentWindowsSessionCustody: Promise<ProcessCustodyJobJoinOutcome> | null = null;
+
+/** Earliest inherited-tag startup and manual first binding share this owner. */
+export async function joinCurrentWindowsSessionProcessCustody(): Promise<ProcessCustodyJobJoinOutcome | null> {
+    if (process.platform !== 'win32') return null;
+    const ownerTag = process.env[PROCESS_OWNER_ENV_KEY];
+    const owner = parseProcessOwnerTag(ownerTag);
+    if (!owner || owner.kind !== 'session' || owner.daemonScopeKey !== resolveProcessOwnerScopeKey(configuration.happyHomeDir)) return null;
+    return currentWindowsSessionCustody ??= joinProcessCustodyJob({ pid: process.pid, holderPid: process.pid, ownerTag: ownerTag! });
 }
 
 /** Private post-assignment handshake file path for one spawn. */
@@ -380,7 +500,7 @@ export async function terminateProcessCustodyByJob(
 
 /**
  * Read the native subsecond start identity for one Darwin pid through the
- * helper's validated numeric sysctl witness. Returns `null` when the helper is
+ * validated process-census snapshot. Returns `null` when the helper is
  * unavailable or refuses the parse, which callers must treat as "fall back to
  * the legacy whole-second witness", never as a birth fact.
  */
@@ -392,19 +512,17 @@ export async function observeNativeDarwinProcessStartIdentity(
     }>,
 ): Promise<ProcessCustodyNativeWitness | null> {
     if (!isPositiveSafeInteger(input.pid)) return null;
-    const run = input.execFile ?? execFileWithDeadline;
     try {
-        const result = await run(input.executablePath, ['pid-startidentity', String(input.pid)], {
-            timeout: CUSTODY_RUNTIME_EXEC_TIMEOUT_MS,
-        });
-        const outcome = readJsonLineOutcome(result.stdout);
-        if (!outcome || outcome.v !== 1 || outcome.pid !== input.pid) return null;
-        const sec = outcome.sec;
-        const usec = outcome.usec;
-        if (!isPositiveSafeInteger(sec) || typeof usec !== 'number' || !Number.isSafeInteger(usec) || usec < 0 || usec > 999_999) {
-            return null;
-        }
-        return Object.freeze({ sec, usec });
+        // The census resolves its helper through this module; load the view lazily to avoid a cycle.
+        const { createProcessCensusReader } = await import('@/processes/census/processCensus');
+        const snapshot = await createProcessCensusReader({
+            platform: 'darwin', helperExecutablePath: input.executablePath, execFile: input.execFile,
+        })({ freshness: 'fresh', pids: [input.pid], scope: 'all' });
+        if (snapshot.status !== 'ok') return null;
+        const native = snapshot.rows.find(row => row.pid === input.pid)?.start.native;
+        const identity = native ? parseProcessCustodyStartIdentity(native) : null;
+        if (identity?.kind !== 'darwin-proc' || identity.pid !== input.pid) return null;
+        return Object.freeze({ sec: identity.sec, usec: identity.usec });
     } catch {
         return null;
     }

@@ -15,7 +15,7 @@ export type ManagedProcessKind =
   | 'claude-code'
   | 'codex-tui'
   | 'pi-rpc'
-  | 'caffeinate'
+  | 'keep-awake'
   | 'other';
 
 export type ManagedProcessRestartPolicy =
@@ -94,4 +94,3 @@ export type StopRequest = Readonly<{
   reason: StopReason;
   requestedAtMs: number;
 }>;
-

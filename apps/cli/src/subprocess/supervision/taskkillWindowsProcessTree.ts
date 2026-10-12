@@ -13,6 +13,8 @@ export type TaskkillExecFile = (command: string, args: readonly string[], option
 type TaskkillInput = Readonly<{
   pid: number;
   force: boolean;
+  /** The terminator signals its identity-validated members individually. */
+  tree?: boolean;
   /** Supplied by the containing teardown when it owns a deadline. Startup custody has no deadline. */
   timeoutMs?: number;
   execFile?: TaskkillExecFile;

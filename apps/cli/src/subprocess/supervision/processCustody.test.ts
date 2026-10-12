@@ -10,6 +10,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     createProcessCustodyHandshakePath,
     createWindowsJobCustodyName,
+    parseWindowsJobCustodyOwnerTag,
+    joinProcessCustodyJob,
+    releaseProcessCustodyJobHandle,
     formatDarwinNativeStartIdentity,
     formatWindowsJobCustodyStartIdentity,
     observeNativeDarwinProcessStartIdentity,
@@ -86,12 +89,39 @@ describe('process custody identity format', () => {
 describe('process custody runtime outcomes', () => {
     function fakeExec(stdout: string, code = 0) {
         if (code === 0) {
-            return vi.fn(async () => ({ stdout, stderr: '' }));
+            return vi.fn(async (_file: string, _args: readonly string[]) => ({ stdout, stderr: '' }));
         }
-        return vi.fn(async () => {
+        return vi.fn(async (_file: string, _args: readonly string[]) => {
             throw Object.assign(new Error('custody helper failed'), { code });
         });
     }
+
+    it('keeps owner-held Job naming isolated by home scope and round-trips the canonical owner', () => {
+        const tag = 'v1.0123456789ab.session.owner.with/slashes';
+        const name = createWindowsJobCustodyName(tag);
+        expect(parseWindowsJobCustodyOwnerTag(name)).toBe(tag);
+        expect(createWindowsJobCustodyName('v1.abcdef012345.session.owner.with/slashes')).not.toBe(name);
+        expect(parseWindowsJobCustodyOwnerTag('Local\\happier-owner-YmFk')).toBeNull();
+        expect(parseWindowsJobCustodyOwnerTag(createWindowsJobCustodyName('opaque-id'))).toBeNull();
+    });
+
+    it('accepts only exact established owner-held custody and releases the original holder generation', async () => {
+        const tag = 'v1.0123456789ab.terminal.owned';
+        const job = createWindowsJobCustodyName(tag);
+        const expected = { v: 1, state: 'joined', job, pid: 42, holderPid: 43, holderStartTimeMs: 1234, holderHandle: '18446744073709551600' };
+        const joined = await joinProcessCustodyJob({ platform: 'win32', pid: 42, holderPid: 43, ownerTag: tag,
+            executablePath: 'custody', execFile: fakeExec(JSON.stringify(expected)) });
+        expect(joined).toEqual({ state: 'joined', jobName: job, pid: 42, holderPid: 43, holderStartTimeMs: 1234, holderHandle: expected.holderHandle });
+        await expect(joinProcessCustodyJob({ platform: 'win32', pid: 42, holderPid: 43, ownerTag: tag,
+            executablePath: 'custody', execFile: fakeExec(JSON.stringify({ ...expected, pid: 44 })) })).resolves.toEqual({ state: 'unavailable' });
+        await expect(joinProcessCustodyJob({ platform: 'win32', pid: 42, holderPid: 43, ownerTag: tag,
+            executablePath: 'custody', execFile: fakeExec('', 5) })).resolves.toEqual({ state: 'unavailable' });
+        if (joined.state !== 'joined') throw new Error('join missing');
+        const release = fakeExec('{"v":1,"state":"released"}');
+        await expect(releaseProcessCustodyJobHandle({ custody: joined, executablePath: 'custody', execFile: release })).resolves.toBe(true);
+        expect(release.mock.calls[0]?.[1]).toContain('--holder-start-time-ms=1234');
+        expect(release.mock.calls[0]?.[1]).toContain(`--holder-handle=${expected.holderHandle}`);
+    });
 
     it('maps the job query outcomes honestly', async () => {
         await expect(queryProcessCustodyJob({
@@ -134,21 +164,34 @@ describe('process custody runtime outcomes', () => {
         })).resolves.toBe('members-remaining');
     });
 
-    it('falls back to null when the Darwin native witness is unavailable or refuses', async () => {
+    it('reads exact Darwin subsecond identity from a validated process census and refuses missing evidence', async () => {
+        const snapshot = (native: string, pid = 4242, includeSelf = true) => JSON.stringify({
+            v: 1, capturedAtMs: 1000, logicalCpus: 8,
+            rows: [
+                ...(includeSelf ? [{ pid: process.pid, ppid: 1, start: { startTimeMs: 1000 },
+                    principal: { kind: 'uid', value: '1000' }, name: 'daemon', memory: null, cpuTimeUs: null }] : []),
+                { pid, ppid: 1, start: { startTimeMs: 1754041400000, native },
+                    principal: { kind: 'uid', value: '1000' }, name: 'runner', memory: null, cpuTimeUs: null },
+            ],
+        });
         await expect(observeNativeDarwinProcessStartIdentity({
             executablePath: 'custody',
             pid: 4242,
-            execFile: fakeExec('{"v":1,"pid":4242,"sec":1754041400,"usec":123456}\n'),
+            execFile: fakeExec(snapshot('darwin-proc:4242:1754041400:123456')),
         })).resolves.toEqual({ sec: 1754041400, usec: 123456 });
         await expect(observeNativeDarwinProcessStartIdentity({
             executablePath: 'custody',
             pid: 4242,
-            execFile: fakeExec('{"v":1,"pid":4242,"sec":1754041400,"usec":1000000}\n'),
+            execFile: fakeExec(snapshot('darwin-proc:4242:1754041400:1000000')),
         })).resolves.toBeNull();
         await expect(observeNativeDarwinProcessStartIdentity({
             executablePath: 'custody',
             pid: 4242,
-            execFile: fakeExec('{"v":1,"pid":99,"sec":1754041400,"usec":123456}\n'),
+            execFile: fakeExec(snapshot('darwin-proc:99:1754041400:123456', 99)),
+        })).resolves.toBeNull();
+        await expect(observeNativeDarwinProcessStartIdentity({
+            executablePath: 'custody', pid: 4242,
+            execFile: fakeExec(snapshot('darwin-proc:4242:1754041400:123456', 4242, false)),
         })).resolves.toBeNull();
         await expect(observeNativeDarwinProcessStartIdentity({
             executablePath: 'custody',
@@ -219,16 +262,14 @@ describe('staged runtime resolution', () => {
             // Real helper smoke is a mac-host live lane; unit runs skip it.
             return;
         }
-        const { stdout } = await execFileAsync(executablePath, ['pid-startidentity', String(process.pid)]);
-        const witness = JSON.parse(stdout) as { v: number; pid: number; sec: number; usec: number };
-        expect(witness.v).toBe(1);
-        expect(witness.pid).toBe(process.pid);
-        expect(witness.usec).toBeGreaterThanOrEqual(0);
-        expect(witness.usec).toBeLessThanOrEqual(999_999);
+        const witness = await observeNativeDarwinProcessStartIdentity({ executablePath, pid: process.pid });
+        expect(witness).not.toBeNull();
+        expect(witness!.usec).toBeGreaterThanOrEqual(0);
+        expect(witness!.usec).toBeLessThanOrEqual(999_999);
         // Cross-check the seconds against the independent `ps lstart` witness.
         const lstart = (
             await execFileAsync('ps', ['-o', 'lstart=', '-p', String(process.pid)])
         ).stdout.trim();
-        expect(Math.trunc(Date.parse(lstart) / 1000)).toBe(witness.sec);
+        expect(Math.trunc(Date.parse(lstart) / 1000)).toBe(witness!.sec);
     });
 });
