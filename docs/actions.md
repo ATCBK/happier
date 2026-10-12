@@ -55,12 +55,16 @@ approval default and its original surface's waiver. Waiving review permits only
 that invocation; it writes no remembered Project trust and grants no agent
 authority to approve setup. Explicit human trust decisions still bind the
 current Project and effect. Service Move and public-link controls consume the
-same Action policy. Admitted Local Services Actions supply the raw transport's
+same Action policy and read the targeted Home's settings. Service Start/Restart
+effect review also follows the invoking Action's policy; waived review still
+captures and revalidates the current effect before launch. An explicitly supplied
+stale effect digest remains a refusal, not an approval that policy can waive.
+Admitted Local Services Actions supply the raw transport's
 acknowledgement or confirmation nonce after approval routing, including when
 the user waived approval; those fields are not another approval policy.
 
 In 0.3 development, a spec may declare `safetyForInput` for a validated,
-field-sensitive approval floor. The approval-policy owner consumes it after
+field-sensitive approval default. The approval-policy owner consumes it after
 explicit settings; discovery retains the conservative declared safety. Provider
 connection updates use this for display-name edits. Malformed input and updates
 to routing, credentials, slots, placement or helper models retain danger by default.
