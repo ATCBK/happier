@@ -367,13 +367,43 @@ export function buildMachineFromMachineActivityEphemeralUpdate(params: {
     };
 }
 
+const machineActivityPlaceholderContent = {
+    seq: 0,
+    revokedAt: null,
+    metadata: null,
+    metadataVersion: 0,
+    daemonState: null,
+    daemonStateVersion: 0,
+} as const;
+
+/** The first socket heartbeat carries presence, not a content/access context. */
+export function buildMachineActivityPlaceholder(update: { id: string; active: boolean; activeAt: number }): Machine {
+    return {
+        ...machineActivityPlaceholderContent,
+        id: update.id,
+        createdAt: update.activeAt,
+        updatedAt: update.activeAt,
+        active: update.active,
+        activeAt: update.activeAt,
+    };
+}
+
+export function isMachineActivityPlaceholder(machine: Machine): boolean {
+    const placeholder = buildMachineActivityPlaceholder(machine);
+    return Object.keys(machine).every((key) => Object.prototype.hasOwnProperty.call(placeholder, key))
+        && Object.entries(machineActivityPlaceholderContent).every(([key, value]) => machine[key as keyof Machine] === value);
+}
+
 /** A presence-only publication cannot retire a captured content/access read. */
 function isMachineReadSnapshotCurrent(
     current: Machine | null | undefined,
     captured: Machine | null | undefined,
 ): boolean {
     if (current === captured) return true;
-    if (!current || !captured) return false;
+    if (!current) return false;
+    if (!captured) {
+        return isMachineActivityPlaceholder(current);
+    }
     return Object.keys(current).length === Object.keys(captured).length
         && Object.entries(current).every(([key, value]) => key === 'active' || key === 'activeAt'
             || value === captured[key as keyof Machine]);
