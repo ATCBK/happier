@@ -123,7 +123,8 @@ export async function observeProjectServicePlacementActualV1(input: Readonly<{
     // Paused and one-way links still qualify an existing native occurrence for observation.
     const physicalIds = new Set([sourceEndpoint.endpoint.id,
       ...(component?.relationships.flatMap(edge => [edge.alphaWorkspaceRefId, edge.betaWorkspaceRefId]) ?? [])]);
-    const scopedRefs = selectWorkspaceSyncEndpointAliases({ workspaceRefs: input.workspaceRefs.filter(ref => ref.serverId === input.workspace.serverId),
+    const server = (id: string) => input.context?.normalizeServerId?.(id.trim()) ?? id.trim();
+    const scopedRefs = selectWorkspaceSyncEndpointAliases({ workspaceRefs: input.workspaceRefs.filter(ref => server(ref.serverId) === server(source.ref.serverId)),
       physicalWorkspaceRefIds: physicalIds, childMachines: input.childMachineProjections ?? input.childMachines ?? [], context: input.context });
     const childMachines = input.readChildMachines ? [...(sourceFacts ?? []), ...await input.readChildMachines(
       [...new Set(scopedRefs.map(ref => ref.machineId))].filter(machineId => machineId !== source.ref.machineId))] : input.childMachines;

@@ -40,6 +40,10 @@ describe('actual service placement through admitted Sync endpoints', () => {
         machineId: request.machineId, updatedAt: 1, targets: request.machineId === actual.machineId ? [target] : [] } }),
     };
     expect(await observeProjectServicePlacementActualV1(input)).toEqual({ status: 'present', target });
+    expect(await observeProjectServicePlacementActualV1({ ...input,
+      workspace: { ...input.workspace, serverId: 'profile-alias' },
+      context: { normalizeServerId: id => id === 'profile-alias' ? 'home' : id },
+    })).toEqual({ status: 'present', target });
     const unrelated = { ...child, id: 'unrelated', machineId: 'unrelated-machine', rootPath: '/unrelated' };
     const unrelatedFact = { ...childMachines[0], machineId: unrelated.machineId,
       projection: { ...childMachines[0].projection, observation: { ...observation, workspaceFolder: unrelated.rootPath,
