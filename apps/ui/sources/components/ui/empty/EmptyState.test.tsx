@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { collectRenderedTestIds, renderScreen } from '@/dev/testkit';
 import { EmptyState } from './EmptyState';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
+import { SectionLeadingColumnProvider } from '@/components/ui/lists/sectionLeadingColumn';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -183,6 +186,18 @@ describe('EmptyState', () => {
         const style = flatten(caughtUp.findHostByTestId('inbox')?.props.style);
         expect(style.borderStyle).toBeUndefined();
         expect(style.borderWidth ?? 0).toBe(0);
+    });
+
+    it('takes the page column itself, but not a second time inside a section that already sits in it', async () => {
+        const state = <EmptyState testID="tokens" layout="page" variant="add" title="No API tokens yet" />;
+        const onPage = await renderScreen(<ListPresentationProvider value="page">{state}</ListPresentationProvider>);
+        expect(onPage.findAllByType(PageContentColumn)).toHaveLength(1);
+
+        const inSection = await renderScreen(
+            <ListPresentationProvider value="page"><SectionLeadingColumnProvider>{state}</SectionLeadingColumnProvider></ListPresentationProvider>,
+        );
+        expect(inSection.findAllByType(PageContentColumn)).toHaveLength(0);
+        expect(inSection.findHostByTestId('tokens')).toBeTruthy();
     });
 
     it('omits the action slot when no action is provided', async () => {
