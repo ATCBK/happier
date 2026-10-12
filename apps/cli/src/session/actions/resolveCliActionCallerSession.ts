@@ -14,23 +14,23 @@ export function createCliBoundSessionMetadataReader(params: SessionMetadataReade
   sessionId: string;
   credentials?: StoredCredentials;
   getCurrentSessionMetadata?: () => Readonly<Record<string, unknown>> | null;
-  resolveTransportForSession: (sessionId: string) => Promise<Extract<ResolveSessionTransportContextResult, { ok: true }> | Readonly<{ ok: false }>>;
-}>): () => Promise<Record<string, unknown> | null> {
+  resolveTransportForSession: (sessionId: string, signal?: AbortSignal) => Promise<Extract<ResolveSessionTransportContextResult, { ok: true }> | Readonly<{ ok: false }>>;
+}>): (signal?: AbortSignal) => Promise<Record<string, unknown> | null> {
   // A layout-1 shared record is not the process's owner metadata snapshot.
   // Opening it requires the authenticated Account mode from transport resolution.
   let currentSessionMetadata = readSessionLegacyMetadata(params);
-  return async () => {
+  return async (signal) => {
     if (params.getCurrentSessionMetadata) return params.getCurrentSessionMetadata();
     if (currentSessionMetadata) return currentSessionMetadata;
     try {
       if (params.credentials) {
-        const transport = await params.resolveTransportForSession(params.sessionId);
+        const transport = await params.resolveTransportForSession(params.sessionId, signal);
         if (!transport.ok || transport.sessionId !== params.sessionId || transport.rawSession.id !== params.sessionId) return null;
         currentSessionMetadata = tryDecryptSessionOwnerMetadataView({ credentials: params.credentials,
           accountEncryptionMode: transport.accountEncryptionCurrentness.mode, rawSession: transport.rawSession });
         return currentSessionMetadata;
       }
-      const rawSession = await fetchSessionById({ token: params.token, sessionId: params.sessionId });
+      const rawSession = await fetchSessionById({ token: params.token, sessionId: params.sessionId, ...(signal ? { signal } : {}) });
       // A Session bearer cannot open Account-private owner metadata.
       if (!rawSession || rawSession.id !== params.sessionId) return null;
       const mode = resolveSessionStoredContentEncryptionMode(rawSession);
@@ -60,7 +60,7 @@ export async function resolveCliActionCallerSession(params: Readonly<{
   credentials?: StoredCredentials;
   boundSessionId: string;
   readBoundSession: () => Promise<CallerSessionFacts>;
-  resolveTransportForSession: (sessionId: string) => Promise<Extract<ResolveSessionTransportContextResult, { ok: true }> | Readonly<{ ok: false }>>;
+  resolveTransportForSession: (sessionId: string, signal?: AbortSignal) => Promise<Extract<ResolveSessionTransportContextResult, { ok: true }> | Readonly<{ ok: false }>>;
 }>): Promise<(CallerSessionFacts & Readonly<{ sessionId: string }>) | null> {
   const callerSessionId = params.context.actionCaller?.kind === 'session'
     ? params.context.actionCaller.sessionId : params.context.defaultSessionId;
@@ -70,7 +70,7 @@ export async function resolveCliActionCallerSession(params: Readonly<{
   if (sessionId === params.boundSessionId) return { sessionId, ...await params.readBoundSession() };
   // A selector is not authenticated Session identity.
   if (params.context.actionCaller?.kind !== 'session') return null;
-  const transport = await params.resolveTransportForSession(sessionId);
+  const transport = await params.resolveTransportForSession(sessionId, params.context.signal);
   if (!transport.ok || transport.sessionId !== sessionId || transport.rawSession.id !== sessionId || !params.credentials) return null;
   const metadata = tryDecryptSessionOwnerMetadataView({ credentials: params.credentials,
     accountEncryptionMode: transport.accountEncryptionCurrentness.mode, rawSession: transport.rawSession });

@@ -5,6 +5,35 @@ import { resolveSessionTransportContext } from '@/session/services/resolveSessio
 import { createCliBoundSessionMetadataReader, resolveCliActionCallerSession } from './resolveCliActionCallerSession';
 
 describe('Account Action caller Session metadata authority', () => {
+  it('cancels remote caller preparation at the Account-currentness boundary', async () => {
+    const sessionId = 'c111111111111111111111111';
+    const credentials = { token: 'token', encryption: null };
+    const caller = new AbortController();
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const get = vi.spyOn(axios, 'get').mockImplementationOnce((_url, config) => new Promise((resolve, reject) => {
+      config?.signal?.addEventListener?.('abort', () => reject(caller.signal.reason), { once: true });
+      release = () => resolve({ status: 200, data: { mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
+      entered();
+    })).mockResolvedValue({ status: 200, data: { session: createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain',
+      metadata: JSON.stringify({ path: '/owner/repo', machineId: 'caller-machine', flavor: 'codex' }) }) } });
+    try {
+      const pending = resolveCliActionCallerSession({ credentials, boundSessionId: 'cli-global',
+        context: { surface: 'agent', actionCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 },
+          defaultSessionId: sessionId, signal: caller.signal },
+        readBoundSession: async () => ({ metadata: null, workDepth: undefined, backendTarget: null, machineId: null, directory: null }),
+        resolveTransportForSession: (id, signal?: AbortSignal) => resolveSessionTransportContext({ credentials, idOrPrefix: id, signal }),
+      }).then(value => ({ value }), error => ({ error }));
+      await ready;
+      const reason = new Error('caller cancelled');
+      caller.abort(reason);
+      release();
+      expect(await pending).toEqual({ error: reason });
+      expect(get).toHaveBeenCalledTimes(1);
+    } finally { get.mockRestore(); }
+  });
   it('keeps a Session bearer closed to layout-1 owner metadata', async () => {
     const sessionId = 'c111111111111111111111111';
     const rawSession = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadataLayoutVersion: 1,
