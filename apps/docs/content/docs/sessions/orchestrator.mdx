@@ -33,6 +33,19 @@ Actions. Session roles start conversations; background-run roles start runs.
 Review and Plan have their own launch controls, and **Second opinion** starts
 the read-only role. Existing sessions can join the tree through **Put under**.
 
+## Orchestrate an issue
+
+In **PRs & Issues**, open an issue's menu and choose **Orchestrate this**.
+Review the default prompt, which includes the issue as a labelled brief. You
+can edit or replace that prompt before starting; the issue stays attached
+to the new session either way.
+
+Starting creates a session with the **Orchestrator** role and starts **Plan
+with a panel** on it. The panel receives your final prompt as its request.
+Its plan returns to the originating conversation as a **Worker update**, so
+the lead can use the plan to coordinate the work. This journey describes
+unreleased development source; live end-to-end validation is still pending.
+
 ## Receive worker outcomes
 
 A reporting worker can publish a result, need input, fail, be cancelled or
@@ -77,8 +90,9 @@ current lead, and `session.list` with `underSessionId` to read the subtree.
 Agents normally list their own led subtree. `session.message.send` sends
 explicit input; `session.worker.publish` reports from a reporting worker.
 `session.notes.set` updates orchestration notes. `settings.get` and
-`settings.update` reach declared delegation preferences under their normal
-approval rules.
+`settings.set` reach declared delegation preferences by `anchor`, under their
+normal approval rules. The Approval reviewer Account preference uses
+`anchor: "delegation.approvalReviewerEnabled"` and a boolean `value`.
 
 The CLI front door is `happier actions invoke <action-id> --input-json '<json>'`.
 Discover exact fields and surfaces in the

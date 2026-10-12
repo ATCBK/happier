@@ -21,10 +21,9 @@ Account default. New sessions, including workflow step sessions, can use that
 default. A session-specific choice takes precedence. Adjust the Approval
 reviewer role in [Roles](/agents/roles) if you need a different usable engine.
 
-Direct configuration requires a present user. The current development Action
-catalog can also expose a request for that configuration through human
-approval; an agent request alone never enables it. That requestable surface
-is still under contract reconciliation, so use the user control for setup.
+A present user can change the Account default or session choice directly.
+An agent can request either change, but a present user must approve that
+request before it applies. An agent request alone never enables the reviewer.
 
 ## What it can decide
 
@@ -53,8 +52,9 @@ or bypass Hands-off.
 
 ## The same tasks through Actions
 
-`settings.get` and `settings.update` read and change the declared Account
-preference `approvalReviewerEnabled`; normal authority and approval rules
+`settings.get` and `settings.set` read and change the declared Account
+preference using `anchor: "delegation.approvalReviewerEnabled"`; set takes a
+boolean `value`. Normal authority and approval rules
 still apply. `session.approval_reviewer.set` with `sessionId` and `enabled`
 sets the per-session choice. Use the
 [host Action reference](/plugins/api/host-actions) for the current catalog

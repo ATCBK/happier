@@ -171,7 +171,10 @@ The 0.3 development MCP servers support passive resource subscriptions for
 targets whose owner exposes a change feed. Call `watch` with the same exact
 Home-qualified `{target, condition, timeout?}` input as `wait`. A supported
 request returns the target, condition, initial snapshot and `resourceUri`.
-The external MCP server can observe supported Session targets. The MCP server
+The external MCP server can observe supported Session, execution-run and
+workflow-run targets. Runs support `terminal`, `needs_attention` and
+`terminal_or_needs_attention` conditions through their existing wait owners.
+The MCP server
 inside a Session currently returns `unsupported_condition` for passive requests:
 its daemon channel supports one-result Actions but not passive snapshot delivery.
 
@@ -180,8 +183,8 @@ re-read when `notifications/resources/updated` arrives. Send
 `resources/unsubscribe` when finished; disconnect also releases observation.
 An optional timeout ends observation and leaves the work running.
 
-Execution and Workflow passive feeds, plugin passive sources, and Session
-idle/ready conditions are not yet supported and return `unsupported_condition`.
+Plugin passive sources and Session idle/ready conditions are not yet supported
+and return `unsupported_condition`.
 Subscription and resource-read refusals carry the same typed result in MCP error
 data. Other authorization or availability failures retain their typed refusal.
 

@@ -29,10 +29,9 @@ role with view access can also have a personal override; editing the original
 requires edit or admin access and changes the shared document.
 
 The engine field carries the Agent target, model and optional effort together.
-In the current source the role picker edits Agent and model and preserves an
-existing effort for the same Agent; it does not yet provide a role-effort
-editor. Starting with another Agent clears preferences belonging to the
-previous Agent. Normal [model controls](/agents/model-and-engine-selection)
+Open its Agent/model picker to change the model and, where the Agent offers it,
+reasoning effort. Starting with another Agent clears preferences belonging to
+the previous Agent. Normal [model controls](/agents/model-and-engine-selection)
 and role support remain Agent-dependent.
 
 ## Use a role in a session
@@ -62,6 +61,10 @@ a present user can relax it. This restriction also covers Happier Actions
 that write the workspace; it does not change the session's permission mode or
 grant authority over another session. A start whose Agent cannot enforce it
 is refused with `role_policy_unenforceable`.
+
+Some Agents apply Hands-off only at startup. If the session reports
+`role_policy_restart_required`, restart it before choosing the role again;
+the refused change is not a claim that the running Agent is already hands-off.
 
 The **Second opinion** attribute can encourage a second opinion in the
 instructions. It is not a compulsory PR or completion check. Use Work's

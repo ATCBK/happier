@@ -20,6 +20,13 @@ Happier also separates three related ideas:
 
 An action can be available and discoverable without being exposed as a direct tool. That mode is called **discoverable-only**.
 
+In 0.3 development, plugin-contributed Actions use the qualified ID returned by
+discovery, `pluginId/actions/localId`, for `action_execute` and Settings policy.
+Plugin Tool metadata publishes the same Action ID; a Tool's own ID is not an
+Action execution ID. An available Action does not need a named Tool declaration
+to be executed after discovery. Surface restrictions and approval settings still
+apply.
+
 ## What “Happier tools” means
 
 Happier tools are the actions and external tools that an agent can use through Happier itself.

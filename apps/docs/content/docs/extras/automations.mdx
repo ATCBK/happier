@@ -35,8 +35,15 @@ Workflows. Open its trigger to review it on a device that still has the old
 encryption key. Opening does not save or run it. **Save** stores the reviewed
 workflow without end-to-end encryption and resumes its enabled triggers; the
 Session itself stays end-to-end encrypted. If the key is unavailable or review
-fails, the Automation stays paused. Automatic recovery never makes this
-conversion for you.
+fails, the Automation stays paused.
+
+In current 0.3 development source, an Agent can also request this conversion
+through the existing Workflow trigger Action, including from MCP or the CLI.
+The request presents the reviewed Workflow and project for your approval.
+Conversion runs only after you approve that exact request; **Always allow**
+cannot bypass this confirmation. A denied request leaves the Automation
+unchanged. If the reviewed revision has changed, review it again before
+requesting conversion. Automatic recovery does not confirm conversion for you.
 
 ### Create or edit with an Agent
 
@@ -68,7 +75,9 @@ editable commands, session, and trigger before saving; choosing a template
 alone does not start work.
 
 Between ordered steps, **Run when** chooses **Success** (the default), **Failure**,
-or **Always**, relative to the preceding step in that sequence. A failure handler
+or **Always**, relative to the preceding step in that sequence. You set it in the
+step's **Step options**; the editor names a step's edge above it only when it is not
+the default ("If it fails", "Either way"). A failure handler
 does not erase the failed step. Cancellation, an uncertain outcome, or a step
 waiting for your input is not a definitive failure and does not start a handler.
 
@@ -136,11 +145,15 @@ Run title and authored step number are available, the chip reads
 replacing its visible messages; an unavailable number is not guessed from event order.
 Public snapshot transcripts do not consult private Account Run content.
 
-For a **Notify me** Action whose message is bound to a reachable earlier Agent
-step's whole text result, **Only if the agent reported something** adds the
-existing non-empty-result condition. It skips an empty result and preserves
-other authored conditions. It is unavailable for a literal message, a JSON
-result, or a result that is not reachable from that Action.
+**Only if the agent reported something** is part of a **Notify me** step's
+**Only run when** in its **Step options**, not a separate setting. It reads the
+step's condition: it is on whenever that condition requires an earlier Agent step
+to have reported something (its text result is not empty, or one of its named
+results is Yes), and turning it off removes exactly those parts. Turning it on
+adds the non-empty-result condition when the message is bound to a reachable
+earlier Agent step's whole text result; other authored conditions are kept. It
+cannot be turned on for a literal message, a JSON result, or a result that is not
+reachable from that Action.
 
 The same Automation can own no automatic triggers, one trigger, or several.
 Every enabled trigger is independent: if any one of them fires, the recipe
