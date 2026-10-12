@@ -10,7 +10,7 @@ import {
     publishAppliedActiveServerRuntimeAvailability,
     publishAppliedActiveServerSnapshot,
 } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { useRoleEnginePresentation } from '../catalog/useRoleEnginePresentation';
+import { resolveRoleEngineTargetKey, useRoleEnginePresentation } from '../catalog/useRoleEnginePresentation';
 import { useRoleRailItems } from '../rail/useRoleRailItems';
 import { RolesRailDetailView } from '../rail/RolesRailDetail';
 import { t } from '@/text';
@@ -19,6 +19,8 @@ import { applyAcpCatalogSnapshot, resetAcpCatalogSnapshotsForTests } from '@/syn
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { resetAcpCatalogEngineForTests } from '@/sync/engine/settings/acpCatalogEngine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
+import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 
 // Native portal/window measurement is the system boundary; the picker and catalog stay real.
 vi.mock('@/components/ui/popover', async (importOriginal) => {
@@ -48,7 +50,7 @@ beforeEach(() => {
     applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 1, record: AcpCatalogRecordV1Schema.parse({
         v: 1, definitions: [{
             id: 'focused-review', name: 'focused-review', title: 'Focused Review',
-            description: 'Focused review', command: 'review-agent', args: [], env: {}, defaultMode: 'default', defaultModel: 'default',
+            description: 'Focused review', launch: { kind: 'command' as const, command: 'review-agent', args: [] }, env: {}, defaultMode: 'default', defaultModel: 'default',
             capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown',
                 supportsConfigOptions: 'unknown', promptImageSupport: 'unknown' },
             createdAt: 1, updatedAt: 1,
@@ -86,19 +88,60 @@ describe('role engine exact Home qualification', () => {
     it.each(['another-home', null])('does not disclose focused Account engine identity for target %s', async (serverId) => {
         const hook = await renderHook(() => useRoleEnginePresentation(serverId));
 
-        expect(hook.getCurrent()(engine)).toEqual({ label: 'stored-model · high', icon: null, unavailable: true });
-        expect(hook.getCurrent()(undefined)).toEqual({ label: null, icon: null, unavailable: false });
+        expect(hook.getCurrent()(engine)).toEqual({ label: 'stored-model · high', choiceLabel: 'stored-model · high', icon: null, unavailable: true, pending: false });
+        expect(hook.getCurrent()(undefined)).toEqual({ label: null, choiceLabel: null, icon: null, unavailable: false, pending: false });
     });
 
+    it('names the agent a role without an engine runs on, with that agent\'s own mark', async () => {
+        const hook = await renderHook(() => useRoleEnginePresentation());
+        const presented = hook.getCurrent()(undefined);
+        // The role follows the Account's preferred agent: its title and mark, not "Default agent".
+        expect(presented.label).toBe('Focused Review');
+        expect(presented.choiceLabel).toBe('Focused Review');
+        expect(presented.icon).not.toBeNull();
+        expect(presented.unavailable).toBe(false);
+    });
+
+    it('says nothing about the agent a role without an engine follows until the catalog has named it', async () => {
+        resetAcpCatalogSnapshotsForTests();
+        const hook = await renderHook(() => useRoleEnginePresentation());
+        const presented = hook.getCurrent()(undefined);
+        expect(presented.pending).toBe(true);
+        expect(presented.label).toBeNull();
+        expect(presented.icon).toBeNull();
+    });
+    it('names an explicitly preferred bundled Agent without waiting for the independent configured catalog', async () => {
+        resetAcpCatalogSnapshotsForTests();
+        storage.setState({ settings: { ...storage.getState().settings,
+            lastUsedBackendTarget: { kind: 'agent', identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.claude },
+        } });
+        const hook = await renderHook(() => useRoleEnginePresentation());
+        const presented = hook.getCurrent()(undefined);
+        expect(presented).toMatchObject({ label: 'Claude', choiceLabel: 'Claude', pending: false, unavailable: false });
+        expect(presented.icon).not.toBeNull();
+        expect(hook.getCurrent()({ agentTargetKey: resolveBackendTargetKeyV2({
+            kind: 'agent', identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.claude,
+        }) }).label).toBe('Claude');
+    });
+    it('does not replace an explicitly preferred configured Agent while its catalog is loading', async () => {
+        resetAcpCatalogSnapshotsForTests();
+        storage.setState({ settings: { ...storage.getState().settings,
+            lastUsedBackendTarget: { kind: 'backend', backendId: 'focused-review', configuredBackendId: 'focused-review' },
+        } });
+        const hook = await renderHook(() => useRoleEnginePresentation());
+        expect(hook.getCurrent()(undefined)).toMatchObject({ label: null, pending: true });
+    });
     it('keeps Account Settings while a Home-qualified presentation retires and reopens with its runtime', async () => {
         const settings = await renderHook(() => useRoleEnginePresentation());
         const session = await renderHook(() => useRoleEnginePresentation('focused-home'));
         expect(settings.getCurrent()(engine).label).toBe('Focused Review · stored-model · high');
+        // Beside the agent's own mark, the line starts at the model.
+        expect(settings.getCurrent()(engine).choiceLabel).toBe('stored-model · high');
         expect(session.getCurrent()(engine).unavailable).toBe(false);
 
         await act(async () => { publishAppliedActiveServerRuntimeAvailability(false); });
 
-        expect(session.getCurrent()(engine)).toEqual({ label: 'stored-model · high', icon: null, unavailable: true });
+        expect(session.getCurrent()(engine)).toEqual({ label: 'stored-model · high', choiceLabel: 'stored-model · high', icon: null, unavailable: true, pending: false });
         expect(settings.getCurrent()(engine).unavailable).toBe(false);
 
         await act(async () => { publishAppliedActiveServerRuntimeAvailability(true); });
@@ -108,7 +151,7 @@ describe('role engine exact Home qualification', () => {
         await act(async () => {
             publishAppliedActiveServerSnapshot({ serverId: 'another-home', serverUrl: 'https://another-home.test', generation: 2 });
         });
-        expect(session.getCurrent()(engine)).toEqual({ label: 'stored-model · high', icon: null, unavailable: true });
+        expect(session.getCurrent()(engine)).toEqual({ label: 'stored-model · high', choiceLabel: 'stored-model · high', icon: null, unavailable: true, pending: false });
         await act(async () => {
             publishAppliedActiveServerSnapshot({ serverId: 'focused-home', serverUrl: 'https://focused-home.test', generation: 3 });
         });
@@ -168,11 +211,13 @@ describe('role engine exact Home qualification', () => {
         expect(detail.props.selectedConfigOverrides).toEqual({ reasoning_effort: 'high' });
 
         detail.props.onSelectionChange({ modelId: 'stored-model', sessionModeId: null, configOverrides: { reasoning_effort: 'low' } });
-        expect(onChange).toHaveBeenLastCalledWith({ agentTargetKey: engine.agentTargetKey, modelId: 'stored-model', effort: 'low' });
+        // Written in the catalog's canonical key, the same Agent the stored role named.
+        const agentTargetKey = resolveRoleEngineTargetKey(engine.agentTargetKey);
+        expect(onChange).toHaveBeenLastCalledWith({ agentTargetKey, modelId: 'stored-model', effort: 'low' });
 
         // A model the effort does not apply to clears it instead of keeping a stale one.
         detail.props.onSelectionChange({ modelId: 'other-model', sessionModeId: null, configOverrides: {} });
-        expect(onChange).toHaveBeenLastCalledWith({ agentTargetKey: engine.agentTargetKey, modelId: 'other-model' });
+        expect(onChange).toHaveBeenLastCalledWith({ agentTargetKey, modelId: 'other-model' });
     });
 
     it('keeps a role no layer can resolve in the rail as unavailable instead of dropping it', async () => {
