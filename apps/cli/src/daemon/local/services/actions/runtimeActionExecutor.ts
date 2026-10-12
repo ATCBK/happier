@@ -15,6 +15,7 @@ import type { LocalServiceActionRoutes } from './routes';
 import type { LocalServiceActionExecutionContext } from './executor';
 import type { LocalServicesDaemonFeatureGate, LocalServicesDaemonFeatureGateId } from '../featureGate';
 import type { LocalServiceInventoryRoutes } from '../inventory/routes';
+import { projectLocalServiceInventorySnapshotV1 } from '../inventory/wire';
 import type { LocalServiceLauncherRoutes } from '../launch/routes';
 import type { LocalServicePreviewRoutes } from '../preview/routes';
 import type { LocalServicePublicPreviewRoutes } from '../public/routes';
@@ -209,14 +210,14 @@ export function createLocalServicesDaemonRuntimeActionExecutor(
         if (args.actionId === 'localServices.inventory.list') {
             const routes = input.routes.inventoryRoutes;
             return routes
-                ? await routes.getSnapshot()
+                ? projectLocalServiceInventorySnapshotV1(await routes.getSnapshot())
                 : disabledResult('local_services_inventory_routes_unavailable');
         }
 
         if (args.actionId === 'localServices.inventory.refresh') {
             const routes = input.routes.inventoryRoutes;
             return routes
-                ? await routes.refreshSnapshot()
+                ? projectLocalServiceInventorySnapshotV1(await routes.refreshSnapshot())
                 : disabledResult('local_services_inventory_routes_unavailable');
         }
 

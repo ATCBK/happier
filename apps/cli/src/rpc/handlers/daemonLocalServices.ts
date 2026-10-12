@@ -1,9 +1,9 @@
 import type { RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { DaemonLocalServiceActionExecuteRequestV1Schema, DaemonLocalServiceActionExecuteResponseV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
-import { DaemonLocalServiceInventoryRefreshRequestV1Schema, DaemonLocalServiceInventoryRefreshResponseV1Schema, DaemonLocalServiceInventorySnapshotRequestV1Schema, DaemonLocalServiceInventorySnapshotResponseV1Schema, DaemonLocalServiceInventoryWatchRequestV1Schema, DaemonLocalServiceInventoryWatchResponseV1Schema, LocalServiceInventorySnapshotV1Schema } from '@happier-dev/protocol/local/services/inventory/v1';
+import { DaemonLocalServiceInventoryRefreshRequestV1Schema, DaemonLocalServiceInventoryRefreshResponseV1Schema, DaemonLocalServiceInventorySnapshotRequestV1Schema, DaemonLocalServiceInventorySnapshotResponseV1Schema, DaemonLocalServiceInventoryWatchRequestV1Schema, DaemonLocalServiceInventoryWatchResponseV1Schema } from '@happier-dev/protocol/local/services/inventory/v1';
 import { DaemonLocalServiceLauncherHistoryClearResponseV1Schema, DaemonLocalServiceLauncherLeafRequestV1Schema, DaemonLocalServiceLauncherOpenPreviewResponseV1Schema, DaemonLocalServiceLauncherRegisterPreviewResponseV1Schema, DaemonLocalServiceLauncherSnapshotRequestV1Schema, DaemonLocalServiceLauncherSnapshotResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { DaemonLocalServicePublicPreviewCopyUrlRequestV1Schema, DaemonLocalServicePublicPreviewCopyUrlResponseV1Schema, DaemonLocalServicePublicPreviewCreateRequestV1Schema, DaemonLocalServicePublicPreviewCreateResponseV1Schema, DaemonLocalServicePublicPreviewRevokeRequestV1Schema, DaemonLocalServicePublicPreviewRevokeResponseV1Schema, DaemonLocalServicePublicPreviewStatusRequestV1Schema, DaemonLocalServicePublicPreviewStatusResponseV1Schema, isLocalServicePublicPreviewCreateConfirmed } from '@happier-dev/protocol/local/services/public/v1';
-import type { DaemonLocalServiceInventoryRefreshResponseV1, DaemonLocalServiceInventorySnapshotResponseV1, DaemonLocalServiceInventoryWatchResponseV1, DaemonLocalServiceLauncherHistoryClearResponseV1, DaemonLocalServiceLauncherOpenPreviewResponseV1, DaemonLocalServiceLauncherRegisterPreviewResponseV1, DaemonLocalServiceLauncherSnapshotResponseV1, DaemonLocalServicePublicPreviewCopyUrlResponseV1, DaemonLocalServicePublicPreviewCreateResponseV1, DaemonLocalServicePublicPreviewRevokeResponseV1, DaemonLocalServicePublicPreviewStatusResponseV1, LocalServiceInventorySnapshotV1 } from '@happier-dev/protocol';
+import type { DaemonLocalServiceInventoryRefreshResponseV1, DaemonLocalServiceInventorySnapshotResponseV1, DaemonLocalServiceInventoryWatchResponseV1, DaemonLocalServiceLauncherHistoryClearResponseV1, DaemonLocalServiceLauncherOpenPreviewResponseV1, DaemonLocalServiceLauncherRegisterPreviewResponseV1, DaemonLocalServiceLauncherSnapshotResponseV1, DaemonLocalServicePublicPreviewCopyUrlResponseV1, DaemonLocalServicePublicPreviewCreateResponseV1, DaemonLocalServicePublicPreviewRevokeResponseV1, DaemonLocalServicePublicPreviewStatusResponseV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, resolveLocalServiceActionKindForRuntimeActionId } from '@happier-dev/protocol/actions/specs/localServices';
 import type { RuntimeActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
@@ -11,7 +11,7 @@ import type { RpcHandler } from '@/api/rpc/types';
 
 import type { LocalServiceActionRoutes } from '@/daemon/local/services/actions/routes';
 import type { LocalServiceInventoryRoutes } from '@/daemon/local/services/inventory/routes';
-import type { NormalizedLocalServiceInventorySnapshot } from '@/daemon/local/services/inventory/scanner';
+import { projectLocalServiceInventorySnapshotV1 } from '@/daemon/local/services/inventory/wire';
 import type { LocalServiceLauncherRoutes } from '@/daemon/local/services/launch/routes';
 import type { LocalServicePreviewRoutes } from '@/daemon/local/services/preview/routes';
 import type { LocalServicePublicPreviewRoutes } from '@/daemon/local/services/public/routes';
@@ -42,21 +42,6 @@ function requireInventoryRoutes(
         throw new Error('Local service inventory runtime is unavailable');
     }
     return options.localServicesInventory;
-}
-
-/**
- * The daemon keeps connection observations on its internal inventory so the resource guard can
- * decide whether a listener is busy. Inventory V1 predates that private fact and is a closed wire
- * object, so project the internal snapshot before strict response validation instead of widening
- * the RPC or leaking per-listener traffic facts to older clients.
- */
-function projectLocalServiceInventorySnapshotV1(
-    snapshot: NormalizedLocalServiceInventorySnapshot,
-): LocalServiceInventorySnapshotV1 {
-    return LocalServiceInventorySnapshotV1Schema.parse({
-        ...snapshot,
-        entries: snapshot.entries.map(({ establishedConnections: _internalConnectionFact, ...entry }) => entry),
-    });
 }
 
 function requireLauncherRoutes(
