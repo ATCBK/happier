@@ -97,6 +97,7 @@ describe('savedSecretResourceContentV1', () => {
     });
 
     expect(stored.t).toBe('encrypted');
+    expect(SavedSecretResourceStoredContentV1Schema.parse(stored)).toEqual(stored);
     expect(openSavedSecretResourceStoredContentV1({
       resourceId: 'resource-1',
       mode: 'e2ee',
@@ -146,6 +147,7 @@ describe('savedSecretResourceContentV1', () => {
     });
 
     expect(stored).toEqual({ t: 'plain', v: content });
+    expect(SavedSecretResourceStoredContentV1Schema.parse(stored)).toEqual(stored);
     expect(openSavedSecretResourceStoredContentV1({
       resourceId: 'resource-1',
       mode: 'plain',

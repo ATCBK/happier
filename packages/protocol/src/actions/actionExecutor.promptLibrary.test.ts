@@ -1,53 +1,120 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
-import { createPromptDocInLibrary, createPromptBundleInLibrary, updatePromptBundleInLibrary, listPromptLibrary, setPromptDocFavorite, type PromptLibraryStoredArtifact } from '../prompts/library/promptLibraryActionOperations.js';
+import { createPromptDocInLibrary, createPromptBundleInLibrary, updatePromptDocInLibrary, updatePromptBundleInLibrary, exportPromptLibraryArtifact, installPromptRegistryItemInLibrary, listPromptLibrary, setPromptDocFavorite, type PromptLibraryArtifactStore, type PromptLibraryStoredArtifact } from '../prompts/library/promptLibraryActionOperations.js';
 import { getActionSpec } from './actionSpecs.js';
-import { ActionsSettingsV1Schema } from './actionSettings.js';
+import { ActionsSettingsV1Schema, isActionEnabledByActionsSettings } from './actionSettings.js';
 import { writeSessionContextIntentV1ToMetadata } from '../sessions/context/sessionContextV1.js';
 import type { StoredContentPublicShareV1 } from '../sharing/storedContentPublicShareV1.js';
 import type { PromptLibraryRecordV1 } from '../prompts/library/promptLibraryRowsV1.js';
-import { MemoryMutationResultV1Schema } from '../prompts/library/memoryActionsV1.js';
+import { MemoryDocReadResultV1Schema, MemoryMutationResultV1Schema } from '../prompts/library/memoryActionsV1.js';
+import { MemoryDocBodyV1Schema } from '../prompts/library/memoryDocV1.js';
+import { PromptDocArtifactHeaderV1Schema, PromptDocBodyV1Schema } from '../prompts/library/promptDocV2.js';
 import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { resolvePromptStackSystemAppendBlocksV1 } from '../prompts/library/resolvePromptStackSystemAppendBlocksV1.js';
+import { PromptBundleArtifactHeaderV1Schema, PromptBundleBodyV1Schema } from '../prompts/library/promptBundleSchemas.js';
+import { PromptAssetWriteDocRequestSchema } from '../prompts/library/promptAssetsV1.js';
+import { PromptRegistryFetchItemResponseV1Schema, PromptRegistryInstallRequestV1Schema } from '../prompts/library/promptRegistriesV1.js';
+import { decodeBase64 } from '../crypto/base64.js';
+import { computePromptBundleDigestV1 } from '../prompts/library/promptLibraryDigests.js';
 
 function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
+  const unavailable = async (): Promise<never> => { throw new Error('Unexpected Action dependency'); };
   return createActionExecutor({
-    executionRunStart: async () => ({}),
-    executionRunList: async () => ({}),
-    executionRunGet: async () => ({}),
-    detachedExecutionRunSend: async () => ({}),
-    executionRunStop: async () => ({}),
-    executionRunAction: async () => ({}),
-    executionRunWait: async () => ({}),
-    sessionOpen: async () => ({}),
-    sessionFork: async () => ({}),
-    sessionRollback: async () => ({}),
-    sessionSpawnNew: async () => ({}),
-    pathsListRecent: async () => ({ items: [] }),
-    machinesList: async () => ({ items: [] }),
-    serversList: async () => ({ items: [] }),
-    reviewEnginesList: async () => ({ items: [] }),
-    agentsBackendsList: async () => ({ items: [] }),
-    agentsModelsList: async () => ({ items: [] }),
-    sessionSendMessage: async () => ({}),
-    sessionPermissionRespond: async () => ({}),
-    sessionUserActionAnswer: async () => ({}),
-    sessionModeSet: async () => ({}),
-    sessionModesList: async () => ({ items: [] }),
-    sessionTargetPrimarySet: async () => ({}),
-    sessionTargetTrackedSet: async () => ({}),
-    sessionList: async () => ({}),
-    sessionActivityGet: async () => ({}),
-    sessionRecentMessagesGet: async () => ({}),
-    daemonMemorySearch: async () => ({ v: 1, ok: true as const, hits: [] }),
-    daemonMemoryGetWindow: async () => ({ v: 1, snippets: [], citations: [] }),
-    daemonMemoryEnsureUpToDate: async () => ({}),
-    resetGlobalVoiceAgent: async () => {},
-    // Routing tests exercise the domain ports, not the shared approval owner.
-    isActionApprovalRequired: () => false,
+    executionRunStart: unavailable,
+    executionRunList: unavailable,
+    executionRunGet: unavailable,
+    detachedExecutionRunSend: unavailable,
+    executionRunStop: unavailable,
+    executionRunAction: unavailable,
+    executionRunWait: unavailable,
+    sessionOpen: unavailable,
+    sessionFork: unavailable,
+    sessionRollback: unavailable,
+    sessionSpawnNew: unavailable,
+    pathsListRecent: unavailable,
+    machinesList: unavailable,
+    serversList: unavailable,
+    reviewEnginesList: unavailable,
+    agentsBackendsList: unavailable,
+    agentsModelsList: unavailable,
+    sessionSendMessage: unavailable,
+    sessionPermissionRespond: unavailable,
+    sessionUserActionAnswer: unavailable,
+    sessionModeSet: unavailable,
+    sessionModesList: unavailable,
+    sessionTargetPrimarySet: unavailable,
+    sessionTargetTrackedSet: unavailable,
+    sessionList: unavailable,
+    sessionActivityGet: unavailable,
+    sessionRecentMessagesGet: unavailable,
+    daemonMemorySearch: unavailable,
+    daemonMemoryGetWindow: unavailable,
+    daemonMemoryEnsureUpToDate: unavailable,
+    resetGlobalVoiceAgent: unavailable,
     ...overrides,
   });
+}
+
+const routingApprovalSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {}, approvalWaivedSurfaces: {
+  'prompt_doc.create': ['ui', 'agent', 'mcp', 'cli'], 'prompt_doc.update': ['ui'],
+  'prompt_bundle.create': ['ui', 'agent', 'mcp', 'cli', 'voice'],
+  'prompt_bundle.update': ['ui', 'agent', 'mcp', 'cli', 'voice'],
+  'prompt_asset.export': ['ui'], 'prompt_registry.install': ['ui'],
+} });
+
+// Artifact and private-row persistence boundaries shared by these operation tests.
+function createStoredLibrary(initial: readonly PromptLibraryStoredArtifact[] = []) {
+  const artifacts = new Map(initial.map(artifact => [artifact.id, artifact]));
+  let folderRecord: PromptLibraryRecordV1 = { key: 'folders', value: { v: 1,
+    folders: [{ id: 'folder-1', name: 'Review' }] } };
+  let folderRevision = 1;
+  const store: PromptLibraryArtifactStore = {
+    read: async artifactId => artifacts.get(artifactId) ?? null,
+    create: async input => {
+      const id = `artifact-${artifacts.size + 1}`;
+      artifacts.set(id, { id, header: input.header, body: input.body, revision: { headerVersion: 1, bodyVersion: 1 } });
+      return id;
+    },
+    update: async input => {
+      const previous = artifacts.get(input.artifactId);
+      if (!previous || input.expectedRevision.headerVersion !== previous.revision.headerVersion
+        || input.expectedRevision.bodyVersion !== previous.revision.bodyVersion) {
+        throw Object.assign(new Error('version_mismatch'), { code: 'version_mismatch' });
+      }
+      const revision = { headerVersion: previous.revision.headerVersion + 1, bodyVersion: previous.revision.bodyVersion + 1 };
+      artifacts.set(previous.id, { ...previous, header: input.header, body: input.body, revision });
+      return { revision };
+    },
+    organization: { serverId: 'home', assertCurrent: () => {},
+      readCatalog: async () => ({ catalog: { status: 'ready', rows: [{ record: folderRecord, revision: folderRevision }], tombstones: [], diagnostics: [] } }),
+      readArtifactHeader: async artifactId => {
+        const artifact = artifacts.get(artifactId);
+        return artifact?.header ? { header: artifact.header, owned: true } : null;
+      },
+      listArtifactHeaders: async () => { throw new Error('Unexpected inventory read'); },
+      writeRecord: async input => {
+        if (input.expectedRevision !== folderRevision) return { status: 'conflict', revision: folderRevision };
+        folderRecord = input.record; folderRevision++;
+        return { status: 'updated', revision: folderRevision, cursor: folderRevision };
+      },
+    },
+  };
+  return { store, artifacts, readOrganization: () => folderRecord };
+}
+
+function storedPromptDoc(): PromptLibraryStoredArtifact {
+  return { id: 'doc-1', revision: { headerVersion: 1, bodyVersion: 1 },
+    header: PromptDocArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_doc.v2', title: 'Review prompt' }),
+    body: JSON.stringify(PromptDocBodyV1Schema.parse({ v: 1, markdown: '# Review', createdAtMs: 1, updatedAtMs: 1 })) };
+}
+
+function fetchedRegistrySkill() {
+  return PromptRegistryFetchItemResponseV1Schema.parse({ ok: true, item: {
+    sourceId: 'skills_sh:featured', itemId: 'skills_sh:featured:item-1', title: 'Frontend design',
+    bundleSchemaId: 'skills.skill_md_v1', bundleBody: { v: 1, createdAtMs: 1, updatedAtMs: 1,
+      entries: [{ path: 'SKILL.md', contentBase64: 'IyBTa2lsbA==', contentKind: 'utf8' }] },
+  } });
 }
 
 describe('createActionExecutor (prompt library actions)', () => {
@@ -56,11 +123,11 @@ describe('createActionExecutor (prompt library actions)', () => {
     const store = { read: async () => null, update: async () => {},
       create: async (input: { body: string }) => { saved.push(input.body); return 'doc'; } };
     const executor = createExecutor({ promptDocCreate: async ({ signal, ...request }) => createPromptDocInLibrary({ store, request, signal }) });
-    expect(await executor.execute('prompt_doc.create', { title: 'Doc', markdown: 'Text', folderId: null, tags: ['', '  '] }, { surface: 'ui' }))
+    expect(await executor.execute('prompt_doc.create', { title: 'Doc', markdown: 'Text', folderId: null, tags: ['', '  '] }, { surface: 'ui', actionsSettings: routingApprovalSettings }))
       .toMatchObject({ ok: true, result: { artifactId: 'doc' } });
     expect(saved).toHaveLength(1);
     // Empty folder strings were also admitted; the domain still owns their placement failure.
-    expect(await executor.execute('prompt_doc.create', { title: 'Doc', markdown: 'Text', folderId: '', tags: [''] }, { surface: 'ui' }))
+    expect(await executor.execute('prompt_doc.create', { title: 'Doc', markdown: 'Text', folderId: '', tags: [''] }, { surface: 'ui', actionsSettings: routingApprovalSettings }))
       .toMatchObject({ ok: false, error: 'artifact_organization_unavailable' });
     expect(saved).toHaveLength(1);
     expect(getActionSpec('prompt_doc.create').inputSchema.safeParse({ title: 'Doc', markdown: 'Text', folderId: '',
@@ -88,10 +155,11 @@ describe('createActionExecutor (prompt library actions)', () => {
       create: async (input: { header: Readonly<Record<string, unknown>>; body: string }) => {
         artifacts.set('saved', { id: 'saved', ...input, revision: { headerVersion: 1, bodyVersion: 1 } }); return 'saved';
       } };
+    const readSaveSettings = () => ActionsSettingsV1Schema.parse({ v: 1,
+      actions: { 'artifact.folders.create': { enabled: folderEnabled, approvalRequiredSurfaces: ['ui'] } },
+      approvalWaivedSurfaces: { 'prompt_doc.create': ['ui'] } });
     const executor = createExecutor({ artifactFolders: port,
-      isActionEnabled: id => id !== 'artifact.folders.create' || folderEnabled,
-      // The content is waived while its exact child folder intent requires confirmation.
-      isActionApprovalRequired: id => id === 'artifact.folders.create',
+      isActionEnabled: (id, context) => isActionEnabledByActionsSettings(id, readSaveSettings(), { surface: context.surface }),
       isApprovalExecutionOriginCurrent: async () => true,
       approvalsCreate: async ({ request }) => { approval = request; return { artifactId: 'save-approval' }; },
       approvalsGet: async () => approval, approvalsUpdate: async ({ request }) => { approval = request; return { ok: true }; },
@@ -99,7 +167,8 @@ describe('createActionExecutor (prompt library actions)', () => {
     });
     const input = { title: 'Saved', markdown: 'Reviewed text', folderId: 'new-folder',
       createFolder: { id: 'new-folder', name: 'New folder', expectedRevision: 3 } };
-    const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'home', actionRequestId: 'save' };
+    const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'home', actionRequestId: 'save',
+      get actionsSettings() { return readSaveSettings(); } };
     folderEnabled = false;
     expect(await executor.execute('prompt_doc.create', input, context)).toMatchObject({ ok: false, errorCode: 'action_disabled' });
     expect(record.value).toMatchObject({ folders: [] }); expect(artifacts.size).toBe(0);
@@ -137,16 +206,17 @@ describe('createActionExecutor (prompt library actions)', () => {
     const entries = [{ path: 'SKILL.md', contentBase64: 'U2tpbGw=', contentKind: 'utf8' },
       { path: 'support.bin', contentBase64: 'AAE=', contentKind: 'binary', unixMode: 0o600 }];
     for (const surface of ['ui', 'agent', 'mcp', 'cli', 'voice'] as const) {
-      expect(await executor.execute('prompt_bundle.create', { title: 'Skill', bundleSchemaId: 'skills.skill_md_v1', entries }, { surface }))
+      const context = { surface, actionsSettings: routingApprovalSettings };
+      expect(await executor.execute('prompt_bundle.create', { title: 'Skill', bundleSchemaId: 'skills.skill_md_v1', entries }, context))
         .toMatchObject({ ok: true, result: { artifactId: 'bundle' } });
       expect(readStored()?.header).toMatchObject({ origin: 'user' });
       const changed = [...entries, { path: 'extra.txt', contentBase64: 'RXh0cmE=', contentKind: 'utf8' }];
       expect(await executor.execute('prompt_bundle.update', { artifactId: 'bundle', title: 'Edited', entries: changed,
-        expectedRevision: { headerVersion: 1, bodyVersion: 1 } }, { surface }))
+        expectedRevision: { headerVersion: 1, bodyVersion: 1 } }, context))
         .toMatchObject({ ok: true, result: { revision: { headerVersion: 2, bodyVersion: 2 } } });
       expect(JSON.parse(readStored()!.body!).entries).toEqual(changed);
       expect(await executor.execute('prompt_bundle.update', { artifactId: 'bundle', title: 'Stale', entries,
-        expectedRevision: { headerVersion: 1, bodyVersion: 1 } }, { surface })).toMatchObject({ ok: false, errorCode: 'version_mismatch' });
+        expectedRevision: { headerVersion: 1, bodyVersion: 1 } }, context)).toMatchObject({ ok: false, errorCode: 'version_mismatch' });
       expect(JSON.parse(readStored()!.body!).entries).toEqual(changed);
     }
   });
@@ -166,11 +236,14 @@ describe('createActionExecutor (prompt library actions)', () => {
       header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' }, body: JSON.stringify({ v: 1, index: [], topics: [] }) };
     // Artifact and approval persistence are external boundaries; admission,
     // reviewed-target binding, approval replay and memory mutation remain real.
-    const executor = createExecutor({ isActionApprovalRequired: undefined,
-      isApprovalExecutionOriginCurrent: async () => true,
+    const approvalPorts: Partial<ActionExecutorDeps> = {
+      isApprovalExecutionOriginCurrent: async ({ origin }) => origin.serverId === 'home'
+        && origin.machineId === 'machine-1' && origin.sessionId === 'lead',
       approvalsCreate: async ({ request: value }) => { request = value; return { artifactId: 'proposal' }; },
       approvalsGet: async () => request,
       approvalsUpdate: async ({ request: value }) => { request = value; return { ok: true }; },
+    };
+    const originExecutor = createExecutor({ ...approvalPorts, isActionApprovalRequired: undefined,
       memoryLibrary: { serverId: 'home', nowMs: () => 10, randomId: () => 'approved-fact',
         store: { read: async () => stored, update: async input => {
           stored = { ...stored, body: input.body, revision: { headerVersion: 2, bodyVersion: 2 } };
@@ -179,29 +252,53 @@ describe('createActionExecutor (prompt library actions)', () => {
           publicShares: { publicShares: [] } }),
       },
     });
+    const uiExecutor = createExecutor({ ...approvalPorts, approvalRequestApprovedReplay: async ({ artifactId, request: approved, context }) => {
+      // This port is the daemon RPC boundary. Replay, strict Artifact admission
+      // and execution remain real in the separate originating executor.
+      expect(approved).toMatchObject({ v: 2, status: 'approved', executionOriginV1: {
+        serverId: 'home', machineId: 'machine-1', sessionId: 'lead', surface: 'agent',
+      } });
+      expect(context).toMatchObject({ surface: 'ui', authority: 'present_user' });
+      return originExecutor.replayApprovedApprovalRequest({ artifactId });
+    } });
     const original = stored;
     const prepareWorker = () => resolvePromptStackSystemAppendBlocksV1({ surface: 'coding', memoryEnabled: true,
       scope: { serverId: 'home', accountId: 'owner', sessionId: 'worker' },
       sessionEntries: [{ id: 'session.memory', ref: { kind: 'doc', artifactId: 'memory', serverId: 'home' },
         enabled: true, placement: 'system_append' }], readArtifact: async () => stored });
-    expect(await executor.execute('approval.request.create', { actionId: 'memory.remember',
+    expect(await originExecutor.execute('approval.request.create', { actionId: 'memory.remember',
       actionArgs: { ref: { kind: 'doc', artifactId: 'memory', serverId: 'home' }, expectedRevision: stored.revision,
         text: 'Use the canonical Context owner.' }, summary: 'Remember', createdBy: { surface: 'agent' } },
       { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' },
-        serverId: 'home', defaultSessionId: 'lead', actionRequestId: 'memory-proposal' }))
+        serverId: 'home', defaultSessionId: 'lead', defaultSessionMachineId: 'machine-1', actionRequestId: 'memory-proposal' }))
       .toMatchObject({ ok: true });
     expect(stored).toBe(original);
     expect((await prepareWorker()).blocks.join('\n')).not.toContain('Use the canonical Context owner.');
     expect(request).toMatchObject({ status: 'open', actionId: 'memory.remember' });
-    expect(await executor.execute('approval.request.decide', { artifactId: 'proposal', decision: 'approve' },
+    const decided = await uiExecutor.execute('approval.request.decide', { artifactId: 'proposal', decision: 'approve' },
       { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'home',
-        defaultSessionId: 'lead' })).toMatchObject({ ok: true });
-    expect(JSON.parse(stored.body!).index).toEqual([expect.objectContaining({ id: 'approved-fact',
+        defaultSessionId: 'lead' });
+    const persistedApproval = (() : ApprovalRequest | null => request)();
+    if (persistedApproval?.execution && !persistedApproval.execution.ok) {
+      throw new Error(`Fixture approval execution failed: ${JSON.stringify(persistedApproval.execution)}`);
+    }
+    expect(decided).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+    expect(request).toMatchObject({ status: 'executed', execution: { ok: true } });
+    expect(MemoryDocBodyV1Schema.parse(JSON.parse(stored.body!)).index).toEqual([expect.objectContaining({ id: 'approved-fact',
       text: 'Use the canonical Context owner.', sourceSessionRef: { serverId: 'home', sessionId: 'lead' } })]);
+    const read = await originExecutor.execute('memory.read', {
+      ref: { kind: 'doc', artifactId: 'memory', serverId: 'home' },
+    }, { surface: 'ui', authority: 'present_user', serverId: 'home' });
+    expect(read).toMatchObject({ ok: true });
+    if (!read.ok) throw new Error('Expected accepted memory read');
+    expect(MemoryDocReadResultV1Schema.parse(read.result)).toMatchObject({
+      artifactId: 'memory', revision: { headerVersion: 2, bodyVersion: 2 },
+      body: { index: [expect.objectContaining({ id: 'approved-fact', text: 'Use the canonical Context owner.' })] },
+    });
     expect(request).toMatchObject({ status: 'executed' });
     expect((await prepareWorker()).blocks.join('\n')).toContain('Use the canonical Context owner.');
     const applied = stored;
-    expect(await executor.execute('approval.request.decide', { artifactId: 'proposal', decision: 'approve' },
+    expect(await uiExecutor.execute('approval.request.decide', { artifactId: 'proposal', decision: 'approve' },
       { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'home',
         defaultSessionId: 'lead' })).toMatchObject({ ok: true });
     expect(stored).toBe(applied);
@@ -302,7 +399,7 @@ describe('createActionExecutor (prompt library actions)', () => {
     };
     const executor = createExecutor({ promptDocCreate: request => createPromptDocInLibrary({ store, request }) });
     const receipt = await executor.execute('prompt_doc.create', { title: 'Created content', markdown: 'Retained content', folderId: 'folder' },
-      { surface: 'cli', serverId: 'home' });
+      { surface: 'cli', serverId: 'home', actionsSettings: routingApprovalSettings });
     expect(receipt).toMatchObject({ ok: false, errorCode: 'artifact_organization_failed', details: {
       artifactId: 'created', organization: { status: 'conflict', revision: 5 },
     } });
@@ -310,7 +407,7 @@ describe('createActionExecutor (prompt library actions)', () => {
     expect(artifacts.get('created')?.header).not.toHaveProperty('folderId');
     writerUnavailable = true;
     const unavailable = await executor.execute('prompt_doc.create', { title: 'Other content', markdown: 'Retained too', folderId: 'folder' },
-      { surface: 'cli', serverId: 'home' });
+      { surface: 'cli', serverId: 'home', actionsSettings: routingApprovalSettings });
     expect(unavailable).toMatchObject({ ok: false, errorCode: 'artifact_organization_failed', details: {
       artifactId: 'created-2', organization: { status: 'unavailable', reason: 'artifact_organization_unavailable' },
     } });
@@ -379,7 +476,6 @@ describe('createActionExecutor (prompt library actions)', () => {
     let revision = 1;
     const sharedHeader = { v: 1, kind: 'document.v1', title: 'Recipient document', folderId: 'owner-folder', tags: ['Owner private'] };
     const deps = {
-      isActionApprovalRequired: () => false,
       artifactFolders: {
         serverId: 'home', assertCurrent: () => {},
         // A host-profile resolution boundary admits its known alias, never a foreign Home.
@@ -427,7 +523,7 @@ describe('createActionExecutor (prompt library actions)', () => {
     let current = true;
     let writes = 0;
     let inventoryCoverage: 'complete' | 'partial' | 'unavailable' = 'complete';
-    const deps = { isActionApprovalRequired: () => false, artifactFolders: {
+    const deps = { artifactFolders: {
       serverId: 'home', assertCurrent: () => { if (!current) throw Object.assign(new Error('Retired Home'), { code: 'scope-retired' }); },
       readCatalog: async () => ({ catalog: unavailable
         ? { status: 'unavailable' as const, reason: 'unreachable' as const }
@@ -790,10 +886,11 @@ describe('createActionExecutor (prompt library actions)', () => {
       promptsLibraryList: async ({ signal, ...request }) => listPromptLibrary({ store, request, signal }),
     });
     for (const surface of ['agent', 'mcp', 'cli', 'ui'] as const) {
+      const context = { surface, actionsSettings: routingApprovalSettings };
       expect(getActionSpec('prompt_doc.create').surfaces[surface]).toBe(true);
-      expect(await executor.execute('prompt_doc.create', { title: 'Saved', markdown: 'Text', favorite: false }, { surface })).toMatchObject({ ok: true, result: { artifactId: 'saved' } });
-      expect(await executor.execute('prompt_doc.favorite.set', { artifactId: 'saved', favorite: true }, { surface })).toMatchObject({ ok: true });
-      expect(await executor.execute('prompts.library.list', {}, { surface })).toMatchObject({ ok: true, result: { coverage: 'complete', items: [{ artifactId: 'saved', favorite: true }] } });
+      expect(await executor.execute('prompt_doc.create', { title: 'Saved', markdown: 'Text', favorite: false }, context)).toMatchObject({ ok: true, result: { artifactId: 'saved' } });
+      expect(await executor.execute('prompt_doc.favorite.set', { artifactId: 'saved', favorite: true }, context)).toMatchObject({ ok: true });
+      expect(await executor.execute('prompts.library.list', {}, context)).toMatchObject({ ok: true, result: { coverage: 'complete', items: [{ artifactId: 'saved', favorite: true }] } });
     }
   });
   it('routes daemon prompt adapter actions through canonical deps with caller cancellation', async () => {
@@ -862,75 +959,102 @@ describe('createActionExecutor (prompt library actions)', () => {
     });
   });
 
-  it('routes prompt_doc.update to deps.promptDocUpdate', async () => {
-    const promptDocUpdate = vi.fn(async () => ({ ok: true, artifactId: 'doc-1' }));
-    const executor = createExecutor({ promptDocUpdate } as Partial<ActionExecutorDeps>);
-
-    const res = await executor.execute('prompt_doc.update' as any, {
+  it('persists reviewed prompt edits and personal tags through the real document operation', async () => {
+    const original: PromptLibraryStoredArtifact = { id: 'doc-1', revision: { headerVersion: 1, bodyVersion: 1 },
+      header: PromptDocArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_doc.v2', title: 'Original' }),
+      body: JSON.stringify(PromptDocBodyV1Schema.parse({ v: 1, markdown: 'Original', createdAtMs: 1, updatedAtMs: 1 })) };
+    const { store, artifacts, readOrganization } = createStoredLibrary([original]);
+    const executor = createExecutor({ promptDocUpdate: async ({ signal, ...request }) => updatePromptDocInLibrary({ store, request, signal }) });
+    const res = await executor.execute('prompt_doc.update', {
       artifactId: 'doc-1',
       title: 'Review prompt',
       markdown: '# Review',
       tags: ['review'],
-    }, { surface: 'ui' });
-
-    expect(res).toEqual({ ok: true, result: { ok: true, artifactId: 'doc-1' } });
-    expect(promptDocUpdate).toHaveBeenCalledWith({
-      artifactId: 'doc-1',
-      title: 'Review prompt',
-      markdown: '# Review',
-      tags: ['review'],
-    });
+      expectedRevision: original.revision,
+    }, { surface: 'ui', actionsSettings: routingApprovalSettings });
+    const stored = artifacts.get('doc-1')!;
+    expect(res).toEqual({ ok: true, result: { ok: true, artifactId: 'doc-1', revision: { headerVersion: 2, bodyVersion: 2 } } });
+    expect(PromptDocArtifactHeaderV1Schema.parse(stored.header)).toMatchObject({ title: 'Review prompt' });
+    expect(PromptDocBodyV1Schema.parse(JSON.parse(stored.body!))).toMatchObject({ markdown: '# Review', createdAtMs: 1 });
+    expect(readOrganization().value).toMatchObject({ artifactHeadersById: { 'doc-1': { tags: ['review'] } } });
+    expect(stored.header).not.toHaveProperty('tags');
+    const accepted = stored;
+    expect(await executor.execute('prompt_doc.update', { artifactId: 'doc-1', title: 'Stale', markdown: 'Stale',
+      expectedRevision: { headerVersion: 1, bodyVersion: 1 } }, { surface: 'ui', actionsSettings: routingApprovalSettings }))
+      .toMatchObject({ ok: false, errorCode: 'version_mismatch' });
+    expect(artifacts.get('doc-1')).toBe(accepted);
   });
 
-  it('routes prompt_bundle.update to deps.promptBundleUpdate', async () => {
-    const promptBundleUpdate = vi.fn(async () => ({ ok: true, artifactId: 'bundle-1' }));
-    const executor = createExecutor({ promptBundleUpdate } as Partial<ActionExecutorDeps>);
-
-    const res = await executor.execute('prompt_bundle.update' as any, {
+  it('updates the stored skill and personal folder through the real bundle operation', async () => {
+    const original: PromptLibraryStoredArtifact = { id: 'bundle-1', revision: { headerVersion: 1, bodyVersion: 1 },
+      header: PromptBundleArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_bundle.v2', title: 'Old', bundleSchemaId: 'skills.skill_md_v1' }),
+      body: JSON.stringify(PromptBundleBodyV1Schema.parse({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [
+        { path: 'SKILL.md', contentBase64: 'T2xk', contentKind: 'utf8' },
+        { path: 'support.bin', contentBase64: 'AAE=', contentKind: 'binary' },
+      ] })) };
+    const { store, artifacts, readOrganization } = createStoredLibrary([original]);
+    const executor = createExecutor({ promptBundleUpdate: ({ signal, ...request }) => updatePromptBundleInLibrary({ store, request, signal }) });
+    const res = await executor.execute('prompt_bundle.update', {
       artifactId: 'bundle-1',
       title: 'Reviewer',
       skillMarkdown: '# Reviewer',
       folderId: 'folder-1',
-    }, { surface: 'ui' });
+    }, { surface: 'ui', actionsSettings: routingApprovalSettings });
 
-    expect(res).toEqual({ ok: true, result: { ok: true, artifactId: 'bundle-1' } });
-    expect(promptBundleUpdate).toHaveBeenCalledWith({
-      artifactId: 'bundle-1',
-      title: 'Reviewer',
-      skillMarkdown: '# Reviewer',
-      folderId: 'folder-1',
-    });
+    expect(res).toEqual({ ok: true, result: { ok: true, artifactId: 'bundle-1', revision: { headerVersion: 2, bodyVersion: 2 } } });
+    const stored = artifacts.get('bundle-1')!;
+    expect(PromptBundleArtifactHeaderV1Schema.parse(stored.header)).toMatchObject({ title: 'Reviewer' });
+    const body = PromptBundleBodyV1Schema.parse(JSON.parse(stored.body!));
+    expect(new TextDecoder().decode(decodeBase64(body.entries.find(entry => entry.path === 'SKILL.md')!.contentBase64, 'base64'))).toBe('# Reviewer');
+    expect(body.entries.find(entry => entry.path === 'support.bin')).toEqual({ path: 'support.bin', contentBase64: 'AAE=', contentKind: 'binary' });
+    expect(readOrganization().value).toMatchObject({ artifactHeadersById: { 'bundle-1': { folderId: 'folder-1' } } });
+    expect(stored.header).not.toHaveProperty('folderId');
   });
 
-  it('routes prompt_asset.export to deps.promptAssetExport', async () => {
-    const promptAssetExport = vi.fn(async () => ({ ok: true, artifactId: 'doc-1' }));
-    const executor = createExecutor({ promptAssetExport } as Partial<ActionExecutorDeps>);
-
-    const res = await executor.execute('prompt_asset.export' as any, {
+  it('exports stored document content and produces the qualified external link through the real operation', async () => {
+    const { store, artifacts } = createStoredLibrary([storedPromptDoc()]);
+    const files = new Map<string, string>();
+    const executor = createExecutor({ promptAssetExport: ({ signal, directory, targetPath, targetName, ...request }) =>
+      exportPromptLibraryArtifact({ store, machineTarget: { serverIdentityId: 'srv_home', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
+        request: { ...request, workspacePath: directory, targetInput: targetPath ?? targetName ?? '', promptExternalLinks: null }, signal,
+        randomId: () => 'link-1', nowMs: () => 3,
+        write: async input => {
+          expect(input.machineId).toBe('machine-1');
+          const admitted = PromptAssetWriteDocRequestSchema.parse(input.request);
+          files.set(admitted.targetPath, admitted.markdown);
+          return { ok: true, externalRef: { path: admitted.targetPath }, digest: 'external-digest' };
+        },
+      }) });
+    const res = await executor.execute('prompt_asset.export', {
       artifactId: 'doc-1',
       machineId: 'machine-1',
       assetTypeId: 'claude.command',
       scope: 'user',
       targetPath: 'review.md',
       installMode: 'symlink',
-    }, { surface: 'ui' });
+    }, { surface: 'ui', actionsSettings: routingApprovalSettings });
 
-    expect(res).toEqual({ ok: true, result: { ok: true, artifactId: 'doc-1' } });
-    expect(promptAssetExport).toHaveBeenCalledWith({
-      artifactId: 'doc-1',
-      machineId: 'machine-1',
-      assetTypeId: 'claude.command',
-      scope: 'user',
-      targetPath: 'review.md',
-      installMode: 'symlink',
-    });
+    expect(res).toMatchObject({ ok: true, result: { ok: true, artifactId: 'doc-1', exported: true,
+      nextPromptExternalLinks: { links: [{ artifactId: 'doc-1', machineId: 'machine-1', serverIdentityId: 'srv_home',
+        assetTypeId: 'claude.command', scope: 'user', externalRef: { path: 'review.md' } }] } } });
+    expect(files.get('review.md')).toBe('# Review');
+    expect(artifacts.get('doc-1')).toEqual(storedPromptDoc());
   });
 
-  it('forwards server routing to prompt_asset.export deps', async () => {
-    const promptAssetExport = vi.fn(async () => ({ ok: true, artifactId: 'doc-1' }));
-    const executor = createExecutor({ promptAssetExport } as Partial<ActionExecutorDeps>);
-
-    const res = await executor.execute('prompt_asset.export' as any, {
+  it('keeps the exact supplied Home at the external asset transport', async () => {
+    const { store } = createStoredLibrary([storedPromptDoc()]);
+    const files = new Map<string, string>();
+    const executor = createExecutor({ promptAssetExport: ({ signal, directory, targetPath, targetName, ...request }) =>
+      exportPromptLibraryArtifact({ store, machineTarget: { serverIdentityId: 'srv_machine', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
+        request: { ...request, workspacePath: directory, targetInput: targetPath ?? targetName ?? '', promptExternalLinks: null }, signal,
+        randomId: () => 'link-1', write: async input => {
+          expect(input.serverId).toBe('server-1');
+          const admitted = PromptAssetWriteDocRequestSchema.parse(input.request);
+          files.set(admitted.targetPath, admitted.markdown);
+          return { ok: true, externalRef: { path: admitted.targetPath }, digest: 'external-digest' };
+        },
+      }) });
+    const res = await executor.execute('prompt_asset.export', {
       artifactId: 'doc-1',
       machineId: 'machine-1',
       assetTypeId: 'claude.command',
@@ -939,73 +1063,92 @@ describe('createActionExecutor (prompt library actions)', () => {
     }, {
       surface: 'ui',
       serverId: 'server-1',
+      actionsSettings: routingApprovalSettings,
     });
 
-    expect(res).toEqual({ ok: true, result: { ok: true, artifactId: 'doc-1' } });
-    expect(promptAssetExport).toHaveBeenCalledWith({
-      artifactId: 'doc-1',
-      machineId: 'machine-1',
-      assetTypeId: 'claude.command',
-      scope: 'user',
-      targetPath: 'review.md',
-      serverId: 'server-1',
-    });
+    expect(res).toMatchObject({ ok: true, result: { ok: true, artifactId: 'doc-1', exported: true,
+      nextPromptExternalLinks: { links: [{ serverIdentityId: 'srv_machine' }] } } });
+    expect(files.get('review.md')).toBe('# Review');
   });
 
-  it('propagates prompt_asset.export failures from deps', async () => {
-    const promptAssetExport = vi.fn(async () => ({ ok: false, errorCode: 'conflict', error: 'conflict' }));
-    const executor = createExecutor({ promptAssetExport } as Partial<ActionExecutorDeps>);
-
-    const res = await executor.execute('prompt_asset.export' as any, {
+  it('preserves the stored document and current external content when its writer refuses a conflict', async () => {
+    const original = storedPromptDoc();
+    const { store, artifacts } = createStoredLibrary([original]);
+    const files = new Map([['review.md', 'Concurrent external edit']]);
+    const executor = createExecutor({ promptAssetExport: ({ signal, directory, targetPath, targetName, ...request }) =>
+      exportPromptLibraryArtifact({ store, machineTarget: { serverIdentityId: 'srv_home', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
+        request: { ...request, workspacePath: directory, targetInput: targetPath ?? targetName ?? '', promptExternalLinks: null }, signal,
+        randomId: () => 'link-1', write: async () => ({ ok: false, errorCode: 'conflict', error: 'conflict' }),
+      }) });
+    const res = await executor.execute('prompt_asset.export', {
       artifactId: 'doc-1',
       machineId: 'machine-1',
       assetTypeId: 'claude.command',
       scope: 'user',
       targetPath: 'review.md',
-    }, { surface: 'ui' });
+    }, { surface: 'ui', actionsSettings: routingApprovalSettings });
 
     expect(res).toEqual({ ok: false, errorCode: 'conflict', error: 'conflict' });
+    expect(files.get('review.md')).toBe('Concurrent external edit');
+    expect(artifacts.get('doc-1')).toBe(original);
   });
 
-  it('routes prompt_registry.install to deps.promptRegistryInstall', async () => {
-    const promptRegistryInstall = vi.fn(async () => ({ ok: true, artifactId: 'bundle-1', exported: true }));
-    const executor = createExecutor({ promptRegistryInstall } as Partial<ActionExecutorDeps>);
-
-    const res = await executor.execute('prompt_registry.install' as any, {
+  it('installs fetched skill content and retains its Artifact and external link through the real operation', async () => {
+    const { store, artifacts } = createStoredLibrary();
+    const fetched = fetchedRegistrySkill();
+    if (!fetched.ok) throw new Error('Expected fetched skill');
+    const installed = new Map<string, string>();
+    const installTarget = { assetTypeId: 'agents.skill', scope: 'project' as const, directory: '/tmp/project',
+      targetName: 'frontend-design', installMode: 'symlink' as const };
+    const response = { ok: true as const, externalRef: { name: 'frontend-design' }, digest: 'external-digest' };
+    const executor = createExecutor({ promptRegistryInstall: ({ signal, ...request }) => installPromptRegistryItemInLibrary({
+      store, machineTarget: { serverIdentityId: 'srv_home', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
+      request: { ...request, promptExternalLinks: null }, signal, randomId: () => 'link-1', nowMs: () => 4,
+      fetchItem: async input => {
+        expect(input).toEqual({ machineId: 'machine-1', sourceId: 'skills_sh:featured', itemId: 'skills_sh:featured:item-1', configuredSources: [] });
+        return fetched;
+      },
+      install: async input => {
+        expect(input).toEqual({ machineId: 'machine-1', request: { sourceId: 'skills_sh:featured',
+          itemId: 'skills_sh:featured:item-1', configuredSources: [], installTarget, previewOnly: false } });
+        const admitted = PromptRegistryInstallRequestV1Schema.parse(input.request);
+        installed.set(admitted.installTarget.targetName, admitted.itemId);
+        return response;
+      },
+    }) });
+    const res = await executor.execute('prompt_registry.install', {
       machineId: 'machine-1',
       sourceId: 'skills_sh:featured',
       itemId: 'skills_sh:featured:item-1',
       configuredSources: [],
-      installTarget: {
-        assetTypeId: 'agents.skill',
-        scope: 'project',
-        directory: '/tmp/project',
-        targetName: 'frontend-design',
-        installMode: 'symlink',
-      },
-    }, { surface: 'ui' });
+      installTarget,
+    }, { surface: 'ui', actionsSettings: routingApprovalSettings });
 
-    expect(res).toEqual({ ok: true, result: { ok: true, artifactId: 'bundle-1', exported: true } });
-    expect(promptRegistryInstall).toHaveBeenCalledWith({
-      machineId: 'machine-1',
-      sourceId: 'skills_sh:featured',
-      itemId: 'skills_sh:featured:item-1',
-      configuredSources: [],
-      installTarget: {
-        assetTypeId: 'agents.skill',
-        scope: 'project',
-        directory: '/tmp/project',
-        targetName: 'frontend-design',
-        installMode: 'symlink',
-      },
-    });
+    expect(res).toEqual({ ok: true, result: { ok: true, artifactId: 'artifact-1', routeKind: 'bundle', exported: true, response,
+      nextPromptExternalLinks: { v: 1, links: [{ id: 'link-1', artifactId: 'artifact-1', assetTypeId: 'agents.skill',
+        machineId: 'machine-1', serverIdentityId: 'srv_home', scope: 'project', workspacePath: '/tmp/project',
+        externalRef: response.externalRef, syncMode: 'manual', baseDigest: response.digest,
+        lastLibraryDigest: computePromptBundleDigestV1(fetched.item.bundleBody), lastExternalDigest: response.digest, lastSyncAtMs: 4 }] } } });
+    expect(installed.get('frontend-design')).toBe('skills_sh:featured:item-1');
+    const artifact = artifacts.get('artifact-1')!;
+    expect(PromptBundleArtifactHeaderV1Schema.parse(artifact.header)).toEqual({ v: 1, kind: 'prompt_bundle.v2',
+      title: 'Frontend design', bundleSchemaId: 'skills.skill_md_v1', origin: 'imported', locked: false });
+    expect(PromptBundleBodyV1Schema.parse(JSON.parse(artifact.body!))).toEqual(fetched.item.bundleBody);
   });
 
-  it('forwards server routing to prompt_registry.install deps', async () => {
-    const promptRegistryInstall = vi.fn(async () => ({ ok: true, artifactId: 'bundle-1', exported: true }));
-    const executor = createExecutor({ promptRegistryInstall } as Partial<ActionExecutorDeps>);
-
-    const res = await executor.execute('prompt_registry.install' as any, {
+  it('fetches from the exact supplied Home and retains the skill without an external install target', async () => {
+    const { store, artifacts } = createStoredLibrary();
+    const executor = createExecutor({ promptRegistryInstall: ({ signal, ...request }) => installPromptRegistryItemInLibrary({
+      store, machineTarget: { serverIdentityId: 'srv_machine', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
+      request: { ...request, promptExternalLinks: null }, signal, randomId: () => 'link-1',
+      fetchItem: async input => {
+        expect(input).toEqual({ machineId: 'machine-1', serverId: 'server-1', sourceId: 'skills_sh:featured',
+          itemId: 'skills_sh:featured:item-1', configuredSources: [] });
+        return fetchedRegistrySkill();
+      },
+      install: async () => { throw new Error('An Artifact-only import must not install external files'); },
+    }) });
+    const res = await executor.execute('prompt_registry.install', {
       machineId: 'machine-1',
       sourceId: 'skills_sh:featured',
       itemId: 'skills_sh:featured:item-1',
@@ -1013,29 +1156,34 @@ describe('createActionExecutor (prompt library actions)', () => {
     }, {
       surface: 'ui',
       serverId: 'server-1',
+      actionsSettings: routingApprovalSettings,
     });
 
-    expect(res).toEqual({ ok: true, result: { ok: true, artifactId: 'bundle-1', exported: true } });
-    expect(promptRegistryInstall).toHaveBeenCalledWith({
-      machineId: 'machine-1',
-      sourceId: 'skills_sh:featured',
-      itemId: 'skills_sh:featured:item-1',
-      configuredSources: [],
-      serverId: 'server-1',
-    });
+    expect(res).toEqual({ ok: true, result: { ok: true, artifactId: 'artifact-1', routeKind: 'bundle', exported: false } });
+    expect(artifacts.get('artifact-1')?.header).toEqual({ v: 1, kind: 'prompt_bundle.v2', title: 'Frontend design',
+      bundleSchemaId: 'skills.skill_md_v1', origin: 'imported', locked: false });
   });
 
-  it('propagates prompt_registry.install failures from deps', async () => {
-    const promptRegistryInstall = vi.fn(async () => ({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' }));
-    const executor = createExecutor({ promptRegistryInstall } as Partial<ActionExecutorDeps>);
+  it('propagates prompt_registry.install fetch failures without mutating the library', async () => {
+    const { store, artifacts } = createStoredLibrary();
+    const promptRegistryInstall: NonNullable<ActionExecutorDeps['promptRegistryInstall']> = ({ signal, ...request }) =>
+      installPromptRegistryItemInLibrary({ store,
+        machineTarget: { serverIdentityId: 'srv_home', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
+        request: { ...request, promptExternalLinks: null }, signal, randomId: () => 'link-1',
+        fetchItem: async () => PromptRegistryFetchItemResponseV1Schema.parse({ ok: false,
+          errorCode: 'invalid_request', error: 'invalid_parameters' }),
+        install: async () => { throw new Error('Failed fetch must not install external files'); },
+      });
+    const executor = createExecutor({ promptRegistryInstall });
 
-    const res = await executor.execute('prompt_registry.install' as any, {
+    const res = await executor.execute('prompt_registry.install', {
       machineId: 'machine-1',
       sourceId: 'skills_sh:featured',
       itemId: 'skills_sh:featured:item-1',
       configuredSources: [],
-    }, { surface: 'ui' });
+    }, { surface: 'ui', actionsSettings: routingApprovalSettings });
 
-    expect(res).toEqual({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
+    expect(res).toEqual({ ok: false, errorCode: 'invalid_request', error: 'invalid_parameters' });
+    expect(artifacts.size).toBe(0);
   });
 });

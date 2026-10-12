@@ -1,47 +1,50 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import { getActionSpec } from './actionSpecs.js';
 import { MemorySettingsV1Schema } from '../memory/memorySettings.js';
 import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import { MemorySearchQueryV1Schema, MemorySearchResultV1Schema, negotiateMemorySearchV1 } from '../memory/memorySearch.js';
+import { MemoryWindowV1Schema } from '../memory/memoryWindow.js';
 
 function createDeps(): ActionExecutorDeps {
+  const unavailable = async (): Promise<never> => { throw new Error('Unexpected Action dependency'); };
   return {
-    executionRunStart: vi.fn(async () => ({})),
-    executionRunList: vi.fn(async () => ({})),
-    executionRunGet: vi.fn(async () => ({})),
-    detachedExecutionRunSend: vi.fn(async () => ({})),
-    executionRunStop: vi.fn(async () => ({})),
-    executionRunAction: vi.fn(async () => ({})),
-    executionRunWait: vi.fn(async () => ({})),
+    executionRunStart: unavailable,
+    executionRunList: unavailable,
+    executionRunGet: unavailable,
+    detachedExecutionRunSend: unavailable,
+    executionRunStop: unavailable,
+    executionRunAction: unavailable,
+    executionRunWait: unavailable,
 
-    sessionOpen: vi.fn(async () => ({})),
-    sessionFork: vi.fn(async () => ({})),
-    sessionRollback: vi.fn(async () => ({})),
-    sessionSpawnNew: vi.fn(async () => ({})),
+    sessionOpen: unavailable,
+    sessionFork: unavailable,
+    sessionRollback: unavailable,
+    sessionSpawnNew: unavailable,
 
-    pathsListRecent: vi.fn(async () => ({ items: [] })),
-    machinesList: vi.fn(async () => ({ items: [] })),
-    serversList: vi.fn(async () => ({ items: [] })),
-    reviewEnginesList: vi.fn(async () => ({ items: [] })),
-    agentsBackendsList: vi.fn(async () => ({ items: [] })),
-    agentsModelsList: vi.fn(async () => ({ items: [] })),
+    pathsListRecent: unavailable,
+    machinesList: unavailable,
+    serversList: unavailable,
+    reviewEnginesList: unavailable,
+    agentsBackendsList: unavailable,
+    agentsModelsList: unavailable,
 
-    sessionSendMessage: vi.fn(async () => ({})),
-    sessionPermissionRespond: vi.fn(async () => ({})),
-    sessionUserActionAnswer: vi.fn(async () => ({})),
+    sessionSendMessage: unavailable,
+    sessionPermissionRespond: unavailable,
+    sessionUserActionAnswer: unavailable,
 
-    sessionTargetPrimarySet: vi.fn(async () => ({})),
-    sessionTargetTrackedSet: vi.fn(async () => ({})),
-    sessionList: vi.fn(async () => ({})),
-    sessionActivityGet: vi.fn(async () => ({})),
-    sessionRecentMessagesGet: vi.fn(async () => ({})),
+    sessionTargetPrimarySet: unavailable,
+    sessionTargetTrackedSet: unavailable,
+    sessionList: unavailable,
+    sessionActivityGet: unavailable,
+    sessionRecentMessagesGet: unavailable,
 
-    resetGlobalVoiceAgent: vi.fn(),
+    resetGlobalVoiceAgent: unavailable,
 
-    daemonMemorySearch: vi.fn(async () => ({ v: 1, ok: true, hits: [] })),
-    daemonMemoryGetWindow: vi.fn(async () => ({ v: 1, snippets: [], citations: [] })),
-    daemonMemoryEnsureUpToDate: vi.fn(async () => ({ ok: true })),
+    daemonMemorySearch: unavailable,
+    daemonMemoryGetWindow: unavailable,
+    daemonMemoryEnsureUpToDate: unavailable,
   };
 }
 
@@ -54,9 +57,12 @@ describe('createActionExecutor (memory)', () => {
       expect(args).toEqual({ machineId: 'm1', source, sourceItemId: 'message', cursor: 'older', serverId: 'home' });
       return result;
     };
-    expect(await createActionExecutor(deps).execute('memory.get_window', {
+    const response = await createActionExecutor(deps).execute('memory.get_window', {
       machineId: 'm1', source, sourceItemId: 'message', cursor: 'older',
-    }, { surface, serverId: 'home' })).toEqual({ ok: true, result });
+    }, { surface, serverId: 'home' });
+    expect(response).toEqual({ ok: true, result });
+    if (!response.ok) throw new Error('Expected native transcript window');
+    expect(MemoryWindowV1Schema.parse(response.result)).toEqual(result);
     expect(getActionSpec('memory.get_window').inputSchema.safeParse({
       machineId: 'm1', source, sourceItemId: 'message', seqFrom: 1, seqTo: 2,
     }).success).toBe(false);
@@ -114,29 +120,42 @@ describe('createActionExecutor (memory)', () => {
       revision: { headerVersion: 2, bodyVersion: 3 }, factId: 'fact-1', location: 'archive',
       summary: 'Remembered decision', score: 1,
     }], documents: { state: 'ready' } };
-    deps.daemonMemorySearch = vi.fn(async () => result);
-    const query = { v: 1, query: 'decision', scope: { type: 'global' }, mode: 'deep', corpora: ['sessions', 'documents'] };
+    // Only the daemon transport is substituted; corpus negotiation and result admission stay real.
+    deps.daemonMemorySearch = async args => {
+      expect(args).toEqual({ machineId: 'm1', query, serverId: 'home-1' });
+      return negotiateMemorySearchV1({ query: args.query,
+        readDocumentSearchSupport: async () => true, search: async () => result });
+    };
+    const query = MemorySearchQueryV1Schema.parse({ v: 1, query: 'decision', scope: { type: 'global' }, mode: 'deep', corpora: ['sessions', 'documents'] });
     const res = await createActionExecutor(deps).execute('memory.search', { machineId: 'm1', query }, {
       surface, serverId: 'home-1',
     });
     expect(res).toEqual({ ok: true, result });
-    expect(deps.daemonMemorySearch).toHaveBeenCalledWith({ machineId: 'm1', query, serverId: 'home-1' });
+    if (!res.ok) throw new Error('Expected admitted document search');
+    expect(MemorySearchResultV1Schema.parse(res.result)).toEqual(result);
   });
 
-  it('routes memory.search to deps.daemonMemorySearch', async () => {
+  it('retains legacy Session results when the daemon cannot search documents and no Home is supplied', async () => {
     const deps = createDeps();
     const executor = createActionExecutor(deps);
-
+    const query = MemorySearchQueryV1Schema.parse({ v: 1, query: 'openclaw', scope: { type: 'global' }, mode: 'hints',
+      corpora: ['sessions', 'documents'] });
+    const legacy = { v: 1, ok: true, hits: [{ sessionId: 'session-1', seqFrom: 1, seqTo: 2,
+      createdAtFromMs: 10, createdAtToMs: 20, summary: 'Retained conversation', score: 1 }] };
+    deps.daemonMemorySearch = async args => {
+      expect(args).toEqual({ machineId: 'm1', query, serverId: null });
+      return negotiateMemorySearchV1({ query: args.query, readDocumentSearchSupport: async () => false,
+        search: async admitted => {
+          expect(admitted).toEqual({ v: 1, query: 'openclaw', scope: { type: 'global' }, mode: 'hints' });
+          return legacy;
+        } });
+    };
     const res = await executor.execute('memory.search', {
-      machineId: 'm1',
-      query: { v: 1, query: 'openclaw', scope: { type: 'global' }, mode: 'hints' },
+      machineId: 'm1', query,
     }, { surface: 'ui' });
-    expect(res.ok).toBe(true);
-    expect(deps.daemonMemorySearch).toHaveBeenCalledWith({
-      machineId: 'm1',
-      query: { v: 1, query: 'openclaw', scope: { type: 'global' }, mode: 'hints' },
-      serverId: null,
-    });
+    expect(res).toEqual({ ok: true, result: { ...legacy, documents: { state: 'unavailable' } } });
+    if (!res.ok) throw new Error('Expected legacy Session search');
+    expect(MemorySearchResultV1Schema.parse(res.result)).toEqual({ ...legacy, documents: { state: 'unavailable' } });
   });
 
   it('threads Action cancellation into the authorized memory-search dependency', async () => {
@@ -144,14 +163,18 @@ describe('createActionExecutor (memory)', () => {
     const executor = createActionExecutor(deps);
     const controller = new AbortController();
 
-    await executor.execute('memory.search', {
+    deps.daemonMemorySearch = async ({ signal }) => {
+      expect(signal).toBe(controller.signal);
+      controller.abort(Object.assign(new Error('cancelled'), { code: 'cancelled' }));
+      signal?.throwIfAborted();
+      return { v: 1, ok: true, hits: [] };
+    };
+    const result = await executor.execute('memory.search', {
       machineId: 'm1',
       query: { v: 1, query: 'openclaw', scope: { type: 'global' }, mode: 'hints' },
     }, { surface: 'agent', signal: controller.signal });
 
-    expect(deps.daemonMemorySearch).toHaveBeenCalledWith(expect.objectContaining({
-      signal: controller.signal,
-    }));
+    expect(result).toMatchObject({ ok: false, errorCode: 'cancelled' });
   });
 
   it('threads Action cancellation into the authorized memory-window dependency', async () => {
@@ -159,15 +182,19 @@ describe('createActionExecutor (memory)', () => {
     const executor = createActionExecutor(deps);
     const controller = new AbortController();
 
-    await executor.execute('memory.get_window', {
+    deps.daemonMemoryGetWindow = async ({ signal }) => {
+      expect(signal).toBe(controller.signal);
+      controller.abort(Object.assign(new Error('cancelled'), { code: 'cancelled' }));
+      signal?.throwIfAborted();
+      return { v: 1, snippets: [], citations: [] };
+    };
+    const result = await executor.execute('memory.get_window', {
       machineId: 'm1',
       sessionId: 'session-1',
       seqFrom: 1,
       seqTo: 2,
     }, { surface: 'agent', signal: controller.signal });
 
-    expect(deps.daemonMemoryGetWindow).toHaveBeenCalledWith(expect.objectContaining({
-      signal: controller.signal,
-    }));
+    expect(result).toMatchObject({ ok: false, errorCode: 'cancelled' });
   });
 });

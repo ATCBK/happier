@@ -27,7 +27,9 @@ import * as savedSecretOwner from './savedSecretMutationOwner.js';
 import type { ArtifactSharingResourceV1 } from '../../artifacts/artifactSharingV1.js';
 import { ProfileTransferControlV1Schema } from '../../profiles/profileTransferV1.js';
 import { McpServerCatalogV1Schema } from '../../mcp/servers/serverRowsV1.js';
+import { splitRetainedMcpServerConfigurationV1 } from '../../mcp/servers/splitRetainedMcpServerConfigurationV1.js';
 import { AcpCatalogRecordV1Schema } from '../../acp/catalog/catalogRowsV1.js';
+import { AcpCatalogSettingsV1Schema } from '../../acp/catalog/settingsV1.js';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema } from '../../providers/connections/connectionRowsV1.js';
 import { ConnectedConfigurationCatalogV1Schema } from '../../connect/connectedAccountConfigurationRowsV1.js';
 import { NotificationChannelCatalogRecordV1Schema } from './notificationChannelSchemasV1.js';
@@ -35,25 +37,65 @@ import { SecretStringV1Schema } from '../../crypto/settingsSecretStringSchemasV1
 
 describe('Session-attested MCP reference census', () => {
   it('counts and rewrites template variables through the MCP catalog and retained source owners', () => {
-    const template = { t: 'template' as const, template: 'Bearer {key}', vars: {
-      key: { t: 'savedSecret' as const, secretId: 'personal-key' },
-    } };
-    const mcp = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'server', name: 'server', transport: 'http',
-      remote: { url: 'https://example.test/mcp', headers: { Authorization: template } },
-      env: {}, createdAt: 1, updatedAt: 1,
+    const catalog = (secretId: string) => McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'server', name: 'server', transport: 'http',
+      remote: { url: 'https://example.test/mcp', headers: { Authorization: { t: 'template', template: 'Bearer {key}',
+        vars: { key: { t: 'savedSecret', secretId } } } } }, env: {}, createdAt: 1, updatedAt: 1,
     }], bindings: [] });
+    const source = formatSharedSavedSecretRefV1('current-resource');
+    const replacement = formatSharedSavedSecretRefV1('replacement-resource');
+    const mcp = catalog(source);
     const catalogs = { profileRecords: [], mcp };
-    expect(listAccountSettingsSavedSecretReferences({}, 'personal-key', catalogs)).toEqual([
+    expect(listAccountSettingsSavedSecretReferences({}, source, catalogs)).toEqual([
       { owner: 'mcp', path: 'mcpCatalog.servers[0].remote.headers.Authorization.vars.key' },
     ]);
-    const rewritten = savedSecretOwner.rewriteSavedSecretReferenceCatalogsV1(catalogs, 'personal-key', 'replacement');
-    expect(listAccountSettingsSavedSecretReferences({}, 'replacement', rewritten)).toEqual([
+    const rewritten = savedSecretOwner.rewriteSavedSecretReferenceCatalogsV1(catalogs, source, replacement);
+    expect(McpServerCatalogV1Schema.parse(rewritten.mcp)).toEqual(rewritten.mcp);
+    expect(listAccountSettingsSavedSecretReferences({}, replacement, rewritten)).toEqual([
       { owner: 'mcp', path: 'mcpCatalog.servers[0].remote.headers.Authorization.vars.key' },
     ]);
-    const retained = { mcpServersSettingsV1: mcp };
+    const backend = { id: 'configured', name: 'configured', title: 'Configured',
+      launch: { kind: 'command', command: 'agent', args: [] },
+      env: { TOKEN: { t: 'template', template: '{key}/{region}', vars: {
+        key: { t: 'savedSecret', secretId: source }, region: { t: 'literal', v: 'local' },
+      } } }, createdAt: 1, updatedAt: 1 };
+    const acp = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [backend] });
+    const acpRewritten = savedSecretOwner.rewriteSavedSecretReferenceCatalogsV1({ profileRecords: [], acp }, source, replacement);
+    expect(AcpCatalogRecordV1Schema.parse(acpRewritten.acp)).toEqual(acpRewritten.acp);
+    expect(listAccountSettingsSavedSecretReferences({}, replacement, acpRewritten)).toEqual([
+      { owner: 'acp', path: 'acpCatalog.definitions[0].env.TOKEN.vars.key' },
+    ]);
+    const retainedMcp = catalog('personal-key');
+    const authorization = retainedMcp.servers[0]!.remote!.headers.Authorization!;
+    const retained = { secrets: [{ ...secret, id: 'personal-key' }], mcpServersSettingsV1: {
+      ...retainedMcp, servers: [{ ...retainedMcp.servers[0], remote: {
+        ...retainedMcp.servers[0]!.remote, headers: { Authorization: { ...authorization, futureMetadata: 'preserved' } },
+      } }],
+    }, acpCatalogSettingsV1: AcpCatalogSettingsV1Schema.parse({ v: 2, backends: [{ ...backend,
+      env: { ...backend.env, TOKEN: { ...backend.env.TOKEN,
+        vars: { ...backend.env.TOKEN.vars, key: { t: 'savedSecret', secretId: 'personal-key' } } } },
+    }] }) };
     expect(listAccountSettingsSavedSecretReferences(retained, 'personal-key', { profileRecords: [] })).toEqual([
       { owner: 'mcp', path: 'mcpServersSettingsV1.servers[0].remote.headers.Authorization.vars.key' },
+      { owner: 'acp', path: 'acpCatalogSettingsV1.backends[0].env.TOKEN.vars.key' },
     ]);
+    const retainedBeforePromotion = structuredClone(retained);
+    const promoted = promotePersonalSavedSecretReference(retained,
+      { secretId: 'personal-key', expectedUpdatedAt: 1, sharedSecretRef: replacement }, { profileRecords: [] });
+    expect(promoted.settings.mcpServersSettingsV1).toEqual({ ...retained.mcpServersSettingsV1,
+      servers: [{ ...retained.mcpServersSettingsV1.servers[0], remote: {
+        ...retained.mcpServersSettingsV1.servers[0]!.remote, headers: { Authorization: {
+          ...authorization, vars: { key: { t: 'savedSecret', secretId: replacement } }, futureMetadata: 'preserved',
+        } },
+      } }],
+    });
+    expect(promoted.settings.acpCatalogSettingsV1).toEqual({ ...retained.acpCatalogSettingsV1,
+      backends: [{ ...retained.acpCatalogSettingsV1.backends[0], env: { TOKEN: {
+        ...backend.env.TOKEN, vars: { key: { t: 'savedSecret', secretId: replacement }, region: { t: 'literal', v: 'local' } },
+      } } }],
+    });
+    expect(retained).toEqual(retainedBeforePromotion);
+    expect(listAccountSettingsSavedSecretReferences(promoted.settings, 'personal-key', { profileRecords: [] })).toEqual([]);
+    expect(listAccountSettingsSavedSecretReferences(promoted.settings, replacement, { profileRecords: [] })).toHaveLength(2);
   });
   it('retains symbolic facts in an inactive MCP source without classifying them as credentials', () => {
     const settings = { mcpServersSettingsV1: { v: 1, servers: [{ id: 'integrator', name: 'integrator',
@@ -91,6 +133,7 @@ describe('notification channel SavedSecret reference census', () => {
       { owner: 'notificationChannel', path: 'notificationChannelsCatalog.channels[0].signingSecretRef' },
     ]);
     const rewritten = savedSecretOwner.rewriteSavedSecretReferenceCatalogsV1(catalogs, reference, replacement);
+    expect(NotificationChannelCatalogRecordV1Schema.parse(rewritten.notificationChannels)).toEqual(rewritten.notificationChannels);
     expect(rewritten).toEqual({ ...catalogs, notificationChannels: { ...notificationChannels, channels: [
       { ...notificationChannels.channels[0], signingSecretRef: replacement }, notificationChannels.channels[1],
     ] } });
@@ -326,13 +369,14 @@ describe('destination catalog SavedSecret reference ownership', () => {
   });
 
   it('rewrites every MCP destination slot atomically and preserves nullable patches and inactive source bytes', () => {
-    const reference = { t: 'savedSecret', secretId: secret.id };
-    const mcp = { v: 1, servers: [{ id: 'server-a', name: 'server-a', transport: 'http',
+    const reference = { t: 'savedSecret' as const, secretId: secret.id };
+    const server = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'server-a', name: 'server-a', transport: 'http',
       remote: { url: 'https://example.test/mcp', headers: { Authorization: reference } },
-      env: { TOKEN: reference }, createdAt: 1, updatedAt: 1 }],
-      bindings: [{ id: 'binding-a', serverId: 'server-a', enabled: true, target: { t: 'allMachines' },
+      env: { TOKEN: reference }, createdAt: 1, updatedAt: 1 }], bindings: [] }).servers[0]!;
+    const mcp = McpServerCatalogV1Schema.parse({ v: 1, ...splitRetainedMcpServerConfigurationV1([server],
+      [{ id: 'binding-a', serverId: 'server-a', enabled: true, target: { t: 'machine', machineId: 'machine-a' },
         overrides: { envPatch: { TOKEN: reference, REMOVED: null }, remote: { headersPatch: { Authorization: reference, Removed: null } } },
-        createdAt: 1, updatedAt: 1 }] };
+        createdAt: 1, updatedAt: 1 }]) });
     const settings = { secrets: [secret], mcpServersSettingsV1: { v: 1, strictMode: true,
       servers: [{ ...mcp.servers[0], id: 'retired-source', name: 'retired-source' }], bindings: [] },
       preferredLanguage: 'de' };
@@ -345,8 +389,9 @@ describe('destination catalog SavedSecret reference ownership', () => {
       [settings, { secretId: secret.id, expectedUpdatedAt: 1, sharedSecretRef: target }, catalogs]);
     expect(rewrite.settings.mcpServersSettingsV1).toEqual(settings.mcpServersSettingsV1);
     expect(rewrite.settings.preferredLanguage).toBe('de');
-    expect(rewrite.mcp.bindings[0].overrides.envPatch.REMOVED).toBeNull();
-    expect(rewrite.mcp.bindings[0].overrides.remote.headersPatch.Removed).toBeNull();
+    expect(McpServerCatalogV1Schema.parse(rewrite.mcp)).toEqual(rewrite.mcp);
+    expect(rewrite.mcp.servers[0].configOverrides[0].envPatch.REMOVED).toBeNull();
+    expect(rewrite.mcp.servers[0].configOverrides[0].remote.headersPatch.Removed).toBeNull();
     expect(Reflect.apply(listAccountSettingsSavedSecretReferences, undefined,
       [rewrite.settings, secret.id, { ...catalogs, mcp: rewrite.mcp }])).toEqual([]);
     expect(Reflect.apply(listAccountSettingsSavedSecretReferences, undefined,
