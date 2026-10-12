@@ -96,6 +96,41 @@ async function* prompt() {
 }
 
 describe('Claude plugin SDK query', () => {
+    it('delivers skills beside other plugins once and merges path-local native overrides', async () => {
+        const { ctx, spawnClient } = createContextFixture();
+        const running = query(ctx, { prompt: prompt(), options: {
+            skills: { pluginRoot: '/session/happier', skillsRoot: '/session/happier/skills', items: [],
+                nativeDisables: [{ name: 'blocked', path: '/native/blocked/SKILL.md' }] },
+            plugins: [{ type: 'local', path: '/session/hooks' }],
+            extraArgs: ['--plugin-dir', '/session/hooks'],
+            settingsJson: JSON.stringify({ skillOverrides: { retained: 'on' } }),
+        } });
+        const args = spawnClient.mock.calls[0]?.[0].launch.args ?? [];
+        expect(args.filter(arg => arg === '/session/happier')).toHaveLength(1);
+        expect(args.filter(arg => arg === '/session/hooks')).toHaveLength(1);
+        expect(JSON.parse(args[args.indexOf('--settings') + 1])).toMatchObject({ skillOverrides: { retained: 'on', blocked: 'off' } });
+        await running.dispose();
+    });
+
+    it('acknowledges reload only after both control success and commands_changed', async () => {
+        const { ctx, stream } = createContextFixture();
+        const running = query(ctx, { prompt: prompt() });
+        let settled = false;
+        const reload = running.reloadSkills().then(() => { settled = true; });
+        await vi.waitFor(() => expect(stream.written).toContainEqual(expect.objectContaining({
+            type: 'control_request', request: { subtype: 'reload_skills' },
+        })));
+        const request = stream.written.find((record): record is { request_id: string; request: { subtype: string } } =>
+            Boolean(record && typeof record === 'object' && 'request' in record
+                && (record.request as { subtype?: string }).subtype === 'reload_skills'))!;
+        await stream.emit({ type: 'control_response', response: { subtype: 'success', request_id: request.request_id, response: {} } });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        await stream.emit({ type: 'system', subtype: 'commands_changed', slash_commands: ['happier:contract-skill'] });
+        await reload;
+        expect(settled).toBe(true);
+        await running.dispose();
+    });
     it('removes every built-in tool for an empty confined list despite broader native options', async () => {
         const { ctx, spawnClient } = createContextFixture();
         const running = query(ctx, {
