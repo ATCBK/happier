@@ -13,6 +13,7 @@ import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent
 import { createDeferred, createPlainAccountEncryptionCurrentnessFixture, flushHookEffects, renderHook, renderScreen } from '@/dev/testkit';
 import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
@@ -92,6 +93,7 @@ async function createHarness() {
           if (key === 'status.lastSeen') return `status.lastSeen:${String(params?.time ?? '')}`;
           if (key === 'time.minutesAgo') return `time.minutesAgo:${String(params?.count ?? '')}`;
           if (key === 'time.hoursAgo') return `time.hoursAgo:${String(params?.count ?? '')}`;
+          if (key === 'errors.errorWithCode') return `${key}:${String(params?.code ?? '')}:${String(params?.message ?? '')}`;
           return key;
         },
       }),
@@ -177,6 +179,12 @@ async function createHarness() {
     if (url.endsWith('/v1/account/encryption')) return Response.json({ mode: todoKv.currentness.mode, updatedAt: 1 });
     if (url.endsWith('/v2/account/settings')) return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
     if (url.endsWith('/v1/machines/m1')) return Response.json({ machine: { id: 'm1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
+    // Session creation reads current Machine custody through the real HTTP owner.
+    if (url.endsWith('/v1/machines/m1/access')) return Response.json(MachineAccessGrantsListResponseV1Schema.parse({
+      machineId: 'm1', custodian: { accountId: 'account-a', displayName: 'Test Account' },
+      access: { custodian: { accountId: 'account-a', displayName: 'Test Account' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+      canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+    }));
     if (/^\/v1\/sessions\/[^/]+\/messages$/.test(new URL(url).pathname)) {
       return Response.json({ messages: [], hasMore: false });
     }
@@ -329,6 +337,57 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     await harness?.disposeAuth();
     vi.useRealTimers();
     vi.clearAllMocks();
+  });
+
+  it('commits submitted authoring before capturing launch revisions and keeps later edits after completion', async () => {
+    const { useCreateNewSession, sessionSpawnNewActionBoundarySpy, storageState, scope } = await setupTaskHarness();
+    const { writeNewSessionAuthoringDraftToRepository, readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+    const { writeNewSessionDraft, getSessionDraftSnapshot } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+    const draftId = 'submitted-selections-draft';
+    const submitted = {
+      input: '', selectedMachineId: 'm1', selectedPath: '/submitted', targetServerId: scope.serverId,
+      selectedProfileId: null, selectedSecretId: null, agentType: 'codex', permissionMode: 'read-only',
+      modelSelection: { v: 1, ref: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-5.5' }, updatedAt: 10 },
+      acpSessionModeId: null, updatedAt: Date.now(),
+    } satisfies import('@/sync/domains/state/persistence').NewSessionDraft;
+    writeNewSessionDraft({ scope, draftId, patch: { text: 'Original draft' }, materializationIntent: 'userEdit' });
+    writeNewSessionAuthoringDraftToRepository({ scope, draftId, draft: { ...submitted, selectedPath: '/older', permissionMode: 'default', modelSelection: null } });
+    expect(readNewSessionDraftFromRepository({ scope, draftId })?.selectedPath).toBe('/older');
+    const creation = createDeferred<void>();
+    const enteredSpawn = createDeferred<void>();
+    sessionSpawnNewActionBoundarySpy.mockImplementationOnce(async () => {
+      enteredSpawn.resolve(undefined);
+      await creation.promise;
+      harness.storageState.applySessions([createSessionFixture({ id: 'submitted-session', serverId: scope.serverId, encryptionMode: 'plain' })]);
+      return { ...spawnSuccess('submitted-session'), executionTarget: { serverId: scope.serverId, machineId: 'm1' } };
+    });
+    const params = createRetryParams(storageState.settings, {
+      draftId, draftScope: scope, targetServerId: scope.serverId, allowedTargetServerIds: [scope.serverId],
+      selectedPath: submitted.selectedPath, permissionMode: submitted.permissionMode,
+      modelMode: submitted.modelSelection.ref.modelId,
+      flushAuthoringDraft: () => writeNewSessionAuthoringDraftToRepository({ scope, draftId, draft: submitted }),
+    });
+    const hook = await renderHook(() => useCreateNewSession(params));
+    let creating: Promise<void> | undefined;
+    await act(async () => {
+      creating = hook.getCurrent().handleCreateSession({ initialMessage: 'skip' });
+      await enteredSpawn.promise;
+    });
+    expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({
+      selectedPath: submitted.selectedPath, permissionMode: submitted.permissionMode, modelSelection: submitted.modelSelection,
+    });
+    // A later text edit is a successor, whereas the submitted selection fields
+    // must be cleared with the accepted launch, not misclassified as successors.
+    writeNewSessionDraft({ scope, draftId, patch: { text: 'Follow up after launch' }, materializationIntent: 'userEdit' });
+    creation.resolve(undefined);
+    await act(async () => { await creating; });
+    const snapshot = getSessionDraftSnapshot(scope, { kind: 'newSession', draftId });
+    expect(snapshot?.document.composer.text.value).toBe('Follow up after launch');
+    if (snapshot?.document.target.kind !== 'newSession') throw new Error('Expected successor draft');
+    expect(snapshot.document.target.authoring).not.toHaveProperty('directory');
+    expect(snapshot.document.target.authoring).not.toHaveProperty('permissionMode');
+    expect(snapshot.document.target.authoring).not.toHaveProperty('modelSelection');
+    await hook.unmount();
   });
 
   it('links a reloaded Zen draft after accepted creation, preserves conflicting links and retries the same Session', async () => {
@@ -1068,10 +1127,10 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
   });
 
   it('admits and projects the accepted first prompt before opening the created session route', async () => {
-    const { useCreateNewSession, sessionSpawnNewActionBoundarySpy, storageState } = await setupHarness();
+    const { useCreateNewSession, sessionSpawnNewActionBoundarySpy, storageState, modalAlertSpy, scope } = await setupTaskHarness();
     const { storage } = await import('@/sync/domains/state/storageStore');
-    harness.storageState.applySessions([createSessionFixture({ id: 'session-created', serverId: 'server-a', encryptionMode: 'plain' })]);
-    sessionSpawnNewActionBoundarySpy.mockResolvedValueOnce(spawnSuccess('session-created'));
+    harness.storageState.applySessions([createSessionFixture({ id: 'session-created', serverId: scope.serverId, encryptionMode: 'plain' })]);
+    sessionSpawnNewActionBoundarySpy.mockResolvedValueOnce({ ...spawnSuccess('session-created'), executionTarget: { serverId: scope.serverId, machineId: 'm1' } });
     const router = {
       push: vi.fn(),
       replace: vi.fn(() => {
@@ -1082,6 +1141,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     };
     const hook = await renderHook(() => useCreateNewSession(createRetryParams(storageState.settings, {
       router, promptStore: createNewSessionPromptStore('Start here'),
+      draftScope: scope, targetServerId: scope.serverId, allowedTargetServerIds: [scope.serverId], targetAccountScope: scope,
     })));
     await act(async () => { await hook.getCurrent().handleCreateSession(); });
     expect(sessionSpawnNewActionBoundarySpy.mock.calls[0]?.[0]).toMatchObject({
@@ -1090,6 +1150,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     expect(router.replace).toHaveBeenCalledTimes(1);
     const { sync } = await import('@/sync/sync');
     expect(sync.sendMessage).not.toHaveBeenCalled();
+    expect(modalAlertSpy).not.toHaveBeenCalled();
     await hook.unmount();
   });
 
@@ -1247,30 +1308,59 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     await hook.unmount();
   });
 
-  it('preserves a first prompt not accepted by the created Session without sending it twice', async () => {
-    const { useCreateNewSession, sessionSpawnNewActionBoundarySpy, storageState } = await setupHarness();
+  it.each([
+    {
+      initialInput: { status: 'outcomeUnknown' as const, localId: 'input-session-created', code: 'transport_unavailable' },
+      // The Session exists and the draft is kept: the title says what to do, never a bare "Error".
+      expectedTitle: 'newSession.initialInputNotConfirmedTitle',
+      expectedLabel: 'newSession.initialInputNotConfirmed',
+    },
+    {
+      initialInput: { status: 'rejected' as const, code: 'session_input_idempotency_conflict' as const },
+      expectedTitle: 'newSession.initialInputRejectedTitle',
+      expectedLabel: 'session.pendingMessages.admissionRejected.idempotencyConflict',
+    },
+    {
+      initialInput: { status: 'rejected', code: 'session_input_storage_unavailable' } as const,
+      expectedTitle: 'newSession.initialInputRejectedTitle',
+      expectedLabel: 'session.pendingMessages.admissionRejected.storageUnavailable',
+    },
+  ])('preserves and explains a $initialInput.status ($initialInput.code) first prompt without sending it twice', async ({ initialInput, expectedTitle, expectedLabel }) => {
+    const { useCreateNewSession, sessionSpawnNewActionBoundarySpy, storageState, modalAlertSpy, scope } = await setupTaskHarness();
     const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
     await prepareSessionDraftPersistenceStorage();
     const { getSessionDraftSnapshot } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
-    harness.storageState.applySessions([createSessionFixture({ id: 'session-created', serverId: 'server-a', encryptionMode: 'plain' })]);
+    harness.storageState.applySessions([createSessionFixture({ id: 'session-created', serverId: scope.serverId, encryptionMode: 'plain' })]);
     sessionSpawnNewActionBoundarySpy.mockResolvedValueOnce({
       ...spawnSuccess('session-created'),
       type: 'success', disposition: 'created', sessionId: 'session-created',
-      executionTarget: { serverId: 'server-a', machineId: 'm1' },
+      executionTarget: { serverId: scope.serverId, machineId: 'm1' },
       organizationPlacement: { folderId: null, tagIds: [] },
-      initialInput: { status: 'outcomeUnknown', localId: 'input-session-created', code: 'transport_unavailable' },
+      initialInput,
     });
-    const router = { push: vi.fn(), replace: vi.fn() };
+    let firstPromptAtNavigation: string | undefined;
+    let warnedBeforeNavigation = false;
+    const router = { push: vi.fn(), replace: vi.fn(() => {
+      firstPromptAtNavigation = getSessionDraftSnapshot(scope, { kind: 'session', sessionId: 'session-created' })?.document.composer.text?.value;
+      warnedBeforeNavigation = modalAlertSpy.mock.calls.some((call) => typeof call[1] === 'string'
+        && call[1].includes(expectedLabel) && call[1].includes(initialInput.code));
+    }) };
     const hook = await renderHook(() => useCreateNewSession(createRetryParams(storageState.settings, {
       promptStore: createNewSessionPromptStore('Keep this first prompt'), router,
+      draftScope: scope, targetServerId: scope.serverId, allowedTargetServerIds: [scope.serverId],
+      targetAccountScope: scope,
     })));
     await act(async () => { await hook.getCurrent().handleCreateSession(); });
-    expect(sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(1);
+    expect(sessionSpawnNewActionBoundarySpy.mock.calls, JSON.stringify({ alerts: modalAlertSpy.mock.calls, rpc: harness.machineRpcSpy.mock.calls })).toHaveLength(1);
     expect(sessionSpawnNewActionBoundarySpy.mock.calls[0]?.[0].initialInput).toEqual({ text: 'Keep this first prompt' });
-    expect(getSessionDraftSnapshot({ serverId: 'server-a', accountId: 'account-a' }, { kind: 'session', sessionId: 'session-created' })?.document.composer.text?.value).toBe('Keep this first prompt');
+    expect(getSessionDraftSnapshot(scope, { kind: 'session', sessionId: 'session-created' })?.document.composer.text?.value).toBe('Keep this first prompt');
     const { sync } = await import('@/sync/sync');
     expect(sync.sendMessage).not.toHaveBeenCalled();
     expect(router.replace).toHaveBeenCalledTimes(1);
+    expect(modalAlertSpy).toHaveBeenCalledWith(expectedTitle, expect.stringContaining(initialInput.code));
+    expect(modalAlertSpy).toHaveBeenCalledWith(expectedTitle, expect.stringContaining(expectedLabel));
+    expect(warnedBeforeNavigation).toBe(true);
+    expect(firstPromptAtNavigation).toBe('Keep this first prompt');
     await hook.unmount();
   });
 

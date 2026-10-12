@@ -416,7 +416,7 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
     expect(sessionSpawnNewRpcSpy).toHaveBeenCalledWith(expect.objectContaining({
       creationKey: expect.any(String),
       executionTarget: { serverId: 'server-a', machineId: 'm1' },
-      directory: '/tmp',
+      directory: { kind: 'path', path: '/tmp' },
       agentTarget: {
         kind: 'agent',
         identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
