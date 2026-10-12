@@ -1,30 +1,242 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
-import { WidgetInstanceActionOutputSchemasV1 } from '@happier-dev/protocol/widgets';
+import { buildWidgetSurfaceArtifactIdV1, WidgetInstanceActionOutputSchemasV1 } from '@happier-dev/protocol/widgets';
 import { renderHook, renderScreen } from '@/dev/testkit';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
-import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { installSessionDetailsPanelNonRnModuleMocks } from '@/components/sessions/panes/sessionDetailsPanelNonRnModuleMocks';
-import { useCorePageWidgetAreaBinding } from './useCorePageWidgetAreaBinding';
-import { useWidgetAreaLayouts } from '@/components/projects/overview/useProjectDashboards';
-import { useWidgetAreaLayout } from './useWidgetAreaLayout';
-import { WidgetAreaPresetLine } from './WidgetAreaPresetLine';
-import { useUsageWidgetAreaBinding } from '@/components/settings/usage/useUsageWidgetAreaBinding';
 import { USAGE_WIDGET_PRESET_IDS } from '@/components/settings/usage/usageWidgetPresets';
 import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { readUsageWidgetPageContext, readUsageWidgetPageScope } from '@/components/settings/usage/usageWidgetPageContext';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { storage } from '@/sync/domains/state/storageStore';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 installSessionDetailsPanelNonRnModuleMocks();
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
-const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init) => artifacts.handle(new URL(String(url)).pathname, init) });
+let actionPolicy = normalizeActionsSettingsV1({ v: 1 });
+const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: { actionsSettingsV1: actionPolicy } }, version: 0 });
+    return artifacts.handle(path, init);
+} });
+function setActionPolicy(policy: ReturnType<typeof normalizeActionsSettingsV1>) {
+    actionPolicy = policy;
+    storage.setState({ settingsScope: { serverId: runtime.serverId, accountId: 'account-a' },
+        settings: { ...storage.getState().settings, actionsSettingsV1: policy } });
+}
 let disposeActionLoader: (() => void) | undefined;
-beforeAll(async () => { disposeActionLoader = await installRealActionExecutorModuleLoader(); });
+let useCorePageWidgetAreaBinding: typeof import('./useCorePageWidgetAreaBinding')['useCorePageWidgetAreaBinding'];
+let useWidgetAreaLayouts: typeof import('@/components/projects/overview/useProjectDashboards')['useWidgetAreaLayouts'];
+let useWidgetAreaLayout: typeof import('./useWidgetAreaLayout')['useWidgetAreaLayout'];
+let WidgetAreaPresetLine: typeof import('./WidgetAreaPresetLine')['WidgetAreaPresetLine'];
+let useUsageWidgetAreaBinding: typeof import('@/components/settings/usage/useUsageWidgetAreaBinding')['useUsageWidgetAreaBinding'];
+beforeAll(async () => {
+    const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+    disposeActionLoader = await installRealActionExecutorModuleLoader();
+    ({ useCorePageWidgetAreaBinding } = await import('./useCorePageWidgetAreaBinding'));
+    ({ useWidgetAreaLayouts } = await import('@/components/projects/overview/useProjectDashboards'));
+    ({ useWidgetAreaLayout } = await import('./useWidgetAreaLayout'));
+    ({ WidgetAreaPresetLine } = await import('./WidgetAreaPresetLine'));
+    ({ useUsageWidgetAreaBinding } = await import('@/components/settings/usage/useUsageWidgetAreaBinding'));
+});
 afterAll(() => disposeActionLoader?.());
-beforeEach(() => { artifacts.clear(); retirePresentationNotice(); });
+beforeEach(() => {
+    artifacts.clear(); retirePresentationNotice();
+    // These layout-owner scenarios exercise acknowledged edits under the user's explicit policy.
+    setActionPolicy(normalizeActionsSettingsV1({ v: 1,
+        approvalWaivedSurfaces: { 'widgets.item.rename': ['ui'], 'widgets.item.move': ['ui'],
+            'widgets.area.layout.create': ['ui'], 'widgets.area.layout.reset': ['ui'], 'widgets.area.layout.undo': ['ui'] },
+    }));
+});
+
+it('keeps an untouched Usage widget unchanged while its default UI edit awaits canonical approval', async () => {
+    setActionPolicy(normalizeActionsSettingsV1({ v: 1 }));
+    const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
+        { id: 'overview', name: 'Overview', items: [{ kind: 'widget' as const, instance: {
+            v: 1 as const, id: 'displayed', definition: { kind: 'builtin' as const, id: 'project_about' }, bindings: {},
+        } }] },
+    ] };
+    const hook = await renderHook(() => useCorePageWidgetAreaBinding(input));
+    try {
+        const surface = hook.getCurrent().surface!;
+        const result = await hook.getCurrent().port!.execute({ actionId: 'widgets.item.rename', instanceId: 'displayed', displayName: 'Personal' });
+        expect(result).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        expect(artifacts.readPlainBody(buildWidgetSurfaceArtifactIdV1(surface))).toBeNull();
+        const approval = artifacts.list().find(row => row.id !== buildWidgetSurfaceArtifactIdV1(surface));
+        expect(approval).toBeDefined();
+        expect(JSON.parse(artifacts.readPlainBody(approval!.id)!)).toMatchObject({ actionId: 'widgets.item.rename',
+            actionArgs: { ref: { surface, instanceId: 'displayed' }, displayName: 'Personal' },
+            executionOriginV1: { authority: 'present_user' } });
+    } finally { await hook.unmount(); }
+});
+
+it('reports a pending new Usage view without treating its approval as an applied layout', async () => {
+    setActionPolicy(normalizeActionsSettingsV1({ v: 1 }));
+    const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
+        { id: 'overview', name: 'Overview', items: [] },
+    ] };
+    const hook = await renderHook(() => {
+        const binding = useCorePageWidgetAreaBinding(input);
+        return { binding, layouts: useWidgetAreaLayouts({ surface: binding.surface, execute: binding.executeLayoutAction }) };
+    });
+    try {
+        await vi.waitFor(() => expect(hook.getCurrent().layouts.state.status).toBe('ready'));
+        let created!: ReturnType<ReturnType<typeof hook.getCurrent>['layouts']['create']>;
+        await act(async () => { created = hook.getCurrent().layouts.create('Personal', hook.getCurrent().binding.surface!); });
+        await vi.waitFor(() => expect(hook.getCurrent().layouts.approvalId).toBeTypeOf('string'));
+        expect(hook.getCurrent().layouts.state.dashboards.map(row => row.name)).toEqual(['Overview']);
+        expect(readPresentationNotice()).toMatchObject({ severity: 'info', message: 'widgetAdd.areaApprovalPending' });
+        expect(await decideApprovalAsInbox(runtime.serverId, hook.getCurrent().layouts.approvalId!, 'reject')).toMatchObject({ ok: true });
+        await expect(created).resolves.toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+    } finally { await hook.unmount(); }
+});
+
+it('keeps an edited preset and offers no Undo while Reset is awaiting approval', async () => {
+    const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
+        { id: 'overview', name: 'Overview', items: [{ kind: 'widget' as const, instance: {
+            v: 1 as const, id: 'displayed', definition: { kind: 'builtin' as const, id: 'project_about' }, bindings: {},
+        } }] },
+    ] };
+    let binding: ReturnType<typeof useCorePageWidgetAreaBinding> | undefined;
+    function Composition() {
+        binding = useCorePageWidgetAreaBinding(input);
+        return binding.surface ? <WidgetAreaPresetLine preset={{ id: 'overview', name: 'Overview', isEdited: true, changes: [] }}
+            surface={binding.surface} presetActions={binding} testID="pending.preset" /> : null;
+    }
+    const screen = await renderScreen(<Composition />);
+    try {
+        const port = binding!.port!;
+        await act(async () => { expect(await port.execute({ actionId: 'widgets.item.rename', instanceId: 'displayed', displayName: 'Personal' })).toMatchObject({ ok: true }); });
+        const artifactId = buildWidgetSurfaceArtifactIdV1(binding!.surface!);
+        const before = artifacts.readPlainBody(artifactId);
+        setActionPolicy(normalizeActionsSettingsV1({ v: 1 }));
+        await screen.pressByTestIdAsync('pending.preset.reset');
+        await vi.waitFor(() => expect(readPresentationNotice()).toMatchObject({ severity: 'info', message: 'widgetAdd.areaApprovalPending' }));
+        expect(readPresentationNotice()?.undo).toBeUndefined();
+        expect(artifacts.readPlainBody(artifactId)).toBe(before);
+        expect(JSON.parse(artifacts.readPlainBody(artifacts.list().find(row => row.id !== artifactId)!.id)!))
+            .toMatchObject({ actionId: 'widgets.area.layout.reset' });
+    } finally { await screen.unmount(); }
+});
+
+it('retains the selected user view while Delete awaits approval', async () => {
+    const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
+        { id: 'overview', name: 'Overview', items: [] },
+    ] };
+    const hook = await renderHook(() => {
+        const binding = useCorePageWidgetAreaBinding(input);
+        return { binding, layouts: useWidgetAreaLayouts({ surface: binding.surface, execute: binding.executeLayoutAction }) };
+    });
+    try {
+        await act(async () => { expect(await hook.getCurrent().binding.createLayout('personal', 'Personal')).toMatchObject({ ok: true }); });
+        await act(async () => { await hook.getCurrent().layouts.reload(); });
+        await vi.waitFor(() => expect(hook.getCurrent().layouts.state.dashboards.some(row => row.name === 'Personal')).toBe(true));
+        await act(async () => { expect(await hook.getCurrent().binding.selectLayout('personal')).toMatchObject({ ok: true }); });
+        const personal = hook.getCurrent().layouts.state.dashboards.find(row => row.name === 'Personal')!;
+        const before = artifacts.readPlainBody(personal.artifactId);
+        setActionPolicy(normalizeActionsSettingsV1({ v: 1 }));
+        let removed!: ReturnType<ReturnType<typeof hook.getCurrent>['layouts']['remove']>;
+        await act(async () => { removed = hook.getCurrent().layouts.remove(personal); });
+        await vi.waitFor(() => expect(hook.getCurrent().layouts.approvalId).toBeTypeOf('string'));
+        expect(hook.getCurrent().binding.surface).toMatchObject({ owner: { layoutId: 'personal' } });
+        expect(artifacts.readPlainBody(personal.artifactId)).toBe(before);
+        expect(readPresentationNotice()).toMatchObject({ severity: 'info', message: 'widgetAdd.areaApprovalPending' });
+        expect(await decideApprovalAsInbox(runtime.serverId, hook.getCurrent().layouts.approvalId!, 'reject')).toMatchObject({ ok: true });
+        await expect(removed).resolves.toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+    } finally { await hook.unmount(); }
+});
+
+it('reads the route-selected preset on the first admitted surface without first reading Overview', async () => {
+    const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, initialLayoutId: 'work', presets: [
+        { id: 'overview', name: 'Overview', items: [] },
+        { id: 'work', name: 'Work', items: [{ kind: 'widget' as const, instance: {
+            v: 1 as const, id: 'work-body', definition: { kind: 'builtin' as const, id: 'project_about' }, bindings: {},
+        } }] },
+    ] };
+    const hook = await renderHook(() => {
+        const binding = useCorePageWidgetAreaBinding(input);
+        return { binding, layout: useWidgetAreaLayout(binding.port!, input.context) };
+    });
+    expect(hook.getCurrent().binding.surface).toMatchObject({ owner: { layoutId: 'work' } });
+    await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready',
+        surface: { owner: { layoutId: 'work' } }, placements: [{ instance: { id: 'work-body' } }] }));
+    expect(artifacts.list()).toEqual([]);
+    await hook.unmount();
+});
+
+it('resets and copies the exact displayed view while a different view is selected', async () => {
+    const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
+        { id: 'overview', name: 'Overview', items: [{ kind: 'widget' as const, instance: {
+            v: 1 as const, id: 'displayed', definition: { kind: 'builtin' as const, id: 'project_about' }, bindings: {},
+        } }] }, { id: 'work', name: 'Work', items: [] },
+    ] };
+    const hook = await renderHook(() => useCorePageWidgetAreaBinding(input));
+    const displayed = hook.getCurrent().surface!;
+    expect(await hook.getCurrent().port!.execute({ actionId: 'widgets.item.rename', instanceId: 'displayed', displayName: 'Personal' })).toMatchObject({ ok: true });
+    await act(async () => { expect(await hook.getCurrent().selectLayout('work')).toMatchObject({ ok: true }); });
+    const copy = await hook.getCurrent().executeLayoutAction('widgets.area.layout.create', {
+        surface: hook.getCurrent().surface, layoutId: 'copy', name: 'Copy', fromSurface: displayed,
+    });
+    expect(copy).toMatchObject({ ok: true });
+    if (!copy.ok) throw new Error(copy.errorCode);
+    const copied = WidgetInstanceActionOutputSchemasV1['widgets.area.layout.create'].parse(copy.result);
+    expect(JSON.parse(artifacts.readPlainBody(copied.artifactId)!)).toMatchObject({ items: [{ instance: { id: 'displayed', displayName: 'Personal' } }] });
+    expect(await hook.getCurrent().port!.execute({ actionId: 'widgets.item.rename', instanceId: 'displayed', displayName: 'Edited displayed' }, undefined,
+        { surface: displayed, context: input.context })).toMatchObject({ ok: true });
+    expect(JSON.parse(artifacts.readPlainBody(buildWidgetSurfaceArtifactIdV1(displayed))!)).toMatchObject({ items: [{ instance: { displayName: 'Edited displayed' } }] });
+    expect(await hook.getCurrent().port!.execute({ actionId: 'widgets.item.rename', instanceId: 'displayed', displayName: 'Wrong owner' }, undefined,
+        { surface: { ...displayed, accountId: 'other-account' }, context: input.context })).toMatchObject({ ok: false });
+    const reset = await hook.getCurrent().resetPreset(displayed);
+    expect(reset).toMatchObject({ ok: true, result: { undo: { surface: displayed } } });
+    expect(hook.getCurrent().surface).toMatchObject({ owner: { layoutId: 'work' } });
+    await hook.unmount();
+});
+
+it('updates the mounted core-page model after removing both children from a group without remounting', async () => {
+    const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
+        { id: 'overview', name: 'Overview', items: [{ kind: 'group' as const, id: 'group', children: ['first', 'last'].map(id => ({
+            kind: 'widget' as const, frameStyle: 'card' as const,
+            instance: { v: 1 as const, id, definition: { kind: 'builtin' as const, id: 'project_about' }, bindings: {} },
+        })) }] },
+    ] };
+    const hook = await renderHook(() => {
+        const binding = useCorePageWidgetAreaBinding(input);
+        const layout = useWidgetAreaLayout(binding.port!, input.context);
+        return { binding, layout };
+    });
+    await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', items: [{ kind: 'group' }] }));
+    await act(async () => {
+        expect(await hook.getCurrent().binding.createLayout('personal', 'Personal')).toMatchObject({ ok: true });
+        expect(await hook.getCurrent().binding.selectLayout('personal')).toMatchObject({ ok: true });
+    });
+    await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', documentState: 'present',
+        surface: { owner: { layoutId: 'personal' } }, items: [{ kind: 'group' }] }));
+    for (const id of ['first', 'last']) {
+        let acknowledgement: ReturnType<ReturnType<typeof hook.getCurrent>['layout']['write']> | undefined;
+        // Do not batch the entire network write and reread into one React commit:
+        // the live page renders the Artifact publication before the acknowledgement.
+        act(() => {
+            acknowledgement = hook.getCurrent().layout.write({ actionId: 'widgets.item.move', instanceId: id, toIndex: 1, groupId: null });
+        });
+        await vi.waitFor(() => {
+            const state = hook.getCurrent().layout.state;
+            expect(state.status).toBe('ready');
+            if (state.status !== 'ready') throw new Error('Expected ready layout');
+            expect(state.isCurrent()).toBe(true);
+            expect(state.items.some(item => item.kind === 'widget' && item.instance.id === id && item.frameStyle === 'card')).toBe(true);
+            expect(state.items.filter(item => item.kind === 'group').map(item => item.children.map(child => child.instance.id)))
+                .toEqual(id === 'first' ? [['last']] : []);
+        });
+        expect(await acknowledgement).toEqual({ kind: 'applied' });
+    }
+    await hook.unmount();
+});
 
 it('discovers externally created layouts and ignores other areas without remounting', async () => {
     const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
@@ -82,7 +294,7 @@ it('resets an edited Usage preset through its captured binding and Undo restores
     const providedContext = readUsageWidgetPageContext(readUsageWidgetPageScope(normalizeUsageQuery({ period: { startMs: 1000 } })));
     let binding: ReturnType<typeof useUsageWidgetAreaBinding> | undefined;
     function Composition() {
-        binding = useUsageWidgetAreaBinding({ serverId: runtime.serverId, providedContext, names });
+        binding = useUsageWidgetAreaBinding({ serverId: runtime.serverId, providedContext, period: '7days', names });
         const operations = { presetActions: { resetPreset: binding.resetPreset, undoReset: binding.undoReset } };
         return binding.surface ? <WidgetAreaPresetLine preset={{ id: 'overview', name: 'overview', isEdited: true, changes: [] }}
             surface={binding.surface} {...operations} testID="usage.preset" /> : null;

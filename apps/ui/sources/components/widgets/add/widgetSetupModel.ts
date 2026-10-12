@@ -12,6 +12,7 @@ import type {
 
 import type { IconName } from '@/components/ui/icons/Icon';
 import { describeHostInputTypePickerValue } from '@/components/sessions/actions/hostInputTypePickerForm';
+import { describeBuiltinInputOptionValue } from '@/text/builtinInputPrompts';
 
 /**
  * The Set up / Edit inputs step's model (lab `dashboards` dadd A/Ab/IN, dbind E/X). It only presents
@@ -52,9 +53,13 @@ export type WidgetSetupField = Readonly<{
     neededHint?: string;
 }>;
 
-/** Literal controls share the public field/parser; discovered references use binding choices. */
+/**
+ * Discovery-demand classification only. Literal drafts without a declared source need the public
+ * parser/picker; references and collections retain their normal options discovery. Every field's
+ * value control is presented by the same public typed-field owner.
+ */
 export function isLiteralWidgetSetupField(field: InputFieldHint): boolean {
-    if (field.widget === 'multiselect') return true;
+    if (field.widget === 'multiselect') return false;
     if (field.optionsSourceId !== undefined || field.connectedAccountOptions === true) return false;
     return field.inputType === undefined || field.widget !== 'select';
 }
@@ -82,6 +87,8 @@ export type WidgetSetup = Readonly<{
     /** The widget being set up, for the preview card's header (its mark and name). */
     widget?: Readonly<{ title: string; mark: IconName; source?: string }>;
     fields: readonly WidgetSetupField[];
+    /** Actual host slot declarations, including slots whose current value is unavailable. */
+    contextSlots?: readonly string[];
     initial: WidgetSetupDraft;
     /** Resolved once from the declaration and host surface; linear surfaces omit it. */
     sizeChoices?: Readonly<{ surface: WidgetSurfaceRefV1['owner']['kind']; sizes: readonly WidgetSizeV1[] }>;
@@ -167,7 +174,13 @@ function findValue(values: readonly WidgetSetupValue[], value: JsonValue | undef
 }
 
 /** A pin people can still read when its option list does not hold it (plain strings and numbers). */
-function plainLabel(value: JsonValue | undefined, field: InputFieldHint): string | null {
+function plainLabel(value: JsonValue | undefined, field: InputFieldHint, options: readonly WidgetSetupValue[] = []): string | null {
+    const choiceLabel = describeBuiltinInputOptionValue(field.optionsSourceId, value);
+    if (choiceLabel !== null) return choiceLabel;
+    if (field.widget === 'multiselect' && Array.isArray(value)) {
+        if (!value.length) return field.placeholder ?? null;
+        return value.map(selected => findValue(options, selected)?.label ?? plainLabel(selected, field)).filter(Boolean).join(' · ');
+    }
     if (field.inputType && 'hostType' in field.inputType) {
         const typedLabel = describeHostInputTypePickerValue(field.inputType, value);
         if (typedLabel !== null) return typedLabel;
@@ -201,22 +214,21 @@ export function describeWidgetSetupRow(input: Readonly<{
     }
     if (binding?.kind === 'value') {
         if (issue && issue.status !== 'selection_required') {
-            return { kind: 'invalid', label: findValue([...offered, ...input.options], binding.value)?.label ?? plainLabel(binding.value, entry.field), issue };
+            return { kind: 'invalid', label: findValue([...offered, ...input.options], binding.value)?.label ?? plainLabel(binding.value, entry.field, input.options), issue };
         }
         if (offered.length > 1) {
             const selectedIndex = offered.findIndex((candidate) => sameStrictJsonValue(candidate.value, binding.value));
             if (selectedIndex >= 0 && offered.length <= AMBIGUOUS_INLINE_LIMIT) return { kind: 'choices', choices: offered, selectedIndex };
         }
         const value = findValue([...offered, ...input.options], binding.value);
-        return { kind: 'pinned', value, label: value?.label ?? plainLabel(binding.value, entry.field) ?? '' };
+        return { kind: 'pinned', value, label: value?.label ?? plainLabel(binding.value, entry.field, input.options) ?? '' };
     }
     return { kind: 'needed' };
 }
 
 /**
- * Up to three surface candidates read better as choices in place than behind a menu (lab IN, Q1).
- * This is the lab's presentation rule for a compact step, not a limit on what can be chosen: more go
- * to the field's searchable menu.
+ * The compact binding summary can name up to three ambiguous surface candidates (lab IN, Q1).
+ * This is not an options limit: the public typed field receives every discovered choice.
  */
 export const AMBIGUOUS_INLINE_LIMIT = 3;
 

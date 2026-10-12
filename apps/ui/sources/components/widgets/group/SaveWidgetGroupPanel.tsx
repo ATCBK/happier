@@ -41,7 +41,7 @@ export function SaveWidgetGroupPanel(props: Readonly<{
             note={t('widgetFrame.groupSaveNote')}
             error={state.kind === 'failed' ? state.message : null}
             onCancel={props.onCancel}
-            primary={{ testID: `${props.testID}.submit`, label: t('widgetFrame.groupSaveTitle'), onPress: () => { void save(); },
+            primary={{ testID: `${props.testID}.submit`, label: t(state.kind === 'failed' ? 'common.retry' : 'widgetFrame.groupSaveTitle'), onPress: () => { void save(); },
                 busy: state.kind === 'busy', disabled: trimmed.length === 0,
                 blockedReason: trimmed.length === 0 ? t('widgetDefinition.nameNeeded') : null }}
             testID={props.testID}

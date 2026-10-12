@@ -1,8 +1,57 @@
 import { describe, expect, it } from 'vitest';
-import { WIDGET_SIZE_POLICY_V1 } from '@happier-dev/protocol/widgets';
+import { readBuiltinWidgetDescriptorV1, WIDGET_SIZE_POLICY_V1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
+import { resolveEffectiveInputFields } from '@happier-dev/protocol/inputs';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
+import { usageAnalyticsRequestToQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { usageQaAccountingFixture } from '@/dev/testkit/fixtures/usageQaAccountingFixture';
+import { usageWidgetSurfaceContext, readUsageWidgetPageContext, readUsageWidgetPageScope } from '@/components/settings/usage/usageWidgetPageContext';
 import { proposeWidgetSetupDraft } from '@/components/widgets/add/widgetSetupModel';
 import { buildWidgetCandidateSetup, widgetProvidedContext, widgetSetupFieldsForCandidate } from './widgetSurfaceSetup';
 import type { WidgetCandidate } from '../widgetCatalog';
+
+describe('Usage declared inputs on every host', () => {
+    const accounting = usageQaAccountingFixture();
+    const query = usageAnalyticsRequestToQuery({ dateRange: { startMs: accounting.coverage!.range.startMs }, costMode: 'auto' });
+    const copiedInput = { ...readUsageWidgetPageScope(query), period: projectNativeJsonValueForTransport(query.period),
+        metric: query.metric, breakdown: query.breakdown };
+    const sessionId = accounting.contributions!.find(row => row.sessionId !== null)!.sessionId!;
+    const page = usageWidgetSurfaceContext(readUsageWidgetPageContext(readUsageWidgetPageScope(query)), '7days');
+    const session = usageWidgetSurfaceContext(readUsageWidgetPageContext(readUsageWidgetPageScope({ ...query, session: sessionId })), '7days', sessionId);
+    const filteredPage = usageWidgetSurfaceContext(readUsageWidgetPageContext(readUsageWidgetPageScope({ ...query, session: sessionId })), '7days');
+    const contexts = { Usage: page, 'Usage with a Session filter': filteredPage, Home: {}, Project: { slots: { projects: { label: 'This project',
+        value: { value: ['qa-project'], label: 'QA project' } } } }, Session: session };
+    for (const [host, context] of Object.entries(contexts)) {
+        for (const flow of ['add', 'edit', 'copy'] as const) {
+            it(`offers Session only on an admitted Session host in ${host} ${flow}`, () => {
+                const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_daily' })!;
+                const candidate: WidgetCandidate = { ...descriptor, pluginName: 'Happier', sharedPluginName: false };
+                const instance: WidgetInstanceV1 = { v: 1, id: 'daily', definition: descriptor.definition,
+                    bindings: Object.fromEntries(descriptor.inputs!.fields.map(field => [field.path, { kind: 'value' as const,
+                        value: copiedInput[field.path as keyof typeof copiedInput] }])) };
+                const setup = buildWidgetCandidateSetup({ candidate, context, audience: 'personal',
+                    mode: flow === 'edit' ? { kind: 'edit', instance } : { kind: 'add', submitLabel: 'Add',
+                        ...(flow === 'copy' ? { copiedInput } : {}) }, submit: async () => ({ ok: true }) });
+                const fields = resolveEffectiveInputFields({ inputHints: { fields: setup.fields.map(entry => entry.field) } },
+                    setup.optionsContext!(setup.initial).draftInput, { contextSlots: setup.contextSlots });
+                expect(fields.some(field => field.path === 'session')).toBe(host === 'Session');
+                expect(fields.some(field => field.path === 'breakdown')).toBe(false);
+            });
+            it(`omits unused Group by from Period summary in ${host} ${flow} while retaining saved query intent`, () => {
+                const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_period_summary' })!;
+                const candidate: WidgetCandidate = { ...descriptor, pluginName: 'Happier', sharedPluginName: false };
+                const instance: WidgetInstanceV1 = { v: 1, id: 'summary', definition: descriptor.definition,
+                    bindings: Object.fromEntries(Object.entries({ ...copiedInput, breakdown: ['agent'] })
+                        .map(([path, value]) => [path, { kind: 'value' as const, value }])) };
+                const setup = buildWidgetCandidateSetup({ candidate, context, audience: 'personal',
+                    mode: flow === 'edit' ? { kind: 'edit', instance } : { kind: 'add', submitLabel: 'Add',
+                        ...(flow === 'copy' ? { copiedInput } : {}) }, submit: async () => ({ ok: true }) });
+                expect(setup.fields.some(entry => entry.field.path === 'breakdown')).toBe(false);
+                expect(setup.resolve(setup.initial).status).toBe('ready');
+                if (flow === 'edit') expect(setup.initial.bindings.breakdown).toEqual({ kind: 'value', value: ['agent'] });
+            });
+        }
+    }
+});
 
 describe('Widget setup schema defaults', () => {
     const candidate: WidgetCandidate = { key: 'acme.checks/checks', title: 'Checks', pluginName: 'Checks', sharedPluginName: false,
@@ -70,6 +119,25 @@ describe('Widget setup schema defaults', () => {
             inputSchema: { type: 'object', properties: { connection: { type: 'string', default: 'not-a-viewer-connection' } } },
         } });
         expect(viewer.initial.bindings).toEqual({ connection: { kind: 'viewer', purpose: 'metrics-read' } });
+    });
+
+    it('projects declaration defaults into Edit while retaining saved array-valued single choices and missing followed slots', () => {
+        const own = { ...candidate, inputs: { fields: [
+            { path: 'breakdown', title: 'Group by', widget: 'select' as const, contextMode: 'own' as const },
+            { path: 'period', title: 'Period', widget: 'select' as const, contextMode: 'follow' as const },
+        ] }, inputSchema: { type: 'object' as const, properties: {
+            breakdown: { type: 'array' as const, items: { type: 'string' as const }, default: ['agent'] },
+            period: { type: 'object' as const, default: {} },
+        } } };
+        const instance = { v: 1 as const, id: 'copy', definition: { kind: 'installed' as const, surface: candidate.surface! },
+            bindings: { period: { kind: 'context' as const, slot: 'period' } } };
+        const edited = setup({ candidate: own, mode: { kind: 'edit', instance } });
+        expect(edited.initial.bindings.breakdown).toEqual({ kind: 'value', value: ['agent'] });
+        expect(edited.resolve(edited.initial).status).toBe('selection_required');
+        const saved = setup({ candidate: own, mode: { kind: 'edit', instance: { ...instance, bindings: {
+            breakdown: { kind: 'value', value: ['model', 'source'] },
+        } } } });
+        expect(saved.initial.bindings.breakdown).toEqual({ kind: 'value', value: ['model', 'source'] });
     });
 
     it('keeps an invalid declared default invalid rather than admitting or substituting it', () => {

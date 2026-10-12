@@ -17,6 +17,7 @@ import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { t } from '@/text';
 import { resolveWidgetLayoutInsertionIndex } from '@/components/ui/treeDragDrop/widgetLayoutEntityDrop';
+import { readWidgetGroupTitle } from './widgetGroupTitle';
 
 /**
  * A group's own operations on its surface (Home's layout owner, or an area's port). Each is one
@@ -37,11 +38,11 @@ export type WidgetGroupOperations = Readonly<{
 
 /** What a widget or a group is called in menus: its own name, else (a group) the names of its widgets. */
 export function describeWidgetGroup(
-  group: Pick<WidgetLayoutGroupV1, 'title' | 'children'>,
+  group: Pick<WidgetLayoutGroupV1, 'title' | 'titleKey' | 'children'>,
   childTitle: (instanceId: string) => string,
 ): string {
   return (
-    group.title ??
+    readWidgetGroupTitle(group) ??
     group.children.map((child) => childTitle(child.instance.id)).join(' · ')
   );
 }

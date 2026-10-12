@@ -2,6 +2,7 @@ import * as React from 'react';
 import type { View } from 'react-native';
 import type { WidgetDefinitionV1, WidgetInstanceV1, WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import type { JsonValue } from '@happier-dev/protocol';
+import { canPromoteSessionWidgetDefinitionSourceV1 } from '@happier-dev/protocol/widgets/widgetDefinitionPromotionV1';
 
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { describeAuthoredWidgetDefinitionV1, readWidgetDescriptor, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
@@ -18,12 +19,13 @@ import { SaveAsWidgetPanel, type SaveAsWidgetConvertedInput } from './SaveAsWidg
 import { WidgetAboutPanel, readWidgetAboutSources } from './WidgetAboutPanel';
 import { runWidgetDefinitionCommand } from './widgetDefinitionCommands';
 import { WidgetFlowPanel } from '@/components/widgets/flow/WidgetFlowPanel';
-import { WidgetFlowShell } from '@/components/widgets/flow/WidgetFlowShell';
+import { WIDGET_FLOW_WIDTH_PX, WidgetFlowShell } from '@/components/widgets/flow/WidgetFlowShell';
 import type { IconName } from '@/components/ui/icons/Icon';
 import { createWidgetSnapshotCaptureSlot, useWidgetSnapshotCaptureAvailable, type WidgetSnapshotCaptureSlot } from './widgetSnapshotCapture';
 import { WidgetSnapshotConfirmPanel } from './WidgetSnapshotConfirmPanel';
+import { WidgetCopyChooser, WidgetCopyPanel } from './WidgetCopyPanel';
 
-type Flow = 'about' | 'save' | 'snapshot';
+type Flow = 'about' | 'save' | 'snapshot' | 'addTo';
 
 /** A Session Board card: what Save as your widget and Post a snapshot need from it. */
 export type WidgetDefinitionSessionItem = Readonly<{
@@ -74,6 +76,7 @@ export function useWidgetDefinitionFlows(input: Readonly<{
     testID: string;
 }>): Readonly<{
     about: (() => void) | undefined;
+    addTo: (() => void) | undefined;
     saveAsYours: (() => void) | undefined;
     postSnapshot: (() => void) | undefined;
     snapshotSlot: WidgetSnapshotCaptureSlot;
@@ -84,20 +87,31 @@ export function useWidgetDefinitionFlows(input: Readonly<{
     const capturable = useWidgetSnapshotCaptureAvailable(slot);
     const { instance, scope, anchorRef, editInputs, sessionItem, testID } = input;
     const artifactId = instance?.definition.kind === 'artifact' ? instance.definition.artifactId : null;
-    const close = React.useCallback(() => setFlow(null), []);
+    // Add to… chooses its place in the shared chooser first; the copy's setup then opens at setup width.
+    const [copyTo, setCopyTo] = React.useState<string | null>(null);
+    const close = React.useCallback(() => { setFlow(null); setCopyTo(null); }, []);
     const about = React.useMemo(() => (instance && scope ? () => setFlow('about') : undefined), [instance, scope]);
+    const addTo = React.useMemo(() => (instance && scope && (scope.owner.kind !== 'sessionBoard'
+        || canPromoteSessionWidgetDefinitionSourceV1({ kind: 'widget', instance })) ? () => setFlow('addTo') : undefined), [instance, scope]);
     const onBoard = scope?.owner.kind === 'sessionBoard';
     const saveAsYours = React.useMemo(() => (onBoard && sessionItem?.savable ? () => setFlow('save') : undefined), [onBoard, sessionItem?.savable]);
     const postSnapshot = React.useMemo(() => (onBoard && sessionItem?.canEdit && capturable ? () => setFlow('snapshot') : undefined),
         [capturable, onBoard, sessionItem?.canEdit]);
 
     let panel: React.ReactElement | null = null;
-    if (flow && scope) {
-        const title = flow === 'about' ? t('widgetDefinition.aboutTitle') : flow === 'save' ? t('widgetDefinition.saveTitle') : t('widgetDefinition.snapshotTitle');
+    if (flow === 'addTo' && scope && instance && copyTo === null) {
+        panel = <WidgetCopyChooser instance={instance} current={scope} anchorRef={anchorRef} onChoose={setCopyTo} onClose={close} testID={`${testID}.addTo`} />;
+    } else if (flow && scope) {
+        const title = flow === 'about' ? t('widgetDefinition.aboutTitle') : flow === 'save' ? t('widgetDefinition.saveTitle')
+            : flow === 'addTo' ? t('widgetFrame.groupAddTo') : t('widgetDefinition.snapshotTitle');
         const account = { serverId: scope.serverId, accountId: scope.accountId };
         panel = (
-            <WidgetFlowShell anchorRef={anchorRef} title={title} onRequestClose={close} testID={`${testID}.${flow}`}>
-                {flow === 'about' && instance ? (
+            <WidgetFlowShell anchorRef={anchorRef} title={title} onRequestClose={close} testID={`${testID}.${flow}`}
+                {...(flow === 'addTo' ? { width: WIDGET_FLOW_WIDTH_PX.setup } : {})}>
+                {flow === 'addTo' && instance && copyTo !== null ? (
+                    <WidgetCopyPanel instance={instance} current={scope} destinationKey={copyTo} providedContext={input.providedContext ?? {}}
+                        onBack={() => setCopyTo(null)} onClose={close} testID={`${testID}.addTo`} />
+                ) : flow === 'about' && instance ? (
                     <AboutFlow key={`${scope.serverId}/${scope.accountId}/${instance.id}/${artifactId ?? instance.definition.kind}`} account={account} scope={scope} instance={instance} artifactId={artifactId} editInputs={editInputs}
                         providedContext={input.providedContext}
                         onClose={close} testID={`${testID}.about`} />
@@ -121,7 +135,7 @@ export function useWidgetDefinitionFlows(input: Readonly<{
             </WidgetFlowShell>
         );
     }
-    return { about, saveAsYours, postSnapshot, snapshotSlot: slot, panel };
+    return { about, addTo, saveAsYours, postSnapshot, snapshotSlot: slot, panel };
 }
 
 function AboutFlow(props: Readonly<{
@@ -172,8 +186,8 @@ function AboutResolvedFlow(props: Parameters<typeof AboutFlow>[0] & Readonly<{
 }>): React.ReactElement {
     const runtime = useAppShellPluginUiProjection();
     const definition = props.definition;
-    const installed = readWidgetDescriptor(runtime.pluginUiProjection,
-        definition?.body.kind === 'installed' ? definition.body : props.instance.definition);
+    const installed = definition && definition.body.kind !== 'installed' && definition.body.kind !== 'builtin' ? null : readWidgetDescriptor(runtime.pluginUiProjection,
+        definition?.body.kind === 'installed' || definition?.body.kind === 'builtin' ? definition.body : props.instance.definition);
     const reference = props.instance.definition;
     const descriptor = definition && (reference.kind === 'inline' || reference.kind === 'artifact')
         ? describeAuthoredWidgetDefinitionV1(definition, reference, installed) : installed;
@@ -228,7 +242,7 @@ function AboutPanelContent(props: Parameters<typeof AboutBoundFlow>[0] & Readonl
                 });
             } } : {})}
             {...(artifactId ? { onDuplicate: async () => {
-                const outcome = await runWidgetDefinitionCommand('widgets.definition.duplicate', { account, artifactId, newArtifactId: randomUUID() }, account);
+                const outcome = await runWidgetDefinitionCommand('widgets.definition.duplicate', () => ({ account, artifactId, newArtifactId: randomUUID() }), account);
                 return outcome.kind === 'applied' ? outcome.result.definition.name : null;
             } } : {})}
             testID={props.testID}

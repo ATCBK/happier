@@ -77,6 +77,12 @@ const source: InstalledWidgetSource = {
 };
 
 describe('installed widget correlation', () => {
+    it('carries the projection owner unreachable cause instead of relabeling it as a missing widget', () => {
+        expect(resolveInstalledWidgetMount({ source, target: 'session', presentation: 'content',
+            runtime: runtime({ phase: 'unavailable', pluginUiProjection: null,
+                unavailableReasonCode: 'plugin_machine_unreachable' }) }).unresolved)
+            .toEqual({ state: 'unavailable', reasonCode: 'plugin_machine_unreachable' });
+    });
     it('resolves a widget only for the target it was made for', () => {
         const projection = widgetProjectionOf(
             [{ pluginId: 'acme.review', localId: 'latest', target: 'app' }],

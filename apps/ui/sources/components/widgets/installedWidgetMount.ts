@@ -76,7 +76,7 @@ export function resolveInstalledWidgetMount(input: Readonly<{
     target: WidgetTargetKind;
     /** The public embedded presentation this physical host maps onto. */
     presentation: WidgetPresentation;
-    runtime: Pick<PluginUiProjectionCurrentness, 'phase' | 'pluginUiProjection'>;
+    runtime: Pick<PluginUiProjectionCurrentness, 'phase' | 'pluginUiProjection' | 'unavailableReasonCode'>;
 }>): InstalledWidgetMount {
     const inlineMount = resolveWidgetInlineMount(input.presentation, input.target);
     if (!inlineMount) {
@@ -88,7 +88,7 @@ export function resolveInstalledWidgetMount(input: Readonly<{
         // fetch must not present a stored widget as a removed surface.
         return input.runtime.phase === 'establishing'
             ? unresolved('loading', 'widget_projection_establishing')
-            : unresolved('unavailable', 'widget_projection_unavailable');
+            : unresolved('unavailable', input.runtime.unavailableReasonCode ?? 'widget_projection_unavailable');
     }
     const placements = selectWidgetPlacementsBySurface(projection, input.source.surface, input.target);
     if (placements.length !== 1) {

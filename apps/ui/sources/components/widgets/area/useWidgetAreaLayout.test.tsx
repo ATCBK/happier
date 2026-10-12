@@ -1,11 +1,48 @@
 import { expect, it } from 'vitest';
 import { act } from 'react-test-renderer';
 import { PluginUiWidgetAreaResultV1Schema } from '@happier-dev/protocol/plugins/ui';
-import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1, buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, flattenWidgetLayoutWidgetsV1, type WidgetAreaLayoutV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1, buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, flattenWidgetLayoutWidgetsV1, WidgetAreaLayoutV1Schema, type WidgetAreaLayoutV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import type { HomeHubArtifactV1, HomeHubArtifactTransportV1 } from '@happier-dev/protocol/home';
 import { renderHook, flushHookEffects } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storage';
 import { useWidgetAreaLayout, type WidgetAreaPort } from './useWidgetAreaLayout';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+
+it('distinguishes a pending observation from retired Account authority and rejects its late completion', async () => {
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://area-pending-retirement.test', accountId: 'actor' });
+    const surface: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor', owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'work' } };
+    let delayed = false;
+    let release: (() => void) | undefined;
+    const transport: HomeHubArtifactTransportV1 = {
+        read: async () => { if (delayed) await new Promise<void>(resolve => { release = resolve; }); return null; },
+        create: async () => { throw new Error('Unexpected create'); },
+        update: async () => { throw new Error('Unexpected update'); },
+    };
+    const owner = createWidgetSurfaceArtifactPortV1(transport, { surface, isCurrent: () => true, presets: [{ id: 'work', name: 'Work', items: [] }] });
+    const area = createWidgetAreaActionPortV1(() => owner);
+    const port: WidgetAreaPort = { execute: async () => PluginUiWidgetAreaResultV1Schema.parse({ ok: true, result: await area.read(surface, {}) }) };
+    let context = {};
+    const hook = await renderHook(() => useWidgetAreaLayout(port, context));
+    try {
+        await flushHookEffects();
+        const retained = hook.getCurrent().state;
+        if (retained.status !== 'ready') throw new Error('Expected admitted layout');
+        delayed = true;
+        context = {};
+        await hook.rerender();
+        expect(retained.isReadPending()).toBe(true);
+        expect(retained.isCurrent()).toBe(true);
+        retireActiveServerAccountScopeLifetime();
+        expect(retained.isCurrent()).toBe(false);
+        expect(retained.isReadPending()).toBe(false);
+        expect(await hook.getCurrent().write({ actionId: 'widgets.item.rename', instanceId: 'copy', displayName: 'Retired' }))
+            .toEqual({ kind: 'refused', errorCode: 'widget_area_unavailable' });
+        await act(async () => { delayed = false; release?.(); });
+        await flushHookEffects();
+        expect(hook.getCurrent().state).toMatchObject({ status: 'unavailable', reasonCode: 'widget_area_scope_retired' });
+    } finally { await hook.unmount(); await connection.dispose(); }
+});
 
 it('projects core-page preset groups and first-edit personalization through the shared area read', async () => {
     const surface: WidgetSurfaceRefV1 = { serverId: 'home', accountId: 'actor', owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'overview' } };
@@ -135,6 +172,9 @@ it('settles an acknowledged widget add even when its follow-up layout read is st
     }).then(outcome => { settled = outcome; });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(settled).toEqual({ kind: 'applied' });
+    // Observing another read is not a terminal fact about the still-authorized layout.
+    const retained = hook.getCurrent().state;
+    expect(retained.status === 'ready' && retained.isCurrent()).toBe(true);
     expect(rows.size).toBe(1);
     await hook.unmount();
 });
@@ -182,12 +222,14 @@ it('withdraws mounted effect admission on exact Artifact publication before a de
     publication.updatedAt = 2;
     await act(async () => storage.getState().applyArtifacts([{ ...publication }]));
     expect(admitted.isCurrent()).toBe(false);
+    expect(admitted.isReadPending()).toBe(true);
     expect(hook.getCurrent().state.status).toBe('ready'); // Last admitted layout remains during the read.
     await act(async () => { waitForRead = false; releaseRead?.(); });
     await flushHookEffects();
     const renewed = hook.getCurrent().state;
     if (renewed.status !== 'ready') throw new Error('Expected read to renew admission');
     expect(renewed.isCurrent()).toBe(true);
+    expect(renewed.isReadPending()).toBe(false);
     expect(storage.getState().artifacts[artifactId]).not.toBe(firstPublication);
     waitForRead = true;
     revoked = true;
@@ -256,4 +298,54 @@ it('keeps the newly selected area when an earlier captured durable write acknowl
     await hook.unmount();
     expect(await unmountedWrite({ actionId: 'widgets.item.rename', instanceId: 'copy', displayName: 'Unmounted callback' }))
         .toEqual({ kind: 'refused', errorCode: 'widget_area_unavailable' });
+});
+
+it('writes the displayed Artifact rather than the newly selected same-id copy while its read is pending', async () => {
+    const surface = (layoutId: string): WidgetSurfaceRefV1 => ({ serverId: 'home', accountId: 'actor', owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId } });
+    const first = surface('first'); const second = surface('second');
+    const rows = new Map<string, HomeHubArtifactV1>();
+    const seed = (ref: WidgetSurfaceRefV1, displayName: string) => {
+        const layout: WidgetAreaLayoutV1 = { v: 1, surface: ref, items: [{ kind: 'widget', instance: { v: 1, id: 'same-id',
+            definition: { kind: 'builtin', id: 'project_about' }, bindings: {}, displayName } }] };
+        rows.set(buildWidgetSurfaceArtifactIdV1(ref), { artifactId: buildWidgetSurfaceArtifactIdV1(ref), ownerAccountId: 'actor', access: 'owner',
+            header: buildWidgetSurfaceArtifactHeaderV1(layout), body: JSON.stringify(layout), revision: { headerVersion: 1, bodyVersion: 1 } });
+    };
+    seed(first, 'Displayed'); seed(second, 'Selected');
+    let blockNextRead = false;
+    let release: (() => void) | undefined;
+    const transport: HomeHubArtifactTransportV1 = {
+        read: async id => rows.get(id) ?? null,
+        create: async () => { throw new Error('Unexpected create'); },
+        update: async input => { const prior = rows.get(input.artifactId)!;
+            const revision = { headerVersion: prior.revision.headerVersion + 1, bodyVersion: prior.revision.bodyVersion + 1 };
+            rows.set(input.artifactId, { ...prior, ...input, revision }); return { ok: true, revision }; },
+    };
+    const area = createWidgetAreaActionPortV1(ref => createWidgetSurfaceArtifactPortV1(transport, { surface: ref, isCurrent: () => true }));
+    const pendingRead = new Promise<void>(resolve => { release = resolve; });
+    const bind = (ref: WidgetSurfaceRefV1): WidgetAreaPort => ({ execute: async (operation, signal, target) => {
+        const selected = target?.surface ?? ref;
+        if (operation.actionId === 'widgets.item.list' && selected === second && blockNextRead) await pendingRead;
+        const result = operation.actionId === 'widgets.item.list' ? { ok: true, result: await area.read(selected, {}, signal) }
+            : operation.actionId === 'widgets.item.rename' ? await area.apply(selected, { kind: 'rename', instanceId: operation.instanceId, displayName: operation.displayName }, {}, signal)
+            : (() => { throw new Error('Unsupported operation'); })();
+        return PluginUiWidgetAreaResultV1Schema.parse(result);
+    } });
+    let port = bind(first);
+    const context = {};
+    const hook = await renderHook(() => useWidgetAreaLayout(port, context));
+    try {
+        await flushHookEffects();
+        blockNextRead = true;
+        port = bind(second);
+        await hook.rerender();
+        expect(hook.getCurrent().state).toMatchObject({ status: 'ready', surface: first });
+        await act(async () => { expect(await hook.getCurrent().write({ actionId: 'widgets.item.rename', instanceId: 'same-id', displayName: 'Edited displayed' })).toEqual({ kind: 'applied' }); });
+        const displayedBody = rows.get(buildWidgetSurfaceArtifactIdV1(first))?.body;
+        const selectedBody = rows.get(buildWidgetSurfaceArtifactIdV1(second))?.body;
+        if (typeof displayedBody !== 'string' || typeof selectedBody !== 'string') throw new Error('Expected both stored layout bodies');
+        const displayed = WidgetAreaLayoutV1Schema.parse(JSON.parse(displayedBody));
+        const selected = WidgetAreaLayoutV1Schema.parse(JSON.parse(selectedBody));
+        expect(flattenWidgetLayoutWidgetsV1(displayed.items)[0]!.instance.displayName).toBe('Edited displayed');
+        expect(flattenWidgetLayoutWidgetsV1(selected.items)[0]!.instance.displayName).toBe('Selected');
+    } finally { await act(async () => { release?.(); }); await hook.unmount(); }
 });

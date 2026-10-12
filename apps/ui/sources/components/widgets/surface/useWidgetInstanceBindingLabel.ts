@@ -36,3 +36,17 @@ export function useWidgetInstanceBindingLabel(
     }
     return null;
 }
+
+/**
+ * Whether a copy follows one of its surface's own named slots ("This checkout" on a Project page),
+ * as opposed to a value pinned to it. A surface whose header already names that slot leaves the
+ * follow label out of each frame; the copy's inputs editor still reads it from the label above.
+ */
+export function isWidgetFollowingSurfaceSlot(
+    instance: Pick<WidgetInstanceV1, 'bindings'>,
+    context?: WidgetSurfaceContext,
+): boolean {
+    const slots = context?.slots;
+    if (!slots) return false;
+    return Object.values(instance.bindings).some(binding => binding.kind === 'context' && Object.hasOwn(slots, binding.slot));
+}

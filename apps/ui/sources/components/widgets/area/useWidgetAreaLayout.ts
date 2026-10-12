@@ -3,9 +3,10 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import type { PluginUiWidgetAreaOperationV1, PluginUiWidgetAreaResultV1 } from '@happier-dev/protocol/plugins/ui';
 import { buildWidgetSurfaceArtifactIdV1, getWidgetLayoutItemIdV1, WidgetAreaLayoutV1Schema, WidgetSurfaceReadV1Schema, type WidgetAreaLayoutV1, type WidgetPlacementV1, type WidgetSurfaceReadV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { storage, useArtifact } from '@/sync/domains/state/storage';
-import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { WidgetEntityMovementPort } from '@/sync/ops/actions/widgetEntityMovement';
+import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 
 /**
  * One personal widget area's operations (a plugin page's declared area, a Project aside). The host
@@ -15,7 +16,9 @@ import type { WidgetEntityMovementPort } from '@/sync/ops/actions/widgetEntityMo
  * resolver lives behind it here.
  */
 export type WidgetAreaPort = Readonly<{
-    execute(operation: PluginUiWidgetAreaOperationV1, signal?: AbortSignal): Promise<PluginUiWidgetAreaResultV1>;
+    /** Writes name the still-displayed admission, not a different selection awaiting its read. */
+    execute(operation: PluginUiWidgetAreaOperationV1, signal?: AbortSignal,
+        target?: Readonly<{ surface: WidgetSurfaceRefV1; context: WidgetSurfaceContext }>): Promise<PluginUiWidgetAreaResultV1>;
     /** Only the host that already binds the layout owner may bind its existing movement owner. */
     movement?: WidgetEntityMovementPort;
 }>;
@@ -38,6 +41,8 @@ export type WidgetAreaLayoutState<C> =
         preset?: WidgetSurfaceReadV1['preset'];
         /** This read's exact publication and binding still admit mounted effects. */
         isCurrent: () => boolean;
+        /** A new observation is pending under the same authority; this never admits effects. */
+        isReadPending: () => boolean;
         /** The page context this read was admitted with; widgets follow only an admitted context. */
         context: C;
     }>;
@@ -82,8 +87,10 @@ function reconcile<C>(previous: WidgetAreaLayoutState<C>, next: WidgetAreaLayout
  * it), and after each of its own writes. While a read is in flight the last good layout and its
  * admitted context stay on screen; a refused write never discards them.
  */
-export function useWidgetAreaLayout<C>(port: WidgetAreaPort, context: C): WidgetAreaLayout<C> {
+export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: WidgetAreaPort, context: C): WidgetAreaLayout<C> {
     const [state, setState] = React.useState<WidgetAreaLayoutState<C>>({ status: 'loading' });
+    const displayed = React.useRef(state);
+    displayed.current = state;
     const artifactId = state.status === 'ready' ? state.surface.artifactId ?? buildWidgetSurfaceArtifactIdV1(state.surface) : '';
     const artifact = useArtifact(artifactId);
     const generation = React.useRef(0);
@@ -100,6 +107,7 @@ export function useWidgetAreaLayout<C>(port: WidgetAreaPort, context: C): Widget
         const capturedBinding = binding.current;
         const publications = storage.getState().artifacts;
         const admittedViewer = getActiveServerAccountScope();
+        const admittedLifetime = captureActiveServerAccountScopeLifetime();
         const current = ++generation.current;
         let next: WidgetAreaLayoutState<C>;
         try {
@@ -110,18 +118,24 @@ export function useWidgetAreaLayout<C>(port: WidgetAreaPort, context: C): Widget
             const area = parsed?.success ? WidgetAreaLayoutV1Schema.safeParse({ v: 1, surface: parsed.data.surface, items: parsed.data.items }) : null;
             const admittedArtifactId = parsed?.success ? parsed.data.surface.artifactId ?? buildWidgetSurfaceArtifactIdV1(parsed.data.surface) : '';
             const admittedPublication = publications[admittedArtifactId];
-            const isCurrent = () => mounted.current && current === generation.current && binding.current === capturedBinding
+            // A pending observation does not retire admitted facts. Actual scope retirement or
+            // a new Artifact publication does; late read results are still rejected below.
+            const hasAuthority = () => mounted.current && (admittedLifetime ? admittedLifetime.isCurrent() : getActiveServerAccountScope() === null);
+            const isCurrent = () => hasAuthority()
                 && storage.getState().artifacts[admittedArtifactId] === admittedPublication;
+            const isReadPending = () => hasAuthority() && (current !== generation.current || binding.current !== capturedBinding
+                || storage.getState().artifacts[admittedArtifactId] !== admittedPublication);
             next = refused !== null ? { status: 'unavailable', reasonCode: refused }
                 : parsed?.success && area?.success ? { status: 'ready', surface: area.data.surface, items: area.data.items,
                     placements: parsed.data.instances, canEdit: parsed.data.canEdit,
-                    isShared: parsed.data.isShared === true, admittedViewer, context, isCurrent, documentState: parsed.data.state ?? 'present',
+                    isShared: parsed.data.isShared === true, admittedViewer, context, isCurrent, isReadPending, documentState: parsed.data.state ?? 'present',
                     ...(parsed.data.dashboard ? { dashboard: parsed.data.dashboard } : {}), ...(parsed.data.preset ? { preset: parsed.data.preset } : {}) }
                 : { status: 'unavailable', reasonCode: 'invalid_widget_area_result' };
         } catch {
             next = { status: 'unavailable', reasonCode: 'widget_area_unavailable' };
         }
         if (!mounted.current || signal?.aborted || current !== generation.current || binding.current !== capturedBinding) return;
+        if (admittedLifetime && !admittedLifetime.isCurrent()) next = { status: 'unavailable', reasonCode: 'widget_area_scope_retired' };
         setState(previous => reconcile(previous, next));
     }, [context, port]);
 
@@ -142,9 +156,11 @@ export function useWidgetAreaLayout<C>(port: WidgetAreaPort, context: C): Widget
     const write = React.useCallback(async (operation: PluginUiWidgetAreaOperationV1): Promise<WidgetAreaWriteOutcome> => {
         if (!mounted.current || binding.current.port !== port || binding.current.context !== context)
             return { kind: 'refused', errorCode: 'widget_area_unavailable' };
+        const admitted = displayed.current;
+        if (admitted.status !== 'ready' || !admitted.isCurrent()) return { kind: 'refused', errorCode: 'widget_area_unavailable' };
         let outcome: WidgetAreaWriteOutcome;
         try {
-            const result = await port.execute(operation);
+            const result = await port.execute(operation, undefined, { surface: admitted.surface, context: admitted.context });
             const refused = failureCode(result);
             outcome = refused !== null ? { kind: 'refused', errorCode: refused }
                 : result.ok && 'kind' in result.result && result.result.kind === 'approval_request_created' ? { kind: 'approvalPending' }

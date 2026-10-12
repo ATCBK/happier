@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, StyleSheet as RNStyleSheet, View } from 'react-native';
+import { Platform, StyleSheet as RNStyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { WidgetPresentationProvider, useWidgetPresentation, type WidgetPresentation as WidgetBodyPresentation } from '@happier-dev/plugin-ui';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -29,11 +29,13 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { usePageRowMetrics } from '@/components/ui/lists/useResolvedItemDensity';
 import { reanimatedDisclosureMotion } from '@/components/ui/lists/ExpandableItem';
-import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
-import { SurfaceStateCard, type SurfaceStateAction } from '@/components/ui/surfaces/SurfaceStateCard';
-import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
+import { SurfaceFreshnessLine, SurfaceFreshnessOnSheetProvider } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { SurfaceStateCard, SurfaceStateContentContext, type SurfaceStateAction } from '@/components/ui/surfaces/SurfaceStateCard';
+import { projectWidgetGroupCellContent } from '@/components/widgets/group/widgetGroupLayout';
+import { SurfaceStateSizeProvider, useSurfaceStateCardSize } from '@/components/ui/surfaces/surfaceStateSize';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -41,7 +43,11 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
 import { shadowLevelStyle } from '@/shadowElevation';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { MiddleEllipsisText } from '@/components/ui/text/MiddleEllipsisText';
 import { WidgetFrameResourceActivityContext } from './widgetFrameResourceActivity';
+import { WidgetFrameBodyRowsContext } from './widgetFrameBody';
+import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
+import { resolveVerticalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
 
 export type WidgetFrameStyle = HappierWidgetFrameStyle;
 export type WidgetFramePlacement = HappierWidgetFramePlacement;
@@ -104,11 +110,6 @@ export type WidgetFrameProps = Readonly<{
     menu?: React.ReactNode;
     /** The move handle, before the mark, while the widget's surface is being arranged. */
     leading?: React.ReactNode;
-    /**
-     * A half-width cell of a group: the title keeps its room, so the activity label is its spinner alone
-     * and the source takes its short form whatever the frame measures.
-     */
-    compactHeader?: boolean;
     /** Mounted viewer-local disclosure; never writes the layout or alters Resource activity. */
     disclosure?: HappierControlledDisclosure;
     body: WidgetFrameBody;
@@ -136,14 +137,38 @@ export type WidgetFrameProps = Readonly<{
     /** Fill the grid cell, so cards in one row share a height. */
     fill?: boolean;
     /**
-     * Inside a widget group: the group draws the surface and the dividers, so this frame (always
-     * plain there) draws no hairline of its own.
+     * Inside a widget group, or alone on a host surface (a popover, a sheet): the host draws the
+     * surface and the dividers, so this frame (always plain there) draws no hairline of its own.
      */
     grouped?: boolean;
     accessibilityLabel?: string;
 }>;
 
+
+/**
+ * The frame's one first-load body (lab `dagent` ST "Loading · first time only"): the header shows at
+ * once and quiet rows keep the card's room. Used by the frame's own `loading` body and by content that
+ * is still arriving inside a frame, so a card never has two loading looks.
+ */
+export function WidgetFrameLoadingBody(props: Readonly<{ testID: string; accessibilityLabel: string; rows?: number }>) {
+    const frameRows = React.useContext(WidgetFrameBodyRowsContext);
+    return (
+        <ItemLoadStateRows
+            testID={props.testID}
+            state={{ kind: 'loading' }}
+            rows={Math.max(1, Math.min(props.rows ?? frameRows ?? WIDGET_FRAME_LOADING_MAX_ROWS, WIDGET_FRAME_LOADING_MAX_ROWS))}
+            lines={2}
+            shape="list"
+            accessibilityLabel={props.accessibilityLabel}
+        />
+    );
+}
+
+/** A tall card keeps its room with space, not with a wall of placeholder rows. */
+const WIDGET_FRAME_LOADING_MAX_ROWS = 3;
+
 const FOOTER_MIN_TARGET_PX = resolveMinimumInteractiveTargetSize(Platform.OS);
+const FIXED_BODY_FADE_EDGES = { top: true, bottom: true } as const;
 /** How long the arrival ring stays before it fades: long enough to find it, short enough to never read as a badge. */
 const FRESH_RING_HOLD_MS = 2000;
 const FRESH_RING_FADE_MS = 600;
@@ -159,7 +184,22 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const phone = useDeviceType() === 'phone';
-    const rows = props.widgetPresentation ? props.widgetPresentation.footprint.rowSpan * 2
+    const inheritedStateSize = useSurfaceStateCardSize();
+    const [replacementStates, setReplacementStates] = React.useState<ReadonlyMap<symbol, boolean>>(() => new Map());
+    const reportContentState = React.useCallback((key: symbol, empty: boolean | null) => {
+        setReplacementStates(previous => {
+            if (empty === null ? !previous.has(key) : previous.get(key) === empty) return previous;
+            const next = new Map(previous);
+            if (empty === null) next.delete(key); else next.set(key, empty);
+            return next;
+        });
+    }, []);
+    const emptyBody = props.body.kind === 'empty' || (props.body.kind === 'content'
+        && replacementStates.size > 0 && [...replacementStates.values()].every(empty => empty));
+    const bodyFootprint = props.widgetPresentation ? projectWidgetGroupCellContent(
+        { id: props.testID, ...props.widgetPresentation.footprint }, props.grouped && emptyBody ? 'empty' : undefined,
+    ) : undefined;
+    const rows = bodyFootprint ? bodyFootprint.rowSpan * 2
         : props.rows ?? (props.placement === 'home' ? HOME_WIDGET_BODY_ROWS : 0);
     const rowHeight = useWidgetBodyRowHeight();
     const inheritedPresentation = useWidgetPresentation();
@@ -175,6 +215,21 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
     const inset = resolveHappierWidgetFrameInsetPx(props.frameStyle);
     // Inside a group nothing clips (A6): a grid cell keeps its rows' room and grows; a phone's stack is its content.
     const bodyHeight = props.bodyHeight ?? (props.grouped ? phone ? 'content' : 'grow' : 'fixed');
+    // A half-width cell, grouped or standalone (its footprint, never its caller), keeps the title's room:
+    // the activity label is its spinner alone (lab wgpres D). A phone stacks every card full width.
+    const compactHeader = !phone && props.widgetPresentation !== undefined
+        && props.widgetPresentation.footprint.columnSpan * 2 <= props.widgetPresentation.footprint.columns;
+    // A fixed body whose rows run past it fades at the cut edge, so no line reads as cut off mid-height.
+    const bodyFades = useScrollEdgeFades({ enabledEdges: FIXED_BODY_FADE_EDGES });
+    const onFixedViewportLayout = React.useCallback((event: HappierLayoutChangeEvent) => {
+        onViewportLayout(event);
+        // The fades read only `nativeEvent.layout`, which the portable layout event carries.
+        bodyFades.onViewportLayout(event as unknown as LayoutChangeEvent);
+    }, [bodyFades.onViewportLayout, onViewportLayout]);
+    const onFixedContentLayout = React.useCallback((event: HappierLayoutChangeEvent) => {
+        bodyFades.onContentSizeChange(event.nativeEvent.layout.width, event.nativeEvent.layout.height);
+    }, [bodyFades.onContentSizeChange]);
+    const bodyFadeMask = Platform.OS === 'web' ? resolveVerticalScrollEdgeMaskStyle(bodyFades.visibility) : null;
     const footer = props.footer ?? null;
     const [refreshingResources, setRefreshingResources] = React.useState<ReadonlySet<symbol>>(() => new Set());
     const reportResourceActivity = React.useCallback((key: symbol, refreshing: boolean) => {
@@ -195,7 +250,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
             <ActivitySpinner size={ICON_SIZE.xs - 2} color={theme.colors.text.tertiary} />
         </View>
     ) : undefined;
-    const meta = !refreshing ? props.meta : props.compactHeader ? refreshingMark : (
+    const meta = !refreshing ? props.meta : compactHeader ? refreshingMark : (
         <View testID={`${props.testID}.refreshing`} style={styles.refreshing} accessibilityLiveRegion="polite">
             <ActivitySpinner size={ICON_SIZE.xs - 2} color={theme.colors.text.tertiary} />
             <Text style={styles.source} numberOfLines={1}>{t('widgetDefinition.refreshing')}</Text>
@@ -203,17 +258,19 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
     );
     // The frame sizes every state inside it (W1 bodies, a refusal, a plugin's own): a card's states on
     // Home and a Board, one line under the header in a Companion or other column (lab ST "Compact").
-    const stateSize = props.placement === 'companion' ? 'line' : 'pane';
+    const stateSize = props.presentation === 'body' ? inheritedStateSize ?? (props.placement === 'companion' ? 'line' : 'pane')
+        : props.grouped && emptyBody && props.widgetPresentation?.footprint.columnSpan === 1 ? 'line'
+        // A compact footprint (Small, Wide) has one row of room: its state is the line, balanced in that row.
+        : props.widgetPresentation?.footprint.height === 'compact' ? 'line'
+        : props.placement === 'companion' ? 'line' : 'pane';
 
-    const renderText = React.useCallback<HappierWidgetFrameTextRender>((input) => (
-        <Text
-            testID={input.testID}
-            style={input.role === 'title' ? styles.title : styles.source}
-            numberOfLines={1}
-            accessibilityRole={input.role === 'title' ? 'header' : undefined}
-        >
-            {input.text}
-        </Text>
+    // A source names what the widget is bound to ("devbox · 3ad2"): a narrow header gives up its middle, never the
+    // suffix that tells near-identical names apart. A title keeps its tail ellipsis.
+    const renderText = React.useCallback<HappierWidgetFrameTextRender>((input) => input.role !== 'title' && input.text.includes(' · ') ? (
+        <MiddleEllipsisText testID={input.testID} style={styles.source} value={input.text} />
+    ) : (
+        <Text testID={input.testID} style={input.role === 'title' ? styles.title : styles.source} numberOfLines={1}
+            accessibilityRole={input.role === 'title' ? 'header' : undefined}>{input.text}</Text>
     ), [styles.source, styles.title]);
     // A bound source's glyph from the app's icon family: the pin it is set by, or the link it follows.
     const renderSourceGlyph = React.useCallback((binding: HappierWidgetFrameSourceBinding) => (
@@ -275,6 +332,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
         </SurfaceStateSizeProvider>{footerNode}</>;
     }
     return (
+        <SurfaceStateContentContext.Provider value={props.grouped ? reportContentState : null}>
         <WidgetFrameResourceActivityContext.Provider value={reportResourceActivity}>
         <HappierWidgetFrame
             testID={props.testID}
@@ -295,7 +353,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
             renderSourceGlyph={renderSourceGlyph}
             sourcePlacement={phone ? 'below' : 'inline'}
             meta={meta}
-            {...(refreshingMark && !props.compactHeader ? { compactMeta: refreshingMark } : {})}
+            {...(refreshingMark && !compactHeader ? { compactMeta: refreshingMark } : {})}
             {...(props.leading ? { leading: props.leading } : {})}
             accessory={props.menu}
             disclosure={props.disclosure}
@@ -316,6 +374,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
             overlay={props.fresh ? <WidgetFrameArrivalRing key={String(props.fresh)} frameStyle={props.frameStyle} /> : null}
         >
             <SurfaceStateSizeProvider size={stateSize}>
+                <WidgetFrameBodyRowsContext.Provider value={rows}>
                 <WidgetPresentationProvider value={widgetPresentation}>
                 {props.widgetPresentation && bodyHeight !== 'fixed' ? (
                     // Nothing clips or scrolls here: the body is measured (its size and width still
@@ -325,10 +384,14 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                         <WidgetFrameBodyView testID={props.testID} body={props.body} rows={rows} />
                     </View>
                 ) : props.widgetPresentation ? (
-                    <HappierScrollArea testID={`${props.testID}.viewport`} onLayout={onViewportLayout}
-                        style={{ height: props.viewportHeight ?? rows * rowHeight, minWidth: 0 }}
+                    <HappierScrollArea testID={`${props.testID}.viewport`} onLayout={onFixedViewportLayout}
+                        onScroll={bodyFades.onScroll} scrollEventThrottle={16}
+                        style={{ height: props.viewportHeight ?? rows * rowHeight, minWidth: 0,
+                            ...(bodyFadeMask ? { maskImage: bodyFadeMask.maskImage, WebkitMaskImage: bodyFadeMask.WebkitMaskImage } : {}) }}
                         contentContainerStyle={{ minHeight: '100%' }}>
-                        <WidgetFrameBodyView testID={props.testID} body={props.body} rows={rows} />
+                        <View testID={`${props.testID}.viewportContent`} onLayout={onFixedContentLayout} style={styles.fixedBodyContent}>
+                            <WidgetFrameBodyView testID={props.testID} body={props.body} rows={rows} />
+                        </View>
                     </HappierScrollArea>
                 ) : rows > 0 ? (
                     <WidgetFrameReservedRows rows={rows} rowHeight={rowHeight}>
@@ -338,9 +401,11 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                     <WidgetFrameBodyView testID={props.testID} body={props.body} rows={rows} />
                 )}
                 </WidgetPresentationProvider>
+                </WidgetFrameBodyRowsContext.Provider>
             </SurfaceStateSizeProvider>
         </HappierWidgetFrame>
         </WidgetFrameResourceActivityContext.Provider>
+        </SurfaceStateContentContext.Provider>
     );
 });
 
@@ -392,23 +457,21 @@ function WidgetFrameBodyView(props: Readonly<{ testID: string; body: WidgetFrame
     const body = props.body;
     switch (body.kind) {
         case 'content':
-            return <>{body.children}</>;
-        case 'loading':
+            // A widget draws the same rows on Home, a Board and a configuration page: its body starts its own
+            // list scope, as a floating surface does, so a host page's column and row insets never reach it.
             return (
-                <ItemLoadStateRows
-                    testID={`${props.testID}.loading`}
-                    state={{ kind: 'loading' }}
-                    rows={Math.max(1, props.rows)}
-                    lines={2}
-                    shape="list"
-                    accessibilityLabel={body.accessibilityLabel}
-                />
+                <ListPresentationProvider value="grouped" pageInsets="contained">
+                    <SurfaceFreshnessOnSheetProvider>{body.children}</SurfaceFreshnessOnSheetProvider>
+                </ListPresentationProvider>
             );
+        case 'loading':
+            return <WidgetFrameLoadingBody testID={`${props.testID}.loading`} accessibilityLabel={body.accessibilityLabel} rows={props.rows} />;
         case 'empty':
             return (
                 <SurfaceStateCard
                     testID={`${props.testID}.empty`}
                     kind="empty"
+                    replacesContent
                     title={body.title}
                     reason={body.reason}
                     {...(body.action ? { action: body.action } : {})}
@@ -452,12 +515,14 @@ const stylesheet = StyleSheet.create((theme) => {
         refreshing: {
             flexDirection: 'row',
             alignItems: 'center',
-            gap: 4,
+            gap: theme.space.s4,
         },
+        // Fills the fixed viewport (a state body keeps its room) and grows past it when the rows do.
+        fixedBodyContent: { flexGrow: 1 },
         titleWithMeta: {
             flexDirection: 'row',
             alignItems: 'baseline',
-            gap: 6,
+            gap: theme.space.s6,
         },
         source: {
             ...Typography.default('regular'),
@@ -469,7 +534,7 @@ const stylesheet = StyleSheet.create((theme) => {
             alignSelf: 'stretch',
             flexDirection: 'row',
             alignItems: 'center',
-            gap: 4,
+            gap: theme.space.s4,
         },
         footerFill: {
             flex: 1,

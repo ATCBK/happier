@@ -6,6 +6,8 @@ import { TextInput } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import { t } from '@/text';
+import { resolveActionExecutionErrorMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
+import { HomeReachabilityGate, useFailureExplainedByUnreachableHome } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 
 /**
  * Rename in place for a widget frame's title, on every surface (lab `dashboards` dbind E: "Rename
@@ -18,6 +20,8 @@ export function useWidgetFrameRename(input: Readonly<{
     /** The surface's rename write; absent when this viewer cannot rename the copy. */
     onRename?: (next: string) => void | Promise<void>;
     testID: string;
+    /** Exact writer target, when this surface has one; never inferred from the focused Home. */
+    serverId?: string | null;
 }>): Readonly<{ begin: (() => void) | undefined; field: React.ReactElement | null }> {
     const [renaming, setRenaming] = React.useState(false);
     const onRename = input.onRename;
@@ -27,8 +31,8 @@ export function useWidgetFrameRename(input: Readonly<{
             await onRename?.(next);
             setRenaming(false);
             return true;
-        } catch {
-            Modal.alert(t('common.error'), t('widgetAdd.saveFailed'));
+        } catch (error) {
+            Modal.alert(t('common.error'), resolveActionExecutionErrorMessage(error, t('widgetAdd.saveFailed')));
             return false;
         }
     }, [onRename]);
@@ -36,7 +40,7 @@ export function useWidgetFrameRename(input: Readonly<{
     return {
         begin: onRename ? begin : undefined,
         field: renaming && onRename ? (
-            <WidgetFrameTitleField value={input.title} onCommit={commit} onCancel={cancel} testID={`${input.testID}-title-input`} />
+            <WidgetFrameTitleField value={input.title} onCommit={commit} onCancel={cancel} testID={`${input.testID}-title-input`} serverId={input.serverId} />
         ) : null,
     };
 }
@@ -52,19 +56,20 @@ export function WidgetFrameNameField(props: Readonly<{
     accessibilityLabel: string;
     onRename: (next: string) => void | Promise<void>;
     testID: string;
+    serverId?: string | null;
 }>): React.ReactElement {
     const onRename = props.onRename;
     const commit = React.useCallback(async (next: string): Promise<boolean> => {
         try {
             await onRename(next);
             return true;
-        } catch {
-            Modal.alert(t('common.error'), t('widgetAdd.saveFailed'));
+        } catch (error) {
+            Modal.alert(t('common.error'), resolveActionExecutionErrorMessage(error, t('widgetAdd.saveFailed')));
             return false;
         }
     }, [onRename]);
     return <WidgetFrameTitleField persistent value={props.value} placeholder={props.placeholder}
-        accessibilityLabel={props.accessibilityLabel} onCommit={commit} testID={props.testID} />;
+        accessibilityLabel={props.accessibilityLabel} onCommit={commit} testID={props.testID} serverId={props.serverId} />;
 }
 
 function WidgetFrameTitleField(props: Readonly<{
@@ -76,10 +81,12 @@ function WidgetFrameTitleField(props: Readonly<{
     placeholder?: string;
     accessibilityLabel?: string;
     testID: string;
+    serverId?: string | null;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const [draft, setDraft] = React.useState(props.value);
     const [saving, setSaving] = React.useState(false);
+    const homeUnreachable = useFailureExplainedByUnreachableHome(saving && props.serverId ? [props.serverId] : []);
     // A persistent field follows its saved name whenever that changes (a rename from elsewhere, an undo).
     const [saved, setSaved] = React.useState(props.value);
     if (saved !== props.value) {
@@ -116,12 +123,13 @@ function WidgetFrameTitleField(props: Readonly<{
         } else props.onCancel?.();
     };
     return (
+        <>
         <TextInput
             testID={props.testID}
             style={[styles.input, props.persistent ? styles.field : null]}
             value={draft}
             editable={!saving}
-            accessibilityState={{ busy: saving }}
+            accessibilityState={{ busy: saving && !homeUnreachable }}
             autoFocus={!props.persistent}
             selectTextOnFocus
             {...(props.placeholder ? { placeholder: props.placeholder, placeholderTextColor: theme.colors.text.tertiary } : {})}
@@ -133,6 +141,8 @@ function WidgetFrameTitleField(props: Readonly<{
                 if (event.nativeEvent.key === 'Escape') finish(false);
             }}
         />
+        {saving && props.serverId ? <HomeReachabilityGate variant="line" relevantServerIds={[props.serverId]}>{null}</HomeReachabilityGate> : null}
+        </>
     );
 }
 
@@ -142,7 +152,7 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.default('semiBold'),
         ...happierPageTextMetrics('sectionTitle'),
         color: theme.colors.text.primary,
-        paddingVertical: 2,
+        paddingVertical: theme.space.s2,
     },
     // Always there: it reads as a field, at the control radius, and gives way to the bar's controls.
     field: {
@@ -150,8 +160,8 @@ const styles = StyleSheet.create((theme) => ({
         flexShrink: 1,
         minWidth: 96,
         maxWidth: 220,
-        paddingVertical: 4,
-        paddingHorizontal: 10,
+        paddingVertical: theme.space.s4,
+        paddingHorizontal: theme.space.s10,
         borderRadius: theme.borderRadius.md,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,

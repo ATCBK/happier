@@ -1,5 +1,6 @@
 import {
   getWidgetSizeFootprintV1,
+  WIDGET_SIZE_POLICY_V1,
   type WidgetGroupWidthV1,
   type WidgetSizeV1,
   type WidgetSurfaceRefV1,
@@ -13,6 +14,19 @@ export type WidgetGroupCellInput = Readonly<{
 }>;
 
 export type WidgetGroupCell = Readonly<{ id: string; rowSpan: number }>;
+
+export type WidgetGroupContentState = 'empty' | 'content';
+
+/** Empty half cells need only the existing compact row; saved geometry stays untouched. */
+export function projectWidgetGroupCellContent(
+  cell: WidgetGroupCellInput,
+  contentState: WidgetGroupContentState | undefined,
+): WidgetGroupCellInput {
+  const compactRowSpan = WIDGET_SIZE_POLICY_V1.home.footprints.small.rowSpan;
+  return contentState === 'empty' && cell.columnSpan === 1 && cell.rowSpan > compactRowSpan
+    ? { ...cell, rowSpan: compactRowSpan }
+    : cell;
+}
 
 /**
  * A horizontal band of the group, separated from the next by a full-bleed divider:
@@ -49,17 +63,17 @@ export function resolveWidgetGroupColumns(
 /** The surface's A3 footprint for each child, in the group's reading order. */
 export function resolveWidgetGroupCells(
   surface: WidgetSurfaceRefV1['owner']['kind'],
-  children: readonly Readonly<{ id: string; size: WidgetSizeV1 | undefined }>[],
+  children: readonly Readonly<{ id: string; size: WidgetSizeV1 | undefined; contentState?: WidgetGroupContentState }>[],
 ): WidgetGroupCellInput[] {
   return children.map((child) => {
     const footprint = child.size
       ? getWidgetSizeFootprintV1(surface, child.size)
       : undefined;
-    return {
+    return projectWidgetGroupCellContent({
       id: child.id,
       columnSpan: footprint?.columnSpan ?? 1,
       rowSpan: footprint?.rowSpan ?? 2,
-    };
+    }, child.contentState);
   });
 }
 

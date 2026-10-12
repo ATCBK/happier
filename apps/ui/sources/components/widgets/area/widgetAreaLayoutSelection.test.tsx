@@ -6,6 +6,8 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createActionExecutor, normalizeActionsSettingsV1, type ActionExecutorDeps, RPC_METHODS } from '@happier-dev/protocol';
+import { WidgetInstanceRefV1Schema, WidgetInstanceActionOutputSchemasV1 } from '@happier-dev/protocol/widgets';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
@@ -16,16 +18,18 @@ installHomeGovernanceBoundaries(homes);
 await loadSyncSingletonForTests();
 const { useCorePageWidgetAreaBinding } = await import('./useCorePageWidgetAreaBinding');
 const { useWidgetAreaLayout } = await import('./useWidgetAreaLayout');
+const { useProjectWidgetAreaBinding } = await import('./useProjectWidgetAreaBinding');
 const { createUiClientActionReverseHandler } = await import('@/sync/ops/actions/clientActionReverseDispatch');
 const { API_TOKEN_FULL_GRANT_V1 } = await import('@happier-dev/protocol/auth/apiTokenGrant');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+const { createClientActionReverseDispatcher } = await import('../../../../../cli/src/session/actions/clientActionReverseDispatch');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let serverId: string;
 beforeEach(async () => {
     await homes.reset();
     serverId = await homes.addHome({ name: 'Home', serverUrl: 'https://area-selection.test', accountId: 'account-a' });
-    connection = await restoreServerAccountForTest({ serverUrl: 'https://area-selection.test', accountId: 'account-a', request: homes.request });
-    installHomeGovernanceBoundaries(homes);
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://area-selection.test',
+        serverIdentityId: 'srv_0123456789abcdefghijklmnopqrstuv', accountId: 'account-a', request: homes.request });
 });
 afterEach(async () => {
     standardCleanup();
@@ -55,7 +59,7 @@ it('select through the answering client changes the mounted document and refuses
             grant: { ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: ['widgets.area.layout.select'] } },
         } } }, { signal: new AbortController().signal })).execution;
     await act(async () => {
-        const result = await execute({ ...surface, owner: { ...owner, layoutId: 'empty' } });
+        const result = await execute({ ...surface, serverId, owner: { ...owner, layoutId: 'empty' } });
         expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     });
     await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', surface: { owner: { layoutId: 'empty' } }, placements: [] }));
@@ -79,4 +83,61 @@ it('refuses an ambiguous mounted area without changing either owner', async () =
     expect(hook.getCurrent().first.surface).toEqual(surface);
     expect(hook.getCurrent().second.surface).toEqual(surface);
     await hook.unmount();
+});
+
+it('delivers Project selection through both reverse dispatchers using the portable Home address', async () => {
+    const scope = { serverId: 'srv_0123456789abcdefghijklmnopqrstuv', accountId: 'account-a' };
+    // Seed the Account policy at its settings producer and HTTP boundary. A
+    // created approval is not the named-layout mutation this fixture requires.
+    const { storage } = await import('@/sync/domains/state/storage');
+    const settings = { ...storage.getState().settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+        approvalWaivedSurfaces: { 'widgets.area.layout.create': ['ui'], 'widgets.item.add': ['ui'] },
+    }) };
+    storage.getState().applySettingsForScope(scope, settings, 1);
+    homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+    const surface = { ...scope, owner: { kind: 'project' as const, projectId: 'project-anchor' } };
+    const context = { surface: 'ui' as const, serverId: scope.serverId, expectedAccountId: scope.accountId };
+    const executor = createDefaultActionExecutor();
+    const created = await executor.execute('widgets.area.layout.create', { surface, layoutId: 'checks', name: 'Checks' }, context);
+    expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
+    if (!created.ok) throw new Error(created.errorCode);
+    expect(WidgetInstanceActionOutputSchemasV1['widgets.area.layout.create'].parse(created.result)).toMatchObject({ name: 'Checks' });
+    const target = { ...surface, owner: { ...surface.owner, layoutId: 'checks' } };
+    const instance = { v: 1 as const, id: 'constant', bindings: {}, definition: { kind: 'inline' as const, definition: {
+        v: 1 as const, id: 'constant', name: 'Constant', inputs: { fields: [] },
+        inputSchema: { type: 'object' as const, properties: {}, additionalProperties: false },
+        sizeDeclaration: { sizes: ['medium' as const], defaultSize: 'medium' as const }, provenance: { source: { kind: 'authored' as const } },
+        body: { kind: 'declarative' as const, document: { version: 1 as const, root: { kind: 'text' as const, text: 'Constant value' } } },
+    } } };
+    const added = await executor.execute('widgets.item.add', { surface: target, instance }, context);
+    expect(added, JSON.stringify(added)).toMatchObject({ ok: true });
+    const checkout = { id: 'checkout', serverId, machineId: 'machine', rootPath: '/repo', projectKey: 'project-anchor', createdAtMs: 1 };
+    const hook = await renderHook(() => {
+        const [layoutId, setLayoutId] = React.useState<string | null>(null);
+        const binding = useProjectWidgetAreaBinding({ serverId, projectName: 'Project', projectRef: checkout,
+            layoutId: layoutId ?? undefined, onSelectLayout: setLayoutId });
+        return { layoutId, layout: useWidgetAreaLayout(binding.port!, binding.context) };
+    });
+    await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready' }));
+    const receive = createUiClientActionReverseHandler({ ...scope, isCurrent: () => true });
+    const caller = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => ({
+        hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+        // Only the network hop is replaced; both dispatchers and Action owners run.
+        callConnectedClientRpc: async (_method, payload, options) => {
+            options.onIssued();
+            return { ok: true, result: await receive(payload, { signal: options.signal ?? new AbortController().signal }) };
+        },
+    })) } as unknown as ActionExecutorDeps);
+    const remoteContext = { surface: 'cli' as const, authority: 'present_user' as const, serverId: scope.serverId };
+    await act(async () => {
+        const selected = await caller.execute('widgets.area.layout.select', { surface: target }, remoteContext);
+        expect(selected, JSON.stringify(selected)).toMatchObject({ ok: true });
+    });
+    await vi.waitFor(() => expect(hook.getCurrent().layoutId).toBe('checks'));
+    const ref = WidgetInstanceRefV1Schema.parse({ surface: target, instanceId: instance.id });
+    const refreshed = await caller.execute('widgets.item.refresh', { ref }, remoteContext);
+    expect(refreshed, JSON.stringify(refreshed)).toMatchObject({ ok: false, errorCode: 'widget_refresh_unavailable' });
+    await hook.unmount();
+    expect(await caller.execute('widgets.area.layout.select', { surface: target }, remoteContext)).toMatchObject({ ok: false, errorCode: 'widget_area_layout_owner_unavailable' });
+    expect(await caller.execute('widgets.item.refresh', { ref }, remoteContext)).toMatchObject({ ok: false, errorCode: 'widget_area_layout_owner_unavailable' });
 });

@@ -161,7 +161,7 @@ export function createScrollViewNearViewportTracker(scrollRef: React.RefObject<u
     };
 }
 
-export function useIsNearViewport(tracker: NearViewportTracker | null, span: NearViewportSpan | null): boolean {
+export function useIsNearViewport(tracker: Pick<NearViewportTracker, 'subscribe' | 'getWindow'> | null, span: NearViewportSpan | null): boolean {
     const read = React.useCallback(
         () => tracker === null || (span !== null && isSpanNearViewport(tracker.getWindow(), span)),
         [span, tracker],

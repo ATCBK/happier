@@ -12,6 +12,8 @@ import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projecti
 import type { SessionPluginRuntimeState } from '@/components/sessions/plugins/useSessionPluginRuntime';
 import {
     describeWidgetDefinitionSummaryV1,
+    isBuiltinWidgetSwitchedOff,
+    selectBuiltinWidgetCandidates,
     selectCurrentSessionWidgetCandidates,
     selectWidgetCandidates as selectUniversalWidgetCandidates,
 } from './widgetCatalog';
@@ -244,5 +246,27 @@ describe('Widget Add candidates', () => {
         expect(candidates.filter(candidate => candidate.surface)).toEqual([]);
         expect(candidates.map(candidate => candidate.definition)).toEqual(state.boardFeatureEnabled && state.canEdit
             ? BUILTIN_WIDGET_DESCRIPTORS_V1.map(descriptor => descriptor.definition) : []);
+    });
+});
+
+describe('Your Home, the atmosphere widget', () => {
+    const yourHome = (moments: Readonly<Record<string, boolean>>) => selectUniversalWidgetCandidates(null, undefined, moments)
+        .find(candidate => candidate.key === 'builtin:your_home');
+
+    it('is offered as a built-in App widget at the four Home sizes while its moment is on', () => {
+        expect(yourHome({ yourHome: true })).toMatchObject({
+            definition: { kind: 'builtin', id: 'your_home' }, target: 'app', icon: 'house',
+            sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full'], defaultSize: 'medium' },
+        });
+        // A stored map without the key keeps the default (on).
+        expect(yourHome({})).toBeDefined();
+    });
+
+    it('is withdrawn from every creation path when the person switches the moment off', () => {
+        expect(yourHome({ yourHome: false })).toBeUndefined();
+        expect(selectBuiltinWidgetCandidates({ yourHome: false }).some(candidate => candidate.key === 'builtin:your_home')).toBe(false);
+        expect(isBuiltinWidgetSwitchedOff({ kind: 'builtin', id: 'your_home' }, { yourHome: false })).toBe(true);
+        expect(isBuiltinWidgetSwitchedOff({ kind: 'builtin', id: 'your_home' }, { yourHome: true })).toBe(false);
+        expect(isBuiltinWidgetSwitchedOff({ kind: 'builtin', id: 'usage_daily' }, { yourHome: false })).toBe(false);
     });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { resolveConfiguredWidgetInputs } from '@happier-dev/protocol/widgets';
 import { buildWidgetCandidateSetup } from '@/components/widgets/surface/widgetSurfaceSetup';
-import { buildWidgetGroupInputsCandidate, collectWidgetGroupInputFields } from './widgetGroupInputs';
+import { buildWidgetGroupInputsCandidate, collectWidgetGroupInputFields, describeWidgetGroupInputsBinding } from './widgetGroupInputs';
 
 const candidate = (fields: NonNullable<WidgetCandidate['inputs']>['fields']): Extract<WidgetCandidate, { definition: unknown }> => ({
   key: 'checks', title: 'Checks', pluginName: 'Checks', sharedPluginName: false,
@@ -12,6 +12,13 @@ const candidate = (fields: NonNullable<WidgetCandidate['inputs']>['fields']): Ex
 });
 
 describe('Widget group input collection', () => {
+  it('names the bound input before its value on the group’s Inputs… row (lab wgmenu M “Project: happier”, F4 D-21)', () => {
+    const fields = [{ path: 'session', title: 'Session', widget: 'json' as const }];
+    expect(describeWidgetGroupInputsBinding({ session: { kind: 'value', value: 'abc' } }, { session: 'qa-detect' }, fields)).toBe('Session: qa-detect');
+    // A value with no declared field keeps its value alone; nothing chosen says nothing.
+    expect(describeWidgetGroupInputsBinding({ other: { kind: 'value', value: 'x' } }, { other: 'x' }, fields)).toBe('x');
+    expect(describeWidgetGroupInputsBinding({}, {}, fields)).toBeNull();
+  });
   it('discovers each group field through its declaring follow-able child, retaining its dependencies', () => {
     const period = { path: 'period', title: 'Period', widget: 'select' as const, optionsSourceId: 'periods' };
     const metric = { path: 'metric', title: 'Metric', widget: 'select' as const, optionsSourceId: 'metrics' };

@@ -10,7 +10,6 @@ import { executeWidgetEntityMovement, widgetMovementRefused } from '@/sync/ops/a
 import { t } from '@/text';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { Modal } from '@/modal';
-import { useDeviceType } from '@/utils/platform/responsive';
 import { useWidgetAreaLayouts, type WidgetAreaLayoutsExecute } from '@/components/projects/overview/useProjectDashboards';
 
 import { WidgetArea } from './WidgetArea';
@@ -67,7 +66,24 @@ export function PluginPageWidgetArea(props: PluginUiWidgetAreaPresentation & Rea
             return { ok: true, context: { surface: read.data.surface, values: widgetProvidedContext(context) } } as const;
         };
         return {
-            execute: (operation, signal) => pagePort.execute(operation, pageContext, { signal, layoutId: selectedLayoutId }),
+            execute: async (operation, signal, admitted) => {
+                const failed = (errorCode: string) => ({ ok: false as const, errorCode, error: errorCode });
+                const isCurrent = () => mounted.current && currentBinding.current.pagePort === pagePort && currentBinding.current.pageContext === pageContext;
+                if (!isCurrent() || signal?.aborted) return failed('widget_area_scope_retired');
+                if (!admitted) return pagePort.execute(operation, pageContext, { signal, layoutId: selectedLayoutId });
+                if (admitted.surface.owner.kind !== 'pluginArea' || admitted.surface.owner.area !== props.area) return failed('widget_area_owner_mismatch');
+                const targetContext: Record<string, JsonValue> = {};
+                for (const [slot, entry] of Object.entries(admitted.context.slots ?? {})) if (entry.value) targetContext[slot] = entry.value.value;
+                const options = { signal, layoutId: admitted.surface.owner.layoutId };
+                // The facade owns Home/Account/page identity. Admit the displayed target through
+                // that existing read before writing; a replaced facade cannot redirect the write.
+                const result = await pagePort.execute({ actionId: 'widgets.item.list' }, targetContext, options);
+                if (!result.ok) return result;
+                const parsed = WidgetSurfaceReadV1Schema.safeParse(result.result);
+                if (!parsed.success || !sameStrictJsonValue(parsed.data.surface, admitted.surface)) return failed('widget_area_owner_mismatch');
+                if (!isCurrent() || signal?.aborted) return failed('widget_area_scope_retired');
+                return operation.actionId === 'widgets.item.list' ? result : pagePort.execute(operation, targetContext, options);
+            },
             movement: {
                 readAdmission: async (ref, destination, signal) => {
                     const admitted = await readMovementContext(destination, signal);
@@ -85,7 +101,7 @@ export function PluginPageWidgetArea(props: PluginUiWidgetAreaPresentation & Rea
                 },
             },
         };
-    }, [context, pageContext, pagePort, selectedLayoutId]);
+    }, [context, pageContext, pagePort, props.area, selectedLayoutId]);
     const layout = useWidgetAreaLayout(port, context);
     const ready = layout.state.status === 'ready' ? layout.state : null;
     const baseKey = ready ? stableJsonStringify(widgetAreaLayoutBaseSurface(ready.surface)) : '';
@@ -166,11 +182,9 @@ export function PluginPageWidgetArea(props: PluginUiWidgetAreaPresentation & Rea
             ...(before ? { moveBefore: { name: before.name, onPress: () => { if (isCurrent()) void layouts.reorder(selectedSummary, { anchorId: before.artifactId, placement: 'before' }); } } } : {}),
             ...(after ? { moveAfter: { name: after.name, onPress: () => { if (isCurrent()) void layouts.reorder(selectedSummary, { anchorId: after.artifactId, placement: 'after' }); } } } : {}),
             delete: selectedSummary.isPreset ? { disabledReason: t('projects.dashboard.defaultProtected') } : { onPress: async () => {
-                const confirmed = await Modal.confirm(t('usage.board.page.deleteViewTitle', { name: selectedSummary.name }), t('usage.board.page.deleteViewBody'),
-                    { confirmText: t('common.delete'), destructive: true });
-                if (!confirmed || !isCurrent()) return;
+                if (!isCurrent()) return;
                 const removed = await layouts.remove(selectedSummary);
-                if (removed.ok && isCurrent()) await executeLayoutAction('widgets.area.layout.select', { surface: base });
+                if (removed.ok && !removed.approvalPending && isCurrent()) await executeLayoutAction('widgets.area.layout.select', { surface: base });
             } },
         };
     }, [base, executeLayoutAction, isCurrent, layouts, listed, ready?.canEdit, selectedSummary]);
@@ -181,17 +195,17 @@ export function PluginPageWidgetArea(props: PluginUiWidgetAreaPresentation & Rea
         moveBefore: name => t('usage.board.page.moveViewBefore', { name }), moveAfter: name => t('usage.board.page.moveViewAfter', { name }),
         delete: t('usage.board.page.deleteView'), deleteLabel: t('usage.board.page.deleteView'),
     };
-    const phone = useDeviceType() === 'phone';
     const testID = props.testID ?? `widget-area.${props.area}`;
     return (
         <>
         {ready ? <WidgetAreaLayoutBar layouts={options} selectedId={selectedId} onSelect={id => { void selectLayout(id); }}
-            narrow={phone} onCreate={ready.canEdit ? () => { void create(); } : null} actions={actions} labels={labels} testID={`${testID}.layouts`} /> : null}
+            onCreate={ready.canEdit ? () => { void create(); } : null} actions={actions} labels={labels} testID={`${testID}.layouts`} /> : null}
         {ready?.preset?.isEdited ? <WidgetAreaPresetLine preset={ready.preset} surface={ready.surface} testID={`${testID}.preset`}
-            presetActions={{ resetPreset: async () => {
-                const result = await port.execute({ actionId: 'widgets.item.list' });
+            presetActions={{ resetPreset: async (surface = ready.surface) => {
+                const admitted = { surface, context: ready.context };
+                const result = await port.execute({ actionId: 'widgets.item.list' }, undefined, admitted);
                 const read = result.ok ? WidgetSurfaceReadV1Schema.safeParse(result.result) : null;
-                return read?.success ? port.execute({ actionId: 'widgets.area.layout.reset', expectedRevision: read.data.revision ?? null }) : result;
+                return read?.success ? port.execute({ actionId: 'widgets.area.layout.reset', expectedRevision: read.data.revision ?? null }, undefined, admitted) : result;
             }, undoReset: capture => executeLayoutAction('widgets.area.layout.undo', { capture }) }} /> : null}
         <WidgetArea
             port={port}

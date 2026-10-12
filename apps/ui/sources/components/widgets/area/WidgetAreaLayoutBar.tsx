@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   HAPPIER_FOCUS_RING_DELEGATED_STYLE,
@@ -8,6 +8,7 @@ import {
   HappierTabs,
   isHappierFocusVisible,
   type HappierTabDescriptor,
+  HAPPIER_ICON_BUTTON_SIZE,
 } from '@happier-dev/plugin-ui/presentation';
 
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
@@ -29,6 +30,8 @@ export type WidgetAreaLayoutOption = Readonly<{
   name: string;
   /** The area's stock layout (the narrow list says so under its name). */
   isDefault?: boolean;
+  /** Host presets precede the viewer's own layouts in the compact selector. */
+  isPreset?: boolean;
   /** A host's own mark for the layout (Usage's views); absent where layouts are told apart by name. */
   icon?: IconName;
   /** Set for a layout someone else owns: its owner's mark instead of an icon. */
@@ -90,6 +93,9 @@ function editedMarker(option: WidgetAreaLayoutOption): string | undefined {
 }
 
 /** A tab descriptor: `HappierTabs` reads its props; the widget area below the bar is the panel. */
+/** The gap between a tab's icon and its name. */
+const TAB_ICON_GAP_PX = 6;
+
 function LayoutTab(_props: HappierTabDescriptor): null {
   return null;
 }
@@ -98,7 +104,8 @@ function LayoutTab(_props: HappierTabDescriptor): null {
  * The one tab bar for an area's named layouts (lab wgsaved R, `d2views`, `p-overview`): every area
  * owner — a Project's dashboards, a core page's views, a plugin area's layouts — draws it. Underlined
  * tabs with the edited dot, `+` to create from the current layout and `⋯` on the exact selected one at
- * the trailing edge; on a narrow pane the current name opens the same list. Switching writes nothing.
+ * the trailing edge; where the tabs do not fit (measured here, never decided by the caller) the current
+ * name opens the same list. Switching writes nothing.
  * The inventory (names, order, `isEdited`) comes from `useWidgetAreaLayouts`.
  */
 export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
@@ -106,8 +113,6 @@ export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
     layouts: readonly WidgetAreaLayoutOption[];
     selectedId: string;
     onSelect: (layoutId: string) => void;
-    /** The current-name menu replaces the tabs (narrow pane, phone). */
-    narrow: boolean;
     onCreate: (() => void) | null;
     actions: WidgetAreaLayoutActions | null;
     labels: WidgetAreaLayoutLabels;
@@ -122,6 +127,13 @@ export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
     props.layouts[0] ??
     null;
   const selectedId = selected?.id ?? props.selectedId;
+  // A tab's icon and its gap: what the strip gives back before it gives up the tabs (lab d2views).
+  const iconAllowancePx =
+    props.layouts.filter((layout) => layout.icon || layout.sharedBy).length *
+    (ICON_SIZE.sm + TAB_ICON_GAP_PX);
+  const layoutSignature = JSON.stringify(props.layouts.map(({ id, name, icon, sharedBy }) =>
+    [id, name, icon, sharedBy?.accountId]));
+  const fit = useLayoutTabsFit(iconAllowancePx, tabsTheme.spacing.xsmall, layoutSignature);
   const create = props.onCreate ? (
     <IconButton
       testID={`${testID}.create`}
@@ -141,10 +153,22 @@ export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
         testID={`${testID}.actions`}
       />
     ) : null;
+  // Selection can change the available menu, never the measured room for the tabs.
+  const actionSlot = (
+    <View
+      testID={`${testID}.actions-space`}
+      style={{
+        width: HAPPIER_ICON_BUTTON_SIZE,
+        height: HAPPIER_ICON_BUTTON_SIZE,
+      }}
+    >
+      {actions}
+    </View>
+  );
 
-  if (props.narrow) {
+  if (fit.narrow) {
     return (
-      <View testID={testID} style={styles.narrow}>
+      <View testID={testID} style={styles.narrow} onLayout={fit.onBarLayout}>
         <LayoutCurrentNameMenu
           layouts={props.layouts}
           selected={selected}
@@ -154,30 +178,31 @@ export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
           testID={`${testID}.current`}
         />
         <View style={styles.grow} />
-        {actions}
+        {/* The same trailing pair as the tabs (lab p-overview HOMEp): Create, then the selected one's ⋯. */}
+        {create}
+        {actionSlot}
       </View>
     );
   }
   return (
-    <View testID={testID} style={styles.bar}>
+    <View testID={testID} style={styles.bar} onLayout={fit.onBarLayout}>
       <CoreCollectionScope>
         <HappierTabs
           theme={tabsTheme}
+          onStripLayout={fit.onStripLayout}
           value={selectedId}
           onValueChange={props.onSelect}
           ariaLabel={labels.list}
           sharedPanel={null}
           testID={`${testID}.tabs`}
-          {...(actions || create
-            ? {
-                trailing: (
-                  <View style={styles.trailing}>
-                    {actions}
-                    {create}
-                  </View>
-                ),
-              }
-            : {})}
+          {...{
+            trailing: (
+              <View testID={`${testID}.trailing`} style={styles.trailing} onLayout={fit.onTrailingLayout}>
+                {create}
+                {actionSlot}
+              </View>
+            ),
+          }}
         >
           {props.layouts.map((layout) => (
             <LayoutTab
@@ -192,8 +217,9 @@ export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
                     size={ICON_SIZE.sm}
                     imageUrl={layout.sharedBy.imageUrl ?? null}
                   />
-                ) : layout.icon ? (
+                ) : layout.icon && !fit.iconless ? (
                   <Icon
+                    testID={`${testID}.tabs:${layout.id}:icon`}
                     name={layout.icon}
                     size={ICON_SIZE.sm}
                     color={
@@ -212,7 +238,78 @@ export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
   );
 });
 
-/** Narrow panes and phones: the selected layout's name opens the list, with Create at its end. */
+/**
+ * Whether the tabs fit the bar, by measurement: while they show, the bar width they need is their
+ * natural strip width plus the bar's own controls; once they do not fit, the current-name menu takes
+ * their place until the bar is that wide again. The need is re-measured whenever the tabs show.
+ */
+function useLayoutTabsFit(iconAllowancePx: number, controlsGapPx: number, layoutSignature: string) {
+  const [barWidth, setBarWidth] = React.useState<number | null>(null);
+  const [trailingWidth, setTrailingWidth] = React.useState<number | null>(null);
+  const [strip, setStrip] = React.useState<Readonly<{
+    contentWidth: number;
+    viewportWidth: number;
+    iconless: boolean;
+  }> | null>(null);
+  // What the tabs need with their icons; without them they need `iconAllowancePx` less.
+  const [neededPx, setNeededPx] = React.useState<number | null>(null);
+  React.useLayoutEffect(() => {
+    // A compact selector has no strip to report its changed natural width. Let the real tabs
+    // measure again after a rename, removal or mark change before choosing the compact form.
+    setNeededPx(null);
+    setStrip(null);
+  }, [layoutSignature]);
+  const iconless =
+    barWidth !== null && neededPx !== null && barWidth + 1 < neededPx;
+  const narrow = iconless && barWidth! + 1 < neededPx! - iconAllowancePx;
+  React.useEffect(() => {
+    // The tabs are gone while the menu shows; their last widths describe a bar that no longer exists.
+    if (narrow) {
+      setStrip(null);
+      return;
+    }
+    if (barWidth === null || strip === null) return;
+    // Measured without icons, the need is still expressed with them, so the two steps never oscillate.
+    // The room the bar's own controls take: measured directly where they have laid out, because a
+    // scroller's first width on web can be transient (and a need read from it stays stuck); otherwise
+    // what the scroller leaves of the bar.
+    const controlsPx = trailingWidth !== null ? trailingWidth + controlsGapPx : barWidth - strip.viewportWidth;
+    setNeededPx(
+      controlsPx +
+        strip.contentWidth +
+        (strip.iconless ? iconAllowancePx : 0),
+    );
+  }, [barWidth, narrow, strip, iconAllowancePx, trailingWidth, controlsGapPx]);
+  const onBarLayout = React.useCallback((event: LayoutChangeEvent) => {
+    const width = event.nativeEvent.layout.width;
+    setBarWidth((current) => (current === width ? current : width));
+  }, []);
+  const onStripLayout = React.useCallback(
+    (metrics: Readonly<{ contentWidth: number; viewportWidth: number }>) => {
+      // A scroller with no width yet has not been laid out (web reports its content first); reading it as
+      // "no room" would turn the bar into the menu and keep it there.
+      if (metrics.viewportWidth <= 0) return;
+      setStrip((current) =>
+        current?.contentWidth === metrics.contentWidth &&
+        current.viewportWidth === metrics.viewportWidth && current.iconless === iconless
+          ? current
+          : {
+              contentWidth: metrics.contentWidth,
+              viewportWidth: metrics.viewportWidth,
+              iconless,
+            },
+      );
+    },
+    [iconless],
+  );
+  const onTrailingLayout = React.useCallback((event: LayoutChangeEvent) => {
+    const width = event.nativeEvent.layout.width;
+    setTrailingWidth((current) => (current === width ? current : width));
+  }, []);
+  return { narrow, iconless: iconless && !narrow, onBarLayout, onStripLayout, onTrailingLayout };
+}
+
+/** Where the tabs do not fit: the selected layout's name opens the list, with Create at its end. */
 function LayoutCurrentNameMenu(
   props: Readonly<{
     layouts: readonly WidgetAreaLayoutOption[];
@@ -247,7 +344,7 @@ function LayoutCurrentNameMenu(
                 ),
               }
             : {}),
-          category: 'layouts',
+          category: layout.isPreset ? 'presets' : 'layouts',
           icon: layout.sharedBy ? (
             <Avatar
               id={layout.sharedBy.accountId}
@@ -267,7 +364,7 @@ function LayoutCurrentNameMenu(
           ...(layout.isDefault && labels.defaultLayout
             ? { subtitle: labels.defaultLayout }
             : {}),
-            checked: layout.id === selectedId,
+          checked: layout.id === selectedId,
           testID: `${testID}.option.${layout.id}`,
         };
       }),

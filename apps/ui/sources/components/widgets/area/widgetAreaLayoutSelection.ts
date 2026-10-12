@@ -1,6 +1,7 @@
-import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ActionExecuteFailure, ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { WidgetSurfaceReadV1Schema, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 /** Selection lives in the mounted page's route/state; this is only its answering-client address. */
 export type WidgetAreaLayoutSelectionOwner = Readonly<{
@@ -15,7 +16,7 @@ export function widgetAreaLayoutBaseSurface(surface: WidgetSurfaceRefV1): Widget
     const owner = surface.owner;
     if (owner.kind !== 'project' && owner.kind !== 'corePage' && owner.kind !== 'pluginArea') return surface;
     const { layoutId: _layoutId, ...base } = owner;
-    return { serverId: surface.serverId, accountId: surface.accountId, owner: base };
+    return { serverId: resolveServerProfileScopeIdForIdentifier(surface.serverId), accountId: surface.accountId, owner: base };
 }
 
 export function registerWidgetAreaLayoutSelectionOwner(owner: WidgetAreaLayoutSelectionOwner): () => void {
@@ -23,13 +24,20 @@ export function registerWidgetAreaLayoutSelectionOwner(owner: WidgetAreaLayoutSe
     return () => { mountedOwners.delete(owner); };
 }
 
+export function resolveMountedWidgetAreaLayoutSelectionOwner(surface: WidgetSurfaceRefV1): WidgetAreaLayoutSelectionOwner | ActionExecuteFailure {
+    const base = widgetAreaLayoutBaseSurface(surface);
+    const matches = [...mountedOwners].filter(owner => owner.isCurrent() && sameStrictJsonValue(widgetAreaLayoutBaseSurface(owner.surface), base));
+    if (matches.length === 1) return matches[0]!;
+    const errorCode = matches.length ? 'widget_area_layout_owner_ambiguous' : 'widget_area_layout_owner_unavailable';
+    return { ok: false, errorCode, error: errorCode };
+}
+
 export async function selectMountedWidgetAreaLayout(surface: WidgetSurfaceRefV1, signal?: AbortSignal): Promise<ActionExecuteResult> {
     const failed = (errorCode: string): ActionExecuteResult => ({ ok: false, errorCode, error: errorCode });
     if (signal?.aborted) return failed('cancelled');
     const base = widgetAreaLayoutBaseSurface(surface);
-    const matches = [...mountedOwners].filter(owner => owner.isCurrent() && sameStrictJsonValue(widgetAreaLayoutBaseSurface(owner.surface), base));
-    if (matches.length !== 1) return failed(matches.length ? 'widget_area_layout_owner_ambiguous' : 'widget_area_layout_owner_unavailable');
-    const owner = matches[0]!;
+    const owner = resolveMountedWidgetAreaLayoutSelectionOwner(surface);
+    if ('ok' in owner) return owner;
     const result = await owner.read(surface, signal);
     if (!result.ok) return result;
     const read = WidgetSurfaceReadV1Schema.safeParse(result.result);

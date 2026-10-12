@@ -8,6 +8,7 @@ import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAre
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
 import { slideTransitionTokens } from '@/components/ui/motion/slideTransitionTokens';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
+import { WidgetFlowHeightBoundContext } from '@/components/widgets/flow/WidgetFlowPanel';
 import { Popover } from '@/components/ui/popover';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { BaseModal } from '@/modal/components/BaseModal';
@@ -31,10 +32,13 @@ const MAX_HEIGHT_PX = 640;
 /** The sheet leaves the top of the screen visible, so the surface it changes stays in view. */
 const SHEET_MAX_HEIGHT_RATIO = 0.9;
 
+/** The gap the flow keeps from the window's edges; the flow's own width sits inside it. */
+const EDGE_PADDING_PX = 8;
+
 /**
  * The one floating surface every widget flow uses on desktop: Edit inputs, About, Save as your
- * widget and Post a snapshot, anchored to the control that opened it with its trailing edge on the
- * anchor's (the ⋯ it came from). Each flow keeps one width for its whole life.
+ * widget and Post a snapshot, anchored to the control that opened it: it starts at the ⋯ it came from
+ * and slides back inside the window, so it stays over the content. Each flow keeps one width for its whole life.
  */
 export function AnchoredWidgetShell(props: Readonly<{
     anchorRef: React.RefObject<View | null>;
@@ -50,22 +54,25 @@ export function AnchoredWidgetShell(props: Readonly<{
             placement={props.placement ?? 'bottom'}
             gap={8}
             maxHeightCap={MAX_HEIGHT_PX}
-            maxWidthCap={props.width}
-            edgePadding={{ vertical: 8, horizontal: 8 }}
-            portal={{ web: true, native: true, matchAnchorWidth: false, anchorAlign: 'end' }}
+            // A designed flow keeps its full size and slides inside the window rather than being
+            // squeezed into the room below a mid-page ⋯, which scrolled its footer out of view.
+            fit="shift"
+            maxWidthCap={props.width + 2 * EDGE_PADDING_PX}
+            edgePadding={{ vertical: EDGE_PADDING_PX, horizontal: EDGE_PADDING_PX }}
+            // Opens from the ⋯ toward the content and slides back inside the window, so a card in the
+            // left column never pushes its flow over the navigation (QA-V F11; lab d2edit-SET).
+            portal={{ web: true, native: true, matchAnchorWidth: false, anchorAlign: 'start' }}
             onRequestClose={props.onRequestClose}
             backdrop={{ effect: 'none', closeOnPan: true }}
         >
             {({ maxHeight, maxWidth }) => (
-                // A definite width, capped by the room the Popover found.
-                <View style={{ alignSelf: 'flex-end', width: Math.min(props.width, maxWidth) }}>
-                    <FloatingOverlay
-                        maxHeight={maxHeight}
-                        keyboardShouldPersistTaps="always"
-                        edgeFades={{ top: true, bottom: true, size: 24 }}
-                        edgeIndicators={true}
-                    >
-                        {props.children}
+                // A definite width, capped by the room the Popover found inside its own edge padding.
+                <View style={{ alignSelf: 'flex-start', width: Math.min(props.width, maxWidth - 2 * EDGE_PADDING_PX) }}>
+                    {/* The flow scrolls its own body inside this room, so its header and footer stay put. */}
+                    <FloatingOverlay maxHeight={maxHeight} scrollEnabled={false} keyboardShouldPersistTaps="always">
+                        <WidgetFlowHeightBoundContext.Provider value={maxHeight}>
+                            {props.children}
+                        </WidgetFlowHeightBoundContext.Provider>
                     </FloatingOverlay>
                 </View>
             )}
@@ -125,6 +132,24 @@ export function WidgetSheetShell(props: Readonly<{
             </ModalCardFrame>
         </BaseModal>
     );
+}
+
+/**
+ * The ⋯ menu of a widget and of a group on a phone: the same bottom sheet, naming the object once with
+ * Done (lab wgmenu Cp, wgphone Mp). It is `undefined` on a wider window, where the menu stays anchored.
+ * Pass it as `renderOverflowSurface`.
+ */
+export function useWidgetMenuSurface(input: Readonly<{ title: string; meta?: string; testID: string }>) {
+    const phone = useDeviceType() === 'phone';
+    const { title, meta, testID } = input;
+    return React.useMemo(() => phone
+        ? ({ children, onRequestClose }: Readonly<{ children: React.ReactNode; onRequestClose: () => void }>) => (
+            <WidgetSheetShell title={title} heading={{ ...(meta === undefined ? {} : { meta }), doneTestID: `${testID}.done` }}
+                onRequestClose={onRequestClose} testID={`${testID}.sheet`}>
+                {children}
+            </WidgetSheetShell>
+        )
+        : undefined, [phone, title, meta, testID]);
 }
 
 /**
@@ -188,13 +213,13 @@ const sheetStyles = StyleSheet.create((theme) => ({
     heading: {
         flexDirection: 'row',
         alignItems: 'baseline',
-        gap: 8,
+        gap: theme.space.s8,
         paddingLeft: MENU_ROW_METRICS.insetPx + MENU_ROW_METRICS.paddingHorizontalPx,
         paddingRight: MENU_ROW_METRICS.insetPx + MENU_ROW_METRICS.paddingHorizontalPx - 6,
     },
     headingTitle: { ...Typography.default('semiBold'), ...happierPageTextMetrics('sectionTitle'), color: theme.colors.text.primary, flexShrink: 1 },
     headingMeta: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, flexShrink: 1 },
     headingGrow: { flex: 1 },
-    done: { paddingHorizontal: 6, paddingVertical: 8, borderRadius: MENU_ROW_METRICS.radiusPx },
+    done: { paddingHorizontal: theme.space.s6, paddingVertical: theme.space.s8, borderRadius: MENU_ROW_METRICS.radiusPx },
     doneLabel: { ...Typography.default('semiBold'), ...happierPageTextMetrics('rowTitle'), color: theme.colors.text.link },
 }));

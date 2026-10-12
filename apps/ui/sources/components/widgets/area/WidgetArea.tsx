@@ -3,12 +3,15 @@ import { Platform, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { EmptySlot } from '@/components/ui/empty/EmptySlot';
+import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { useOptionalPluginUiScrollActivityTracker } from '@happier-dev/plugin-ui/advanced';
 import { findWidgetLayoutItemV1, flattenWidgetLayoutWidgetsV1, getWidgetLayoutItemIdV1, normalizeWidgetSizeForSurfaceV1, resolveWidgetSizeChoicesV1, supportsWidgetGroupsV1, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetLayoutGroupV1, type WidgetLayoutItemV1, type WidgetPlacementV1, type WidgetSurfaceRefV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 import { WidgetGroupFrame, type WidgetGroupChildPlacement } from '@/components/widgets/group/WidgetGroupFrame';
 import { WidgetGroupMenuButton } from '@/components/widgets/group/WidgetGroupMenuButton';
 import { WidgetGroupBar } from '@/components/widgets/group/WidgetGroupBar';
-import { buildWidgetGroupMembershipActions, describeWidgetGroup, resolveWidgetGroupChildSizeLimit, type WidgetGroupOperations } from '@/components/widgets/group/widgetGroupMenu';
+import { readWidgetGroupTitle } from '@/components/widgets/group/widgetGroupTitle';
+import { buildWidgetGroupMembershipActions, describeWidgetGroup, resolveWidgetGroupChildSizeLimit, WIDGET_GROUP_ICON, type WidgetGroupOperations } from '@/components/widgets/group/widgetGroupMenu';
+import { useWidgetCarriedIdentity } from '@/components/widgets/surface/widgetCarriedIdentity';
 import { describeWidgetGroupContext, readWidgetGroupFollowedValue, widgetGroupFollowSource, widgetGroupPinnedSource, widgetGroupSurfaceContext } from '@/components/widgets/group/widgetGroupInputs';
 import { resolveWidgetGroupCells, resolveWidgetGroupColumns } from '@/components/widgets/group/widgetGroupLayout';
 import { resolveWidgetGroupPointerDestination, widgetGroupDropTarget, widgetLayoutCardDropTarget } from '@/components/widgets/group/widgetGroupDropTarget';
@@ -17,17 +20,20 @@ import { WidgetGroupMembershipArrivalView, useWidgetGroupMembershipArrivals } fr
 import { useWidgetGroupMenu } from '@/components/widgets/group/useWidgetGroupMenu';
 import { randomUUID } from '@/platform/randomUUID';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { useWidgetMenuSurface } from '@/components/widgets/flow/WidgetFlowShell';
 import { getWidgetSizeFootprintV1 } from '@happier-dev/protocol/widgets';
 
 import { useIsFocused } from '@/components/appShell/workspace/destinationRoute';
+import { useCurrentUiContextLocalCommands } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { readCoarsePrimaryPointer, useRowActionHoverHost } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
-import { RowActionRevealSlot } from '@/components/sessions/transcript/messageActions/RowActionRevealSlot';
+import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { CardGrid, CardGridCell } from '@/components/ui/cardGrid/CardGrid';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
+import { ItemGroupColumn, ItemGroupColumns } from '@/components/ui/lists/ItemGroupColumns';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
@@ -42,24 +48,27 @@ import {
     buildWidgetMoveActions,
     buildWidgetSizeActions,
     orderWidgetMenu,
+    useWidgetMenuAlwaysShown,
     WIDGET_MENU_MAX_HEIGHT_PX,
 } from '@/components/widgets/frame/widgetFrameMenu';
 import { WIDGET_FRAME_PLACEMENT_DEFAULTS, resolveWidgetFrameStyle } from '@/components/widgets/frame/widgetFrameStyle';
 import { useWidgetFrameRename } from '@/components/widgets/frame/useWidgetFrameRename';
-import { WidgetFrameBodyCaptionContext } from '@/components/widgets/frame/widgetFrameBodyCaption';
+import { WidgetFrameBodyCaptionContext, WidgetFrameBodyMetaContext } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { WidgetFrameBodyActionsContext } from '@/components/widgets/frame/widgetFrameBodyActions';
 import { useWidgetDefinitionFlows } from '@/components/widgets/definitions/useWidgetDefinitionFlows';
 import { useWidgetInputsEditor } from '@/components/widgets/surface/useWidgetInputsEditor';
-import { useWidgetInstanceBindingLabel } from '@/components/widgets/surface/useWidgetInstanceBindingLabel';
+import { isWidgetFollowingSurfaceSlot, useWidgetInstanceBindingLabel } from '@/components/widgets/surface/useWidgetInstanceBindingLabel';
 import type { WidgetBindingValueLabels } from '@/components/widgets/surface/useWidgetBindingValueLabels';
 import { useWidgetInstanceDescriptors } from '@/components/widgets/surface/useWidgetInstanceDescriptor';
 import { WidgetSurface } from '@/components/widgets/surface/WidgetSurface';
 import { runAcknowledgedWidgetSetupCommand, widgetProvidedContext, type WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
-import { readWidgetDescriptor, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import { isBuiltinWidgetSwitchedOff, readWidgetDescriptor, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import { useAtmosphereMoments } from '@/components/atmosphere/atmosphereMoments';
 import { t } from '@/text';
 import { useIsNearViewport, type NearViewportSpan } from '@/components/widgets/nearViewport';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useWidgetMovementAdmission } from '@/components/widgets/surface/useWidgetMovementAdmission';
 import { SessionSurfaceEntityDragHandle, SessionSurfaceEntityFeedback, SessionSurfaceEntityTargetFeedback, useSessionSurfaceCarriedStyle, useSessionSurfaceEntityDrag, useSessionSurfaceGeometryRefresh } from '@/components/sessions/board/SessionSurfaceEntityDrag';
 import { resolveEntityFlatRowPosition } from '@/components/ui/treeDragDrop/geometry/entityFlatListStrategy';
@@ -96,12 +105,16 @@ export type WidgetAreaProps = Readonly<{
     area?: 'main' | 'aside';
     /** Phone renders merged widgets once, followed by each area's existing Add control. */
     display?: 'all' | 'widgets' | 'add';
+    /** Split Project renderers and trailing controls use their document's one editing state. */
+    organize?: Readonly<{ active: boolean; onChange: (active: boolean) => void }>;
     /** A document host retains viewer-local disclosure while responsive areas remount. */
     disclosure?: Readonly<{
         collapsedByInstanceId: Readonly<Record<string, boolean>>;
         onCollapsedChange: (instanceId: string, collapsed: boolean) => void;
     }>;
     geometry: WidgetAreaGeometry;
+    /** A measured host pairs one column's saved order without replacing its mounted bodies. */
+    columnLayout?: Readonly<{ columns: 1 | 2; gap: number }>;
     title: string;
     /** One quiet fact beside the title ("your widgets on this page"). */
     meta?: string;
@@ -113,7 +126,12 @@ export type WidgetAreaProps = Readonly<{
      * A dashboard area (lab `p-overview`): no area header; the widgets, then one dashed "Add widget" line
      * that opens the same Add surface; an area emptied by Remove keeps its place and says so quietly.
      */
-    dashboard?: Readonly<{ addLabel: string; emptyTitle: string; /** The gallery says where the widget goes ("Add to Release · side area"). */ addTitle?: string }>;
+    dashboard?: Readonly<{ addLabel: string; emptyTitle: string; /** The gallery says where the widget goes ("Add to Release · side area"). */ addTitle?: string;
+        /**
+         * One Add that serves both areas of a dashboard (stacked and on a phone): the gallery offers the
+         * areas, each with its own title, and adds into the chosen one through the same layout write.
+         */
+        areaChoice?: readonly Readonly<{ area: 'main' | 'aside'; label: string; title: string }>[] }>;
     testID: string;
 }>;
 
@@ -163,7 +181,9 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
     // a refused change on the card it was for, with Retry, until a later change succeeds; one held
     // for someone's approval as the header's quiet meta. A refused add stays on its gallery tile.
     const [notice, setNotice] = React.useState<AreaNotice | null>(null);
-    const [organizing, setOrganizing] = React.useState(false);
+    const [localOrganizing, setLocalOrganizing] = React.useState(false);
+    const organizing = props.organize?.active ?? localOrganizing;
+    const setOrganizing = props.organize?.onChange ?? setLocalOrganizing;
     const state = layout.state;
     const ready = state.status === 'ready' ? state : null;
     const canAdd = ready?.canEdit === true;
@@ -175,7 +195,7 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
     const canOrganize = canAdd && (hasGroup || (ready?.placements.length ?? 0) > 1 && (Platform.OS !== 'web' || readCoarsePrimaryPointer()));
     const viewer = useActiveServerAccountScope();
     const focused = useIsFocused();
-    const current = ready !== null && focused && viewer?.serverId === ready.surface.serverId
+    const current = ready !== null && focused && !!viewer && areServerProfileIdentifiersEquivalent(viewer.serverId, ready.surface.serverId)
         && (viewer.accountId === ready.surface.accountId || ready.admittedViewer?.serverId === viewer.serverId && ready.admittedViewer.accountId === viewer.accountId);
     const movement = useWidgetMovementAdmission(current ? ready?.surface ?? null : null, ready?.placements, props.port.movement);
     const drop = useSessionSurfaceEntityDrag(current && ready ? {
@@ -201,9 +221,18 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
         return outcome;
     }, [layoutWrite]);
     const closeAdd = React.useCallback(() => setAddOpen(false), []);
+    const changeOrganizing = React.useCallback((next: boolean) => {
+        setOrganizing(next);
+        drop.runtime.cancel('organize-changed');
+    }, [setOrganizing, drop.runtime]);
+    useCurrentUiContextLocalCommands(current && canOrganize && ready ? [{
+        key: `${stableJsonStringify(ready.surface)}:${props.area ?? 'all'}:organize`,
+        title: `${t(organizing ? 'common.done' : 'entityDragDrop.organize.title')}: ${props.surfaceName}`,
+        invoke: () => changeOrganizing(!organizing),
+    }] : []);
     const organizeControl = canOrganize ? <RoundButton size="small" display="secondary" testID={`${props.testID}.organize`}
         title={t(organizing ? 'common.done' : 'entityDragDrop.organize.title')}
-        onPress={() => { setOrganizing(value => !value); drop.runtime.cancel('organize-changed'); }} /> : null;
+        onPress={() => changeOrganizing(!organizing)} /> : null;
 
     return (
         <View ref={drop.ref} onLayout={drop.onLayout} testID={props.testID} style={styles.area}>
@@ -232,7 +261,15 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                     </View>
                 ) : null}
             />}
-            {props.display === 'add' ? null : state.status === 'unavailable' ? (
+            {props.display === 'add' ? null : state.status === 'loading' ? (
+                <WidgetFrame
+                    testID={`${props.testID}.loading`}
+                    title={null}
+                    frameStyle={props.geometry === 'grid' ? 'card' : 'plain'}
+                    placement={GEOMETRY_PLACEMENT[props.geometry]}
+                    body={{ kind: 'loading', accessibilityLabel: t('common.loading') }}
+                />
+            ) : state.status === 'unavailable' ? (
                 <SurfaceStateCard
                     testID={`${props.testID}.unavailable`}
                     kind="unavailable"
@@ -257,11 +294,12 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                 <WidgetAreaPlacements {...props} context={ready.context} surface={ready.surface} placements={ready.placements} items={ready.items} canEdit={ready.canEdit}
                     isShared={ready.isShared} admittedViewer={ready.admittedViewer}
                     isCurrent={ready.isCurrent}
+                    isReadPending={ready.isReadPending}
                     current={current} organizing={organizing && canOrganize} admitWidgetMovement={movement.admit} write={write}
                     movementSourceItem={movement.sourceItem}
                     failed={notice?.kind === 'failed' ? notice : null} />
             ) : null}
-            {props.display !== 'widgets' && props.dashboard && (state.status === 'loading' || canAdd) ? (
+            {props.display !== 'widgets' && props.dashboard && canAdd ? (
                 <View style={styles.header}>
                     {organizeControl}
                 <View ref={addAnchorRef} collapsable={false} style={styles.grow}>
@@ -292,6 +330,7 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                     {...(props.area ? { area: props.area } : {})}
                     surfaceName={props.surfaceName}
                     {...(props.dashboard?.addTitle ? { title: props.dashboard.addTitle } : {})}
+                    {...(props.dashboard?.areaChoice ? { areaChoice: props.dashboard.areaChoice } : {})}
                     write={layoutWrite}
                     onRequestClose={closeAdd}
                     testID={`${props.testID}.addPopover`}
@@ -329,6 +368,7 @@ type PlacementsProps = WidgetAreaProps & Readonly<{
     isShared: boolean;
     admittedViewer: Extract<WidgetAreaLayout<WidgetSurfaceContext>['state'], { status: 'ready' }>['admittedViewer'];
     isCurrent: () => boolean;
+    isReadPending: () => boolean;
     current: boolean;
     organizing: boolean;
     admitWidgetMovement(effect: EntityDropEffectV1): EntityDropAdmissionV1;
@@ -417,7 +457,16 @@ function WidgetAreaPlacements(props: PlacementsProps): React.ReactElement {
         const id = getWidgetLayoutItemIdV1(item);
         return <WidgetGroupMembershipArrivalView key={id} arrival={arrivals.get(id)} style={styles.cell}>{built[index]}</WidgetGroupMembershipArrivalView>;
     });
-    if (props.geometry === 'column') return <View style={styles.column}>{rendered}</View>;
+    if (props.geometry === 'column') {
+        if (!props.columnLayout) return <View style={styles.column}>{rendered}</View>;
+        const split = Math.ceil(rendered.length / 2);
+        // Both partitions stay mounted at every width; only the shared primitive's cell width changes.
+        return <ItemGroupColumns columns={2} activeColumns={props.columnLayout.columns}
+            paddingHorizontal={0} paddingVertical={0} columnGap={props.columnLayout.gap} rowGap={12}>
+            <ItemGroupColumn><View style={styles.column}>{rendered.slice(0, split)}</View></ItemGroupColumn>
+            <ItemGroupColumn><View style={styles.column}>{rendered.slice(split)}</View></ItemGroupColumn>
+        </ItemGroupColumns>;
+    }
     return (
         <CardGrid testID={`${props.testID}.grid`} columns={2}>
             {items.map((item, index) => {
@@ -486,8 +535,9 @@ function WidgetAreaGroup(props: PlacementsProps & Readonly<{
     });
     const labels = menu.labels;
     // The whole group lifts by its grip and is a drop target: into it, or beside it (lab wgdnd B).
+    const carried = useWidgetCarriedIdentity({ kind: 'group', mark: WIDGET_GROUP_ICON, childCount: group.children.length });
     const drop = useSessionSurfaceEntityDrag(props.current && props.canEdit ? {
-        scope: props.surface, title: name, isCurrent: () => props.current && props.canEdit,
+        scope: props.surface, title: name, ...carried, isCurrent: () => props.current && props.canEdit,
         getItem: () => props.items.some(item => item.kind === 'group' && item.id === group.id) ? { kind: 'widget-layout-group',
             scope: { serverId: props.surface.serverId, accountId: props.surface.accountId }, ref: { surface: props.surface, instanceId: group.id } } : null,
         admitWidgetMovement: props.admitWidgetMovement, ...(props.port?.movement ? { widgetMovement: props.port.movement } : {}),
@@ -514,9 +564,9 @@ function WidgetAreaGroup(props: PlacementsProps & Readonly<{
                 cells={props.cells}
                 columns={props.columns}
                 customizing={props.organizing}
-                {...(props.organizing && props.canEdit ? { bar: <WidgetGroupBar input={menu.menuInput} onRename={menu.commitName} anchorRef={menu.anchorRef} grip={grip} testID={`${testID}.bar`} /> } : {})}
+                {...(props.organizing && props.canEdit ? { bar: <WidgetGroupBar input={menu.menuInput} serverId={props.surface.serverId} onRename={menu.commitName} anchorRef={menu.anchorRef} grip={grip} testID={`${testID}.bar`} /> } : {})}
                 {...(props.canEdit ? { onAddToGroup: () => setSlotAddOpen(true), addAnchorRef: slotAnchorRef } : {})}
-                title={props.organizing && props.canEdit ? null : group.title !== undefined || menu.renameField ? menu.renameField ?? group.title ?? null : null}
+                title={props.organizing && props.canEdit ? null : menu.renameField ?? readWidgetGroupTitle(group) ?? null}
                 source={source ? widgetGroupPinnedSource(source) : undefined}
                 menu={props.canEdit && !props.organizing ? <WidgetGroupMenuButton input={menu.menuInput} visible={hover.isHovered} anchorRef={menu.anchorRef} testID={`${testID}.menu`} /> : null}
                 accessibilityLabel={t('widgetFrame.groupA11y', { name })}
@@ -558,6 +608,12 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
     const collapsed = props.disclosure?.collapsedByInstanceId[instance.id] ?? localCollapsed;
     const onCollapsedChange = (next: boolean) => props.disclosure
         ? props.disclosure.onCollapsedChange(instance.id, next) : setLocalCollapsed(next);
+    // A Project widget collapses from its ⋯ (lab p-overview): only README, which is read collapsed,
+    // carries its caret at rest; another widget shows it while collapsed, so it can come back. A viewer
+    // without the ⋯ keeps the caret, so collapsing stays theirs either way.
+    const collapsible = surface.owner.kind === 'project';
+    const caretShown = collapsible && (collapsed || !props.canEdit
+        || (instance.definition.kind === 'builtin' && instance.definition.id === 'project_readme'));
     const testID = `${props.testID}.widget.${instance.id}`;
     const runtime = useAppShellPluginUiProjection();
     const candidate = props.descriptor;
@@ -605,10 +661,27 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
     const groupContext = parent?.group.context;
     const groupLabels = parent?.labels;
     const itemContext = React.useMemo(() => widgetGroupSurfaceContext(context, groupContext, groupLabels), [context, groupContext, groupLabels]);
-    const bindingLabel = useWidgetInstanceBindingLabel(instance, candidate, itemContext);
+    const followedLabel = useWidgetInstanceBindingLabel(instance, candidate, itemContext);
+    // A Project page's header chip and a core page's filter bar (Usage) already name what their widgets
+    // follow: "This checkout" or "This page" on each frame would repeat it on every card (lab p-overview
+    // HOME, wgusage-CD). A copy pinned to another value still says which.
+    const namesOwnScope = surface.owner.kind === 'project' || surface.owner.kind === 'corePage';
+    const followsPage = namesOwnScope && isWidgetFollowingSurfaceSlot(instance, itemContext);
+    const bindingLabel = followsPage ? null : followedLabel;
+    // Nor do those pages call their own built-ins "Built in": the source slot is for a plugin's name.
+    // A plugin whose name is also the widget's title is not said twice ("qaf1 footprints  qaf1 footprints").
+    const shownTitle = (instance.displayName ?? candidate?.title)?.trim().toLocaleLowerCase();
+    const sourceName = namesOwnScope && instance.definition.kind === 'builtin' ? undefined
+        : candidate?.pluginName && candidate.pluginName.trim().toLocaleLowerCase() === shownTitle ? undefined : candidate?.pluginName;
     const followed = readWidgetGroupFollowedValue(instance, groupContext, groupLabels);
+    // A group with a header names the value it fills once; each widget that follows it does not say it again
+    // (nor does a binding label, which would read the same slot). An untitled group has no header to say it.
+    const groupNamesFollowed = followed !== null && parent !== undefined && readWidgetGroupTitle(parent.group) !== undefined;
     // The body may name what it shows; a followed group value still wins the source slot.
     const [bodyCaption, setBodyCaption] = React.useState<string | null>(null);
+    const [bodyMeta, setBodyMeta] = React.useState<React.ReactNode>(null);
+    // A built-in withdrawn by its own switch keeps its place in the layout, undrawn (as on Home).
+    const switchedOff = isBuiltinWidgetSwitchedOff(instance.definition, useAtmosphereMoments());
     // The body may also lend the entries that act on what it shows; the frame's ⋯ stays the one menu.
     const [bodyActions, setBodyActions] = React.useState<readonly ItemAction[] | null>(null);
     const supportsGroups = supportsWidgetGroupsV1(surface.owner.kind);
@@ -621,10 +694,18 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
         instance, candidate, scope: surface, context: itemContext, audience: props.isShared ? 'shared' : 'personal',
         ...(props.canEdit ? { setInputs: saveInputs } : {}), testID,
     });
-    const definition = useWidgetDefinitionFlows({ instance, scope: surface, providedContext, anchorRef: edit.anchorRef, editInputs: edit.editInputs, testID });
+    const definition = useWidgetDefinitionFlows({ instance, scope: surface, providedContext: widgetProvidedContext(itemContext), anchorRef: edit.anchorRef, editInputs: edit.editInputs, testID });
     const title = instance.displayName ?? candidate?.title ?? t('sessionBoard.item.pluginUnavailable.title');
+    useCurrentUiContextLocalCommands(props.current && focused && collapsible && !switchedOff ? [{
+        key: `${stableJsonStringify(surface)}:${instance.id}:disclosure`,
+        title: `${t(collapsed ? 'projects.widgets.expand' : 'projects.widgets.collapse')}: ${title}`,
+        invoke: () => onCollapsedChange(!collapsed),
+    }] : []);
+    // Carried, the card keeps its mark and says its source and the size it keeps (lab wgdnd 1).
+    const carried = useWidgetCarriedIdentity({ kind: 'widget', mark: candidate?.icon ?? 'squares-four',
+        source: groupNamesFollowed ? bodyCaption ?? undefined : followed ?? bodyCaption ?? bindingLabel ?? sourceName, size });
     const drag = useSessionSurfaceEntityDrag(props.current && props.canEdit ? {
-        scope: surface, title, isCurrent: () => props.current && props.canEdit && findWidgetLayoutItemV1(props.layoutItems, instance.id) !== undefined,
+        scope: surface, title, ...carried, isCurrent: () => props.current && props.canEdit && findWidgetLayoutItemV1(props.layoutItems, instance.id) !== undefined,
         getItem: () => ({ kind: 'widget-area-instance', scope: { serverId: surface.serverId, accountId: surface.accountId }, ref: { surface, instanceId: instance.id } }),
         admitWidgetMovement: props.admitWidgetMovement,
         ...(props.port?.movement ? { widgetMovement: props.port.movement } : {}),
@@ -641,6 +722,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
     const renaming = useWidgetFrameRename({
         title,
         testID,
+        serverId: surface.serverId,
         ...(props.canEdit ? { onRename: async (next: string) => {
             // An empty name, or the widget's own, goes back to it.
             const displayName = next.length > 0 && next !== candidate?.title ? next : null;
@@ -650,7 +732,8 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
         } } : {}),
     });
 
-    const alwaysVisible = Platform.OS !== 'web' || readCoarsePrimaryPointer();
+    const alwaysVisible = useWidgetMenuAlwaysShown();
+    const menuSurface = useWidgetMenuSurface({ title, testID: `${testID}.menu` });
     const choices = resolveWidgetSizeChoicesV1(surface.owner.kind, candidate?.sizeDeclaration);
     const sizeLimit = parent ? resolveWidgetGroupChildSizeLimit({ group: parent.group, groupName: describeWidgetGroup(parent.group, props.childTitle),
         surface: surface.owner.kind, sizes: choices.sizes }) : undefined;
@@ -678,6 +761,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                 overflowMaxHeightCap={WIDGET_MENU_MAX_HEIGHT_PX}
                 overflowTriggerTestID={`${testID}.menuTrigger`}
                 overflowTriggerAccessibilityLabel={`${t('widgetAdd.widgetOptions')}: ${title}`}
+                renderOverflowSurface={menuSurface}
                 onOverflowTriggerKeyDown={key => stepWidgetSizeControl(sizeControl, key)}
                 renderOverflowSection={({ id }) => renderWidgetSizeMenuSection(sizeControl, id, `${testID}.size`)}
                 actions={orderWidgetMenu({
@@ -706,7 +790,10 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                         ...(supportsGroups ? buildWidgetGroupMembershipActions({ instanceId: instance.id, size, items: props.layoutItems, area: props.area,
                             childTitle: props.childTitle, operations: props.groupOperations }) : []),
                     ],
-                    definition: buildWidgetDefinitionActions({ onAbout: definition.about }),
+                    ...(collapsible ? { collapse: [collapsed
+                        ? { id: 'expand', title: t('projects.widgets.expand'), icon: 'arrows-out' as const, onPress: () => onCollapsedChange(false) }
+                        : { id: 'collapse', title: t('projects.widgets.collapse'), icon: 'arrows-in' as const, onPress: () => onCollapsedChange(true) }] } : {}),
+                    definition: buildWidgetDefinitionActions({ onAbout: definition.about, onAddTo: definition.addTo }),
                     surface: bodyActions ?? [],
                     remove: [{ id: 'remove', title: t('common.remove'), icon: 'trash', destructive: true,
                         onPress: () => { void write({ actionId: 'widgets.item.remove', instanceId: instance.id }); } }],
@@ -721,13 +808,16 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
         kind: 'content' as const,
         // Release executable demand outside the host's admitted window while retaining its room.
         children: active ? (
-            <View testID={`${testID}.bodyHeight`} onLayout={onBodyLayout}>
+            // Fills the frame's body room so a state replacing the body sits balanced in the card.
+            <View testID={`${testID}.bodyHeight`} onLayout={onBodyLayout} style={{ flexGrow: 1 }}>
             <WidgetFrameBodyCaptionContext.Provider value={setBodyCaption}>
+            <WidgetFrameBodyMetaContext.Provider value={setBodyMeta}>
             <WidgetFrameBodyActionsContext.Provider value={setBodyActions}>
             <WidgetSurface
                 scope={surface}
                 admittedViewer={props.admittedViewer ?? undefined}
                 isCurrent={props.isCurrent}
+                isReadPending={props.isReadPending}
                 instance={instance}
                 descriptor={candidate}
                 providedContext={providedContext}
@@ -740,11 +830,13 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                 testID={`${testID}.body`}
             />
             </WidgetFrameBodyActionsContext.Provider>
+            </WidgetFrameBodyMetaContext.Provider>
             </WidgetFrameBodyCaptionContext.Provider>
             </View>
         ) : <View testID={`${testID}.deferred`} style={{ minHeight: bodyHeight }} />,
-    }), [active, bodyHeight, candidate, edit.onRepairInputs, instance, onBodyLayout, providedContext, groupContext, runtime, surface, testID, size, props.admittedViewer, props.isCurrent]);
+    }), [active, bodyHeight, candidate, edit.onRepairInputs, instance, onBodyLayout, providedContext, groupContext, runtime, surface, testID, size, props.admittedViewer, props.isCurrent, props.isReadPending]);
 
+    if (switchedOff) return null;
     return (
         <View ref={node => { sectionRef.current = node; drag.ref(node); }} collapsable={false}
             onLayout={() => { measure(); drag.onLayout(); }} testID={testID} style={[styles.cell, carriedStyle]} {...hover.hoverProps}>
@@ -755,15 +847,17 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                 widgetPresentation={widgetPresentation}
                 mark={candidate?.icon ?? 'squares-four'}
                 title={renaming.field ?? title}
-                source={followed
-                    ? widgetGroupFollowSource(followed, parent?.wide === true)
-                    : bodyCaption ?? bindingLabel ?? candidate?.pluginName ?? undefined}
+                source={groupNamesFollowed
+                    ? bodyCaption ?? undefined
+                    : followed
+                        ? widgetGroupFollowSource(followed, parent?.wide === true)
+                        : bodyCaption ?? bindingLabel ?? sourceName ?? undefined}
+                meta={bodyMeta}
                 grouped={parent !== undefined}
-                compactHeader={parent !== undefined && !parent.wide}
                 // A core page's rows take their content height (A6/A7): no fixed viewport, size and width kept.
                 {...(surface.owner.kind === 'corePage' ? { bodyHeight: 'content' as const } : {})}
                 menu={menu}
-                {...(surface.owner.kind === 'project' ? { disclosure: {
+                {...(caretShown ? { disclosure: {
                     collapsed, onCollapsedChange,
                     expandLabel: t('projects.widgets.expand'), collapseLabel: t('projects.widgets.collapse'),
                 } } : {})}
@@ -795,25 +889,41 @@ function WidgetAreaAddPopover(props: Readonly<{
     groupId?: string;
     /** Overrides the gallery title (a dashboard area names its dashboard and area). */
     title?: string;
+    areaChoice?: readonly Readonly<{ area: 'main' | 'aside'; label: string; title: string }>[];
     write: WidgetAreaWrite;
     onRequestClose: () => void;
     testID: string;
 }>): React.ReactElement {
     const { write } = props;
+    const [chosenArea, setChosenArea] = React.useState(props.area);
+    const area = props.areaChoice ? chosenArea : props.area;
+    const chosen = props.areaChoice?.find((option) => option.area === area);
     const instances = React.useMemo(() => props.placements.map((placement) => placement.instance), [props.placements]);
     const labels = React.useMemo(() => AREA_LABELS(props.surfaceName), [props.surfaceName]);
     const addInstance = React.useCallback((instance: WidgetInstanceV1, size?: WidgetSizeV1) => runAcknowledgedWidgetSetupCommand(
-        () => write({ actionId: 'widgets.item.add', instance, ...(props.area ? { area: props.area } : {}), ...(size ? { size } : {}),
+        () => write({ actionId: 'widgets.item.add', instance, ...(area ? { area } : {}), ...(size ? { size } : {}),
             ...(props.groupId ? { groupId: props.groupId } : {}) }), t('widgetAdd.addFailed'),
-    ), [props.area, props.groupId, write]);
+    ), [area, props.groupId, write]);
     const sections = useAccountWidgetAddSections({ scope: props.surface, instances, addInstance, labels, context: props.context,
-        ...(props.area ? { area: props.area } : {}), testID: props.testID });
+        ...(area ? { area } : {}), testID: props.testID });
+    const destination = props.areaChoice && area ? (
+        <SegmentedTabBar
+            tabs={props.areaChoice.map((option) => ({ id: option.area, label: option.label }))}
+            activeTabId={area}
+            onSelectTab={setChosenArea}
+            segmentSizing="content"
+            compact
+            accessibilityLabel={chosen?.title ?? labels.submit}
+            testIDPrefix={`${props.testID}.area`}
+        />
+    ) : undefined;
     return (
         <WidgetAddSurface
             open
             anchorRef={props.anchorRef}
             onRequestClose={props.onRequestClose}
-            title={props.title ?? labels.submit}
+            title={chosen?.title ?? props.title ?? labels.submit}
+            {...(destination ? { destination } : {})}
             hint={t('widgetAdd.areaHint')}
             searchPlaceholder={t('widgetAdd.searchWidgets')}
             addLabel={labels.submit}
@@ -825,12 +935,13 @@ function WidgetAreaAddPopover(props: Readonly<{
 }
 
 const styles = StyleSheet.create((theme) => ({
-    area: { gap: 8 },
-    header: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: ADD_TARGET_PX },
-    title: { ...Typography.default('semiBold'), ...happierPageTextMetrics('sectionTitle'), color: theme.colors.text.primary, flexShrink: 1 },
-    meta: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, flexShrink: 1 },
+    area: { gap: theme.space.s8 },
+    header: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minHeight: ADD_TARGET_PX },
+    title: { ...Typography.default('semiBold'), ...happierPageTextMetrics('sectionTitle'), color: theme.colors.text.primary, flexShrink: 0 },
+    // The section's title keeps its room; the quiet meta beside it is what gives way.
+    meta: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, flexShrink: 1, minWidth: 0 },
     grow: { flex: 1 },
-    column: { gap: 12 },
+    column: { gap: theme.space.s12 },
     dashboardEmpty: { ...Typography.default(), ...happierPageTextMetrics('sectionDescription'), color: theme.colors.text.secondary },
     // The frame fills its grid cell, so cards in one row share a height.
     cell: { flexGrow: 1 },

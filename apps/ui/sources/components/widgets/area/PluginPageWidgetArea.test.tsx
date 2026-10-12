@@ -9,7 +9,7 @@ import {
     createWidgetActionInputResolverV1, createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1, createWidgetAreaLayoutArtifactPortV1,
     buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, WidgetAreaLayoutV1Schema, WIDGET_SURFACE_ARTIFACT_KIND_V1,
     buildWidgetDefinitionArtifactHeaderV1, WidgetDefinitionV1Schema, flattenWidgetLayoutWidgetsV1,
-    type WidgetAreaLayoutV1, type WidgetInstanceV1, type WidgetSurfaceRefV1, type WidgetSizeDeclarationV1,
+    type WidgetAreaLayoutV1, type WidgetAreaPresetV1, type WidgetInstanceV1, type WidgetSurfaceRefV1, type WidgetSizeDeclarationV1,
 } from '@happier-dev/protocol/widgets';
 import { createPluginUiResourceStore, PluginHostApiProvider, PluginUiHostPresentationScope } from '@happier-dev/plugin-ui/advanced';
 import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
@@ -38,6 +38,7 @@ import { PluginDeclarativeProjectedModelV1Schema } from '@happier-dev/protocol';
 import { PluginPageWidgetArea } from './PluginPageWidgetArea';
 import { WidgetArea } from './WidgetArea';
 import { WidgetAreaLayoutBar } from './WidgetAreaLayoutBar';
+import { WidgetAreaPresetLine } from './WidgetAreaPresetLine';
 import { selectMountedWidgetAreaLayout } from './widgetAreaLayoutSelection';
 import { ProjectAsideWidgets, ProjectWidgetArea } from './ProjectWidgetArea';
 import { SessionSurfaceEntityDragHandle } from '@/components/sessions/board/SessionSurfaceEntityDrag';
@@ -125,23 +126,28 @@ function widgetPlacements(layout: WidgetAreaLayoutV1) {
  * boundaries; the area Action executor, the mounted area host port with its declared context schema,
  * the Artifact reducer/CAS, the public author component and the host presentation bridge are real.
  */
-function createArea() {
+function createArea(options: Readonly<{ presets?: readonly WidgetAreaPresetV1[]; beforeRead?(artifactId: string): Promise<void> }> = {}) {
     const boundary = createWorkBoardArtifactBoundary({ v: 1, boards: [] });
-    const transport = { ...boundary.forAccount(scope.accountId),
+    const accountTransport = boundary.forAccount(scope.accountId);
+    const transport = { ...accountTransport,
+        read: async (...args: Parameters<typeof accountTransport.read>) => {
+            await options.beforeRead?.(args[0]); return accountTransport.read(...args);
+        },
         // The scoped Artifact listing serves the same owner/access/revision as its row read.
         list: async (args: Parameters<NonNullable<typeof boundary.transport.list>>[0]) => {
             const result = await boundary.transport.list!(args);
             return { ...result, items: result.items.map(row => ({ ...row, ownerAccountId: scope.accountId, access: 'owner' as const,
                 bodyVersion: boundary.rows.get(row.artifactId)!.revision.bodyVersion })) };
         }, delete: boundary.transport.delete! };
-    const store = createWidgetSurfaceArtifactPortV1(transport, { surface, isCurrent: () => true });
-    const area = createWidgetAreaActionPortV1(ref => createWidgetSurfaceArtifactPortV1(transport, { surface: ref, isCurrent: () => true }));
+    const storeFor = (ref: WidgetSurfaceRefV1) => createWidgetSurfaceArtifactPortV1(transport, { surface: ref, presets: options.presets, isCurrent: () => true });
+    const store = storeFor(surface);
+    const area = createWidgetAreaActionPortV1(storeFor);
     const widgetInputs = createWidgetActionInputResolverV1({
         readDescriptor: async () => ({ inputs: { fields }, inputSchema, sizeDeclaration }),
         readContext: async request => request.context.widgetAreaContext?.values ?? {}, readViewerValues: async () => ({ values: {} }),
         validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [],
     });
-    const layouts = createWidgetAreaLayoutArtifactPortV1(transport, { surface, isCurrent: () => true });
+    const layouts = createWidgetAreaLayoutArtifactPortV1(transport, { surface, presets: options.presets, isCurrent: () => true });
     const executor = createActionExecutor(createActionExecutorBoundaryFixture({ widgetAccountScope: () => scope, widgetSurfaceActions: { pluginArea: area }, widgetInputs,
         widgetAreaLayoutSelect: (target, _context, signal) => selectMountedWidgetAreaLayout(target, signal),
         widgetAreaLayouts: {
@@ -150,8 +156,8 @@ function createArea() {
             rename: (args, _context, signal) => layouts.rename(args, signal),
             reorder: (args, _context, signal) => layouts.reorder(args, signal),
             delete: (args, _context, signal) => layouts.delete(args, signal),
-            reset: (args, _context, signal) => createWidgetSurfaceArtifactPortV1(transport, { surface: args.surface, isCurrent: () => true }).resetPreset(args.expectedRevision, signal),
-            undo: (capture, _context, signal) => createWidgetSurfaceArtifactPortV1(transport, { surface: capture.surface, isCurrent: () => true }).undoReset(capture, signal),
+            reset: (args, _context, signal) => storeFor(args.surface).resetPreset(args.expectedRevision, signal),
+            undo: (capture, _context, signal) => storeFor(capture.surface).undoReset(capture, signal),
         },
     }));
     const hostPort = createPluginWidgetAreaHostPortV1({ scope, pluginId: 'acme.prs', pageId: 'overview', declarations, isCurrent: () => true,
@@ -162,7 +168,7 @@ function createArea() {
         widgetArea: (request: unknown, options?: { signal?: AbortSignal }) => hostPort.execute(request, options?.signal),
         readResource: async () => { throw new Error('the page reads no Resource here'); },
     } as unknown as PluginUiHostApi;
-    return { store, hostApi, executor };
+    return { store, storeFor, hostApi, executor };
 }
 
 const environment = projectHappierUiEnvironment({ theme: projectPluginUiTheme(resolveThemeProfile({ mode: 'light', profile: null })),
@@ -316,6 +322,47 @@ describe('a plugin page widget area', () => {
         await vi.waitFor(() => expect(screen.findByTestId('prs.pinned.widget.follow')).not.toBeNull());
         await screen.unmount();
         expect(await executor.execute('widgets.area.layout.select', { surface }, { surface: 'mcp', bypassApprovals: true })).toMatchObject({ ok: false, errorCode: 'widget_area_layout_owner_unavailable' });
+    });
+    it('resets the displayed plugin preset while another preset read is pending', async () => {
+        const initial: WidgetSurfaceRefV1 = { ...surface, owner: { kind: 'pluginArea', pluginId: 'acme.prs', pageId: 'overview', area: 'pinned', layoutId: 'default' } };
+        const selected: WidgetSurfaceRefV1 = { ...surface, owner: { kind: 'pluginArea', pluginId: 'acme.prs', pageId: 'overview', area: 'pinned', layoutId: 'other' } };
+        let holdSelected = false;
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const fixture = createArea({ presets: [{ id: 'default', name: 'Default', items: [] }, { id: 'other', name: 'Other', items: [] }],
+            beforeRead: async id => { if (holdSelected && id === buildWidgetSurfaceArtifactIdV1(selected)) await gate; } });
+        await fixture.storeFor(initial).apply({ kind: 'add', instance: follow });
+        await fixture.storeFor(selected).apply({ kind: 'add', instance: pin });
+        const screen = await renderScreen(page(fixture.hostApi, 'happier'));
+        try {
+            await vi.waitFor(() => expect(screen.findAllByType(WidgetAreaLayoutBar)).toHaveLength(1));
+            await act(async () => { expect(await fixture.executor.execute('widgets.area.layout.select', { surface: initial }, { surface: 'mcp', bypassApprovals: true })).toMatchObject({ ok: true }); });
+            await vi.waitFor(() => expect(screen.findAllByType(WidgetAreaPresetLine)).toHaveLength(1));
+            const line = screen.findByType(WidgetAreaPresetLine);
+            const displayed: WidgetSurfaceRefV1 = line.props.surface;
+            await act(async () => {
+                expect(await fixture.executor.execute('widgets.area.layout.select', { surface: selected }, { surface: 'mcp', bypassApprovals: true })).toMatchObject({ ok: true });
+                holdSelected = true;
+            });
+            expect(screen.findByType(WidgetAreaPresetLine).props.surface).toEqual(displayed);
+            const reset = line.props.presetActions.resetPreset(displayed);
+            holdSelected = false; release();
+            const result = await reset;
+            expect(result).toMatchObject({ ok: true, result: { undo: { surface: displayed } } });
+            expect(widgetPlacements(await fixture.storeFor(initial).read())).toEqual([]);
+            expect(widgetPlacements(await fixture.storeFor(selected).read()).map(row => row.instance.id)).toEqual(['pin']);
+        } finally { holdSelected = false; release(); await screen.unmount(); }
+    });
+    it('reserves the dashboard body until its document arrives without offering Add on an unknown layout', async () => {
+        const { hostApi } = createArea();
+        const port: WidgetAreaPort = { execute: async () => ({ ok: false, errorCode: 'unused', error: 'unused' }) };
+        const screen = await renderScreen(page(hostApi, 'happier', <WidgetArea port={port} context={{}}
+            layout={{ state: { status: 'loading' }, write: async () => ({ kind: 'applied' }) }}
+            geometry="grid" title="Dashboard" surfaceName="Dashboard" testID="loading-area"
+            dashboard={{ addLabel: 'Add widget', emptyTitle: 'Empty' }} />));
+        expect(screen.findByTestId('loading-area.loading')).not.toBeNull();
+        expect(screen.findByTestId('loading-area.add')).toBeNull();
+        expect(screen.findByTestId('loading-area.empty')).toBeNull();
     });
     it.each([false, true])('reaches the full untitled group menu through Organize on desktop (dashboard=%s)', async dashboard => {
         const fixture = projectMovementFixture().first;

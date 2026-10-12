@@ -19,6 +19,8 @@ import { WidgetPreviewWell, WidgetFlowPanel } from '@/components/widgets/flow/Wi
 import { WidgetPreviewStage } from '@/components/widgets/flow/WidgetPreviewStage';
 import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
 import { WidgetSizeControl } from '@/components/widgets/frame/WidgetSizeControl';
+import { useFailureExplainedByUnreachableHome } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
+import { resolveActionExecutionErrorMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 
 import { WidgetSetupFieldRow, type WidgetSetupFieldChange } from './WidgetSetupFieldRow';
 import {
@@ -35,6 +37,8 @@ import {
 
 /** The preview well keeps one height while inputs change, so the step never jumps under the pointer. */
 const PREVIEW_MIN_HEIGHT_PX = 168;
+/** Edit inputs' preview column: a glance at the live card, narrower than the inputs it answers to. */
+const POPOVER_PREVIEW_WIDTH_PX = 288;
 /** A phone shows the card's header and first rows under the inputs; the rest is clipped, never scaled. */
 const PHONE_PREVIEW_HEIGHT_PX = 168;
 
@@ -99,6 +103,8 @@ export function WidgetSetupStep(props: Readonly<{
     const [draft, setDraft] = React.useState<WidgetSetupDraft>(setup.initial);
     const [busy, setBusy] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
+    const pendingHomeIds = React.useMemo(() => busy && props.serverId ? [props.serverId] : [], [busy, props.serverId]);
+    const homeUnreachable = useFailureExplainedByUnreachableHome(pendingHomeIds);
     const resolution = React.useMemo(() => setup.resolve(draft), [draft, setup]);
     const blocker = describeWidgetSetupBlocker(setup.fields, resolution);
     // Finishable once nothing blocks; a per-viewer input is each viewer's own and never blocks.
@@ -142,9 +148,10 @@ export function WidgetSetupStep(props: Readonly<{
             }
             setError(result.message);
             props.onRefused?.(result.message);
-        } catch {
-            setError(t('widgetAdd.saveFailed'));
-            props.onRefused?.(t('widgetAdd.saveFailed'));
+        } catch (error) {
+            const message = resolveActionExecutionErrorMessage(error, t('widgetAdd.saveFailed'));
+            setError(message);
+            props.onRefused?.(message);
         } finally {
             setBusy(false);
         }
@@ -166,8 +173,8 @@ export function WidgetSetupStep(props: Readonly<{
     // neutral field owner: a hidden input leaves the step and a disabled one cannot be changed.
     const draftInput = discoveryContext?.draftInput;
     const effective = React.useMemo(() => new Map(resolveEffectiveInputFields(
-        { inputHints: { fields: setup.fields.map(({ field }) => field) } }, draftInput ?? {}, { includeHidden: true },
-    ).map((field) => [field.path, field])), [draftInput, setup.fields]);
+        { inputHints: { fields: setup.fields.map(({ field }) => field) } }, draftInput ?? {}, { includeHidden: true, contextSlots: setup.contextSlots },
+    ).map((field) => [field.path, field])), [draftInput, setup.fields, setup.contextSlots]);
 
     // The values the draft is bound to, as their rows name them, for the line that says what Add does.
     const boundValues = setup.describeOutcome ? setup.fields.flatMap((entry, index) => {
@@ -317,15 +324,16 @@ export function WidgetSetupStep(props: Readonly<{
         ...(props.footerAccessory && finishable ? { footerAccessory: props.footerAccessory } : {}),
         noteTestID: `${props.testID}.why`,
         error,
-        note: blocker ? t('widgetAdd.stillNeeded', { field: blocker.title }) : props.blockedReason ?? props.notice ?? consequence,
+        note: homeUnreachable ? t('settingsPlugins.targetSelection.unreachableThisHome')
+            : blocker ? t('widgetAdd.stillNeeded', { field: blocker.title }) : props.blockedReason ?? props.notice ?? consequence,
         ...(props.backLabel ? { backLabel: props.backLabel } : {}),
         primary: {
             testID: `${props.testID}.submit`,
             label: setup.submitLabel,
             ...(pane ? { icon: 'plus' as const } : {}),
             onPress: () => { void submit(); },
-            disabled: !finishable,
-            busy,
+            disabled: busy || !finishable,
+            busy: busy && !homeUnreachable,
         },
     } satisfies Omit<React.ComponentProps<typeof WidgetFlowPanel>, 'children'>;
 
@@ -352,7 +360,7 @@ export function WidgetSetupStep(props: Readonly<{
             </WidgetFlowPanel>
         );
     }
-    const aside = preview && sizePicker ? <View style={{ gap: 12 }}>{preview}{sizePicker}</View> : preview ?? sizePicker;
+    const aside = preview && sizePicker ? <View style={{ gap: theme.space.s12 }}>{preview}{sizePicker}</View> : preview ?? sizePicker;
     return (
         <WidgetFlowPanel {...panel}>
             {props.phone ? (
@@ -371,16 +379,18 @@ export function WidgetSetupStep(props: Readonly<{
 }
 
 const styles = StyleSheet.create((theme) => ({
-    body: { flexDirection: 'row', alignItems: 'flex-start', gap: 14 },
-    bodyPhone: { gap: 6 },
-    inputs: { flexGrow: 1.25, flexShrink: 1, flexBasis: 0, minWidth: 0 },
-    previewColumn: { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0, paddingTop: 2 },
+    body: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s12 },
+    bodyPhone: { gap: theme.space.s6 },
+    // The inputs keep the room their label and value need; the preview is a fixed glance beside
+    // them and never paints over a value (QA-V F11). Anything wider wraps inside its own column.
+    inputs: { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0, overflow: 'hidden' },
+    previewColumn: { width: POPOVER_PREVIEW_WIDTH_PX, flexShrink: 0, paddingTop: theme.space.s2 },
     paneScroll: { flex: 1, minHeight: 0 },
-    paneBody: { flexGrow: 1, gap: 12 },
+    paneBody: { flexGrow: 1, gap: theme.space.s12 },
     paneSize: { alignItems: 'center' },
-    widthPicker: { alignItems: 'center', gap: 6 },
+    widthPicker: { alignItems: 'center', gap: theme.space.s6 },
     // The card's reserved rows while its inputs are still being chosen: what it waits for, quiet.
-    waitingBody: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: 8, paddingBottom: 4 },
+    waitingBody: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: theme.space.s8, paddingBottom: theme.space.s4 },
     waiting: {
         ...Typography.default(),
         ...happierPageTextMetrics('rowDescription'),

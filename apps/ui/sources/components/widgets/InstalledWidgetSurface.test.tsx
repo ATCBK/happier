@@ -14,7 +14,8 @@ import { AccountProfileSchema } from '@happier-dev/protocol';
 import { resolveWidgetViewerPurposeValuesV1, type WidgetInstanceV1, type WidgetInputDescriptorV1 } from '@happier-dev/protocol/widgets';
 import { resolveConfiguredWidgetTarget, withWidgetInputRepairOutcome } from '@/sync/domains/widgets/widgetBinding';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { ConfiguredWidgetRefusal, InstalledWidgetSurface } from './InstalledWidgetSurface';
+import { ConfiguredWidgetRefusal, InstalledWidgetSurface, UnavailableInstalledWidget } from './InstalledWidgetSurface';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 
 /**
  * The installed arm every widget host shares (Board and Home).
@@ -52,7 +53,8 @@ vi.mock('@/sync/store/hooks', () => ({
     useSession: () => state.legacyIdOnlySession,
     useSessionServerId: () => state.legacyIdOnlySession?.serverId ?? 'home-a',
     useSettings: () => ({}),
-    useLocalSetting: () => null,
+    // Local settings answer with their registry defaults where a rendered row reads one (row density).
+    useLocalSetting: (key: string) => (key === 'uiItemDensity' ? 'cozy' : null),
 }));
 
 vi.mock('@/utils/sessions/sessionUtils', () => ({
@@ -189,9 +191,9 @@ describe('InstalledWidgetSurface', () => {
         }
         expect(state.mounts).toHaveLength(0);
     });
-    it('repairs a lost pinned value in place: names the value, says why, and offers that field’s own choice', async () => {
+    it('repairs a lost pinned reference without exposing its raw value, and offers that field’s own choice', async () => {
         const instance: WidgetInstanceV1 = { v: 1, id: 'copy', definition: { kind: 'installed', surface: source.surface },
-            bindings: { repo: { kind: 'value', value: 'happier-dev/relay' } } };
+            bindings: { repo: { kind: 'value', value: 'opaque-repository-id' } } };
         const descriptor = { inputs: { fields: [{ path: 'repo', title: 'Repository', widget: 'select' as const, optionsSourceId: 'repositories' }] } };
         const resolution = withWidgetInputRepairOutcome({ status: 'invalid', reasonCode: 'widget_input_value_invalid',
             fields: [{ path: 'repo', status: 'invalid', reasonCode: 'widget_input_value_invalid' }] }, { instance, descriptor });
@@ -199,7 +201,7 @@ describe('InstalledWidgetSurface', () => {
         const screen = await renderScreen(<ConfiguredWidgetRefusal resolution={resolution} testID="lost" onRepairInputs={repair} />);
         const card = screen.tree.findByType(SurfaceStateCard).props;
         const { t } = await import('@/text');
-        expect(card.title).toBe(t('widgetAdd.valueNotFound', { value: 'happier-dev/relay' }));
+        expect(card.title).toBe(t('widgetAdd.inputUnavailable', { field: 'Repository' }));
         expect(card.reason).toBe(t('widgetAdd.invalidReason'));
         expect(card.action?.label).toBe(t('widgetAdd.chooseAnother', { field: 'Repository' }));
         await screen.pressByTestIdAsync('lost-inputs-repair');
@@ -508,5 +510,23 @@ describe('InstalledWidgetSurface', () => {
 
         expect(state.mounts).toHaveLength(0);
         expect(screen.findByTestId('widget-state')).toBeTruthy();
+    });
+});
+
+describe('UnavailableInstalledWidget', () => {
+    // Lab dashboards ST "Loading · first time only": the header shows at once and the body keeps the
+    // card's room with the widget skeleton, never a sentence about loading.
+    it('reserves a first-time loading body with the widget skeleton, keeping the reason only for QA', async () => {
+        const screen = await renderScreen(<UnavailableInstalledWidget unresolved={{ state: 'loading', reasonCode: 'widget_session_hydrating' }} testID="widget" />);
+        expect(screen.findAllByType(SurfaceStateCard)).toHaveLength(0);
+        expect(screen.findAllByType(ItemLoadStateRows)).toHaveLength(1);
+        const coded = screen.root.findAll(node => (node.props as { diagnosticCode?: unknown }).diagnosticCode === 'widget_session_hydrating');
+        expect(coded.length).toBeGreaterThan(0);
+    });
+
+    it('keeps the unavailable card with its cause', async () => {
+        const screen = await renderScreen(<UnavailableInstalledWidget unresolved={{ state: 'unavailable', reasonCode: 'widget_type_unavailable' }} testID="widget" />);
+        expect(screen.findAllByType(SurfaceStateCard)).toHaveLength(1);
+        expect(screen.findAllByType(ItemLoadStateRows)).toHaveLength(0);
     });
 });

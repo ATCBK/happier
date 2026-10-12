@@ -3,12 +3,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import type { PublicActionInputById } from '@happier-dev/protocol';
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { HappierInputField } from '@happier-dev/plugin-ui/presentation';
 import { buildWidgetCandidateSetup } from '@/components/widgets/surface/widgetSurfaceSetup';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { WidgetSetupStep } from './WidgetSetupStep';
 import { WidgetSetupFieldRow } from './WidgetSetupFieldRow';
 import { buildWidgetGroupInputsCandidate } from '@/components/widgets/group/widgetGroupInputs';
+import { USAGE_QUERY_INPUT_FIELDS } from '@happier-dev/protocol/inputs/usageQuery';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { storage } from '@/sync/domains/state/storage';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -37,6 +41,47 @@ const candidate: WidgetCandidate = { key: 'acme.options/checks', title: 'Checks'
     ] } };
 
 describe('WidgetSetupStep discovery', () => {
+    it('shows an unreachable Home while a dispatched save remains pending, then accepts its actual receipt', async () => {
+        const previous = storage.getState();
+        const applied = getAppliedActiveServerSnapshot();
+        const available = isAppliedActiveServerRuntimeAvailable();
+        let finish!: (value: { ok: true }) => void;
+        const completed = vi.fn();
+        const setup = buildWidgetCandidateSetup({ candidate: { ...candidate, target: 'app', sessionInputPath: undefined, inputs: { fields: [] } },
+            scope: { ...scope, owner: { kind: 'home' } }, audience: 'personal', context: {},
+            mode: { kind: 'add', submitLabel: 'Add' }, submit: async () => new Promise(resolve => { finish = resolve; }) });
+        publishAppliedActiveServerSnapshot({ serverId: scope.serverId, serverUrl: 'https://setup-home.test', generation: 1 });
+        storage.setState({ endpointStatus: 'online', socketStatus: 'connected' });
+        const screen = await renderScreen(<WidgetSetupStep setup={setup} phone={false} serverId={scope.serverId}
+            onDone={completed} testID="pending-home" />);
+        try {
+            await act(async () => { screen.findByTestId('pending-home.submit')!.props.onPress(); });
+            await act(async () => { storage.setState({ endpointStatus: 'offline' }); });
+            expect(screen.findByTestId('pending-home.why')!.props.children).toBe('settingsPlugins.targetSelection.unreachableThisHome');
+            expect(screen.findByTestId('pending-home.submit')!.props.disabled).toBe(true);
+            expect(screen.findAllByType(RoundButton).find(node => node.props.testID === 'pending-home.submit')!.props.loading).toBe(false);
+            expect(completed).not.toHaveBeenCalled();
+            await act(async () => { finish({ ok: true }); });
+            expect(completed).toHaveBeenCalledWith({ ok: true });
+        } finally {
+            await screen.unmount();
+            storage.setState(previous, true);
+            publishAppliedActiveServerSnapshot(applied, available);
+        }
+    });
+    it.each([[{}, false], [{ slots: { session: { label: 'This session', value: null } } }, true]] as const)(
+        'shows the Usage Session input from actual host slot declarations: %j', async (context, expected) => {
+            const sessionField = USAGE_QUERY_INPUT_FIELDS.find(field => field.path === 'session')!;
+            const queryCandidate: WidgetCandidate = { ...candidate, target: 'app', sessionInputPath: undefined,
+                inputs: { fields: [sessionField] } };
+            const setup = buildWidgetCandidateSetup({ candidate: queryCandidate, scope, audience: 'personal', context,
+                mode: { kind: 'edit', instance: { v: 1, id: 'query', definition: { kind: 'installed', surface: candidate.surface! },
+                    bindings: { session: { kind: 'value', value: ['retained-pin'] } } } }, submit: async () => ({ ok: true }) });
+            const screen = await renderScreen(<WidgetSetupStep setup={setup} phone={false} serverId={scope.serverId}
+                onDone={() => {}} testID="query-scope" />);
+            expect(screen.findAllByType(WidgetSetupFieldRow).some(row => row.props.entry.field.path === 'session')).toBe(expected);
+            expect(setup.initial.bindings.session).toEqual({ kind: 'value', value: ['retained-pin'] });
+        });
     it('sends a group field read with its own declaring child identity', async () => {
         const first: WidgetCandidate = { ...candidate, target: 'app', sessionInputPath: undefined,
             surface: { pluginId: 'acme.options', localId: 'first' },
@@ -129,8 +174,8 @@ describe('WidgetSetupStep discovery', () => {
         const request = discovery.requests.filter(request => request.fieldPath === 'result').at(-1)!;
         expect(request.consumer).toMatchObject({ kind: 'widget', selectedSession: { serverId: scope.serverId, sessionId: 'B' } });
         expect(request.draftInput).toMatchObject({ session: { serverId: scope.serverId, sessionId: 'B' }, filter: 'open' });
-        const options = screen.findAllByType(DropdownMenu).find(row => row.props.testID === 'setup.field.result')!.props.items;
-        expect(options[0]?.title).toBe('B:open');
+        const options = screen.findAllByType(HappierInputField).find(row => row.props.field.path === 'result')!.props.options;
+        expect(options[0]?.label).toBe('B:open');
     });
 
     it('discovers connection-only options for a personal field without making a shared viewer field selectable', async () => {
@@ -143,7 +188,7 @@ describe('WidgetSetupStep discovery', () => {
             onCancel={() => {}} onDone={() => {}} testID="connection" />);
         await flushHookEffects({ cycles: 4 });
         expect(discovery.requests.some(request => request.fieldPath === 'connection')).toBe(true);
-        expect(screen.findAllByType(DropdownMenu).find(row => row.props.testID === 'connection.field.connection')!.props.items).toHaveLength(1);
+        expect(screen.findAllByType(HappierInputField).find(row => row.props.field.path === 'connection')!.props.options).toHaveLength(1);
         expect(buildWidgetCandidateSetup({ candidate: personal, scope: { ...scope, owner: { kind: 'sessionBoard', sessionId: 'A' } },
             audience: 'shared', context: {}, mode: { kind: 'add', submitLabel: 'Add' }, submit: async () => ({ ok: true }) }).fields[0]?.viewer)
             .toEqual({ purpose: 'metrics' });

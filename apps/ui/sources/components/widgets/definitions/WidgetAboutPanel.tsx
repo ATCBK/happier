@@ -43,10 +43,10 @@ export function readWidgetAboutSources(input: Readonly<{
 }>): readonly WidgetAboutSource[] {
     const runtime = input.resolution?.status === 'ready' ? input.resolution.runtime : null;
     const projection = runtime?.pluginUiProjection;
-    const reference = input.definition?.body.kind === 'installed' ? input.definition.body
+    const reference = input.definition?.body.kind === 'installed' || input.definition?.body.kind === 'builtin' ? input.definition.body
         : input.descriptor?.sourceDefinition ?? (input.descriptor?.surface ? { kind: 'installed' as const, surface: input.descriptor.surface } : null);
     const installed = reference ? readWidgetDescriptor(projection, reference) : null;
-    const resources = input.definition?.body.kind === 'declarative' ? readWidgetDefinitionResourcesV1(input.definition)
+    const resources = input.definition && (input.definition.body.kind === 'declarative' || input.definition.body.kind === 'html') ? readWidgetDefinitionResourcesV1(input.definition)
         : reference && runtime ? installed?.resources ?? [] : input.descriptor?.resources ?? [];
     const state = storage.getState();
     return resources.map((resource) => {
@@ -144,7 +144,7 @@ export function WidgetAboutPanel(props: Readonly<{
             testID={props.testID}
             onClose={props.onClose}
             footerStart={(
-                <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+                <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: theme.space.s12 }}>
                     {props.onChangeWithAgent ? (
                         <RoundButton testID={`${props.testID}.changeWithAgent`} size="small" display="secondary"
                             leading={<Icon name="sparkle" size={ICON_SIZE.xs} color={theme.colors.text.primary} />}
@@ -173,7 +173,7 @@ export function WidgetAboutPanel(props: Readonly<{
                 <WidgetFactRow label={t('widgetDefinition.aboutData')} testID={`${props.testID}.data`}>
                     {sources.map((source) => (
                         <View key={source.key}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 }}>
                                 <Icon name="hard-drives" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
                                 <Text style={[text.primary, text.strong]}>{source.plugin}</Text>
                             </View>
@@ -196,7 +196,7 @@ export function WidgetAboutPanel(props: Readonly<{
             ) : null}
             {props.inputs && (props.definition?.inputs ?? props.descriptor?.inputs)?.fields.length ? (
                 <WidgetFactRow label={t('widgetDefinition.aboutInputs')} testID={`${props.testID}.inputs`}>
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', gap: 6 }}>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', gap: theme.space.s6 }}>
                         <Text style={text.primary}>
                             {props.inputs.binding ?? (props.definition?.inputs ?? props.descriptor?.inputs)?.fields.map((field) => field.title).join(', ')}
                         </Text>
@@ -207,7 +207,7 @@ export function WidgetAboutPanel(props: Readonly<{
             ) : null}
             {sources.length > 0 ? (
                 <WidgetFactRow label={t('widgetDefinition.aboutRefresh')} testID={`${props.testID}.refresh`}>
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', gap: 6 }}>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', gap: theme.space.s6 }}>
                         <Text style={text.primary}>{t('widgetDefinition.refreshWhenOpen')}</Text>
                         {props.onRefresh ? link(
                             refresh === 'busy' ? t('widgetDefinition.refreshing') : t('widgetDefinition.refreshNow'),

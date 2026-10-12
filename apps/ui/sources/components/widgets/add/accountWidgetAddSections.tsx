@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { normalizeWidgetSizeForSurfaceV1, supportsWidgetGroupsV1, type WidgetLayoutFragmentSummaryV1, type WidgetProjectAreaV1, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
+import { MACHINE_BUILTIN_WIDGET_IDS_V1, USAGE_BUILTIN_WIDGET_IDS_V1, normalizeWidgetSizeForSurfaceV1, supportsWidgetGroupsV1, type WidgetLayoutFragmentSummaryV1, type WidgetProjectAreaV1, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { useHomeWidgetCandidates } from '@/components/hub/layout/useHomeWidgetCandidates';
@@ -69,6 +69,21 @@ export type AccountWidgetAddInput = Readonly<{
  * widget without inputs that is already here stays Added. Every add is the surface's one add intent,
  * the same operation `widgets.item.add` performs for an agent.
  */
+/**
+ * Happier's built-in families that read as one group of their own (plan 60 AGW-14, lab `rw` AD; usage
+ * lab `d2edit-G`): Machines and Usage. On a family's own page its group leads, so Add on Usage opens
+ * on the Usage widgets; elsewhere the families keep this order.
+ */
+const BUILTIN_WIDGET_FAMILIES = [
+    { id: 'machines', ids: new Set<string>(MACHINE_BUILTIN_WIDGET_IDS_V1), pageId: null, title: () => t('machines.widgets.machine_fleet') },
+    { id: 'usage', ids: new Set<string>(USAGE_BUILTIN_WIDGET_IDS_V1), pageId: 'usage', title: () => t('usage.board.page.title') },
+] as const;
+type BuiltinWidgetFamily = (typeof BUILTIN_WIDGET_FAMILIES)[number];
+function builtinWidgetFamilyOf(candidate: WidgetCandidate): BuiltinWidgetFamily | null {
+    const definition = candidate.definition;
+    return definition?.kind === 'builtin' ? BUILTIN_WIDGET_FAMILIES.find(family => family.ids.has(definition.id)) ?? null : null;
+}
+
 export function buildAccountWidgetAddSections(input: AccountWidgetAddInput): readonly WidgetAddSection[] {
     const context = input.context ?? NO_CONTEXT;
     const entry = (candidate: WidgetCandidate): WidgetAddEntry => {
@@ -107,8 +122,16 @@ export function buildAccountWidgetAddSections(input: AccountWidgetAddInput): rea
         renderGroupPreview: input.renderGroupPreview ?? (() => null),
     }), ...(input.fragmentActions ? { actions: input.fragmentActions(fragment) } : {}) })) : [];
     const yours = [...widgets.yours.map(entry), ...groups];
+    const pageId = input.scope?.owner.kind === 'corePage' ? input.scope.owner.pageId : null;
+    const ownPage = (family: BuiltinWidgetFamily) => pageId !== null && family.pageId === pageId;
+    const families = [...BUILTIN_WIDGET_FAMILIES].sort((a, b) => Number(ownPage(b)) - Number(ownPage(a)))
+        .map(family => ({ family, candidates: widgets.builtIn.filter(candidate => builtinWidgetFamilyOf(candidate) === family) }))
+        .filter(({ candidates }) => candidates.length > 0);
+    const otherBuiltIns = widgets.builtIn.filter(candidate => builtinWidgetFamilyOf(candidate) === null);
     return [
-        { id: 'builtins', title: t('widgetAdd.builtIn'), entries: widgets.builtIn.map(entry) },
+        ...families.map(({ family, candidates }) => ({ id: `builtins:${family.id}`, title: family.title(),
+            hint: t('widgetAdd.builtIn').toLocaleLowerCase(), entries: candidates.map(entry) })),
+        { id: 'builtins', title: t('widgetAdd.builtIn'), entries: otherBuiltIns.map(entry) },
         ...groupWidgetCandidatesByPlugin(widgets.fromPlugins).map((group) => ({
             id: `plugin:${group.id}`, title: group.title, hint: t('widgetAdd.pluginTag'), pluginId: group.id, entries: group.candidates.map(entry),
         })),

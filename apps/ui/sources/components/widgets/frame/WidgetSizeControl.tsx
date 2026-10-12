@@ -26,9 +26,9 @@ export function WidgetSizeControl(props: WidgetSizeControl & Readonly<{ testID: 
         <WidgetSizeMenu input={input} testID={`${testID}.compact`} />
     ), [testID]);
     if (props.sizes.length === 0) return null;
-    return <View style={{ gap: 6 }}>
-        {props.showLabel ? <Text style={{ color: theme.colors.text.primary }}>{t('widgetAdd.size')}</Text> : null}
+    return <View style={{ gap: theme.space.s6 }}>
         <WidgetSizePicker testID={props.testID} accessibilityLabel={t('widgetAdd.size')} value={props.size}
+            {...(props.showLabel ? { label: <Text style={{ color: theme.colors.text.primary }}>{t('widgetAdd.size')}</Text> } : {})}
             disabled={props.disabled}
             renderCompact={renderCompact}
             choices={props.sizes.flatMap(size => {

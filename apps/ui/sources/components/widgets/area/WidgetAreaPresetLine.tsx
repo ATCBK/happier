@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import type { ActionExecuteResult } from '@happier-dev/protocol';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import {
   WidgetAreaPresetResultV1Schema,
   WidgetSurfaceReadV1Schema,
@@ -76,9 +77,9 @@ function usePresetChangeSummary(changes: readonly WidgetAreaPresetChangeV1[], su
 
 /**
  * An edited preset's one line (lab wgsaved R): "Overview is yours now: you moved Limits up and removed
- * Active days. The preset is kept." with Reset to preset at its trailing edge. Reset applies at once —
- * it is recoverable, so there is no confirm — and the app's notice offers Undo, which restores exactly
- * the layout it replaced.
+ * Active days. The preset is kept." with Reset to preset at its trailing edge. The canonical Action
+ * either awaits approval or applies the recoverable reset. Only its applied result offers Undo,
+ * which restores exactly the layout it replaced.
  */
 export function WidgetAreaPresetLine(
   props: Readonly<{
@@ -87,7 +88,7 @@ export function WidgetAreaPresetLine(
     testID: string;
     /** Core pages supply their captured preset resolver and Account lifetime. */
     presetActions?: Readonly<{
-      resetPreset(): Promise<ActionExecuteResult>;
+      resetPreset(target?: WidgetSurfaceRefV1): Promise<ActionExecuteResult>;
       undoReset(capture: WidgetAreaPresetUndoV1): Promise<ActionExecuteResult>;
     }>;
   }>,
@@ -109,7 +110,13 @@ export function WidgetAreaPresetLine(
         return runPresetAction('widgets.area.layout.reset',
           { surface, expectedRevision: state.data.revision ?? null }, surface);
       };
-      const result = await (props.presetActions ? props.presetActions.resetPreset() : resetUnbound());
+      const result = await (props.presetActions ? props.presetActions.resetPreset(surface) : resetUnbound());
+      const pending = (result: ActionExecuteResult) => {
+        if (!result.ok || !ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) return false;
+        publishPresentationNotice({ key: `widget-area-preset:${preset.id}`, severity: 'info', message: t('widgetAdd.areaApprovalPending') });
+        return true;
+      };
+      if (pending(result)) return;
       const parsed = result.ok ? WidgetAreaPresetResultV1Schema.safeParse(result.result) : null;
       if (!parsed?.success) {
         failure();
@@ -126,7 +133,7 @@ export function WidgetAreaPresetLine(
             run: () => {
               const undo = props.presetActions ? props.presetActions.undoReset(capture)
                 : runPresetAction('widgets.area.layout.undo', { capture }, surface);
-              void undo.then(result => { if (!result.ok) failure(); }, failure);
+              void undo.then(result => { if (!pending(result) && !result.ok) failure(); }, failure);
             },
           },
         } : {}),
@@ -163,7 +170,7 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: theme.space.s10,
   },
   // The sentence takes the row; Reset stays at the trailing edge and drops under it only on a phone.
   text: {

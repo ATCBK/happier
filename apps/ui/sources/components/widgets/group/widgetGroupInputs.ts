@@ -39,6 +39,25 @@ export function describeWidgetGroupContext(
   return null;
 }
 
+/**
+ * The group's Inputs… row: what is bound, then its value ("Project: happier", lab wgmenu M), by the
+ * input's own title. A value whose input is not declared keeps its value alone.
+ */
+export function describeWidgetGroupInputsBinding(
+  context: WidgetInputBindingsV1 | undefined,
+  labels: WidgetBindingValueLabels | undefined,
+  fields: readonly Pick<InputFieldHint, 'path' | 'title'>[],
+): string | null {
+  for (const [slot, binding] of Object.entries(context ?? {})) {
+    if (binding.kind !== 'value') continue;
+    const value = labels && Object.hasOwn(labels, slot) ? labels[slot] : describeWidgetBindingValue(binding.value);
+    if (!value) continue;
+    const field = fields.find((entry) => entry.path === slot);
+    return field ? t('widgetFrame.groupInputsValue', { field: field.title, value }) : value;
+  }
+  return null;
+}
+
 /** The group value a child follows, when one of its inputs follows a slot the group fills. */
 export function readWidgetGroupFollowedValue(
   instance: Pick<WidgetInstanceV1, 'bindings'>,

@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { View } from 'react-native';
+import type { UiSurfaceNetworkRequestV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
 
 import type {
     PluginUiInstanceKeyV1,
@@ -12,6 +14,7 @@ import type { BoundPluginSurfaceBinding } from '@/components/plugins/surfaces/bo
 import { usePluginSurfaceDestinationNavigationBinding } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 import { useSessionPluginPolicyContext } from '@/components/sessions/plugins/useSessionPluginPolicyContext';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { WidgetFrameLoadingBody } from '@/components/widgets/frame/WidgetFrame';
 import { useSurfaceStateCardSize } from '@/components/ui/surfaces/surfaceStateSize';
 import { randomUUID } from '@/platform/randomUUID';
 import type { PluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
@@ -82,6 +85,7 @@ export type InstalledWidgetSurfaceProps = Readonly<{
     source: InstalledWidgetSource;
     /** The item's persisted bounded launch input, forwarded unchanged. */
     input?: PluginUiLaunchInputV1;
+    guestNetworkOverride?: UiSurfaceNetworkRequestV1;
     /** The public embedded presentation this physical host maps onto. */
     presentation: WidgetPresentation;
     /** The host's plugin projection: the Session's, or the app shell's. */
@@ -100,16 +104,27 @@ export function UnavailableInstalledWidget(props: Readonly<{
     unresolved: NonNullable<InstalledWidgetMount['unresolved']>;
     testID: string;
     onManagePlugin?: () => void;
+    reasonKind?: 'pluginRuntime' | 'widget';
 }>): React.ReactElement {
     // One factual result, one centralized presentation projection. This adds no
     // widget-local availability enum and no widget-specific error copy.
     const presentation = resolvePluginSurfaceStatePresentation({
         state: props.unresolved.state,
+        reasonKind: props.reasonKind,
         reasonCode: props.unresolved.reasonCode,
     });
     // Only `loading` and `unavailable` reach this component, and both produce a
     // replacement card. The fallback keeps a truthful state on screen rather
     // than an empty frame if that ever stops being true.
+    // First-time loading is not a problem to explain (lab dashboards ST): the header already stands,
+    // and the body keeps the card's room with the same skeleton every widget body uses while it reads.
+    // The reason stays on the diagnostic marker for QA only.
+    if (props.unresolved.state === 'loading') {
+        return (
+            <WidgetBodyLoading testID={`${props.testID}-state`} diagnosticCode={presentation.diagnosticCode}
+                accessibilityLabel={presentation.card?.title ?? t('common.loading')} />
+        );
+    }
     const card = presentation.card ?? Object.freeze({
         kind: 'unavailable' as const,
         title: t('sessionBoard.item.pluginUnavailable.title'),
@@ -131,11 +146,29 @@ export function UnavailableInstalledWidget(props: Readonly<{
     );
 }
 
+/** The one first-read body of a widget: its rows' room reserved, no copy, announced once as busy. */
+function WidgetBodyLoading(props: Readonly<{ testID: string; diagnosticCode: string | null; accessibilityLabel: string }>): React.ReactElement {
+    return (
+        <View testID={props.testID} accessible accessibilityLabel={props.accessibilityLabel} aria-busy>
+            {/* The frame's own first-load rows: one loading look per card, sized by the frame it sits in. */}
+            <WidgetFrameLoadingBody testID={`${props.testID}-rows`} accessibilityLabel={props.accessibilityLabel} />
+            {props.diagnosticCode ? <DiagnosticMarker testID={`${props.testID}-diagnostic-${props.diagnosticCode}`}
+                diagnosticCode={props.diagnosticCode} /> : null}
+        </View>
+    );
+}
+
+/** Hidden marker naming why the body is not ready yet (QA and tests read it; people never do). */
+function DiagnosticMarker(props: Readonly<{ testID: string; diagnosticCode: string }>): React.ReactElement {
+    return <View testID={props.testID} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ width: 0, height: 0 }} />;
+}
+
 type MountedWidgetProps = Readonly<{
     mount: InstalledWidgetMount;
     runtime: PluginUiProjectionCurrentness;
     isCurrent?: () => boolean;
     input?: PluginUiLaunchInputV1;
+    guestNetworkOverride?: UiSurfaceNetworkRequestV1;
     onManagePlugin?: () => void;
     onIntrinsicHeightChange?: (height: number) => void;
 }>;
@@ -155,6 +188,7 @@ function useMountedWidgetHostProps(props: MountedWidgetProps) {
         projectionInteractionEnabled: props.runtime.interactionEnabled,
         isHostCurrent: props.isCurrent,
         launchInput: props.input,
+        guestNetworkOverride: props.guestNetworkOverride,
         mountInstanceKey,
         ...(props.onIntrinsicHeightChange
             ? { onIntrinsicHeightChange: props.onIntrinsicHeightChange }
@@ -247,7 +281,7 @@ export function InstalledWidgetSurface(props: InstalledWidgetSurfaceProps): Reac
         const state = props.runtime.phase === 'establishing' ? 'loading' : 'unavailable';
         return (
             <UnavailableInstalledWidget
-                unresolved={{ state, reasonCode: `widget_runtime_${props.runtime.phase}` }}
+                unresolved={{ state, reasonCode: props.runtime.unavailableReasonCode ?? `widget_runtime_${props.runtime.phase}` }}
                 testID={`${props.testID}-runtime-${props.runtime.phase}`}
             />
         );
@@ -257,6 +291,7 @@ export function InstalledWidgetSurface(props: InstalledWidgetSurfaceProps): Reac
     // transport/custody metadata and must not remount an unchanged slot.
     const lifetimeKey = stableJsonStringify([
         props.recordRevision,
+        props.guestNetworkOverride,
         props.runtime.serverId,
         props.runtime.machineId,
         props.target.kind,
@@ -268,6 +303,7 @@ export function InstalledWidgetSurface(props: InstalledWidgetSurfaceProps): Reac
         runtime: props.runtime,
         isCurrent: props.isCurrent,
         input: props.input,
+        guestNetworkOverride: props.guestNetworkOverride,
         ...(props.onIntrinsicHeightChange ? { onIntrinsicHeightChange: props.onIntrinsicHeightChange } : {}),
         ...(props.onManagePlugin ? { onManagePlugin: props.onManagePlugin } : {}),
     };
@@ -331,7 +367,7 @@ export function ConfiguredWidgetRefusal(props: Readonly<{
     }
     const repair = resolution.repair;
     if (!repair || resolution.reasonCode === 'widget_viewer_purpose_authority_unavailable') {
-        return <UnavailableInstalledWidget unresolved={{ state: 'unavailable', reasonCode: resolution.reasonCode }} testID={props.testID} />;
+        return <UnavailableInstalledWidget reasonKind="widget" unresolved={{ state: 'unavailable', reasonCode: resolution.reasonCode }} testID={props.testID} />;
     }
     // One repair, said where the widget is (lab dagent ST "Invalid input · repair in place"): name the
     // value that stopped resolving and why, and offer that input's own choice — never a generic

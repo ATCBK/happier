@@ -36,6 +36,22 @@ const ready: WidgetBindingResolutionV1 = { status: 'ready', input: {} };
 const missing = (path: string): WidgetBindingResolutionV1 => ({ status: 'selection_required', fields: [{ path, status: 'selection_required', reasonCode: 'widget_input_missing' }] });
 
 describe('widget setup model', () => {
+    it('shows the effective array-valued Group by before its choices finish loading', () => {
+        const entry = { field: field('breakdown', 'Group by', { widget: 'select',
+            optionsSourceId: 'usage.query.breakdown' }) };
+        expect(describeWidgetSetupRow({ entry, resolution: ready, options: [],
+            draft: { bindings: { breakdown: { kind: 'value', value: ['agent'] } } } }))
+            .toMatchObject({ kind: 'pinned', label: expect.stringMatching(/Agent/i) });
+    });
+    it('names every selected scope choice and the unrestricted empty pin', () => {
+        const entry = { field: field('agents', 'Agents', { widget: 'multiselect', required: false,
+            placeholder: 'All agents', optionsSourceId: 'usage.filters.agents' }) };
+        const options = [{ value: 'claude', label: 'Claude' }, { value: 'codex', label: 'Codex' }];
+        const row = (value: string[]) => describeWidgetSetupRow({ entry, options, resolution: ready,
+            draft: { bindings: { agents: { kind: 'value', value } } } });
+        expect(row(['claude', 'codex'])).toMatchObject({ kind: 'pinned', label: 'Claude · Codex' });
+        expect(row([])).toMatchObject({ kind: 'pinned', label: 'All agents' });
+    });
     it('starts a copy following one surface value, per viewer for connections, and the likeliest of a few', () => {
         expect(proposeWidgetSetupDraft([sessionFollows, account, checkout, { field: field('label', 'Label') }])).toEqual({
             bindings: {

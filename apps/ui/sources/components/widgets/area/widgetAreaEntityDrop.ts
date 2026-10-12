@@ -17,5 +17,5 @@ export function resolveWidgetAreaEntityDrop(input: Readonly<{
 }>): EntityDropAdmissionV1 {
     const items = input.placements.map((entry): WidgetLayoutItemV1 => 'kind' in entry ? entry : { kind: 'widget', ...entry });
     const admission = resolveWidgetLayoutEntityDrop({ ...input, items });
-    return admission.status === 'refused' ? widgetMovementRefused(admission.reason.code, admission.preview) : admission;
+    return admission.status === 'refused' ? widgetMovementRefused(admission.reason, admission.preview) : admission;
 }

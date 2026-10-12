@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HAPPIER_WIDGET_FRAME_METRICS, HappierPressable, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
@@ -13,6 +13,12 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
+
+/**
+ * The height a floating flow surface allows its flow (the anchored shell's room). Inside it a flow
+ * keeps its header and footer in place and scrolls only its body, so Save never scrolls away.
+ */
+export const WidgetFlowHeightBoundContext = React.createContext<number | null>(null);
 
 export type WidgetFlowPrimary = Readonly<{
     label: string;
@@ -104,8 +110,11 @@ export function WidgetFlowPanel(props: Readonly<{
         </View>
     ) : null;
     const hasFooter = props.primary || props.onCancel || props.footerStart || message;
+    const heightBound = React.useContext(WidgetFlowHeightBoundContext);
+    const bounded = heightBound !== null && !props.fill;
     return (
-        <View testID={props.testID} accessibilityLabel={props.title} style={[styles.root, props.fill ? styles.rootFill : null]}>
+        <View testID={props.testID} accessibilityLabel={props.title}
+            style={[styles.root, props.fill ? styles.rootFill : null, bounded ? { maxHeight: heightBound } : null]}>
             {phone && props.onBack && props.backLabel ? (
                 <HappierPressable
                     testID={`${props.testID}.back`}
@@ -140,7 +149,14 @@ export function WidgetFlowPanel(props: Readonly<{
                     <IconButton testID={`${props.testID}.close`} iconName="x" variant="plain" accessibilityLabel={t('common.close')} onPress={closeInHeader} />
                 ) : null}
             </View>
-            <View style={[styles.body, props.fill ? styles.bodyFill : null]}>{props.children}</View>
+            {bounded ? (
+                <ScrollView style={styles.bodyScroll} contentContainerStyle={styles.body} keyboardShouldPersistTaps="always"
+                    testID={`${props.testID}.body`}>
+                    {props.children}
+                </ScrollView>
+            ) : (
+                <View style={[styles.body, props.fill ? styles.bodyFill : null]}>{props.children}</View>
+            )}
             {hasFooter ? (
                 phone ? (
                     <View style={[styles.footer, styles.footerPhone]}>
@@ -250,12 +266,12 @@ export const widgetFlowText = StyleSheet.create((theme) => ({
 }));
 
 const stylesheet = StyleSheet.create((theme) => ({
-    root: { paddingHorizontal: 6, paddingTop: 6, paddingBottom: 8 },
+    root: { paddingHorizontal: theme.space.s6, paddingTop: theme.space.s6, paddingBottom: theme.space.s8 },
     // A phone's pushed step: "‹ Widgets" on its own line, as the navigation bar would draw it.
-    backRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 2, paddingVertical: 6, paddingRight: 8, marginLeft: -2, marginBottom: 4, borderRadius: MENU_ROW_METRICS.radiusPx },
+    backRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: theme.space.s2, paddingVertical: theme.space.s6, paddingRight: theme.space.s8, marginLeft: -2, marginBottom: theme.space.s4, borderRadius: MENU_ROW_METRICS.radiusPx },
     backLabel: { ...Typography.default(), ...happierPageTextMetrics('rowTitle'), color: theme.colors.text.link },
     rootFill: { flex: 1, minHeight: 0 },
-    header: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingHorizontal: 4, paddingTop: 2, paddingBottom: 10 },
+    header: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s6, paddingHorizontal: theme.space.s4, paddingTop: theme.space.s2, paddingBottom: theme.space.s10 },
     caret: {
         width: 28,
         height: 28,
@@ -267,23 +283,25 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     // The mark sits on the title's first line.
     mark: { height: happierPageTextMetrics('sectionTitle').lineHeight, justifyContent: 'center' },
-    titleBlock: { flex: 1, minWidth: 0, gap: 2 },
+    titleBlock: { flex: 1, minWidth: 0, gap: theme.space.s2 },
     title: { ...Typography.default('semiBold'), ...happierPageTextMetrics('sectionTitle'), color: theme.colors.text.primary },
     hint: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
-    provenance: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, marginTop: 2 },
-    body: { paddingHorizontal: 4 },
+    provenance: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, marginTop: theme.space.s2 },
+    body: { paddingHorizontal: theme.space.s4 },
     bodyFill: { flex: 1, minHeight: 0 },
+    // Bounded by its floating surface: the body gives way and scrolls; header and footer stay.
+    bodyScroll: { flexGrow: 0, flexShrink: 1, minHeight: 0 },
     footer: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        marginTop: 8,
-        paddingTop: 10,
-        paddingHorizontal: 4,
+        gap: theme.space.s8,
+        marginTop: theme.space.s8,
+        paddingTop: theme.space.s10,
+        paddingHorizontal: theme.space.s4,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
     },
-    footerPhone: { flexDirection: 'column', alignItems: 'stretch', paddingTop: 8 },
+    footerPhone: { flexDirection: 'column', alignItems: 'stretch', paddingTop: theme.space.s8 },
     primaryPhone: { alignSelf: 'stretch' },
     note: {
         ...Typography.default(),
@@ -296,27 +314,27 @@ const stylesheet = StyleSheet.create((theme) => ({
     noteError: { color: theme.colors.state.danger.foreground },
     fact: {
         flexDirection: 'row',
-        gap: 12,
-        paddingVertical: 10,
+        gap: theme.space.s12,
+        paddingVertical: theme.space.s10,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
     },
-    factPhone: { flexDirection: 'column', gap: 2 },
+    factPhone: { flexDirection: 'column', gap: theme.space.s2 },
     factLabel: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), width: 88, color: theme.colors.text.tertiary },
     factLabelPhone: { width: undefined },
-    factBody: { flex: 1, minWidth: 0, gap: 2 },
-    textAction: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: MENU_ROW_METRICS.radiusPx },
+    factBody: { flex: 1, minWidth: 0, gap: theme.space.s2 },
+    textAction: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, borderRadius: MENU_ROW_METRICS.radiusPx },
     textActionPressed: { opacity: motionTokens.press.opacity },
     well: {
         borderRadius: HAPPIER_WIDGET_FRAME_METRICS.cardRadiusPx + PREVIEW_WELL_PADDING_PX,
         backgroundColor: theme.colors.surface.inset,
         padding: PREVIEW_WELL_PADDING_PX,
-        gap: 6,
+        gap: theme.space.s6,
     },
     wellCaption: {
         ...Typography.default('semiBold'),
         ...happierPageTextMetrics('meta'),
         color: theme.colors.text.tertiary,
-        paddingHorizontal: 4,
+        paddingHorizontal: theme.space.s4,
     },
 }));

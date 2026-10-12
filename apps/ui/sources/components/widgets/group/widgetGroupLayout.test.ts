@@ -17,6 +17,22 @@ const cells = (
   );
 
 describe('packWidgetGroupBands', () => {
+  it('projects empty half cells compactly without changing populated, loading or saved sizes', () => {
+    const children = [
+      { id: 'empty', size: 'tall' as const, contentState: 'empty' as const },
+      { id: 'populated', size: 'tall' as const, contentState: 'content' as const },
+      { id: 'pending', size: 'medium' as const },
+      { id: 'wide-empty', size: 'full' as const, contentState: 'empty' as const },
+    ];
+    expect(resolveWidgetGroupCells('home', children)).toEqual([
+      { id: 'empty', columnSpan: 1, rowSpan: 1 },
+      { id: 'populated', columnSpan: 1, rowSpan: 4 },
+      { id: 'pending', columnSpan: 1, rowSpan: 2 },
+      { id: 'wide-empty', columnSpan: 2, rowSpan: 2 },
+    ]);
+    expect(children.map(child => child.size)).toEqual(['tall', 'tall', 'medium', 'full']);
+  });
+
   it('packs a Medium beside two Smalls in one band, the Medium drawing the vertical divider', () => {
     expect(
       packWidgetGroupBands(

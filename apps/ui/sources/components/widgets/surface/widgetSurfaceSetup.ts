@@ -1,7 +1,7 @@
 import { VoiceTrackedSessionAddressV1Schema } from '@happier-dev/protocol/sessions/follow/voiceTrackedTargetsCompatibilityV1';
 import { StrictJsonValueSchema, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { readInputPath } from '@happier-dev/protocol/inputs';
-import { isWidgetTargetHostableV1, projectWidgetBindingInputV1, resolveConfiguredWidgetInputs, readWidgetInputTargetV1, widgetCandidateDefinitionV1, isSameWidgetDefinitionV1, countWidgetInstancesV1, type WidgetInstanceV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { isWidgetTargetHostableV1, proposeWidgetInputDefaultBindingsV1, projectWidgetBindingInputV1, resolveConfiguredWidgetInputs, readWidgetInputTargetV1, widgetCandidateDefinitionV1, isSameWidgetDefinitionV1, countWidgetInstancesV1, type WidgetInstanceV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 
 import type { SessionBoardCommandOutcome } from '@/components/sessions/board/useSessionBoardController';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
@@ -16,6 +16,7 @@ import {
 import { getPreferredLanguage, t } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { normalizeWidgetSizeForSurfaceV1, resolveWidgetSizeChoicesV1 } from '@happier-dev/protocol/widgets';
+import { resolveActionExecutionErrorMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 
 /**
  * One named slot a page or area fills (lab `dashboards` PG, P1): "This page" (a plugin page's
@@ -26,6 +27,8 @@ export type WidgetSurfaceContextSlot = Readonly<{
     /** The follow label: "This page", "This project", "The checkout you're on". */
     label: string;
     value: Readonly<{ value: JsonValue; label: string; description?: string }> | null;
+    /** A runtime scope value can remain admitted without being offered as an editor input. */
+    offered?: false;
 }>;
 
 /**
@@ -204,7 +207,7 @@ export function buildWidgetCandidateSetup(input: Readonly<{
     const { candidate, mode } = input;
     const fields = widgetSetupFieldsForCandidate(candidate, input.context, input.audience);
     const proposed: WidgetSetupDraft = mode.kind === 'edit'
-        ? { bindings: mode.instance.bindings }
+        ? { bindings: proposeWidgetInputDefaultBindingsV1(candidate, mode.instance.bindings) }
         : proposeWidgetCandidateSetupDraft(candidate, fields, mode.copiedInput);
     // Input editing has its own mutation; size editing stays at the layout Action.
     const choices = mode.kind === 'add' && input.scope
@@ -222,6 +225,8 @@ export function buildWidgetCandidateSetup(input: Readonly<{
             // The preview card names its source as the placed card will (lab wsplit A1).
             ...(candidate.pluginName ? { source: candidate.pluginName } : {}) },
         fields,
+        contextSlots: [...Object.entries(input.context.slots ?? {}).filter(([, slot]) => slot.offered !== false).map(([path]) => path),
+            ...(input.context.session ? [WIDGET_SESSION_CONTEXT_SLOT] : [])],
         initial,
         ...(choices?.sizes.length && input.scope ? { sizeChoices: { surface: input.scope.owner.kind, sizes: choices.sizes } } : {}),
         resolve: (draft) => resolveConfiguredWidgetInputs({
@@ -266,11 +271,8 @@ function proposeWidgetCandidateSetupDraft(candidate: WidgetCandidate, fields: re
         // A copy carries resolved values, never the source's follow-slot promise or read authority.
         const copiedValue = copiedInput === undefined ? undefined : readInputPath(copiedInput, entry.field.path);
         if (copiedValue !== undefined) { bindings[entry.field.path] = { kind: 'value', value: StrictJsonValueSchema.parse(copiedValue) }; continue; }
-        let schema = candidate.inputSchema;
-        for (const segment of entry.field.path.split('.')) schema = schema?.properties?.[segment];
-        if (schema?.default !== undefined) bindings[entry.field.path] = { kind: 'value', value: schema.default };
     }
-    return { bindings };
+    return { bindings: proposeWidgetInputDefaultBindingsV1(candidate, bindings) };
 }
 
 /** An acknowledged step result, or a write that resolves only after success and throws on refusal. */
@@ -280,8 +282,8 @@ export async function runWidgetSetupCommand(run: () => Promise<WidgetSetupComman
     try {
         const result = await run();
         return result ?? { ok: true };
-    } catch {
-        return { ok: false, message: failure };
+    } catch (error) {
+        return { ok: false, message: resolveActionExecutionErrorMessage(error, failure) };
     }
 }
 
@@ -298,7 +300,7 @@ export async function runAcknowledgedWidgetSetupCommand(
         const outcome = await run();
         return outcome && (outcome.kind === 'applied' || outcome.kind === 'approvalPending')
             ? { ok: true, ...(outcome.kind === 'approvalPending' ? { approvalPending: true } : {}) } : { ok: false, message: failure };
-    } catch {
-        return { ok: false, message: failure };
+    } catch (error) {
+        return { ok: false, message: resolveActionExecutionErrorMessage(error, failure) };
     }
 }

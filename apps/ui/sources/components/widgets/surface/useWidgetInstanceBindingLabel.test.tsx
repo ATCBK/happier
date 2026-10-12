@@ -3,11 +3,31 @@ import { act } from 'react-test-renderer';
 import type { InputHints } from '@happier-dev/protocol/inputs';
 import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storage';
-import { useWidgetInstanceBindingLabel } from './useWidgetInstanceBindingLabel';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { isWidgetFollowingSurfaceSlot, useWidgetInstanceBindingLabel } from './useWidgetInstanceBindingLabel';
 import { useWidgetBindingValueLabels } from './useWidgetBindingValueLabels';
 import { describeWidgetGroupContext, readWidgetGroupFollowedValue, widgetGroupSurfaceContext } from '../group/widgetGroupInputs';
 
 afterEach(() => standardCleanup());
+
+it('names machine pins from the exact Home inventory and updates their live display name', async () => {
+  const previous = storage.getState();
+  const machine = createMachineFixture({ id: 'shared-id', metadata: { ...createMachineFixture().metadata!, displayName: 'My workstation' } });
+  try {
+    storage.setState({ machines: {}, machineListByServerId: { home: [machine], other: [{ ...machine,
+      metadata: { ...machine.metadata!, displayName: 'Another Home workstation' } }] }, machineListStatusByServerId: { home: 'idle', other: 'idle' } });
+    const candidate = { inputs: { fields: [{ path: 'machine', title: 'Machine', widget: 'select' as const,
+      inputType: { hostType: 'machine' as const } }] } };
+    const hook = await renderHook(() => useWidgetInstanceBindingLabel({ bindings: {
+      machine: { kind: 'value', value: { serverId: 'home', machineId: machine.id } },
+    } }, candidate));
+    expect(hook.getCurrent()).toBe('My workstation');
+    await act(async () => storage.setState({ machineListByServerId: { ...storage.getState().machineListByServerId,
+      home: [{ ...machine, metadata: { ...machine.metadata!, displayName: 'Renamed workstation' } }] } }));
+    expect(hook.getCurrent()).toBe('Renamed workstation');
+    await hook.unmount();
+  } finally { storage.setState(previous, true); }
+});
 
 it('names declared Session pins and group followers by their exact Home-qualified Session, and checkout pins by the workspace owner', async () => {
   const fields: InputHints['fields'] = [{ path: 'session', title: 'Session', widget: 'json', inputType: { hostType: 'session' } },
@@ -105,4 +125,13 @@ it('resolves a JSON choice by the canonical option identity rather than raw obje
     filter: { kind: 'value', value: { period: 'month', name: 'stored-id' } },
   } }, { inputs }));
   expect(hook.getCurrent()).toBe('Monthly costs');
+});
+
+it('tells a copy that follows its surface slot from one pinned to a value, so a page that names its slot can leave it out', () => {
+  const context = { slots: { checkout: { label: 'This checkout', value: { value: 'wr_1', label: 'main' } } } };
+  expect(isWidgetFollowingSurfaceSlot({ bindings: { target: { kind: 'context', slot: 'checkout' } } }, context)).toBe(true);
+  expect(isWidgetFollowingSurfaceSlot({ bindings: { target: { kind: 'value', value: 'wr_2' } } }, context)).toBe(false);
+  // A slot the surface does not offer is not "its own".
+  expect(isWidgetFollowingSurfaceSlot({ bindings: { target: { kind: 'context', slot: 'filter' } } }, context)).toBe(false);
+  expect(isWidgetFollowingSurfaceSlot({ bindings: { target: { kind: 'context', slot: 'checkout' } } }, {})).toBe(false);
 });

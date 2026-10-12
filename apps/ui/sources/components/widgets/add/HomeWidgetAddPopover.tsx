@@ -36,6 +36,8 @@ export function buildHomeWidgetAddSections(input: Omit<AccountWidgetAddInput, 'l
 export function HomeWidgetAddPopover(props: Readonly<{
     open: boolean;
     anchorRef: React.RefObject<View | null>;
+    /** The Customize bar the surface centres on (see `WidgetAddSurface.regionRef`). */
+    regionRef?: React.RefObject<View | null>;
     onRequestClose: () => void;
     /** Adds into this group (a group's empty slot) instead of at the end of Home. */
     groupId?: string;
@@ -66,6 +68,7 @@ function OpenHomeWidgetAddPopover(props: React.ComponentProps<typeof HomeWidgetA
         <WidgetAddSurface
             open
             anchorRef={props.anchorRef}
+            {...(props.regionRef ? { regionRef: props.regionRef } : {})}
             onRequestClose={props.onRequestClose}
             title={t('widgetAdd.homeTitle')}
             hint={t('widgetAdd.homeHint')}

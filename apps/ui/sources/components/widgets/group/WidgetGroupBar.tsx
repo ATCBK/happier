@@ -14,6 +14,7 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
 import { WidgetGroupMenuButton } from './WidgetGroupMenuButton';
+import { readWidgetGroupTitle } from './widgetGroupTitle';
 import {
   resolveWidgetGroupWidthChoices,
   isWidgetGroupWidthAvailable,
@@ -35,9 +36,11 @@ export function WidgetGroupBar(
     grip?: React.ReactNode;
     anchorRef?: React.RefObject<View | null>;
     testID: string;
+    serverId?: string | null;
   }>,
 ) {
   const { group, operations } = props.input;
+  const title = readWidgetGroupTitle(group);
   const widths = isWidgetGroupWidthAvailable(props.input)
     ? resolveWidgetGroupWidthChoices(group.children, props.input.childTitle)
     : [];
@@ -71,14 +74,15 @@ export function WidgetGroupBar(
       {props.onRename ? (
         <WidgetFrameNameField
           testID={`${props.testID}.name`}
-          value={group.title ?? ''}
+          value={title ?? ''}
           placeholder={t('widgetFrame.groupUntitled')}
           accessibilityLabel={t('widgetFrame.groupName')}
           onRename={props.onRename}
+          serverId={props.serverId}
         />
       ) : (
         <Text style={styles.name} numberOfLines={1}>
-          {group.title ?? t('widgetFrame.groupUntitled')}
+          {title ?? t('widgetFrame.groupUntitled')}
         </Text>
       )}
       <View style={styles.rest}>
@@ -97,7 +101,6 @@ export function WidgetGroupBar(
           tabs={tabs}
           activeTabId={group.width}
           onSelectTab={(width) => operations.setWidth(group.id, width)}
-          slidingThumb
           segmentSizing="content"
           targetSize="platform"
           role="radiogroup"

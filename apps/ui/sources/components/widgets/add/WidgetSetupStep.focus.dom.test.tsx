@@ -63,7 +63,8 @@ it.each(['typing', 'arrival'] as const)('preserves the %s intent from the setup 
         await act(async () => root.render(render(true, true)));
         const first = document.querySelector('[data-testid="setup.field.session.option.0"]');
         expect(first).not.toBeNull();
-        expect(document.activeElement).toBe(intent === 'typing' ? search : first);
+        if (intent === 'typing') expect(document.activeElement).toBe(search);
+        else expect(document.querySelector('[data-testid="setup.field.session"]')?.contains(document.activeElement)).toBe(true);
         if (intent === 'typing') expect(search.value).toBe('Session summaryx');
     } finally {
         await act(async () => root.unmount());

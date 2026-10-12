@@ -1,13 +1,11 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
-import { readCoarsePrimaryPointer } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
-import { RowActionRevealSlot } from '@/components/sessions/transcript/messageActions/RowActionRevealSlot';
+import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import { t } from '@/text';
-import { useDeviceType } from '@/utils/platform/responsive';
-import { WidgetSheetShell } from '@/components/widgets/flow/WidgetFlowShell';
-import { WIDGET_MENU_MAX_HEIGHT_PX } from '@/components/widgets/frame/widgetFrameMenu';
+import { useWidgetMenuSurface } from '@/components/widgets/flow/WidgetFlowShell';
+import { useWidgetMenuAlwaysShown, WIDGET_MENU_MAX_HEIGHT_PX } from '@/components/widgets/frame/widgetFrameMenu';
 
 import {
   buildWidgetGroupActions,
@@ -34,10 +32,13 @@ export function WidgetGroupMenuButton(
     testID: string;
   }>,
 ) {
-  const phone = useDeviceType() === 'phone';
-  // Shown with the hovered group on a fine pointer; touch has no hover, so it is always there.
-  const revealed = props.visible || Platform.OS !== 'web' || readCoarsePrimaryPointer();
+  // Shown with the hovered group on a fine pointer; on touch and on a phone it is always there (lab wgphone B).
+  const alwaysShown = useWidgetMenuAlwaysShown();
+  const revealed = props.visible || alwaysShown;
   const title = describeWidgetGroup(props.input.group, props.input.childTitle);
+  const menuSurface = useWidgetMenuSurface({
+    title, meta: t('widgetFrame.groupWidgetCount', { count: props.input.group.children.length }), testID: props.testID,
+  });
   return (
     <View ref={props.anchorRef} collapsable={false} testID={props.testID}>
       {/* The shared reveal owner: it fades, takes no clicks while hidden, and shows itself on keyboard focus. */}
@@ -52,17 +53,7 @@ export function WidgetGroupMenuButton(
         overflowMaxHeightCap={WIDGET_MENU_MAX_HEIGHT_PX}
         overflowTriggerTestID={`${props.testID}.trigger`}
         overflowTriggerAccessibilityLabel={`${t('widgetFrame.groupMenu')}: ${title}`}
-        renderOverflowSurface={phone ? ({ children, onRequestClose }) => (
-          // Lab wgphone Mp: the sheet names the group once ("happier · Group · 4 widgets") with Done.
-          <WidgetSheetShell
-            title={title}
-            heading={{ meta: t('widgetFrame.groupWidgetCount', { count: props.input.group.children.length }), doneTestID: `${props.testID}.done` }}
-            onRequestClose={onRequestClose}
-            testID={`${props.testID}.sheet`}
-          >
-            {children}
-          </WidgetSheetShell>
-        ) : undefined}
+        renderOverflowSurface={menuSurface}
         renderOverflowSection={({ id }) =>
           renderWidgetGroupMenuSection(
             props.input,

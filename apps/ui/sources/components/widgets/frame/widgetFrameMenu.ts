@@ -1,5 +1,9 @@
+import { Platform } from 'react-native';
+
 import type { ItemAction } from '@/components/ui/lists/itemActions';
+import { readCoarsePrimaryPointer } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
 import { t } from '@/text';
+import { useDeviceType } from '@/utils/platform/responsive';
 
 import type { WidgetFramePlacement, WidgetFrameStyle } from './WidgetFrame';
 import { resolveWidgetFrameStyleToggle } from './widgetFrameStyle';
@@ -11,6 +15,16 @@ import type { WidgetSizeControl } from './WidgetSizeControl';
  * mid-line at the menu's foot. The popover still shrinks to the window and scrolls when that is shorter.
  */
 export const WIDGET_MENU_MAX_HEIGHT_PX = 520;
+
+/**
+ * Whether a widget's or a group's ⋯ stays shown rather than coming with hover: on touch, and on a
+ * phone whatever the pointer (lab wgphone B draws ⋯ on the group and on every card). A wider window
+ * with a fine pointer reveals it with the hovered card.
+ */
+export function useWidgetMenuAlwaysShown(): boolean {
+    const phone = useDeviceType() === 'phone';
+    return phone || Platform.OS !== 'web' || readCoarsePrimaryPointer();
+}
 
 function styleLabel(style: WidgetFrameStyle): string {
     return style === 'card' ? t('widgetFrame.styleCard') : t('widgetFrame.stylePlain');
@@ -79,6 +93,8 @@ export function orderWidgetMenu(groups: Readonly<{
     size?: readonly ItemAction[];
     frame?: readonly ItemAction[];
     move?: readonly ItemAction[];
+    /** Collapse or expand this widget on this device (a Project dashboard), after how it sits. */
+    collapse?: readonly ItemAction[];
     /** About this widget (and, on a Session Board card, Save as your widget and Post a snapshot). */
     definition?: readonly ItemAction[];
     /** The surface's own entries (Open, Customize Home). */
@@ -93,6 +109,7 @@ export function orderWidgetMenu(groups: Readonly<{
         ...section('widgetThis', groups.instance),
         ...section('widgetThis', groups.size),
         ...section('widgetThis', groups.frame),
+        ...section('widgetThis', groups.collapse),
         ...section('widgetMove', groups.move),
         ...section('widgetAbout', groups.definition),
         ...section('widgetSurface', groups.surface),
@@ -167,12 +184,15 @@ export function buildWidgetSizeActions(input: WidgetSizeControl | undefined): It
  */
 export function buildWidgetDefinitionActions(input: Readonly<{
     onAbout?: (() => void) | undefined;
+    onAddTo?: (() => void) | undefined;
     onSaveAsYours?: (() => void) | undefined;
     onPostSnapshot?: (() => void) | undefined;
     group?: ItemAction['group'];
 }>): ItemAction[] {
     const group = input.group ? { group: input.group } : {};
     return [
+        ...(input.onAddTo ? [{ id: 'addTo', title: t('widgetFrame.groupAddTo'), subtitle: t('widgetFrame.groupAddToSubtitle'), icon: 'copy' as const,
+            onPress: input.onAddTo, ...group }] : []),
         ...(input.onAbout ? [{ id: 'about', title: t('widgetDefinition.aboutMenu'), icon: 'info' as const, onPress: input.onAbout, ...group }] : []),
         ...(input.onSaveAsYours ? [{ id: 'saveAsYours', title: t('widgetDefinition.saveMenu'), subtitle: t('widgetDefinition.saveMenuSubtitle'),
             icon: 'floppy-disk' as const, onPress: input.onSaveAsYours, ...group }] : []),

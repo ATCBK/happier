@@ -5,6 +5,8 @@ import { PluginJsonSchemaV2Schema } from '@happier-dev/protocol/plugins/contribu
 import { InputHintsSchema, InputPathSchema, type InputHints } from '@happier-dev/protocol/inputs';
 import { BUILTIN_WIDGET_DESCRIPTORS_V1, readBuiltinWidgetDescriptorV1, readWidgetDefinitionResourcesV1, type BuiltinWidgetDescriptorV1, type WidgetDefinitionV1, type WidgetDefinitionRefV1, type WidgetCandidateIdentityV1 } from '@happier-dev/protocol/widgets';
 import { t } from '@/text';
+import { localizeBuiltinInputHints } from '@/text/builtinInputPrompts';
+import { isAtmosphereMomentOn, readAtmosphereMoments } from '@/components/atmosphere/atmosphereMoments';
 
 import type { IconName } from '@/components/ui/icons/Icon';
 import {
@@ -86,9 +88,10 @@ export function describeWidgetDefinitionSummaryV1(summary: WidgetDefinitionSumma
 export function describeAuthoredWidgetDefinitionV1(definition: WidgetDefinitionV1,
     reference: Extract<WidgetDefinitionRefV1, { kind: 'artifact' | 'inline' }>,
     installed?: WidgetCandidate | null): WidgetCandidate {
+    const native = definition.body.kind === 'builtin' ? readWidgetDescriptor(null, definition.body) : null;
     return { definition: reference, key: reference.kind === 'artifact' ? `artifact:${reference.artifactId}` : `inline:${definition.id}`,
         title: definition.name, pluginName: installed?.pluginName ?? definition.name, sharedPluginName: false,
-        icon: installed?.icon ?? 'stack', homeDefault: 'available', target: definition.sessionInputPath ? 'session' : 'app',
+        icon: native?.icon ?? installed?.icon ?? 'stack', homeDefault: 'available', target: readWidgetInputTargetV1(definition).kind === 'session' ? 'session' : 'app',
         inputs: definition.inputs, inputSchema: definition.inputSchema, sizeDeclaration: definition.sizeDeclaration,
         ...(definition.sessionInputPath ? { sessionInputPath: definition.sessionInputPath } : {}),
         ...(definition.connectedAccountPurposeBindings ? { connectedAccountPurposeBindings: definition.connectedAccountPurposeBindings } : {}),
@@ -105,16 +108,30 @@ export function describeAuthoredWidgetDefinitionV1(definition: WidgetDefinitionV
 export function selectWidgetCandidates(
     projection: PluginUiProjectionModel | null | undefined,
     policyContext?: PluginUiPolicyEvaluationContext,
+    moments: Readonly<Record<string, boolean>> = readAtmosphereMoments(),
 ): readonly WidgetCandidate[] {
-    return Object.freeze([...selectBuiltinWidgetCandidates(), ...describeWidgetPlacements(projection, projection ? selectRenderableWidgetPlacements(projection, policyContext) : [])]);
+    return Object.freeze([...selectBuiltinWidgetCandidates(moments), ...describeWidgetPlacements(projection, projection ? selectRenderableWidgetPlacements(projection, policyContext) : [])]);
 }
 
-export function selectBuiltinWidgetCandidates(): readonly WidgetCandidate[] {
-    return BUILTIN_WIDGET_DESCRIPTORS_V1.map(describeBuiltinWidgetCandidate);
+/**
+ * Happier's own widgets a person may add. A built-in that is one of the Home atmosphere's moments
+ * (Your Home) follows that moment's switch: off, it is not offered here, and a copy already placed
+ * is not drawn (see {@link isBuiltinWidgetSwitchedOff}); the copy stays in its layout for when the
+ * switch comes back on.
+ */
+export function selectBuiltinWidgetCandidates(moments: Readonly<Record<string, boolean>> = readAtmosphereMoments()): readonly WidgetCandidate[] {
+    return BUILTIN_WIDGET_DESCRIPTORS_V1.filter(descriptor => !isBuiltinWidgetSwitchedOff(descriptor.definition, moments))
+        .map(describeBuiltinWidgetCandidate);
+}
+
+/** The one decision for a built-in withdrawn by the person's own switch. */
+export function isBuiltinWidgetSwitchedOff(definition: WidgetDefinitionRefV1, moments: Readonly<Record<string, boolean>>): boolean {
+    return definition.kind === 'builtin' && definition.id === 'your_home' && !isAtmosphereMomentOn(moments, 'yourHome');
 }
 
 function describeBuiltinWidgetCandidate(descriptor: BuiltinWidgetDescriptorV1): WidgetCandidate {
     return Object.freeze({ ...descriptor, title: t(descriptor.titleKey),
+        inputs: descriptor.inputs ? localizeBuiltinInputHints(descriptor.inputs) : undefined,
         description: descriptor.descriptionKey ? t(descriptor.descriptionKey)
             : readWidgetInputTargetV1(descriptor).kind !== 'session' ? t(descriptor.titleKey)
             : t(`widgetAdd.nativeDescriptions.${descriptor.definition.id as 'session_summary' | 'agent_plan' | 'changes' | 'local_services'}`),

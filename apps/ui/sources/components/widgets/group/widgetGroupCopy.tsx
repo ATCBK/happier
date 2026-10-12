@@ -1,11 +1,13 @@
 import * as React from 'react';
 import type { View } from 'react-native';
+import { useUnistyles } from 'react-native-unistyles';
 import type { WidgetLayoutFragmentOriginV1, WidgetLayoutGroupV1, WidgetProjectAreaV1, WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWorkspaceRefDisplayName';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { runCopyWidgetGroupCommandV1 } from '@/components/widgets/definitions/widgetLayoutFragmentCommands';
 import { useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { t } from '@/text';
@@ -59,9 +61,45 @@ export function describeWidgetGroupOrigin(surface: WidgetSurfaceRefV1, refs: Ret
 }
 
 /**
- * Add to… for a group (lab wgmenu M): a chooser of the Account's other places (Home, each Project);
- * choosing one adds a copy there as a fragment (`widgets.group.add`). Nothing is linked: later changes
- * to either group stay where they are made. Mounted only while open, so a closed menu reads nothing.
+ * The one Add to… chooser (lab wgmenu M), for a group and for a single widget: the Account's other
+ * places, each by its mark and name, anchored to the ⋯ it came from. Choosing does not close it on
+ * its own; the caller either copies and closes (a group) or moves on to the copy's setup (a widget),
+ * so the hand-off never races the menu's close.
+ */
+export function WidgetCopyDestinationMenu(props: Readonly<{
+    destinations: readonly WidgetGroupCopyDestination[];
+    anchorRef: React.RefObject<View | null>;
+    onChoose: (destination: WidgetGroupCopyDestination) => void;
+    onClose: () => void;
+    testID: string;
+}>) {
+    const { theme } = useUnistyles();
+    const { destinations, onChoose, onClose } = props;
+    return (
+        <DropdownMenu
+            testID={props.testID}
+            open
+            closeOnSelect={false}
+            onOpenChange={open => { if (!open) onClose(); }}
+            popoverAnchorRef={props.anchorRef}
+            // Anchored to a ⋯, so the menu takes its own width, names itself and is a sheet on a phone.
+            matchTriggerWidth={false}
+            showCategoryTitles
+            popoverPhonePresentation="sheet"
+            popoverAccessibilityLabel={t('widgetFrame.groupAddTo')}
+            items={destinations.map(destination => ({ id: destination.key, testID: `${props.testID}.${destination.key}`, title: destination.label,
+                category: t('widgetFrame.groupAddTo'),
+                icon: <Icon name={destination.surface.owner.kind === 'home' ? 'house' : 'folder'} size={ICON_SIZE.sm} color={theme.colors.text.secondary} /> }))}
+            selectedId={null}
+            onSelect={key => { const destination = destinations.find(entry => entry.key === key); if (destination) onChoose(destination); }}
+        />
+    );
+}
+
+/**
+ * Add to… for a group (lab wgmenu M): the shared chooser; choosing a place adds a copy there as a
+ * fragment (`widgets.group.add`). Nothing is linked: later changes to either group stay where they
+ * are made. Mounted only while open, so a closed menu reads nothing.
  */
 export function WidgetGroupCopyChooser(props: Readonly<{
     group: WidgetLayoutGroupV1;
@@ -74,27 +112,14 @@ export function WidgetGroupCopyChooser(props: Readonly<{
     const projects = useCopyProjects(props.current.serverId);
     const destinations = React.useMemo(() => resolveWidgetGroupCopyDestinations({ current: props.current, projects }), [projects, props.current]);
     const { group, name, onClose } = props;
-    const copy = React.useCallback((key: string) => {
-        const destination = destinations.find(entry => entry.key === key);
+    const copy = React.useCallback((destination: WidgetGroupCopyDestination) => {
         onClose();
-        if (!destination) return;
         void runCopyWidgetGroupCommandV1(group, destination.surface, destination.area ? { area: destination.area } : {}).then(outcome => {
             publishPresentationNotice({ key: `widget-group-copy:${group.id}`, severity: outcome.kind === 'refused' ? 'error' : 'info',
                 message: outcome.kind === 'refused' ? t('widgetFrame.groupCopyFailed')
                     : outcome.kind === 'approvalPending' ? t('widgetAdd.areaApprovalPending')
                     : t('widgetFrame.groupCopied', { name, place: destination.label }) });
         });
-    }, [destinations, group, name, onClose]);
-    return (
-        <DropdownMenu
-            testID={props.testID}
-            open
-            onOpenChange={open => { if (!open) onClose(); }}
-            popoverAnchorRef={props.anchorRef}
-            items={destinations.map(destination => ({ id: destination.key, testID: `${props.testID}.${destination.key}`, title: destination.label,
-                category: t('widgetFrame.groupAddTo') }))}
-            selectedId={null}
-            onSelect={copy}
-        />
-    );
+    }, [group, name, onClose]);
+    return <WidgetCopyDestinationMenu destinations={destinations} anchorRef={props.anchorRef} onChoose={copy} onClose={onClose} testID={props.testID} />;
 }

@@ -1,4 +1,5 @@
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { readWidgetGroupTitle } from './widgetGroupTitle';
 import type {
   EntityDropEffectV1,
   EntityDropPreviewV1,
@@ -74,7 +75,7 @@ function layoutTarget(
         ...(input.describeGroup ? { describeGroup: input.describeGroup } : {}),
       });
       return admission.status === 'refused'
-        ? widgetMovementRefused(admission.reason.code, admission.preview)
+        ? widgetMovementRefused(admission.reason, admission.preview)
         : admission;
     },
     // The shared surface binding executes the admitted `widgets.item.move` itself.
@@ -104,7 +105,7 @@ export function widgetGroupDropTarget(
   return layoutTarget({
     ...input,
     fallback: into,
-    describeGroup: input.describeGroup ?? ((group) => group.id === input.group.id ? input.name : group.title ?? t('widgetFrame.groupUntitled')),
+    describeGroup: input.describeGroup ?? ((group) => group.id === input.group.id ? input.name : readWidgetGroupTitle(group) ?? t('widgetFrame.groupUntitled')),
     preview: { verb: t('widgetFrame.moveIntoGroupNamed', { group: input.name }), target: input.name },
     destinations: () => [
       {

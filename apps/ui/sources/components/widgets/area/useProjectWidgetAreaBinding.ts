@@ -2,12 +2,13 @@ import * as React from 'react';
 import type { JsonValue } from '@happier-dev/protocol';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { buildWidgetAreaActionInputV1, PluginUiWidgetAreaResultV1Schema, pluginUiWidgetAreaOperationHasOutwardEffectV1, type PluginUiWidgetAreaResultV1 } from '@happier-dev/protocol/plugins/ui';
-import { readWidgetSurfaceArtifactV1, WidgetInstanceActionInputSchemasV1, WidgetSurfaceReadV1Schema, WidgetSurfaceRefV1Schema, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { WidgetInstanceActionInputSchemasV1, WidgetSurfaceReadV1Schema, WidgetSurfaceRefV1Schema, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { ProjectSourcesReadOutputV1Schema, type ProjectSourceV1 } from '@happier-dev/protocol/projects/sources/projectSourceV1';
 
 import type { WidgetSurfaceContext, WidgetSurfaceContextSlot } from '@/components/widgets/surface/widgetSurfaceSetup';
+import { widgetProvidedContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { readProjectWidgetAreaContextV1 } from '@/sync/domains/widgets/projectWidgetAreaContext';
-import { useActiveServerAccountScope, useArtifact } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { ProjectAttachedDashboardSelection } from '@/components/projects/detail/projectRouteState';
 import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
@@ -17,7 +18,8 @@ import { executeWidgetEntityMovement, widgetMovementRefused } from '@/sync/ops/a
 import { t } from '@/text';
 
 import type { WidgetAreaPort } from './useWidgetAreaLayout';
-import { registerWidgetAreaLayoutSelectionOwner } from './widgetAreaLayoutSelection';
+import { registerWidgetAreaLayoutSelectionOwner, widgetAreaLayoutBaseSurface } from './widgetAreaLayoutSelection';
+import { useProjectDashboardDocument, type ProjectDashboardDocumentRead } from './useProjectDashboardDocument';
 
 /** One value the Project page fills, named for people ("happier-dev/happier", "MacBook Pro · main"). */
 export type ProjectWidgetAreaValue = Readonly<{ value: JsonValue; label: string; description?: string }>;
@@ -52,7 +54,8 @@ export type ProjectWidgetAreaBindingInput = Readonly<{
     onSelectLayout?: (layoutId: string | null) => void;
 }>;
 
-export type ProjectAttachedDashboardRead = Readonly<{ artifactId: string; surface: WidgetSurfaceRefV1; name: string }>;
+/** An attached shared dashboard as this viewer was admitted to it: its name, revision and the viewer's own access. */
+export type ProjectAttachedDashboardRead = ProjectDashboardDocumentRead;
 
 export type ProjectWidgetAreaBinding = Readonly<{
     port: WidgetAreaPort | null;
@@ -64,7 +67,7 @@ export type ProjectWidgetAreaBinding = Readonly<{
 function hasDashboardAttachment(source: ProjectSourceV1 | null | undefined, selection: ProjectAttachedDashboardSelection, serverId: string): boolean {
     return source?.id === selection.sourceId && (source.attachments ?? []).some(attachment => attachment.purpose === 'dashboard'
         && attachment.ref.artifactId === selection.artifactId
-        && (attachment.ref.serverId === undefined || areServerProfileIdentifiersEquivalent(attachment.ref.serverId, serverId)));
+        && areServerProfileIdentifiersEquivalent(attachment.ref.serverId ?? serverId, selection.serverId ?? serverId));
 }
 
 /** One captured Project layout binding; the Action and Artifact owners retain all access policy. */
@@ -75,8 +78,13 @@ export function useProjectWidgetAreaBinding(props: ProjectWidgetAreaBindingInput
         [props.activeCheckout, props.projectRef, props.serverId]);
     const sourceRead = useProjectSource(lifetime?.isCurrent() && selectActiveServerAccountScopeForServer(viewer, props.serverId) ? lifetime : null,
         props.attachedDashboard?.sourceId ?? demand.sourceId);
-    const read = React.useMemo(() => readProjectWidgetAreaContextV1({ serverId: props.serverId, projectRef: props.projectRef,
+    const nextRead = React.useMemo(() => readProjectWidgetAreaContextV1({ serverId: props.serverId, projectRef: props.projectRef,
         activeCheckout: props.activeCheckout, source: sourceRead.source }), [props.activeCheckout, props.projectRef, props.serverId, sourceRead.source]);
+    // Snapshot publications can replace an equivalent checkout. Only a changed binding
+    // retires the area's in-flight read, not that publication's object identity.
+    const stableRead = React.useRef(nextRead);
+    if (!sameStrictJsonValue(stableRead.current, nextRead)) stableRead.current = nextRead;
+    const read = stableRead.current;
     const selectionKey = JSON.stringify([lifetime?.scope, read.projectIdentity?.projectKey]);
     const [selection, setSelection] = React.useState<Readonly<{ key: string; initial?: string; layoutId?: string }> | null>(null);
     const locallySelected = !props.onSelectLayout && selection?.key === selectionKey && selection.initial === props.layoutId;
@@ -92,34 +100,8 @@ export function useProjectWidgetAreaBinding(props: ProjectWidgetAreaBindingInput
     const attached = props.attachedDashboard;
     const attachmentEligible = attached !== undefined && demand.sourceId === attached.sourceId
         && hasDashboardAttachment(sourceRead.source?.source, attached, props.serverId);
-    const publication = useArtifact(attached?.artifactId ?? '');
-    const attachedKey = attached ? JSON.stringify([lifetime?.scope, props.serverId, attached.sourceId, attached.artifactId]) : '';
-    const [attachedRead, setAttachedRead] = React.useState<Readonly<{ key: string; publication?: ReturnType<typeof useArtifact>;
-        dashboard: ProjectAttachedDashboardRead | null; reasonCode?: string }>>({ key: '', dashboard: null });
-    React.useEffect(() => {
-        if (!attached || !attachmentEligible || !lifetime?.isCurrent() || !selectActiveServerAccountScopeForServer(viewer, props.serverId)) return;
-        const controller = new AbortController();
-        void (async () => {
-            try {
-                const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
-                const account = await captureLazyActionAccountContext(props.serverId, controller.signal);
-                try {
-                    const row = await account.homeHubArtifactTransport.read(attached.artifactId, { signal: controller.signal });
-                    const layout = row ? readWidgetSurfaceArtifactV1(row) : null;
-                    if (!layout || layout.surface.owner.kind !== 'project' || row?.ownerAccountId !== layout.surface.accountId
-                        || layout.surface.serverId !== account.serverId) throw new Error('widget_area_owner_mismatch');
-                    if (!controller.signal.aborted && lifetime.isCurrent()) setAttachedRead({ key: attachedKey, publication,
-                        dashboard: { artifactId: attached.artifactId, surface: { ...layout.surface, artifactId: attached.artifactId },
-                            name: layout.name ?? t('projects.pages.overview') } });
-                } finally { account.dispose(); }
-            } catch {
-                if (!controller.signal.aborted && lifetime.isCurrent()) setAttachedRead({ key: attachedKey, publication, dashboard: null, reasonCode: 'widget_area_unavailable' });
-            }
-        })();
-        return () => controller.abort();
-    }, [attachedKey, attachmentEligible, lifetime, props.serverId, publication]);
-    const attachedReadCurrent = attachedRead.key === attachedKey && attachedRead.publication === publication;
-    const sharedDashboard = attachmentEligible && attachedReadCurrent ? attachedRead.dashboard ?? undefined : undefined;
+    const attachedRead = useProjectDashboardDocument(attachmentEligible ? attached! : null, props.serverId);
+    const sharedDashboard = attachmentEligible ? attachedRead.document ?? undefined : undefined;
     const surface = React.useMemo((): WidgetSurfaceRefV1 | null => {
         if (!lifetime?.isCurrent() || !selectActiveServerAccountScopeForServer(viewer, props.serverId) || !read.projectIdentity) return null;
         if (attached) return sharedDashboard?.surface ?? null;
@@ -130,7 +112,7 @@ export function useProjectWidgetAreaBinding(props: ProjectWidgetAreaBindingInput
                 ...(layoutId === undefined ? {} : { layoutId }) },
         });
         return parsed.success ? parsed.data : null;
-    }, [attached?.sourceId, attached?.artifactId, lifetime, locallySelected, props.artifactId, layoutId, props.ownerAccountId, props.serverId, read.projectIdentity, sharedDashboard, viewer]);
+    }, [attached?.sourceId, attached?.artifactId, attached?.serverId, lifetime, locallySelected, props.artifactId, layoutId, props.ownerAccountId, props.serverId, read.projectIdentity, sharedDashboard, viewer]);
     const mounted = React.useRef(true);
     React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     const currentBinding = React.useRef({ surface, context: read.providedContext });
@@ -141,8 +123,10 @@ export function useProjectWidgetAreaBinding(props: ProjectWidgetAreaBindingInput
         const widgetAreaContext = { surface, values: read.providedContext };
         const isCurrent = () => mounted.current && lifetime.isCurrent() && currentBinding.current.surface === surface
             && currentBinding.current.context === read.providedContext;
-        const execute: WidgetAreaPort['execute'] = async (operation, signal) => {
+        const execute: WidgetAreaPort['execute'] = async (operation, signal, admitted) => {
             if (!isCurrent() || signal?.aborted) return failed('widget_area_scope_retired');
+            const target = admitted?.surface ?? surface;
+            if (!sameStrictJsonValue(widgetAreaLayoutBaseSurface(target), widgetAreaLayoutBaseSurface(surface))) return failed('widget_area_owner_mismatch');
             const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
             if (!isCurrent() || signal?.aborted) return failed('widget_area_scope_retired');
             const executor = createDefaultActionExecutor();
@@ -153,9 +137,10 @@ export function useProjectWidgetAreaBinding(props: ProjectWidgetAreaBindingInput
                 if (!parsed?.success || !parsed.data.ok || !hasDashboardAttachment(parsed.data.source, attached, lifetime.scope.serverId)) return failed('widget_project_source_unavailable');
                 if (!isCurrent() || signal?.aborted) return failed('widget_area_scope_retired');
             }
-            const result = await executor.execute(operation.actionId, buildWidgetAreaActionInputV1(operation, surface), {
-                surface: 'ui', actionCaller: { kind: 'host' }, serverId: lifetime.scope.serverId,
-                expectedAccountId: lifetime.scope.accountId, signal, widgetAreaContext,
+            const result = await executor.execute(operation.actionId, buildWidgetAreaActionInputV1(operation, target), {
+                surface: 'ui', actionCaller: { kind: 'host' }, serverId: sharedDashboard?.viewerScope.serverId ?? lifetime.scope.serverId,
+                expectedAccountId: sharedDashboard?.viewerScope.accountId ?? lifetime.scope.accountId, signal,
+                widgetAreaContext: admitted ? { surface: target, values: widgetProvidedContext(admitted.context) } : widgetAreaContext,
             });
             // Preserve a real effect acknowledgement; retired reads disclose no Account content.
             if ((!isCurrent() || signal?.aborted) && !(result.ok && pluginUiWidgetAreaOperationHasOutwardEffectV1(operation))) return failed('widget_area_scope_retired');
@@ -189,11 +174,11 @@ export function useProjectWidgetAreaBinding(props: ProjectWidgetAreaBindingInput
                     const admitted = await readMovementContext(destination);
                     if (!admitted.ok) return widgetMovementRefused(admitted.code, effect.preview);
                     if (!isCurrent()) return widgetMovementRefused('widget_area_scope_retired', effect.preview);
-                    return executeWidgetEntityMovement(effect, lifetime.scope, admitted.context);
+                    return executeWidgetEntityMovement(effect, sharedDashboard?.viewerScope ?? lifetime.scope, admitted.context);
                 },
             },
         };
-    }, [attached?.sourceId, attached?.artifactId, lifetime, read.providedContext, surface]);
+    }, [attached?.sourceId, attached?.artifactId, attached?.serverId, lifetime, read.providedContext, sharedDashboard?.viewerScope, surface]);
     React.useEffect(() => {
         if (!lifetime?.isCurrent() || !selectActiveServerAccountScopeForServer(viewer, props.serverId) || !read.projectIdentity) return;
         // The mounted Project is the viewer's destination even while displaying an attached document.
@@ -218,7 +203,7 @@ export function useProjectWidgetAreaBinding(props: ProjectWidgetAreaBindingInput
     }, [lifetime, props.layoutId, props.onSelectLayout, props.serverId, read.projectIdentity, read.providedContext, selectionKey, surface, viewer]);
     const unavailableReasonCode = port ? undefined
         : !lifetime?.isCurrent() || !selectActiveServerAccountScopeForServer(viewer, props.serverId) ? 'widget_area_scope_unavailable'
-        : attached ? !attachmentEligible ? 'widget_project_source_unavailable' : attachedReadCurrent ? attachedRead.reasonCode ?? 'widget_area_loading' : 'widget_area_loading'
+        : attached ? !attachmentEligible ? 'widget_project_source_unavailable' : attachedRead.loaded ? 'widget_area_unavailable' : 'widget_area_loading'
         : 'widget_project_identity_unavailable';
     return React.useMemo(() => ({ port, context, ...(sharedDashboard ? { sharedDashboard } : {}), ...(unavailableReasonCode ? { unavailableReasonCode } : {}) }),
         [context, port, sharedDashboard, unavailableReasonCode]);

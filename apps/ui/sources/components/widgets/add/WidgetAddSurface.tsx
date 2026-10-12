@@ -7,6 +7,7 @@ import {
     HAPPIER_COLLECTION_LIST_TEXT,
     HAPPIER_WIDGET_FRAME_METRICS,
     HappierPressable,
+    HappierSkeletonBlock,
     happierPageTextMetrics,
 } from '@happier-dev/plugin-ui/presentation';
 
@@ -14,12 +15,16 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
+import { KeyHint } from '@/components/ui/keyboard/KeyHint';
+import { EmptySlot } from '@/components/ui/empty/EmptySlot';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover';
+import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
+import { resolveVerticalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
@@ -28,7 +33,7 @@ import { useDeviceType } from '@/utils/platform/responsive';
 import { WidgetFlowPanel, WidgetPreviewWell } from '@/components/widgets/flow/WidgetFlowPanel';
 import { WidgetFlowStep, WidgetSheetDone, WidgetSheetShell } from '@/components/widgets/flow/WidgetFlowShell';
 
-import { WidgetAddPluginMark } from './WidgetAddPluginMark';
+import { InstalledPluginMarkById } from '@/components/plugins/shared/InstalledPluginMarkById';
 import { WidgetSetupStep } from './WidgetSetupStep';
 import type { WidgetSetupSubmitResult } from './widgetSetupModel';
 import {
@@ -51,9 +56,20 @@ export const WIDGET_ADD_SURFACE_PX = Object.freeze({
     height: 624,
     listWidth: 316,
     splitMinWidth: 880,
+    /** The room kept beside the surface and the window's sides. */
+    marginX: 24,
+    /**
+     * The room kept above and below it: the lab's surface floats clear of the window's bottom edge (about
+     * 130 px at 1440 x 900), so a surface slid down by a low trigger still keeps a calm band under it and
+     * its height is capped to the window minus this.
+     */
+    marginY: 64,
 });
 
 const ASK_ID = 'ask';
+/** The nothing-selected sketch: a small Home of three cards and its Add slot. */
+const WIDGET_ADD_SKETCH_PX = Object.freeze({ width: 280, gap: 8, cardHeight: 54, slotHeight: 40 });
+const LIST_FADE_EDGES = { top: true, bottom: true } as const;
 /** A plugin section's mark sits on its label's line. */
 const GROUP_MARK_PX = HAPPIER_COLLECTION_LIST_TEXT.groupTitle.lineHeight - 2;
 
@@ -72,6 +88,8 @@ export type WidgetAddPanelProps = Readonly<{
     ask?: WidgetAddAsk;
     /** Where an entry without its own setup goes ("Add to Home"). */
     addLabel: string;
+    /** A choice of where the widget goes, under the title (a dashboard's main or side area). */
+    destination?: React.ReactNode;
     /** `split`: list beside the selected widget; `push`: the list pushes the widget's pane. */
     composition: 'split' | 'push';
     /** Phones: the sheet's Done closes, and the pane recomposes for the phone. */
@@ -113,12 +131,18 @@ function feedbackFor(entry: Readonly<{ id: string; title: string }>, result: Wid
  */
 export function WidgetAddSurface(props: Omit<WidgetAddPanelProps, 'composition' | 'phone'> & Readonly<{
     open: boolean;
+    /** The control that opened it; focus returns here. */
     anchorRef: React.RefObject<View | null>;
+    /**
+     * The band the surface centres on, when the control sits inside a wider bar that spans the page's
+     * content column (Home's Customize bar): the surface then sits centred in that column.
+     */
+    regionRef?: React.RefObject<View | null>;
     placement?: 'top' | 'bottom';
 }>): React.ReactElement | null {
     const phone = useDeviceType() === 'phone';
     if (!props.open) return null;
-    const { open: _open, anchorRef, placement, ...panel } = props;
+    const { open: _open, anchorRef, regionRef, placement, ...panel } = props;
     if (phone) {
         return (
             <WidgetSheetShell title={props.title} onRequestClose={props.onRequestClose} testID={`${props.testID}.sheet`}>
@@ -129,13 +153,18 @@ export function WidgetAddSurface(props: Omit<WidgetAddPanelProps, 'composition' 
     return (
         <Popover
             open
-            anchorRef={anchorRef}
+            anchorRef={regionRef ?? anchorRef}
+            focusReturnRef={anchorRef}
             placement={placement ?? 'bottom'}
             gap={8}
             maxHeightCap={WIDGET_ADD_SURFACE_PX.height}
             maxWidthCap={WIDGET_ADD_SURFACE_PX.width}
-            edgePadding={{ vertical: 8, horizontal: 8 }}
-            portal={{ web: true, native: true, matchAnchorWidth: false, anchorAlign: 'end' }}
+            // The surface is a designed panel, not a menu: it keeps its size and calm margins, centred on
+            // the control that opened it and slid inside the window (over that control if it must)
+            // rather than squeezed into whatever room is left on one side of it (lab wsplit A).
+            fit="shift"
+            edgePadding={{ vertical: WIDGET_ADD_SURFACE_PX.marginY, horizontal: WIDGET_ADD_SURFACE_PX.marginX }}
+            portal={{ web: true, native: true, matchAnchorWidth: false, anchorAlign: 'center' }}
             onRequestClose={props.onRequestClose}
             backdrop={{ effect: 'none', closeOnPan: true }}
         >
@@ -154,11 +183,18 @@ function AnchoredWidgetAddContent(props: Readonly<{
     maxHeight: number;
     maxWidth: number;
 }>): React.ReactElement {
-    const [split] = React.useState(() => props.maxWidth >= WIDGET_ADD_SURFACE_PX.splitMinWidth);
+    const [split, setSplit] = React.useState(() => props.maxWidth >= WIDGET_ADD_SURFACE_PX.splitMinWidth);
+    // The first room can be the window's, before a page column's boundary is measured; when the real
+    // room turns out too narrow to split, the surface settles once on the pushed composition (never
+    // back), so a pane-sized boundary never crushes the list and the widget into one row.
+    const fitsSplit = props.maxWidth >= WIDGET_ADD_SURFACE_PX.splitMinWidth;
+    React.useLayoutEffect(() => {
+        if (split && !fitsSplit) setSplit(false);
+    }, [fitsSplit, split]);
     const width = Math.min(props.maxWidth, split ? WIDGET_ADD_SURFACE_PX.width : WIDGET_ADD_SURFACE_PX.narrowWidth);
     const height = Math.min(props.maxHeight, WIDGET_ADD_SURFACE_PX.height);
     return (
-        <View style={{ alignSelf: 'flex-end', width }}>
+        <View style={{ alignSelf: 'center', width }}>
             <FloatingOverlay maxHeight={height} scrollEnabled={false} keyboardShouldPersistTaps="always">
                 <View style={{ height }}>
                     <WidgetAddPanel {...props.panel} composition={split ? 'split' : 'push'} />
@@ -342,6 +378,9 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
     const styles = stylesheet;
     const split = props.composition === 'split';
     const nothing = props.sections.length === 0 && !props.askEntry;
+    // Rows that run past the surface fade at the cut edge, so the list never ends mid-row (web).
+    const fades = useScrollEdgeFades({ enabledEdges: LIST_FADE_EDGES });
+    const fadeMask = Platform.OS === 'web' && !props.phone ? resolveVerticalScrollEdgeMaskStyle(fades.visibility) : null;
     const row = (entry: WidgetAddEntry) => (
         <WidgetAddRow key={entry.id} entry={entry} selected={props.selectedId === entry.id}
             nativeID={widgetAddOptionId(props.listboxId, entry.id)}
@@ -361,6 +400,7 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
                     <IconButton testID={`${props.testID}.close`} iconName="x" variant="plain" accessibilityLabel={t('common.close')} onPress={props.onRequestClose} />
                 ) : null}
             </View>
+            {props.destination ? <View style={styles.destination}>{props.destination}</View> : null}
             <CompactSearchField
                 value={props.query}
                 onChangeText={props.onQueryChange}
@@ -381,11 +421,13 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
             {/* @ts-expect-error React Native typings omit the supported React Native Web listbox role. */}
             <ScrollView nativeID={props.listboxId} accessibilityLabel={props.searchPlaceholder}
                 {...(Platform.OS === 'web' ? { role: 'listbox' as const } : {})}
-                style={props.phone ? null : styles.fill} contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="always">
+                onLayout={fades.onViewportLayout} onContentSizeChange={fades.onContentSizeChange} onScroll={fades.onScroll} scrollEventThrottle={16}
+                style={props.phone ? null : [styles.fill, fadeMask ? { maskImage: fadeMask.maskImage, WebkitMaskImage: fadeMask.WebkitMaskImage } as object : null]}
+                contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="always">
                 {props.sections.map((section) => (
                     <View key={section.id} style={styles.section} accessibilityLabel={section.title}>
                         <View style={styles.sectionHeader}>
-                            {section.pluginId ? <WidgetAddPluginMark pluginId={section.pluginId} size={GROUP_MARK_PX} testID={`${props.testID}.section.${section.id}.mark`} /> : null}
+                            {section.pluginId ? <InstalledPluginMarkById pluginId={section.pluginId} size={GROUP_MARK_PX} testID={`${props.testID}.section.${section.id}.mark`} /> : null}
                             <Text style={styles.sectionTitle} accessibilityRole="header" numberOfLines={1}>{section.title}</Text>
                             {section.hint ? <Text style={styles.sectionHint} numberOfLines={1}>{section.hint}</Text> : null}
                         </View>
@@ -589,21 +631,63 @@ function WidgetAddDetail(props: Readonly<{
             primary={{ testID: `${props.testID}.submit`, label: props.addLabel, icon: 'plus', onPress: () => {}, disabled: true }}
         >
             <View testID={props.emptyTestID} style={styles.empty}>
-                <Icon name="squares-four" size={ICON_SIZE.lg} color={theme.colors.text.tertiary} />
+                {props.phone ? <Icon name="squares-four" size={ICON_SIZE.lg} color={theme.colors.text.tertiary} /> : <AddInvitation />}
                 <Text style={styles.emptyTitle}>{t('widgetAdd.pickTitle')}</Text>
                 <Text style={styles.emptyBody}>{t('widgetAdd.pickHint')}</Text>
+                {Platform.OS === 'web' && !props.phone ? <KeyLegend testID={`${props.emptyTestID}.keys`} /> : null}
             </View>
         </WidgetFlowPanel>
     );
 }
 
-/** ⌘↵ beside Add, in the shortcut keys' quiet type. */
+/**
+ * Nothing selected yet (lab wsplit A0): the shape of the surface the widget will land on — two cards,
+ * a wide one, and the dashed slot where the new one goes — drawn still, from the skeleton and the one
+ * empty slot. It teaches what Add does without reading anything.
+ */
+function AddInvitation(): React.ReactElement {
+    const styles = stylesheet;
+    const { theme } = useUnistyles();
+    const card = (wide: boolean) => (
+        <View style={[styles.sketchCard, wide ? null : styles.sketchCardHalf]}>
+            <HappierSkeletonBlock color={theme.colors.border.strong} width="45%" height={6} animationEnabled={false} style={styles.sketchLine} />
+            <HappierSkeletonBlock color={theme.colors.border.default} width={wide ? '70%' : '80%'} height={6} animationEnabled={false} style={styles.sketchLine} />
+        </View>
+    );
+    return (
+        <View style={styles.sketch} accessible={false} importantForAccessibility="no-hide-descendants">
+            <View style={styles.sketchRow}>{card(false)}{card(false)}</View>
+            {card(true)}
+            <EmptySlot icon="plus" minHeight={WIDGET_ADD_SKETCH_PX.slotHeight} />
+        </View>
+    );
+}
+
+/** ⌘↵ beside Add, drawn with the app's one keycap (menus, the palette, settings). */
 function ShortcutHint(): React.ReactElement {
     const styles = stylesheet;
     return (
         <View style={styles.keys} accessible={false} importantForAccessibility="no-hide-descendants">
-            <Text style={styles.key}>⌘</Text>
-            <Text style={styles.key}>↵</Text>
+            <KeyHint label="⌘" />
+            <KeyHint label="↵" />
+        </View>
+    );
+}
+
+/** Nothing selected yet: the keys that drive the surface (lab wsplit A0), quiet under the promise. */
+function KeyLegend(props: Readonly<{ testID: string }>): React.ReactElement {
+    const styles = stylesheet;
+    const item = (keys: readonly string[], label: string) => (
+        <View style={styles.legendItem}>
+            {keys.map((key) => <KeyHint key={key} label={key} />)}
+            <Text style={styles.legendLabel}>{label}</Text>
+        </View>
+    );
+    return (
+        <View testID={props.testID} style={styles.legend} accessible={false} importantForAccessibility="no-hide-descendants">
+            {item(['↑', '↓'], t('widgetAdd.keysBrowse'))}
+            {item(['↵'], t('widgetAdd.keysAdd'))}
+            {item(['esc'], t('widgetAdd.keysClose'))}
         </View>
     );
 }
@@ -617,21 +701,22 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRightWidth: StyleSheet.hairlineWidth,
         borderRightColor: theme.colors.border.default,
     },
-    detailColumn: { flex: 1, minWidth: 0, minHeight: 0, paddingHorizontal: 8, paddingTop: 6 },
-    listHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: HAPPIER_COLLECTION_LIST_METRICS.contentInset - 4, paddingRight: 10, paddingTop: HAPPIER_COLLECTION_LIST_METRICS.headerPaddingTop + 4, paddingBottom: 8 },
+    detailColumn: { flex: 1, minWidth: 0, minHeight: 0, paddingHorizontal: theme.space.s8, paddingTop: theme.space.s6 },
+    destination: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.contentInset - 4, paddingBottom: theme.space.s8 },
+    listHeader: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, paddingLeft: HAPPIER_COLLECTION_LIST_METRICS.contentInset - 4, paddingRight: theme.space.s10, paddingTop: HAPPIER_COLLECTION_LIST_METRICS.headerPaddingTop + 4, paddingBottom: theme.space.s8 },
     titleBlock: { flex: 1, minWidth: 0, gap: 1 },
     title: { ...listText('title'), color: theme.colors.text.primary },
     hint: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
-    search: { marginHorizontal: 10, marginBottom: 4 },
+    search: { marginHorizontal: theme.space.s10, marginBottom: theme.space.s4 },
     // The Collection list's column geometry and type rhythm (`HAPPIER_COLLECTION_LIST_*`).
-    listContent: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset - 4, paddingBottom: 10 },
+    listContent: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset - 4, paddingBottom: theme.space.s10 },
     section: { paddingTop: HAPPIER_COLLECTION_LIST_METRICS.groupLabelFirstPaddingTop },
     sectionHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         paddingLeft: HAPPIER_COLLECTION_LIST_METRICS.contentInset - HAPPIER_COLLECTION_LIST_METRICS.rowInset,
-        paddingRight: 8,
+        paddingRight: theme.space.s8,
         paddingTop: HAPPIER_COLLECTION_LIST_METRICS.groupLabelPaddingTop - HAPPIER_COLLECTION_LIST_METRICS.groupLabelFirstPaddingTop,
         paddingBottom: HAPPIER_COLLECTION_LIST_METRICS.groupLabelPaddingBottom,
     },
@@ -641,50 +726,57 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'flex-start',
         gap: HAPPIER_COLLECTION_LIST_METRICS.rowGlyphGap,
-        paddingVertical: 7,
+        paddingVertical: theme.space.s6,
         paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.contentInset - HAPPIER_COLLECTION_LIST_METRICS.rowInset,
         borderRadius: HAPPIER_COLLECTION_LIST_METRICS.rowRadius,
     },
     rowHover: { backgroundColor: theme.colors.surface.pressed },
-    rowWithActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    rowWithActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
     rowPick: { flex: 1, minWidth: 0 },
     rowSelected: { backgroundColor: theme.colors.surface.selected },
     // The mark sits on the title's line.
     rowMark: { width: HAPPIER_COLLECTION_LIST_METRICS.rowGlyphBox, height: HAPPIER_COLLECTION_LIST_TEXT.rowTitle.lineHeight, alignItems: 'center', justifyContent: 'center' },
     rowText: { flex: 1, minWidth: 0 },
-    rowTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    rowTop: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
     rowTitle: { ...listText('rowTitle'), color: theme.colors.text.primary, flex: 1, minWidth: 0 },
     rowTitleSelected: listText('rowTitleSelected'),
     rowTitleAdded: { color: theme.colors.text.secondary },
     rowSubtitle: { ...listText('groupCount'), color: theme.colors.text.tertiary },
-    trailing: { flexDirection: 'row', alignItems: 'center', gap: 4, height: HAPPIER_COLLECTION_LIST_TEXT.rowTitle.lineHeight, flexShrink: 0 },
+    trailing: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, height: HAPPIER_COLLECTION_LIST_TEXT.rowTitle.lineHeight, flexShrink: 0 },
     count: { ...listText('groupCount'), color: theme.colors.text.secondary, fontVariant: ['tabular-nums'] },
     addedText: { ...listText('groupCount'), color: theme.colors.text.tertiary },
-    empty: { flex: 1, minHeight: 200, alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 32 },
+    empty: { flex: 1, minHeight: 200, alignItems: 'center', justifyContent: 'center', gap: theme.space.s6, paddingHorizontal: theme.space.s32 },
     emptyTitle: { ...Typography.default('semiBold'), ...happierPageTextMetrics('sectionTitle'), color: theme.colors.text.primary, textAlign: 'center' },
     emptyBody: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.secondary, textAlign: 'center', maxWidth: 340 },
-    keys: { flexDirection: 'row', gap: 3 },
-    key: {
-        ...Typography.default(),
-        ...happierPageTextMetrics('meta'),
-        minWidth: 18,
-        textAlign: 'center',
-        paddingHorizontal: 4,
-        borderRadius: HAPPIER_WIDGET_FRAME_METRICS.cardRadiusPx / 2,
-        backgroundColor: theme.colors.surface.inset,
-        // A key, not a tag: the cap's lower lip (lab wsplit A1).
-        borderBottomWidth: 1,
-        borderBottomColor: theme.colors.border.default,
-        overflow: 'hidden',
-        color: theme.colors.text.secondary,
+    keys: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+    sketch: { width: WIDGET_ADD_SKETCH_PX.width, gap: WIDGET_ADD_SKETCH_PX.gap, marginBottom: theme.space.s16 },
+    sketchRow: { flexDirection: 'row', gap: WIDGET_ADD_SKETCH_PX.gap },
+    sketchCard: {
+        height: WIDGET_ADD_SKETCH_PX.cardHeight,
+        justifyContent: 'center',
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s12,
+        borderRadius: HAPPIER_WIDGET_FRAME_METRICS.cardRadiusPx,
+        // A card standing on the floating glass (lab `.wa-mini i`): the page's own surface and the strong ink
+        // edge, so it reads as a card, faint but legible, where a bare outline would vanish on the glass.
+        backgroundColor: theme.colors.surface.base,
+        borderWidth: 1,
+        borderColor: theme.colors.border.strong,
     },
+    // The still skeleton draws at the pulse's low opacity; these lines are the sketch's ink, so they keep
+    // their full ink.
+    sketchLine: { opacity: 1 },
+    sketchCardHalf: { flex: 1, minWidth: 0 },
+    legend: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s12, marginTop: theme.space.s12 },
+    legendItem: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+    legendLabel: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, marginLeft: 3 },
     askDraft: {
         borderRadius: MENU_ROW_METRICS.radiusPx,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
-        paddingVertical: 10,
-        paddingHorizontal: 12,
+        paddingVertical: theme.space.s10,
+        paddingHorizontal: theme.space.s12,
     },
     askDraftText: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.primary },
     askDraftEllipsis: { color: theme.colors.text.tertiary },

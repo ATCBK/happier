@@ -11,6 +11,8 @@ import { ListPresentationProvider } from '@/components/ui/lists/listPresentation
 import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
 import { WidgetFlowPanel, WidgetPreviewWell } from '@/components/widgets/flow/WidgetFlowPanel';
+import { listWidgetGroupProjects } from '@/components/widgets/group/widgetGroupCopy';
+import { useWorkspaceRefs } from '@/sync/domains/state/storage';
 
 import { runWidgetDefinitionCommand } from './widgetDefinitionCommands';
 
@@ -20,16 +22,19 @@ export type SaveAsWidgetConvertedInput = Readonly<{ path: string; title: string;
 type Destination = Readonly<{ key: string; label: string; surface: WidgetSurfaceRefV1 }>;
 
 /**
- * Where the person can also put the new widget: Home and each of their WorkBoards — personal
- * surfaces of the same Account. Never another Home.
+ * Where the person can also put the new widget: Home, WorkBoards and Projects in the same Account.
+ * Never another Home; each destination keeps the canonical widget input admission.
  */
 export function useSaveAsWidgetDestinations(account: Readonly<{ serverId: string; accountId: string }>): readonly Destination[] {
     const boards = useWorkBoards().boards;
+    const refs = useWorkspaceRefs();
     return React.useMemo((): readonly Destination[] => [
         { key: 'home', label: t('widgetDefinition.placedOnHome'), surface: { ...account, owner: { kind: 'home' } } },
         ...boards.map((board): Destination => ({ key: `board:${board.id}`, label: board.name,
             surface: { ...account, owner: { kind: 'workBoard', boardId: board.id } } })),
-    ], [account, boards]);
+        ...listWidgetGroupProjects(refs, account.serverId).map((project): Destination => ({ key: `project:${project.projectId}`,
+            label: project.label, surface: { ...account, owner: { kind: 'project', projectId: project.projectId } } })),
+    ], [account, boards, refs]);
 }
 
 /**
@@ -54,23 +59,29 @@ export function SaveAsWidgetPanel(props: Readonly<{
     const destinations = useSaveAsWidgetDestinations(props.account);
     const [name, setName] = React.useState(props.defaultName);
     const [chosen, setChosen] = React.useState<ReadonlySet<string>>(() => new Set());
-    const [state, setState] = React.useState<'idle' | 'busy' | 'failed' | 'partial'>('idle');
+    const [state, setState] = React.useState<'idle' | 'busy' | 'failed' | 'pending' | 'placementPending' | 'partial'>('idle');
+    const inFlight = React.useRef(false);
     const trimmed = name.trim();
 
     const save = React.useCallback(async () => {
-        if (trimmed.length === 0 || state === 'busy') return;
+        if (trimmed.length === 0 || inFlight.current || state === 'partial' || state === 'pending' || state === 'placementPending') return;
+        inFlight.current = true;
         setState('busy');
-        const artifactId = randomUUID();
-        const saved = await runWidgetDefinitionCommand('widgets.definition.saveFromSession', {
-            account: props.account, session: props.session, itemId: props.itemId, artifactId, name: trimmed,
-        }, props.account);
-        if (saved.kind !== 'applied') { setState('failed'); return; }
+        const saved = await runWidgetDefinitionCommand('widgets.definition.saveFromSession', () => ({
+            account: props.account, session: props.session, itemId: props.itemId, artifactId: randomUUID(), name: trimmed,
+        }), props.account);
+        if (saved.kind !== 'applied') { setState(saved.kind === 'approvalPending' ? 'pending' : 'failed'); inFlight.current = false; return; }
+        const artifactId = saved.result.definition.id;
         const bindings: WidgetInputBindingsV1 = saved.result.suggestedBindings;
         const adds = await Promise.all(destinations.filter((destination) => chosen.has(destination.key)).map((destination) => (
-            runWidgetDefinitionCommand('widgets.item.add', { surface: destination.surface,
-                instance: { v: 1, id: randomUUID(), definition: { kind: 'artifact', artifactId }, bindings } }, props.account)
+            runWidgetDefinitionCommand('widgets.item.add', () => ({ surface: destination.surface,
+                instance: { v: 1, id: randomUUID(), definition: { kind: 'artifact', artifactId }, bindings } }), props.account)
         )));
-        if (adds.some((outcome) => outcome.kind === 'refused')) { setState('partial'); return; }
+        inFlight.current = false;
+        if (adds.some((outcome) => outcome.kind !== 'applied')) {
+            setState(adds.some(outcome => outcome.kind === 'approvalPending') ? 'placementPending' : 'partial');
+            return;
+        }
         AccessibilityInfo.announceForAccessibility?.(t('widgetDefinition.savedAsYours', { name: trimmed }));
         props.onDone();
     }, [chosen, destinations, props, state, trimmed]);
@@ -80,10 +91,11 @@ export function SaveAsWidgetPanel(props: Readonly<{
             title={t('widgetDefinition.saveTitle')}
             hint={t('widgetDefinition.saveHint')}
             {...(props.onBack ? { onBack: props.onBack } : {})}
-            note={state === 'partial' ? t('widgetDefinition.savedButNotPlaced') : t('widgetDefinition.saveNote')}
+            note={state === 'placementPending' ? `${t('widgetDefinition.savedButNotPlaced')} ${t('widgetAdd.areaApprovalPending')}`
+                : state === 'partial' ? t('widgetDefinition.savedButNotPlaced') : state === 'pending' ? t('widgetAdd.areaApprovalPending') : t('widgetDefinition.saveNote')}
             error={state === 'failed' ? t('widgetDefinition.saveFailed') : null}
             onCancel={props.onCancel}
-            primary={state === 'partial'
+            primary={state === 'partial' || state === 'pending' || state === 'placementPending'
                 ? { label: t('common.done'), onPress: props.onDone }
                 : { label: t('widgetDefinition.saveWidget'), onPress: () => { void save(); }, busy: state === 'busy', disabled: trimmed.length === 0,
                     blockedReason: trimmed.length === 0 ? t('widgetDefinition.nameNeeded') : null }}

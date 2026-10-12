@@ -25,9 +25,11 @@ import { t } from '@/text';
 
 import {
   buildWidgetGroupInputsCandidate,
-  describeWidgetGroupContext,
+  describeWidgetGroupInputsBinding,
 } from './widgetGroupInputs';
 import { WIDGET_GROUP_ICON } from './widgetGroupMenu';
+
+const NO_FIELDS: readonly never[] = [];
 
 /**
  * A group's Inputs… (lab wginputs I): the A4 Set up step — the same header, field rows, value
@@ -70,7 +72,8 @@ export function useWidgetGroupInputsEditor(
     else close();
   }, [close]);
   const labels = useWidgetBindingValueLabels(group.context ?? {}, candidate, input.candidates);
-  const binding = describeWidgetGroupContext(group.context, labels);
+  // The Inputs… row names what is bound before its value (lab wgmenu M "Project: happier").
+  const binding = describeWidgetGroupInputsBinding(group.context, labels, candidate?.inputs?.fields ?? NO_FIELDS);
   const editable =
     candidate !== null && scope !== null && setInputs !== undefined;
   const editInputs = React.useMemo(
@@ -194,13 +197,13 @@ function WidgetGroupFollowers(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  list: { gap: 8 },
+  list: { gap: theme.space.s8 },
   heading: {
     ...Typography.default('medium'),
     ...happierPageTextMetrics('meta'),
     color: theme.colors.text.secondary,
   },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 28 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, minHeight: 28 },
   title: {
     ...Typography.default(),
     ...happierPageTextMetrics('rowTitle'),

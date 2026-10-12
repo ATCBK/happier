@@ -2,6 +2,7 @@ import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { VoiceTrackedSessionAddressV1Schema } from '@happier-dev/protocol/sessions/follow/voiceTrackedTargetsCompatibilityV1';
 import { WorkspaceRefV1Schema } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { MachineTargetV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { isSameInputOptionValue } from '@happier-dev/protocol/inputs';
 import { readWidgetInputTargetV1, type WidgetInputBindingsV1 } from '@happier-dev/protocol/widgets';
 
@@ -11,6 +12,9 @@ import { storage, useSessionDisplayNameProjections, type SessionDisplayNameSourc
 import { readProjectWorkspaceRefs } from '@/sync/store/domains/projectAccountRows';
 import { resolveWorkspaceDisplayPresentation } from '@/sync/domains/workspaces/workspaceDisplayPresentation';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { resolveExactServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
 export type WidgetBindingValueLabels = Readonly<Record<string, string | null>>;
 
@@ -39,7 +43,10 @@ export function useWidgetBindingValueLabels(
                 ? VoiceTrackedSessionAddressV1Schema.safeParse(value) : null;
             const workspace = value !== undefined && field?.inputType && 'hostType' in field.inputType && field.inputType.hostType === 'workspace'
                 ? WorkspaceRefV1Schema.safeParse(value) : null;
-            return { path, field, value, session: session?.success ? session.data : null, workspace: workspace?.success ? workspace.data : null };
+            const machine = value !== undefined && field?.inputType && 'hostType' in field.inputType && field.inputType.hostType === 'machine'
+                ? MachineTargetV1Schema.safeParse(value) : null;
+            return { path, field, value, session: session?.success ? session.data : null, workspace: workspace?.success ? workspace.data : null,
+                machine: machine?.success ? machine.data : null };
         });
     }, [bindings, candidate, fieldCandidates]);
     const addresses = React.useMemo(() => entries.flatMap(entry => entry.session ? [entry.session] : []), [entries]);
@@ -49,6 +56,15 @@ export function useWidgetBindingValueLabels(
         scope: entry.workspace, workspaceRefs: readProjectWorkspaceRefs(state), fallbackPathLabel: entry.workspace.rootPath,
         legacyLabel: entry.workspace.label,
     }).displayTitle : null)));
+    const machineNames = storage(useShallow(state => entries.map(entry => {
+        if (!entry.machine) return null;
+        const machine = resolveExactServerScopedMachine({ ...entry.machine,
+            activeServerId: getActiveServerSnapshot().serverId, activeMachines: Object.values(state.machines),
+            machineListByServerId: state.machineListByServerId, machineListStatusByServerId: state.machineListStatusByServerId });
+        // The Home's list disambiguates near-identical names; the frame says the same name as that list.
+        const inventory = state.machineListByServerId?.[entry.machine.serverId ?? getActiveServerSnapshot().serverId ?? ''] ?? undefined;
+        return machine ? getMachineDisplayName(machine, inventory) : null;
+    })));
     return React.useMemo(() => {
         let sessionIndex = 0;
         return Object.fromEntries(entries.map((entry, index) => {
@@ -56,6 +72,7 @@ export function useWidgetBindingValueLabels(
             let label: string | null = null;
             if (entry.session) label = sessionNames[sessionIndex++] ?? null;
             else if (entry.workspace) label = workspaceNames[index] ?? null;
+            else if (entry.machine) label = machineNames[index] ?? null;
             else if (value !== undefined && field) {
                 const option = field.options?.find(option => isSameInputOptionValue(option.value, value));
                 if (option) label = option.label;
@@ -63,5 +80,5 @@ export function useWidgetBindingValueLabels(
             }
             return [entry.path, label];
         }));
-    }, [entries, sessionNames, workspaceNames]);
+    }, [entries, sessionNames, workspaceNames, machineNames]);
 }

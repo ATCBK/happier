@@ -1,34 +1,26 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierInputField, happierPageTextMetrics, resolveHappierActionFieldPresentation, useHappierInputPicker } from '@happier-dev/plugin-ui/presentation';
+import { HappierInputField, happierPageTextMetrics, resolveHappierActionFieldPresentation, resolveHappierChoiceControl } from '@happier-dev/plugin-ui/presentation';
 import { sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { readInputOptionValue } from '@happier-dev/protocol/inputs';
 
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
-import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
 import {
-    AMBIGUOUS_INLINE_LIMIT,
-    isLiteralWidgetSetupField,
     type WidgetSetupField,
     type WidgetSetupRow,
     type WidgetSetupValue,
 } from './widgetSetupModel';
 
 const FOLLOW_ID = 'follow';
-const ANOTHER_ID = 'another';
-const PICKER_ID = 'picker';
-const RETRY_ID = 'retry';
-const pinId = (index: number) => `pin:${index}`;
-
 export type WidgetSetupFieldChange =
     | Readonly<{ kind: 'follow'; slot: string }>
     | Readonly<{ kind: 'pin'; value: JsonValue }>
@@ -42,9 +34,8 @@ export type WidgetSetupFieldChange =
  * A per-viewer input (a connection on a shared surface) is each viewer's own: the row says so and
  * offers nothing to choose.
  *
- * The field menu lists Follow first, then a few pinnable values, then Another… (search over every
- * choice the one options resolver returned). Literal inputs (nothing to follow, no discovered
- * choices) are the public typed field itself, as in Action and Workflow forms.
+ * The public typed field owns choices, literal values and custom pickers, as in Action and Workflow
+ * forms. Its host slot adds only the current binding and the option to follow the surface again.
  */
 export function WidgetSetupFieldRow(props: Readonly<{
     entry: WidgetSetupField;
@@ -68,12 +59,9 @@ export function WidgetSetupFieldRow(props: Readonly<{
     onChange: (change: WidgetSetupFieldChange) => void;
     testID: string;
 }>): React.ReactElement {
-    const { entry, row } = props;
-    const field = entry.field;
+    const { entry } = props;
     if (entry.viewer) return <ViewerFieldRow {...props} />;
-    if (row.kind === 'choices') return <ChoicesFieldRow {...props} row={row} />;
-    if (!entry.follow && isLiteralWidgetSetupField(field)) return <LiteralFieldRow {...props} />;
-    return <BindingFieldRow {...props} />;
+    return <InputFieldRow {...props} />;
 }
 
 function rowSubtitle(props: Readonly<{ entry: WidgetSetupField; row: WidgetSetupRow }>): string | undefined {
@@ -86,179 +74,27 @@ function NeededTag(): React.ReactElement {
     return <Text style={styles.needed}>{t('widgetAdd.needed')}</Text>;
 }
 
-function BindingFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>): React.ReactElement {
+/** Only the follow/pin affordance is widget-specific; typed choices and pickers stay public. */
+function WidgetBindingControl(props: React.ComponentProps<typeof WidgetSetupFieldRow>): React.ReactElement | null {
     const { theme } = useUnistyles();
-    const { entry, row, options } = props;
-    const field = entry.field;
-    const [open, setOpen] = React.useState(props.autoOpen === true || Boolean(props.focusRequest));
-    const [lastFocusRequest, setLastFocusRequest] = React.useState(props.focusRequest);
-    const [searching, setSearching] = React.useState(false);
-    // Open in this render, not a later passive effect: the menu's opening listener
-    // must be mounted before input delivered in the command's commit can cancel it.
-    if (props.focusRequest !== lastFocusRequest) {
-        setLastFocusRequest(props.focusRequest);
-        if (props.focusRequest) setOpen(true);
-    }
-    const follow = entry.follow;
-    // A few likely values sit in the menu; the rest wait behind Another… (lab IN "Follow or pin").
-    const shortlist = options.length > AMBIGUOUS_INLINE_LIMIT && !searching ? options.slice(0, AMBIGUOUS_INLINE_LIMIT) : options;
-    const pinCategory = follow ? t('widgetAdd.pinGroup') : undefined;
-    // The type's own picker (the custom-picker slot): its answer is checked like any other value
-    // and pins exactly like a listed choice; cancelling leaves the binding as it was.
-    const picker = useHappierInputPicker({
-        field: entry.field,
-        value: row.kind === 'pinned' ? props.plainValue : follow?.values[0]?.value,
-        ...(props.optionsStatus === 'ready' && (field.optionsSourceId !== undefined || field.options !== undefined
-            || (field.inputType !== undefined && !('hostType' in field.inputType))) ? { options } : {}),
-        onSelect: (picked) => {
-            const value = readInputOptionValue(picked);
-            if (value === undefined) return;
-            props.onChange({ kind: 'pin', value });
-        },
-    });
-
-    const openPicker = picker.open;
-    const pickerLabel = picker.affordance?.label;
-    const pickerAccessibilityLabel = picker.affordance?.accessibilityLabel;
-
-    const items = React.useMemo<DropdownMenuItem[]>(() => {
-        const list: DropdownMenuItem[] = [];
-        if (follow && !searching && follow.values.length <= 1) {
-            list.push({
-                id: FOLLOW_ID,
-                testID: `${props.testID}.follow`,
-                title: follow.label,
-                ...(follow.values[0] ? { subtitle: follow.values[0].label } : {}),
-                category: t('widgetAdd.followGroup'),
-                icon: <Icon name="link" size={16} color={theme.colors.text.secondary} />,
-                checked: row.kind === 'follows',
-            });
-        }
-        shortlist.forEach((option, index) => {
-            list.push({
-                id: pinId(index),
-                testID: `${props.testID}.option.${index}`,
-                title: option.label,
-                ...(option.description ? { subtitle: option.description } : {}),
-                ...(pinCategory ? { category: pinCategory } : {}),
-                ...(option.icon ? { icon: <Icon name={option.icon} size={16} color={theme.colors.text.secondary} /> } : {}),
-                ...(option.disabled ? { disabled: true } : {}),
-                checked: row.kind === 'pinned' && row.value !== null && sameStrictJsonValue(row.value.value, option.value),
-            });
-        });
-        if (!searching && options.length > shortlist.length) {
-            list.push({
-                id: ANOTHER_ID,
-                testID: `${props.testID}.another`,
-                title: t('widgetAdd.another'),
-                subtitle: t('widgetAdd.anotherSubtitle'),
-                ...(pinCategory ? { category: pinCategory } : {}),
-                icon: <Icon name="magnifying-glass" size={16} color={theme.colors.text.secondary} />,
-            });
-        }
-        // A failed read says so in the menu and offers to read again, rather than an empty list.
-        if (!searching && props.optionsStatus === 'failed' && props.onRetryOptions) {
-            list.push({
-                id: RETRY_ID,
-                testID: `${props.testID}.retry`,
-                title: t('common.retry'),
-                subtitle: t('widgetAdd.optionsFailed'),
-                icon: <Icon name="arrow-clockwise" size={16} color={theme.colors.text.secondary} />,
-            });
-        }
-        if (!searching && pickerLabel !== undefined) {
-            list.push({
-                id: PICKER_ID,
-                testID: `${props.testID}.picker`,
-                title: pickerLabel,
-                ...(pickerAccessibilityLabel ? { accessibilityLabel: pickerAccessibilityLabel } : {}),
-                ...(pinCategory ? { category: pinCategory } : {}),
-                disabled: props.optionsStatus === 'loading',
-            });
-        }
-        return list;
-    }, [follow, options.length, pickerAccessibilityLabel, pickerLabel, pinCategory, props.onRetryOptions, props.optionsStatus, props.testID, row, searching, shortlist, theme.colors.text.secondary]);
-
-    const select = React.useCallback((id: string) => {
-        if (id === RETRY_ID) {
-            props.onRetryOptions?.();
-            return;
-        }
-        if (id === PICKER_ID) {
-            setOpen(false);
-            void openPicker();
-            return;
-        }
-        if (id === ANOTHER_ID) {
-            // The same menu, now searching every choice; it reopens in place under the field.
-            setSearching(true);
-            setOpen(true);
-            return;
-        }
-        setSearching(false);
-        if (id === FOLLOW_ID && follow) {
-            props.onChange({ kind: 'follow', slot: follow.slot });
-            return;
-        }
-        const option = shortlist[Number(id.slice('pin:'.length))];
-        if (!option || option.disabled) return;
-        props.onChange({ kind: 'pin', value: option.value });
-    }, [follow, openPicker, props, shortlist]);
-    const onOpenChange = React.useCallback((next: boolean) => {
-        setOpen(next);
-        if (!next) setSearching(false);
-    }, []);
-
-    const trigger = describeTrigger(row, theme.colors.text.secondary, theme.colors.state.danger.foreground);
-    const emptyLabel = props.optionsStatus === 'loading'
-        ? t('widgetAdd.optionsLoading')
-        : props.optionsStatus === 'failed' ? t('widgetAdd.optionsFailed') : t('widgetAdd.noChoices');
-    return (
-        <DropdownMenu
-            testID={props.testID}
-            open={open}
-            onOpenChange={onOpenChange}
-            items={items}
-            onSelect={select}
-            selectedId={selectedIdFor(row, shortlist)}
-            search={searching}
-            searchPlaceholder={t('widgetAdd.searchChoices', { field: entry.field.title })}
-            emptyLabel={emptyLabel}
-            showCategoryTitles
-            variant="default"
-            matchTriggerWidth={false}
-            maxWidthCap={360}
-            itemTrigger={{
-                title: entry.field.title,
-                subtitle: picker.error ?? rowSubtitle(props),
-                showSelectedSubtitle: false,
-                detailFormatter: () => trigger.detail,
-                field: trigger.field,
-                // An empty choice names what it asks for, in the field's own words.
-                placeholder: t('widgetAdd.chooseField', { field: entry.field.title }),
-                itemProps: {
-                    testID: `${props.testID}.trigger`,
-                    titleAccessory: row.kind === 'needed' && entry.field.required ? <NeededTag /> : undefined,
-                    // The line says what the field needs or why it is lost; it wraps rather than cuts off.
-                    subtitleLines: 0,
-                    accessoryLayout: props.phone ? 'stacked' : 'inline',
-                    disabled: props.disabled,
-                    showDivider: true,
-                    accessibilityLabel: [entry.field.title, trigger.spoken].filter(Boolean).join(', '),
-                },
-            }}
-        />
-    );
-}
-
-function selectedIdFor(row: WidgetSetupRow, shortlist: readonly WidgetSetupValue[]): string | null {
-    if (row.kind === 'follows') return FOLLOW_ID;
-    if (row.kind === 'pinned' && row.value) {
-        const selected = row.value.value;
-        const index = shortlist.findIndex((option) => sameStrictJsonValue(option.value, selected));
-        return index >= 0 ? pinId(index) : null;
-    }
-    return null;
+    const follow = props.entry.follow;
+    const [open, setOpen] = React.useState(false);
+    if (!follow) return null;
+    const trigger = describeTrigger(props.row, theme.colors.text.secondary, theme.colors.state.danger.foreground);
+    return <DropdownMenu
+        testID={props.testID}
+        open={open}
+        onOpenChange={setOpen}
+        items={[{ id: FOLLOW_ID, title: follow.label, checked: props.row.kind === 'follows',
+            ...(follow.values[0] ? { subtitle: follow.values[0].label } : {}),
+            icon: <Icon name="link" size={16} color={theme.colors.text.secondary} /> }]}
+        onSelect={() => props.onChange({ kind: 'follow', slot: follow.slot })}
+        selectedId={props.row.kind === 'follows' ? FOLLOW_ID : null}
+        itemTrigger={{ title: '', showSelectedSubtitle: false,
+            detailFormatter: () => trigger.detail, field: trigger.field,
+            itemProps: { testID: `${props.testID}.trigger`, showDivider: false, disabled: props.disabled,
+                accessibilityLabel: [props.entry.field.prompt ?? props.entry.field.title, trigger.spoken].filter(Boolean).join(', ') } }}
+    />;
 }
 
 function describeTrigger(row: WidgetSetupRow, secondary: string, danger: string): Readonly<{
@@ -267,12 +103,16 @@ function describeTrigger(row: WidgetSetupRow, secondary: string, danger: string)
     field: Readonly<{ leading?: React.ReactNode; secondary?: string | null; quietValue?: boolean; invalid?: boolean }>;
 }> {
     switch (row.kind) {
-        case 'follows':
+        case 'follows': {
+            // What it follows, then what that is now (lab IN "🔗 This session  happier"); a value that
+            // reads the same as its source is said once.
+            const value = row.valueLabel === row.label ? null : row.valueLabel;
             return {
                 detail: row.label,
-                spoken: [row.label, row.valueLabel].filter(Boolean).join(' '),
-                field: { leading: <Icon name="link" size={15} color={secondary} />, secondary: row.valueLabel, quietValue: true },
+                spoken: [row.label, value].filter(Boolean).join(' '),
+                field: { leading: <Icon name="link" size={15} color={secondary} />, secondary: value, quietValue: true },
             };
+        }
         case 'pinned': {
             const value = row.value;
             const label = value?.label ?? row.label;
@@ -280,7 +120,9 @@ function describeTrigger(row: WidgetSetupRow, secondary: string, danger: string)
                 detail: label || null,
                 spoken: label,
                 field: {
-                    leading: <Icon name={value?.icon ?? 'push-pin'} size={15} color={secondary} />,
+                    // A pinned value shows its own mark when it has one (a session, a repository); a plain
+                    // value (All agents, a number) stands alone, as the link glyph marks only a follow.
+                    ...(value?.icon ? { leading: <Icon name={value.icon} size={15} color={secondary} /> } : {}),
                     secondary: value?.description ?? null,
                 },
             };
@@ -319,42 +161,6 @@ function ViewerFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>)
     );
 }
 
-/** Two or three values the surface offers, in place, the likeliest chosen (lab IN "Ambiguous, a few"). */
-function ChoicesFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow> & Readonly<{
-    row: Extract<WidgetSetupRow, { kind: 'choices' }>;
-}>): React.ReactElement {
-    const { theme } = useUnistyles();
-    const { entry, row } = props;
-    return (
-        <View testID={props.testID}>
-            <Item
-                title={entry.field.title}
-                subtitle={entry.field.description ?? t('widgetAdd.choicesCount', { count: row.choices.length })}
-                showChevron={false}
-                showDivider={false}
-                mode="info"
-            />
-            <ItemGroup surface="none" accessibilityRole="radiogroup" accessibilityLabel={entry.field.title}>
-                {row.choices.map((choice, index) => (
-                    <Item
-                        key={index}
-                        testID={`${props.testID}.choice.${index}`}
-                        title={choice.label}
-                        {...(choice.description ? { subtitle: choice.description } : {})}
-                        {...(choice.icon ? { icon: <Icon name={choice.icon} size={18} color={theme.colors.text.secondary} /> } : {})}
-                        accessibilityRole="radio"
-                        webRole="radio"
-                        selected={index === row.selectedIndex}
-                        disabled={props.disabled}
-                        onPress={() => props.onChange({ kind: 'pin', value: choice.value })}
-                        showChevron={false}
-                    />
-                ))}
-            </ItemGroup>
-        </View>
-    );
-}
-
 /**
  * A literal input — text, a number, a switch, a list, JSON, static choices or several choices — is
  * the one public typed field (`HappierInputField`, the same Action fields and Workflow inputs use),
@@ -362,7 +168,7 @@ function ChoicesFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>
  * choices a collection and offers the type's own picker. The row adds only the title, the line under
  * it and the Needed tag. A value typed back to empty clears the input.
  */
-function LiteralFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>): React.ReactElement {
+function InputFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>): React.ReactElement {
     const { theme } = useUnistyles();
     const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
     const { entry, row } = props;
@@ -370,47 +176,60 @@ function LiteralFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>
     const field = React.useMemo(() => (entry.field.widget === 'text_list' && entry.field.placeholder === undefined
         ? { ...entry.field, placeholder: t(entry.field.listSeparator === 'newline' ? 'widgetAdd.listOnePerLine' : 'widgetAdd.listCommaSeparated') }
         : entry.field), [entry.field]);
-    const value = props.plainValue;
-    const multiple = field.widget === 'multiselect';
-    const choices = multiple || field.widget === 'select';
-    const selection = !choices ? undefined : multiple ? (Array.isArray(value) ? value : []) : value;
-    const options = React.useMemo(() => props.options.map((option, index) => ({
+    const value = props.plainValue ?? (row.kind === 'follows' ? entry.follow?.values[0]?.value : undefined);
+    const choices = field.widget === 'select' || field.widget === 'multiselect';
+    const selection = choices ? value : undefined;
+    const choicesOptions = row.kind === 'choices' ? row.choices : props.options;
+    const options = React.useMemo(() => choicesOptions.map((option, index) => ({
         value: option.value,
         label: option.label,
         ...(option.description ? { description: option.description } : {}),
         ...(option.disabled ? { disabled: true } : {}),
         testID: `${props.testID}.option.${index}`,
-    })), [props.options, props.testID]);
+    })), [choicesOptions, props.testID]);
     const presentation = resolveHappierActionFieldPresentation(field, value, selection);
     // The shared field exposes no focus handle, so the row hands the keyboard to the first control
     // the field drew (web only; a native keyboard arrives with the person's own tap).
     const controlHost = React.useRef<View>(null);
     React.useEffect(() => {
-        if (!props.focusRequest || Platform.OS !== 'web') return;
+        if (!(props.focusRequest || props.autoOpen) || Platform.OS !== 'web') return;
         const host = controlHost.current as unknown as { querySelector?: (selector: string) => { focus?: () => void } | null } | null;
         host?.querySelector?.('input, textarea, [role="radio"], [role="checkbox"], [role="switch"], button')?.focus?.();
-    }, [props.focusRequest]);
-    // A switch or a short field sits beside its title; choices and multi-line text go beneath it.
-    const stacked = props.phone || presentation.kind === 'select' || (presentation.kind === 'text' && presentation.multiline);
+    }, [props.autoOpen, props.focusRequest]);
+    const subtitle = row.kind === 'invalid' && !entry.follow && row.label
+        ? `${row.label} · ${rowSubtitle(props)}`
+        : choices || (row.kind === 'needed' && entry.neededHint) ? rowSubtitle(props) : field.description;
+    const titleAccessory = row.kind === 'needed' && field.required ? <NeededTag /> : undefined;
+    // The shared field decides how a fixed choice is drawn (two to four short ones are a segmented
+    // control, anything else one compact choice field); the row only places them: beside the title when
+    // there is room, and multi-line text beneath it.
+    const choiceControl = resolveHappierChoiceControl(presentation, options);
+    // A value the choices cannot name (a period) is read from the row's own label.
+    const valueLabel = row.kind === 'pinned' ? row.label : row.kind === 'follows' ? row.valueLabel ?? undefined : row.kind === 'invalid' ? row.label ?? undefined : undefined;
+    const stacked = props.phone || (presentation.kind === 'text' && presentation.multiline);
     return (
         <Item
             testID={props.testID}
-            title={field.title}
+            title={field.prompt ?? field.title}
             // A chosen value that stopped resolving says why; a typed one is still being typed, and the
             // step's line says what is needed.
-            subtitle={choices || (row.kind === 'needed' && entry.neededHint) ? rowSubtitle(props) : field.description}
+            subtitle={subtitle}
             subtitleLines={0}
-            titleAccessory={row.kind === 'needed' && field.required ? <NeededTag /> : undefined}
+            titleAccessory={titleAccessory}
             showChevron={false}
-            accessoryLayout={stacked ? 'stacked' : 'inline'}
+            accessoryLayout={stacked ? 'stacked' : choiceControl !== null ? 'adaptive' : 'inline'}
             rightElement={(
                 <View ref={controlHost} collapsable={false}>
                 <HappierInputField<JsonValue>
                     frame="none"
+                    leading={entry.follow ? <WidgetBindingControl {...props} /> : undefined}
                     field={field}
                     value={value}
                     selection={selection as JsonValue | readonly JsonValue[] | undefined}
                     options={options}
+                    {...(valueLabel === undefined ? {} : { valueLabel })}
+                    // A repair, or ↵ with this input still needed, opens its choices where the request lands.
+                    openRequest={(props.focusRequest ?? 0) + (props.autoOpen ? 1 : 0)}
                     optionsStatus={props.optionsStatus}
                     optionsNotice={props.optionsStatus === 'failed' ? (
                         <SurfaceStateCard kind="error" size="line" title={t('widgetAdd.optionsFailed')} testID={`${props.testID}.optionsFailed`}
@@ -422,7 +241,8 @@ function LiteralFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>
                     controlTestID={`${props.testID}.input`}
                     testID={`${props.testID}.control`}
                     theme={presentationTheme}
-                    onChange={(next) => props.onChange(next === undefined ? { kind: 'clear' } : { kind: 'pin', value: next as JsonValue })}
+                    onChange={(next) => { const value = readInputOptionValue(next);
+                        props.onChange(value === undefined ? { kind: 'clear' } : { kind: 'pin', value }); }}
                 />
                 </View>
             )}

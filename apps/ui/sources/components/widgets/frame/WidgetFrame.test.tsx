@@ -13,6 +13,9 @@ import { WidgetFrame } from './WidgetFrame';
 import { renderWidgetSizeMenuSection } from './WidgetSizeControl';
 import { darkTheme, lightTheme } from '@/theme';
 import { SessionBoardDeclarativeContent } from '@/components/sessions/board/SessionBoardDeclarativeContent';
+import { WidgetGroupFrame } from '@/components/widgets/group/WidgetGroupFrame';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { UsageBodyInsufficient } from '@/components/settings/usage/widgets/usageBodyKit';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -51,6 +54,64 @@ async function renderFrame(props: Partial<React.ComponentProps<typeof WidgetFram
 }
 
 describe('WidgetFrame', () => {
+    it('compacts an empty grouped half body and restores its declared room when content arrives', async () => {
+        const presentation = { size: 'tall' as const,
+            footprint: { columns: 2, columnSpan: 1, rowSpan: 4, height: 'tall' as const, width: 'half' as const } };
+        let observed: ReturnType<typeof useWidgetPresentation>;
+        let mounts = 0;
+        function Body(props: { empty: boolean; supplemental: boolean }) {
+            observed = useWidgetPresentation();
+            React.useEffect(() => { mounts += 1; }, []);
+            return <>{!props.empty ? <Text testID="retained-facts">42 tokens</Text> : null}
+                {props.empty ? <UsageBodyInsufficient testID="insufficient" title="Nothing recorded" /> : props.supplemental
+                    ? <SurfaceStateCard kind="empty" size="line" title="No outcome recorded" /> : null}</>;
+        }
+        const render = (empty: boolean, supplemental = false) => <WidgetGroupFrame testID="group"
+            group={{ id: 'group', frameStyle: 'card', dividers: 'hairline' }} placement="home" columns={2}
+            cells={[{ id: 'one', columnSpan: 1, rowSpan: 4 }, { id: 'two', columnSpan: 1, rowSpan: 2 }]}
+            customizing={false} title={null} accessibilityLabel="Group" renderChild={(id) =>
+                <WidgetFrame testID={id} frameStyle="plain" placement="home" grouped title={id}
+                    widgetPresentation={presentation} body={{ kind: 'content', children: id === 'one'
+                        ? <Body empty={empty} supplemental={supplemental} /> : <Text>Other facts</Text> }} />} />;
+        const screen = await renderScreen(render(false));
+        const height = () => StyleSheet.flatten(screen.findByTestId('one.viewport')!.props.style).minHeight as number;
+        const declaredHeight = height();
+        await act(async () => { screen.tree.update(render(true)); });
+        await flushHookEffects({ cycles: 2 });
+        expect(height()).toBe(declaredHeight / 4);
+        expect(observed?.size).toBe('tall');
+        expect(observed?.footprint.rowSpan).toBe(4);
+        await act(async () => { screen.tree.update(render(false, true)); });
+        await flushHookEffects({ cycles: 2 });
+        expect(height()).toBe(declaredHeight);
+        expect(screen.findByTestId('retained-facts')).not.toBeNull();
+        expect(mounts).toBe(1);
+    });
+    it('projects native body states through their enclosing grouped frame while loading and standalone frames keep their room', async () => {
+        const widgetPresentation = { size: 'tall' as const,
+            footprint: { columns: 2, columnSpan: 1, rowSpan: 4, height: 'tall' as const, width: 'half' as const } };
+        const render = (empty: boolean, grouped = true) => <WidgetFrame testID="native" frameStyle="plain" placement="home"
+            grouped={grouped} title="Native" widgetPresentation={widgetPresentation} body={{ kind: 'content', children:
+                <WidgetFrame testID="native-body" frameStyle="plain" placement="home" presentation="body" title={null}
+                    body={empty ? { kind: 'empty', title: 'No runs', reason: 'Runs will appear here' }
+                        : { kind: 'loading', accessibilityLabel: 'Loading runs' }} /> }} />;
+        const screen = await renderScreen(render(false));
+        const height = () => {
+            const style = StyleSheet.flatten(screen.findByTestId('native.viewport')!.props.style);
+            return style.minHeight ?? style.height;
+        };
+        const reserved = height();
+        await act(async () => { screen.tree.update(render(true)); });
+        await flushHookEffects({ cycles: 2 });
+        expect(height()).toBe(reserved / 4);
+        expect(screen.root.findByType(SurfaceStateCard).props.replacesContent).toBe(true);
+        await act(async () => { screen.tree.update(render(false)); });
+        await flushHookEffects({ cycles: 2 });
+        expect(height()).toBe(reserved);
+        await act(async () => { screen.tree.update(render(true, false)); });
+        await flushHookEffects({ cycles: 2 });
+        expect(height()).toBe(reserved);
+    });
     it.each([['light', lightTheme], ['dark', darkTheme]] as const)('renders the size menu heading in the %s theme primary ink', async (_name, theme) => {
         const runtime = Unistyles.useUnistyles();
         const themedRuntime = vi.spyOn(Unistyles, 'useUnistyles').mockReturnValue({ ...runtime, theme });
@@ -100,7 +161,7 @@ describe('WidgetFrame', () => {
             body={{ kind: 'content', children: <SessionBoardDeclarativeContent document={document} /> }} />);
         const viewport = screen.findByTestId('declarative.viewport')!;
         const plotHeight = () => {
-            const heights = screen.findByTestId('plugin-declarative-chart-bar-1')!.findAll(node =>
+            const heights = screen.findByTestId('plugin-declarative-chart-bar-1-0')!.findAll(node =>
                 typeof node.type === 'string' && typeof node.props.style?.height === 'number').map(node => node.props.style.height as number);
             return Math.max(...heights);
         };
@@ -110,8 +171,8 @@ describe('WidgetFrame', () => {
         await act(async () => { viewport.props.onLayout({ nativeEvent: { layout: { width: 350, height: 384 } } }); });
         expect(plotHeight()).toBeGreaterThan(compactHeight);
         expect(screen.findByTestId('plugin-declarative-chart')).toBe(chart);
-        expect(chart?.props.accessibilityLabel).toContain('Mon 2, Tue 4, Wed 3');
-        expect(screen.findByTestId('plugin-declarative-chart-bar-2')).not.toBeNull();
+        expect(chart?.props.accessibilityLabel).toContain('Mon: Checks 2; Tue: Checks 4; Wed: Checks 3');
+        expect(screen.findByTestId('plugin-declarative-chart-bar-2-0')).not.toBeNull();
     });
     it('delivers the measured viewport to its retained body while preserving the chosen aspect footprint', async () => {
         let mounts = 0;
@@ -146,6 +207,32 @@ describe('WidgetFrame', () => {
         await act(async () => { screen.findByTestId('grouped.viewport')!.props.onLayout({ nativeEvent: { layout: { width: 330, height: 240 } } }); });
         expect(observed).toMatchObject({ size: 'small', geometry: { width: 330, height: 240 } });
     });
+    it('gives every half-width card the half-cell header, grouped or not: the title keeps its room and activity is its spinner alone', async () => {
+        const { useWidgetFrameResourceActivity } = await import('./widgetFrameResourceActivity');
+        function Refreshing() { useWidgetFrameResourceActivity(true); return <>rows</>; }
+        const frame = (width: 'half' | 'full') => <WidgetFrame testID={width} frameStyle="card" placement="home" title="Period summary" source="Account"
+            widgetPresentation={{ size: width === 'half' ? 'medium' : 'full', footprint: { columns: 2, columnSpan: width === 'half' ? 1 : 2, rowSpan: 2, height: 'regular', width } }}
+            body={{ kind: 'content', children: <Refreshing /> }} />;
+        const half = await renderScreen(frame('half'));
+        await flushHookEffects({ cycles: 2 });
+        expect(half.findByTestId('half.refreshing')?.props.accessibilityLabel).toBe('widgetDefinition.refreshing');
+        expect(half.getTextContent()).not.toContain('widgetDefinition.refreshing');
+        // A full-width card has the room, so the word stays.
+        const full = await renderScreen(frame('full'));
+        await flushHookEffects({ cycles: 2 });
+        expect(full.getTextContent()).toContain('widgetDefinition.refreshing');
+    });
+    it('fades the foot of a fixed body whose rows run past it, so no line reads as cut off', async () => {
+        const frame = await renderScreen(<WidgetFrame testID="fixed" frameStyle="card" placement="home" title="Period summary"
+            widgetPresentation={{ size: 'small', footprint: { columns: 2, columnSpan: 1, rowSpan: 1, height: 'compact', width: 'half' } }}
+            body={{ kind: 'content', children: <>many rows</> }} />);
+        const masked = () => StyleSheet.flatten(frame.findByTestId('fixed.viewport')!.props.style) as Record<string, unknown>;
+        await act(async () => { frame.findByTestId('fixed.viewport')!.props.onLayout({ nativeEvent: { layout: { width: 330, height: 96 } } }); });
+        await act(async () => { frame.findByTestId('fixed.viewportContent')!.props.onLayout({ nativeEvent: { layout: { width: 330, height: 96 } } }); });
+        expect(masked().maskImage).toBeUndefined();
+        await act(async () => { frame.findByTestId('fixed.viewportContent')!.props.onLayout({ nativeEvent: { layout: { width: 330, height: 240 } } }); });
+        expect(String(masked().maskImage)).toContain('transparent 100%');
+    });
     it('takes its content height on a content-height surface (a core page), keeping the body its size and measured width', async () => {
         const { HappierScrollArea } = await import('@happier-dev/plugin-ui/presentation');
         let observed: ReturnType<typeof useWidgetPresentation>;
@@ -158,7 +245,14 @@ describe('WidgetFrame', () => {
         await act(async () => { screen.findByTestId('core.viewport')!.props.onLayout({ nativeEvent: { layout: { width: 900, height: 412 } } }); });
         expect(observed).toMatchObject({ size: 'wide', footprint: { columnSpan: 2 }, geometry: { width: 900, height: 412 } });
     });
-    it('draws the header at once — title, source, freshness and the section menu — around the body', async () => {
+    it('keeps the suffix that tells near-identical machines apart when a bound source is too long for its header', async () => {
+        const screen = await renderFrame({ source: 'Following group · NLDW6-3-11-20 · 0371' });
+        const runs = screen.tree.findAllByType(Text).map((node) => node.props.children).filter((child: unknown) => typeof child === 'string');
+        // The head gives up its end; the suffix stays a whole run of its own.
+        expect(runs).toContain('Following group · NLDW6-3-11-20');
+        expect(runs).toContain('\u00a0· 0371');
+    });
+        it('draws the header at once — title, source, freshness and the section menu — around the body', async () => {
         const screen = await renderFrame({ meta: 'As of 10:42', menu: 'menu:here' });
         const text = screen.getTextContent();
         expect(text).toContain('Latest runs');

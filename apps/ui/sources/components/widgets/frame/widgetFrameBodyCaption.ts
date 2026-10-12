@@ -16,3 +16,19 @@ export function useWidgetFrameBodyCaption(caption: string | null): void {
     return () => lend?.(null);
   }, [caption, lend]);
 }
+
+/**
+ * The same lending for the header's meta slot: a mounted body's one live fact ("1 needs you",
+ * "2 working"), at the frame's end. Pass an identity-stable node: a new one re-lends it.
+ */
+export const WidgetFrameBodyMetaContext = React.createContext<
+  ((meta: React.ReactNode) => void) | null
+>(null);
+
+export function useWidgetFrameBodyMeta(meta: React.ReactNode): void {
+  const lend = React.useContext(WidgetFrameBodyMetaContext);
+  React.useEffect(() => {
+    lend?.(meta);
+    return () => lend?.(null);
+  }, [meta, lend]);
+}

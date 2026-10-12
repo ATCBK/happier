@@ -11,6 +11,7 @@ import type { WidgetBindingValueLabels } from '@/components/widgets/surface/useW
 import { useWidgetGroupInputsEditor } from './useWidgetGroupInputsEditor';
 import { useWidgetGroupKeepFlows } from './useWidgetGroupKeepFlows';
 import { describeWidgetGroup, type WidgetGroupMenuInput, type WidgetGroupOperations } from './widgetGroupMenu';
+import { readWidgetGroupTitle } from './widgetGroupTitle';
 
 /** The full group menu and its flows, shared by titled headers and Customize on every host. */
 export function useWidgetGroupMenu(input: Readonly<{
@@ -37,14 +38,16 @@ export function useWidgetGroupMenu(input: Readonly<{
 }> {
     const { group, childTitle, scope, testID } = input;
     const name = describeWidgetGroup(group, childTitle);
+    const ownTitle = readWidgetGroupTitle(group);
     const rename = input.rename;
     const commitName = rename ? (next: string) => {
         const title = next.length > 0 ? next : undefined;
-        if (title !== group.title) return rename(title);
+        if (title !== ownTitle) return rename(title);
     } : undefined;
     const renaming = useWidgetFrameRename({
-        title: group.title ?? '',
+        title: ownTitle ?? '',
         testID,
+        serverId: scope?.serverId,
         ...(commitName ? { onRename: commitName } : {}),
     });
     const inputs = useWidgetGroupInputsEditor({

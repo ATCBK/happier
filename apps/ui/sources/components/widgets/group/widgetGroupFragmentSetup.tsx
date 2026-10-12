@@ -35,6 +35,7 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { WidgetGroupFrame } from './WidgetGroupFrame';
+import { readWidgetGroupTitle } from './widgetGroupTitle';
 import { resolveWidgetGroupCells, resolveWidgetGroupColumns } from './widgetGroupLayout';
 import { resolveWidgetGroupWidthChoices, WIDGET_GROUP_ICON } from './widgetGroupMenu';
 import { buildWidgetGroupInputsCandidate } from './widgetGroupInputs';
@@ -208,7 +209,7 @@ export function WidgetGroupFragmentPreview(props: Readonly<{
       cells={cells}
       columns={resolveWidgetGroupColumns(width, props.phone)}
       customizing={false}
-      title={fragment.group.title ?? null}
+      title={readWidgetGroupTitle(fragment.group) ?? null}
       accessibilityLabel={fragment.name}
       renderChild={(id) => {
         const entry = children[Number(id)];
@@ -236,7 +237,7 @@ export function WidgetGroupFragmentPreview(props: Readonly<{
 }
 
 const styles = StyleSheet.create((theme) => ({
-  waitingBody: { flexGrow: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  waitingBody: { flexGrow: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: theme.space.s6 },
   waiting: {
     ...Typography.default(),
     ...happierPageTextMetrics('rowDescription'),

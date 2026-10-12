@@ -46,8 +46,8 @@ export type CompanionWidgetAddSource = Readonly<{
 
 /**
  * Add to Companion (lab `cwidgets` WC3, round 2): the shared Add surface with the
- * Companion's three sources — Glances (built-ins and plugin views that declare the `companion`
- * placement), what is On this board, and Panes, added as a link row that opens in Details. Every
+ * Companion's widgets grouped as Built in, each plugin by name and Your widgets, followed by
+ * what is On this board and Panes, added as a link row that opens in Details. Every
  * choice is one reference through the Companion's one add path; nothing is created on the Board.
  */
 export function CompanionWidgetAddPopover(props: Readonly<{

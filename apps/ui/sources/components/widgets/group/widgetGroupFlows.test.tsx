@@ -5,7 +5,9 @@ import { widgetCandidateDefinitionV1 } from '@happier-dev/protocol/widgets';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
-import { buildWidgetGroupFragmentEntry } from './widgetGroupFragmentSetup';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -24,6 +26,12 @@ vi.mock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
   return createTextModuleMock();
 });
+
+const harness = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(harness);
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { buildWidgetGroupFragmentEntry } = await import('./widgetGroupFragmentSetup');
 
 afterEach(() => standardCleanup());
 

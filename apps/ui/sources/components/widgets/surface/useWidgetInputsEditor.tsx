@@ -9,6 +9,8 @@ import { getSessionName } from '@/utils/sessions/sessionUtils';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { WidgetInputRepairOutcome } from '@/sync/domains/widgets/widgetBinding';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { t } from '@/text';
+import { readSessionWidgetProvidedContext } from './sessionWidgetContext';
 
 import { useWidgetInstanceBindingLabel } from './useWidgetInstanceBindingLabel';
 import { WidgetSetupPreview } from './WidgetSetupPreview';
@@ -39,9 +41,14 @@ export function useSessionWidgetSurface(input: Readonly<{
             ? { serverId, accountId: account.accountId, owner: { kind: owner, sessionId } }
             : null
     ), [account, owner, serverId, sessionId]);
+    const provided = React.useMemo(() => serverId ? readSessionWidgetProvidedContext({ serverId, sessionId, session }) : {}, [serverId, sessionId, session]);
+    const machine = provided.machine?.[0];
     const context = React.useMemo<WidgetSurfaceContext>(() => (serverId
-        ? { session: { ref: { serverId, sessionId }, label } }
-        : {}), [label, serverId, sessionId]);
+        ? { session: { ref: { serverId, sessionId }, label }, slots: {
+            machine: { label: t('machines.widgets.followsSessionMachine'), value: machine
+                ? { value: machine, label: t('machines.widgets.followsSessionMachine') } : null },
+        } }
+        : {}), [label, serverId, sessionId, machine]);
     return React.useMemo(() => ({ scope, context }), [context, scope]);
 }
 
