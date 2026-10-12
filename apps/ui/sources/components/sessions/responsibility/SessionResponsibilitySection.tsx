@@ -9,7 +9,8 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { ITEM_SUBTITLE_TEXT_METRICS, ITEM_TITLE_TEXT_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { Text } from '@/components/ui/text/Text';
-import { SelectionListSkeletonRow } from '@/components/ui/selectionList/SelectionListSkeletonRow';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
+import { SELECTION_LIST_SKELETON_ROW_SHAPE } from '@/components/ui/selectionList/_constants';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -109,7 +110,7 @@ export function SessionResponsibilitySection(props: Readonly<{
     if (controller.availability === 'loading') {
         return (
             <View style={styles.frame}>
-                <SelectionListSkeletonRow index={0} testID="session-responsibility-loading" />
+                <SkeletonRows rows={1} {...SELECTION_LIST_SKELETON_ROW_SHAPE} rowTestID="session-responsibility-loading" />
             </View>
         );
     }
