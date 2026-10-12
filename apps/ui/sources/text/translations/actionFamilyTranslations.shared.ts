@@ -22,6 +22,7 @@ export const surfaceFamilyLabels = {
     workspace_file_search: fileContentSearchTranslations.en.textInFiles,
     scope: 'Scope',
     connected_services_configuration: 'Connected accounts',
+    capability_rules: 'Capability rules',
     boards: 'Boards',
     artifacts: 'Artifacts',
     settings_declarations: 'Settings',
