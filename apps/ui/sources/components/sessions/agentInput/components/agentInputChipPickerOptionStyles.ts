@@ -1,4 +1,4 @@
-import Color from "color";
+import { parseThemeColor } from '@/theme/parseThemeColor';
 
 import { shadowLevelStyle, type ShadowElevationToken } from "@/shadowElevation";
 import { motionTokens } from '@/components/ui/motion/motionTokens';
@@ -38,13 +38,8 @@ export function createAgentInputChipPickerOptionTransientStyles(
             ...shadowLevelStyle(theme.colors.shadowLevels[1]),
         },
         optionRowHovered: {
-            backgroundColor: (() => {
-                try {
-                    return Color(theme.colors.surface.base).alpha(0.8).rgb().string();
-                } catch {
-                    return theme.colors.surface.pressed;
-                }
-            })(),
+            backgroundColor: parseThemeColor(theme.colors.surface.base)?.alpha(0.8).rgb().string()
+                ?? theme.colors.surface.pressed,
         },
         optionRowPressed: {
             opacity: motionTokens.press.opacitySubtle,

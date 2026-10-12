@@ -39,7 +39,7 @@ export function resolveAgentInputPanelLayoutStyle(theme: Theme, readOnly = false
 export function resolveAgentInputPanelStyle(theme: Theme) {
     return {
         ...resolveAgentInputPanelLayoutStyle(theme),
-        backgroundColor: glassSurfaceBackgroundColor(theme.colors.input.background, 'content', true),
+        backgroundColor: glassSurfaceBackgroundColor(theme.colors.input.background, 'card'),
     };
 }
 
