@@ -24,6 +24,8 @@ import { classifyHttpMutationRequestFailure } from '@/sync/http/mutationRequestO
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { captureSavedSecretReferenceRevisionsInContext } from './apiSavedSecretCatalog';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { applyAcknowledgedMcpServerCatalog } from '@/sync/store/settings/mcpServerCatalogSnapshot';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 export type McpServerCatalogAccountContext = Awaited<ReturnType<typeof import('@/sync/ops/actions/actionAccountContext').captureLazyActionAccountContext>>;
 
@@ -215,6 +217,11 @@ export async function writeMcpServerCatalogInContext(context: McpServerCatalogAc
     } catch (error) { throw new McpServerCatalogOperationError(classifyHttpMutationRequestFailure({ error, issued: true, signal }), error); }
     const parsed = McpServerCatalogRowMutationResponseV1Schema.safeParse(await response.json().catch(() => null));
     if (!parsed.success) throw new McpServerCatalogOperationError(response.ok ? 'outcome_unknown' : `mcp_catalog_http_${response.status}`);
+    if (parsed.data.status === 'updated') {
+        try { applyAcknowledgedMcpServerCatalog(context.accountLifetime.scope, McpServerCatalogV1Schema.parse(input.catalog),
+            parsed.data.revision, context.accountLifetime.isCurrent()); }
+        catch { /* Display publication cannot retract the durable row receipt. */ }
+    }
     return parsed.data;
 }
 
@@ -223,7 +230,8 @@ export async function writeMcpServerCatalogAndPublishInContext(context: McpServe
     const result = await writeMcpServerCatalogInContext(context, input, signal);
     if (result.status === 'updated') {
         const { invalidateMcpServerCatalogAfterAcknowledgedMutation } = await import('@/sync/engine/settings/mcpServerCatalogEngine');
-        try { await invalidateMcpServerCatalogAfterAcknowledgedMutation({ serverId: context.serverId, accountId: context.accountId }, context.assertAccountCurrent); }
+        try { fireAndForget(invalidateMcpServerCatalogAfterAcknowledgedMutation(context.accountLifetime.scope, context.assertAccountCurrent),
+            { tag: 'mcpServerCatalog.afterAcknowledgedMutation' }); }
         catch { /* A refresh failure cannot erase the durable authoring receipt. */ }
     }
     return result;

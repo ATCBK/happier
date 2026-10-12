@@ -23,6 +23,8 @@ import { decryptSecretValueWithKeys, deriveSettingsSecretsKeySet } from '@/sync/
 import { normalizeAccountSettingsHistoryAfterTransfer } from '@/sync/engine/settings/accountSettingsHistoryRestore';
 import { randomUUID } from '@/platform/randomUUID';
 import { SavedSecretCatalogReferenceCensusV1Schema, type SavedSecretCatalogReferenceCensusV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
+import { applyAcknowledgedRemoteHostCatalog } from '@/sync/store/settings/remoteHostCatalogSnapshot';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 export type RemoteHostAccountContext = Pick<ProfileAccountContext,
     'request' | 'assertCurrent' | 'credentials' | 'resolveAccountMode' | 'resolveAccountEncryption' | 'serverId' | 'accountId' | 'accountLifetime' | 'mutateRawSettings'>;
@@ -272,6 +274,7 @@ export async function prepareRemoteHostSaveInContext(context: ProfileAccountCont
 }
 
 async function mutateRemoteHostCatalogInContext(context: RemoteHostAccountContext, mutation: RemoteHostCatalogRowMutationV1,
+    record: RemoteHostCatalogRecordV1,
     resources: RemoteHostActionInputByIdV1['remote_hosts.save']['savedSecretResources'], signal?: AbortSignal,
     referenceCensus?: SavedSecretCatalogReferenceCensusV1): Promise<RemoteHostMutationResult> {
     signal?.throwIfAborted();
@@ -290,7 +293,18 @@ async function mutateRemoteHostCatalogInContext(context: RemoteHostAccountContex
         const result = RemoteHostCatalogRowMutationResponseV1Schema.parse(await response.json());
         // The mutation receipt reports the committed effect even if its captured
         // Account retires while the response is in flight. No private data is disclosed.
-        if (result.status === 'updated') return { ok: true, revision: result.revision };
+        if (result.status === 'updated') {
+            try {
+                const scope = context.accountLifetime.scope;
+                if (context.accountLifetime.isCurrent()) {
+                    applyAcknowledgedRemoteHostCatalog(scope, record.hosts, result.revision, true);
+                    fireAndForget(import('@/sync/engine/settings/remoteHostCatalogEngine').then(engine =>
+                        context.accountLifetime.isCurrent() ? engine.invalidateRemoteHostCatalogProjection(scope) : undefined),
+                        { tag: 'remoteHostCatalog.afterAcknowledgedMutation' });
+                }
+            } catch { /* Display publication cannot retract the durable row receipt. */ }
+            return { ok: true, revision: result.revision };
+        }
         return { ok: false, reason: result.status === 'conflict' || result.status === 'settings-conflict'
             || result.status === 'references-conflict' ? 'changed' : result.status };
     } catch (error) {
@@ -363,7 +377,7 @@ export async function saveRemoteHostInContext(context: RemoteHostAccountContext,
                 ...(source ? { sourceSettingsVersion: source.version } : {}),
                 referencedSavedSecretRevisions: revisions,
                 content: sealRemoteHostCatalogContentV1({ mode, material, record: { v: 1, hosts } }),
-            }, prepared.savedSecretResources, signal, referenceCensus);
+            }, { v: 1, hosts }, prepared.savedSecretResources, signal, referenceCensus);
         });
     } catch (error) {
         const result = failure(error, signal);
@@ -416,7 +430,8 @@ export async function removeRemoteHostInContext(context: RemoteHostAccountContex
             const revisions = await captureRemoteHostResourceRevisions(context, hosts, { host: catalog.hosts[0]!, expectedRevision: catalog.revision }, signal);
             if (!revisions) return { ok: false, reason: 'references-conflict' };
             return mutateRemoteHostCatalogInContext(context, { expectedRevision: input.expectedRevision,
-                referencedSavedSecretRevisions: revisions, content: sealRemoteHostCatalogContentV1({ mode, material, record: { v: 1, hosts } }) }, undefined, signal);
+                referencedSavedSecretRevisions: revisions, content: sealRemoteHostCatalogContentV1({ mode, material, record: { v: 1, hosts } }) },
+                { v: 1, hosts }, undefined, signal);
         });
     } catch (error) {
         const result = failure(error, signal);

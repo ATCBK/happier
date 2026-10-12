@@ -18,6 +18,8 @@ import { importLegacySavedSecretsInContext } from '@/sync/ops/settings/savedSecr
 import { captureSavedSecretReferenceRevisionsInContext } from './apiSavedSecretCatalog';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { classifyHttpMutationRequestFailure } from '@/sync/http/mutationRequestOutcome';
+import { applyAcknowledgedProviderCatalog } from '@/sync/store/settings/providerCatalogSnapshot';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 export type ProviderCatalogMutationResponse = ReturnType<typeof ProviderConnectionsRowMutationResponseV1Schema.parse>;
 export class ProviderCatalogOperationError extends Error {
@@ -192,6 +194,14 @@ export async function writeProviderCatalogInContext(context: LazyActionAccountCo
     } catch (error) { throw new ProviderCatalogOperationError(classifyHttpMutationRequestFailure({ error, issued: true, signal }), error); }
     const result = ProviderConnectionsRowMutationResponseV1Schema.safeParse(await response.json().catch(() => null));
     if (!result.success) throw new ProviderCatalogOperationError(response.ok ? 'outcome_unknown' : `provider_catalog_http_${response.status}`);
+    if (result.data.status === 'updated') {
+        try {
+            const admission = mutation.content?.t === 'encrypted' ? createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee',
+                material: resolveAccountScopedCryptoMaterialFromCredentials(context.credentials) }) : null;
+            applyAcknowledgedProviderCatalog(context.accountLifetime.scope, input.catalog, result.data.revision,
+                context.accountLifetime.isCurrent(), admission?.contentPublicKeyFingerprint ? { contentPublicKeyFingerprint: admission.contentPublicKeyFingerprint } : null);
+        } catch { /* Display publication cannot retract the durable row receipt. */ }
+    }
     return result.data;
 }
 export function writeProviderCatalog(scope: ServerAccountScope, input: ProviderCatalogWriteInput, signal?: AbortSignal): Promise<ProviderCatalogMutationResponse> {
@@ -202,7 +212,8 @@ export async function writeProviderCatalogAndPublishInContext(context: LazyActio
     const result = await writeProviderCatalogInContext(context, input, signal);
     if (result.status === 'updated') {
         const { invalidateProviderCatalogAfterAcknowledgedMutation } = await import('@/sync/engine/settings/providerCatalogEngine');
-        try { await invalidateProviderCatalogAfterAcknowledgedMutation({ serverId: context.serverId, accountId: context.accountId }, context.assertAccountCurrent); }
+        try { fireAndForget(invalidateProviderCatalogAfterAcknowledgedMutation(context.accountLifetime.scope, context.assertAccountCurrent),
+            { tag: 'providerCatalog.afterAcknowledgedMutation' }); }
         catch { /* A projection failure cannot erase the durable row receipt. */ }
     }
     return result;

@@ -1,13 +1,22 @@
 import type { AcpCatalogRecordV1, AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import type { AcpCatalogCleanupV1 } from '@happier-dev/protocol/acp/catalog/catalogMutationsV1';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
-export type AcpCatalogSnapshot = Readonly<{ scope: ServerAccountScope; catalog: AcpCatalogSnapshotV1; data: AcpCatalogRecordV1 | null; stale: boolean }>;
+export type AcpCatalogSnapshot = Readonly<{ scope: ServerAccountScope; catalog: AcpCatalogSnapshotV1; data: AcpCatalogRecordV1 | null;
+    revision: number | 'absent'; stale: boolean; cleanup?: AcpCatalogCleanupV1 }>;
 const snapshots = new Map<string, AcpCatalogSnapshot>();
 const listeners = new Set<() => void>();
 const loading: AcpCatalogSnapshotV1 = Object.freeze({ status: 'loading' });
 export function subscribeAcpCatalogSnapshots(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener); }; }
 export function getAcpCatalogSnapshot(scope: ServerAccountScope | null | undefined): AcpCatalogSnapshot | null {
     return scope ? snapshots.get(serverAccountScopeKeySuffix(scope)) ?? null : null;
+}
+export function applyAcknowledgedAcpCatalog(scope: ServerAccountScope, record: AcpCatalogRecordV1, revision: number, current: boolean): void {
+    const previous = getAcpCatalogSnapshot(scope);
+    if (!current || typeof previous?.revision === 'number' && previous.revision > revision) return;
+    snapshots.set(serverAccountScopeKeySuffix(scope), { scope, catalog: loading, data: record, revision, stale: true,
+        ...(previous?.cleanup ? { cleanup: previous.cleanup } : {}) });
+    for (const listener of [...listeners]) listener();
 }
 /** A captured nonfocused read stands alone; observed domain refreshes withdraw older facts. */
 export function isAcpCatalogCaptureCurrent(scope: ServerAccountScope,
@@ -19,7 +28,8 @@ export function isAcpCatalogCaptureCurrent(scope: ServerAccountScope,
         && (captured.revision !== 'absent' || current.revision === 'absent'
             && current.source === captured.source && current.sourceSettingsVersion === captured.sourceSettingsVersion);
 }
-export function applyAcpCatalogSnapshot(scope: ServerAccountScope, catalog: AcpCatalogSnapshotV1, current: boolean): void {
+export function applyAcpCatalogSnapshot(scope: ServerAccountScope, catalog: AcpCatalogSnapshotV1, current: boolean,
+    cleanup?: AcpCatalogCleanupV1): void {
     if (!current || catalog.status === 'unavailable' && catalog.reason === 'scope-retired') return;
     const previous = getAcpCatalogSnapshot(scope);
     const withdraw = catalog.status === 'unavailable' && ['account-mode-mismatch', 'encryption-material-unavailable', 'unauthorized',
@@ -38,8 +48,12 @@ export function applyAcpCatalogSnapshot(scope: ServerAccountScope, catalog: AcpC
     }
     if (previous && JSON.stringify(previous.catalog) === JSON.stringify(catalog)) catalog = previous.catalog;
     const stale = catalog.status !== 'ready';
-    if (previous?.catalog === catalog && previous.data === data && previous.stale === stale) return;
-    snapshots.set(serverAccountScopeKeySuffix(scope), Object.freeze({ scope, catalog, data, stale }));
+    const retainedCleanup = cleanup ?? previous?.cleanup;
+    if (previous?.catalog === catalog && previous.data === data && previous.stale === stale
+        && JSON.stringify(previous.cleanup) === JSON.stringify(retainedCleanup)) return;
+    snapshots.set(serverAccountScopeKeySuffix(scope), Object.freeze({ scope, catalog, data, stale,
+        revision: catalog.status === 'ready' ? catalog.revision : previous?.revision ?? 'absent',
+        ...(retainedCleanup ? { cleanup: retainedCleanup } : {}) }));
     for (const listener of [...listeners]) listener();
 }
 export function beginAcpCatalogLoad(scope: ServerAccountScope): void { applyAcpCatalogSnapshot(scope, loading, true); }

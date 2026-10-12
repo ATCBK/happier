@@ -27,6 +27,7 @@ import { readSavedSecretCatalogInContext } from './apiSavedSecretCatalog';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { applyAcknowledgedProfileRecord } from '@/sync/store/settings/profileCatalogSnapshot';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { PROFILE_TRANSFER_ROUTE_V1, ProfileTransferRowReadResponseV1Schema, ProfileTransferMutationV1Schema,
     ProfileTransferMutationResponseV1Schema, assertProfileTransferContentForModeV1,
@@ -256,8 +257,8 @@ async function mutateWithContext(context: ProfileAccountContext, mutation: Profi
     if (result.status === 'updated' && input.settingsCleanup && context.accountLifetime.isCurrent()
         && areAccountSettingsScopesEqual(getStorage().getState().settingsScope, context.accountLifetime.scope)) {
         try {
-            await getSyncSingleton().refreshAccountSettingsFromServer(input.settingsCleanup.expectedSettingsVersion + 1,
-                context.accountLifetime.scope);
+            fireAndForget(getSyncSingleton().refreshAccountSettingsFromServer(input.settingsCleanup.expectedSettingsVersion + 1,
+                context.accountLifetime.scope), { tag: 'profileCatalog.afterAcknowledgedSettingsCleanup' });
         } catch {
             // A source reload failure cannot retract the durable transaction ACK.
         }

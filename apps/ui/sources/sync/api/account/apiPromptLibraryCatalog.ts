@@ -62,7 +62,7 @@ type PromptLibraryReadPublication = Readonly<{
     onReady?: (projection: PromptLibraryCatalogProjection, isAccountCurrent: () => boolean) => void;
     hasPendingCleanup?: () => boolean;
 }>;
-export async function readPromptLibraryCatalogProjectionInContext(context: PromptLibraryAccountContext, signal?: AbortSignal,
+async function readPromptLibraryCatalogWithMaintenanceInContext(context: PromptLibraryAccountContext, signal?: AbortSignal,
     publication?: PromptLibraryReadPublication): Promise<PromptLibraryCatalogProjection> {
     try {
         return await admit(context, async (mode, material) => {
@@ -108,6 +108,16 @@ export async function readPromptLibraryCatalogProjectionInContext(context: Promp
             return project(catalog);
         });
     } catch (error) { return { catalog: failure(error, signal), rawSettings: {}, sourceSettingsVersion: 0 }; }
+}
+/** Finite Actions borrow admitted rows; the existing Account watch owns the cleanup tail. */
+export function readPromptLibraryCatalogProjectionInContext(context: PromptLibraryAccountContext, signal?: AbortSignal,
+    publication?: PromptLibraryReadPublication): Promise<PromptLibraryCatalogProjection> {
+    if (publication?.onReady) return readPromptLibraryCatalogWithMaintenanceInContext(context, signal, publication);
+    let finishReady!: (projection: PromptLibraryCatalogProjection) => void;
+    const ready = new Promise<PromptLibraryCatalogProjection>(resolve => { finishReady = resolve; });
+    const completion = context.runPrepared(() => readPromptLibraryCatalogWithMaintenanceInContext(context, signal,
+        { ...publication, onReady: finishReady })).catch(error => ({ catalog: failure(error, signal), rawSettings: {}, sourceSettingsVersion: 0 }));
+    return Promise.race([ready, completion]);
 }
 export async function readPromptLibraryCatalogProjection(scope: ServerAccountScope, signal?: AbortSignal,
     assertCapturedAccountCurrent?: () => void, publication?: PromptLibraryReadPublication): Promise<PromptLibraryCatalogProjection> {

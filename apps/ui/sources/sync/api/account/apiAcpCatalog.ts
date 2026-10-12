@@ -17,10 +17,16 @@ import { captureSavedSecretReferenceRevisionsInContext, type SavedSecretReferenc
 import { sealAccountSettingsCleanup } from '@/sync/engine/settings/sealAccountSettingsCleanup';
 import { areAccountSettingsJsonValuesEqual } from '@/sync/domains/settings/accountSettingsStructuralEquality';
 import { normalizeAccountSettingsHistoryAfterTransfer } from '@/sync/engine/settings/accountSettingsHistoryRestore';
+import { applyAcknowledgedAcpCatalog } from '@/sync/store/settings/acpCatalogSnapshot';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 export type AcpCatalogAccountContext = Awaited<ReturnType<typeof import('@/sync/ops/actions/actionAccountContext').captureLazyActionAccountContext>>;
-export type AcpCatalogProjection = Readonly<{ catalog: AcpCatalogSnapshotV1;
+export type AcpCatalogProjection = Readonly<{ catalog: AcpCatalogSnapshotV1; cleanup?: AcpCatalogCleanupV1;
     source?: Readonly<{ raw: Readonly<Record<string, unknown>>; version: number; mode: 'plain' | 'e2ee' }> }>;
+type AcpCatalogReadPublication = Readonly<{
+    onReady: (projection: AcpCatalogProjection, isAccountCurrent: () => boolean) => void;
+    hasPendingCleanup: () => boolean;
+}>;
 type AcpCatalogWireMutationResponseV1 = ReturnType<typeof AcpCatalogRowMutationResponseV1Schema.parse>;
 export type AcpCatalogRowMutationResponseV1 = Exclude<AcpCatalogWireMutationResponseV1, { status: 'updated' }>
     | (Extract<AcpCatalogWireMutationResponseV1, { status: 'updated' }> & Readonly<{ cleanup?: AcpCatalogCleanupV1 }>);
@@ -63,7 +69,8 @@ export function readAcpCatalogRowInContext(context: AcpCatalogAccountContext, si
     return readAcpCatalogRow({ request: context.request, assertCurrent: context.assertCurrent, signal });
 }
 /** Reads never write: characterized predecessor data is a captured projection, not destination authority. */
-export async function readAcpCatalogInContext(context: AcpCatalogAccountContext, signal?: AbortSignal): Promise<AcpCatalogProjection> {
+export async function readAcpCatalogInContext(context: AcpCatalogAccountContext, signal?: AbortSignal,
+    publication?: AcpCatalogReadPublication): Promise<AcpCatalogProjection> {
     try {
         return await admit(context, async (mode, material) => {
             const row = await readAcpCatalogRowInContext(context, signal);
@@ -93,14 +100,32 @@ export async function readAcpCatalogInContext(context: AcpCatalogAccountContext,
             const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
             context.assertCurrent();
             if (current.mode !== mode) return { catalog: { status: 'unavailable', reason: 'account-mode-mismatch' } };
-            return { catalog,
-                ...(capturedSource ? { source: capturedSource } : {}) };
+            const projection = { catalog, ...(capturedSource ? { source: capturedSource } : {}) };
+            if (publication && catalog.status === 'ready' && typeof catalog.revision === 'number') {
+                publication.onReady(projection, context.accountLifetime.isCurrent);
+                if (!publication.hasPendingCleanup()) return { ...projection,
+                    cleanup: await normalizeAcpCatalogHistoryInContext(context, catalog.revision) };
+            }
+            return projection;
         });
     } catch (error) { return failure(error, signal); }
 }
-export async function readAcpCatalog(scope: ServerAccountScope, signal?: AbortSignal): Promise<AcpCatalogProjection> {
-    try { return await withAccount(scope, signal, context => readAcpCatalogInContext(context, signal)); }
+export async function readAcpCatalog(scope: ServerAccountScope, signal?: AbortSignal,
+    publication?: AcpCatalogReadPublication): Promise<AcpCatalogProjection> {
+    try { return await withAccount(scope, signal, context => readAcpCatalogInContext(context, signal, publication)); }
     catch (error) { return failure(error, signal); }
+}
+async function normalizeAcpCatalogHistoryInContext(context: AcpCatalogAccountContext, revision: number): Promise<AcpCatalogCleanupV1> {
+    try {
+        const { encryption } = await context.resolveAccountEncryption();
+        const maintenance = await normalizeAccountSettingsHistoryAfterTransfer({ credentials: context.credentials, encryption,
+            settingsScope: context.accountLifetime.scope,
+            destinationAuthority: { activeTransferredRoots: ['acpCatalogSettingsV1'], activePrivateCatalogRevisions: { acp: revision } },
+            requestContext: { request: context.request, isCurrent: context.accountLifetime.isCurrent } });
+        return maintenance.status === 'complete' ? { status: 'complete' } : { status: 'cleanup-pending', reason: 'history-incomplete' };
+    } catch {
+        return { status: 'cleanup-pending', reason: 'history-incomplete' };
+    }
 }
 export type AcpCatalogRecordWriteInput = Readonly<{ record: AcpCatalogRecordV1; expectedRevision: number | 'absent'; sourceSettingsVersion?: number;
     savedSecretRevisions?: readonly SavedSecretReferenceRevisionProof[]; pendingResourceIds?: readonly string[] }>;
@@ -180,20 +205,16 @@ async function postAcpCatalogMutationInContext(context: AcpCatalogAccountContext
     const parsed = AcpCatalogRowMutationResponseV1Schema.safeParse(await response.json().catch(() => null));
     if (!parsed.success) throw new AcpCatalogOperationError(response.ok ? 'outcome_unknown' : `acp_catalog_http_${response.status}`);
     if (parsed.data.status === 'updated') {
-        let cleanup: AcpCatalogCleanupV1;
         try {
-            const { encryption } = await context.resolveAccountEncryption();
-            const maintenance = await normalizeAccountSettingsHistoryAfterTransfer({ credentials: context.credentials, encryption,
-                settingsScope: context.accountLifetime.scope,
-                destinationAuthority: { activeTransferredRoots: ['acpCatalogSettingsV1'],
-                    activePrivateCatalogRevisions: { acp: parsed.data.revision } },
-                requestContext: { request: context.request, isCurrent: context.accountLifetime.isCurrent } });
-            cleanup = maintenance.status === 'complete' ? { status: 'complete' }
-                : { status: 'cleanup-pending', reason: 'history-incomplete' };
-        } catch {
-            // History maintenance cannot retract or replay the acknowledged destination/source transaction.
-            cleanup = { status: 'cleanup-pending', reason: 'history-incomplete' };
-        }
+            const opened = openAcpCatalogContentV1({ mode: mutation.content.t === 'plain' ? 'plain' : 'e2ee',
+                material: mutation.content.t === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(context.credentials), content: mutation.content });
+            if (opened.status === 'opened') applyAcknowledgedAcpCatalog(context.accountLifetime.scope, opened.record,
+                parsed.data.revision, context.accountLifetime.isCurrent());
+        } catch { /* Display publication cannot retract the durable row receipt. */ }
+        // Only source activation creates the historical cleanup obligation. An
+        // ordinary destination edit cannot be held by unrelated retained history.
+        if (mutation.expectedRevision !== 'absent') return parsed.data;
+        const cleanup = await normalizeAcpCatalogHistoryInContext(context, parsed.data.revision);
         return { ...parsed.data, cleanup };
     }
     return parsed.data;
@@ -236,7 +257,8 @@ export async function writeAcpCatalogRecordAndPublishInContext(context: AcpCatal
     if (result.status === 'updated') {
         try {
             const { invalidateAcpCatalogAfterAcknowledgedMutation } = await import('@/sync/engine/settings/acpCatalogEngine');
-            await invalidateAcpCatalogAfterAcknowledgedMutation(context.accountLifetime.scope, context.assertAccountCurrent);
+            fireAndForget(invalidateAcpCatalogAfterAcknowledgedMutation(context.accountLifetime.scope, context.assertAccountCurrent),
+                { tag: 'acpCatalog.afterAcknowledgedMutation' });
         } catch { /* A failed projection refresh cannot retract the durable row receipt. */ }
     }
     return result;

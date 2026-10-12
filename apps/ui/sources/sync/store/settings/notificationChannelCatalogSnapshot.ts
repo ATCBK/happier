@@ -28,6 +28,16 @@ export function getNotificationChannelCatalogSnapshot(scope: ServerAccountScope)
 export function getNotificationChannelCatalogValue(scope: ServerAccountScope | null | undefined): NotificationChannelCatalogValueSnapshot {
     return scope ? snapshots.get(serverAccountScopeKeySuffix(scope))?.value ?? loading : loading;
 }
+export function applyAcknowledgedNotificationChannelCatalog(scope: ServerAccountScope, channels: readonly NotificationChannelRecordV1[],
+    revision: number, current: boolean): void {
+    const old = getNotificationChannelCatalogValue(scope);
+    if (!current || typeof old.revision === 'number' && old.revision > revision) return;
+    const previous = getNotificationChannelCatalogSnapshot(scope);
+    snapshots.set(serverAccountScopeKeySuffix(scope), { scope, projection: { catalog: { status: 'loading' },
+        rawSettings: previous?.rawSettings ?? {}, sourceSettingsVersion: previous?.sourceSettingsVersion ?? 0 },
+        value: { status: 'loading', channels, revision, diagnostics: [], stale: true, reason: 'loading' } });
+    for (const listener of [...listeners]) listener();
+}
 export function applyNotificationChannelCatalogSnapshot(scope: ServerAccountScope, projection: NotificationChannelCatalogProjection, current: boolean): void {
     const catalog = projection.catalog;
     if (!current || catalog.status === 'unavailable' && catalog.reason === 'scope-retired') return;

@@ -12,9 +12,21 @@ const loader = createScopedSnapshotLoader<Target>({
         const guard = publicationGuards.get(key);
         try { guard?.(); } catch { return; }
         beginAcpCatalogLoad(scope);
-        const projection = await readAcpCatalog(scope);
-        try { guard?.(); } catch { return; }
-        applyAcpCatalogSnapshot(scope, projection.catalog, context.isCurrent());
+        return context.readWithMaintenance({
+            read: publication => readAcpCatalog(scope, undefined, publication),
+            publish: (projection, current) => {
+                try { guard?.(); } catch { return; }
+                applyAcpCatalogSnapshot(scope, projection.catalog, current, projection.cleanup);
+            },
+            getPublication: () => {
+                const snapshot = getAcpCatalogSnapshot(scope);
+                // A numeric CAS revision identifies the same immutable ready row
+                // across overlapping demand. Withdrawal and newer receipts still
+                // replace that identity, and the captured Account guards retirement.
+                return snapshot?.catalog.status === 'ready' && typeof snapshot.catalog.revision === 'number'
+                    ? snapshot.catalog.revision : snapshot;
+            },
+        });
     },
     shouldLoadOnObserve: ({ scope }) => getAcpCatalogSnapshot(scope)?.stale !== false,
     invalidateServer: invalidateAcpCatalogsForServer,

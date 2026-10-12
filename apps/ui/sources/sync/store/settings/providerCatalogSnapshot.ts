@@ -59,6 +59,15 @@ export function subscribeProviderCatalogSnapshots(listener: () => void): () => v
 export function getProviderCatalogSnapshot(scope: ServerAccountScope | null | undefined): ProviderCatalogSnapshot | null {
     return scope ? snapshots.get(serverAccountScopeKeySuffix(scope)) ?? null : null;
 }
+export function applyAcknowledgedProviderCatalog(scope: ServerAccountScope, data: ProviderConnectionsCatalogV1, revision: number,
+    current: boolean, cryptoAdmission: ProviderCatalogCryptoAdmission | null): void {
+    const previous = getProviderCatalogSnapshot(scope);
+    if (!current || typeof previous?.revision === 'number' && previous.revision > revision) return;
+    snapshots.set(serverAccountScopeKeySuffix(scope), { scope, status: 'loading', catalog: { status: 'loading' },
+        data, revision, stale: true, cryptoAdmission });
+    syncCredentialSubscription();
+    for (const listener of [...listeners]) listener();
+}
 export function applyProviderCatalogSnapshot(scope: ServerAccountScope, catalog: ProviderConnectionsCatalogSnapshotV1, current: boolean,
     cryptoAdmission: ProviderCatalogCryptoAdmission | null = null): void {
     if (!current || (catalog.status === 'unavailable' && catalog.reason === 'scope-retired')) return;

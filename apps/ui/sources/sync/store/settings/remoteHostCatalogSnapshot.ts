@@ -10,6 +10,7 @@ export type RemoteHostCatalogSnapshot = Readonly<{
     catalog: RemoteHostCatalogSnapshotV1;
     data: readonly RemoteHostRecordV1[] | null;
     stale: boolean;
+    revision?: number | 'absent';
 }>;
 const snapshots = new Map<string, RemoteHostCatalogSnapshot>();
 const listeners = new Set<() => void>();
@@ -17,7 +18,10 @@ const loading: RemoteHostCatalogSnapshotV1 = Object.freeze({ status: 'loading' }
 function publish(next: RemoteHostCatalogSnapshot): void {
     const key = serverAccountScopeKeySuffix(next.scope);
     const previous = snapshots.get(key);
-    if (previous?.catalog === next.catalog && previous.data === next.data && previous.stale === next.stale) return;
+    next = { ...next, revision: next.revision ?? (next.catalog.status === 'ready' || next.catalog.status === 'partial'
+        ? next.catalog.revision : previous?.revision ?? 'absent') };
+    if (previous?.catalog === next.catalog && previous.data === next.data && previous.stale === next.stale
+        && previous.revision === next.revision) return;
     snapshots.set(key, Object.freeze(next));
     for (const listener of [...listeners]) listener();
 }
@@ -27,6 +31,12 @@ export function subscribeRemoteHostCatalogSnapshots(listener: () => void): () =>
 }
 export function getRemoteHostCatalogSnapshot(scope: ServerAccountScope | null | undefined): RemoteHostCatalogSnapshot | null {
     return scope ? snapshots.get(serverAccountScopeKeySuffix(scope)) ?? null : null;
+}
+export function applyAcknowledgedRemoteHostCatalog(scope: ServerAccountScope, hosts: readonly RemoteHostRecordV1[], revision: number,
+    current: boolean): void {
+    const previous = getRemoteHostCatalogSnapshot(scope);
+    if (!current || typeof previous?.revision === 'number' && previous.revision > revision) return;
+    publish({ scope, catalog: loading, data: hosts, revision, stale: true });
 }
 export function beginRemoteHostCatalogLoad(scope: ServerAccountScope): void {
     publish({ scope, catalog: loading, data: getRemoteHostCatalogSnapshot(scope)?.data ?? null, stale: true });

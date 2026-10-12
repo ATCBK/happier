@@ -19,6 +19,14 @@ export function subscribeMcpServerCatalogSnapshots(listener: () => void): () => 
 export function getMcpServerCatalogSnapshot(scope: ServerAccountScope | null | undefined): McpServerCatalogValueSnapshot {
     return scope ? snapshots.get(serverAccountScopeKeySuffix(scope))?.value ?? loading : loading;
 }
+export function applyAcknowledgedMcpServerCatalog(scope: ServerAccountScope, catalog: McpServerCatalogV1, revision: number, current: boolean): void {
+    const previous = getMcpServerCatalogSnapshot(scope);
+    if (!current || typeof previous.revision === 'number' && previous.revision > revision) return;
+    snapshots.set(serverAccountScopeKeySuffix(scope), { scope, value: { status: 'loading', value: catalog,
+        revision, authority: 'active', stale: true, diagnostics: [], reason: 'loading',
+        ...(previous.cleanup ? { cleanup: previous.cleanup } : {}) } });
+    for (const listener of [...listeners]) listener();
+}
 export function projectMcpServerCatalogSnapshot(snapshot: McpServerCatalogSnapshotV1,
     previous?: McpServerCatalogValueSnapshot): McpServerCatalogValueSnapshot {
     let next: McpServerCatalogValueSnapshot;

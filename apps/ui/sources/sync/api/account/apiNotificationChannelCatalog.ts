@@ -17,6 +17,8 @@ import type { SavedSecretResourceMaterialV1 } from '@happier-dev/protocol/accoun
 import { classifyAccountStorageReadFailure, resolveAccountStorageContext } from '@/sync/encryption/accountStorageContext';
 import { resolveSettingsSecretsKeySet } from '@/sync/encryption/resolveSettingsSecretsKeySet';
 import { normalizeAccountSettingsHistoryAfterTransfer } from '@/sync/engine/settings/accountSettingsHistoryRestore';
+import { applyAcknowledgedNotificationChannelCatalog } from '@/sync/store/settings/notificationChannelCatalogSnapshot';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { classifyHttpMutationRequestFailure } from '@/sync/http/mutationRequestOutcome';
 import type { NotificationChannelCatalogProjection } from '@/sync/store/settings/notificationChannelCatalogSnapshot';
 
@@ -107,6 +109,11 @@ export async function writeNotificationChannelCatalogInContext(context: Notifica
     const receipt = NotificationChannelCatalogMutationResponseV1Schema.safeParse(await response.json().catch(() => null));
     if (!receipt.success) throw new NotificationChannelCatalogOperationError(response.ok ? 'outcome_unknown'
         : response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden' : 'unreachable');
+    if (receipt.data.status === 'updated') {
+        try { applyAcknowledgedNotificationChannelCatalog(context.accountLifetime.scope, input.record.channels,
+            receipt.data.revision, context.accountLifetime.isCurrent()); }
+        catch { /* Display publication cannot retract the durable row receipt. */ }
+    }
     return receipt.data;
 }
 export function requireUpdatedNotificationChannelCatalog(receipt: NotificationChannelCatalogMutationResponse):
@@ -161,7 +168,7 @@ function signingHistoryRecovery(context: NotificationChannelCatalogAccountContex
             return opened.ok && opened.revision === proof.revision ? opened.value : null;
         } };
 }
-export async function readNotificationChannelCatalogProjectionInContext(context: NotificationChannelCatalogAccountContext,
+async function readNotificationChannelCatalogWithMaintenanceInContext(context: NotificationChannelCatalogAccountContext,
     signal?: AbortSignal, publication?: NotificationChannelCatalogReadPublication,
     admitInitializationRecord?: (record: NotificationChannelCatalogRecordV1) => void): Promise<NotificationChannelCatalogProjection> {
     const operationAdmission: { failure: Readonly<{ error: unknown }> | null } = { failure: null };
@@ -250,6 +257,17 @@ export async function readNotificationChannelCatalogProjectionInContext(context:
         return { catalog: catalogFailure(error, signal), rawSettings: {}, sourceSettingsVersion: 0 };
     }
 }
+/** Finite Actions borrow admitted rows, preserving initialization admission and captured cleanup custody. */
+export function readNotificationChannelCatalogProjectionInContext(context: NotificationChannelCatalogAccountContext,
+    signal?: AbortSignal, publication?: NotificationChannelCatalogReadPublication,
+    admitInitializationRecord?: (record: NotificationChannelCatalogRecordV1) => void): Promise<NotificationChannelCatalogProjection> {
+    if (publication?.onReady) return readNotificationChannelCatalogWithMaintenanceInContext(context, signal, publication, admitInitializationRecord);
+    let finishReady!: (projection: NotificationChannelCatalogProjection) => void;
+    const ready = new Promise<NotificationChannelCatalogProjection>(resolve => { finishReady = resolve; });
+    const completion = context.runPrepared(() => readNotificationChannelCatalogWithMaintenanceInContext(context, signal,
+        { ...publication, onReady: finishReady }, admitInitializationRecord));
+    return Promise.race([ready, completion]);
+}
 export async function readNotificationChannelCatalogProjection(scope: ServerAccountScope, signal?: AbortSignal,
     assertCapturedAccountCurrent?: () => void, publication?: NotificationChannelCatalogReadPublication): Promise<NotificationChannelCatalogProjection> {
     try {
@@ -262,6 +280,7 @@ export async function readNotificationChannelCatalogProjection(scope: ServerAcco
 }
 export async function publishAcknowledgedNotificationChannelCatalog(context: NotificationChannelCatalogAccountContext): Promise<void> {
     const { invalidateNotificationChannelCatalogAfterAcknowledgedMutation } = await import('@/sync/engine/settings/notificationChannelCatalogEngine');
-    try { await invalidateNotificationChannelCatalogAfterAcknowledgedMutation(context.accountLifetime.scope, context.assertAccountCurrent); }
+    try { fireAndForget(invalidateNotificationChannelCatalogAfterAcknowledgedMutation(context.accountLifetime.scope, context.assertAccountCurrent),
+        { tag: 'notificationChannelCatalog.afterAcknowledgedMutation' }); }
     catch { /* Revalidation cannot erase the durable receipt for this Account. */ }
 }
