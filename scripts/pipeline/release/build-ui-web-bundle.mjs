@@ -49,8 +49,8 @@ async function main() {
   let result;
   try {
     if (!skipBuild) {
-      // Metro resolves internal workspace packages via `package.json#exports` which points to `dist/**`.
-      // Ensure all `@happier-dev/*` workspace deps used by the UI have been built before `expo export`.
+      // Metro resolves authored workspace exports. Prepare the source plugin-UI
+      // byte inventory through the canonical UI owner before exporting.
       await execOrThrow(process.execPath, ['apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs'], {
         cwd: repoRoot,
         env: {
