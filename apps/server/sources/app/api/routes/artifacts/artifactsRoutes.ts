@@ -5,10 +5,11 @@ import { eventRouter, buildNewArtifactUpdate, buildUpdateArtifactUpdate, buildDe
 import { inTx } from "@/storage/inTx";
 import {
     commitArtifactRecipientKeyEnvelopesInTx,
-    listArtifactAccessGrantsInTx,
-    listArtifactHeadersForCallerInTx,
-    readArtifactForCallerInTx,
-    readArtifactRecipientCensusInTx,
+    listArtifactAccessGrants,
+    listArtifactHeadersForCaller,
+    readArtifactForCaller,
+    readArtifactBatchForCaller,
+    readArtifactRecipientCensus,
     removeArtifactAccessGrantInTx,
     setArtifactAccessGrantInTx,
     type ArtifactForCaller,
@@ -21,11 +22,12 @@ import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { log } from "@/utils/logging/log";
 import * as privacyKit from "privacy-kit";
 import { createArtifact, deleteArtifact, updateArtifact } from "@/app/artifacts/artifactWriteService";
-import { listArtifactBodyRevisionsInTx, restoreArtifactBodyRevision } from "@/app/artifacts/artifactRevisionService";
+import { listArtifactBodyRevisions, restoreArtifactBodyRevision } from "@/app/artifacts/artifactRevisionService";
 import { ArtifactStorageSizeUnavailableError, readArtifactStorageUsageInTx } from "@/app/artifacts/artifactStorageService";
 import { readArtifactBlob } from '@/app/artifacts/artifactBlobService';
-import { resolveStoredContentPublicShareOrigin } from '@/app/share/storedContentPublicShareOrigin';
+import { resolveIsolatedStoredContentPublicShareOrigin } from '@/app/share/storedContentPublicShareOrigin';
 import { registerArtifactHtmlViewerRoutes } from '../share/registerPublicShareViewerRoutes';
+import { readHomeConfigEnv } from '@/app/home/settings/homeSettings';
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import {
     ArtifactCallerAccessV1Schema,
@@ -102,7 +104,7 @@ export function artifactsRoutes(app: Fastify) {
                 503: z.object({ error: z.literal('artifact_content_unavailable') }).strict() } },
     }, async (request, reply) => {
         const inventory = await inTx(tx => readArtifactAccountEncryptionMigrationInventoryInTx({ tx, accountId: request.userId,
-            afterId: request.query.afterId, limit: request.query.limit ?? DEFAULT_ARTIFACT_LIST_LIMIT }), { readOnly: true });
+            afterId: request.query.afterId, limit: request.query.limit ?? DEFAULT_ARTIFACT_LIST_LIMIT }), { /* Artifact mode, recipient keys and effective audience must remain coherent. */ isolationLevel: "Serializable", readOnly: true });
         return inventory ? reply.send(inventory) : reply.code(503).send({ error: 'artifact_content_unavailable' });
     });
     app.get('/v1/artifacts/:id/html-preview', {
@@ -114,10 +116,10 @@ export function artifactsRoutes(app: Fastify) {
             503: z.object({ error: z.enum(['artifact_content_unavailable', 'artifact_html_isolation_unavailable']) }),
         } },
     }, async (request, reply) => {
-        const read = await inTx(tx => readArtifactForCallerInTx(tx, { actorAccountId: request.userId, artifactId: request.params.id }), { readOnly: true });
+        const read = await readArtifactForCaller({ actorAccountId: request.userId, artifactId: request.params.id });
         if (!read.ok) return read.error === 'artifact_not_found'
             ? reply.code(404).send({ error: 'Artifact not found' }) : reply.code(503).send({ error: 'artifact_content_unavailable' });
-        const origin = resolveStoredContentPublicShareOrigin(request.params.id);
+        const origin = resolveIsolatedStoredContentPublicShareOrigin(request.params.id, await readHomeConfigEnv());
         if (!origin) return reply.code(503).send({ error: 'artifact_html_isolation_unavailable' });
         return reply.send({ url: `${origin}/a/${encodeURIComponent(request.params.id)}` });
     });
@@ -159,7 +161,7 @@ export function artifactsRoutes(app: Fastify) {
             503: z.object({ error: z.literal('artifact_content_unavailable') }),
         } },
     }, async (request, reply) => {
-        const result = await inTx(tx => listArtifactBodyRevisionsInTx(tx, { actorAccountId: request.userId, artifactId: request.params.id }), { readOnly: true });
+        const result = await listArtifactBodyRevisions({ actorAccountId: request.userId, artifactId: request.params.id });
         if (!result.ok) return result.error === 'artifact_not_found'
             ? reply.code(404).send({ error: 'Artifact not found' })
             : reply.code(503).send({ error: 'artifact_content_unavailable' });
@@ -259,8 +261,8 @@ export function artifactsRoutes(app: Fastify) {
         if (query.cursor && !cursor) return reply.code(400).send({ error: 'Failed to get artifacts' });
 
         try {
-            const artifacts = await inTx(tx => listArtifactHeadersForCallerInTx(tx, { actorAccountId: userId, limit: listLimit, cursor,
-                includeBody: query.includeBody === 'true' }), { readOnly: true });
+            const artifacts = await listArtifactHeadersForCaller({ actorAccountId: userId, limit: listLimit, cursor,
+                includeBody: query.includeBody === 'true' });
 
             const projected = artifacts.map((artifact) => {
                 return {
@@ -295,17 +297,15 @@ export function artifactsRoutes(app: Fastify) {
             500: z.object({ error: z.literal('artifact_content_unavailable') }).strict() } },
     }, async (request, reply) => {
         try {
-            const items = await inTx(async tx => {
+            const captured = await readArtifactBatchForCaller({ actorAccountId: request.userId, artifactIds: request.body.artifactIds });
+            const items = (() => {
                 const result: ArtifactReadBatchResponseV1['items'] = [];
-                for (const artifactId of request.body.artifactIds) {
-                    const input = { actorAccountId: request.userId, artifactId };
-                    const read = await readArtifactForCallerInTx(tx, input);
+                for (const { artifactId, read, census } of captured) {
                     if (!read.ok) {
                         const refusal = projectArtifactHttpReadFailure(read, request.userId);
                         result.push({ artifactId, ok: false, error: read.error, status: refusal.status, retryable: refusal.retryable });
                         continue;
                     }
-                    const census = read.artifact.encryptionMode === 'e2ee' ? await readArtifactRecipientCensusInTx(tx, input) : null;
                     if (census && !census.ok) {
                         // The incumbent recipient API rejects with a generic typed Error,
                         // which the existing retry owner retries; preserve that classification.
@@ -317,7 +317,7 @@ export function artifactsRoutes(app: Fastify) {
                         recipientCensus: census?.value ?? null });
                 }
                 return result;
-            }, { readOnly: true });
+            })();
             return reply.send({ items });
         } catch (error) {
             log({ module: 'api', level: 'error' }, `Failed to read Artifact details: ${error}`);
@@ -351,7 +351,7 @@ export function artifactsRoutes(app: Fastify) {
         const { id } = request.params;
 
         try {
-            const read = await inTx(tx => readArtifactForCallerInTx(tx, { actorAccountId: userId, artifactId: id }), { readOnly: true });
+            const read = await readArtifactForCaller({ actorAccountId: userId, artifactId: id });
             if (!read.ok) {
                 const refusal = projectArtifactHttpReadFailure(read, userId);
                 return reply.code(refusal.status).send({ error: refusal.error });
@@ -371,7 +371,7 @@ export function artifactsRoutes(app: Fastify) {
         preHandler: app.authenticate,
         schema: { params: accessParams, response: { 200: ArtifactAccessGrantsListResponseV1Schema, ...accessErrors } },
     }, async (request, reply) => {
-        const result = await inTx(tx => listArtifactAccessGrantsInTx(tx, { actorAccountId: request.userId, artifactId: request.params.id }), { readOnly: true });
+        const result = await listArtifactAccessGrants({ actorAccountId: request.userId, artifactId: request.params.id });
         return result.ok ? reply.send(result.value) : reply.code(accessErrorStatus(result.error)).send({ error: result.error });
     });
     app.put('/v1/artifacts/:id/access/grants', {
@@ -380,7 +380,7 @@ export function artifactsRoutes(app: Fastify) {
             response: { 200: ArtifactAccessGrantMutationResponseV1Schema, ...accessErrors } },
     }, async (request, reply) => {
         if (request.body.artifactId !== request.params.id) return reply.code(400).send({ error: "artifact_not_found" });
-        const result = await inTx(tx => setArtifactAccessGrantInTx(tx, { ...request.body, actorAccountId: request.userId }));
+        const result = await inTx(tx => setArtifactAccessGrantInTx(tx, { ...request.body, actorAccountId: request.userId }), { /* Artifact mode, recipient keys and effective audience must remain coherent. */ isolationLevel: "Serializable" });
         return result.ok ? reply.send(result.value) : reply.code(accessErrorStatus(result.error)).send({ error: result.error });
     });
     app.delete('/v1/artifacts/:id/access/grants', {
@@ -389,14 +389,14 @@ export function artifactsRoutes(app: Fastify) {
             response: { 200: ArtifactAccessGrantMutationResponseV1Schema, ...accessErrors } },
     }, async (request, reply) => {
         if (request.body.artifactId !== request.params.id) return reply.code(400).send({ error: "artifact_not_found" });
-        const result = await inTx(tx => removeArtifactAccessGrantInTx(tx, { ...request.body, actorAccountId: request.userId }));
+        const result = await inTx(tx => removeArtifactAccessGrantInTx(tx, { ...request.body, actorAccountId: request.userId }), { /* Artifact mode, recipient keys and effective audience must remain coherent. */ isolationLevel: "Serializable" });
         return result.ok ? reply.send(result.value) : reply.code(accessErrorStatus(result.error)).send({ error: result.error });
     });
     app.get('/v1/artifacts/:id/access/recipients', {
         preHandler: app.authenticate,
         schema: { params: accessParams, response: { 200: ArtifactAccessRecipientCensusResponseV1Schema, ...accessErrors } },
     }, async (request, reply) => {
-        const result = await inTx(tx => readArtifactRecipientCensusInTx(tx, { actorAccountId: request.userId, artifactId: request.params.id }), { readOnly: true });
+        const result = await readArtifactRecipientCensus({ actorAccountId: request.userId, artifactId: request.params.id });
         return result.ok ? reply.send(result.value) : reply.code(accessErrorStatus(result.error)).send({ error: result.error });
     });
     app.post('/v1/artifacts/:id/access/key-envelopes', {
@@ -405,7 +405,7 @@ export function artifactsRoutes(app: Fastify) {
             response: { 200: ArtifactRecipientKeyEnvelopeCommitResponseV1Schema, ...accessErrors } },
     }, async (request, reply) => {
         if (request.body.artifactId !== request.params.id) return reply.code(400).send({ error: "artifact_not_found" });
-        const result = await inTx(tx => commitArtifactRecipientKeyEnvelopesInTx(tx, { ...request.body, actorAccountId: request.userId }));
+        const result = await inTx(tx => commitArtifactRecipientKeyEnvelopesInTx(tx, { ...request.body, actorAccountId: request.userId }), { /* Artifact mode, recipient keys and effective audience must remain coherent. */ isolationLevel: "Serializable" });
         return result.ok ? reply.send(result.value) : reply.code(accessErrorStatus(result.error)).send({ error: result.error });
     });
 

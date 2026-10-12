@@ -5,11 +5,12 @@ import { ArtifactBlobReferenceV1Schema, decodePlainArtifactStoredContent, type A
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { db } from '@/storage/db';
 import { inTx, type Tx } from '@/storage/inTx';
+import { readSnapshotWithCurrentAdmission } from '@/storage/readSnapshotWithCurrentAdmission';
 import { deletePrivateFile, readPrivateFile, writePrivateFile } from '@/storage/blob/files';
 import { normalizePrivateFileKey } from '@/storage/privateFiles/privateFileKeys';
 import { encryptBytes, decryptBytes } from '@/modules/encrypt';
 import { readEncryptionFeatureEnv } from '@/app/features/catalog/readFeatureEnv';
-import { readArtifactForCallerInTx } from './artifactAccessService';
+import { readArtifactForCallerInTx, readmitArtifactContentInTx } from './artifactAccessService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 
 const PlainBlobFileSchema = createStoredReadSchema(z.discriminatedUnion('t', [
@@ -131,7 +132,7 @@ export async function admitArtifactBlobWriteInTx(tx: Tx, input: Readonly<{
 }
 
 export async function readArtifactBlob(input: Readonly<{ actorAccountId: string; artifactId: string; blobId: string }>) {
-    const admitted = await inTx(async tx => {
+    const admitted = await readSnapshotWithCurrentAdmission({ capture: async tx => {
         const read = await readArtifactForCallerInTx(tx, input);
         if (!read.ok) return read;
         const row = await tx.artifactBlob.findFirst({ where: { id: input.blobId, artifactId: input.artifactId } });
@@ -140,13 +141,20 @@ export async function readArtifactBlob(input: Readonly<{ actorAccountId: string;
             return { ok: false as const, error: 'artifact_not_found' as const };
         }
         if (row.encryptionMode !== read.artifact.encryptionMode) return { ok: false as const, error: 'artifact_content_unavailable' as const };
-        return { ok: true as const, row, ownerAccountId: read.artifact.ownerAccountId };
-    }, { readOnly: true });
+        return { ok: true as const, row, ownerAccountId: read.artifact.ownerAccountId, admission: read.artifact };
+    }, materialize: async captured => {
+        if (!captured.ok) return captured;
+        // Private IO may be large/remote and must finish outside the database lock.
+        const bytes = privacyKit.encodeBase64(new Uint8Array(await openArtifactBlobBytes(captured.ownerAccountId, captured.row)));
+        const content: ArtifactBlobStoredContentV1 = captured.row.encryptionMode === 'plain' ? { t: 'plain', v: bytes } : { t: 'encrypted', c: bytes };
+        return { ...captured, value: { blobId: captured.row.id, content } };
+    } }, async (tx, captured) => {
+        if (!captured.ok) return captured;
+        const current = await readmitArtifactContentInTx(tx, input, captured.admission);
+        return current.ok ? captured : current;
+    });
     if (!admitted.ok) return admitted;
-    // Private IO can be large/remote; authorization captures immutable custody without holding the database lock.
-    const bytes = privacyKit.encodeBase64(new Uint8Array(await openArtifactBlobBytes(admitted.ownerAccountId, admitted.row)));
-    const content: ArtifactBlobStoredContentV1 = admitted.row.encryptionMode === 'plain' ? { t: 'plain', v: bytes } : { t: 'encrypted', c: bytes };
-    return { ok: true as const, value: { blobId: admitted.row.id, content } };
+    return { ok: true as const, value: admitted.value };
 }
 
 export async function discardArtifactBlobCandidate(prepared: PreparedArtifactBlobWrite | undefined): Promise<void> {
@@ -179,7 +187,7 @@ export async function cleanupArtifactOrphanBlobs(artifactId: string): Promise<vo
         const revisions = await tx.artifactRevision.findMany({ where: { artifactId }, select: { blobId: true } });
         const retainedIds = new Set([head?.currentBlobId, ...revisions.map(row => row.blobId)].filter((id): id is string => Boolean(id)));
         return (await tx.artifactBlob.findMany({ where: { artifactId } })).filter(row => !retainedIds.has(row.id));
-    });
+    }, { /* Head, retained revisions and orphan blobs must share one snapshot before private-file deletion. */ isolationLevel: "Serializable", readOnly: true });
     for (const row of obsolete) {
         await deletePrivateFile(row.storageKey);
         await inTx(async tx => {

@@ -15,6 +15,8 @@ import { auth } from "@/app/auth/auth";
 import { artifactUpdateHandler } from "@/app/api/socket/artifactUpdateHandler";
 import { createFakeSocket, getSocketHandler } from "@/app/api/testkit/socketHarness";
 import { deleteArtifact, migrateArtifactAccountEncryptionInTx, updateArtifactTx } from "./artifactWriteService";
+import { readArtifactHeaderForCallerInTx } from './artifactAccessService';
+import { withSqliteReadSnapshot } from '@/storage/prisma';
 
 describe("Artifact document grants (real SQLite)", () => {
     let harness: LightSqliteHarness;
@@ -40,6 +42,77 @@ describe("Artifact document grants (real SQLite)", () => {
     }
 
     const protocolHeaders = { "x-happier-account-stored-content-protocol": String(CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION) };
+
+    it.each(['owner', 'grantee'] as const)('qualifies an exact admitted header from one Artifact row (%s)', async caller => {
+        const owner = await plainAccount();
+        const grantee = await plainAccount();
+        const artifact = await plainArtifact(owner.id);
+        await db.artifactAccountGrant.create({ data: { artifactId: artifact.id, accountId: grantee.id, accessLevel: 'view', createdByAccountId: owner.id } });
+        await withSqliteReadSnapshot(async tx => {
+            const delegate = tx.artifact;
+            const original = delegate.findFirst.bind(delegate);
+            let reads = 0;
+            // Preserve Prisma's bound delegate; instrument only the database boundary.
+            Object.defineProperty(delegate, 'findFirst', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof original>) => {
+                    reads += 1;
+                    return await original(...args);
+                } });
+            try {
+                const result = await readArtifactHeaderForCallerInTx(tx, { artifactId: artifact.id,
+                    actorAccountId: caller === 'owner' ? owner.id : grantee.id });
+                expect(result).toMatchObject({ ok: true, artifact: { id: artifact.id, encryptionMode: 'plain', access: caller === 'owner' ? 'owner' : 'view' } });
+                if (!result.ok) throw new Error('Expected an admitted Artifact header');
+                expect(decodePlainArtifactStoredContent(privacyKit.encodeBase64(result.artifact.header))).toEqual({ kind: 'workflow-definition.v1' });
+                // A single admitted-header query is the explicit readmission contract.
+                expect(reads).toBe(1);
+            } finally {
+                Object.defineProperty(delegate, 'findFirst', { configurable: true, writable: true, value: original });
+            }
+        });
+    });
+
+    it('denies an Artifact body after its grant is revoked during the content snapshot', async () => {
+        const owner = await plainAccount();
+        const recipient = await plainAccount();
+        const artifact = await plainArtifact(owner.id);
+        await db.artifactAccountGrant.create({ data: { artifactId: artifact.id, accountId: recipient.id,
+            accessLevel: 'view', createdByAccountId: owner.id } });
+        await withAuthenticatedTestApp(app => artifactsRoutes(app), async app => {
+            const url = `/v1/artifacts/${artifact.id}`;
+            const headers = { 'x-test-user-id': recipient.id, ...protocolHeaders };
+            expect((await app.inject({ method: 'GET', url, headers })).statusCode).toBe(200);
+            const { withSqliteReadSnapshot } = await import('@/storage/prisma');
+            const reader = await withSqliteReadSnapshot(async tx => tx);
+            const delegate = reader.artifact;
+            const original = delegate.findFirst.bind(delegate);
+            let enter!: () => void;
+            let resume!: () => void;
+            const reached = new Promise<void>(resolve => { enter = resolve; });
+            const release = new Promise<void>(resolve => { resume = resolve; });
+            let paused = false;
+            // Pause the genuine DB query after access/header admission; all policy and bytes stay real.
+            Object.defineProperty(delegate, 'findFirst', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof original>) => {
+                    if (!paused && args[0]?.select?.body === true) {
+                        paused = true; enter(); await release;
+                    }
+                    return await original(...args);
+                } });
+            const response = app.inject({ method: 'GET', url, headers });
+            try {
+                expect(await Promise.race([reached.then(() => 'barrier'), response.then(() => 'response')])).toBe('barrier');
+                await db.artifactAccountGrant.deleteMany({ where: { artifactId: artifact.id, accountId: recipient.id } });
+                resume();
+                const result = await response;
+                expect((await app.inject({ method: 'GET', url, headers })).statusCode).toBe(404);
+                expect(result.statusCode).toBe(404);
+            } finally {
+                resume(); await response;
+                Object.defineProperty(delegate, 'findFirst', { configurable: true, writable: true, value: original });
+            }
+        });
+    });
 
     it('projects retained public audience on authenticated reads with public sharing disabled, until expiry or deletion', async () => {
         const owner = await plainAccount();

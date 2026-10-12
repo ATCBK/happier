@@ -35,6 +35,59 @@ describe("Artifact revisions and storage budgets (real SQLite)", () => {
         "x-happier-account-stored-content-protocol": String(CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION) });
     const body = (value: string) => encodePlainArtifactStoredContent({ body: value });
 
+    it.each(['revoked', 'owner', 'grantee'] as const)('readmits blob bytes after private-file IO (%s)', async caller => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const grantee = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const id = crypto.randomUUID();
+        const blobId = crypto.randomUUID();
+        const bytes = Uint8Array.of(0, 255, 12);
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const created = await app.inject({ method: 'POST', url: '/v1/artifacts/content/binary', headers: headers(owner.id), payload: {
+                id, header: encodePlainArtifactStoredContent({ title: 'Blob admission' }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+                body: encodePlainArtifactStoredContent({ body: { blobId, mime: 'application/octet-stream', sizeBytes: bytes.length,
+                    sha256: createHash('sha256').update(bytes).digest('hex') } }),
+                blob: { blobId, content: { t: 'plain', v: privacyKit.encodeBase64(bytes) } },
+            } });
+            expect(created.statusCode, created.body).toBe(200);
+            await db.artifactAccountGrant.create({ data: { artifactId: id, accountId: grantee.id, accessLevel: 'view', createdByAccountId: owner.id } });
+            const url = `/v1/artifacts/${id}/blobs/${blobId}`;
+            const callerHeaders = headers(caller === 'owner' ? owner.id : grantee.id);
+            expect((await app.inject({ method: 'GET', url, headers: callerHeaders })).json()).toEqual({
+                blobId, content: { t: 'plain', v: privacyKit.encodeBase64(bytes) },
+            });
+            let entered!: () => void;
+            let resume!: () => void;
+            const reached = new Promise<void>(resolve => { entered = resolve; });
+            const release = new Promise<void>(resolve => { resume = resolve; });
+            const original = privateFiles.readPrivateFile;
+            // Delay only the real file boundary, with routing, storage and ACL owners intact.
+            const boundary = vi.spyOn(privateFiles, 'readPrivateFile').mockImplementationOnce(async key => {
+                const stored = await original(key);
+                entered();
+                await release;
+                return stored;
+            });
+            const response = app.inject({ method: 'GET', url, headers: callerHeaders });
+            try {
+                expect(await Promise.race([reached.then(() => 'file'), response.then(() => 'response')])).toBe('file');
+                if (caller === 'revoked') await db.artifactAccountGrant.deleteMany({ where: { artifactId: id, accountId: grantee.id } });
+                resume();
+                const result = await response;
+                if (caller === 'revoked') {
+                    expect((await app.inject({ method: 'GET', url, headers: callerHeaders })).statusCode).toBe(404);
+                    expect(result.statusCode).toBe(404);
+                } else {
+                    expect(result.statusCode, result.body).toBe(200);
+                    expect(result.json()).toEqual({ blobId, content: { t: 'plain', v: privacyKit.encodeBase64(bytes) } });
+                }
+            } finally {
+                resume();
+                await response;
+                boundary.mockRestore();
+            }
+        });
+    });
+
     it.each(['Retained Board content', null])('restores stored envelope extensions while keeping replacement admission strict (%s)', async value => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
         const id = crypto.randomUUID();

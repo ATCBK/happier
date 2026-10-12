@@ -52,7 +52,7 @@ export async function createArtifactHttpMutation(userId: string, input: Artifact
                 log({ module: 'api', artifactId: id, userId }, 'Found existing artifact');
             }
 
-            const read = await inTx(tx => readArtifactForCallerInTx(tx, { actorAccountId: userId, artifactId: id }));
+            const read = await inTx(tx => readArtifactForCallerInTx(tx, { actorAccountId: userId, artifactId: id }), { /* Artifact access, Account mode and mutation response content must share one capture. */ isolationLevel: "Serializable" });
             if (!read.ok) return { statusCode: 500 as const, body: { error: 'Failed to create artifact' as const } };
             const artifact = read.artifact;
             return { statusCode: 200 as const, body: {

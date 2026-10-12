@@ -1,6 +1,7 @@
 import { inTx, type Tx } from "@/storage/inTx";
 import { readArtifactStorageEnv } from "@/app/features/catalog/readFeatureEnv";
-import { readArtifactForCallerInTx } from "./artifactAccessService";
+import { readArtifactForCallerInTx, readmitArtifactContentInTx } from "./artifactAccessService";
+import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { openArtifactStoredContentBytes, openArtifactProvenanceBytes } from "./artifactStoredContent";
 import { updateArtifactTx, type UpdateArtifactResult } from "./artifactWriteService";
 import { cleanupArtifactOrphanBlobs } from './artifactBlobService';
@@ -8,7 +9,7 @@ import { ArtifactBodyEnvelopeV1Schema, ArtifactBodyEnvelopeV1StoredSchema, decod
 import * as privacyKit from 'privacy-kit';
 
 /** Reads history under the same current access, mode and recipient envelope admission as the head. */
-export async function listArtifactBodyRevisionsInTx(tx: Tx, input: Readonly<{
+async function captureArtifactBodyRevisionsInTx(tx: Tx, input: Readonly<{
     actorAccountId: string;
     artifactId: string;
 }>) {
@@ -28,7 +29,27 @@ export async function listArtifactBodyRevisionsInTx(tx: Tx, input: Readonly<{
         projected.push({ bodyVersion: revision.bodyVersion, body, provenance, createdAt: revision.createdAt,
             sizeBytes: revision.body.byteLength + (revision.provenance?.byteLength ?? 0) });
     }
-    return { ok: true as const, revisions: projected, retentionCount: readArtifactStorageEnv(process.env).revisionRetentionCount };
+    return { ok: true as const, revisions: projected, retentionCount: readArtifactStorageEnv(process.env).revisionRetentionCount,
+        admission: read.artifact };
+}
+
+export async function listArtifactBodyRevisionsInTx(tx: Tx, input: Parameters<typeof captureArtifactBodyRevisionsInTx>[1]) {
+    const captured = await captureArtifactBodyRevisionsInTx(tx, input);
+    if (!captured.ok) return captured;
+    const { admission: _admission, ...result } = captured;
+    return result;
+}
+
+export async function listArtifactBodyRevisions(input: Parameters<typeof listArtifactBodyRevisionsInTx>[1]): Promise<Awaited<ReturnType<typeof listArtifactBodyRevisionsInTx>>> {
+    const result = await readSnapshotWithCurrentAdmission<Awaited<ReturnType<typeof captureArtifactBodyRevisionsInTx>>>(
+        tx => captureArtifactBodyRevisionsInTx(tx, input), async (tx, captured) => {
+            if (!captured.ok) return captured;
+            const current = await readmitArtifactContentInTx(tx, input, captured.admission);
+            return current.ok ? captured : current;
+        });
+    if (!result.ok) return result;
+    const { admission: _admission, ...projection } = result;
+    return projection;
 }
 
 /** Restore the selected body with caller-prepared provenance, atomically advancing both head versions. */
@@ -66,7 +87,7 @@ export async function restoreArtifactBodyRevision(input: Readonly<{
                 provenance: input.provenance, provenanceDataEncryptionKey: input.provenanceDataEncryptionKey,
                 header: { bytes: input.header, expectedVersion: input.expectedRevision.headerVersion },
                 body: { bytes: input.body ?? bytes, expectedVersion: input.expectedRevision.bodyVersion }, restoredBlobId: revision.blobId });
-        });
+        }, { /* Artifact restore shares the storage-budget and head-sequence invariant with writes. */ isolationLevel: "Serializable" });
         if (result.ok) await cleanupArtifactOrphanBlobs(input.artifactId);
         return result;
     } catch {
