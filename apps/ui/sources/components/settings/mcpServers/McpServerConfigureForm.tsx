@@ -271,14 +271,6 @@ export const McpServerConfigureForm = React.memo(function McpServerConfigureForm
             )}
 
             <ItemGroup title={t('settings.mcpServersEditorAppliesTo')} description={t('settings.mcpServersEditorAppliesToSubtitle')}>
-                {props.draftBindings.length === 0 ? (
-                    <Item
-                        title={t('settings.mcpServersBindingsEmptyTitle')}
-                        subtitle={t('settings.mcpServersBindingsEmptySubtitle')}
-                        mode="info"
-                        showChevron={false}
-                    />
-                ) : null}
                 {props.draftBindings.map((binding) => (
                     <McpServerBindingEditor
                         key={binding.id}

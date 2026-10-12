@@ -20,7 +20,7 @@ import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprov
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
 import { useMachineAdministrationExecutionTargetBinding } from '@/sync/domains/machines/administration/useExecutionTargetBinding';
-import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { t } from '@/text';
 import { Icon } from '@/components/ui/icons/Icon';
 import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
@@ -160,16 +160,6 @@ export const McpServerTestPanel = React.memo(function McpServerTestPanel(props: 
         <ItemGroup
             title={t('settings.mcpServersTestTitle')}
             description={t('settings.mcpServersTestFooter')}
-            action={(
-                <SectionActionButton
-                    testID="mcp.server.test.run"
-                    icon="play"
-                    title={t('settings.mcpServersTestRunTitle')}
-                    loading={isTesting}
-                    disabled={executionTarget === null || !testExecution.ready || !canTestServer || !canTestBinding || isTesting}
-                    onPress={runTest}
-                />
-            )}
         >
             {testExecution.approval.approvalId && executionTarget ? (
                 <ActionApprovalPendingNotice testID="mcp.server.test.approval"
@@ -222,29 +212,32 @@ export const McpServerTestPanel = React.memo(function McpServerTestPanel(props: 
                 )}
             />
 
-            {lastResult ? (
-                lastResult.ok ? (
-                    <Item
-                        testID="mcp.server.test.result.ok"
-                        title={t('settings.mcpServersTestResultOkTitle')}
-                        subtitle={t('settings.mcpServersTestResultOkSubtitle', { toolCount: lastResult.toolCount, durationMs: lastResult.durationMs })}
-                        accessibilityLiveRegion="polite"
-                        mode="info"
-                        showChevron={false}
+            {/* One row runs the test and reports its last result, inside the sheet it belongs to. */}
+            <Item
+                testID={lastResult ? (lastResult.ok ? 'mcp.server.test.result.ok' : 'mcp.server.test.result.error') : 'mcp.server.test.row'}
+                title={lastResult ? (lastResult.ok ? t('settings.mcpServersTestResultOkTitle') : t('settings.mcpServersTestResultErrorTitle'))
+                    : t('settings.mcpServersTestRunTitle')}
+                subtitle={lastResult ? (lastResult.ok
+                    ? t('settings.mcpServersTestResultOkSubtitle', { toolCount: lastResult.toolCount, durationMs: lastResult.durationMs })
+                    : `${lastResult.errorCode} · ${lastResult.error}`) : undefined}
+                subtitleLines={0}
+                subtitleLeading={lastResult && !lastResult.ok ? <View style={collectionListStyles.troubleDot} /> : undefined}
+                accessibilityLiveRegion="polite"
+                mode="info"
+                showChevron={false}
+                rightElement={(
+                    <RoundButton
+                        testID="mcp.server.test.run"
+                        size="small"
+                        display="secondary"
+                        title={t('settings.mcpServersTestTitle')}
+                        accessibilityLabel={t('settings.mcpServersTestRunTitle')}
+                        loading={isTesting}
+                        disabled={executionTarget === null || !testExecution.ready || !canTestServer || !canTestBinding || isTesting}
+                        onPress={runTest}
                     />
-                ) : (
-                    <Item
-                        testID="mcp.server.test.result.error"
-                        title={t('settings.mcpServersTestResultErrorTitle')}
-                        subtitle={`${lastResult.errorCode} · ${lastResult.error}`}
-                        subtitleLines={0}
-                        subtitleLeading={<View style={collectionListStyles.troubleDot} />}
-                        accessibilityLiveRegion="polite"
-                        mode="info"
-                        showChevron={false}
-                    />
-                )
-            ) : null}
+                )}
+            />
         </ItemGroup>
     );
 });

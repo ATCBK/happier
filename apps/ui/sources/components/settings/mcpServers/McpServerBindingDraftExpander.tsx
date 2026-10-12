@@ -140,7 +140,6 @@ export const McpServerBindingDraftExpander = React.memo(function McpServerBindin
                     }
                 }}
                 title={t('settings.mcpServersAddApplyRule')}
-                subtitle={t('settings.mcpServersAddApplyRuleSubtitle')}
                 helpText={t('settings.mcpServersAddApplyRuleHelp')}
                 onCancel={handleCancel}
                 onSave={handleSave}

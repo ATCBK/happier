@@ -9,7 +9,6 @@ import { useListPresentation } from '@/components/ui/lists/listPresentation';
 import { Modal } from '@/modal';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
-import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { t } from '@/text';
 
 import { ValueRefEditorModal, getValueRefEditorModalTitle } from '@/components/ui/forms/valueRefs/ValueRefEditorModal';
@@ -106,26 +105,15 @@ export const McpValueRefMapEditor = React.memo(function McpValueRefMapEditor(pro
         });
     }, [openEditor, props.entries, props.onChangeEntries]);
 
-    const addAction = page ? (
-        <SectionActionButton
-            testID={`${props.testIdPrefix}.add`}
-            icon="plus"
-            title={props.addRowTitle}
-            onPress={handleAdd}
-        />
-    ) : undefined;
-
     return (
         <>
-            <ItemGroup title={props.title} description={page ? props.description : undefined} action={addAction}>
-                {rows.length === 0 ? (
+            <ItemGroup title={props.title} description={page ? props.description : undefined}>
+                {rows.length === 0 && !page ? (
                     <Item
                         testID={`${props.testIdPrefix}.empty`}
                         title={props.emptyTitle}
                         subtitle={props.emptySubtitle}
-                        icon={page ? undefined : <Icon name={props.iconName} size={29} color={theme.colors.text.secondary} />}
-                        mode={page ? 'info' : undefined}
-                        subtitleLines={page ? 0 : undefined}
+                        icon={<Icon name={props.iconName} size={29} color={theme.colors.text.secondary} />}
                         showChevron={false}
                     />
                 ) : null}
@@ -162,6 +150,15 @@ export const McpValueRefMapEditor = React.memo(function McpValueRefMapEditor(pro
                         showDivider={idx < rows.length - 1}
                     />
                 ))}
+                {page ? (
+                    // One entry point, inside its sheet, like "Add applies-to rule"; the section description says what goes here.
+                    <Item
+                        testID={`${props.testIdPrefix}.add`}
+                        title={props.addRowTitle}
+                        onPress={handleAdd}
+                        showChevron={false}
+                    />
+                ) : null}
             </ItemGroup>
 
             {page ? null : (
