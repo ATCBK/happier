@@ -19,7 +19,11 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useAllMachines, useAllSessions } from '@/sync/store/hooks';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 
 import {
@@ -77,19 +81,17 @@ export type ApiTokenGrantEditorProps = Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     stack: {
-        gap: 20,
+        gap: theme.space.s20,
     },
     pickerHead: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 4,
+        marginBottom: theme.space.s4,
     },
     review: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13.5,
-        lineHeight: 20,
-        paddingHorizontal: 2,
+        ...Typography.variant('body'),
+        paddingHorizontal: theme.space.s2,
     },
     reviewLabel: {
         ...Typography.default('semiBold'),
@@ -98,14 +100,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     addRow: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 8,
+        gap: theme.space.s8,
     },
     addField: {
         flex: 1,
         minWidth: 0,
     },
     search: {
-        marginBottom: 10,
+        marginBottom: theme.space.s10,
     },
 }));
 
@@ -516,11 +518,16 @@ export const ApiTokenGrantTargetsPicker = React.memo(function ApiTokenGrantTarge
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const machines = useAllMachines();
+    const scope = useActiveServerAccountScope();
+    const presenceNowMs = useMachinePresenceNowMs(machines);
+    useMachineReachabilityRevision();
     const sessions = useAllSessions();
     const [query, setQuery] = React.useState('');
     const targets = props.value.targets;
     const normalized = query.trim().toLowerCase();
-    const machineNames = React.useMemo(() => new Map(machines.map((machine) => [machine.id, getMachineDisplayName(machine) ?? machine.id])), [machines]);
+    // The shared machine identity: same-named computers are told apart by host or id, and each row
+    // carries the same presence line as every other machine list, so a retired one reads as offline.
+    const machineNames = React.useMemo(() => resolveMachineDisplayNames(machines), [machines]);
     const sessionRows = React.useMemo(() => sessions.map((session) => ({
         id: session.id,
         title: getSessionName(session),
@@ -552,6 +559,7 @@ export const ApiTokenGrantTargetsPicker = React.memo(function ApiTokenGrantTarge
                                 key={machine.id}
                                 testID={`api-token-grant-machine:${machine.id}`}
                                 title={machineNames.get(machine.id) ?? machine.id}
+                                subtitle={describeMachinePresenceLine(machine, presenceNowMs, undefined, scope).label}
                                 icon={<Icon name="desktop" size={20} color={theme.colors.text.secondary} />}
                                 checked={targets.machines.includes(machine.id)}
                                 disabled={props.disabled}
@@ -561,7 +569,7 @@ export const ApiTokenGrantTargetsPicker = React.memo(function ApiTokenGrantTarge
                     </ItemGroup>
                     <ItemGroup title={t('settingsApiTokens.grant.targets.sessions')}>
                         {sessionRows.length > 0 ? (
-                            <View style={{ paddingHorizontal: 12, paddingTop: 12 }}>
+                            <View style={{ paddingHorizontal: theme.space.s12, paddingTop: theme.space.s12 }}>
                                 <CompactSearchField
                                     testID="api-token-grant-sessions-search"
                                     value={query}

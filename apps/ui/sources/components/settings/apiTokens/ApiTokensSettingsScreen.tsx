@@ -48,15 +48,11 @@ function resolveOperationNotice(notice: 'revoked' | 'revokedAll' | 'signedOutEve
 
 const stylesheet = StyleSheet.create((theme) => ({
     refreshing: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
     },
     feedback: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
     },
     error: {
         color: theme.colors.state.danger.foreground,
@@ -65,11 +61,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.state.success.foreground,
     },
     listErrorContainer: {
-        paddingVertical: 20,
+        paddingVertical: theme.space.s20,
     },
     retryAction: {
         alignItems: 'center',
-        marginTop: 12,
+        marginTop: theme.space.s12,
     },
     tokenListTransition: {
         overflow: 'visible',
@@ -215,6 +211,7 @@ const ApiTokensListPage = React.memo(function ApiTokensListPage(props: Readonly<
                 ) : undefined}
                 primaryAction={!showsEmptyState ? {
                     title: t('settingsApiTokens.create.button'),
+                    icon: 'plus',
                     testID: 'settings-api-tokens-create',
                     disabled: actionsPending,
                     onPress: openCreate,
