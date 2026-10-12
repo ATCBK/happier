@@ -18,6 +18,7 @@
     }
   },
   "files": [
+    "assets",
     "dist",
     ".happier-plugin",
     "package.json"

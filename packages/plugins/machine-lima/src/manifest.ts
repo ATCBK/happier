@@ -57,6 +57,10 @@ export const LIMA_MACHINE_PROVISIONER = {
 export const LIMA_PLUGIN = definePlugin({
   id: LIMA_PLUGIN_ID, version: '0.0.0', displayName: 'Lima Machines',
   description: 'Managed local Lima guests using native, private bootstrap IO.',
+  brand: { iconResourceId: 'brand-icon', monochrome: true },
+  resources: {
+    'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+  },
   engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
   entrypoints: { daemon: './.happier-plugin/daemon.js' },
   hostAccess: { required: [{ id: processAccess, capability: 'process',
