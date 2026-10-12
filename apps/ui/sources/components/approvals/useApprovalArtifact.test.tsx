@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 import {
     ApprovalRequestV1Schema,
     ApprovalRequestV2Schema,
@@ -162,6 +163,99 @@ describe('useApprovalArtifact', () => {
     });
 
     afterEach(() => standardCleanup());
+
+    it('stops an empty approval loading state when its Home becomes unreachable without discarding the pending read', async () => {
+        const serverId = await addHome(HOME_IDENTITY);
+        const artifactId = await openPresentUserApproval(serverId);
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const previous = storage.getState();
+        const applied = getAppliedActiveServerSnapshot();
+        const available = isAppliedActiveServerRuntimeAvailable();
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        const path = `/v1/artifacts/${artifactId}`;
+        harness.answer(serverId, path, { select: async () => {
+            await held;
+            const response = await harness.artifacts(serverId).handle(path, { method: 'GET' });
+            if (!response) throw new Error('Expected real stored approval response');
+            return { body: await response.json() };
+        } });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        storage.setState({ artifacts: {}, endpointStatus: 'online', socketStatus: 'connected' });
+        const hook = await renderReader(artifactId, serverId);
+        try {
+            await waitForHomeGovernance(() => expect(harness.requestsFor(path).length).toBeGreaterThan(0));
+            expect(hook.getCurrent().isLoading).toBe(true);
+            await act(async () => { storage.setState({ endpointStatus: 'offline' }); });
+            expect(hook.getCurrent()).toMatchObject({ homeUnavailable: true, isLoading: false, error: true, artifact: null });
+            await act(async () => { storage.setState({ endpointStatus: 'online' }); release(); });
+            await settle(hook, artifactId, state => expect(state.artifact?.id).toBe(artifactId));
+            expect(hook.getCurrent()).toMatchObject({ isLoading: false, error: false, homeUnavailable: false });
+        } finally {
+            release();
+            await hook.unmount();
+            storage.setState(previous, true);
+            publishAppliedActiveServerSnapshot(applied, available);
+        }
+    });
+
+    it('keeps an unrelated exact Home wake from invalidating the readable approval', async () => {
+        const serverId = await addHome(HOME_IDENTITY);
+        const artifactId = await openPresentUserApproval(serverId);
+        await addHome(OTHER_IDENTITY, 'https://approval-other-home.example');
+        const hook = await renderReader(artifactId, serverId);
+        await settle(hook, artifactId, state => expect(state.artifact?.header?.approvalStatus).toBe('open'));
+        // Another client deletes this row. Only its own change id may invalidate
+        // the retained projection; an unrelated entity says nothing about it.
+        harness.answer(serverId, `/v1/artifacts/${artifactId}`, { status: 404 });
+        const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+        await act(async () => { publishHomeAccountChange(serverId, ['unrelated-session']); });
+        await hook.rerender();
+        expect(hook.getCurrent().error).toBe(false);
+        expect(hook.getCurrent().artifact?.id).toBe(artifactId);
+        await act(async () => { publishHomeAccountChange(serverId, [artifactId]); });
+        await settle(hook, artifactId, state => expect(state.error).toBe(true));
+        await hook.unmount();
+    });
+
+    it('projects an accepted exact-Home decision before replay returns, without a remote change or poll', async () => {
+        const serverId = await addHome(HOME_IDENTITY);
+        const artifactId = await openPresentUserApproval(serverId);
+        await addHome(OTHER_IDENTITY, 'https://approval-other-home.example');
+        const hook = await renderReader(artifactId, serverId);
+        await settle(hook, artifactId, state => expect(state.artifact?.header?.approvalStatus).toBe('open'));
+
+        let executionReached!: () => void;
+        let releaseExecution!: () => void;
+        const reached = new Promise<void>(resolve => { executionReached = resolve; });
+        const released = new Promise<void>(resolve => { releaseExecution = resolve; });
+        harness.answer(serverId, '/v1/teams/update', {
+            select: async () => {
+                executionReached();
+                await released;
+                return { body: teamSummaryFixture({ name: 'Renamed' }) };
+            },
+        });
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        let decisionReturned = false;
+        const decision = createDefaultActionExecutor().execute('approval.request.decide', {
+            artifactId, decision: 'approve',
+        }, { surface: 'ui', serverId, authority: 'present_user' }).finally(() => { decisionReturned = true; });
+        try {
+            await act(async () => { await reached; });
+            // The server has accepted and claimed the decision, but its side effect
+            // is still pending. No socket event, timer, or explicit refresh is sent.
+            await settle(hook, artifactId, state => expect(state.artifact?.header?.approvalStatus).toBe('executing'));
+            expect(decisionReturned).toBe(false);
+        } finally {
+            releaseExecution();
+            await act(async () => { await decision; });
+        }
+        await settle(hook, artifactId, state => expect(state.artifact?.header?.approvalStatus).toBe('executed'));
+        await hook.unmount();
+    });
 
     it('observes a newer approval revision even when the local acknowledgement timestamp does not advance', async () => {
         // The OS clock is a boundary, not an Artifact revision. Fast acknowledgements

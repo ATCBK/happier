@@ -38,3 +38,14 @@ describe('Approval context age leaf', () => {
         expect(paints.mock.calls.length).toBe(before);
     });
 });
+
+describe('Requested by main line', () => {
+    it('leads with the asking Home when no session asked', async () => {
+        const screen = await renderScreen(<ApprovalSessionContextCard session={null} machine={null} serverId="home"
+            context={null} homeName="Studio Mac" requesterSessionId={null} requesterAgentId={null} requesterSurface="cli" />);
+        const title = screen.findByTestId('approvals.requester-title');
+        expect(title?.props.children).toBe('Studio Mac');
+        // The Home is the main line, so it is not repeated as a "Home: …" fact beneath it.
+        expect(screen.getTextContent()).not.toContain('actionConfirmations.homeTarget');
+    });
+});

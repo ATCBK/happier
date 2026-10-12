@@ -1,0 +1,996 @@
+import * as React from 'react';
+import { Animated, Easing, Platform, Pressable, View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import type {
+  StorageItemV1,
+  StorageReasonV1,
+} from '@happier-dev/protocol/storage/storageV1';
+
+import { useMotionPreferences } from '@/components/instrument/motion/useMotionPreferences';
+import { useMachineTabCompactLayout } from '@/components/machines/page/useMachineTabCompactLayout';
+import { PileBar } from '@/components/machines/storage/PileBar';
+import { StorageVerdictPill } from '@/components/machines/storage/StorageItemRow';
+import { StorageVolumeRow } from '@/components/machines/storage/StorageVolumes';
+import {
+  describeStorageLosses,
+  describeStorageVerdict,
+  storageReasonLabel,
+  type StorageVerdictChip,
+} from '@/components/machines/storage/storageReasonPresentation';
+import type { StoragePileBar } from '@/components/machines/storage/storagePileModel';
+import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { Icon } from '@/components/ui/icons/Icon';
+import { Item } from '@/components/ui/lists/Item';
+import { StatusPill } from '@/components/ui/status/StatusPill';
+import { SelectionCheckGlyph } from '@/components/ui/selection/SelectionCheckGlyph';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { useMachineStorageSummary } from '@/sync/domains/machines/storage/useMachineStorageSummary';
+import { t } from '@/text';
+import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
+
+import type {
+  ResourceProposalItem,
+  ResourceProposalVerdict,
+  ResourceProposalModel,
+} from './readResourceProposalApproval';
+import {
+  resolveResourceProposalOutcomes,
+  resourceProposalChangedCount,
+  resourceProposalSelectAllState,
+  type ResourceProposalOutcome,
+  type ResourceProposalRow,
+} from './resourceProposalPresentation';
+import { resolveResourceProposalLabels } from './resourceProposalLabels';
+import { ResourceProposalProcessesContext } from './ResourceProposalProcessesContext';
+import type { ResourceProposalController } from './useResourceProposalCheck';
+
+function lastSegment(path: string): string {
+  const parts = path.replace(/[\\/]+$/u, '').split(/[\\/]/u);
+  return parts[parts.length - 1] || path;
+}
+
+function ownerTitle(item: ResourceProposalItem): string {
+  const kind = item.owner?.kind;
+  switch (kind) {
+    case 'session':
+    case 'terminal':
+    case 'service':
+    case 'run':
+    case 'browser_sidecar':
+    case 'workspace_sync':
+      return t(`resourceProposal.owner.${kind}`);
+    default:
+      return t('resourceProposal.owner.other');
+  }
+}
+
+function verdictChip(
+  kind: 'storage' | 'processes',
+  verdict: ResourceProposalVerdict,
+  reason: StorageReasonV1 | null,
+  actionId: ResourceProposalModel['actionId'],
+): StorageVerdictChip {
+  if (kind === 'processes') {
+    return verdict === 'safe'
+      ? {
+          variant: 'success',
+          chrome: 'plain',
+          icon: 'check-circle',
+          label: t(actionId === 'machines.processes.stop' ? 'resourceProposal.processSafe' : 'machineStorage.verdicts.safe'),
+        }
+      : {
+          variant: 'attention',
+          chrome: 'plain',
+          icon: 'warning-circle',
+          label: t('resourceProposal.processCheck'),
+        };
+  }
+  if (reason) return describeStorageVerdict({ verdict, reason });
+  // No reason reported: the verdict word alone, in the verdict table's tone and mark.
+  const chip = describeStorageVerdict({ verdict, reason: { code: 'facts_unavailable' } });
+  return { ...chip, label: t(VERDICT_WORD[verdict]) };
+}
+
+const VERDICT_WORD = {
+  safe: 'machineStorage.verdicts.safe',
+  caution: 'machineStorage.verdicts.caution',
+  keep: 'machineStorage.verdicts.keep',
+  forbidden: 'machineStorage.verdicts.forbidden',
+  check: 'machineStorage.verdicts.check',
+} as const;
+
+/** One request item: its tick, title, path and reason, the verdict, and what it gives back. */
+const ProposalRow = React.memo(function ProposalRow(
+  props: Readonly<{
+    kind: 'storage' | 'processes';
+    actionId: ResourceProposalModel['actionId'];
+    row: ResourceProposalRow;
+    index: number;
+    outcome: ResourceProposalOutcome | null;
+    interactive: boolean;
+    arrive: boolean;
+    compact: boolean;
+    showDivider: boolean;
+    onToggle: (key: string) => void;
+    onConfirmKeep: (key: string) => void;
+    /** Settled: invoke the Action again for this skipped item (a new UI invocation, re-checked). */
+    onRetry?: ((key: string) => unknown) | null;
+    /** Stopped: the process owner's Start again. */
+    onStartAgain?: ((key: string) => unknown) | null;
+    startedAgain?: boolean;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const motion = useMotionPreferences();
+  const { row } = props;
+  const [revealLoss, setRevealLoss] = React.useState(false);
+  // Arrival (lab AM): rows fill top to bottom once, opacity + 4 px, 160 ms each, 40 ms apart.
+  const arrival = React.useRef(
+    new Animated.Value(props.arrive && !motion.reduceMotion ? 0 : 1),
+  ).current;
+  React.useEffect(() => {
+    if (!props.arrive || motion.reduceMotion) return;
+    const animation = Animated.timing(arrival, {
+      toValue: 1,
+      duration: 160,
+      delay: props.index * 40,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: Platform.OS !== 'web',
+    });
+    animation.start();
+    return () => animation.stop();
+    // Once per mount: the arrival is not replayed when facts or ticks change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const title =
+    props.kind === 'storage'
+      ? lastSegment(row.item.path)
+      : ownerTitle(row.item);
+  const path =
+    props.kind === 'storage'
+      ? formatPathRelativeToHome(row.item.path)
+      : row.item.path;
+  const gone = row.facts?.status === 'gone';
+  const bytes = row.facts?.bytes ?? null;
+  const size = gone
+    ? t('resourceProposal.gone')
+    : bytes === null
+      ? '—'
+      : formatMachineBytes(
+          bytes,
+          props.kind === 'storage' ? 'storage' : 'memory',
+        );
+  const onDisk = row.facts?.onDiskBytes
+    ? t('resourceProposal.onDisk', {
+        amount: formatMachineBytes(row.facts.onDiskBytes, 'storage'),
+      })
+    : null;
+  const chip = verdictChip(props.kind, row.verdict, row.reason, props.actionId);
+  const reasonText = row.reason ? storageReasonLabel(row.reason) : null;
+  const skipped = props.outcome?.status === 'skipped';
+  const skippedReason =
+    skipped && props.outcome?.reasonCode
+      ? t('resourceProposal.skipped', {
+          reason:
+            props.kind === 'storage'
+              ? storageReasonLabel({
+                  code: props.outcome.reasonCode as StorageReasonV1['code'],
+                })
+              : props.outcome.reasonCode,
+        })
+      : null;
+  const press = () => {
+    if (!props.interactive || !row.selectable) return;
+    if (row.needsConfirm) {
+      setRevealLoss((value) => !value);
+      return;
+    }
+    props.onToggle(row.item.key);
+  };
+  let lead: React.ReactNode = <View style={styles.leadSpace} />;
+  if (props.outcome) {
+    lead =
+      props.outcome.status === 'done' ? (
+        <Icon
+          name="check"
+          size={16}
+          color={theme.colors.state.success.textForeground}
+        />
+      ) : (
+        <Icon name="minus" size={16} color={theme.colors.text.tertiary} />
+      );
+  } else if (row.selectable && props.interactive) {
+    lead = (
+      <SelectionCheckGlyph state={row.selected ? 'checked' : 'unchecked'} />
+    );
+  } else if (!row.selectable) {
+    lead = <Icon name="lock" size={14} color={theme.colors.text.tertiary} />;
+  }
+  const rowAction = skipped && props.onRetry ? (
+    <Pressable testID={`resource-proposal-retry-${row.item.key}`} accessibilityRole="button" hitSlop={8}
+      onPress={() => { void props.onRetry?.(row.item.key); }}>
+      <Text style={styles.link}>{t('resourceProposal.tryAgain')}</Text>
+    </Pressable>
+  ) : props.outcome?.status === 'done' && props.onStartAgain ? (
+    props.startedAgain ? <Text style={styles.onDisk}>{t('resourceProposal.startedAgain')}</Text> : (
+      <Pressable testID={`resource-proposal-start-again-${row.item.key}`} accessibilityRole="button" hitSlop={8}
+        onPress={() => { void props.onStartAgain?.(row.item.key); }}>
+        <Text style={styles.link}>{t('resourceProposal.startAgain')}</Text>
+      </Pressable>
+    )
+  ) : null;
+  const subtitle = [path, skippedReason ?? reasonText]
+    .filter(Boolean)
+    .join('\n');
+  const label = t('resourceProposal.itemLabel', {
+    title,
+    size,
+    verdict: chip.label,
+  });
+  return (
+    <Animated.View
+      style={{
+        opacity: arrival,
+        transform: [
+          {
+            translateY: arrival.interpolate({
+              inputRange: [0, 1],
+              outputRange: [4, 0],
+            }),
+          },
+        ],
+      }}
+    >
+      <Item
+        testID={`resource-proposal-item-${row.item.key}`}
+        title={title}
+        titleAccessory={
+          row.facts?.changed && row.facts.status === 'present' ? (
+            <Text style={styles.changed}>{t('resourceProposal.changed')}</Text>
+          ) : undefined
+        }
+        subtitle={subtitle}
+        subtitleLines={props.compact ? 3 : 2}
+        mode={props.interactive && row.selectable ? 'interactive' : 'info'}
+        onPress={props.interactive && row.selectable ? press : undefined}
+        accessibilityRole={
+          props.interactive && row.selectable ? 'checkbox' : undefined
+        }
+        accessibilityChecked={
+          props.interactive && row.selectable ? row.selected : undefined
+        }
+        accessibilityLabel={label}
+        showDivider={props.showDivider}
+        leftElement={<View style={styles.lead}>{lead}</View>}
+        style={!row.selected && props.interactive ? styles.unticked : undefined}
+        rightElement={
+          <View
+            style={[styles.figures, props.compact && styles.figuresCompact]}
+          >
+            {props.compact ? null : (
+              <StorageVerdictPill
+                chip={skipped ? { ...chip, variant: 'attention' } : chip}
+              />
+            )}
+            <View style={styles.sizeColumn}>
+              <Text
+                style={[
+                  styles.size,
+                  row.facts?.changed &&
+                    row.facts.status === 'present' &&
+                    styles.sizeChanged,
+                ]}
+                numberOfLines={1}
+              >
+                {size}
+              </Text>
+              {onDisk ? (
+                <Text style={styles.onDisk} numberOfLines={1}>
+                  {onDisk}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        }
+        bottomElement={
+          props.compact || (revealLoss && row.needsConfirm) || rowAction ? (
+            <View style={styles.bottom}>
+              {props.compact ? <StorageVerdictPill chip={chip} /> : null}
+              {rowAction}
+              {revealLoss && row.needsConfirm ? (
+                <View style={styles.loss}>
+                  <Text style={styles.lossText}>
+                    {describeStorageLosses(
+                      row.facts?.loses.length
+                        ? row.facts.loses
+                        : row.reason
+                          ? [row.reason]
+                          : [],
+                    )}
+                  </Text>
+                  <RoundButton
+                    testID={`resource-proposal-include-${row.item.key}`}
+                    size="small"
+                    display="secondary"
+                    title={t('resourceProposal.includeAnyway')}
+                    onPress={() => props.onConfirmKeep(row.item.key)}
+                  />
+                </View>
+              ) : null}
+            </View>
+          ) : undefined
+        }
+      />
+    </Animated.View>
+  );
+});
+
+/** Items the agent left out (Keep, Forbidden): listed so the person knows they exist, never tickable. */
+const NotIncludedRow = React.memo(function NotIncludedRow(
+  props: Readonly<{
+    item: StorageItemV1;
+    compact: boolean;
+    showDivider: boolean;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const chip = describeStorageVerdict(props.item);
+  return (
+    <Item
+      testID={`resource-proposal-left-out-${props.item.itemId}`}
+      title={props.item.title || lastSegment(props.item.path)}
+      subtitle={[
+        formatPathRelativeToHome(props.item.path),
+        storageReasonLabel(props.item.reason),
+      ].join('\n')}
+      subtitleLines={2}
+      mode="info"
+      showDivider={props.showDivider}
+      leftElement={
+        <View style={styles.lead}>
+          <Icon name="lock" size={14} color={theme.colors.text.tertiary} />
+        </View>
+      }
+      style={styles.unticked}
+      rightElement={
+        <View style={styles.figures}>
+          {props.compact ? null : <StorageVerdictPill chip={chip} />}
+          <View style={styles.sizeColumn}>
+            <Text style={styles.size} numberOfLines={1}>
+              {formatMachineBytes(props.item.size.allocatedBytes, 'storage')}
+            </Text>
+          </View>
+        </View>
+      }
+    />
+  );
+});
+
+/** The volume the items live on, with the selection as its hatched ghost "after the Trash empties". */
+const ProposalVolume = React.memo(function ProposalVolume(
+  props: Readonly<{
+    machineId: string;
+    serverId: string | null;
+    paths: readonly string[];
+    selectedBytes: number;
+    compact: boolean;
+  }>,
+) {
+  const storage = useMachineStorageSummary({
+    machineId: props.machineId,
+    serverId: props.serverId,
+  });
+  const volume = React.useMemo(() => {
+    const volumes = storage.summary?.volumes ?? [];
+    let best: (typeof volumes)[number] | null = null;
+    for (const candidate of volumes) {
+      const mount = candidate.volume.mountPath;
+      if (
+        props.paths.some(
+          (path) =>
+            path === mount ||
+            path.startsWith(
+              mount.endsWith('/') || mount.endsWith('\\') ? mount : `${mount}/`,
+            ) ||
+            path.startsWith(`${mount}\\`),
+        )
+      ) {
+        if (!best || mount.length > best.volume.mountPath.length)
+          best = candidate;
+      }
+    }
+    return best;
+  }, [props.paths, storage.summary]);
+  if (!volume) return null;
+  return (
+    <StorageVolumeRow
+      volume={{ ...volume, pileBytes: props.selectedBytes }}
+      compact={props.compact}
+      after="trashEmpties"
+    />
+  );
+});
+
+function pileBarFor(
+  controller: ResourceProposalController,
+): StoragePileBar | null {
+  const { display } = controller;
+  switch (display.kind) {
+    case 'ask':
+      return controller.selectedCount > 0
+        ? {
+            kind: 'ready',
+            count: controller.selectedCount,
+            freesBytes: controller.selectedBytes,
+          }
+        : null;
+    case 'executing':
+      return {
+        kind: 'checking',
+        count: display.count,
+        freesBytes: display.bytes,
+      };
+    case 'trashed': {
+      const acted = display.result.outcomes.filter(
+        (outcome) => outcome.status === 'moved' || outcome.status === 'deleted',
+      ).length;
+      return {
+        kind: 'held',
+        batchId: display.result.batchId,
+        count: acted,
+        inTrashBytes: display.result.inTrashBytes,
+        notActed: display.result.outcomes.length - acted,
+        emptiesAt: null,
+      };
+    }
+    case 'emptied':
+      return {
+        kind: 'freed',
+        count: display.count,
+        freedBytes: display.freedBytes,
+      };
+    default:
+      return null;
+  }
+}
+
+function pileNote(controller: ResourceProposalController): string | null {
+  const { display, model } = controller;
+  if (display.kind === 'ask') {
+    if (model.kind === 'processes') return t(model.actionId === 'machines.processes.kill'
+      ? 'machineProcesses.kill.treeBody' : 'resourceProposal.note.processes');
+    return model.emptyAfter
+      ? t('resourceProposal.note.emptyAfter')
+      : t('resourceProposal.note.trash');
+  }
+  if (display.kind === 'trashed') {
+    const skipped = display.result.outcomes.filter(
+      (outcome) => outcome.status !== 'moved' && outcome.status !== 'deleted',
+    ).length;
+    return skipped > 0
+      ? t('machineStorage.pile.skippedNote', { count: skipped })
+      : t('machineStorage.pile.heldNote');
+  }
+  // PileBar's freed title already says what came back; the note says it is final.
+  if (display.kind === 'emptied') return null;
+  return null;
+}
+
+/**
+ * The proposal card's body (plan 60 AGW-6/7/8, lab `ra` A2/A3/A4/A7): the decision itself — items with
+ * reason, verdict and the size each actually gives back, the selection, the volume's ghost and the
+ * docked pile. The surrounding approval card and its footer stay the existing approval owners.
+ */
+export const ResourceProposalBody = React.memo(function ResourceProposalBody(
+  props: Readonly<{
+    controller: ResourceProposalController;
+    /** The approval was just requested: rows arrive once. */
+    arrive: boolean;
+    /** The second R37 choice (keep Undo) for an in-session disk-full proposal. */
+    onApproveKeepingUndo?: () => void;
+    decisionsAvailable: boolean;
+    testID?: string;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const { controller } = props;
+  const layout = useMachineTabCompactLayout();
+  const compact = layout.compact;
+  const { model, display, rows } = controller;
+  const interactive = display.kind === 'ask' && props.decisionsAvailable;
+  if (display.kind === 'declined') {
+    return (
+      <View testID="resource-proposal-declined" style={styles.quiet}>
+        <Icon
+          name="minus-circle"
+          size={16}
+          color={theme.colors.text.tertiary}
+        />
+        <Text style={styles.quietText} numberOfLines={2}>
+          <Text style={styles.quietStrong}>
+            {t('resourceProposal.declinedTitle')}
+          </Text>
+          {` · ${t('resourceProposal.declinedFacts', { count: model.items.length })}`}
+        </Text>
+        {controller.reopen ? (
+          <Pressable
+            testID="resource-proposal-reopen"
+            accessibilityRole="button"
+            onPress={controller.reopen}
+            hitSlop={8}
+          >
+            <Text style={styles.link}>{t('resourceProposal.reopen')}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  }
+  if (display.kind === 'restored') {
+    return (
+      <View testID="resource-proposal-restored" style={styles.quiet}>
+        <Icon
+          name="arrow-arc-left"
+          size={16}
+          color={theme.colors.text.tertiary}
+        />
+        <Text style={styles.quietText}>{t('resourceProposal.restored')}</Text>
+      </View>
+    );
+  }
+  const outcomes = resolveResourceProposalOutcomes(
+    display,
+    controller.approvedKeys,
+  );
+  const visibleRows = outcomes
+    ? rows.filter((row) => outcomes.has(row.item.key))
+    : rows;
+  const selectAll = resourceProposalSelectAllState(rows);
+  const openCount = rows.filter(
+    (row) => row.selectable && !row.needsConfirm,
+  ).length;
+  const changedCount = resourceProposalChangedCount(controller.check);
+  const pile = pileBarFor(controller);
+  const goal =
+    model.goalBytes && display.kind === 'ask'
+      ? t('resourceProposal.goal', {
+          found: formatMachineBytes(controller.selectedBytes, 'storage'),
+          goal: formatMachineBytes(model.goalBytes, 'storage'),
+        })
+      : null;
+  return (
+    <View testID={props.testID ?? 'resource-proposal-body'} style={styles.body} onLayout={layout.onLayout}>
+      {display.kind === 'ask' && display.stale ? (
+        <View
+          testID="resource-proposal-stale"
+          style={styles.stale}
+          accessibilityLiveRegion="polite"
+        >
+          <Icon
+            name="clock"
+            size={16}
+            color={theme.colors.state.attention.textForeground}
+          />
+          <View style={styles.staleCopy}>
+            <Text style={styles.staleTitle}>
+              {t('resourceProposal.staleTitle', { count: changedCount })}
+            </Text>
+            <Text style={styles.staleBody}>
+              {t('resourceProposal.staleBody')}
+            </Text>
+          </View>
+          <RoundButton
+            testID="resource-proposal-check-again"
+            size="small"
+            display="default"
+            title={t('resourceProposal.checkAgain')}
+            onPress={controller.checkAgain}
+          />
+        </View>
+      ) : null}
+      {display.kind === 'ask' && controller.check.kind === 'unavailable' ? (
+        <Text testID="resource-proposal-check-unavailable" style={styles.hint}>
+          {t('resourceProposal.checkUnavailable')}
+        </Text>
+      ) : null}
+      {interactive && openCount > 0 ? (
+        <View style={styles.allRow}>
+          <Pressable
+            testID="resource-proposal-select-all"
+            accessibilityRole="checkbox"
+            accessibilityState={{
+              checked:
+                selectAll === 'mixed' ? 'mixed' : selectAll === 'checked',
+            }}
+            accessibilityLabel={t('resourceProposal.selectAll')}
+            onPress={controller.toggleAll}
+            hitSlop={8}
+            style={styles.allBox}
+          >
+            <SelectionCheckGlyph state={selectAll} />
+            <Text style={styles.allText}>
+              {t('resourceProposal.selected', {
+                count: controller.selectedCount,
+                total: openCount,
+              })}
+            </Text>
+          </Pressable>
+          <View style={styles.grow} />
+          {model.kind === 'storage' && !model.emptyAfter ? (
+            <Pressable
+              testID="resource-proposal-select-safe"
+              accessibilityRole="button"
+              onPress={controller.selectAllSafe}
+              hitSlop={8}
+            >
+              <Text style={styles.link}>
+                {t('resourceProposal.selectAllSafe')}
+              </Text>
+            </Pressable>
+          ) : null}
+          {compact ? null : (
+            <Text style={styles.columnHead}>
+              {t(
+                model.kind === 'storage'
+                  ? 'resourceProposal.givesBack'
+                  : 'resourceProposal.frees',
+              )}
+            </Text>
+          )}
+        </View>
+      ) : null}
+      {goal ? (
+        <Text testID="resource-proposal-goal" style={styles.hint}>
+          {goal}
+        </Text>
+      ) : null}
+      <View accessibilityRole="list">
+        {visibleRows.map((row, index) => (
+          <ProposalRow
+            key={row.item.key}
+            kind={model.kind}
+            actionId={model.actionId}
+            row={row}
+            index={index}
+            outcome={controller.retried.get(row.item.key) ?? outcomes?.get(row.item.key) ?? null}
+            interactive={interactive}
+            arrive={props.arrive}
+            compact={compact}
+            showDivider={
+              index < visibleRows.length - 1 || model.notIncluded.length > 0
+            }
+            onToggle={controller.toggle}
+            onConfirmKeep={controller.confirmKeep}
+            onRetry={controller.retryItem}
+            onStartAgain={controller.startAgain}
+            startedAgain={controller.startedAgain.has(row.item.key)}
+          />
+        ))}
+      </View>
+      {model.notIncluded.length > 0 && display.kind === 'ask' ? (
+        <View>
+          <View style={styles.leftOutHead}>
+            <Icon name="lock" size={13} color={theme.colors.text.secondary} />
+            <Text style={styles.leftOutTitle}>
+              {t('resourceProposal.notIncluded')}
+            </Text>
+          </View>
+          {model.notIncluded.map((item, index) => (
+            <NotIncludedRow
+              key={item.itemId}
+              item={item}
+              compact={compact}
+              showDivider={index < model.notIncluded.length - 1}
+            />
+          ))}
+        </View>
+      ) : null}
+      {model.kind === 'processes' && display.kind === 'ask' ? (
+        <ResourceProposalProcessesContext machineId={model.machineId} serverId={model.serverId}
+          proposedRefs={new Set(model.items.map((item) => item.key))} selectedBytes={controller.selectedBytes} />
+      ) : null}
+      {model.kind === 'storage' && display.kind === 'ask' ? (
+        <ProposalVolume
+          machineId={model.machineId}
+          serverId={model.serverId}
+          paths={model.items.map((item) => item.path)}
+          selectedBytes={controller.selectedBytes}
+          compact={compact}
+        />
+      ) : null}
+      {display.kind === 'stopped' ? (
+        <StoppedSummary controller={controller} />
+      ) : null}
+      {display.kind === 'failed' ? (
+        <Text testID="resource-proposal-failed" style={styles.hint}>
+          {display.error ?? t('resourceProposal.failed')}
+        </Text>
+      ) : null}
+      {interactive && props.onApproveKeepingUndo && model.emptyAfter ? (
+        <View style={styles.keepUndo}>
+          <RoundButton
+            testID="resource-proposal-keep-undo"
+            size="small"
+            display="secondary"
+            disabled={controller.approveWithheld}
+            title={t('resourceProposal.approve.keepUndo')}
+            onPress={props.onApproveKeepingUndo}
+          />
+          <Text style={styles.hint}>
+            {t('resourceProposal.approve.keepUndoHint')}
+          </Text>
+        </View>
+      ) : null}
+      {controller.reopened ? (
+        <View style={styles.keepUndo}>
+          <RoundButton
+            testID="resource-proposal-run"
+            size="small"
+            display="default"
+            disabled={!controller.runFromUi}
+            title={resolveResourceProposalLabels(controller).approve}
+            action={async () => { await controller.runFromUi?.(); }}
+          />
+        </View>
+      ) : null}
+      {pile ? (
+        <PileBar
+          testID="resource-proposal-pile"
+          bar={pile}
+          note={pileNote(controller)}
+          compact={compact}
+          placement="card"
+          onUndo={
+            display.kind === 'trashed' && controller.undo
+              ? controller.undo
+              : undefined
+          }
+          onEmptyNow={
+            display.kind === 'trashed' && controller.emptyNow
+              ? controller.emptyNow
+              : undefined
+          }
+        />
+      ) : null}
+      {controller.retryReceipts.map((receipt) => receipt.restored ? (
+        <View key={receipt.batchId} testID={`resource-proposal-retry-receipt-${receipt.batchId}`} style={styles.quiet}>
+          <Text style={styles.quietText}>{t('resourceProposal.restored')}</Text>
+        </View>
+      ) : (
+        <PileBar
+          key={receipt.batchId}
+          testID={`resource-proposal-retry-receipt-${receipt.batchId}`}
+          bar={receipt.bar}
+          note={receipt.bar.kind === 'held' ? t('machineStorage.pile.heldNote') : null}
+          compact={compact}
+          placement="card"
+          onUndo={receipt.undo ?? undefined}
+          onEmptyNow={receipt.emptyNow ?? undefined}
+        />
+      ))}
+    </View>
+  );
+});
+
+/** Stopping frees memory at once (R25): the receipt says so with the real amount. */
+function StoppedSummary(
+  props: Readonly<{ controller: ResourceProposalController }>,
+) {
+  const { theme } = useUnistyles();
+  const { display } = props.controller;
+  if (display.kind !== 'stopped') return null;
+  const ended = display.result.outcomes.filter(
+    (outcome) =>
+      outcome.outcome === 'ended' || outcome.outcome === 'gone_before',
+  );
+  const freed = ended.reduce(
+    (sum, outcome) => sum + (outcome.freedBytes ?? 0),
+    0,
+  );
+  return (
+    <View
+      testID="resource-proposal-stopped"
+      style={styles.quiet}
+      accessibilityLiveRegion="polite"
+    >
+      <Icon
+        name="check-circle"
+        size={16}
+        color={theme.colors.state.success.textForeground}
+      />
+      <Text style={styles.quietText}>
+        <Text style={styles.quietStrong}>
+          {t('resourceProposal.stopped', { count: ended.length })}
+        </Text>
+        {freed > 0
+          ? ` · ${t('resourceProposal.stoppedFreed', { amount: formatMachineBytes(freed, 'memory') })}`
+          : ''}
+      </Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  body: {
+    gap: 0,
+  },
+  stale: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: theme.colors.state.attention.background,
+  },
+  staleCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  staleTitle: {
+    ...Typography.default('semiBold'),
+    ...happierPageTextMetrics('rowDescription'),
+    color: theme.colors.text.primary,
+  },
+  staleBody: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowDescription'),
+    color: theme.colors.text.secondary,
+  },
+  hint: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowDescription'),
+    color: theme.colors.text.secondary,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  allRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border.default,
+  },
+  allBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 32,
+  },
+  allText: {
+    ...Typography.default('medium'),
+    ...happierPageTextMetrics('rowDescription'),
+    color: theme.colors.text.primary,
+    fontVariant: ['tabular-nums'],
+  },
+  grow: {
+    flex: 1,
+  },
+  link: {
+    ...Typography.default('semiBold'),
+    ...happierPageTextMetrics('rowDescription'),
+    color: theme.colors.text.primary,
+  },
+  columnHead: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.tertiary,
+    width: 84,
+    textAlign: 'right',
+  },
+  lead: {
+    width: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  leadSpace: {
+    width: 18,
+  },
+  unticked: {
+    opacity: 0.86,
+  },
+  changed: {
+    ...Typography.default('medium'),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.state.attention.textForeground,
+  },
+  figures: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 16,
+  },
+  figuresCompact: {
+    gap: 0,
+  },
+  sizeColumn: {
+    width: 84,
+    alignItems: 'flex-end',
+  },
+  size: {
+    ...Typography.default('semiBold'),
+    ...happierPageTextMetrics('rowTitle'),
+    color: theme.colors.text.primary,
+    fontVariant: ['tabular-nums'],
+    textAlign: 'right',
+  },
+  sizeChanged: {
+    color: theme.colors.state.attention.textForeground,
+  },
+  onDisk: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.tertiary,
+    fontVariant: ['tabular-nums'],
+    textAlign: 'right',
+  },
+  bottom: {
+    gap: 8,
+    paddingTop: 6,
+  },
+  loss: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  lossText: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowDescription'),
+    color: theme.colors.state.attention.textForeground,
+    flexShrink: 1,
+  },
+  leftOutHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 4,
+  },
+  leftOutTitle: {
+    ...Typography.default('semiBold'),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+  },
+  keepUndo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 4,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  quiet: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  quietText: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowDescription'),
+    color: theme.colors.text.secondary,
+    flexShrink: 1,
+  },
+  quietStrong: {
+    ...Typography.default('semiBold'),
+    color: theme.colors.text.primary,
+  },
+}));
+
+/** The header's mode chip: this Action's own approval setting for the caller that asked (R41). */
+export function ResourceProposalModeChip(props: Readonly<{ mode: 'ask_first' | 'allowed' }>) {
+  const { theme } = useUnistyles();
+  const label = props.mode === 'ask_first' ? t('settingsActions.modes.askFirst') : t('settingsActions.modes.allowed');
+  return (
+    <View testID={`resource-proposal-mode-${props.mode}`}>
+      <StatusPill variant="neutral" chrome="plain" label={label} labelVariant="phrase" labelNumberOfLines={1}
+        leading={<Icon name={props.mode === 'ask_first' ? 'shield' : 'check'} size={12} color={theme.colors.text.secondary} />} />
+    </View>
+  );
+}

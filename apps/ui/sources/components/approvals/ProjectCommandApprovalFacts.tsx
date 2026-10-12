@@ -6,6 +6,9 @@ import { ProjectExecutionChoiceV1Schema } from '@happier-dev/protocol/workspaces
 import type { ApprovalRequest } from '@happier-dev/protocol';
 import type { ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+
+import { CodeBlockView } from '@/components/ui/code/blocks/CodeBlockView';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -201,20 +204,12 @@ export const ProjectCommandApprovalFacts = React.memo(
     return (
       <View style={styles.root} testID={props.testID}>
         {presentation.kind !== 'service' || presentation.command ? (
-          <View
-            style={[
-              styles.command,
-              { backgroundColor: theme.colors.surface.inset },
-            ]}
-          >
-            <Text
-              style={[styles.mono, { color: theme.colors.text.primary }]}
-              testID={`${props.testID}.command`}
-            >
-              {presentation.kind === 'script'
-                ? presentation.name
-                : `$ ${presentation.command}`}
-            </Text>
+          <View testID={`${props.testID}.command`}>
+            <CodeBlockView
+              code={presentation.kind === 'script' ? presentation.name : `$ ${presentation.command}`}
+              showHeaderRow={false}
+              wrap
+            />
           </View>
         ) : null}
         <View style={styles.rows}>
@@ -256,12 +251,10 @@ export const ProjectCommandApprovalFacts = React.memo(
 
 const styles = StyleSheet.create(() => ({
   root: { gap: 10 },
-  command: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
-  mono: { ...Typography.mono(), fontSize: 12, lineHeight: 18 },
   rows: { gap: 4 },
   row: { flexDirection: 'row', gap: 12 },
-  label: { fontSize: 12, lineHeight: 17, width: 52 },
-  value: { fontSize: 12, lineHeight: 17, flex: 1, minWidth: 0 },
+  label: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), width: 56 },
+  value: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), flex: 1, minWidth: 0 },
   note: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -269,5 +262,5 @@ const styles = StyleSheet.create(() => ({
     paddingTop: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  noteText: { fontSize: 11, lineHeight: 16, flex: 1, minWidth: 0 },
+  noteText: { ...Typography.default(), ...happierPageTextMetrics('meta'), flex: 1, minWidth: 0 },
 }));

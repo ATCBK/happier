@@ -9,6 +9,9 @@ import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfil
 import { ActionApprovalFieldsCard } from './ActionApprovalFieldsCard';
 import type { ApprovalActionFieldsPresentation } from './approvalFieldValues';
 import { describeUnnamedApprovalSession } from './approvalRequesterLabels';
+import { describeApprovalActionFields } from './approvalFieldValues';
+import { builtInSettingUiDeclaration } from '@/components/settings/catalog/settingDeclarations';
+import { t } from '@/text';
 
 const initialState = storage.getState();
 const profiles: string[] = [];
@@ -17,6 +20,22 @@ afterEach(async () => {
     await standardCleanup();
     storage.setState(initialState);
     for (const id of profiles.splice(0)) await removeServerProfile(id);
+});
+
+it('reads the declared setting name and exact new value in both approval anatomies', async () => {
+    const anchor = 'delegation.workDepthLimit';
+    const presentation = describeApprovalActionFields({ actionId: 'settings.set', actionArgs: { anchor, value: 3 } });
+    for (const anatomy of ['page', 'card'] as const) {
+        const screen = await renderScreen(<ActionApprovalFieldsCard presentation={presentation} anatomy={anatomy} />);
+        const text = screen.getTextContent();
+        expect(text).toContain(t(builtInSettingUiDeclaration(anchor).titleKey));
+        expect(text).toContain('3');
+        expect(text).not.toContain(anchor);
+        const details = screen.findAllByTestId('approvals.technical-details')
+            .find(node => typeof node.props.onExpandedChange === 'function');
+        await act(async () => { details?.props.onExpandedChange(true); });
+        expect(screen.getTextContent()).toContain(anchor);
+    }
 });
 
 it('the approval Details page preserves an exact remote host id when a session has the same id', async () => {

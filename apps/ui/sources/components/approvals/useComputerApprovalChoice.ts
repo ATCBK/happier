@@ -15,7 +15,7 @@ export type ComputerApprovalChoice = Readonly<{
     /** Opens the picker for this approval (choose a window, or change the agent's suggestion). */
     chooseTarget: () => void;
     /** What the decision carries: the picked window for an agent's `computer.target.select` (W15). */
-    decisionOptions: Readonly<{ computerTarget?: ComputerTargetV1; computerAccess?: ComputerAccessV1 }>;
+    decisionOptions: Readonly<{ narrowedInput?: unknown }>;
     /** Approving an agent's window choice needs an exact window first: Approve opens the picker. */
     needsChoiceBeforeApprove: boolean;
 }>;
@@ -32,6 +32,8 @@ export function useComputerApprovalChoice(input: Readonly<{
     artifactId?: string;
     actionId: string;
     actionArgs: unknown;
+    /** Saved decision input for history presentation only; never replaces the signed proposal. */
+    approvedInput?: unknown;
     preview: unknown;
     sessionId: string;
     serverId?: string | null;
@@ -42,8 +44,8 @@ export function useComputerApprovalChoice(input: Readonly<{
     const borrowedLifetime = useSessionViewerSourceAccountLifetime();
     const accountLifetime = input.accountLifetime === undefined ? borrowedLifetime : input.accountLifetime;
     const described = React.useMemo(
-        () => describeComputerActionApproval({ actionId: input.actionId, actionArgs: input.actionArgs, preview: input.preview }),
-        [input.actionArgs, input.actionId, input.preview],
+        () => describeComputerActionApproval({ actionId: input.actionId, actionArgs: input.approvedInput ?? input.actionArgs, preview: input.preview }),
+        [input.actionArgs, input.actionId, input.approvedInput, input.preview],
     );
     const { sessionId, resolveOpenPicker } = input;
     const serverId = input.serverId ?? accountLifetime?.scope.serverId ?? null;
@@ -120,8 +122,11 @@ export function useComputerApprovalChoice(input: Readonly<{
         && (input.actionArgs as { target?: unknown }).target,
     );
     const decisionOptions = React.useMemo(
-        () => (share && chosenTarget ? { computerTarget: chosenTarget, computerAccess: chosenAccess ?? 'use' } : {}),
-        [chosenAccess, chosenTarget, share],
+        () => (share && chosenTarget ? { narrowedInput: {
+            ...(input.actionArgs && typeof input.actionArgs === 'object' ? input.actionArgs : {}),
+            target: chosenTarget, access: chosenAccess ?? 'use',
+        } } : {}),
+        [chosenAccess, chosenTarget, input.actionArgs, share],
     );
     return {
         presentation,

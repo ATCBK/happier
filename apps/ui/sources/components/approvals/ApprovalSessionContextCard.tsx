@@ -102,6 +102,12 @@ export const ApprovalSessionContextCard = React.memo(function ApprovalSessionCon
     if (!sessionTitle && !pathLabel && !machineLabel && !agentLabel && !originLabel && !homeLabel) {
         return null;
     }
+    // The section always leads with one main line: the session, else the Home that asked (by its
+    // name, so it is not also repeated as a "Home: …" fact), else who asked and how.
+    const homeLeads = !sessionTitle && Boolean(homeLabel);
+    const requesterFacts = agentLabel || originLabel ? joinHappierFacts(agentLabel, originLabel) : null;
+    const factsLead = !sessionTitle && !homeLeads;
+    const mainLine = sessionTitle ?? (homeLeads ? homeLabel : requesterFacts);
 
     return (
         <ItemGroup
@@ -112,15 +118,15 @@ export const ApprovalSessionContextCard = React.memo(function ApprovalSessionCon
         <View style={styles.card}>
             <View style={styles.headerRow}>
                 <View style={styles.titleColumn}>
-                    {sessionTitle ? <Text style={styles.title}>{sessionTitle}</Text> : null}
+                    {mainLine ? <Text testID="approvals.requester-title" style={styles.title}>{mainLine}</Text> : null}
                     {machineLabel || pathLabel ? (
-                        <View style={sessionTitle ? styles.contextChips : null}>
+                        <View style={mainLine ? styles.contextChips : null}>
                             <SessionContextChips machineLabel={machineLabel} pathLabel={pathLabel} />
                         </View>
                     ) : null}
                     {contextLine || props.contextFacts ? <ApprovalContextLine context={props.context}
                         facts={props.contextFacts} showWorkspace={!pathLabel} /> : null}
-                    {homeLabel ? (
+                    {homeLabel && !homeLeads ? (
                         <Text style={styles.homeLabel}>{t('actionConfirmations.homeTarget', { serverId: homeLabel })}</Text>
                     ) : null}
                 </View>
@@ -141,10 +147,10 @@ export const ApprovalSessionContextCard = React.memo(function ApprovalSessionCon
                 ) : null}
             </View>
 
-            {agentLabel || originLabel ? (
+            {requesterFacts && !factsLead ? (
                 // Who asked and how it arrived, as one quiet line of words (never the stored enum).
                 <Text testID="approvals.requester-origin" style={styles.metaText}>
-                    {joinHappierFacts(agentLabel, originLabel)}
+                    {requesterFacts}
                 </Text>
             ) : null}
         </View>

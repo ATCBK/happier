@@ -3,18 +3,30 @@ import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 
-/** The requester's one-line summary of what approving will do, when it sent one. */
-export function readApprovalPreviewSummary(preview: unknown): string | null {
+type ApprovalSummaryInput = Readonly<{ actionId: string; actionArgs: unknown }>;
+
+/** A supplied request summary reads through its domain owner; absent previews remain absent. */
+export function readApprovalPreviewSummary(preview: unknown, request?: ApprovalSummaryInput): string | null {
     if (!preview || typeof preview !== 'object' || Array.isArray(preview)) return null;
-    const summary = typeof (preview as { summary?: unknown }).summary === 'string'
+    const storedSummary = typeof (preview as { summary?: unknown }).summary === 'string'
         ? (preview as { summary: string }).summary.trim()
         : '';
-    return summary || null;
+    if (!storedSummary) return null;
+    const actionId = request ? ActionIdSchema.safeParse(request.actionId) : null;
+    if (actionId?.success) {
+        const spec = getActionSpec(actionId.data);
+        const summary = spec.approvalPresentation && spec.inputSchema.safeParse(request?.actionArgs).success
+            ? spec.approvalPresentation?.summary(request?.actionArgs) : null;
+        if (summary) return summary;
+    }
+    return storedSummary;
 }
 
-export const ApprovalPreviewCard = React.memo(function ApprovalPreviewCard(props: Readonly<{ preview: unknown }>) {
-    const summary = React.useMemo(() => readApprovalPreviewSummary(props.preview), [props.preview]);
+export const ApprovalPreviewCard = React.memo(function ApprovalPreviewCard(props: Readonly<{ preview: unknown; request?: ApprovalSummaryInput }>) {
+    const summary = React.useMemo(() => readApprovalPreviewSummary(props.preview, props.request), [props.preview, props.request]);
     if (!summary) return null;
 
     return (

@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
 import { describeApprovalActionFields, projectApprovalStructuredAnswers } from './approvalFieldValues';
+import { readApprovalPreviewSummary } from './ApprovalPreviewCard';
+import { readBuiltInSettingDeclarationV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
+
+it('reads the declared request effect instead of a stored generic Action description', () => {
+    const anchor = 'delegation.workDepthLimit';
+    const declaration = readBuiltInSettingDeclarationV1(anchor)!;
+    const generic = { summary: 'Discover declared settings, read or change bound preferences' };
+    expect(readApprovalPreviewSummary(generic, { actionId: 'settings.set', actionArgs: { anchor, value: 3 } }))
+        .toBe(`Change “${declaration.title}” to 3.`);
+    expect(readApprovalPreviewSummary({ summary: 'Requested effect' }, { actionId: 'session.title.set', actionArgs: {} }))
+        .toBe('Requested effect');
+    expect(readApprovalPreviewSummary(undefined, { actionId: 'settings.set', actionArgs: { anchor, value: 3 } }))
+        .toBeNull();
+});
 
 describe('projectApprovalStructuredAnswers', () => {
     it('preserves the exact released scalar question and answer content', () => {
@@ -141,7 +155,7 @@ describe('describeApprovalActionFields', () => {
         const createPresentation = describeApprovalActionFields(creation);
         expect(createPresentation.unrepresentable).toBeNull();
         expect(createPresentation.rows).toContainEqual(
-            { kind: 'value', path: 'itemId', title: 'Item id', value: 'release-checklist' },
+            expect.objectContaining({ kind: 'value', path: 'itemId', value: 'release-checklist' }),
         );
 
         // The same field, absent: the observation-safe context really is missing.

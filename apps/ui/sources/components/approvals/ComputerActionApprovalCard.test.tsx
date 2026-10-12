@@ -23,6 +23,18 @@ const unchosen = { machineDisplayName: 'Studio laptop', requiresTargetSelection:
 const typeInput = { machineId: 'machine_1', captureId: 'capture_1', operation: { kind: 'type', text: 'ana@lumen.dev' } };
 
 describe('describeComputerActionApproval', () => {
+    it('shows the saved see-only decision after reloading without changing the original input', async () => {
+        const actionArgs = { machineId: 'machine_1', requestedTarget: 'Lumen', access: 'use' };
+        const hook = await renderHook(() => useComputerApprovalChoice({
+            actionId: 'computer.target.select', actionArgs,
+            approvedInput: { ...actionArgs, access: 'see' },
+            preview: { computerApprovalDisplay: unchosen }, sessionId: 'session_1',
+            accountLifetime: null, resolveOpenPicker: () => () => {},
+        }));
+        expect(hook.getCurrent().presentation?.access).toBe('see');
+        expect(hook.getCurrent().decisionOptions).toEqual({});
+        expect(actionArgs.access).toBe('use');
+    });
     it('shows confidential entry against the owner-reviewed window without displaying or retargeting a credential', async () => {
         const args = { serverId: 'home-1', sessionId: 'session_1', machineId: 'machine_1', purpose: 'Sign in',
             sourceId: 'source-1', target: { kind: 'window', displayId: ':77', pid: 123, windowId: 456 }, captureId: 'capture-1',
@@ -55,7 +67,9 @@ describe('describeComputerActionApproval', () => {
         await act(async () => { hook.getCurrent().chooseTarget(); });
         const target = { kind: 'window', displayId: ':77', pid: 123, windowId: 456 } as const;
         await act(async () => { pickerInput?.onChosen?.({ target, title: 'Sign in to Lumen', appName: 'Lumen' }, 'see'); });
-        expect(hook.getCurrent().decisionOptions).toEqual({ computerTarget: target, computerAccess: 'see' });
+        expect(hook.getCurrent().decisionOptions).toEqual({ narrowedInput: {
+            machineId: 'machine_1', requestedTarget: 'Lumen', target, access: 'see',
+        } });
         expect(hook.getCurrent().presentation).toMatchObject({ access: 'see', appName: 'Lumen', requiresTargetSelection: false });
         const screen = await renderScreen(<ComputerActionApprovalCard presentation={hook.getCurrent().presentation!} />);
         expect(screen.getTextContent()).toContain('computerUse.approval.seeConsequence');

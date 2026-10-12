@@ -3,6 +3,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 import { resolveApprovalPresentationInput } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { ApprovalExecutionOriginV1, ApprovalRequestV2 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import type { HomeDomainActionIdV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
@@ -87,6 +88,138 @@ export function normalizeActionApprovalRegistration(
     return typeof registration === 'string'
         ? { artifactId: registration, continuation: null }
         : { artifactId: registration.artifactId, continuation: registration };
+}
+
+/** Join an already-admitted Action to the same typed continuation used by mounted authors. */
+export async function resumeActionExecutionResult(input: Readonly<{
+    result: ActionExecuteResult;
+    actionId: ActionId;
+    actionInput: unknown;
+    scope: ServerAccountScope;
+    signal?: AbortSignal;
+    requestId?: string;
+    onApprovalPending(registration: ActionApprovalContinuation): void;
+}>): Promise<ActionExecuteResult> {
+    if (!input.result.ok) return input.result;
+    const pending = ActionApprovalRequestCreatedResultSchema.safeParse(input.result.result);
+    if (!pending.success) return input.result;
+    return await awaitActionApprovalResult<unknown, ActionExecuteResult>({
+        signal: input.signal,
+        execute: async callbacks => {
+            input.onApprovalPending(createActionApprovalContinuation({
+                artifactId: pending.data.artifactId, actionId: input.actionId,
+                scope: input.scope, expectedInput: input.actionInput,
+                ...(input.requestId ? { expectedRequestId: input.requestId } : {}),
+                signal: input.signal,
+                onSucceeded: callbacks.onApprovalSucceeded, onFailed: callbacks.onApprovalFailed,
+            }));
+            return { approvalPending: true };
+        },
+        succeeded: value => ({ ok: true, result: value }),
+        failed: (code, failure) => failure ?? { ok: false, errorCode: code, error: code },
+        aborted: () => ({ ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' }),
+    });
+}
+
+type RegisteredApproval = ReturnType<typeof normalizeActionApprovalRegistration>;
+type ApprovalSettlement = Readonly<{ registration: RegisteredApproval; artifact: DecryptedArtifact | null;
+    status: 'executed' | ActionApprovalTerminalStatus }>;
+
+/**
+ * Process-local result custody, independent of React. The Artifact remains the
+ * durable owner; adapters feed exact-Home observations, never execute/replay here.
+ */
+export function createActionApprovalContinuationObserver(input: Readonly<{ onExecuted(): void }>) {
+    let registrations: RegisteredApproval[] = [];
+    let settlement: ApprovalSettlement | null = null;
+    let deliveredSettlement: ApprovalSettlement | null = null;
+    let snapshot: Readonly<{ approval: RegisteredApproval | null; settlement: ApprovalSettlement | null }> = { approval: null, settlement: null };
+    let disposed = false;
+    let signalsAttached = true;
+    const listeners = new Set<() => void>();
+    const cleanups = new Map<RegisteredApproval, () => void>();
+    const publish = () => {
+        const approval = settlement ? null : registrations[0] ?? null;
+        if (snapshot.approval === approval && snapshot.settlement === settlement) return;
+        snapshot = { approval, settlement };
+        for (const listener of listeners) listener();
+    };
+    const remove = (registration: RegisteredApproval) => {
+        cleanups.get(registration)?.();
+        cleanups.delete(registration);
+        registrations = registrations.filter(entry => entry !== registration);
+    };
+    const attachSignal = (registration: RegisteredApproval) => {
+        const signal = registration.continuation?.signal;
+        if (!signalsAttached || !signal || cleanups.has(registration)) return;
+        if (signal.aborted) { remove(registration); return; }
+        const abort = () => { remove(registration); publish(); };
+        signal.addEventListener('abort', abort, { once: true });
+        cleanups.set(registration, () => signal.removeEventListener('abort', abort));
+    };
+    return {
+        getSnapshot: () => snapshot,
+        subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+        requestApproval(registration: ActionApprovalRegistration) {
+            if (disposed) return;
+            const normalized = normalizeActionApprovalRegistration(registration);
+            const signal = normalized.continuation?.signal;
+            if (signal?.aborted || settlement?.registration.artifactId === normalized.artifactId
+                || registrations.some(entry => entry.artifactId === normalized.artifactId)) return;
+            registrations.push(normalized);
+            attachSignal(normalized);
+            publish();
+        },
+        observeArtifact(artifact: DecryptedArtifact | null, invalidArtifact = false) {
+            const approval = registrations[0];
+            if (disposed || settlement || !approval || (artifact && artifact.id !== approval.artifactId)) return;
+            const headerStatus = artifact?.header?.approvalStatus;
+            const status = invalidArtifact ? 'invalid' : headerStatus === 'executed' ? 'executed'
+                : headerStatus === 'rejected' || headerStatus === 'failed' || headerStatus === 'canceled' ? headerStatus : null;
+            if (!status || (approval.continuation && status !== 'invalid' && (!artifact || typeof artifact.body !== 'string'))) return;
+            // Claim before invoking callbacks; a callback may synchronously enqueue another Action.
+            remove(approval);
+            settlement = { registration: approval, status, artifact };
+            publish();
+        },
+        deliverSettlement() {
+            const claimed = settlement;
+            if (disposed || !claimed || deliveredSettlement === claimed) return;
+            deliveredSettlement = claimed;
+            try {
+                const { status, artifact } = claimed;
+                const continuation = claimed.registration.continuation;
+                if (continuation?.signal?.aborted) return;
+                if (status !== 'executed') {
+                    try { continuation?.onTerminal?.(status, artifact); } catch { /* The caller owns terminal recovery. */ }
+                    return;
+                }
+                if (continuation && artifact) void continuation.onExecuted(artifact).catch(() => {
+                    // A result callback cannot authorize replay of an executed Action.
+                });
+                if (continuation?.refreshAfterExecution !== false) input.onExecuted();
+            } finally { settlement = null; publish(); }
+        },
+        attachSignals() {
+            if (disposed) return;
+            signalsAttached = true;
+            for (const registration of [...registrations]) attachSignal(registration);
+            publish();
+        },
+        detachSignals() {
+            // StrictMode may restore this same mounted observer. Preserve its
+            // custody, but never leave an externally owned signal retaining it.
+            signalsAttached = false;
+            for (const cleanup of cleanups.values()) cleanup();
+            cleanups.clear();
+        },
+        dispose() {
+            disposed = true;
+            for (const cleanup of cleanups.values()) cleanup();
+            cleanups.clear(); registrations = []; listeners.clear(); settlement = null;
+            snapshot = { approval: null, settlement: null };
+        },
+    };
 }
 
 type ApprovalRequestInspection =
@@ -232,21 +365,19 @@ export function createActionApprovalContinuation(
     const expectedExecutionOriginCanonical = Object.prototype.hasOwnProperty.call(input, 'expectedExecutionOrigin')
         ? canonicalApprovalInputIdentity(input.expectedExecutionOrigin)
         : undefined;
+    const inspect = (artifact: DecryptedArtifact) => inspectActionApprovalRequest({
+        artifact, artifactId: input.artifactId, actionId: input.actionId, scope: input.scope,
+        ...(expectedInputCanonical !== undefined ? { expectedInputCanonical } : {}),
+        ...(input.expectedRequestId !== undefined ? { expectedRequestId: input.expectedRequestId } : {}),
+        ...(expectedExecutionOriginCanonical !== undefined ? { expectedExecutionOriginCanonical } : {}),
+    });
     return Object.freeze({
         artifactId: input.artifactId,
         scope: input.scope,
         ...(input.refreshAfterExecution !== undefined ? { refreshAfterExecution: input.refreshAfterExecution } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
         onExecuted: async (artifact: DecryptedArtifact) => {
-            const inspection = inspectActionApprovalRequest({
-                artifact,
-                artifactId: input.artifactId,
-                actionId: input.actionId,
-                scope: input.scope,
-                ...(expectedInputCanonical !== undefined ? { expectedInputCanonical } : {}),
-                ...(input.expectedRequestId !== undefined ? { expectedRequestId: input.expectedRequestId } : {}),
-                ...(expectedExecutionOriginCanonical !== undefined ? { expectedExecutionOriginCanonical } : {}),
-            });
+            const inspection = inspect(artifact);
             if (inspection.kind === 'different_artifact') return 'ignored';
             if (inspection.kind === 'invalid_artifact') {
                 input.onFailed?.('approval_invalid');
@@ -285,15 +416,7 @@ export function createActionApprovalContinuation(
                 input.onFailed?.(`approval_${status}`);
                 return;
             }
-            const inspection = inspectActionApprovalRequest({
-                artifact,
-                artifactId: input.artifactId,
-                actionId: input.actionId,
-                scope: input.scope,
-                ...(expectedInputCanonical !== undefined ? { expectedInputCanonical } : {}),
-                ...(input.expectedRequestId !== undefined ? { expectedRequestId: input.expectedRequestId } : {}),
-                ...(expectedExecutionOriginCanonical !== undefined ? { expectedExecutionOriginCanonical } : {}),
-            });
+            const inspection = inspect(artifact);
             if (inspection.kind === 'different_artifact') return;
             if (inspection.kind === 'invalid_artifact') {
                 input.onFailed?.('approval_invalid');

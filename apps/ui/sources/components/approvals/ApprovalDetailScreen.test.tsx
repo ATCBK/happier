@@ -48,57 +48,136 @@ function readRenderedText(
  * The pass-through `Item` host keeps an element subtitle as a prop instead of rendering it; a page row's
  * structured value is such an element, so its text is read by rendering that element itself.
  */
-async function readRenderedTextWithRowContent(screen: Awaited<ReturnType<typeof renderScreen>>): Promise<string> {
+async function readRenderedTextWithRowContent(
+  screen: Awaited<ReturnType<typeof renderScreen>>,
+): Promise<string> {
   const nested: string[] = [];
   for (const node of screen.findAllByType('Item' as never)) {
     const subtitle: unknown = node.props.subtitle;
-    if (React.isValidElement(subtitle)) nested.push((await renderScreen(subtitle)).getTextContent());
+    if (React.isValidElement(subtitle))
+      nested.push((await renderScreen(subtitle)).getTextContent());
   }
   return [readRenderedText(screen), ...nested].join(' ');
 }
 
 describe('approval field semantics shared by card and page', () => {
-  it.each(['card', 'page'] as const)('preserves principal kinds, ids and arbitrary JSON in the %s', async (anatomy) => {
-    const { describeApprovalActionFields } = await import('./approvalFieldValues');
-    const { ActionApprovalFieldsCard } = await import('./ActionApprovalFieldsCard');
-    for (const kind of ['account', 'team', 'group']) {
-      const principal = { kind, ...(kind === 'group' ? { teamId: 'team-1' } : {}), [`${kind}Id`]: 'session-1' };
-      const screen = await renderScreen(<ActionApprovalFieldsCard anatomy={anatomy} serverId="ui-A"
-        presentation={describeApprovalActionFields({ actionId: 'machines.access.grant.set', actionArgs: {
-          serverId: 'ui-A', machineId: 'machine', principal, level: 'view',
-        } })} />);
-      // Every key and value reads as a labelled entry; the literal is never shown raw.
+  it.each(['card', 'page'] as const)(
+    'preserves principal kinds, ids and arbitrary JSON in the %s',
+    async (anatomy) => {
+      const { describeApprovalActionFields } =
+        await import('./approvalFieldValues');
+      const { ActionApprovalFieldsCard } =
+        await import('./ActionApprovalFieldsCard');
+      for (const kind of ['account', 'team', 'group']) {
+        const principal = {
+          kind,
+          ...(kind === 'group' ? { teamId: 'team-1' } : {}),
+          [`${kind}Id`]: 'session-1',
+        };
+        const screen = await renderScreen(
+          <ActionApprovalFieldsCard
+            anatomy={anatomy}
+            serverId="ui-A"
+            presentation={describeApprovalActionFields({
+              actionId: 'machines.access.grant.set',
+              actionArgs: {
+                serverId: 'ui-A',
+                machineId: 'machine',
+                principal,
+                level: 'view',
+              },
+            })}
+          />,
+        );
+        // Every key and value reads as a labelled entry; the literal is never shown raw.
+        const text = await readRenderedTextWithRowContent(screen);
+        // A discriminator reads as a word ("Kind Account"); ids stay exact.
+        expect(text).toContain(
+          `Kind ${kind.charAt(0).toUpperCase()}${kind.slice(1)}`,
+        );
+        expect(text).toContain(
+          `${kind.charAt(0).toUpperCase()}${kind.slice(1)} id session-1`,
+        );
+        if (kind === 'group') expect(text).toContain('Team id team-1');
+        expect(text).not.toContain(JSON.stringify(principal));
+      }
+      const value = {
+        kind: 'session',
+        sessionId: 'session-1',
+        empty: '',
+        absent: null,
+      };
+      const screen = await renderScreen(
+        <ActionApprovalFieldsCard
+          anatomy={anatomy}
+          serverId="ui-A"
+          presentation={describeApprovalActionFields({
+            actionId: 'settings.set',
+            actionArgs: { anchor: 'example', value },
+          })}
+        />,
+      );
       const text = await readRenderedTextWithRowContent(screen);
-      // A discriminator reads as a word ("Kind Account"); ids stay exact.
-      expect(text).toContain(`Kind ${kind.charAt(0).toUpperCase()}${kind.slice(1)}`);
-      expect(text).toContain(`${kind.charAt(0).toUpperCase()}${kind.slice(1)} id session-1`);
-      if (kind === 'group') expect(text).toContain('Team id team-1');
-      expect(text).not.toContain(JSON.stringify(principal));
-    }
-    const value = { kind: 'session', sessionId: 'session-1', empty: '', absent: null };
-    const screen = await renderScreen(<ActionApprovalFieldsCard anatomy={anatomy} serverId="ui-A"
-      presentation={describeApprovalActionFields({ actionId: 'settings.set', actionArgs: { anchor: 'example', value } })} />);
-    const text = await readRenderedTextWithRowContent(screen);
-    for (const entry of ['Kind Session', 'Session id session-1', 'Empty ""', 'Absent null']) expect(text).toContain(entry);
-    expect(text).not.toContain(JSON.stringify(value));
-  });
-  it.each(['card', 'page'] as const)('names only the typed Voice target on its own Home in the %s', async (anatomy) => {
-    const { describeApprovalActionFields } = await import('./approvalFieldValues');
-    const { ActionApprovalFieldsCard } = await import('./ActionApprovalFieldsCard');
-    const previous = sessionFixturesByServerId;
-    sessionFixturesByServerId = { ...previous, 'other-home': { 'voice-session': createSessionFixture({
-      id: 'voice-session', encryptionMode: 'plain', encryptedContentAvailability: 'ready',
-      metadata: { name: 'Voice target elsewhere', path: '/repo', host: 'example.test' },
-    }) } };
-    try {
-      const screen = await renderScreen(<ActionApprovalFieldsCard anatomy={anatomy} serverId="ui-A"
-        presentation={describeApprovalActionFields({ actionId: 'ui.voice_global.start', actionArgs: {
-          target: { kind: 'session', sessionAddress: { serverId: 'other-home', sessionId: 'voice-session' } }, expectedAttempt: null,
-        } })} />);
-      expect(readRenderedText(screen)).toContain('Voice target elsewhere');
-      expect(readRenderedText(screen)).not.toContain('voice-session');
-    } finally { sessionFixturesByServerId = previous; }
-  });
+      for (const entry of [
+        'Kind Session',
+        'Session id session-1',
+        'Empty ""',
+        'Absent null',
+      ])
+        expect(text).toContain(entry);
+      expect(text).not.toContain(JSON.stringify(value));
+    },
+  );
+  it.each(['card', 'page'] as const)(
+    'names only the typed Voice target on its own Home in the %s',
+    async (anatomy) => {
+      const { describeApprovalActionFields } =
+        await import('./approvalFieldValues');
+      const { ActionApprovalFieldsCard } =
+        await import('./ActionApprovalFieldsCard');
+      const previous = sessionFixturesByServerId;
+      sessionFixturesByServerId = {
+        ...previous,
+        'other-home': {
+          'voice-session': createSessionFixture({
+            id: 'voice-session',
+            encryptionMode: 'plain',
+            encryptedContentAvailability: 'ready',
+            metadata: {
+              name: 'Voice target elsewhere',
+              path: '/repo',
+              host: 'example.test',
+            },
+          }),
+        },
+      };
+      try {
+        const screen = await renderScreen(
+          <ActionApprovalFieldsCard
+            anatomy={anatomy}
+            serverId="ui-A"
+            presentation={describeApprovalActionFields({
+              actionId: 'ui.voice_global.start',
+              actionArgs: {
+                target: {
+                  kind: 'session',
+                  sessionAddress: {
+                    serverId: 'other-home',
+                    sessionId: 'voice-session',
+                  },
+                },
+                expectedAttempt: null,
+              },
+            })}
+          />,
+        );
+        expect(readRenderedText(screen)).toContain('Voice target elsewhere');
+        expect(readRenderedText(screen)).not.toContain('voice-session');
+      } finally {
+        sessionFixturesByServerId = previous;
+      }
+    },
+  );
 });
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -830,15 +909,54 @@ describe('ApprovalDetailScreen', () => {
   });
 
   it('keeps an executed preset refusal visible as failure without completion navigation', async () => {
-    currentArtifact = createBuiltInApprovalArtifact({ actionId: 'machines.presets.archive',
-      actionArgs: { homeId: 'home-1', id: 'preset-1', expectedRevision: 0 }, summary: 'Archive preset',
-      executedResult: { kind: 'refused', code: 'provider_unavailable' } });
+    currentArtifact = createBuiltInApprovalArtifact({
+      actionId: 'machines.presets.archive',
+      actionArgs: { homeId: 'home-1', id: 'preset-1', expectedRevision: 0 },
+      summary: 'Archive preset',
+      executedResult: { kind: 'refused', code: 'provider_unavailable' },
+    });
     const { ApprovalDetailScreen } = approvalDetailScreenModule;
-    const screen = await renderScreen(<ApprovalDetailScreen artifactId="artifact-1" completionHref="/" />);
-    expect(screen.findByTestId('approvals.execution-failure')?.props.subtitle).toBe('provider_unavailable');
+    const screen = await renderScreen(
+      <ApprovalDetailScreen artifactId="artifact-1" completionHref="/" />,
+    );
+    expect(
+      screen.findByTestId('approvals.execution-failure')?.props.subtitle,
+    ).toBe('provider_unavailable');
     expect(readRenderedText(screen)).toContain('approvals.status.failed');
     expect(readRenderedText(screen)).not.toContain('approvals.status.executed');
     expect(dismissToSpy).not.toHaveBeenCalled();
+  });
+
+  it('uses the typed stale outcome even when execution carries another diagnostic message', async () => {
+    const artifact = createDaemonRoutedApprovalArtifact();
+    const request = ApprovalRequestV2Schema.parse({
+      ...JSON.parse(artifact.body),
+      status: 'failed',
+      updatedAtMs: 2,
+      decision: { kind: 'approve', decidedAtMs: 2 },
+      execution: { executedAtMs: 2, ok: false, errorCode: 'approval_stale', error: 'Reviewed policy no longer matches' },
+    });
+    currentArtifact = { ...artifact, header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const screen = await renderScreen(<ApprovalDetailScreen artifactId={currentArtifact.id} />);
+
+    expect(screen.findByTestId('approvals.execution-failure')?.props.subtitle).toBe('approvals.staleFailure');
+  });
+
+  it('presents a durable Provider refusal through the shared Provider error copy', async () => {
+    const artifact = createDaemonRoutedApprovalArtifact();
+    const request = ApprovalRequestV2Schema.parse({
+      ...JSON.parse(artifact.body), status: 'failed', updatedAtMs: 2,
+      decision: { kind: 'approve', decidedAtMs: 2 },
+      execution: { executedAtMs: 2, ok: false, errorCode: 'provider_connection_invalid', error: 'provider_connection_invalid' },
+    });
+    currentArtifact = { ...artifact, header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const { presentProviderError } = await import('@/providers/connection/errorPresentation');
+    const screen = await renderScreen(<ApprovalDetailScreen artifactId={currentArtifact.id} />);
+    expect(screen.findByTestId('approvals.execution-failure')?.props.subtitle)
+      .toBe(presentProviderError('provider_connection_invalid').descriptionKey);
+    expect(readRenderedText(screen)).not.toContain('provider_connection_invalid');
   });
 
   it('renders an executing approval truthfully without decision controls', async () => {
@@ -972,6 +1090,31 @@ describe('ApprovalDetailScreen', () => {
     });
     expect(updateArtifactWithHeaderSpy).not.toHaveBeenCalled();
     expect(executeSpy).not.toHaveBeenCalled();
+  });
+
+  it('refreshes a typed stale target refusal and removes its decision controls', async () => {
+    currentArtifact = createApiTargetActionApprovalArtifact();
+    const request = TargetActionApprovalRequestV1Schema.parse({
+      ...JSON.parse(currentArtifact.body), status: 'failed', updatedAtMs: 2,
+      decision: { kind: 'approve', decidedAtMs: 2 },
+      execution: { executedAtMs: 2, ok: false, errorCode: 'approval_stale', error: 'Current policy differs' },
+    });
+    const failedArtifact = { ...currentArtifact, header: buildTargetActionApprovalArtifactHeaderV1(request), body: JSON.stringify(request) };
+    replayApprovalRequestAtExactDaemonSpy.mockResolvedValueOnce({ ok: false, errorCode: 'approval_stale', error: 'Current policy differs' });
+    fetchArtifactWithBodySpy.mockResolvedValueOnce(failedArtifact);
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const screen = await renderScreen(<ApprovalDetailScreen artifactId="target-api-artifact-1" />);
+    await screen.pressByTestIdAsync('approvals.approve');
+
+    expect(screen.findByTestId('approvals.execution-failure')?.props.subtitle).toBe('approvals.staleFailure');
+    expect(readRenderedText(screen)).toContain('approvals.status.failed');
+    expect(readRenderedText(screen)).not.toContain('approvals.status.approved');
+    expect(screen.findByTestId('approvals.approve')).toBeNull();
+    expect(screen.findByTestId('approvals.reject')).toBeNull();
+    const { Modal } = await import('@/modal');
+    expect(Modal.alert).toHaveBeenCalledWith('common.error', 'approvals.staleFailure');
+    expect(executeSpy).not.toHaveBeenCalled();
+    expect(updateArtifactWithHeaderSpy).not.toHaveBeenCalled();
   });
 
   it('refreshes the target approval after exact-daemon replay so the decision UI reflects the durable result', async () => {
@@ -1762,6 +1905,18 @@ describe('ApprovalDetailScreen', () => {
     await screen.unmount();
   });
 
+  it.each([true, false])('shows the reviewed Profile values or withholds Approve when complete=%s', async (complete) => {
+    const profile = { v: 2, id: 'profile-a', name: 'Payments release workspace', createdAt: 1, updatedAt: 2 };
+    currentArtifact = createBuiltInApprovalArtifact({ actionId: 'launch_profiles.save',
+      actionArgs: { id: profile.id, expectedRevision: 'absent', ...(complete ? { profile } : {}) },
+      summary: 'Save launch profile', preview: { actionId: 'launch_profiles.save', actionArgs: { id: profile.id } },
+    });
+    const screen = await renderScreen(<approvalDetailScreenModule.ApprovalDetailScreen artifactId="artifact-1" />);
+    expect(screen.findByTestId('approvals.approve')?.props.disabled).toBe(!complete);
+    if (complete) expect(await readRenderedTextWithRowContent(screen)).toContain(profile.name);
+    else expect(readRenderedText(screen)).toContain('approvals.unsafeDetailsTitle');
+  });
+
   it('shows the exact Team and member targets before approving deferred governance', async () => {
     currentArtifact = createBuiltInApprovalArtifact({
       actionId: 'teams.members.remove',
@@ -1971,7 +2126,11 @@ describe('ApprovalDetailScreen', () => {
     portableProfileResolution = {
       kind: 'resolved',
       serverIdentityId: 'stable-home-a',
-      profile: { id: 'server-approval', serverIdentityId: 'stable-home-a', name: '' },
+      profile: {
+        id: 'server-approval',
+        serverIdentityId: 'stable-home-a',
+        name: '',
+      },
     };
     sessionFixtures = {
       'session-1': createSessionFixture({
@@ -2210,7 +2369,11 @@ describe('ApprovalDetailScreen', () => {
     portableProfileResolution = {
       kind: 'resolved',
       serverIdentityId: 'stable-home-a',
-      profile: { id: 'server-approval', serverIdentityId: 'stable-home-a', name: '' },
+      profile: {
+        id: 'server-approval',
+        serverIdentityId: 'stable-home-a',
+        name: '',
+      },
     };
     const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
 
@@ -2239,13 +2402,65 @@ describe('ApprovalDetailScreen', () => {
     expect(resolvePreferredServerIdForSessionIdSpy).not.toHaveBeenCalled();
   });
 
+  it('shows the visual being approved through the same renderer as the reply', async () => {
+    const { createSessionSurfaceNoteDocumentV1 } = await import('@happier-dev/protocol/sessions/board');
+    currentArtifact = createBuiltInApprovalArtifact({ actionId: 'session.board.item.upsert', summary: 'Show a visual',
+      actionArgs: { sessionId: 'session-1', itemId: 'release-plan', expectedItemRevision: null, destination: 'transcript',
+        item: { v: 1, title: 'Release plan', source: { kind: 'declarative',
+          document: createSessionSurfaceNoteDocumentV1('Ship the payment retries on Thursday.') } } } });
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const screen = await renderScreen(<ApprovalDetailScreen artifactId="artifact-1" />);
+
+    const visual = screen.findByTestId('approvals.visual');
+    expect(visual).not.toBeNull();
+    expect(screen.getTextContent()).toContain('Ship the payment retries on Thursday.');
+  });
+
+  it('says the recorded answer while the request still reads open, and offers no second answer', async () => {
+    currentArtifact = createCurrentApprovalArtifact('server-approval');
+    portableProfileResolution = {
+      kind: 'resolved',
+      serverIdentityId: 'stable-home-a',
+      profile: {
+        id: 'server-approval',
+        serverIdentityId: 'stable-home-a',
+        name: '',
+      },
+    };
+    // The refreshed request still reads open until the host replays the decision.
+    fetchArtifactWithBodySpy.mockResolvedValueOnce(currentArtifact);
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const screen = await renderScreen(
+      <ApprovalDetailScreen artifactId="artifact-1" />,
+    );
+
+    await act(async () => {
+      await screen.pressByTestIdAsync('approvals.reject');
+    });
+
+    // The decision owner accepted the answer; the stored request has not caught up yet.
+    expect(executeSpy).toHaveBeenCalledWith(
+      'approval.request.decide',
+      { artifactId: 'artifact-1', decision: 'reject' },
+      expect.anything(),
+    );
+    expect(screen.findByTestId('approvals.status')?.props.detail).toBe(
+      'approvals.status.rejected',
+    );
+    expect(screen.findByTestId('approvals.actions')).toBeNull();
+  });
+
   it('executes approval decisions even when the web confirm modal resolves false (ModalProvider unavailable)', async () => {
     modalConfirmResult = false;
     currentArtifact = createCurrentApprovalArtifact('server-approval');
     portableProfileResolution = {
       kind: 'resolved',
       serverIdentityId: 'stable-home-a',
-      profile: { id: 'server-approval', serverIdentityId: 'stable-home-a', name: '' },
+      profile: {
+        id: 'server-approval',
+        serverIdentityId: 'stable-home-a',
+        name: '',
+      },
     };
     const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
 

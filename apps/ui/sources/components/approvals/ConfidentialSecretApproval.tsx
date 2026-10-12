@@ -18,7 +18,7 @@ import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccoun
 import { continueConfidentialSecretFill, type ConfidentialSecretContinuationResult } from '@/sync/ops/actions/confidentialSecretContinuation';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import { t } from '@/text';
-import type { ConfidentialSecretApproval as ReviewedApproval } from './confidentialSecretApproval';
+import type { ConfidentialSecretApproval as ReviewedApproval } from './confidentialSecretApprovalModel';
 
 type Account = Awaited<ReturnType<typeof captureLazyActionAccountContext>>;
 type SavedChoice = Extract<PrivateSecretChoiceV1, { kind: 'saved' }>;

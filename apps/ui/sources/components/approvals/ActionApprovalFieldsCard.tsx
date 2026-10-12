@@ -17,6 +17,11 @@ import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import type { ApprovalActionFieldsPresentation } from './approvalFieldValues';
+import { useProviderCatalogForServer } from '@/sync/store/useProviderCatalog';
+import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { presentProviderConnectionIdentity } from '@/providers/connection/presentation';
+import { areProviderContributionKeysEqualV1 } from '@happier-dev/protocol/providers/contribution-identity';
+import { builtInSettingUiDeclaration } from '@/components/settings/catalog/settingDeclarations';
 
 type ApprovalFieldRow = ApprovalActionFieldsPresentation['rows'][number];
 type ApprovalValueRow = Extract<ApprovalFieldRow, { kind: 'value' }>;
@@ -108,7 +113,8 @@ function ApprovalValueItem(props: Readonly<{
     anatomy?: 'page';
 }>) {
     const { row } = props;
-    const reading = useApprovalReferenceReading(row.reference, row.value, props.serverId);
+    const literal = row.valueFormat === 'boolean' ? t(row.value === 'true' ? 'common.yes' : 'common.no') : row.value;
+    const reading = useApprovalReferenceReading(row.reference, literal, props.serverId);
     const title = nameApprovalReferenceLabel(row.title, row.reference, reading.named);
     if (props.anatomy !== 'page') {
         return (
@@ -138,6 +144,27 @@ function useApprovalReferenceReading(reference: ApprovalReference | undefined, l
     const serverId = reference?.kind === 'session' ? reference.serverId ?? approvalServerId : approvalServerId;
     const name = useApprovalSessionName(serverId, reference?.kind === 'session' ? reference.id : '');
     const viewer = useAccountSettingsScope();
+    const providerCatalog = useProviderCatalogForServer(reference?.kind === 'providerConnection' ? approvalServerId : null);
+    const declarations = readAccountProviderDeclarations();
+    if (reference?.kind === 'setting') {
+        const setting = builtInSettingUiDeclaration(reference.id);
+        return { text: t(setting.titleKey), named: true };
+    }
+    if (reference?.kind === 'providerContribution') {
+        const declaration = declarations.find(row => areProviderContributionKeysEqualV1(row.contributionKey, reference.id));
+        return { text: declaration?.definition.name ?? t('common.unavailable'), named: true };
+    }
+    if (reference?.kind === 'providerConnection') {
+        const connection = providerCatalog?.data?.connections.find(row => row.id === reference.id);
+        if (connection) {
+            const sourceName = connection.source.kind === 'custom' ? connection.source.template.name
+                : declarations.find(row => connection.source.kind === 'contribution'
+                    && areProviderContributionKeysEqualV1(row.contributionKey, connection.source.contributionKey))?.definition.name;
+            return { text: presentProviderConnectionIdentity({ ...connection,
+                providerName: sourceName ?? t('common.unavailable') }).title, named: true };
+        }
+        return { text: reference.displayName ?? t('common.unavailable'), named: true };
+    }
     if (reference?.kind === 'session') return { text: name ?? describeUnnamedApprovalSession(resolveApprovalHomeName(serverId)), named: true };
     if (reference?.kind === 'home') {
         const home = resolveApprovalHomeName(reference.id)

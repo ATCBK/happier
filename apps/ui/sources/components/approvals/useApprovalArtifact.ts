@@ -15,6 +15,7 @@ import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { sync } from '@/sync/sync';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { useFailureExplainedByUnreachableHome } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 
 function hasCompatibleApprovalArtifact(
     artifact: DecryptedArtifact | null,
@@ -90,6 +91,9 @@ export function useApprovalArtifact(input: Readonly<{ artifactId: string | null;
     const scopeMatches = input.scope === undefined || (resolution.kind === 'bound'
         && areServerAccountScopesEqual(resolution.scope, input.scope));
     const activeScope = useActiveServerAccountScope();
+    const readHomeId = unresolvedServer ? null : serverId ?? activeScope?.serverId;
+    const relevantHomeIds = React.useMemo(() => readHomeId ? [readHomeId] : [], [readHomeId]);
+    const homeUnreachable = useFailureExplainedByUnreachableHome(relevantHomeIds);
     const local = useArtifact(artifactId ?? '');
     // Socket updates can publish the terminal header before this reader has the
     // matching decrypted body. That newer revision must restart the exact-Home
@@ -204,14 +208,15 @@ export function useApprovalArtifact(input: Readonly<{ artifactId: string | null;
         // invalidates this mounted exact-Home reader through the same fetch owner.
         return subscribeHomeAccountChange(event => {
             if (!areServerProfileIdentifiersEquivalent(event.serverId, serverId)) return;
+            if (event.entityIds !== undefined && !event.entityIds.includes(artifactId) && !event.entityIds.includes('self')) return;
             void refresh();
         });
     }, [artifactId, focused, refresh, resolution, serverId]);
     return {
         artifact,
-        isLoading: scopeMatches && !artifact && Boolean(artifactId) && (loading || (serverId !== null && resolution.kind === 'resolving')),
-        homeUnavailable: unresolvedServer || !scopeMatches || Boolean(serverId && resolution.kind !== 'bound' && resolution.kind !== 'resolving'),
-        error: error || unresolvedServer || !scopeMatches || Boolean(serverId && resolution.kind !== 'bound'),
+        isLoading: !homeUnreachable && scopeMatches && !artifact && Boolean(artifactId) && (loading || (serverId !== null && resolution.kind === 'resolving')),
+        homeUnavailable: homeUnreachable || unresolvedServer || !scopeMatches || Boolean(serverId && resolution.kind !== 'bound' && resolution.kind !== 'resolving'),
+        error: error || (homeUnreachable && !artifact) || unresolvedServer || !scopeMatches || Boolean(serverId && resolution.kind !== 'bound'),
         invalidArtifact,
         refresh,
     };

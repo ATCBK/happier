@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
@@ -14,6 +15,7 @@ import {
     waitForHomeGovernance,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { createActionApprovalContinuation, type ActionApprovalContinuation } from './actionApprovalContinuation';
 
 /**
@@ -28,10 +30,34 @@ import { createActionApprovalContinuation, type ActionApprovalContinuation } fro
  */
 
 const harness = createHomeGovernanceHarness();
+// Native rendering remains outside the deterministic Action/Artifact owners.
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('react-native-gesture-handler', async () => (await import('@/dev/testkit/mocks/gestureHandler')).createGestureHandlerMock());
+vi.mock('react-native-reanimated', async () => (await import('@/dev/testkit/mocks/reanimated')).createReanimatedModuleMock());
 installHomeGovernanceBoundaries(harness);
 const { useActionApprovalContinuation } = await import('./useActionApprovalContinuation');
 const { createIdentityAdministrationClient } = await import('@/components/settings/teams/identity/identityAdministrationClient');
 const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
+const { createUsageCoachController } = await import('@/components/settings/usage/widgets/usageCoachController');
+const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+const { normalizeUsageQuery } = await import('@happier-dev/protocol/inputs/usageQuery');
+const { resolveUsagePageAggregation } = await import('@happier-dev/protocol/usage/resolveUsagePageAggregation');
+const { AutomationDefinitionCreateRequestSchema, AutomationDefinitionDetailSchema } = await import('@happier-dev/protocol/automations/automationApiV3');
+const { UsageSubscriptionPriceEditor } = await import('@/components/settings/usage/widgets/plans/UsagePlanActions');
+const { projectUsagePlans } = await import('@/components/settings/usage/widgets/plans/usagePlansModel');
+const { ConnectedServiceQuotaGetResultV1Schema } = await import('@happier-dev/protocol/connect/providerAccountUsageHistory');
+const { buildProviderAccountUsageRecordId } = await import('@happier-dev/protocol/connect/account-usage-primitives');
+const { ConnectedPresentationRowMutationV1Schema, readConnectedSubscriptionMonthlyPriceV1 } = await import('@happier-dev/protocol/connect/connectedAccountPresentationRowsV1');
+const { AccountProfileSchema } = await import('@happier-dev/protocol/account/profile');
+const { storage } = await import('@/sync/domains/state/storage');
+const { HomeLayoutEditor } = await import('@/components/hub/layout/HomeLayoutEditor');
+const { useHomeHubLayout } = await import('@/components/hub/layout/useHomeHubLayout');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { publishAppliedActiveServerSnapshot, getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 
 const ACCOUNT_ID = 'account-a';
 const TEAM_UPDATE_PATH = '/v1/teams/update';
@@ -78,6 +104,400 @@ describe('useActionApprovalContinuation', () => {
     });
 
     afterEach(() => standardCleanup());
+
+    it('releases a mounted observers native abort subscription without aborting an externally owned signal or its durable approval', async () => {
+        const serverId = await addApprovalHome();
+        const artifactId = await openRenameApproval(serverId, 'external-interest');
+        const controller = new AbortController();
+        const added = vi.spyOn(controller.signal, 'addEventListener');
+        const removed = vi.spyOn(controller.signal, 'removeEventListener');
+        const hook = await renderContinuation(serverId);
+        await act(async () => hook.getCurrent().requestApproval(createActionApprovalContinuation({ artifactId,
+            actionId: 'teams.update', scope: { serverId, accountId: ACCOUNT_ID }, signal: controller.signal,
+            expectedInput: { v: 1, teamId: 'team-1', name: 'Renamed' }, onSucceeded: vi.fn() })));
+        const listener = added.mock.calls.find(call => call[0] === 'abort')?.[1];
+        expect(listener).toBeDefined();
+        await hook.unmount();
+        expect(removed).toHaveBeenCalledWith('abort', listener);
+        expect(controller.signal.aborted).toBe(false);
+        expect(harness.artifacts(serverId).readPlainBody(artifactId)).toContain('"status":"open"');
+        added.mockRestore(); removed.mockRestore();
+    });
+
+    it.each([
+        { kind: 'visibility' as const, loseTerminalWrite: false },
+        { kind: 'widget_size' as const, loseTerminalWrite: false },
+        { kind: 'visibility' as const, loseTerminalWrite: true },
+    ])('retains the shared Home layout operation for $kind until its durable approval produces the actual layout receipt (terminal write lost: $loseTerminalWrite)', async ({ kind, loseTerminalWrite }) => {
+        const serverId = await addApprovalHome();
+        await harness.requireUiApproval(serverId, kind === 'visibility' ? 'home.hub.layout.update' : 'widgets.item.size.set');
+        const { useHomeHubArtifactLayout, useHomeHubLayoutWritePending } = await import('@/components/hub/layout/useHomeHubArtifactLayout');
+        const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+        const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const profile = (await import('@/sync/domains/server/serverProfiles')).getServerProfileById(serverId)!;
+        const credentials = (await TokenStorage.getCredentialsForServerUrl(profile.serverUrl))!;
+        const previous = storage.getState();
+        const previousApplied = getAppliedActiveServerSnapshot();
+        const previousAvailable = isAppliedActiveServerRuntimeAvailable();
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        storage.setState({ isDataReady: true, profileScope: { serverId, accountId: ACCOUNT_ID }, endpointStatus: 'online',
+            endpointReason: null, socketStatus: 'connected', syncError: null });
+        if (kind === 'widget_size') {
+            const account = await captureLazyActionAccountContext(serverId);
+            try {
+                const { createHomeHubArtifactPortV1 } = await import('@happier-dev/protocol/home');
+                await createHomeHubArtifactPortV1(account.homeHubArtifactTransport, { accountId: ACCOUNT_ID }).apply({
+                    kind: 'widget_add', instance: { v: 1, id: 'checks', definition: { kind: 'builtin', id: 'usage_capacity' }, bindings: {} }, size: 'medium',
+                });
+            } finally { account.dispose(); }
+        }
+        let layout: ReturnType<typeof useHomeHubArtifactLayout> | undefined;
+        let isWriting = false;
+        let contentRenders = 0;
+        let content: ReturnType<typeof useHomeHubLayout> | undefined;
+        const projection = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null,
+            phase: 'current' as const, interactionEnabled: true, machineId: null, serverId, platform: 'web' as const,
+            accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' as const },
+            reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} };
+        function AccountShell({ children }: React.PropsWithChildren) {
+            return <InjectedAuthProvider credentials={credentials}><AppShellPluginUiProjectionValueProvider value={projection}>{children}</AppShellPluginUiProjectionValueProvider></InjectedAuthProvider>;
+        }
+        function ContentProbe() { content = useHomeHubLayout(); contentRenders++; return null; }
+        function Probe() {
+            layout = useHomeHubArtifactLayout();
+            isWriting = useHomeHubLayoutWritePending();
+            return kind === 'visibility' ? <HomeLayoutEditor /> : null;
+        }
+        const screen = await renderScreen(<AccountShell><Probe /><ContentProbe /></AccountShell>);
+        let originMounted = true;
+        let retained: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        let settled = false;
+        let operation!: Promise<void>;
+        try {
+            await waitForHomeGovernance(() => expect(layout!.status).toBe('ready'));
+            const beforeContent = content;
+            const beforeRenders = contentRenders;
+            await act(async () => {
+                operation = layout!.dispatch(kind === 'visibility' ? { kind: 'visibility', sectionId: 'setup', hidden: true }
+                    : { kind: 'widget_size', instanceId: 'checks', size: 'wide' }, { rethrow: true });
+                void operation.then(() => { settled = true; }, () => { settled = true; });
+            });
+            await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(kind === 'visibility' ? 1 : 2));
+            expect(settled).toBe(false);
+            expect(contentRenders).toBe(beforeRenders);
+            expect(content).toBe(beforeContent);
+            expect(isWriting).toBe(true);
+            expect(layout!.failedIntent).toBeUndefined();
+            expect(layout!.layout.hidden).not.toContain('setup');
+            const artifactId = harness.artifacts(serverId).list().find(artifact => harness.artifacts(serverId).readPlainBody(artifact.id).includes('"actionId"'))!.id;
+            if (kind === 'visibility') {
+                const path = `/v1/artifacts/${artifactId}`;
+                harness.answer(serverId, `GET ${path}`, { dispatchThenFail: true });
+                const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+                await act(async () => { publishHomeAccountChange(serverId, [artifactId]); storage.setState({ endpointStatus: 'offline' }); });
+                expect(screen.findByTestId('home-unreachable')).not.toBeNull();
+                expect(settled).toBe(false);
+                expect(layout!.failedIntent).toBeUndefined();
+                harness.answer(serverId, `GET ${path}`, { select: async () => {
+                    const pendingResponse = harness.artifacts(serverId).handle(path, { method: 'GET' });
+                    if (!pendingResponse) throw new Error('Approval Artifact read route unavailable');
+                    const response = await pendingResponse;
+                    return { status: response.status, body: await response.json() };
+                } });
+                await act(async () => { storage.setState({ endpointStatus: 'online' }); });
+                retained = await renderScreen(<AccountShell><Probe /></AccountShell>);
+                await screen.unmount();
+                originMounted = false;
+                expect(settled).toBe(false);
+            }
+            if (loseTerminalWrite) {
+                const path = `/v1/artifacts/${artifactId}`;
+                const { decodePlainArtifactStoredContent } = await import('@happier-dev/protocol/storage/artifactStoredContent');
+                harness.answer(serverId, `POST ${path}`, { select: async input => {
+                    const wire = input && typeof input === 'object' && 'body' in input ? input.body : null;
+                    const content = typeof wire === 'string' ? decodePlainArtifactStoredContent(wire) : null;
+                    const body = content && typeof content === 'object' && 'body' in content ? content.body : null;
+                    const request = ApprovalRequestV2Schema.safeParse(typeof body === 'string' ? JSON.parse(body) : null);
+                    if (request.success && request.data.status === 'executed') return { dispatchThenFail: true };
+                    const pendingResponse = harness.artifacts(serverId).handle(path, { method: 'POST', body: JSON.stringify(input) });
+                    if (!pendingResponse) throw new Error('Approval Artifact update route unavailable');
+                    const response = await pendingResponse;
+                    return { status: response.status, body: await response.json() };
+                } });
+            }
+            const decision = await decideApprovalAsInbox(serverId, artifactId, 'approve');
+            if (loseTerminalWrite) {
+                expect(decision).toMatchObject({ ok: false, errorCode: 'approval_execution_outcome_unknown' });
+                expect(harness.artifacts(serverId).readPlainBody(artifactId)).toContain('"status":"executing"');
+                const account = await captureLazyActionAccountContext(serverId);
+                try {
+                    const { createHomeHubArtifactPortV1, buildHomeHubArtifactIdV1 } = await import('@happier-dev/protocol/home');
+                    expect((await createHomeHubArtifactPortV1(account.homeHubArtifactTransport, { accountId: ACCOUNT_ID }).read()).hidden).toEqual(['setup']);
+                    const homeId = buildHomeHubArtifactIdV1(ACCOUNT_ID);
+                    const beforeWrites = harness.requestsFor(`/v1/artifacts/${homeId}`).filter(request => request.input !== null).length;
+                    const beforeApprovals = harness.artifacts(serverId).list().length;
+                    await act(async () => { await layout!.retry(); });
+                    expect(harness.requestsFor(`/v1/artifacts/${homeId}`).filter(request => request.input !== null)).toHaveLength(beforeWrites);
+                    expect(harness.artifacts(serverId).list()).toHaveLength(beforeApprovals);
+                } finally { account.dispose(); }
+                expect(settled).toBe(false);
+                expect(isWriting).toBe(true);
+                expect(layout!.failedIntent).toBeUndefined();
+                return;
+            }
+            expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true });
+            await act(async () => { await operation; });
+            expect(settled).toBe(true);
+            expect(isWriting).toBe(false);
+            expect(layout!.status).toBe('ready');
+            if (kind === 'visibility') expect(layout!.layout.hidden).toEqual(['setup']);
+            else expect(layout!.layout.items).toEqual(expect.arrayContaining([{ kind: 'widget',
+                instance: expect.objectContaining({ id: 'checks' }), size: 'wide' }]));
+            expect(layout!.failedIntent).toBeUndefined();
+        } finally {
+            if (originMounted) await screen.unmount();
+            await retained?.unmount();
+            storage.setState(previous, true);
+            publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
+        }
+    });
+
+    it('keeps an issued approval decision disabled while its Home is unreachable and consumes the later receipt', async () => {
+        const serverId = await addApprovalHome();
+        const artifactId = await openRenameApproval(serverId, 'pending-home');
+        const previous = storage.getState();
+        const applied = getAppliedActiveServerSnapshot();
+        const available = isAppliedActiveServerRuntimeAvailable();
+        let respond!: () => void;
+        const held = new Promise<void>(resolve => { respond = resolve; });
+        harness.answer(serverId, TEAM_UPDATE_PATH, { respondAfter: held,
+            body: teamSummaryFixture({ name: 'Renamed', capabilities: teamCapabilitiesFixture({ manageSettings: true }) }) });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        storage.setState({ endpointStatus: 'online', socketStatus: 'connected' });
+        const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+        const { ApprovalDecisionBar } = await import('./ApprovalDecisionBar');
+        const screen = await renderScreen(<ApprovalDetailScreen artifactId={artifactId} serverId={serverId} />);
+        let decision!: Promise<void>;
+        try {
+            await waitForHomeGovernance(() => expect(screen.findAllByType(ApprovalDecisionBar)).toHaveLength(1));
+            await act(async () => { decision = screen.pressByTestIdAsync('approvals.approve'); });
+            await waitForHomeGovernance(() => expect(harness.requestsFor(TEAM_UPDATE_PATH)).toHaveLength(1));
+            await act(async () => { storage.setState({ endpointStatus: 'offline' }); });
+            expect(screen.findByTestId('approvals.home-unavailable')).not.toBeNull();
+            const bar = screen.findAllByType(ApprovalDecisionBar)[0];
+            if (bar) {
+                expect(bar.props.busy).toBe(false);
+                expect(bar.props.approve.disabled).toBe(true);
+                expect(bar.props.reject.disabled).toBe(true);
+                expect(bar.props.dismiss.disabled).toBe(true);
+            }
+            await act(async () => { respond(); await decision; });
+            await waitForHomeGovernance(() => expect(harness.artifacts(serverId).readPlainBody(artifactId)).toContain('"status":"executed"'));
+            expect(harness.requestsFor(TEAM_UPDATE_PATH)).toHaveLength(1);
+        } finally {
+            respond();
+            await screen.unmount();
+            storage.setState(previous, true);
+            publishAppliedActiveServerSnapshot(applied, available);
+        }
+    });
+
+    it('restores Plans price retry after rejection and refreshes approved entry and removal', async () => {
+        const serverId = await addApprovalHome();
+        await harness.requireUiApproval(serverId, 'connectedServices.subscription.price.set');
+        const previous = storage.getState();
+        const previousApplied = getAppliedActiveServerSnapshot();
+        const previousAvailable = isAppliedActiveServerRuntimeAvailable();
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        storage.setState({ profileScope: { serverId, accountId: ACCOUNT_ID }, profile: AccountProfileSchema.parse({ id: ACCOUNT_ID }) });
+        const account = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'personal' };
+        let profileAccountId = ACCOUNT_ID;
+        harness.answer(serverId, '/v1/account/profile', { select: () => ({ body: AccountProfileSchema.parse({ id: profileAccountId,
+            connectedAccountsV4: [{ ref: account, status: 'connected', authenticationModeId: 'oauth', configurationReady: true,
+                configurationRevision: null, revisionSemantics: 'legacy_unfenced', credentialRevision: null }] }) }) });
+        harness.answer(serverId, '/v1/account/entity-rows/connected-metadata/acknowledgements', {
+            body: { status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, entries: [] } } },
+        });
+        harness.answer(serverId, '/v1/account/encryption/currentness', { body: { mode: 'plain', version: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0,
+            recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } });
+        let revision = 1;
+        let record: import('@happier-dev/protocol/connect/connectedAccountPresentationRowsV1').ConnectedPresentationRecordV1 = { v: 1, entries: [] };
+        const path = '/v1/account/entity-rows/connected-metadata/presentation';
+        harness.answer(serverId, path, { select: () => ({ body: { status: 'present', revision, content: { t: 'plain', v: record } } }) });
+        harness.answer(serverId, `POST ${path}`, { select: raw => {
+            const input = ConnectedPresentationRowMutationV1Schema.parse(raw);
+            expect(input.expectedRevision).toBe(revision);
+            if (input.content?.t !== 'plain') throw new Error('Expected keyless price metadata');
+            record = input.content.v;
+            revision += 1;
+            return { body: { status: 'updated', revision, cursor: revision } };
+        } });
+        const now = Date.now();
+        const recordKey = { providerId: 'openai', accountSubjectId: account.accountId, subjectKind: 'account', quotaScope: 'account' } as const;
+        const projectedAccount = () => projectUsagePlans([ConnectedServiceQuotaGetResultV1Schema.parse({
+            source: { ref: account, bindingKind: 'account' },
+            current: { v: 1, recordKey, recordId: buildProviderAccountUsageRecordId(recordKey), providerId: 'openai',
+                accountSubject: { kind: 'providerSubject', id: account.accountId }, observedAtMs: now, fetchedAtMs: now,
+                staleAfterMs: 3_600_000, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data', meters: [],
+                subscription: { status: 'unavailable', renewal: 'unknown', observedAtMs: now, staleAfterMs: 3_600_000,
+                    enteredMonthlyPrice: readConnectedSubscriptionMonthlyPriceV1(record, account) } },
+            pace: [], targets: [], waitingWork: { status: 'unavailable', reason: 'unsupported' },
+        })], now).accounts[0]!;
+        const refreshed = vi.fn();
+        function Editor() {
+            const [, refresh] = React.useReducer(value => value + 1, 0);
+            return <UsageSubscriptionPriceEditor account={projectedAccount()} serverId={serverId} testID="price"
+                onSettled={() => { refreshed(); refresh(); }} />;
+        }
+        const screen = await renderScreen(<Editor />);
+        const { FieldTextInput } = await import('@/components/ui/forms/FieldTextInput');
+        const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
+        const save = () => screen.findAllByType(RoundButton).find(node => node.props.testID === 'price.save')!;
+        const field = (name: 'amount' | 'currency') => screen.findAllByType(FieldTextInput).find(node => node.props.testID === `price.${name}`)!;
+        const edit = async (amount: string, currency: string) => {
+            await act(async () => { field('amount').props.onChangeText(amount); field('currency').props.onChangeText(currency); });
+        };
+        let release = () => {};
+        try {
+            expect(screen.findByTestId('price.amount')).toBeNull();
+            await screen.pressByTestIdAsync('price-header');
+            expect(save().props.disabled).toBe(true);
+            await edit('-1', 'EUR');
+            expect(save().props.disabled).toBe(true);
+            await edit('17', 'eur');
+            expect(save().props.disabled).toBe(false);
+            // The rendered entry point runs the real front door; UI custody is deferred despite required-result metadata.
+            await screen.pressByTestIdAsync('price.save');
+            await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
+            expect(save().props.disabled).toBe(true);
+            expect(record.entries).toEqual([]);
+            const rejectedId = harness.artifacts(serverId).list().at(-1)!.id;
+            await expect(decideApprovalAsInbox(serverId, rejectedId, 'reject')).resolves.toMatchObject({ ok: true });
+            await waitForHomeGovernance(() => expect(save().props.disabled).toBe(false));
+            expect(screen.findAllByProps({ accessibilityRole: 'alert' }).length).toBeGreaterThan(0);
+            await screen.pressByTestIdAsync('price.save');
+            await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(2));
+            const acceptedId = harness.artifacts(serverId).list().at(-1)!.id;
+            const accepted = await decideApprovalAsInbox(serverId, acceptedId, 'approve');
+            expect(accepted, JSON.stringify(accepted)).toMatchObject({ ok: true, result: { status: 'executed' } });
+            await waitForHomeGovernance(() => expect(save().props.disabled).toBe(false));
+            expect(refreshed).toHaveBeenCalledTimes(1);
+            expect(record.entries).toMatchObject([{ subject: { kind: 'account', account }, subscriptionMonthlyPrice: { amount: 17, currency: 'EUR' } }]);
+            await screen.pressByTestIdAsync('price.clear');
+            await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(3));
+            const clearedId = harness.artifacts(serverId).list().at(-1)!.id;
+            await expect(decideApprovalAsInbox(serverId, clearedId, 'approve')).resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+            await waitForHomeGovernance(() => expect(refreshed).toHaveBeenCalledTimes(2));
+            expect(record.entries).toEqual([]);
+            const reply = new Promise<void>(resolve => { release = resolve; });
+            let committed = false;
+            harness.answer(serverId, `POST ${path}`, { select: raw => {
+                const mutation = ConnectedPresentationRowMutationV1Schema.parse(raw);
+                if (mutation.content?.t !== 'plain') throw new Error('Expected keyless price metadata');
+                record = mutation.content.v; revision += 1; committed = true;
+                return { body: { status: 'updated', revision, cursor: revision }, respondAfter: reply };
+            } });
+            await edit('17', 'EUR');
+            await screen.pressByTestIdAsync('price.save');
+            await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(4));
+            const oldAccountId = harness.artifacts(serverId).list().at(-1)!.id;
+            // Keep the genuine HTTP reply open without keeping React's async act scope open around it.
+            const deciding = createDefaultActionExecutor({ resolveServerIdForSessionId: () => null }).execute(
+                'approval.request.decide', { artifactId: oldAccountId, decision: 'approve' }, { surface: 'ui', serverId });
+            await waitForHomeGovernance(() => expect(committed).toBe(true));
+            await harness.switchAccount(serverId, 'account-b');
+            await harness.requireUiApproval(serverId, 'connectedServices.subscription.price.set');
+            profileAccountId = 'account-b';
+            act(() => storage.setState({ profileScope: { serverId, accountId: 'account-b' }, profile: AccountProfileSchema.parse({ id: 'account-b' }) }));
+            expect(field('amount').props.value).toBe('');
+            expect(field('currency').props.value).toBe('');
+            release();
+            await act(async () => { await deciding; });
+            // The old Account committed its own write; its late reply must not refresh the new editor.
+            expect(refreshed).toHaveBeenCalledTimes(2);
+            // The same mounted editor is immediately usable under its new Account, not stuck pending.
+            record = { v: 1, entries: [] }; revision = 1;
+            const previousApprovals = harness.artifacts(serverId).list().length;
+            await edit('23', 'USD');
+            expect(save().props.disabled).toBe(false);
+            await screen.pressByTestIdAsync('price.save');
+            await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(previousApprovals + 1));
+            expect(save().props.disabled).toBe(true);
+            const newAccountApprovalId = harness.artifacts(serverId).list().at(-1)!.id;
+            await expect(decideApprovalAsInbox(serverId, newAccountApprovalId, 'approve')).resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+            await waitForHomeGovernance(() => expect(refreshed).toHaveBeenCalledTimes(3));
+            expect(save().props.disabled).toBe(false);
+            expect(record.entries).toMatchObject([{ subject: { kind: 'account', account }, subscriptionMonthlyPrice: { amount: 23, currency: 'USD' } }]);
+        } finally {
+            release();
+            await act(async () => screen.unmount());
+            storage.setState({ profileScope: previous.profileScope, profile: previous.profile });
+            publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
+        }
+    });
+
+    it('restores Coach digest retry after Inbox rejection and consumes its approved Automation receipt', async () => {
+        const serverId = await addApprovalHome();
+        await harness.requireUiApproval(serverId, 'workflow.trigger.add');
+        const rows = new Map<string, ReturnType<typeof AutomationDefinitionDetailSchema.parse>>();
+        harness.answer(serverId, '/v1/account/encryption/currentness', { body: { mode: 'plain', version: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0,
+            recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } });
+        harness.answer(serverId, '/v3/automations', { body: { automations: [], nextCursor: null } });
+        // Stateful HTTP persistence is the external Automation boundary. The actual
+        // trigger owner admits, serializes and reads its own template and receipt.
+        harness.answer(serverId, 'POST /v3/automations', { select: (raw) => {
+            const input = AutomationDefinitionCreateRequestSchema.parse(raw);
+            const row = AutomationDefinitionDetailSchema.parse({ id: input.automationId, name: input.name,
+                description: input.description ?? null, enabled: input.enabled,
+                workflowDefinitionId: input.workflowDefinitionId ?? null, scopeSessionId: input.scopeSessionId ?? null,
+                targetType: null, existingSessionId: null, templateVersion: 1, lastRunAt: null, createdAt: 1, updatedAt: 1,
+                assignments: (input.assignments ?? []).map((value) => ({ machineId: value.machineId,
+                    enabled: value.enabled ?? true, priority: value.priority ?? 0, updatedAt: 1 })),
+                triggers: input.triggers.map((value) => ({ ...value.trigger, id: value.triggerId, revision: 0,
+                    createdAt: 1, updatedAt: 1, nextRunAt: 2, triggerDefinitionEnvelope: null })),
+                ...(input.executionRecipe ? { executionRecipe: input.executionRecipe } : {}) });
+            rows.set(row.id, row);
+            harness.answer(serverId, `/v3/automations/${row.id}`, { body: row });
+            return { body: row };
+        } });
+        const account = await captureLazyActionAccountContext(serverId);
+        const hook = await renderContinuation(serverId);
+        const controller = createUsageCoachController({ lifetime: account.accountLifetime,
+            executor: createDefaultActionExecutor({ resolveServerIdForSessionId: () => null }),
+            onApproval: hook.getCurrent().requestApproval });
+        const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+        const suggestion = resolveUsagePageAggregation({ queries: [query] }).results[0]!.coach!.digestSuggestion!;
+        const project = { machineId: 'machine-a', directory: '/repo' };
+        const trigger = { kind: 'schedule' as const, enabled: true,
+            schedule: { kind: 'interval' as const, scheduleExpr: null, everyMs: 60_000, timezone: null } };
+        try {
+            expect(rows.size).toBe(0);
+            await act(async () => { await controller.createDigest(suggestion, project, trigger); });
+            const rejectedId = controller.getSnapshot().approval!.request.artifactId;
+            expect(hook.getCurrent().approvalId).toBe(rejectedId);
+            expect(rows.size).toBe(0);
+            await expect(decideApprovalAsInbox(serverId, rejectedId, 'reject')).resolves.toMatchObject({ ok: true });
+            await waitForHomeGovernance(() => expect(controller.getSnapshot()).toMatchObject({
+                pending: [], approval: null, digest: null, error: { failure: { errorCode: 'approval_rejected' } } }));
+            expect(rows.size).toBe(0);
+            await act(async () => { await controller.createDigest(suggestion, project, trigger); });
+            const approvedId = controller.getSnapshot().approval!.request.artifactId;
+            expect(approvedId).not.toBe(rejectedId);
+            await waitForHomeGovernance(() => expect(hook.getCurrent().approvalId).toBe(approvedId));
+            await expect(decideApprovalAsInbox(serverId, approvedId, 'approve')).resolves.toMatchObject({
+                ok: true, result: { status: 'executed' } });
+            await waitForHomeGovernance(() => expect(controller.getSnapshot()).toMatchObject({
+                pending: [], approval: null, error: null, digest: { queryKey: suggestion.queryKey } }));
+            const receipt = controller.getSnapshot().digest!;
+            expect(rows.get(receipt.result.set.automationId)).toMatchObject({ enabled: true,
+                assignments: [{ machineId: project.machineId }], triggers: [{ kind: 'schedule', enabled: true }] });
+        } finally { controller.dispose(); account.dispose(); await hook.unmount(); }
+    });
 
     it('claims and clears an executed result before delivering it exactly once', async () => {
         const serverId = await addApprovalHome();

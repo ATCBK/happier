@@ -232,7 +232,7 @@ describe('confidential approval human continuation', () => {
             source: { isDataReady: true, sessionsById: {}, sessionListRowsByServerId: {},
                 ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
             openApprovals: [artifact], openUsageNotices: [], friendRequests: [],
-            sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [] },
+            sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] },
             targetBySessionAddress: new Map(), actionOperationEntries: [], pendingReadKeys: new Set(),
             markAllPending: false, isLoading: false, hasPrimaryAttention: true, hasContent: true, showCaughtUp: false,
             workGroups: [], spansHomes: false, workflowAttention: EMPTY_WORKFLOW_ATTENTION_SOURCE,
