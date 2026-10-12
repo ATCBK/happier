@@ -4,6 +4,7 @@ import {
   installChromiumForTesting,
   resolveInstalledChromiumForTestingExecutable,
 } from './chromiumForTesting';
+import type { RuntimeInstallableInstallErrorCode } from '../registry';
 
 /**
  * Archive-download installable adapter for the managed Chrome-for-Testing browser source (MCH-2).
@@ -26,7 +27,7 @@ export type BrowserChromiumInstallableKey = typeof BROWSER_CHROMIUM_INSTALLABLE_
 
 export type ArchiveDownloadInstallResult =
   | Readonly<{ ok: true; executablePath: string; pinnedVersion: string; integrityDigest: string }>
-  | Readonly<{ ok: false; errorMessage: string }>;
+  | Readonly<{ ok: false; errorMessage: string; errorCode?: RuntimeInstallableInstallErrorCode }>;
 
 export type ArchiveDownloadInstallableAdapter = Readonly<{
   key: string;

@@ -14,6 +14,7 @@ import {
   selectManagedDependencyReleaseAsset,
 } from '@happier-dev/cli-common/agents';
 import { extractReleasePayloadRootFromArchive } from '@happier-dev/cli-common/firstPartyRuntime';
+import { removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 import { ExecFileTerminationError, resolveWindowsCommandOnPath } from '@happier-dev/cli-common/process';
 import { fetchGitHubLatestRelease } from '@happier-dev/release-runtime/github';
 import { ArchiveExtractionTimeoutError } from '@happier-dev/release-runtime/archiveExtraction';
@@ -312,7 +313,7 @@ async function installGitHubReleaseBinary(
       }, options.env);
       return { ok: true, logPath };
     } finally {
-      await rm(scratchDir, { recursive: true, force: true });
+      await removeHappierTempDirAsync(scratchDir);
     }
   } catch (error) {
     if (error instanceof ExecFileTerminationError) throw error;

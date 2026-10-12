@@ -93,6 +93,15 @@ function currentRoot(installId: string, env?: NodeJS.ProcessEnv): string {
   return join(installRoot(installId, env), 'current');
 }
 
+/** Replacement guards observe physical current bytes, including an older pin or damaged receipt. */
+export async function hasPinnedArchiveManagedInstall(params: Readonly<{ installId: string; env?: NodeJS.ProcessEnv }>): Promise<boolean> {
+  try { await access(currentRoot(params.installId, params.env)); return true; }
+  catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 function safeExecutablePath(root: string, executableSubpath: string): string | null {
   if (isAbsolute(executableSubpath)) return null;
   const candidate = join(root, executableSubpath);
@@ -203,6 +212,7 @@ export async function installPinnedArchive(params: Readonly<{
       signal: params.signal,
       installRoot: root,
       candidatePath: candidateDir,
+      preserveExistingCurrent: params.managedAcpDefinition !== undefined,
       currentPath: currentRoot(params.installId, params.env),
     });
     const executablePath = safeExecutablePath(currentRoot(params.installId, params.env), params.asset.executableSubpath);
