@@ -1,16 +1,20 @@
 import type { SurfaceContext } from '@happier-dev/plugin-sdk/ui';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import type { ReactNode } from 'react';
 import { act } from 'react';
 import { describe, expect, it } from 'vitest';
 
 import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import { createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
+import type { PluginUiResourceSnapshot } from '../hostApi/resourceStore.js';
+import { usePluginResource } from '../hostApi/index.js';
 import { HappierInfoState, HappierInfoTile } from '../presentation/state/InfoState.js';
 import { HappierStatus } from '../presentation/status/Status.js';
 import type { PluginUiPresentationHost } from '../presentationHost/context.js';
 import { defineHappierScene, defineHappierSceneProp, type HappierSceneRenderRequest } from '../presentation/state/scenes.js';
 import { PluginUiProvider, PluginUiProviderInternal } from './PluginUiProvider.js';
 import { Button, EmptyState, ErrorState, FreshnessLine, LoadingState, Spinner, State, Status } from './index.js';
+import { SceneArt } from './State.js';
 
 /**
  * EU-7b, family `Spinner` / `LoadingState` / `EmptyState` / `ErrorState` /
@@ -35,7 +39,74 @@ function mountSurface(children: ReactNode, context?: SurfaceContext) {
   );
 }
 
+const INITIAL_RESOURCE = { freshness: 'unknown', pending: 'initial', subscription: 'unsupported' } as const satisfies PluginUiResourceSnapshot;
+const READY_RESOURCE = {
+  value: { contentType: 'text/plain', digest: `sha256:${'1'.repeat(64)}`, bytes: new TextEncoder().encode('Ready') },
+  freshness: 'fresh', pending: 'idle', subscription: 'unsupported',
+} as const satisfies PluginUiResourceSnapshot;
+const FAILED_RESOURCE = { freshness: 'unknown', pending: 'idle', subscription: 'unsupported', error: { message: 'Upstream refused the request' } } as const satisfies PluginUiResourceSnapshot;
+
 describe('plugin-ui resource state renders real React Native semantics', () => {
+  it('renders real Resource hook initial failure, retry and retained refresh failure', async () => {
+    const context = createSurfaceContext();
+    let available = false;
+    const hostApi = createHostApiStub(context, {
+      readResource: async () => {
+        if (!available) throw new PluginError({ code: 'unavailable', message: 'Machine offline' });
+        return READY_RESOURCE.value;
+      },
+    });
+    function Harness() {
+      const { resource, refresh } = usePluginResource('reviews');
+      return <State resource={resource} onRetry={refresh}>
+        {(content) => <span data-testid="hook-content">{new TextDecoder().decode(content.bytes)}</span>}
+      </State>;
+    }
+    const mount = mountThroughReactNativeWeb(<PluginUiProvider hostApi={hostApi} context={context}><Harness /></PluginUiProvider>);
+    try {
+      expect(mount.container.querySelector('[role="progressbar"]')).not.toBeNull();
+      await act(async () => {});
+      expect(mount.container.querySelector('[role="progressbar"]')).toBeNull();
+      expect(mount.container.querySelector('[data-testid="hook-content"]')).toBeNull();
+      available = true;
+      await act(async () => { mount.container.querySelector<HTMLElement>('[role="button"]')?.click(); });
+      expect(mount.container.querySelector('[data-testid="hook-content"]')?.textContent).toBe('Ready');
+      available = false;
+      // A consumer owns the refresh trigger; State renders the canonical resulting snapshot.
+      await mount.render(<PluginUiProvider hostApi={hostApi} context={context}><Harness /><Refresh /></PluginUiProvider>);
+      await act(async () => { mount.container.querySelector<HTMLElement>('[data-testid="refresh-resource"]')?.click(); });
+      expect(mount.container.querySelector('[data-testid="hook-content"]')?.textContent).toBe('Ready');
+      expect(mount.container.textContent).toContain('Machine offline');
+    } finally { mount.unmount(); }
+    function Refresh() {
+      const { refresh } = usePluginResource('reviews');
+      return <Button title="Refresh" testID="refresh-resource" onPress={refresh} />;
+    }
+  });
+  it('retains admitted content through refresh, failure and graceful subscription completion', async () => {
+    const value = { contentType: 'text/plain', digest: 'sha256:retained', bytes: new TextEncoder().encode('Last known reviews') };
+    const context = createSurfaceContext();
+    const render = (resource: PluginUiResourceSnapshot) => (
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <State resource={resource}>{(content) => <span data-testid="retained">{new TextDecoder().decode(content.bytes)}</span>}</State>
+      </PluginUiProvider>
+    );
+    const mount = mountThroughReactNativeWeb(render({ value, freshness: 'fresh', pending: 'idle', subscription: 'live' }));
+    try {
+      expect(mount.container.querySelector('[data-testid="retained"]')?.textContent).toBe('Last known reviews');
+      const retained = mount.container.querySelector('[data-testid="retained"]');
+      await mount.render(render({ value, freshness: 'stale', pending: 'refresh', subscription: 'reconnecting' }));
+      expect(mount.container.querySelector('[data-testid="retained"]')).toBe(retained);
+      expect(mount.container.querySelector('[aria-busy="true"]')).not.toBeNull();
+      await mount.render(render({ value, freshness: 'stale', pending: 'idle', subscription: 'reconnecting', error: { code: 'unavailable', message: 'Machine offline' } }));
+      expect(mount.container.querySelector('[data-testid="retained"]')).toBe(retained);
+      expect(mount.container.textContent).toContain('Machine offline');
+      expect(mount.container.querySelector('[role="progressbar"]')).toBeNull();
+      await mount.render(render({ value, freshness: 'fresh', pending: 'idle', subscription: 'ended' }));
+      expect(mount.container.querySelector('[data-testid="retained"]')).toBe(retained);
+      expect(mount.container.textContent).toBe('Last known reviews');
+    } finally { mount.unmount(); }
+  });
   it('honors explicit transition urgency on a compact failure line', () => {
     const mount = mountSurface(<ErrorState layout="line" title="Save failed" accessibilitySemantics="alert" />);
     const alert = mount.container.querySelector('[role="alert"]');
@@ -83,14 +154,9 @@ describe('plugin-ui resource state renders real React Native semantics', () => {
   });
 
   it('never emits a happier-plugin-* marker element for any resource status', () => {
-    for (const resource of [
-      { status: 'loading' },
-      { status: 'empty' },
-      { status: 'error', message: 'Upstream refused the request' },
-      { status: 'ready', value: 'Ready' },
-    ] as const) {
+    for (const resource of [INITIAL_RESOURCE, FAILED_RESOURCE, READY_RESOURCE]) {
       const mount = mountSurface(
-        <State resource={resource}>{(value: string) => <Spinner accessibilityLabel={value} />}</State>,
+        <State resource={resource}>{(value) => <Spinner accessibilityLabel={new TextDecoder().decode(value.bytes)} />}</State>,
       );
 
       expect(mount.container.innerHTML).not.toContain('happier-plugin-');
@@ -99,7 +165,7 @@ describe('plugin-ui resource state renders real React Native semantics', () => {
   });
 
   it('renders a real progressbar while the resource is loading', () => {
-    const mount = mountSurface(<State resource={{ status: 'loading' }} />);
+    const mount = mountSurface(<State resource={INITIAL_RESOURCE} />);
 
     const progressbar = mount.container.querySelector('[role="progressbar"]');
     expect(progressbar).not.toBeNull();
@@ -138,9 +204,9 @@ describe('plugin-ui resource state renders real React Native semantics', () => {
     });
     const mount = mountSurface(
       <>
-        <State resource={{ status: 'loading' }} />
-        <State resource={{ status: 'empty' }} />
-        <State resource={{ status: 'error' }} />
+        <State resource={INITIAL_RESOURCE} />
+        <State resource={READY_RESOURCE} isEmpty />
+        <State resource={FAILED_RESOURCE} />
       </>,
       context,
     );
@@ -197,6 +263,37 @@ describe('plugin-ui resource state renders real React Native semantics', () => {
     expect(status?.querySelector('[role="img"]')).toBeNull();
 
     mount.unmount();
+  });
+
+  it('carries a second quiet line and the next action in one notice, so no banner has to repeat the reason', () => {
+    const mount = mountSurface(
+      <Status
+        tone="warning" label="Showing the list from 10:42" value="Could not be reached just now."
+        action={<Button title="Retry" onPress={() => undefined} testID="retry" />} testID="offline-status"
+      />,
+    );
+    const status = mount.container.querySelector('[data-testid="offline-status"]')!;
+    expect(status.textContent).toContain('Showing the list from 10:42');
+    expect(status.textContent).toContain('Could not be reached just now.');
+    expect(mount.container.querySelector('[data-testid="retry"]')).not.toBeNull();
+    mount.unmount();
+  });
+
+  it('keeps inline collection states readable without announcing each cell', async () => {
+    const content = (label: string) => <Status tone="warning" label={label} presentation="inline" testID="cell-status" />;
+    const mount = mountSurface(content('Checks pending'));
+    try {
+      const cell = mount.container.querySelector<HTMLElement>('[data-testid="cell-status"]');
+      expect(cell?.textContent).toBe('Checks pending');
+      expect(cell?.getAttribute('role')).toBeNull();
+      expect(cell?.getAttribute('aria-live')).toBeNull();
+      expect(cell?.querySelector('[role="status"], [aria-live]')).toBeNull();
+      await mount.render(<PluginUiProvider hostApi={createHostApiStub(createSurfaceContext())} context={createSurfaceContext()}>
+        {content('Checks passed')}
+      </PluginUiProvider>);
+      expect(cell?.textContent).toBe('Checks passed');
+      expect(cell?.querySelector('[role="img"]')).toBeNull();
+    } finally { mount.unmount(); }
   });
 
   it('speaks a composed status meaning once when the shared owner is given one', () => {
@@ -270,7 +367,7 @@ describe('plugin-ui resource state renders real React Native semantics', () => {
       },
     });
     const mount = mountSurface(
-      <State resource={{ status: 'error', code: 'provider_response_invalid', message: 'provider_response_invalid' }} />,
+      <State resource={{ ...FAILED_RESOURCE, error: { code: 'provider_response_invalid', message: 'provider_response_invalid' } }} />,
       context,
     );
 
@@ -340,7 +437,8 @@ describe('plugin-ui resource state renders real React Native semantics', () => {
   it('renders the empty state title and description as real text', () => {
     const mount = mountSurface(
       <State
-        resource={{ status: 'empty' }}
+        resource={READY_RESOURCE}
+        isEmpty
         empty={<EmptyState title="No findings" description="This project is clean." />}
       />,
     );
@@ -398,6 +496,21 @@ function mountInHost(children: ReactNode, host: Partial<PluginUiPresentationHost
 }
 
 describe('plugin states take the container they are mounted in (lab 5 host primitives)', () => {
+  it('offers standalone scene art through the same host scene renderer', () => {
+    expect(typeof SceneArt).toBe('function');
+    const requests: HappierSceneRenderRequest[] = [];
+    const mount = mountInHost(<SceneArt scene="noMatch" size="thumb" still testID="standalone-art" />, {
+      renderScene: (request) => {
+        requests.push(request);
+        return <span data-testid={request.testID}>{request.scene.name}</span>;
+      },
+    });
+    try {
+      expect(mount.container.querySelector('[data-testid="standalone-art"]')?.textContent).toBe('noMatch');
+      expect(requests.at(-1)).toMatchObject({ size: 'thumb', still: true });
+      expect(requests.at(-1)?.scene.layers.length).toBeGreaterThan(0);
+    } finally { mount.unmount(); }
+  });
   it('offers a quiet second way under the empty state\'s one primary action', () => {
     const mount = mountSurface(
       <EmptyState

@@ -8,6 +8,8 @@ import * as componentsEntry from './components/index.js';
 import * as hostApiEntry from './hostApi/index.js';
 import * as rootEntry from './index.js';
 import * as testingEntry from './testing/index.js';
+import * as chartEntry from '@happier-dev/plugin-ui/components';
+import { renderSurface as renderChartFamily } from '../fixtures/external-authoring/src/chartFamilySurface.js';
 import { HappierDisclosure, HappierPressable, HAPPIER_INSTANT_DISCLOSURE_MOTION, useHappierCollection } from './presentation/index.js';
 
 const publicItems = [{ id: 'entry', title: 'Public entry' }];
@@ -48,6 +50,70 @@ function PublicControls({ store }: { store: rootEntry.ListMultiSelectionStore })
 }
 
 describe('curated plugin-ui public API', () => {
+  it('renders the complete public chart author fixture and preserves keyboard selection and exact accessible facts', async () => {
+    expect(chartEntry).toEqual(expect.objectContaining({
+      Treemap: expect.any(Function), Sunburst: expect.any(Function),
+      StackedSeriesChart: expect.any(Function), CapacityBar: expect.any(Function),
+      CoreLoadBars: expect.any(Function), HappierStateLine: expect.any(Function),
+      layoutHappierTreemap: expect.any(Function), squarifyHappierTreemap: expect.any(Function),
+      createHappierTreemapHitGrid: expect.any(Function),
+      layoutHappierSunburst: expect.any(Function), hitHappierSunburst: expect.any(Function),
+    }));
+    const page = await createPluginUiTestkit({ identity: { instanceId: 'public-charts', mountNonce: 'public' },
+      authorPlugin: { id: 'example.chart-family', version: '0.0.0' }, surfaceContext: createSurfaceContextFixture(),
+      adapter: testingEntry.createPluginUiRnwSemanticSurfaceAdapter(), surface: renderChartFamily });
+    try {
+      for (const [id, label] of [['author-treemap', 'Storage map'], ['author-sunburst', 'Storage rings'],
+        ['author-capacity', 'Storage in use, 100 GB / 200 GB'], ['author-cores', 'CPU cores']] as const) {
+        expect(document.querySelector(`[data-testid="${id}"]`)?.getAttribute('aria-label')).toBe(label);
+      }
+      expect(document.querySelector('[data-testid="author-series"]')).not.toBeNull();
+      await expect(page.getByText('CPU rose from 20 to 40 percent')).resolves.toBeDefined();
+      expect(document.querySelector('[data-testid="author-cores-core-0"]')?.getAttribute('aria-label')).toBe('Core 1, 40% in use');
+      expect(document.querySelector('[data-testid="author-cores-core-1"]')?.getAttribute('aria-label')).toBe('Core 2, not reported');
+      expect(document.querySelector('[data-testid="author-state-line"]')?.getAttribute('aria-live')).toBe('polite');
+      await act(async () => {
+        await page.press(await page.getByRole('button', { name: 'Open Archives, 40 GB' }));
+      });
+      await expect(page.getByText('Opened List: archives')).resolves.toBeDefined();
+      await act(async () => {
+        await page.press(await page.getByRole('button', { name: 'Details' }));
+      });
+      expect(document.querySelector('[data-testid="author-series-values-row-0"]')?.getAttribute('aria-label')).toContain('CPU: 20');
+      expect(document.querySelector('[data-testid="author-series-values-row-1"]')?.getAttribute('aria-label')).toContain('CPU: 40');
+      for (const [id, opened] of [['author-treemap', 'Map: projects'], ['author-sunburst', 'Rings: projects']] as const) {
+        const chart = document.querySelector(`[data-testid="${id}"]`)!;
+        await act(async () => {
+          chart.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+        });
+        await act(async () => {
+          chart.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        });
+        await expect(page.getByText(`Opened ${opened}`)).resolves.toBeDefined();
+      }
+    } finally { await page.dispose(); }
+  });
+
+  it('uses the public geometry helpers for matching layout and hit testing', () => {
+    const nodes = [{ key: 'projects', value: 60 }, { key: 'archives', value: 40 }];
+    const size = { width: 400, height: 240 };
+    const { tiles } = chartEntry.layoutHappierTreemap(nodes, { ...size, minNodePx: { width: 56, height: 20 } });
+    const tile = tiles.find((entry) => entry.key === 'projects')!;
+    const hit = chartEntry.createHappierTreemapHitGrid(tiles, size);
+    expect(hit(tile.rect.x + tile.rect.width / 2, tile.rect.y + tile.rect.height / 2)).toBe('projects');
+    expect(hit(-1, 0)).toBeNull();
+    const rectangles = chartEntry.squarifyHappierTreemap(nodes, { x: 0, y: 0, ...size });
+    expect(rectangles.reduce((area, entry) => area + entry.rect.width * entry.rect.height, 0)).toBeCloseTo(size.width * size.height);
+    const rings = [{ inner: 20, outer: 100 }];
+    const { arcs } = chartEntry.layoutHappierSunburst(nodes, { rings, minArcPx: 1 });
+    const arc = arcs.find((entry) => entry.key === 'projects')!;
+    const angle = (arc.a0 + arc.a1) / 2;
+    expect(chartEntry.hitHappierSunburst(arcs, rings, { cx: 0, cy: 0 }, Math.sin(angle) * 60, -Math.cos(angle) * 60)).toBe('projects');
+    expect(chartEntry.hitHappierSunburst(arcs, rings, { cx: 0, cy: 0 }, 0, 0)).toBeNull();
+    expect(chartEntry.layoutHappierTreemap([], { ...size, minNodePx: { width: 56, height: 20 } }).tiles).toEqual([]);
+    expect(chartEntry.layoutHappierSunburst([], { rings, minArcPx: 1 }).arcs).toEqual([]);
+  });
+
   it('composes the public timeline, feedback and approval anatomy with inline status', async () => {
     const page = await createPluginUiTestkit({ identity: { instanceId: 'public-story', mountNonce: 'public' },
       authorPlugin: { id: 'example.public-api', version: '0.0.0' }, surfaceContext: createSurfaceContextFixture(),
@@ -127,7 +193,7 @@ describe('curated plugin-ui public API', () => {
 
     for (const entry of [rootEntry, componentsEntry]) {
       expect(entry).toEqual(expect.objectContaining({
-        Collection: expect.any(Function), BrandMark: expect.any(Function),
+        Collection: expect.any(Function), BrandMark: expect.any(Function), DetailsPaneFooter: expect.any(Function),
         Step: expect.any(Function), Tabs: expect.any(Function),
         createListMultiSelectionStore: expect.any(Function), useListMultiSelectionController: expect.any(Function),
         ListMultiSelectionProvider: expect.any(Function), useOptionalListMultiSelectionStore: expect.any(Function),

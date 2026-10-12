@@ -160,7 +160,11 @@ export type HappierUiLocalization = Readonly<{
    * never to the raw key — so a missing translation degrades to author-supplied
    * text instead of rendering `plugin.some.key` at the user.
    */
-  translate: (key: string, fallback?: string) => string;
+  translate: (
+    key: string,
+    fallback?: string,
+    values?: Readonly<Record<string, string | number>>,
+  ) => string;
 }>;
 
 /**

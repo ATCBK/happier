@@ -4,12 +4,12 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
-import { View, type ViewStyle } from 'react-native';
+import { View } from 'react-native';
 
 import { resolveHappierIconSize } from '../content/Icon.js';
 import { happierFocusRingStyle } from '../interaction/focusVisible.js';
 import { HappierPressable } from '../interaction/Pressable.js';
-import type { HappierStyleProp } from '../portableTypes.js';
+import type { HappierPortableStyle, HappierStyleProp } from '../portableTypes.js';
 
 /** One line of the row's text; the host draws it on a single line (`numberOfLines={1}`). */
 export type HappierWidgetGlanceRowTextProps = Readonly<{
@@ -154,31 +154,31 @@ export const HappierWidgetGlanceRow = memo(function HappierWidgetGlanceRow(
   );
 });
 
-const itemRowStyle: ViewStyle = {
+const itemRowStyle = {
   minHeight: 40,
   flexDirection: 'row',
   alignItems: 'center',
   minWidth: 0,
-};
-const factRowStyle: ViewStyle = {
+} satisfies HappierPortableStyle;
+const factRowStyle = {
   minHeight: 28,
   flexDirection: 'row',
   alignItems: 'center',
   minWidth: 0,
-};
+} satisfies HappierPortableStyle;
 // The hover wash reaches past the text to the frame's inset; the text keeps its column.
-const pressableStyle: ViewStyle = { marginHorizontal: -8, borderRadius: 8 };
-const dimmedStyle: ViewStyle = { opacity: 0.6 };
-const markStyle: ViewStyle = {
+const pressableStyle = { marginHorizontal: -8, borderRadius: 8 } satisfies HappierPortableStyle;
+const dimmedStyle = { opacity: 0.6 } satisfies HappierPortableStyle;
+const markStyle = {
   width: MARK_BOX,
   alignItems: 'center',
   justifyContent: 'center',
-};
-const textColumnStyle: ViewStyle = { flex: 1, minWidth: 0 };
-const titleLineStyle: ViewStyle = {
+} satisfies HappierPortableStyle;
+const textColumnStyle = { flex: 1, minWidth: 0 } satisfies HappierPortableStyle;
+const titleLineStyle = {
   flexDirection: 'row',
   alignItems: 'center',
   minWidth: 0,
-};
+} satisfies HappierPortableStyle;
 const shrinkingTextStyle = { flexShrink: 1, minWidth: 0 } as const;
 const fixedTextStyle = { flexShrink: 0 } as const;

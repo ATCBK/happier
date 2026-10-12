@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { isRecord } from '@happier-dev/plugin-sdk';
+import type { RenderContext } from '@happier-dev/plugin-sdk/ui';
 import {
   Button,
   Collection,
@@ -6,9 +8,13 @@ import {
   type ComposerHandle,
   defineUiSurface,
   Divider,
+  ErrorState,
   Form,
+  Item,
+  ItemGroup,
   List,
   Select,
+  Stack,
   Status,
   Tabs,
   Text,
@@ -23,11 +29,11 @@ import {
   WidgetFrame,
 } from '@happier-dev/plugin-ui';
 import { useHappierUiAccessibility, useHappierUiLocalization } from '@happier-dev/plugin-ui/environment';
-import { FloatingFrame as AuthorFloatingFrame } from '@happier-dev/plugin-ui/components';
+import { CountedDisclosureItem, FloatingFrame as AuthorFloatingFrame } from '@happier-dev/plugin-ui/components';
 import {
-  FloatingFrame, HappierStack, HappierText, resolveFloatingFrameRect, resolveHappierTreeFocusKey,
+  HappierFloatingFrame as FloatingFrame, HappierStack, HappierText, resolveFloatingFrameRect, resolveHappierTreeFocusKey,
   useHappierCollection, type FrameRect, type HappierTreeNode,
-} from '@happier-dev/plugin-ui/presentation';
+} from '@happier-dev/plugin-ui/components';
 
 const externalReviews = Object.freeze([
   Object.freeze({ id: 'current', title: 'Current review' }),
@@ -260,6 +266,9 @@ function ExternalAuthoringSemanticSurface() {
         }}
         renderItem={(review) => <List.Item title={review.title} />}
       />
+      <CountedDisclosureItem title="Older reviews" count={externalReviews.length - 1} testID="external-older-reviews">
+        {externalReviews.slice(1).map((review) => <Item key={review.id} title={review.title} />)}
+      </CountedDisclosureItem>
       <WidgetFrame
         frameStyle="card"
         placement="board"
@@ -300,17 +309,26 @@ function ExternalAuthoringSemanticSurface() {
         onChange={() => undefined}
         onSubmit={() => undefined}
       />
-      <Select
-        label="External review filter"
-        options={[
-          { value: 'current', label: 'Current review' },
-          { value: 'all', label: 'All reviews' },
-        ]}
-        value={reviewScope}
-        onChange={(next) => {
-          if (next === 'current' || next === 'all') setReviewScope(next);
-        }}
-      />
+      <ItemGroup title="External review scope">
+        <Item
+          title="External review filter"
+          accessoryWraps
+          fieldAccessory
+          accessoryOutsidePressable
+          accessory={<Select
+            presentation="field"
+            label="External review filter"
+            options={[
+              { value: 'current', label: 'Current review' },
+              { value: 'all', label: 'All reviews' },
+            ]}
+            value={reviewScope}
+            onChange={(next) => {
+              if (next === 'current' || next === 'all') setReviewScope(next);
+            }}
+          />}
+        />
+      </ItemGroup>
       <Tabs
         value={reviewSection}
         onValueChange={(next) => {
@@ -348,6 +366,34 @@ function ExternalAuthoringSemanticSurface() {
   );
 }
 
+/** Displays only host-admitted inputs; input eligibility and layout storage remain host-owned. */
+function ExternalProjectSurface({ launchInput }: RenderContext) {
+  const { target } = useSurfaceContext();
+  const checkout = isRecord(launchInput) && isRecord(launchInput.checkout) ? launchInput.checkout : null;
+  if ((target.kind !== 'app' && target.kind !== 'project') || !checkout
+    || typeof checkout.projectKey !== 'string'
+    || typeof checkout.serverId !== 'string' || typeof checkout.machineId !== 'string'
+    || typeof checkout.rootPath !== 'string') {
+    return <ErrorState layout="line" title="This checkout is unavailable" />;
+  }
+  const source = isRecord(launchInput) && isRecord(launchInput.source) ? launchInput.source : null;
+  return (
+    <Stack gap="small">
+      <Text value={`Project ${target.kind === 'project' ? target.projectId : checkout.projectKey}`} />
+      <Text value={`${checkout.serverId} · ${checkout.machineId} · ${checkout.rootPath}`} tone="secondary" />
+      {source && typeof source.sourceId === 'string' ? <Text value={`Source ${source.sourceId}`} /> : null}
+    </Stack>
+  );
+}
+
+function ExternalAuthoringSurface(context: RenderContext) {
+  const { target } = useSurfaceContext();
+  return target.kind === 'project' || (target.kind === 'app'
+    && isRecord(context.launchInput) && isRecord(context.launchInput.checkout))
+    ? <ExternalProjectSurface {...context} />
+    : <ExternalAuthoringSemanticSurface />;
+}
+
 export const renderExternalAuthoringSemanticSurface = defineUiSurface(
-  ExternalAuthoringSemanticSurface,
+  ExternalAuthoringSurface,
 );

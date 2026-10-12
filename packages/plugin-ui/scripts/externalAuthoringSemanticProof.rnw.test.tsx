@@ -78,6 +78,8 @@ describe('external author semantic proof', () => {
     expect(widget?.container).toBe('widget');
     expect(sourceWidget?.container).toBe('widget');
     expect(companion?.container).toBe('rightSidebarTab');
+    expect(widget?.target).toEqual({ kind: 'app' });
+    expect(sourceWidget?.target).toEqual({ kind: 'app' });
     if (!widget || !sourceWidget || !companion) throw new Error('Missing public Project contributions');
 
     const checkout = { id: 'checkout-review', serverId: 'home-review', machineId: 'machine-review',
@@ -134,7 +136,8 @@ describe('external author semantic proof', () => {
         identity: { instanceId: `project-${mount.kind}`, mountNonce: `project-${mount.kind}-mount` },
         authorPlugin: { id: externalAuthoringPlugin.manifest.id, version: externalAuthoringPlugin.manifest.version },
         surface: await loadExternalAuthoringSemanticSurface(mount.kind === 'embedded' ? widget.id : companion.id),
-        surfaceContext: createSurfaceContextFixture({ mount, target: { kind: 'project', projectId: checkout.projectKey } }),
+        surfaceContext: createSurfaceContextFixture({ mount, target: mount.kind === 'embedded'
+          ? { kind: 'app' } : { kind: 'project', projectId: checkout.projectKey } }),
         launchInput: admitted.result.input,
         adapter: createPluginUiRnwSemanticSurfaceAdapter(),
       });
@@ -163,7 +166,7 @@ describe('external author semantic proof', () => {
       identity: { instanceId: 'project-source', mountNonce: 'project-source-mount' },
       authorPlugin: { id: externalAuthoringPlugin.manifest.id, version: externalAuthoringPlugin.manifest.version },
       surface: await loadExternalAuthoringSemanticSurface(sourceWidget.id),
-      surfaceContext: createSurfaceContextFixture({ target: { kind: 'project', projectId: checkout.projectKey },
+      surfaceContext: createSurfaceContextFixture({ target: { kind: 'app' },
         mount: { kind: 'embedded', role: 'widget', presentation: 'content' } }),
       launchInput: sourceInput.result.input,
       adapter: createPluginUiRnwSemanticSurfaceAdapter(),

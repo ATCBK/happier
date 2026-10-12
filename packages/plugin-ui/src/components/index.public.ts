@@ -87,3 +87,35 @@ export {
   type WidgetPresentation,
   type WidgetPresentationProviderProps,
 } from './WidgetPresentation.js';
+
+// Neutral owners consumed by the migrated public author fixtures. The author
+// adapters above remain distinct from the shared controlled presentation.
+export {
+  FloatingFrame as HappierFloatingFrame,
+  type FloatingFrameProps as HappierFloatingFrameProps,
+} from '../presentation/layout/FloatingFrame.js';
+export { resolveFloatingFrameRect, type FrameRect } from '../presentation/layout/floatingFrameGeometry.js';
+export { HappierStack } from '../presentation/layout/Layout.js';
+export { HappierText } from '../presentation/text/Text.js';
+export { resolveHappierTreeFocusKey, type HappierTreeNode } from '../presentation/navigation/treeInteraction.js';
+export { useHappierCollection } from '../presentation/collection/useCollection.js';
+export type { HappierCollectionPresentation } from '../presentation/collection/collectionTable.js';
+export { HappierDisclosure } from '../presentation/collection/Disclosure.js';
+export { HAPPIER_INSTANT_DISCLOSURE_MOTION } from '../presentation/collection/collectionMotion.js';
+export { HappierPressable } from '../presentation/interaction/Pressable.js';
+export { HappierStateLine } from '../presentation/state/InfoState.js';
+export { StackedSeriesChart, type StackedSeriesBand } from '../presentation/data/StackedSeriesChart.js';
+export { Heatmap } from '../presentation/data/Heatmap.js';
+export { DotGrid } from '../presentation/data/DotGrid.js';
+export { IntervalTimeline } from '../presentation/data/IntervalTimeline.js';
+export { CapacityBar } from '../presentation/data/CapacityBar.js';
+export { BurnUpChart } from '../presentation/data/BurnUpChart.js';
+export { RankedRows } from '../presentation/data/RankedRows.js';
+export { CompositionStrip } from '../presentation/data/CompositionStrip.js';
+export { OutcomeScatter } from '../presentation/data/OutcomeScatter.js';
+export { OutcomeFunnel } from '../presentation/data/OutcomeFunnel.js';
+export { CoreLoadBars } from '../presentation/data/CoreLoadBars.js';
+export { Sunburst } from '../presentation/data/Sunburst.js';
+export { Treemap, type HappierChartPart } from '../presentation/data/Treemap.js';
+export { layoutHappierTreemap, squarifyHappierTreemap, createHappierTreemapHitGrid } from '../presentation/data/treemapLayout.js';
+export { layoutHappierSunburst, hitHappierSunburst } from '../presentation/data/sunburstLayout.js';

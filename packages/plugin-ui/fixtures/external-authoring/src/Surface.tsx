@@ -24,7 +24,8 @@ import {
 import {
   StackedSeriesChart, Heatmap, DotGrid, IntervalTimeline, CapacityBar,
   BurnUpChart, RankedRows, CompositionStrip, OutcomeScatter, OutcomeFunnel,
-} from '@happier-dev/plugin-ui/presentation';
+  type StackedSeriesBand,
+} from '@happier-dev/plugin-ui/components';
 
 const summary = { pluginId: 'example.plugin-ui', localId: 'summary' } as const;
 
@@ -64,6 +65,11 @@ function NeutralMeasurements() {
     { id: 'evening', x: 12, y: null, label: 'Evening', annotation: 'Not measured' },
   ] }];
   const rows = [{ id: 'north', label: 'North greenhouse', value: 21 }, { id: 'south', label: 'South greenhouse', value: null }];
+  const bounds = [
+    { id: 'low', label: 'Low reading', points: [{ id: 'morning', x: 0, y: 1 }, { id: 'noon', x: 6, y: 17 }] },
+    { id: 'high', label: 'High reading', points: [{ id: 'morning', x: 0, y: 3 }, { id: 'noon', x: 6, y: 21 }] },
+  ];
+  const bands = [{ id: 'readings', lowerSeriesId: 'low', upperSeriesId: 'high' }] satisfies readonly StackedSeriesBand[];
   const grid = { theme, label: 'Plant samples', rows: [{ id: 'plants', label: 'Plants' }],
     columns: [{ id: 'morning', label: 'Morning' }, { id: 'noon', label: 'Noon' }],
     cells: [{ id: 'dry', row: 'plants', column: 'morning', label: 'Morning moisture', value: 0 },
@@ -71,6 +77,7 @@ function NeutralMeasurements() {
   return <>
     <StackedSeriesChart theme={theme} label="Greenhouse temperature" series={series} variant="area" size="tile" />
     <BurnUpChart theme={theme} label="Water collected" series={series} size="tile" />
+    <BurnUpChart theme={theme} label="Greenhouse reading range" series={bounds} bands={bands} size="tile" />
     <Heatmap {...grid} size="tile" />
     <DotGrid {...grid} size="tile" />
     <IntervalTimeline theme={theme} label="Irrigation" domain={{ start: 0, end: 24 }}

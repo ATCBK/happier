@@ -24,7 +24,7 @@ import {
 } from '../environment/context.js';
 import { projectHappierUiEnvironment } from '../environment/projectEnvironment.js';
 import { HappierPageChromeProvider } from '../presentation/layout/pageChrome.js';
-import type { HappierUiAccessibility, HappierUiEnvironment } from '../environment/types.js';
+import type { HappierUiAccessibility, HappierUiEnvironment, HappierUiLocalization } from '../environment/types.js';
 import { PluginUiDataProviderInternal } from '../data/context.js';
 import type { PluginUiDataClient } from '../data/types.js';
 import { PluginHostApiProviderInternal } from '../hostApi/context.js';
@@ -314,13 +314,9 @@ export function usePluginTheme(): PluginUiThemeV1 {
   return useHappierUiTheme();
 }
 
-export type PluginTranslationValues = Readonly<Record<string, string | number>>;
+export type PluginTranslationValues = NonNullable<Parameters<HappierUiLocalization['translate']>[2]>;
 
-export type PluginTranslate = (
-  key: string,
-  fallback?: string,
-  values?: PluginTranslationValues,
-) => string;
+export type PluginTranslate = HappierUiLocalization['translate'];
 
 /**
  * Resolve one of this plugin's declared translation keys for the active locale.

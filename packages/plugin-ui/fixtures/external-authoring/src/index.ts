@@ -154,14 +154,14 @@ export const externalAuthoringPlugin = definePlugin({
       renderer: 'external-authoring-semantic-renderer',
     }, {
       id: 'external-project-checkout', title: 'Checkout identity', container: 'widget',
-      target: projectTarget, renderer: 'external-project-renderer',
+      target: { kind: 'app' }, renderer: 'external-project-renderer',
       sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
       inputs: { fields: [projectCheckoutInput] },
       inputSchema: { type: 'object', properties: { checkout: projectCheckoutSchema },
         required: ['checkout'], additionalProperties: false },
     }, {
       id: 'external-project-source', title: 'Repository source', container: 'widget',
-      target: projectTarget, renderer: 'external-project-renderer',
+      target: { kind: 'app' }, renderer: 'external-project-renderer',
       sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
       inputs: { fields: [projectCheckoutInput,
         { path: 'source', title: 'Saved repository source', widget: 'json', required: true }] },
@@ -172,9 +172,6 @@ export const externalAuthoringPlugin = definePlugin({
     }, {
       id: 'external-project-companion', title: 'Checkout identity', container: 'rightSidebarTab',
       target: projectTarget, renderer: 'external-project-renderer',
-      inputs: { fields: [projectCheckoutInput] },
-      inputSchema: { type: 'object', properties: { checkout: projectCheckoutSchema },
-        required: ['checkout'], additionalProperties: false },
     }],
     renderers: [{
       id: 'external-authoring-composer-renderer',
