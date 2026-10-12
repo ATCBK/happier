@@ -150,6 +150,15 @@ export const RepositoryCheckpointCommitEvidenceSchema = lazyZodSchema(() => z.ob
   checkpointRef: z.string().min(1),
   checkpointCommitSha: ScmCommitOidSchema,
   commitSha: ScmCommitOidSchema,
+  committedAtMs: z.number().int().nonnegative().optional(),
+  checkpointCommittedAtMs: z.number().int().nonnegative().optional(),
+  retainedChange: z.object({
+    targetSha: ScmCommitOidSchema,
+    method: z.literal('changed_file_tree_comparison'),
+    status: z.enum(['retained', 'partial']),
+    addedLines: z.number().int().nonnegative(),
+    removedLines: z.number().int().nonnegative(),
+  }).strict().optional(),
   attributionScope: RepositoryCheckpointTurnMetadataSchema.shape.attributionScope,
 }).strict());
 

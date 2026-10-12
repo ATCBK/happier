@@ -114,6 +114,17 @@ export type RepositoryCheckpointCommitEvidence = Readonly<{
   checkpointRef: string;
   checkpointCommitSha: string;
   commitSha: string;
+  /** Actual Git committer timestamps, not accounting observations or author dates. */
+  committedAtMs?: number;
+  checkpointCommittedAtMs?: number;
+  /** Counts only unchanged files from the witnessed before/after tree delta at targetSha. */
+  retainedChange?: Readonly<{
+    targetSha: string;
+    method: 'changed_file_tree_comparison';
+    status: 'retained' | 'partial';
+    addedLines: number;
+    removedLines: number;
+  }>;
   attributionScope: CheckpointAttributionScope;
 }>;
 
