@@ -14,6 +14,7 @@ import {
   ConnectedAccountRequestAuthLookupSuccessResponseV1Schema,
   getConnectedAccountRequestAuthErrorHttpStatusV1,
   ConnectedAccountAuthFailureRequestV1Schema,
+  ConnectedAccountConsumerFailureV1Schema,
   ConnectedAccountRequestAuthMaterializationV1Schema,
   ConnectedAccountQuotaFailureRequestV1Schema,
   ConnectedAccountRequestAuthLookupRequestV1Schema,
@@ -65,6 +66,14 @@ const credentialContext = {
 } as const;
 
 describe('private connected-account request-auth wire', () => {
+  it('distinguishes an insufficient-scope challenge from authentication failure', () => {
+    const failure = { class: 'insufficient_scope', requiredScopes: ['read', 'write'], evidence: {
+      httpStatus: 403, providerCode: 'insufficient_scope', limitCategory: 'validation_failed',
+      quotaScope: 'unknown', evidenceSource: { kind: 'structured' },
+    } };
+    expect(ConnectedAccountConsumerFailureV1Schema.parse(failure)).toEqual(failure);
+    expect(ConnectedAccountAuthFailureRequestV1Schema.safeParse({ credentialContext, normalizedFailure: failure }).success).toBe(false);
+  });
   it('owns strict HTTP envelopes, status mapping, and Go conformance vectors', () => {
     expect({
       capabilityHeader: CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_HEADER,

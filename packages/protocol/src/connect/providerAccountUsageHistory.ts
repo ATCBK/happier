@@ -1,12 +1,14 @@
 import type { z } from 'zod';
-import { ProviderAccountUsageSnapshotV1Schema } from './providerAccountUsagePrimitives.js';
+import { lazyZodSchema } from '../lazyZodSchema.js';
+import { serializeProviderAccountUsageSnapshotMaterialV1 } from './providerAccountUsagePrimitives.js';
+import { parseBuiltInLegacyProviderAccountUsageSnapshotV1 } from './legacyConnectedServiceCompatibility.js';
 export { ProviderAccountUsageHistoryCursorV1Schema, ProviderAccountUsageHistoryWitnessV1Schema } from './providerAccountUsagePrimitives.js';
 import { QualifiedProviderAccountUsageRecordResponseV4Schema } from './qualifiedConnectedAccountProjectionsV4.js';
-import { deriveProviderAccountUsagePace, deriveProviderAccountUsageUnusedCapacity } from './deriveProviderAccountUsagePace.js';
+import { deriveProviderAccountUsagePace, deriveProviderAccountUsageUnusedCapacity, resolveProviderAccountUsagePaceWindow } from './deriveProviderAccountUsagePace.js';
 import type { UsagePacingTargetsV1Schema } from '../account/settings/usagePacingPreferencesV1.js';
 import type { AccountScopedCryptoMaterial } from '../crypto/accountScopedCipher.js';
 import type { ProviderAccountUsageSnapshotV1 } from './providerAccountUsagePrimitives.js';
-import { openSealedProviderAccountUsageSnapshot } from './accountUsage.js';
+import { openProviderAccountUsageEncryptedContentV4 } from './accountUsage.js';
 import type { ProviderAccountSubscriptionMonthlyPriceV1 } from './accountSubscription.js';
 import {
   ConnectedServiceQuotaGetResultV1Schema, OpenedProviderAccountUsageHistoryPageV1Schema,
@@ -22,11 +24,60 @@ export {
   type ConnectedServiceQuotaGetInputV1, type ConnectedServiceQuotaGetResultV1,
   type ProviderAccountUsageWaitingWorkV1,
 } from './providerAccountUsageHistorySchemasV1.js';
-export function projectProviderAccountUsageQuotaReadV1(input: Readonly<{ input: ConnectedServiceQuotaGetInputV1; current: ProviderAccountUsageSnapshotV1 | null; history?: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>; nowMs: number; targets?: z.infer<typeof UsagePacingTargetsV1Schema>; waitingWork?: ProviderAccountUsageWaitingWorkV1 }>): ConnectedServiceQuotaGetResultV1 {
-  return ConnectedServiceQuotaGetResultV1Schema.parse({ source: input.input.source, current: input.current,
-    ...(input.history ? { history: input.history } : {}),
-    unusedCapacity: deriveProviderAccountUsageUnusedCapacity({ history: input.history?.entries.map(entry => entry.snapshot), partial: input.history?.nextCursor != null, nowMs: input.nowMs }),
-    pace: input.current?.meters.map(meter => ({ meterId: meter.meterId, value: deriveProviderAccountUsagePace({ snapshot: input.current!, meterId: meter.meterId, nowMs: input.nowMs, history: input.history?.entries.map(entry => entry.snapshot) }) })) ?? [], targets: input.targets ?? [], waitingWork: input.waitingWork ?? { status: 'unavailable', reason: 'read_failed' } });
+
+const QuotaReadProjectionFieldsSchema = lazyZodSchema(() =>
+  ConnectedServiceQuotaGetResultV1Schema.omit({ current: true, history: true }));
+
+export function projectProviderAccountUsageQuotaReadV1(input: Readonly<{ input: ConnectedServiceQuotaGetInputV1; current: ProviderAccountUsageSnapshotV1 | null; history?: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>; /** New page following an already coalesced prefix from this same read. */ appendHistory?: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>; nowMs: number; targets?: z.infer<typeof UsagePacingTargetsV1Schema>; waitingWork?: ProviderAccountUsageWaitingWorkV1; coalesceHistory?: boolean }>): ConnectedServiceQuotaGetResultV1 {
+  const history = input.appendHistory ? appendCoalescedHistory(input.history, input.appendHistory)
+    : input.history && input.coalesceHistory ? coalesceHistory(input.history) : input.history;
+  const snapshots = history?.entries.map(entry => entry.snapshot);
+  const projected = QuotaReadProjectionFieldsSchema.parse({ source: input.input.source,
+    unusedCapacity: deriveProviderAccountUsageUnusedCapacity({ history: snapshots, partial: history?.nextCursor != null, nowMs: input.nowMs }),
+    pace: input.current?.meters.map(meter => ({ meterId: meter.meterId, value: deriveProviderAccountUsagePace({ snapshot: input.current!, meterId: meter.meterId, nowMs: input.nowMs, history: snapshots }) })) ?? [], targets: input.targets ?? [], waitingWork: input.waitingWork ?? { status: 'unavailable', reason: 'read_failed' } });
+  // Current/history are already admitted by the record/page openers (or the
+  // current-snapshot cache). Re-parsing them here clones the whole accumulated
+  // history on every progressive page. Action and Resource boundaries still
+  // validate the complete outward result; validate only new projection fields here.
+  return { source: projected.source, current: input.current, ...(history ? { history } : {}),
+    unusedCapacity: projected.unusedCapacity, pace: projected.pace, targets: projected.targets, waitingWork: projected.waitingWork };
+}
+
+/** Canonical equality basis for history projection and observation-writer HMACs. */
+export function serializeProviderAccountUsageHistoryMaterialV1(snapshot: ProviderAccountUsageSnapshotV1): string {
+    // A timestamp-only run can cross a real window boundary. Preserve the
+    // terminal witness and both sides instead of folding away valid evidence.
+    const phases = snapshot.meters.map(meter => {
+      const window = resolveProviderAccountUsagePaceWindow(snapshot, meter.meterId);
+      if (!window) return null;
+      const at = snapshot.observedAtMs;
+      return at < window.windowStartAtMs ? 'before' : at === window.windowStartAtMs ? 'start'
+        : at < window.resetAtMs ? 'within' : at === window.resetAtMs ? 'reset' : 'after';
+    });
+    return JSON.stringify([serializeProviderAccountUsageSnapshotMaterialV1(snapshot), phases]);
+}
+
+/** Keep both witnessed ends of unchanged runs: slopes, reset boundaries and latest witnesses survive. */
+function coalesceHistory(history: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>) {
+  const entries: typeof history.entries = [];
+  let material: string | undefined;
+  let runLength = 0;
+  for (const entry of history.entries) {
+    const next = serializeProviderAccountUsageHistoryMaterialV1(entry.snapshot);
+    if (next !== material) { entries.push(entry); material = next; runLength = 1; }
+    else if (++runLength === 2) entries.push(entry);
+    else entries[entries.length - 1] = entry;
+  }
+  return { entries, nextCursor: history.nextCursor };
+}
+
+function appendCoalescedHistory(previous: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema> | undefined,
+  page: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>) {
+  // Only the final run can merge with the next page. Its two endpoints carry
+  // every fact needed by the same canonical compactor, including reset phases.
+  const prefix = previous?.entries ?? [];
+  const frontier = coalesceHistory({ entries: [...prefix.slice(-2), ...page.entries], nextCursor: page.nextCursor });
+  return { entries: [...prefix.slice(0, -2), ...frontier.entries], nextCursor: frontier.nextCursor };
 }
 
 export class ProviderAccountUsageReadErrorV1 extends Error {
@@ -41,11 +92,11 @@ export function openProviderAccountUsageRecordV4(input: Readonly<{ recordId: str
   if ((input.accountMode === 'plain') !== (record.content.t === 'plain')) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_mode_mismatch');
   let snapshot: ProviderAccountUsageSnapshotV1 | null;
   if (record.content.t === 'plain') {
-    const parsed = ProviderAccountUsageSnapshotV1Schema.safeParse(record.content.v);
-    snapshot = parsed.success ? parsed.data : null;
+    try { snapshot = parseBuiltInLegacyProviderAccountUsageSnapshotV1(record.content.v); }
+    catch { snapshot = null; }
   } else {
     if (!input.material) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_unavailable');
-    snapshot = openSealedProviderAccountUsageSnapshot({ material: input.material, sealed: { format: 'account_scoped_v1', ciphertext: record.content.c, ...(record.content.subscription ? { subscription: record.content.subscription } : {}) } });
+    snapshot = openProviderAccountUsageEncryptedContentV4({ material: input.material, content: record.content });
   }
   if (!snapshot) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_unavailable');
   if (snapshot.recordId !== input.recordId || snapshot.fetchedAtMs !== record.metadata.fetchedAt || snapshot.staleAfterMs !== record.metadata.staleAfterMs) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_identity_mismatch');

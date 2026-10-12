@@ -132,6 +132,7 @@ export const ConnectedAccountAuthenticationCommandSchemas = {
         code: z.string().min(1).max(32 * 1024),
         callbackUrl: z.url().max(2_048),
         state: z.string().min(1).max(4_096),
+        iss: z.string().max(4_096).optional(),
       }).strict(),
     }).strict()),
     pollDevice: lazyZodSchema(() => z.object({
@@ -154,6 +155,7 @@ export const ConnectedAccountAuthenticationCommandSchemas = {
       operation: z.literal('read'),
       attemptId: BoundedIdentitySchema,
       restoreKind: z.literal('oauth').optional(),
+      waitForProviderStart: z.boolean().optional(),
     }).strict()),
 } as const;
 export const ConnectedAccountDaemonCommandSchema =

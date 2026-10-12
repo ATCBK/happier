@@ -408,15 +408,25 @@ const ConnectedAccountOtherFailureV1Schema = lazyZodSchema(() => z.object({
   ),
 }).strict());
 
+const ConnectedAccountInsufficientScopeFailureV1Schema = lazyZodSchema(() => z.object({
+  class: z.literal('insufficient_scope'),
+  requiredScopes: z.array(z.string().min(1)),
+  evidence: BoundedProviderFailureEvidenceV1Schema.refine(
+    (evidence) => evidence.limitCategory === 'validation_failed',
+    'Scope challenges require validation_failed evidence, not token or quota recovery.',
+  ),
+}).strict());
+
 export const ConnectedAccountConsumerFailureV1Schema = lazyZodSchema(() => z.union([
   ConnectedAccountAuthenticationFailureV1Schema,
   ConnectedAccountQuotaFailureV1Schema,
   ConnectedAccountOtherFailureV1Schema,
+  ConnectedAccountInsufficientScopeFailureV1Schema,
 ]));
 
 export const ConnectedAccountAuthFailureRequestV1Schema = lazyZodSchema(() => z.object({
   credentialContext: RequestAuthCredentialContextV1Schema,
-  normalizedFailure: ConnectedAccountAuthenticationFailureV1Schema,
+  normalizedFailure: z.union([ConnectedAccountAuthenticationFailureV1Schema, ConnectedAccountInsufficientScopeFailureV1Schema]),
 }).strict());
 
 export const ConnectedAccountQuotaFailureRequestV1Schema = lazyZodSchema(() => z.object({
