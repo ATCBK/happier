@@ -71,7 +71,7 @@ export const DEEPSEC_PLUGIN = definePlugin({
         catalog: {
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
-        capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, { executionRuns: { open: ['create'], checkpoint: false, stop: true } }),
+        capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, { skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' }, executionRuns: { open: ['create'], checkpoint: false, stop: true } }),
       },
       factory: createDeepSecRuntime,
     },
