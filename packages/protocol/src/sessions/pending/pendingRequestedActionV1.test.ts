@@ -21,6 +21,23 @@ describe('PendingRequestedActionV1', () => {
       .toThrow('Malformed non-null Pending requested action');
   });
 
+  it('projects annotated retained actions while keeping fresh input and known reset identity strict', () => {
+    const reset = { source: { bindingKind: 'account', ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai' }, accountId: 'account' } },
+      recordId: 'paug_v1_abcdefgh', meterId: 'weekly', witness: { id: 'accepted-history-entry', observedAtMs: 1000 } };
+    const annotated = { v: 1, kind: 'reset_start', retired: true, reset: { ...reset, retired: true,
+      source: { ...reset.source, retired: true, ref: { ...reset.source.ref, retired: true,
+        service: { ...reset.source.ref.service, retired: true } } }, witness: { ...reset.witness, retired: true } } };
+    expect(normalizePendingRequestedActionV1(annotated, 'stored')).toEqual({ v: 1, kind: 'reset_start', reset });
+    expect(normalizePendingRequestedActionV1({ v: 1, kind: 'enqueue', retired: true }, 'stored')).toEqual({ v: 1, kind: 'enqueue' });
+    expect(normalizePendingRequestedActionV1(undefined, 'stored')).toEqual(DEFAULT_PENDING_REQUESTED_ACTION_V1);
+    expect(normalizePendingRequestedActionV1(null, 'stored')).toEqual(DEFAULT_PENDING_REQUESTED_ACTION_V1);
+    expect(() => normalizePendingRequestedActionV1(annotated)).toThrow('Malformed non-null Pending requested action');
+    for (const invalid of [{ v: 1, kind: 'future_action' }, { ...annotated, reset: { ...annotated.reset,
+      source: { ...reset.source, ref: { ...reset.source.ref, service: { ...reset.source.ref.service, pluginId: ' ' } } } } }]) {
+      expect(() => normalizePendingRequestedActionV1(invalid, 'stored')).toThrow('Malformed non-null Pending requested action');
+    }
+  });
+
   it('binds reset start to an accepted B witness without admitting copied protected schedule fields', () => {
     const reset = { source: { bindingKind: 'account', ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai' }, accountId: 'account' } },
       recordId: 'paug_v1_abcdefgh', meterId: 'weekly', witness: { id: 'accepted-history-entry', observedAtMs: 1000 } };

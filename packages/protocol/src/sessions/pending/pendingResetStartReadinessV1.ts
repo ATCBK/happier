@@ -18,6 +18,15 @@ export const PendingResetStartReadinessV1Schema = lazyZodSchema(() => z.discrimi
 export type PendingResetStartWaitingReasonV1 = z.infer<typeof PendingResetStartWaitingReasonV1Schema>;
 export type PendingResetStartReadinessV1 = z.infer<typeof PendingResetStartReadinessV1Schema>;
 
+/** A new hold may bind only the witnessed window that is still current. */
+export function evaluatePendingResetStartAdmissionV1(input: Parameters<typeof evaluatePendingResetStartReadinessV1>[0]):
+  Readonly<{ status: 'available' }> | Readonly<{ status: 'unavailable'; reason: PendingResetStartWaitingReasonV1 }> {
+  const readiness = evaluatePendingResetStartReadinessV1(input);
+  return readiness.status === 'waiting' && readiness.reason === 'before_reset'
+    ? { status: 'available' }
+    : { status: 'unavailable', reason: readiness.status === 'ready' ? 'window_changed' : readiness.reason };
+}
+
 /** Called only after protected B snapshots have been opened under current authority. */
 export function evaluatePendingResetStartReadinessV1(input: Readonly<{
   reset: PendingResetStartBindingV1;

@@ -2,9 +2,32 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
 import { ManagedWakeTargetV1Schema } from '../../machines/managed/managedIntentV1.js';
 import { SessionInputMachineTargetV1Schema } from '../messages/sessionInputAdmission.js';
+import { SpawnSessionErrorCodeSchema } from '../spawnSession.js';
 
 export const PendingActivationFailureCodeV1Schema = lazyZodSchema(() => z.enum(['runtime_start_failed']));
 export type PendingActivationFailureCodeV1 = z.infer<typeof PendingActivationFailureCodeV1Schema>;
+
+export const PendingActivationRuntimeFailureReasonV1Schema = lazyZodSchema(() => z.enum([
+  'runner_authority_unavailable', 'runner_presence_unproven', 'no_token', 'shutdown',
+  'transport_unavailable', 'encryption_material_unavailable', 'runtime_upgrade_required',
+  'malformed_response', 'rpc_method_unavailable', 'rpc_failed',
+]));
+
+/** Diagnostic facts only: no native prose, paths, input content or credential material. */
+export const PendingActivationFailureDetailsV1Schema = lazyZodSchema(() => z.object({
+  reason: z.enum(['ineligible', 'identity-unavailable', 'takeover-required', 'session-directory-missing', 'spawn-rejected']),
+  spawnErrorCode: SpawnSessionErrorCodeSchema.optional(),
+  runtimeReason: PendingActivationRuntimeFailureReasonV1Schema.optional(),
+}).strict());
+export type PendingActivationFailureDetailsV1 = z.infer<typeof PendingActivationFailureDetailsV1Schema>;
+
+// The predecessor ignores query diagnostics and still accepts the unchanged CAS body.
+export const PendingActivationFailureQueryV1Schema = lazyZodSchema(() => z.object({
+  failureDetails: z.preprocess(value => {
+    if (typeof value !== 'string') return value;
+    try { return JSON.parse(value); } catch { return null; }
+  }, PendingActivationFailureDetailsV1Schema).optional(),
+}).strict());
 
 const PendingActivationAuthorizationBaseV1Schema = lazyZodSchema(() => z.object({
   requestId: z.string().trim().min(1),

@@ -1,8 +1,10 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { QualifiedConnectedServiceUsageSourceV4Schema } from '../../connect/qualifiedConnectedAccountProjectionsV4.js';
 import { ProviderAccountUsageRecordIdSchema, ProviderAccountUsageHistoryWitnessV1Schema } from '../../connect/providerAccountUsagePrimitives.js';
 import { SessionPendingWithdrawInputV1Schema, SessionPendingWithdrawResultV1Schema } from '../control/pendingWithdrawV1.js';
+import { StrictSessionStoredMessageContentEnvelopeSchema } from '../messages/sessionStoredMessageContent.js';
 
 export const PendingRequestedActionKindV1Schema = lazyZodSchema(() => z.enum([
   'enqueue',
@@ -25,9 +27,14 @@ export const PendingRequestedActionV1Schema = lazyZodSchema(() => z.union([
   z.object({ v: z.literal(1), kind: z.enum(['enqueue', 'steer_if_active', 'steer_now', 'send_now']) }).strict(),
   z.object({ v: z.literal(1), kind: z.literal('reset_start'), reset: PendingResetStartBindingV1Schema }).strict(),
 ]));
+export const PendingRequestedActionV1StoredSchema = createStoredReadSchema(PendingRequestedActionV1Schema);
 
 export const PendingResetStartSetInputV1Schema = lazyZodSchema(() => SessionPendingWithdrawInputV1Schema.omit({ targetExecutionRunId: true }).extend({
   reset: PendingResetStartBindingV1Schema,
+  // Absence binds existing custody; presence admits one new input, already
+  // sealed in the Session's canonical Pending envelope, with no ordinary-send state.
+  initialInput: z.object({ content: StrictSessionStoredMessageContentEnvelopeSchema,
+    targetMachineId: z.string().trim().min(1).optional() }).strict().optional(),
 }).strict());
 export const PendingResetStartCancelInputV1Schema = lazyZodSchema(() => SessionPendingWithdrawInputV1Schema.omit({ targetExecutionRunId: true }).strict());
 export const PendingResetStartSetResultV1Schema = lazyZodSchema(() => z.object({
@@ -58,6 +65,11 @@ export const PendingResetStartsReadResultV1Schema = lazyZodSchema(() => z.object
     reset: PendingResetStartBindingV1Schema,
     authorityCurrent: z.boolean(),
   }).strict()),
+  // Optional on the wire so a current reader still accepts an older reset reader.
+  // No prompt content is returned by the Account-wide projection.
+  unboundEntries: z.array(PendingResetStartCancelInputV1Schema.omit({ serverId: true }).extend({
+    authorityCurrent: z.boolean(),
+  }).strict()).optional(),
 }).strict());
 export type PendingResetStartsReadInputV1 = z.infer<typeof PendingResetStartsReadInputV1Schema>;
 export type PendingResetStartsReadResultV1 = z.infer<typeof PendingResetStartsReadResultV1Schema>;

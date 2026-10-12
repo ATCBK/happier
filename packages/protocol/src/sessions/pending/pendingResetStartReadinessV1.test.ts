@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildProviderAccountUsageRecordId, type ProviderAccountUsageSnapshotV1 } from '../../connect/providerAccountUsagePrimitives.js';
-import { evaluatePendingResetStartReadinessV1 } from './pendingResetStartReadinessV1.js';
+import { evaluatePendingResetStartReadinessV1, evaluatePendingResetStartAdmissionV1 } from './pendingResetStartReadinessV1.js';
 
 function snapshot(at: number, resetAt: number): ProviderAccountUsageSnapshotV1 {
   const recordKey = { providerId: 'test', accountSubjectId: 'account', subjectKind: 'account', quotaScope: 'account' } as const;
@@ -19,6 +19,13 @@ function readinessInput() {
 }
 
 describe('Pending reset start readiness', () => {
+  it('admits a new hold only for a current witnessed future window, never stale or elapsed input', () => {
+    const input = readinessInput();
+    expect(evaluatePendingResetStartAdmissionV1({ ...input, current: input.witness, nowMs: 750 })).toEqual({ status: 'available' });
+    expect(evaluatePendingResetStartAdmissionV1({ ...input, current: { ...input.witness, staleAfterMs: 100 }, nowMs: 750 })).toMatchObject({ status: 'unavailable', reason: 'quota_stale' });
+    expect(evaluatePendingResetStartAdmissionV1(input)).toMatchObject({ status: 'unavailable', reason: 'window_changed' });
+    expect(evaluatePendingResetStartAdmissionV1({ ...input, current: input.witness, nowMs: 750, witness: null })).toMatchObject({ status: 'unavailable', reason: 'witness_unavailable' });
+  });
   it('projects the same opened witness decision without persisting protected reset dates', () => {
     const input = readinessInput();
     const witness = input.witness;

@@ -4,9 +4,16 @@ import {
   PendingActivationAuthorizationV1Schema,
   PendingActivationFailureRequestV1Schema,
   PendingActivationFailureResponseV1Schema,
+  PendingActivationFailureQueryV1Schema,
 } from './pendingActivationAuthorizationV1.js';
 
 describe('PendingActivationAuthorizationV1', () => {
+  it('accepts closed diagnostic query facts without admitting private failure prose', () => {
+    const failureDetails = { reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED' };
+    expect(PendingActivationFailureQueryV1Schema.parse({ failureDetails: JSON.stringify(failureDetails) })).toEqual({ failureDetails });
+    expect(PendingActivationFailureQueryV1Schema.safeParse({ failureDetails: JSON.stringify({ ...failureDetails, message: 'private' }) }).success).toBe(false);
+    expect(PendingActivationFailureQueryV1Schema.safeParse({ failureDetails: JSON.stringify({ reason: 'private' }) }).success).toBe(false);
+  });
   it('accepts waiting and terminal-failed authorizations and rejects unbounded failure codes', () => {
     expect(PendingActivationAuthorizationV1Schema.parse({
       requestId: 'pending-1',
