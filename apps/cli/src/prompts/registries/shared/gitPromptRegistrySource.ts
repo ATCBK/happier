@@ -14,7 +14,7 @@ import {
   collectPromptRegistrySkillDirectories,
   resolvePromptRegistrySourceRoot,
 } from './gitSkillRepository';
-import { readSkillBundleFrontmatter } from './readSkillBundleFrontmatter';
+import { readSkillFrontmatterV1 as readSkillBundleFrontmatter } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 
 function buildItemId(sourceId: string, relativeSkillPath: string): string {
   return `${sourceId}:${relativeSkillPath}`;

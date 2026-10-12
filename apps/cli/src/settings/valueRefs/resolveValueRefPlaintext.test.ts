@@ -10,7 +10,7 @@ import {
   type SavedSecretCatalogResourceInputV1,
 } from '@/settings/secrets/savedSecretCatalog';
 
-import { resolveMcpValueRefPlaintext } from './resolveMcpValueRefPlaintext';
+import { resolveValueRefPlaintext } from './resolveValueRefPlaintext';
 
 const sharedRef = 'happier:shared-secret:v1:resource_1';
 
@@ -33,21 +33,21 @@ function resource(
   };
 }
 
-describe('resolveMcpValueRefPlaintext', () => {
+describe('resolveValueRefPlaintext', () => {
   it('refuses a SavedSecret reference without the admitted catalog materializer', () => {
-    expect(resolveMcpValueRefPlaintext({
+    expect(resolveValueRefPlaintext({
       valueRef: { t: 'savedSecret', secretId: sharedRef },
       processEnv: {},
     })).toEqual({ status: 'temporarily_unavailable' });
   });
 
   it('keeps literal expansion behavior unchanged', () => {
-    expect(resolveMcpValueRefPlaintext({
+    expect(resolveValueRefPlaintext({
       valueRef: { t: 'literal', v: 'Bearer ${TOKEN}' },
       processEnv: { TOKEN: 'literal-value' },
     })).toEqual({ status: 'ready', value: 'Bearer literal-value' });
 
-    expect(resolveMcpValueRefPlaintext({
+    expect(resolveValueRefPlaintext({
       valueRef: { t: 'literal', v: '${MISSING}' },
       processEnv: {},
     })).toEqual({ status: 'literal_unavailable' });
@@ -69,7 +69,7 @@ describe('resolveMcpValueRefPlaintext', () => {
       resourceCatalogState: 'ready',
     });
 
-    expect(resolveMcpValueRefPlaintext({
+    expect(resolveValueRefPlaintext({
       valueRef: { t: 'savedSecret', secretId },
       savedSecretMaterializer,
       processEnv: {},

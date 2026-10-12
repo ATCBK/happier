@@ -14,6 +14,7 @@ import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettin
 import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot,
   type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createDeferred } from '@/testkit/async/deferred';
+import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
 import * as persistence from '@/persistence';
 import type { HappyMcpSessionClient } from '../startHappyServer';
 import { resolveRunnerMcpServers } from './resolveRunnerMcpServers';
@@ -25,7 +26,7 @@ vi.mock('@/daemon/controlClient', async importOriginal => ({
   readDaemonPluginCatalog: async () => ({ kind: 'available', plugins: [], tools: [] }),
 }));
 
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); resetActiveAccountSettingsSnapshotForTests(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); resetActiveAccountSettingsSnapshotForTests(); withdrawActiveProjectAccountRowsSnapshot(); });
 const credentials = { token: 'runner-account', encryption: null };
 function server(id: string): McpServerCatalogEntryV1 {
   return { id, name: id, transport: 'stdio', stdio: { command: 'echo', args: [id] }, env: {}, createdAt: 1, updatedAt: 1 };
@@ -54,6 +55,29 @@ function resolve(input: Readonly<{ snapshot: ActiveAccountSettingsSnapshot | nul
 }
 
 describe('resolveRunnerMcpServers catalog admission', () => {
+  it('resolves Project rules once before materializing and refuses an unreadable association', async () => {
+    const captured = snapshot([server('tools')]);
+    captured.mcpServerCatalog!.catalog!.bindings[0]!.target = { t: 'project', projectKey: 'project' };
+    const serverId = session().getServerBinding().serverId;
+    const key = { kind: 'workspace-ref', serverId, id: 'checkout' };
+    vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 0 } });
+    const request = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete', rows: [
+      { key, revision: 1, content: { t: 'plain', v: { key, value: { id: 'checkout', serverId, machineId: 'machine-1',
+        rootPath: '/repo', projectKey: 'project', createdAtMs: 1 } } } },
+    ] } });
+    const input = { session: session(), credentials, accountSettings: captured.settings, accountSettingsSnapshot: captured,
+      machineId: 'machine-1', directory: '/repo', agentId: 'codex', agentAcceptsUserMcp: true,
+      sessionMetadata: { workspaceId: 'checkout', projectId: 'project', path: '/repo' }, includeHappierMcpServer: false as const };
+    const result = await resolveRunnerMcpServers(input);
+    try { expect(Object.keys(result.mcpServers)).toEqual(['tools']); } finally { result.happierMcpServer.stop(); }
+    expect(request.mock.calls.filter(call => call[0].endsWith('/projects/account-rows/list'))).toHaveLength(1);
+    request.mockRejectedValue(new Error('network_unavailable'));
+    await expect(resolveRunnerMcpServers(input)).rejects.toMatchObject({ code: 'preparation_pending', reason: 'project_association_unavailable' });
+    request.mockClear();
+    const unsupported = await resolveRunnerMcpServers({ ...input, agentAcceptsUserMcp: false });
+    try { expect(Object.keys(unsupported.mcpServers)).toEqual([]); } finally { unsupported.happierMcpServer.stop(); }
+    expect(request).not.toHaveBeenCalled();
+  });
   it('keeps other servers available when non-strict OAuth capability admission fails', async () => {
     const captured = snapshot([server('static'), { id: 'oauth', name: 'oauth', transport: 'http', remote: { url: 'https://mcp.example.test/path', headers: {}, auth: { kind: 'oauth' } }, env: {}, createdAt: 1, updatedAt: 1 }]);
     const nonStrict = { ...captured, settings: accountSettingsParse({ mcpServersStrictMode: false }) };

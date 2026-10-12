@@ -9,7 +9,7 @@ import type { ProjectSetupSuccessV1 } from '@happier-dev/protocol/workspaces/pro
 import type { ProjectSetupReadinessV1 } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
-import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { normalizeActionsSettingsV1, type ActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { SecretReferenceOverlayV1Schema, listSecretReferenceOverlayV1BindingNames, readSecretReferenceOverlayV1Reference, type SecretReferenceOverlayV1 } from '@happier-dev/protocol/profiles/secretReferenceOverlayV1';
 
 import { LaunchSecretReferenceOverlayError, resolveProjectSecretReferenceEnvironment, type ProjectSecretReferenceEnvironmentInput } from '@/settings/secrets/secretReferenceOverlay';
@@ -394,7 +394,7 @@ export async function inspectProjectSetupReadiness(input: ProjectSetupPreparatio
 }
 
 /** Shared requester-bound settings input for Project setup and service-effect review. */
-export function readProjectActionApprovalSettings(input: Pick<ProjectSetupPreparationInput, 'approvalContext' | 'requester' | 'secretEnvironment'>) {
+export function readProjectActionApprovalSettings(input: Pick<ProjectSetupPreparationInput, 'approvalContext' | 'requester' | 'secretEnvironment'>): ActionsSettingsV1 {
     const requester = readRequesterAccountActionContext(input.requester.authorization);
     return input.approvalContext?.actionsSettings ?? (requester
         ? normalizeActionsSettingsV1(requester.accountSettingsContext.settings.actionsSettingsV1)

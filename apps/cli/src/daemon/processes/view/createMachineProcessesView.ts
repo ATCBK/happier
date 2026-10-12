@@ -112,8 +112,8 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
                 unsubscribeVitals?.(); unsubscribeVitals = undefined;
                 releaseLive?.(); releaseLive = undefined;
                 portsController?.abort(); portsController = undefined;
-                // The same parked-watch boundary lets the existing client re-arm without
-                // losing its baseline. Only metrics survive; native tables and I/O do not.
+                // The existing parked-watch boundary lets the client re-arm without
+                // repeating the ownership census or losing its metrics baseline.
                 if (disposed) clearMetrics();
                 else {
                     metricExpiry = setTimeout(() => {
@@ -169,7 +169,8 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
             const identities = await options.readRequesterIdentities?.().catch(() => undefined);
             if (signal?.aborted || disposed) return { changed: false };
             const read = () => project(latestRead!, request, requester, true);
-            const newer = () => !!latestRead && (latestRead.status !== 'ok' || read().state === 'unavailable' || latestRead.snapshot.capturedAtMs > request.since!);
+            const newer = () => !!latestRead && (latestRead.status !== 'ok' || read().state === 'unavailable'
+                || (latestMetricAtMs ?? latestRead.snapshot.capturedAtMs) > request.since!);
             const controller = new AbortController();
             const abort = () => controller.abort();
             signal?.addEventListener('abort', abort, { once: true });

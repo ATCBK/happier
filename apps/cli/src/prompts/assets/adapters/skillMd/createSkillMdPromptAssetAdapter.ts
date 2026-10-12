@@ -3,6 +3,7 @@ import { isAbsolute, join } from 'node:path';
 
 import type { PromptAssetDeleteRequest, PromptAssetDiscoverRequest, PromptAssetDiscoveryItemV1, PromptAssetMutationResponseV1, PromptAssetReadRequest, PromptAssetReadResponseV1, PromptAssetTypeDescriptorV1, PromptAssetWriteDocRequest, PromptAssetWriteBundleRequest, PromptAssetCapabilitiesV1 } from '@happier-dev/protocol';
 import { validatePromptBundleBodyV1AgainstSchemaId } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
+import { SKILL_NAME_PATTERN_V1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 
 import type { PromptAssetAdapter } from '@happier-dev/plugin-sdk/resources';
 import { toPromptAssetMutationError, toPromptAssetReadError } from '@/prompts/assets/shared/promptAssetResponses';
@@ -19,7 +20,7 @@ import {
 } from '@/prompts/assets/shared/promptAssetManagedSymlinkInstall';
 import { resolveScopedPromptAssetRoot } from '@/prompts/assets/shared/resolveScopedPromptAssetRoot';
 
-const DEFAULT_SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+const DEFAULT_SKILL_NAME_PATTERN = SKILL_NAME_PATTERN_V1;
 
 type SkillMdPromptAssetAdapterConfig = Readonly<{
   assetTypeId: string;

@@ -83,11 +83,12 @@ async function resolveTrackedRunnerIdentity(input: Readonly<{
     );
   }
   const processCommandHash = hashProcessCommand(identity.command);
-  if (!processIdentityMatches({
+  const expectedIdentity = input.tracked.runnerProcessIdentity ?? {
     pid: runnerPid,
     processStartTimeMs: input.tracked.processStartTimeMs,
     processCommandHash: input.tracked.processCommandHash,
-  }, {
+  };
+  if (!processIdentityMatches(expectedIdentity, {
     pid: identity.pid,
     processStartTimeMs,
     processCommandHash,

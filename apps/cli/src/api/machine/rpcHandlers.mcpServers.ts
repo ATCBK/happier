@@ -315,11 +315,12 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
         });
         if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
 
-        return resolveSessionMcpPreview({
+        return await resolveSessionMcpPreview({
           settings: accountMcpSettings,
           machineId: parsed.data.machineId,
           directory: parsed.data.directory,
           agentId: parsed.data.agentId,
+          sessionProject: { credentials, metadata: {} },
           capabilitySelection: parsed.data.capabilitySelection
             ?? (parsed.data.selection ? { mcp: parsed.data.selection } : null),
           detectedServers: detected.servers,

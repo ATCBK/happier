@@ -19,6 +19,8 @@ import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { ArtifactFolderActionPortV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
+import type { SkillRulesActionPortV1 } from '@happier-dev/protocol/prompts/library/skillRulesActionsV1';
+import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
 
 import { targetActionApprovalRequestsEqual, targetActionApprovalSubjectsEqual } from './targetActionApprovalSubject';
 import {
@@ -97,6 +99,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
   executionRunHostActionApprovalsGet(args: Readonly<{ artifactId: string }>): Promise<ExecutionRunHostActionApprovalRequestV1 | null>;
   executionRunHostActionApprovalsUpdate(args: Readonly<{ artifactId: string; request: ExecutionRunHostActionApprovalRequestV1 }>): Promise<Readonly<{ ok: true } | { ok: false; errorCode: string; error: string }>>;
   promptLibraryStore: PromptLibraryArtifactStore;
+  skillRules: SkillRulesActionPortV1;
 }> {
   const accountModeApi = params.getAccountEncryptionMode
     ? null
@@ -114,14 +117,14 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
   const organization: ArtifactFolderActionPortV1 = {
     serverId: params.serverId ?? configuration.activeServerId,
     assertCurrent: folderStore.assertCurrent,
-    readCatalog: async (signal) => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
+    readCatalog: async (signal, key = 'folders') => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
       folderStore.assertCurrent(); signal?.throwIfAborted();
       const transport = createCliPromptLibraryStore({ credentials: params.credentials, signal });
       const catalog = await transport.readPromptLibraryCatalog();
       folderStore.assertCurrent(); signal?.throwIfAborted();
       const occupied = (catalog.status === 'ready' || catalog.status === 'partial') &&
-        (catalog.rows.some(row => row.record.key === 'folders') || catalog.tombstones.some(row => row.key === 'folders') ||
-          catalog.diagnostics.some(row => row.key === 'folders'));
+        (catalog.rows.some(row => row.record.key === key) || catalog.tombstones.some(row => row.key === key) ||
+          catalog.diagnostics.some(row => row.key === key));
       if (catalog.status !== 'ready' && catalog.status !== 'partial' || occupied) return { catalog };
       const source = await transport.readSourceSnapshot();
       folderStore.assertCurrent(); signal?.throwIfAborted();
@@ -182,6 +185,15 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
           expectedRevision, header, body, signal });
         if (!updated.ok) throw Object.assign(new Error(updated.error), { code: updated.errorCode });
       },
+    },
+    skillRules: { ...organization,
+      listSkills: signal => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
+        folderStore.assertCurrent(); signal?.throwIfAborted();
+        const skills = await readSkillLibraryCatalog(accountArtifactStore, signal);
+        folderStore.assertCurrent(); signal?.throwIfAborted();
+        return skills;
+      }),
+      ruleWriteContext: () => ({ nowMs: Date.now(), newId: randomUUID }),
     },
     executionRunHostActionApprovalsCreate: async ({ request }) => {
       const artifactId = randomUUID();

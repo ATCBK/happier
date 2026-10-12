@@ -67,6 +67,18 @@ function tracked(): TrackedSession {
 }
 
 describe('tracked Runner Agent daemon-service operation authority', () => {
+  it('admits the captured runner behind a live wrapper and refuses a replaced runner generation', () => {
+    const admitted = tracked();
+    admitted.processStartTimeMs = 100;
+    admitted.runnerProcessIdentity = { ...runner };
+    const request = { tracked: admitted, ...direct, witness, allowIdleCurrentGeneration: false };
+    expect(authorizeTrackedRunnerAgentDaemonServiceOperation(request)).toBe(true);
+    admitted.runnerProcessIdentity = { ...runner, processStartTimeMs: runner.processStartTimeMs + 1 };
+    expect(authorizeTrackedRunnerAgentDaemonServiceOperation(request)).toBe(false);
+    admitted.runnerProcessIdentity = { ...runner, pid: runner.pid + 1 };
+    expect(authorizeTrackedRunnerAgentDaemonServiceOperation(request)).toBe(false);
+  });
+
   it('checks the complete admitted batch, including a changed sequence beyond 4096', () => {
     const userMessageSeqs = Array.from({ length: 4097 }, (_, index) => index + 1);
     const admitted = tracked();

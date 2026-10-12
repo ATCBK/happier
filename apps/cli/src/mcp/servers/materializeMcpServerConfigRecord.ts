@@ -33,7 +33,7 @@ import {
 } from '@/settings/secrets/savedSecretCatalog';
 
 import { isPackageRunnerCommand, normalizePackageRunnerInvocation } from '@/packagedRuntime/packageRunner/normalizePackageRunnerInvocation';
-import { resolveMcpValueRefPlaintext } from './resolveMcpValueRefPlaintext';
+import { resolveValueRefPlaintext } from '@/settings/valueRefs/resolveValueRefPlaintext';
 import { isSharedSavedSecretReferenceV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import type { SavedSecretOperationReferenceV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import type { McpRequestAuthCapability } from '@/mcp/runtime/mcpRequestAuth';
@@ -206,7 +206,7 @@ async function materializeRemoteServer(params: Readonly<{
 export async function materializeMcpServerConfigRecord(params: Readonly<{
   resolved: McpServerMaterializationV1;
   savedSecretMaterializer?: SavedSecretMaterializerV1;
-  session?: Parameters<typeof resolveMcpValueRefPlaintext>[0]['session'];
+  session?: Parameters<typeof resolveValueRefPlaintext>[0]['session'];
   processEnv?: NodeJS.ProcessEnv;
   tmpDir: string | null;
   strictMode?: boolean;
@@ -241,7 +241,7 @@ export async function materializeMcpServerConfigRecord(params: Readonly<{
       let missingDetail: string | null = null;
 
       for (const [envKey, valueRef] of Object.entries(server.env)) {
-        const resolved = resolveMcpValueRefPlaintext({
+        const resolved = resolveValueRefPlaintext({
           valueRef,
           savedSecretMaterializer: params.savedSecretMaterializer,
           processEnv,
@@ -316,7 +316,7 @@ export async function materializeMcpServerConfigRecord(params: Readonly<{
 
       const resolvedHeaders: Record<string, string> = {};
       for (const [headerKey, valueRef] of Object.entries(server.remote.headers)) {
-        const resolved = resolveMcpValueRefPlaintext({
+        const resolved = resolveValueRefPlaintext({
           valueRef,
           savedSecretMaterializer: params.savedSecretMaterializer,
           processEnv,

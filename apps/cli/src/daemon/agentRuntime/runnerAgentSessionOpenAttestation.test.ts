@@ -138,9 +138,13 @@ describe('runner-owned Agent session-open attestation', () => {
     }
   });
 
-  it('keeps a validated prepare out of opened currentness until commit', async () => {
+  it('keeps a captured runner behind its wrapper out of opened currentness until commit', async () => {
     const { runner, binding, tracked } = createFixture();
+    tracked.pid = runner.pid - 1;
+    tracked.sessionRunnerPid = runner.pid;
+    tracked.processStartTimeMs = runner.processStartTimeMs - 1;
     tracked.processCommandHash = 'b'.repeat(64);
+    tracked.runnerProcessIdentity = { ...runner };
     const updateMarker = vi.fn(async () => true);
     const request = {
       kind: 'create' as const,
@@ -180,6 +184,7 @@ describe('runner-owned Agent session-open attestation', () => {
       providerSessionId: null,
     });
     expect(updateMarker).toHaveBeenCalledOnce();
+    expect(updateMarker).toHaveBeenCalledWith(expect.objectContaining({ pid: runner.pid }));
     await expect(awaitTrackedRunnerAgentSessionOpen({
       getTrackedSessions: () => [tracked],
       sessionId: 'session-child',

@@ -52,7 +52,6 @@ type SetSessionModelInactiveResult = Readonly<{
   status: 'intent_updated';
   sessionId: string;
   selection: ProviderBoundModelRef;
-  applyTiming?: 'immediate' | 'next_prompt';
   updatedAt: number;
   metadata: Record<string, unknown>;
   version: number;
@@ -151,6 +150,7 @@ async function invokeActiveModelTransition(params: Readonly<{
   credentials: StoredCredentials;
   sessionTarget: ResolvedSessionTransportContext;
   selection: ProviderBoundModelRef;
+  applyTiming?: 'immediate' | 'next_prompt';
   captureBefore?: boolean;
   expected?: SessionModelMutationExpectedV1;
   callerInputConstraints?: CallerInputConstraintsV1;

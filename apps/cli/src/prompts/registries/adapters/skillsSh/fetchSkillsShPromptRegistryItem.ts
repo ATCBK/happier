@@ -8,7 +8,7 @@ import {
   clonePromptRegistryRepositoryToTempDir,
   collectPromptRegistrySkillDirectories,
 } from '@/prompts/registries/shared/gitSkillRepository';
-import { readSkillBundleFrontmatter } from '@/prompts/registries/shared/readSkillBundleFrontmatter';
+import { readSkillFrontmatterV1 as readSkillBundleFrontmatter } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 
 import { readSkillsShGitHubBaseUrl } from './skillsShRegistryConfig';
 import { isValidSkillsShSource } from './skillsShCatalogValidation';

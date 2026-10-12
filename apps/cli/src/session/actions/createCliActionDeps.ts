@@ -3102,7 +3102,7 @@ export function createCliActionDeps(params: Readonly<{
       }
     },
     ...(approvalsStore?.promptLibraryStore.organization ? { artifactFolders: approvalsStore.promptLibraryStore.organization,
-      promptStacks: approvalsStore.promptLibraryStore.organization } : {}),
+      promptStacks: approvalsStore.promptLibraryStore.organization, skillRules: approvalsStore.skillRules } : {}),
     runtimeActionExecute: async (args) => {
       const isStart = args.actionId === 'localServices.launcher.start';
       const controlKind = resolveLocalServiceActionKindForRuntimeActionId(args.actionId);

@@ -14,7 +14,7 @@ import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSett
 import { resolveSessionCapabilitiesForDirectory } from '../servers/resolveSessionCapabilitiesForDirectory';
 import {
   deriveSettingsSecretsReadKeysForCredentials,
-} from '../servers/resolveMcpValueRefPlaintext';
+} from '@/settings/valueRefs/resolveValueRefPlaintext';
 import { listSelectedMcpSharedSecretReferences, materializeMcpServerConfigRecord } from '../servers/materializeMcpServerConfigRecord';
 import { mergeWithBuiltInHappierMcpServer } from '../servers/mergeWithBuiltInHappierMcpServer';
 import {

@@ -1,4 +1,5 @@
 import type { McpServersSettingsV1, SessionMcpSelectionV1 } from '@happier-dev/protocol';
+import type { SessionProjectPromptStackInput } from '@/workspaces/resolveSessionProjectKey';
 
 export type SpawnMcpPreviewInventoryDeps = Readonly<{
   detectProviderMcpServers: typeof import('@/mcp/providerDetection/detectProviderMcpServers')['detectProviderMcpServers'];
@@ -30,6 +31,8 @@ export async function resolveSpawnMcpServersPreviewInventory(params: Readonly<{
   machineId: string;
   directory: string;
   agentId: string;
+  projectKey?: string | null;
+  sessionProject?: Omit<SessionProjectPromptStackInput, 'machineId' | 'directory'>;
   selection?: SessionMcpSelectionV1;
   limit?: number;
   deps?: SpawnMcpPreviewInventoryDeps;
@@ -45,11 +48,13 @@ export async function resolveSpawnMcpServersPreviewInventory(params: Readonly<{
     directory: params.directory,
     providers: params.agentId ? [params.agentId] : null,
   });
-  const preview = resolveSessionMcpPreview({
+  const preview = await resolveSessionMcpPreview({
     settings: params.settings,
     machineId: params.machineId,
     directory: params.directory,
     agentId: params.agentId,
+    ...(params.projectKey !== undefined ? { projectKey: params.projectKey } : {}),
+    ...(params.sessionProject ? { sessionProject: params.sessionProject } : {}),
     ...(params.selection ? { capabilitySelection: { mcp: params.selection } } : {}),
     detectedServers: detected.servers,
     detectedWarnings: detected.warnings,

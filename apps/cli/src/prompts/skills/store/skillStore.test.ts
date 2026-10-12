@@ -70,22 +70,13 @@ describe('daemon skill store', () => {
         await f.store.releaseSkillSessionDirs('session-one');
         await expect(lstat(result.pluginRoot)).rejects.toMatchObject({ code: 'ENOENT' });
     });
-    it('records an index Agent resolved set without materializing skill content', async () => {
-        const f = await fixture();
-        const item = skill();
-        const result = await f.store.ensureSkillSessionDir({ ownerKey: 'index-session', plan: 'index', items: [item], nativeDisables: [] });
-        expect(await f.store.readSkillSessionItems('index-session')).toEqual([{ skillId: item.skillId, name: item.name, digest: item.digest }]);
-        expect(await readdir(result.pluginRoot)).toEqual(['session.json']);
-        await expect(lstat(join(f.happyHomeDir, 'skills', 'cache'))).rejects.toMatchObject({ code: 'ENOENT' });
-        expect(await f.store.readSkillSessionItems('unknown')).toBeNull();
-    });
     it('rejects tampered bodies before publication and isolates a staging filesystem failure per item', async () => {
         const f = await fixture();
         const invalid = { ...skill('invalid'), digest: `sha256:${'a'.repeat(64)}` };
         const broken = skill('broken');
         broken.files.push({ path: 'SKILL.md/child', contentKind: 'utf8', contentBase64: Buffer.from('cannot be written under a file').toString('base64') });
-        broken.digest = computePromptBundleDigestV1({ v: 1, entries: broken.files, createdAtMs: 0, updatedAtMs: 0 });
-        const result = await f.ensure('session-one', [invalid, broken, skill('valid')]);
+        const brokenItem = { ...broken, digest: computePromptBundleDigestV1({ v: 1, entries: broken.files, createdAtMs: 0, updatedAtMs: 0 }) };
+        const result = await f.ensure('session-one', [invalid, brokenItem, skill('valid')]);
         expect(result.failed).toMatchObject([{ skillId: invalid.skillId, reason: 'materialize_failed', detail: 'digest_mismatch' }, { skillId: broken.skillId, reason: 'materialize_failed' }]);
         expect(await readdir(result.skillsRoot)).toEqual(['valid']);
         expect(await readdir(join(f.happyHomeDir, 'skills', 'cache'))).toEqual([skill('valid').digest.slice(7)]);

@@ -462,19 +462,25 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
     const parentEnqueue = vi.spyOn(parentSession, 'enqueueAgentMessageCommitted');
 
     const disposeRunToolBinding = vi.fn();
+    const skills = { pluginRoot: '/skills/session-a/runs/run-a', skillsRoot: '/skills/session-a/runs/run-a/skills',
+      items: [{ name: 'child-only', skillId: 'child-skill', digest: 'sha256:child' }], nativeDisables: [] };
     let toolBindingRequest: NativeAgentSessionRunToolBindingRequest | null = null;
     const composeRunToolBinding = vi.fn(async (request: NativeAgentSessionRunToolBindingRequest) => {
       toolBindingRequest = request;
       return {
         mcpServers: { happier: { command: 'happier-mcp', args: ['--run', request.runId] } },
+        skills,
+        supportedSessionReadActions: [],
         dispose: disposeRunToolBinding,
       };
     });
 
     let openedContext: AgentSessionRuntimeContext | null = null;
     let openedMcpServers: unknown = undefined;
-    const open = vi.fn(async (request: { mcpServers?: unknown }, context: AgentSessionRuntimeContext) => {
+    let openedSkills: unknown = undefined;
+    const open = vi.fn(async (request: { mcpServers?: unknown; skills?: unknown }, context: AgentSessionRuntimeContext) => {
       openedMcpServers = request.mcpServers;
+      openedSkills = request.skills;
       openedContext = context;
       await context.session.services.transcripts.publishSessionEvent({ type: 'switch', mode: 'local' });
       throw new Error('stop-after-open-request');
@@ -542,6 +548,8 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
 
     // The Run's own tool profile reached the provider open request.
     expect(openedMcpServers).toEqual({ happier: { command: 'happier-mcp', args: ['--run', 'run-a'] } });
+    expect(openedSkills).toEqual(skills);
+    expect(toolBindingRequest!.agentId).toBe(AGENT_ID);
     expect(composeRunToolBinding).toHaveBeenCalledTimes(1);
     expect(toolBindingRequest!.runId).toBe('run-a');
     expect(toolBindingRequest!.cwd).toBe('/run/a');

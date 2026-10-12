@@ -1,8 +1,8 @@
 import type { StoredCredentials } from '@/persistence';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import {
-  resolveMcpValueRefPlaintext,
-} from '@/mcp/servers/resolveMcpValueRefPlaintext';
+  resolveValueRefPlaintext,
+} from '@/settings/valueRefs/resolveValueRefPlaintext';
 import {
   createSavedSecretMaterializerV1,
   SavedSecretResolutionError,
@@ -32,7 +32,7 @@ export function materializeConfiguredAcpEnvironment(params: Readonly<{
         status: 'repair_required', reference: valueRef.secretId, consumer: 'acp', field: `env:${envKey}`,
       });
     }
-    const resolved = resolveMcpValueRefPlaintext({
+    const resolved = resolveValueRefPlaintext({
       valueRef,
       savedSecretMaterializer,
       processEnv,

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
 import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 
@@ -137,21 +137,7 @@ export function buildPromptBundleBodyFromDirectory(params: Readonly<{
 }
 
 export function computePromptBundleDigest(bundleBody: PromptBundleBodyV1): string {
-  const hash = createHash('sha256');
-  const normalizedEntries = [...bundleBody.entries]
-    .map((entry) => ({
-      path: entry.path,
-      contentBase64: entry.contentBase64,
-      contentKind: entry.contentKind,
-      unixMode: entry.unixMode ?? null,
-    }))
-    .sort((left, right) => left.path.localeCompare(right.path));
-
-  hash.update(JSON.stringify({
-    v: bundleBody.v,
-    entries: normalizedEntries,
-  }));
-  return `sha256:${hash.digest('hex')}`;
+  return computePromptBundleDigestV1(bundleBody);
 }
 
 export function materializePromptBundleBodyToDirectory(params: Readonly<{

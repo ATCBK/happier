@@ -1198,9 +1198,10 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         expect(original.snapshot().state).toBe('running');
         expect(approvals).toEqual([]);
         await writeFile(join(h.root, '.happier/project.json'), JSON.stringify(h.manifest));
+        const admittedRequest = { ...request,
+            ...(policy === 'restart-waived-agent' || policy === 'waived-agent' ? { expectedEffectDigest: undefined } : {}) };
         const result = await execute({ actionId: 'localServices.actions.restartManaged',
-            input: { ...request, ...(policy === 'restart-waived-agent' || policy === 'waived-agent' ? { expectedEffectDigest: undefined } : {}),
-                confirmationNonce: createLocalServiceActionConfirmationNonceV1(request) },
+            input: { ...admittedRequest, confirmationNonce: createLocalServiceActionConfirmationNonceV1(admittedRequest) },
             context: { ...h.context, actionRequestId: request.requestId, surface, actionsSettings: settings } });
         if (surface === 'agent' && policy !== 'waived-agent') {
             expect(original.snapshot().state).toBe('running');

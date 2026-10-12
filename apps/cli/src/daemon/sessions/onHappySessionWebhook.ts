@@ -7,6 +7,7 @@ import type { SessionCreationTerminalSpawnErrorDetail } from '@happier-dev/proto
 import { logger } from '@/ui/logger';
 import { readStoredCredentials } from '@/persistence';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
+import { processIdentityMatches } from '@happier-dev/cli-common/processInstance';
 
 import {
   getAgentResumeConfig,
@@ -815,6 +816,28 @@ export function createOnHappySessionWebhook(params: Readonly<{
           : []),
       );
       await awaitTrackedMarkerPromotion();
+      if (requiresCanonicalMarkerAdoption && currentSessionMarkerPid !== pid) {
+        // A live launch wrapper retains process/exit custody, while daemon-service
+        // authority belongs to the reported runner. Materialize its exact marker
+        // through the existing promotion owner before installing that authority.
+        const runnerIdentity = trackedForPid?.runnerProcessIdentity;
+        if (!runnerIdentity || runnerIdentity.pid !== pid) {
+          throw new Error('Canonical Session runner identity is unavailable');
+        }
+        const promotion = await promoteSessionMarkerFn(currentSessionMarkerPid, pid);
+        await awaitTrackedMarkerPromotion();
+        if (
+          trackedForPid?.runnerProcessIdentity !== runnerIdentity
+          || promotion?.targetMarkerOwnership?.happySessionId !== sessionId
+          || !processIdentityMatches(runnerIdentity, {
+            pid,
+            processStartTimeMs: promotion.targetMarkerOwnership.processStartTimeMs,
+            processCommandHash: promotion.targetMarkerOwnership.processCommandHash,
+          })
+        ) {
+          throw new Error('Canonical Session runner marker identity changed');
+        }
+      }
     };
     const runReportMarkerPersistence = (beforeStartupReadiness = false): Promise<void> => {
       if (markerCustody?.retiring) {

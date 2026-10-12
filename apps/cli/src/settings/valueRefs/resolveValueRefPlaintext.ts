@@ -1,13 +1,13 @@
 /**
- * MCP value ref resolution (CLI/runtime)
+ * Value ref resolution (CLI/runtime)
  *
- * Resolves MCP settings value references into plaintext strings at runtime:
+ * Resolves settings value references into plaintext strings at runtime:
  * - literal values may include `${VAR}` templates expanded from `processEnv`
  * - savedSecret values use the admitted SavedSecret catalog materializer
  */
 
 import { expandEnvironmentVariables } from '@/utils/expandEnvVars';
-import type { McpValueRefV1, SessionAttestedContextV1 } from '@happier-dev/protocol';
+import type { ValueRefV1, SessionAttestedContextV1 } from '@happier-dev/protocol';
 import type {
   SavedSecretMaterializerV1,
   SavedSecretResolutionFailureStatusV1,
@@ -18,18 +18,18 @@ export {
   deriveSettingsSecretsReadKeysForCredentials,
 } from '@/settings/secrets/settingsSecretsKey';
 
-export type McpValueRefPlaintextResolution =
+export type ValueRefPlaintextResolution =
   | Readonly<{ status: 'ready'; value: string }>
   | Readonly<{ status: 'literal_unavailable' }>
   | Readonly<{ status: 'session_attested_unavailable' }>
   | Readonly<{ status: SavedSecretResolutionFailureStatusV1 }>;
 
-export function resolveMcpValueRefPlaintext(params: Readonly<{
-  valueRef: McpValueRefV1;
+export function resolveValueRefPlaintext(params: Readonly<{
+  valueRef: ValueRefV1;
   savedSecretMaterializer?: SavedSecretMaterializerV1;
   processEnv: NodeJS.ProcessEnv;
   session?: Readonly<{ sessionId: string; attestedContext?: SessionAttestedContextV1 }>;
-}>): McpValueRefPlaintextResolution {
+}>): ValueRefPlaintextResolution {
   if (params.valueRef.t === 'sessionAttested') {
     const value = params.valueRef.field === 'sessionId' ? params.session?.sessionId
       : params.session?.attestedContext?.[params.valueRef.field];

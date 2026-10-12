@@ -10,6 +10,7 @@ import type {
 import { resolveSessionCapabilitiesForDirectory } from '@/mcp/servers/resolveSessionCapabilitiesForDirectory';
 import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
 import { resolveAgentToolsDelivery } from '@/agent/tools/happierTools/runtime/resolveAgentToolsDelivery';
+import type { SessionProjectPromptStackInput } from '@/workspaces/resolveSessionProjectKey';
 
 import { buildManagedMcpPreviewEntries } from './buildManagedMcpPreviewEntries';
 import { resolveDetectedMcpPreviewEntries } from './resolveDetectedMcpPreviewEntries';
@@ -34,23 +35,29 @@ function formatWarning(warning: DaemonMcpServersDetectWarningV1): string {
   return `${provider}:${warning.code}${warning.path ? `:${warning.path}` : ''}`;
 }
 
-export function resolveSessionMcpPreview(params: Readonly<{
+export async function resolveSessionMcpPreview(params: Readonly<{
   settings: McpServersSettingsV1;
   machineId: string;
-  directory: string;
+  directory: string | null;
   agentId: string;
+  projectKey?: string | null;
+  sessionProject?: Omit<SessionProjectPromptStackInput, 'machineId' | 'directory'>;
   capabilitySelection?: SessionCapabilitySelectionV1 | null;
   detectedServers: ReadonlyArray<DetectedMcpServerV1>;
   detectedWarnings?: ReadonlyArray<DaemonMcpServersDetectWarningV1>;
-}>): Extract<DaemonMcpServersPreviewResponse, { ok: true }> {
-  const managedSelection = resolveSessionCapabilitiesForDirectory({
+}>): Promise<Extract<DaemonMcpServersPreviewResponse, { ok: true }>> {
+  const context = {
     settings: params.settings,
     machineId: params.machineId,
     directory: params.directory,
     selection: params.capabilitySelection ?? {},
     agentId: params.agentId,
+    ...(params.projectKey !== undefined ? { projectKey: params.projectKey } : {}),
     agentAcceptsUserMcp: agentReceivesUserMcpServersV1(resolveAgentToolsDelivery(params.agentId)),
-  });
+  };
+  const managedSelection = await (params.sessionProject
+    ? resolveSessionCapabilitiesForDirectory({ ...context, sessionProject: params.sessionProject })
+    : resolveSessionCapabilitiesForDirectory(context));
 
   const builtIn = [createBuiltInMcpPreviewEntry()];
   const managed = buildManagedMcpPreviewEntries(managedSelection);
