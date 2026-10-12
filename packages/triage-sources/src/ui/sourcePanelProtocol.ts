@@ -2,6 +2,7 @@ import { defineProtocolLiteral, defineProtocolObject, defineProtocolString, defi
 
 const closed = { policy: 'closed' } as const;
 export const TriageSourcePanelSelectionV1Schema = defineProtocolUnion([
+  defineProtocolObject({ kind: defineProtocolLiteral('loadMoreSourceOccurrences') }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('selectSourceOccurrence'), occurrenceId: defineProtocolString({ minLength: 1 }) }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('setSourceOrdering'), order: defineProtocolUnion([defineProtocolLiteral('provider'), defineProtocolLiteral('spread')]) }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('revealSourceUser'), occurrenceId: defineProtocolString({ minLength: 1 }), revealed: defineProtocolLiteral(false) }, closed),

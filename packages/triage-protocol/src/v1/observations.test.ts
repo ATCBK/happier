@@ -112,6 +112,24 @@ describe('Triage source observation union', () => {
 });
 
 describe('Triage snapshot and row facts', () => {
+    it('keeps a source-authored compact scope name independent of the full nested path', () => {
+        const snapshot = {
+            ...present.snapshot,
+            scopeLabel: 'group/subgroup/project-slug',
+            scopeDisplayName: 'Project display name',
+        };
+        expect(TriageSourceEntrySnapshotV1Schema.parse(snapshot)).toMatchObject({
+            scopeLabel: snapshot.scopeLabel,
+            scopeDisplayName: snapshot.scopeDisplayName,
+        });
+        // Older sources omit the optional presentation field; identity and routing
+        // continue to use their existing closed contracts.
+        expect(TriageSourceEntrySnapshotV1Schema.parse(present.snapshot))
+            .not.toHaveProperty('scopeDisplayName');
+        expect(TriageSourceEntrySnapshotV1Schema.safeParse({
+            ...snapshot, scopeDisplayName: '',
+        }).success).toBe(false);
+    });
     it('preserves a recognized pull-request revision without making it an arbitrary source bag', () => {
         const parsed = TriageSourceEntrySnapshotV1Schema.parse({
             ...present.snapshot,

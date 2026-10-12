@@ -1,4 +1,9 @@
 export {
+  createTriageSourceSettingsSurface,
+  type TriageSourceSettingsDraftEditorPropsV1,
+  type TriageSourceSettingsSurfaceIdentityV1,
+} from './settings/surface.js';
+export {
   TriageEvidenceDisclosureProvider,
   useTriageEvidenceDisclosure,
   triageEvidenceDisclosureActionResultV1,
@@ -21,6 +26,7 @@ export {
   type TriagePostMutationProviderStateClassifierV1,
 } from './ui/postMutation.js';
 export { TriageDetailInstance, TriageDetailPanel, useTriageDetailRequest } from './ui/detailPanel.js';
+export { TriageStatusRow, type TriageStatusRowProps } from './ui/statusRow.js';
 export {
   TriageDetailStory,
   TriageDetailChangeSummary,

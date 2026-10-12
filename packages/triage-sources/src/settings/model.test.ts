@@ -7,10 +7,8 @@ import {
 } from './translations.js';
 
 import {
-  TRIAGE_SOURCE_REMOVAL_CONFIRMATION_TRANSLATION_KEYS_V1,
   UNKNOWN_TRIAGE_SOURCE_SETTINGS_ROW_LIFECYCLE_V1,
   advanceTriageSourceSettingsRowLifecycle,
-  describeTriageSourceRemovalConfirmation,
   describeTriageSourceConfiguredRead,
   describeTriageSourceFailure,
   projectTriageSourceSettingsRows,
@@ -58,6 +56,43 @@ function draft(localInstanceKey: string, overrides: Readonly<{
 }
 
 describe('the source settings discovery model', () => {
+  it('retains an editable configured binding only when its source declares the instance key stability', () => {
+    const persisted = draft('acme/api');
+    const execution = { status: 'success' as const, result: {
+      kind: 'read', status: 'complete', instances: [{ v: 1, lifecycle: 'active', configured: {
+        v: 1, binding: persisted.binding, localInstanceKey: persisted.localInstanceKey,
+        configuration: persisted.configuration, locator: persisted.locator,
+        instance: { source: { pluginId: 'example.tracker', localId: 'triage' }, sourceInstanceId: '11111111-1111-4111-8111-111111111111' },
+      } }],
+    } };
+    const discovery = readTriageSourceDiscovery({ status: 'success', result: {
+      kind: 'incomplete', candidates: [], failures: [],
+    } });
+    const project = (configured: TriageSourceSettingsConfiguredV1) => projectTriageSourceSettingsRows({
+      discovery, configured, outcomes: {}, learned: {}, sourceDisplayName: 'Tracker',
+    });
+    const withoutDeclaration = project(readTriageSourceConfiguredInstances(execution));
+    expect(withoutDeclaration[0]).toMatchObject({ draft: null, controls: [{ id: 'remove' }] });
+    const configured = readTriageSourceConfiguredInstances(execution, 'locatorDerived');
+    const editable = project(configured);
+    expect(editable[0]).toMatchObject({
+      sourceInstanceId: '11111111-1111-4111-8111-111111111111',
+      draft: { ...persisted, keyStability: 'locatorDerived' },
+      controls: [{ id: 'reconfigure' }, { id: 'remove' }],
+    });
+    expect(configured.kind === 'read' && configured.instances[0]?.key).toBe(
+      withoutDeclaration[0]?.key,
+    );
+    const { locator: _locator, ...withoutLocator } = execution.result.instances[0]!.configured;
+    const locatorless = project(readTriageSourceConfiguredInstances({
+      ...execution,
+      result: { ...execution.result, instances: [{
+        ...execution.result.instances[0]!, configured: withoutLocator,
+      }] },
+    }, 'locatorDerived'));
+    expect(locatorless[0]).toMatchObject({ draft: null, controls: [{ id: 'remove' }] });
+  });
+
   it('carries stored opaque configuration beside the current discovered draft for Update and Restore', () => {
     const current = draft('acme/api', { displayPath: 'current/path' });
     const configuration = { v: 1 as const, token: 'stored:repository-scope' };
@@ -904,38 +939,5 @@ describe('the source failure sentence', () => {
       describeTriageSourceFailure({ class: 'unknown', code: 'f' }),
     ]);
     expect(sentences.size).toBe(6);
-  });
-});
-
-describe('the source removal question', () => {
-  it('names the exact row and both halves of what removal costs', () => {
-    const question = describeTriageSourceRemovalConfirmation({
-      rowTitle: 'acme/api',
-      sourceDisplayName: 'Example Tracker',
-    });
-
-    expect(question.title).toBe('Remove acme/api from PRs & Issues?');
-    // The source alone is not enough: a person with several scopes configured
-    // from one account is choosing between rows, not between sources.
-    expect(question.message).toContain('acme/api');
-    expect(question.message).toContain('Example Tracker');
-    // Entries go, commitments stay. Either half alone misleads — "entries leave"
-    // on its own reads as losing the pins too.
-    expect(question.message).toContain('Its entries leave the list');
-    expect(question.message).toContain('pins and Session links you made stay');
-  });
-
-  it('resolves through the reader own bundle rather than a hard-coded sentence', () => {
-    const question = describeTriageSourceRemovalConfirmation(
-      { rowTitle: 'acme/api', sourceDisplayName: 'Example Tracker' },
-      (key, _fallback, values) => `${key}|${String(values?.scope)}|${String(values?.source)}`,
-    );
-
-    expect(question.title).toBe(
-      `${TRIAGE_SOURCE_REMOVAL_CONFIRMATION_TRANSLATION_KEYS_V1.title}|acme/api|Example Tracker`,
-    );
-    expect(question.message).toBe(
-      `${TRIAGE_SOURCE_REMOVAL_CONFIRMATION_TRANSLATION_KEYS_V1.message}|acme/api|Example Tracker`,
-    );
   });
 });

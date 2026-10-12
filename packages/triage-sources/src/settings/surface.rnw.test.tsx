@@ -103,21 +103,13 @@ function configuredRecord(
 
 type Recorded = Readonly<{ action: unknown; input: unknown }>;
 
-type Confirmation = Readonly<{ message: string; title?: string }>;
-
 function createHarness(options: Readonly<{
   discovery: JsonValue | ((signal: AbortSignal) => Promise<JsonValue>);
-  /**
-   * What the user answers the removal question. `unavailable` mounts a host that
-   * does not advertise `confirm` at all, which is how a page reaches the arm
-   * where the question could never be put.
-   */
-  confirm?: boolean | 'unavailable';
   /**
    * What the target says this source has already configured. Defaults to nothing
    * configured, which is the state a first visit is in.
    */
-  configured?: JsonValue;
+  configured?: JsonValue | (() => Promise<JsonValue>);
   /** What that read answers from the second time onward, i.e. after a Refresh. */
   configuredAgain?: JsonValue;
   /**
@@ -151,6 +143,7 @@ function createHarness(options: Readonly<{
         ? options.configured
         : options.configuredAgain ?? options.configured;
       configuredReads += 1;
+      if (typeof answer === 'function') return await answer();
       return answer ?? { kind: 'read', status: 'complete', instances: [] };
     }
     if (
@@ -175,25 +168,12 @@ function createHarness(options: Readonly<{
       .map((entry) => TriageSourceAdministrationActionInputV1Schema.parse(entry.input));
   }
 
-  const confirmations: Confirmation[] = [];
   const connectedAccountsRequests: unknown[] = [];
-  const confirm = options.confirm ?? true;
-  const confirmHandler = confirm === 'unavailable'
-    ? undefined
-    : (input: Readonly<{ message: string; title?: string }>): boolean => {
-      confirmations.push({
-        message: input.message,
-        ...(input.title === undefined ? {} : { title: input.title }),
-      });
-      return confirm;
-    };
 
   return {
     recorded,
     executeAction,
     administrations,
-    confirmations,
-    confirmHandler,
     connectedAccountsRequests,
   };
 }
@@ -212,17 +192,13 @@ async function mountSettings(
       authorPlugin: { id: PLUGIN_ID, version: '0.0.0' },
       surface,
       surfaceContext: createSurfaceContextFixture({ translations }),
-      adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+      adapter: createPluginUiRnwSemanticSurfaceAdapter({ overlays: true }),
       handlers: {
         executeAction: async ({ action, input, signal }) => await harness.executeAction({ action, input, signal }),
         openConnectedAccounts: async ({ request }) => {
           harness.connectedAccountsRequests.push(request);
           return null;
         },
-        // Installed only when the case wants a host that advertises `confirm`.
-        // The testkit advertises exactly the methods it was given a handler for,
-        // so omitting it is the real "this host cannot ask" mount.
-        ...(harness.confirmHandler === undefined ? {} : { confirm: harness.confirmHandler }),
       },
     });
   });
@@ -233,6 +209,14 @@ async function mountSettings(
 async function pressControl(page: PluginUiTestkit, name: string): Promise<void> {
   await act(async () => {
     await page.press(await page.getByRole('button', { name }));
+  });
+}
+
+/** Remove is a rare, consequential arm: it lives in the row's More actions, not beside Update. */
+async function removeRow(page: PluginUiTestkit, title: string): Promise<void> {
+  await pressControl(page, `More actions for ${title}`);
+  await act(async () => {
+    await page.press(await page.getByRole('menuitem', { name: `Remove ${title} from PRs & Issues` }));
   });
 }
 
@@ -298,7 +282,6 @@ describe('the mounted PRs & Issues source settings page', () => {
         adapter: createPluginUiRnwSemanticSurfaceAdapter(),
         handlers: {
           executeAction: async ({ action, input, signal }) => await harness.executeAction({ action, input, signal }),
-          confirm: harness.confirmHandler,
         },
       });
     });
@@ -432,91 +415,35 @@ describe('the mounted PRs & Issues source settings page', () => {
     await expect(page.getByText('In PRs & Issues.')).resolves.toBeDefined();
     await expect(page.queryByRole('button', { name: 'Add acme/api to PRs & Issues' }))
       .resolves.toBeUndefined();
-    await pressControl(page, 'Remove acme/api from PRs & Issues');
+    // Update is the row's everyday control; Remove is never a second slab beside it.
+    await expect(page.queryByRole('button', { name: 'Remove acme/api from PRs & Issues' }))
+      .resolves.toBeUndefined();
+    await removeRow(page, 'acme/api');
     expect(harness.administrations()).toEqual([
       { v: 1, kind: 'remove', sourceInstanceId: INSTANCE_ID },
     ]);
   });
 
-  it('asks before removing a configured source, and names what removal costs', async () => {
+  it('reads as a settings page: its accounts and scopes are one titled section', async () => {
     const harness = createHarness({
       discovery: { kind: 'complete', candidates: [candidate('acme/api')], failures: [] },
-      configured: {
-        kind: 'read',
-        status: 'complete',
-        instances: [configuredRecord('acme/api', 'active')],
-      },
-      administration: [{ kind: 'removed', sourceInstanceId: INSTANCE_ID }],
     });
     const page = await mountSettings(harness);
 
-    await pressControl(page, 'Remove acme/api from PRs & Issues');
-
-    // The question names the exact row, not just the source: a person with
-    // several scopes configured from one account is choosing between rows.
-    expect(harness.confirmations).toHaveLength(1);
-    expect(harness.confirmations[0]?.title).toBe('Remove acme/api from PRs & Issues?');
-    const asked = harness.confirmations[0]?.message ?? '';
-    expect(asked).toContain('acme/api');
-    expect(asked).toContain(SOURCE_DISPLAY_NAME);
-    // Both halves of the blast radius, because either one alone misleads: a
-    // question that only said "entries leave" reads as data loss and stops
-    // people removing a source at all.
-    expect(asked).toContain('entries leave the list');
-    expect(asked).toContain('pins and Session links you made stay');
-
-    // Approved, so the arm ran exactly once and named that row.
-    expect(harness.administrations()).toEqual([
-      { v: 1, kind: 'remove', sourceInstanceId: INSTANCE_ID },
-    ]);
+    // An untitled group has no sheet and no column: the rows sat flush on the page.
+    await expect(page.getByRole('heading', { name: 'Accounts and scopes' })).resolves.toBeDefined();
+    await expect(page.getByRole('button', { name: 'Add acme/api to PRs & Issues' })).resolves.toBeDefined();
   });
 
-  it('removes nothing when the user declines the question', async () => {
-    const harness = createHarness({
-      discovery: { kind: 'complete', candidates: [candidate('acme/api')], failures: [] },
-      configured: {
-        kind: 'read',
-        status: 'complete',
-        instances: [configuredRecord('acme/api', 'active')],
-      },
-      confirm: false,
-    });
+  it('says a refused read once, in words, and never shows the bare refusal code', async () => {
+    const refusal = () => Promise.reject(Object.assign(new Error('stale_surface'), { code: 'stale_surface' }));
+    const harness = createHarness({ discovery: refusal, configured: refusal });
     const page = await mountSettings(harness);
 
-    await pressControl(page, 'Remove acme/api from PRs & Issues');
-
-    // Removal is irreversible from this page's side, so a decline must reach the
-    // target as nothing at all rather than as a request it settles.
-    expect(harness.confirmations).toHaveLength(1);
-    expect(harness.administrations()).toEqual([]);
-    // The row is untouched: still configured, still removable.
-    await expect(page.getByText('In PRs & Issues.')).resolves.toBeDefined();
-    await expect(page.getByRole('button', { name: 'Remove acme/api from PRs & Issues' }))
-      .resolves.toBeDefined();
-  });
-
-  it('removes nothing, and says so, when the question could not be put to the user', async () => {
-    const harness = createHarness({
-      discovery: { kind: 'complete', candidates: [candidate('acme/api')], failures: [] },
-      configured: {
-        kind: 'read',
-        status: 'complete',
-        instances: [configuredRecord('acme/api', 'active')],
-      },
-      confirm: 'unavailable',
-    });
-    const page = await mountSettings(harness);
-
-    await pressControl(page, 'Remove acme/api from PRs & Issues');
-
-    // A host that cannot ask is not a user who said yes, and it is not a user who
-    // said no either. Nothing is removed, and the row says what happened rather
-    // than leaving a pressed button with no visible effect.
-    expect(harness.administrations()).toEqual([]);
-    await expect(page.getByText('This removal could not be confirmed, so nothing was removed. Try again.'))
-      .resolves.toBeDefined();
-    await expect(page.getByRole('button', { name: 'Remove acme/api from PRs & Issues' }))
-      .resolves.toBeDefined();
+    await expect(page.getByText(`${SOURCE_DISPLAY_NAME} could not be read`)).resolves.toBeDefined();
+    await expect(page.queryByText('stale_surface')).resolves.toBeUndefined();
+    // Both reads failed for one reason; the page says it once, where the rows would be.
+    await expect(page.queryByText('What is already configured could not be read')).resolves.toBeUndefined();
   });
 
   it('restores what an earlier visit removed, under the exact ref the target named', async () => {
@@ -561,7 +488,7 @@ describe('the mounted PRs & Issues source settings page', () => {
     });
     const page = await mountSettings(harness);
 
-    await pressControl(page, 'Remove acme/api from PRs & Issues');
+    await removeRow(page, 'acme/api');
     await expect(page.getByRole('button', { name: 'Restore acme/api to PRs & Issues' }))
       .resolves.toBeDefined();
 
@@ -570,7 +497,7 @@ describe('the mounted PRs & Issues source settings page', () => {
     // The re-read observes these rows after that press committed, so it is the
     // newer fact. A press result kept beside it is how a row that changed on
     // another device keeps showing this page's stale answer.
-    await expect(page.getByRole('button', { name: 'Remove acme/api from PRs & Issues' }))
+    await expect(page.getByRole('button', { name: 'More actions for acme/api' }))
       .resolves.toBeDefined();
     await expect(page.queryByRole('button', { name: 'Restore acme/api to PRs & Issues' }))
       .resolves.toBeUndefined();
@@ -679,7 +606,7 @@ describe('the mounted PRs & Issues source settings page', () => {
     )).resolves.toBeDefined();
     await expect(page.queryByRole('button', { name: 'Update acme/api from the provider' }))
       .resolves.toBeUndefined();
-    await pressControl(page, 'Remove acme/api from PRs & Issues');
+    await removeRow(page, 'acme/api');
     expect(harness.administrations()).toEqual([
       { v: 1, kind: 'remove', sourceInstanceId: INSTANCE_ID },
     ]);
@@ -709,7 +636,7 @@ describe('the mounted PRs & Issues source settings page', () => {
     // Remove, Update and Restore each name one exact configured row. The target's
     // read named none here, so offering any of them would be a control that
     // cannot be honoured.
-    await expect(page.queryByRole('button', { name: 'Remove acme/api from PRs & Issues' }))
+    await expect(page.queryByRole('button', { name: 'More actions for acme/api' }))
       .resolves.toBeUndefined();
     await expect(page.queryByRole('button', { name: 'Update acme/api from the provider' }))
       .resolves.toBeUndefined();
@@ -731,7 +658,7 @@ describe('the mounted PRs & Issues source settings page', () => {
 
     await pressControl(page, 'Add acme/api to PRs & Issues');
     await pressControl(page, 'Update acme/api from the provider');
-    await pressControl(page, 'Remove acme/api from PRs & Issues');
+    await removeRow(page, 'acme/api');
 
     // Removal says exactly what it costs. Entries are a projection of what the
     // source can still see, so they go; a pin and a Session link are the user's

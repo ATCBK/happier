@@ -30,7 +30,9 @@ import {
   triageSourceBindingComponentsV1,
   type TriageConfiguredSourceInstanceRecordV1,
   type TriageSourceAccountBindingV1,
+  type TriageSourceAdministrationActionInputV1,
   type TriageSourceFailureV1,
+  type TriageSourceInstanceConfigurationV1,
   type TriageSourceInstanceDraftV1,
 } from '@happier-dev/triage-protocol/v1';
 
@@ -103,6 +105,10 @@ export type TriageSourceSettingsConfiguredInstanceV1 = Readonly<{
   key: string;
   sourceInstanceId: string;
   lifecycle: 'active' | 'retired';
+  /** Source-owned bytes, retained for the source's configuration editor. */
+  configuration: TriageSourceInstanceConfigurationV1;
+  /** Retained configuration can be edited when the source supplies its key-stability contract. */
+  draft?: TriageSourceInstanceDraftV1;
   /** The stored display label, falling back to the source's own instance key. */
   label: string;
   /** The stored provider location, falling back to the account it binds. */
@@ -138,12 +144,22 @@ export type TriageSourceSettingsConfiguredV1 =
 
 function projectConfiguredInstance(
   record: TriageConfiguredSourceInstanceRecordV1,
+  keyStability?: TriageSourceInstanceDraftV1['keyStability'],
 ): TriageSourceSettingsConfiguredInstanceV1 {
   const { configured } = record;
   return {
     key: instanceKey(configured.binding, configured.localInstanceKey),
     sourceInstanceId: configured.instance.sourceInstanceId,
     lifecycle: record.lifecycle,
+    configuration: configured.configuration,
+    ...(keyStability === undefined || configured.locator === undefined ? {} : { draft: {
+      v: 1 as const,
+      binding: configured.binding,
+      localInstanceKey: configured.localInstanceKey,
+      keyStability,
+      configuration: configured.configuration,
+      locator: configured.locator,
+    } }),
     // A stored locator is optional on the configured record, and the source's
     // own instance key is the only other thing in it a person can recognize.
     label: configured.locator?.displayLabel ?? configured.localInstanceKey,
@@ -164,6 +180,7 @@ function projectConfiguredInstance(
  */
 export function readTriageSourceConfiguredInstances(
   execution: PluginActionExecution<unknown>,
+  configuredInstanceKeyStability?: TriageSourceInstanceDraftV1['keyStability'],
 ): TriageSourceSettingsConfiguredV1 {
   if (execution.status === 'idle' || execution.status === 'pending') return { kind: 'loading' };
   if (execution.status === 'outcomeUnknown') return { kind: 'outcomeUnknown' };
@@ -178,7 +195,7 @@ export function readTriageSourceConfiguredInstances(
   return {
     kind: 'read',
     complete: result.status === 'complete',
-    instances: result.instances.map(projectConfiguredInstance),
+    instances: result.instances.map((record) => projectConfiguredInstance(record, configuredInstanceKeyStability)),
   };
 }
 
@@ -220,8 +237,7 @@ export type TriageSourceSettingsConfigurationV1 =
  */
 export type TriageSourceSettingsRowLifecycleV1 =
   | Readonly<{ kind: 'unknown' }>
-  | Readonly<{ kind: 'configured'; sourceInstanceId: string }>
-  | Readonly<{ kind: 'retired'; sourceInstanceId: string }>;
+  | Readonly<{ kind: 'configured' | 'retired'; sourceInstanceId: string; configuration?: TriageSourceInstanceConfigurationV1 }>;
 
 /** The starting lifecycle for a row nothing has been invoked against. */
 export const UNKNOWN_TRIAGE_SOURCE_SETTINGS_ROW_LIFECYCLE_V1: TriageSourceSettingsRowLifecycleV1 =
@@ -240,7 +256,8 @@ export type TriageSourceSettingsRowControlV1 = Readonly<{
 /**
  * What one row is about, and how this source's current listing accounts for it.
  *
- * `discovered` carries the fresh draft every arm but `remove` requires. The other
+ * `discovered` carries a fresh draft. A source may also qualify an editable
+ * retained draft through its declared instance-key stability. The other
  * two are a configured instance the listing did not produce a candidate for, and
  * they are kept apart because absence is only evidence when the listing was
  * complete: `missing` means this source genuinely cannot see it any more, while
@@ -256,7 +273,7 @@ type TriageSourceSettingsRowSubjectV1 = Readonly<{
   keyFollowsProviderName: boolean;
 }> & (
   | Readonly<{ presence: 'discovered'; draft: TriageSourceInstanceDraftV1 }>
-  | Readonly<{ presence: 'missing' | 'unlisted' }>
+  | Readonly<{ presence: 'missing' | 'unlisted'; draft?: TriageSourceInstanceDraftV1 }>
 );
 
 /** Everything a row renders, derived once so six pages cannot disagree. */
@@ -272,11 +289,13 @@ export type TriageSourceSettingsRowV1 = Readonly<{
   /** Present only once the target has told this page the row's stable id. */
   sourceInstanceId: string | null;
   /**
-   * The freshly discovered draft this row's arms submit, or `null` when this
-   * source's listing no longer produces one. Every arm except `remove` carries a
-   * draft, so a row without one is offered no other arm.
+   * The discovered or source-qualified retained draft this row's arms submit.
+   * Every arm except `remove` carries a draft, so a row without one is offered
+   * no other arm.
    */
   draft: TriageSourceInstanceDraftV1 | null;
+  /** Stored or successfully committed source-owned configuration; never decoded here. */
+  configuredConfiguration: TriageSourceInstanceConfigurationV1 | null;
   keyFollowsProviderName: boolean;
 }>;
 
@@ -409,15 +428,24 @@ export function readTriageSourceConfiguration(
 export function advanceTriageSourceSettingsRowLifecycle(
   previous: TriageSourceSettingsRowLifecycleV1,
   outcome: TriageSourceSettingsConfigurationV1,
+  request?: TriageSourceAdministrationActionInputV1,
 ): TriageSourceSettingsRowLifecycleV1 {
+  // Create/reuse and Restore/already-active are no-ops at the writer. Only
+  // these request/result pairs establish that the submitted bytes committed.
+  const configurationCommitted = request?.kind === 'create' && outcome.kind === 'configured'
+    || request?.kind === 'reconfigure' && (outcome.kind === 'reconfigured' || outcome.kind === 'alreadyConfigured')
+    || request?.kind === 'reactivate' && outcome.kind === 'restored';
+  const configuration = configurationCommitted
+    ? request.draft.configuration
+    : previous.kind === 'unknown' ? undefined : previous.configuration;
   switch (outcome.kind) {
     case 'configured':
     case 'alreadyConfigured':
     case 'reconfigured':
     case 'restored':
-      return { kind: 'configured', sourceInstanceId: outcome.sourceInstanceId };
+      return { kind: 'configured', sourceInstanceId: outcome.sourceInstanceId, ...(configuration === undefined ? {} : { configuration }) };
     case 'removed':
-      return { kind: 'retired', sourceInstanceId: outcome.sourceInstanceId };
+      return { kind: 'retired', sourceInstanceId: outcome.sourceInstanceId, ...(configuration === undefined ? {} : { configuration }) };
     default:
       return previous;
   }
@@ -579,7 +607,7 @@ function describeLifecycle(
 
 function controlsFor(
   lifecycle: TriageSourceSettingsRowLifecycleV1,
-  presence: TriageSourceSettingsRowSubjectV1['presence'],
+  hasDraft: boolean,
   title: string,
   outcome: TriageSourceSettingsConfigurationV1 | undefined,
   text: PluginTranslate,
@@ -589,10 +617,8 @@ function controlsFor(
   // arm could create or mutate the same intent twice.
   if (outcome?.kind === 'outcomeUnknown') return [];
 
-  // Add, Update and Restore all submit a freshly discovered draft. Without one
-  // there is nothing to submit, and `remove` — the only arm that names a row and
-  // nothing else — is the only control that stays honest.
-  const hasDraft = presence === 'discovered';
+  // A discovered or source-qualified retained draft supplies the exact binding
+  // and configuration to submit. Without one only Remove names sufficient facts.
   switch (lifecycle.kind) {
     case 'unknown':
       return hasDraft
@@ -647,6 +673,7 @@ function controlsFor(
 function projectTriageSourceSettingsRow(input: Readonly<{
   subject: TriageSourceSettingsRowSubjectV1;
   lifecycle: TriageSourceSettingsRowLifecycleV1;
+  configuredConfiguration: TriageSourceInstanceConfigurationV1 | null;
   /** `undefined` is spelled out: a row with no settled answer is the common case. */
   outcome?: TriageSourceSettingsConfigurationV1 | undefined;
   sourceDisplayName: string;
@@ -657,15 +684,17 @@ function projectTriageSourceSettingsRow(input: Readonly<{
     ? null
     : describeTriageSourceConfiguration(input.outcome, input.sourceDisplayName, input.text);
   const standing = describeLifecycle(lifecycle, subject.presence, input.sourceDisplayName, input.text);
+  const draft = subject.draft ?? null;
   return {
     key: subject.key,
     title: subject.label,
     status: settled?.text ?? standing?.text ?? null,
     locator: subject.locator === subject.label ? null : subject.locator,
     tone: settled?.tone ?? standing?.tone ?? 'neutral',
-    controls: controlsFor(lifecycle, subject.presence, subject.label, input.outcome, input.text),
+    controls: controlsFor(lifecycle, draft !== null, subject.label, input.outcome, input.text),
     sourceInstanceId: lifecycle.kind === 'unknown' ? null : lifecycle.sourceInstanceId,
-    draft: subject.presence === 'discovered' ? subject.draft : null,
+    draft,
+    configuredConfiguration: input.configuredConfiguration,
     keyFollowsProviderName: subject.keyFollowsProviderName,
   };
 }
@@ -695,6 +724,7 @@ function subjectFromConfigured(
     // Claiming it here would put the warning badge on a guess.
     keyFollowsProviderName: false,
     presence,
+    ...(instance.draft === undefined ? {} : { draft: instance.draft }),
   };
 }
 
@@ -755,9 +785,12 @@ export function projectTriageSourceSettingsRows(input: Readonly<{
   }
 
   function project(subject: TriageSourceSettingsRowSubjectV1): TriageSourceSettingsRowV1 {
+    const lifecycle = lifecycleFor(subject.key);
     return projectTriageSourceSettingsRow({
       subject,
-      lifecycle: lifecycleFor(subject.key),
+      lifecycle,
+      configuredConfiguration: (lifecycle.kind === 'unknown' ? undefined : lifecycle.configuration)
+        ?? byKey.get(subject.key)?.configuration ?? null,
       ...(outcomes[subject.key] === undefined ? {} : { outcome: outcomes[subject.key] }),
       sourceDisplayName,
       text,
@@ -947,83 +980,4 @@ export function describeTriageSourceFailure(
   // connection name and carries no remedy, so replacing it loses nothing. One
   // union, two readers, two requirements.
   return failure.detail === undefined ? sentence : `${sentence} (${failure.detail})`;
-}
-
-/**
- * What the user is asked before one configured source is removed.
- *
- * Removal is destructive and this page cannot undo it: the target retires the
- * row, and only an explicit Restore — offered only while the source can still
- * discover that scope — brings it back. So the question is asked before the
- * arm runs, not after.
- *
- * It states the exact row rather than the source alone, because a person with
- * several projects configured from one account is choosing between rows, and
- * "Remove GitLab?" does not tell them which one they are about to lose.
- *
- * It also states the blast radius the same way the settled sentence does, and
- * for the same reason: entries are a projection of what the source can still
- * see, so they go, while a pin and a Session link are the user's own state with
- * their own lifetime (`core/CORPUS.md` §5.3). A question that left that
- * ambiguous would stop people from removing a source at all.
- */
-export const TRIAGE_SOURCE_REMOVAL_CONFIRMATION_TRANSLATION_KEYS_V1 = Object.freeze({
-  title: 'plugins.triage.sourceSettings.removeConfirm.title',
-  message: 'plugins.triage.sourceSettings.removeConfirm.message',
-  unavailable: 'plugins.triage.sourceSettings.removeConfirm.unavailable',
-});
-
-export type TriageSourceRemovalConfirmationV1 = Readonly<{
-  title: string;
-  message: string;
-}>;
-
-/**
- * The fallback is composed here rather than passed as a template, because the
- * fallback is what a caller with no host resolver gets and a resolver-free
- * caller performs no substitution. A bundle entry still carries `{scope}`,
- * `{source}` and `{product}`, which the host resolver fills; an absent entry
- * degrades to this already-written English rather than to visible braces.
- */
-export function describeTriageSourceRemovalConfirmation(
-  input: Readonly<{ rowTitle: string; sourceDisplayName: string }>,
-  text: PluginTranslate = ENGLISH_TEXT,
-): TriageSourceRemovalConfirmationV1 {
-  const { rowTitle, sourceDisplayName } = input;
-  const values = { scope: rowTitle, source: sourceDisplayName, product: PRODUCT_NAME };
-  return {
-    title: text(
-      TRIAGE_SOURCE_REMOVAL_CONFIRMATION_TRANSLATION_KEYS_V1.title,
-      `Remove ${rowTitle} from ${PRODUCT_NAME}?`,
-      values,
-    ),
-    message: text(
-      TRIAGE_SOURCE_REMOVAL_CONFIRMATION_TRANSLATION_KEYS_V1.message,
-      `${sourceDisplayName} stops contributing ${rowTitle} to ${PRODUCT_NAME}.`
-        + ' Its entries leave the list; the pins and Session links you made stay.',
-      values,
-    ),
-  };
-}
-
-/**
- * The sentence for a removal the page could not put to the user at all.
- *
- * A host that does not advertise `confirm`, a retired mount, or a withdrawn
- * question settles the request as a typed host error rather than as an answer.
- * None of those is a decline the user made, and none of them is a removal, so
- * the row says what happened instead of silently doing nothing — a Remove press
- * that produces no visible change reads as a broken button.
- */
-export function describeTriageSourceRemovalUnconfirmable(
-  text: PluginTranslate = ENGLISH_TEXT,
-): TriageSourceSettingsConfigurationV1 {
-  return {
-    kind: 'failed',
-    message: text(
-      TRIAGE_SOURCE_REMOVAL_CONFIRMATION_TRANSLATION_KEYS_V1.unavailable,
-      'This removal could not be confirmed, so nothing was removed. Try again.',
-    ),
-    retryable: true,
-  };
 }

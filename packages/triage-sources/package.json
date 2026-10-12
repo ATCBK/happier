@@ -4,6 +4,7 @@
   "description": "The shared source-runtime authorization, forge HTTP and PRs & Issues settings page every first-party Triage source consumes.",
   "private": false,
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

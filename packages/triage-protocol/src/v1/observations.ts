@@ -155,6 +155,8 @@ export const TriageSourceEntrySnapshotV1Schema = defineProtocolObject({
     summary: TriageTextV1ProtocolSchema.optional(),
     /** Readable owning scope; presentation only, never parsed back into identity. */
     scopeLabel: TriageTextV1ProtocolSchema,
+    /** Source-authored short scope name for compact rows; the full path stays in scopeLabel. */
+    scopeDisplayName: TriageTextV1ProtocolSchema.optional(),
     /**
      * Who opened the entry, as the provider names them ("Mara Oduya", a login).
      * Presentation only: never an identity, a viewer match or a filter key. A

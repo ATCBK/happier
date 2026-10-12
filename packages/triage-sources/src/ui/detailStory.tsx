@@ -3,6 +3,7 @@ import { Chart, Column, Columns, Metric, Progress, Row, ScrollArea, Stack, Step,
 import { formatTriageTimestampV1 } from '@happier-dev/triage-protocol/v1';
 
 import { summarizeTriageChangesV1, type TriageChangedFileV1, type TriageChangeTotalsV1 } from './changeSummary.js';
+import { TriageStatusRow } from './statusRow.js';
 
 /** Composition only: the source retains ownership of evidence and its read lifecycle. */
 const STORY_TITLES = Object.freeze({
@@ -88,13 +89,13 @@ export function TriageDetailChangeSummary({ rows, more, totals, titleKey, childr
   const known = rows.length > 0 || totals !== undefined;
   const files = { count: String(summary.fileCount) };
   const trailing = !known ? undefined : summary.lines === null
-    ? <Text variant="caption" tone="secondary" value={summary.complete
+    ? <Text variant="micro" tone="secondary" value={summary.complete
       ? count('files', summary.fileCount, { one: '{count} file', other: '{count} files' })
       : text('plugins.triage.detailStory.filesPartial', '{count}+ files', files)} />
     : <Row gap="xsmall" align="center">
-      <Text variant="caption" tone="success" value={`+${String(summary.lines.additions)}`} />
-      <Text variant="caption" tone="danger" value={`−${String(summary.lines.deletions)}`} />
-      <Text variant="caption" tone="secondary" value={summary.complete
+      <Text variant="micro" tone="success" value={`+${String(summary.lines.additions)}`} />
+      <Text variant="micro" tone="danger" value={`−${String(summary.lines.deletions)}`} />
+      <Text variant="micro" tone="secondary" value={summary.complete
         ? count('inFiles', summary.fileCount, { one: 'in {count} file', other: 'in {count} files' })
         : text('plugins.triage.detailStory.inFilesPartial', 'in {count}+ files', files)} />
     </Row>;
@@ -102,11 +103,11 @@ export function TriageDetailChangeSummary({ rows, more, totals, titleKey, childr
     {children}
     {summary.files.map((file) => file.lines === undefined
       ? <Row key={file.path} gap="small" align="center">
-        <Stack style={{ flex: 1, minWidth: 0 }}><Text variant="code" numberOfLines={1} value={file.path} /></Stack>
-        {file.note === undefined ? null : <Text variant="caption" tone="secondary" value={file.note} />}
+        <Stack grow><Text variant="code" numberOfLines={1} value={file.path} /></Stack>
+        {file.note === undefined ? null : <Text variant="micro" tone="secondary" value={file.note} />}
       </Row>
       : <Row key={file.path} gap="medium" align="center">
-        <Stack style={{ flex: 1, minWidth: 0 }}><Text variant="code" numberOfLines={1} value={file.path} /></Stack>
+        <Stack grow><Text variant="code" numberOfLines={1} value={file.path} /></Stack>
         <Stack style={{ width: '25%', maxWidth: 120 }}>
           <Progress label={text('plugins.triage.detailStory.fileLines', '{path}: {additions} added, {deletions} removed', {
             path: file.path, additions: String(file.lines.additions), deletions: String(file.lines.deletions),
@@ -115,13 +116,13 @@ export function TriageDetailChangeSummary({ rows, more, totals, titleKey, childr
             { value: file.lines.deletions / summary.scale, tone: 'danger' },
           ]} />
         </Stack>
-        <Text variant="caption" tone="secondary" value={`+${String(file.lines.additions)} −${String(file.lines.deletions)}`} />
+        <Text variant="micro" tone="secondary" value={`+${String(file.lines.additions)} −${String(file.lines.deletions)}`} />
       </Row>)}
-    {summary.restCount === 0 ? null : <Text variant="caption" tone="secondary" value={summary.sortedBySize
+    {summary.restCount === 0 ? null : <Text variant="micro" tone="secondary" value={summary.sortedBySize
       ? count('smallerFiles', summary.restCount, { one: '{count} smaller file', other: '{count} smaller files' })
       : count('moreFiles', summary.restCount, { one: '{count} more file', other: '{count} more files' })} />}
     {!known || summary.lines !== null ? null
-      : <Text variant="caption" tone="secondary" valueKey="plugins.triage.detailStory.noLineCounts" fallback="Line counts not reported" />}
+      : <Text variant="micro" tone="secondary" valueKey="plugins.triage.detailStory.noLineCounts" fallback="Line counts not reported" />}
   </TriageDetailChanges>;
 }
 
@@ -188,18 +189,16 @@ export function TriageDetailChecks({ title, titleKey, rollup, failing, latestCom
           : count('allPassed', passing!, { one: '{count} passed', other: 'All {count} passed' });
     }
   }
-  const trailing = lead === null ? <Text variant="caption" tone="secondary" value={line} />
+  const trailing = lead === null ? <Text variant="micro" tone="secondary" value={line} />
     : <Row gap="xsmall" align="center">
-      <Text variant="caption" tone="danger" value={lead} />
-      <Text variant="caption" tone="secondary" value={line} />
+      <Text variant="micro" tone="danger" value={lead} />
+      <Text variant="micro" tone="secondary" value={line} />
     </Row>;
   const listed = state === 'failed' && failing !== undefined && failing.length > 0;
   return <Step title={title} titleKey={titleKey} marker={{ kind: 'state', state, label }} trailing={trailing}>
     {listed || children !== undefined ? <Stack gap="small">
-      {listed ? failing.map((check) => <Stack key={check.id} gap="none">
-        <Text variant="label" value={check.name} />
-        {check.detail === undefined ? null : <Text variant="caption" tone="secondary" value={check.detail} />}
-      </Stack>) : null}
+      {listed ? failing.map((check) => <TriageStatusRow key={check.id} presentation="summary"
+        name={check.name} status={check.detail} />) : null}
       {children}
     </Stack> : null}
   </Step>;
@@ -231,17 +230,14 @@ export function TriageDetailSpread({ tiles, trend, locale, nowMs }: Readonly<{
   const points = trend === null ? [] : trend.points;
   if (tiles.length === 0 && points.length === 0) return null;
   const tileRow = tiles.length === 0 ? null : <Row gap="large" style={{ flexWrap: 'wrap' }}>
-    {tiles.map((tile) => <Stack key={tile.id} gap="none">
-      <Metric label={tile.label} value={tile.value} />
-      <Text variant="caption" tone="neutral" value={tile.label} />
-    </Stack>)}
+    {tiles.map((tile) => <Metric key={tile.id} label={tile.label} value={tile.value} caption={tile.label} />)}
   </Row>;
   const chart = trend === null || points.length === 0 ? null : <Chart style="line" label={trend.label}
     points={points.map((point) => ({
       x: formatTriageTimestampV1(locale, point.atMs, 'relative', nowMs), y: point.count,
     }))} />;
   return <Step marker={{ kind: 'number', value: 2 }} title="Spread" titleKey="plugins.triage.detailStory.spread"
-    trailing={trend === null ? undefined : <Text variant="caption" tone="neutral" value={trend.windowLabel} />}>
+    trailing={trend === null ? undefined : <Text variant="micro" tone="neutral" value={trend.windowLabel} />}>
     {tileRow === null || chart === null ? tileRow ?? chart
       // Beside each other when the pane holds two columns, stacked when it does not: the
       // count comes from the width `Columns` itself measured.

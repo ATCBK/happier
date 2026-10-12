@@ -4,15 +4,14 @@ import {
   Avatar,
   Button,
   Icon,
-  List,
   Markdown,
-  Row,
   Stack,
   Surface,
   Text,
-  usePluginTheme,
+  Timeline,
   type IconName,
   type TextTone,
+  type TimelineItemContent,
 } from '@happier-dev/plugin-ui';
 import { formatTriageTimestampV1 } from '@happier-dev/triage-protocol/v1';
 
@@ -90,11 +89,6 @@ export type TriageActivityTimelineProps = Readonly<{
   footer?: React.ReactNode;
 }>;
 
-const MARKER_PX = 24;
-const RAIL_PX = 1.5;
-const ROW_INSET_PX = 7;
-/** Where the rail meets a marker's centre, measured from the row's top. */
-const MARKER_CENTER_PX = ROW_INSET_PX + MARKER_PX / 2;
 const MARKER_ICON: Readonly<Record<TriageActivityKindV1, IconName>> = Object.freeze({
   comment: 'conversations',
   review: 'review',
@@ -124,97 +118,56 @@ export function orderTriageActivityEventsV1(
     .map(({ event }) => event);
 }
 
-function ActivityMarker({ event }: Readonly<{ event: TriageActivityEventV1 }>): React.ReactElement {
-  const theme = usePluginTheme();
+function ActivityGlyph({ event }: Readonly<{ event: TriageActivityEventV1 }>): React.ReactElement {
   const actor = event.actor ?? null;
-  return (
-    <Stack
-      align="center"
-      justify="center"
-      style={{
-        width: MARKER_PX,
-        height: MARKER_PX,
-        borderRadius: MARKER_PX / 2,
-        backgroundColor: theme.colors.surface,
-        borderWidth: RAIL_PX,
-        borderColor: theme.colors.divider,
-      }}
-    >
-      {event.kind === 'comment' && actor !== null
-        ? <Avatar name={actor} size="small" />
-        : <Icon name={MARKER_ICON[event.kind]} size="small" tone={event.tone ?? 'secondary'} />}
-    </Stack>
-  );
+  return event.kind === 'comment' && actor !== null
+    ? <Avatar name={actor} size="small" />
+    : <Icon name={MARKER_ICON[event.kind]} size="small" tone={event.tone ?? 'secondary'} />;
 }
 
-function ActivityEventRow({
-  event,
-  first,
-  last,
-  locale,
-  nowMs,
-}: Readonly<{
-  event: TriageActivityEventV1;
-  first: boolean;
-  last: boolean;
-  locale: string;
-  nowMs: number;
-}>): React.ReactElement {
-  const theme = usePluginTheme();
+function activityEventContent(
+  event: TriageActivityEventV1,
+  locale: string,
+  nowMs: number,
+): TimelineItemContent {
   const actor = event.actor ?? null;
   const detail = event.detail ?? null;
   const quote = event.quote ?? null;
   const href = event.href ?? null;
-  return (
-    <Row gap="medium" align="flex-start" style={{ paddingVertical: ROW_INSET_PX }}>
-      <Stack align="center" style={{ width: MARKER_PX, alignSelf: 'stretch' }}>
-        {/* The rail runs through every marker and stops at the first and the last. */}
-        {first && last ? null : (
-          <Stack
-            style={{
-              position: 'absolute',
-              top: first ? MARKER_CENTER_PX : 0,
-              ...(last ? { height: MARKER_CENTER_PX } : { bottom: 0 }),
-              left: (MARKER_PX - RAIL_PX) / 2,
-              width: RAIL_PX,
-              backgroundColor: theme.colors.divider,
-            }}
-          />
-        )}
-        <ActivityMarker event={event} />
-      </Stack>
-      <Stack gap="small" style={{ flex: 1, minWidth: 0, paddingTop: 3 }}>
-        <Text variant="reading">
-          {actor === null ? null : <Text variant="label">{actor}</Text>}
-          {actor === null ? null : ' · '}
-          {event.summary}
-          {detail === null ? null : ' '}
-          {detail === null ? null : <Text variant="reading" tone="secondary">{detail}</Text>}
-          {event.atMs === null ? null : '  '}
-          {event.atMs === null
-            ? null
-            : (
-              <Text variant="caption" tone="muted">
-                {formatTriageTimestampV1(locale, event.atMs, 'relative', nowMs)}
-              </Text>
-            )}
-        </Text>
+  return {
+    glyph: <ActivityGlyph event={event} />,
+    heading: (
+      <>
+        {actor === null ? null : <Text variant="label">{actor}</Text>}
+        {actor === null ? null : ' · '}
+        {event.summary}
+        {detail === null ? null : ' '}
+        {detail === null ? null : <Text variant="reading" tone="secondary">{detail}</Text>}
+      </>
+    ),
+    time: event.atMs === null ? null : (
+      <Text variant="micro" tone="muted">
+        {formatTriageTimestampV1(locale, event.atMs, 'relative', nowMs)}
+      </Text>
+    ),
+    body: (
+      <>
         {quote === null || quote === ''
           ? null
           : <Surface tone="muted" padding="small"><Markdown value={quote} /></Surface>}
         {event.inset ?? null}
-      </Stack>
-      {href === null
-        ? null
-        : (
-          <Action.OpenExternal
-            url={href}
-            variant="plain"
-            accessibilityLabel={event.hrefLabel ?? event.summary}
-          />
-        )}
-    </Row>
-  );
+      </>
+    ),
+    trailing: href === null
+      ? null
+      : (
+        <Action.OpenExternal
+          url={href}
+          variant="plain"
+          accessibilityLabel={event.hrefLabel ?? event.summary}
+        />
+      ),
+  };
 }
 
 function ContinuationButtons({ continuations }: Readonly<{
@@ -250,7 +203,6 @@ export function TriageActivityTimeline(props: TriageActivityTimelineProps): Reac
   const continuations = props.continuations ?? [];
   const earlier = continuations.filter((continuation) => continuation.reads === 'earlier');
   const later = continuations.filter((continuation) => continuation.reads !== 'earlier');
-  const lastIndex = events.length - 1;
   const header = earlier.length === 0 ? props.header : (
     <Stack gap="small">
       {props.header}
@@ -258,7 +210,7 @@ export function TriageActivityTimeline(props: TriageActivityTimelineProps): Reac
     </Stack>
   );
   return (
-    <List
+    <Timeline
       accessibilityLabel={props.accessibilityLabel}
       {...(props.accessibilityLabelKey === undefined ? {} : { accessibilityLabelKey: props.accessibilityLabelKey })}
       items={events}
@@ -273,15 +225,7 @@ export function TriageActivityTimeline(props: TriageActivityTimelineProps): Reac
           {props.footer}
         </Stack>
       )}
-      renderItem={(event, index) => (
-        <ActivityEventRow
-          event={event}
-          first={index === 0}
-          last={index === lastIndex}
-          locale={props.locale}
-          nowMs={props.nowMs}
-        />
-      )}
+      renderItem={(event) => activityEventContent(event, props.locale, props.nowMs)}
     />
   );
 }
