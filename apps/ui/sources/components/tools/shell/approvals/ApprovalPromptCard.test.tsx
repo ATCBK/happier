@@ -288,6 +288,19 @@ describe('ApprovalPromptCard', () => {
         expect(screen.getTextContent()).toContain('Agent wants to inspect active sessions');
     });
 
+    it('names a declared Session reference on the same Home used by the approval decision', async () => {
+        const fixture = createSessionFixture();
+        if (!fixture.metadata) throw new Error('Missing Session metadata fixture');
+        storage.getState().applySessions([createSessionFixture({
+            id: 'session-1', serverId: homeId,
+            metadata: { ...fixture.metadata, name: 'Release captain' },
+        })]);
+        const screen = await renderCard({ ...approvalRequest(), actionId: 'session.turn.cancel',
+            actionArgs: { sessionId: 'session-1' } });
+        expect(screen.getTextContent()).toContain('Release captain');
+        expect(screen.getTextContent()).not.toContain('session-1');
+    });
+
     it('shows an Agent instructions edit as its proposed document diff, not raw Action fields', async () => {
         const screen = await renderCard({ ...approvalRequest(), actionId: 'prompt_doc.update', summary: 'Update its instructions',
             actionArgs: { artifactId: 'instructions-doc', title: 'Release captain', markdown: 'Check prerelease versions first.' } });
@@ -392,6 +405,8 @@ describe('ApprovalPromptCard', () => {
             serverId: homeId, machineId: 'machine-exact', payload: { artifactId: 'approval-1' },
         }));
         expect(home.requests.filter(request => request.path.includes('/sessions/'))).toEqual([]);
+        const { Modal } = await import('@/modal');
+        expect(Modal.alert).toHaveBeenCalledWith('common.error', 'approvals.staleFailure');
     });
 
     it('fails closed instead of locally replaying an API approval whose daemon placement is missing', async () => {

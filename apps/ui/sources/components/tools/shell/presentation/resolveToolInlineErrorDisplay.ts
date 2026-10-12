@@ -29,17 +29,35 @@ export function resolveToolInlineErrorDisplay(params: Readonly<{
     metadata: Metadata | null;
     historicalAgentId?: string | null;
     permissionDisabledReason?: TranscriptPermissionDisabledReason;
-}>): Readonly<{ override: string | null; append: string | null }> {
+}>): Readonly<{ override: string | null; append: string | null; generic: string | null }> {
     const override = resolveToolPermissionTerminalErrorMessage(params);
-    if (override) return { override: resolveToolErrorDisplay(override).text, append: null };
-    const known: KnownToolDefinition | undefined = knownTools[params.normalizedToolName as keyof typeof knownTools];
-    const hideError = known?.hideDefaultError === true
-        || params.normalizedToolName === 'SubAgentRun' || params.tool.name === 'SubAgentRun'
-        || isSubAgentRunErrorResult(params.tool.result);
-    if (hideError || params.tool.state !== 'error' || !params.tool.result || parseToolUseError(params.tool.result).isToolUseError) {
-        return { override: null, append: null };
+    if (override) return { override: resolveToolErrorDisplay(override).text, append: null, generic: null };
+    const result = params.tool.result;
+    const isSubAgentRun = params.normalizedToolName === 'SubAgentRun' || params.tool.name === 'SubAgentRun'
+        || isSubAgentRunErrorResult(result);
+    if (params.tool.state !== 'error' || !result || parseToolUseError(result).isToolUseError || isSubAgentRun) {
+        return { override: null, append: null, generic: null };
     }
-    const typedError = parseToolUseError(params.tool.result).errorMessage;
-    const raw = typedError ?? (typeof params.tool.result === 'string' ? params.tool.result : JSON.stringify(params.tool.result, null, 2));
-    return { override: null, append: resolveToolErrorDisplay(raw).text };
+    const raw = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+    // The body without a tool-specific view always states a failure itself, with the raw result.
+    const generic = raw;
+    const known: KnownToolDefinition | undefined = knownTools[params.normalizedToolName as keyof typeof knownTools];
+    if (known?.hideDefaultError === true) return { override: null, append: null, generic };
+    const typedError = parseToolUseError(result).errorMessage;
+    return { override: null, append: resolveToolErrorDisplay(typedError ?? raw).text, generic };
+}
+
+/**
+ * Whether the open tool body states the failure itself (a `ToolError` block): the permission
+ * override always; beside a tool-specific view, the appended error (unless the tool hides it);
+ * in the generic body, the raw result. A minimal body shows only the result. When this is true the card header stays quiet, so one place states
+ * the error; while the card is closed, the header summary is that place.
+ */
+export function doesToolInlineBodyStateError(
+    display: Readonly<{ override: string | null; append: string | null; generic: string | null }>,
+    body: Readonly<{ hasSpecificView: boolean; minimal: boolean }>,
+): boolean {
+    if (display.override !== null) return true;
+    if (body.hasSpecificView) return display.append !== null;
+    return !body.minimal && display.generic !== null;
 }

@@ -15,8 +15,10 @@ vi.mock('@/sync/sync', () => ({
     },
 }));
 
-const { toolErrorSpy } = vi.hoisted(() => ({
+const { toolErrorSpy, detailLevelDefault, catalog } = vi.hoisted(() => ({
     toolErrorSpy: vi.fn(),
+    detailLevelDefault: { value: 'summary' as 'summary' | 'title' },
+    catalog: { knownTools: {} as Record<string, unknown> },
 }));
 
 installToolShellCommonModuleMocks({
@@ -40,7 +42,7 @@ installToolShellCommonModuleMocks({
             importOriginal,
             overrides: {
                 useSetting: createUseSettingMock({ fallback: (key) => {
-                    if (key === 'toolViewDetailLevelDefault') return 'summary';
+                    if (key === 'toolViewDetailLevelDefault') return detailLevelDefault.value;
                     if (key === 'toolViewDetailLevelDefaultLocalControl') return 'title';
                     if (key === 'toolViewDetailLevelByToolName') return {};
                     if (key === 'toolViewShowDebugByDefault') return false;
@@ -58,7 +60,7 @@ vi.mock('@/components/tools/renderers/core/_registry', () => ({
 }));
 
 vi.mock('@/components/tools/catalog', () => ({
-    knownTools: {},
+    get knownTools() { return catalog.knownTools; },
 }));
 
 vi.mock('@/components/tools/renderers/system/MCPToolView', () => ({
@@ -123,5 +125,60 @@ describe('ToolView (error message formatting)', () => {
         expect(args.message).toContain('"error"');
         expect(args.message).toContain('"status"');
         expect(args.message).toContain('Tool call failed');
+    });
+    // One place states a failure: the open body's error block, or, while the card is closed, the
+    // header summary. Never both (the "unknown_error" twice seen live, 2026-10-12).
+    const headerTexts = (screen: { root: { findAll: (p: (n: any) => boolean) => any[] } }) =>
+        screen.root.findAll((node) => typeof node.type === 'string' && typeof node.props?.children === 'string' && node.props.children.includes('Tool call failed'))
+            .map((node) => node.props.children as string);
+
+    it('states the error once: in the open body, not again in the header', async () => {
+        const tool = makeToolCall({
+            name: 'SomeUnknownTool',
+            state: 'error',
+            input: { anything: true },
+            result: { error: 'Tool call failed', status: 'failed' },
+        });
+        const screen = await renderScreen(
+            React.createElement(ToolView, { tool, metadata: null, messages: [], sessionId: 's1', messageId: 'm1' }),
+        );
+        expect(toolErrorSpy).toHaveBeenCalled();
+        expect(headerTexts(screen as never)).toEqual([]);
+    });
+
+    it('keeps the header summary while the card is closed', async () => {
+        toolErrorSpy.mockClear();
+        detailLevelDefault.value = 'title';
+        const tool = makeToolCall({
+            name: 'SomeUnknownTool',
+            state: 'error',
+            input: { title: 'Create demo README' },
+            result: { error: 'Tool call failed', status: 'failed' },
+        });
+        const screen = await renderScreen(
+            React.createElement(ToolView, { tool, metadata: null, messages: [], sessionId: 's1', messageId: 'm1' }),
+        );
+        expect(headerTexts(screen as never)).toEqual(['Tool call failed']);
+        // The status glyph already marks the failure; the summary beside it adds words, not a second glyph.
+        const warningGlyphs = (screen as never as { root: { findAll: (p: (n: any) => boolean) => any[] } }).root
+            .findAll((node) => typeof node.type === 'string' && node.props?.name === 'warning-circle');
+        expect(warningGlyphs).toHaveLength(1);
+        detailLevelDefault.value = 'summary';
+    });
+    it('states the error once for a tool that hides its default error and has no view of its own', async () => {
+        toolErrorSpy.mockClear();
+        catalog.knownTools = { QuietFailTool: { hideDefaultError: true } };
+        const tool = makeToolCall({
+            name: 'QuietFailTool',
+            state: 'error',
+            input: { anything: true },
+            result: { error: 'Tool call failed', status: 'failed' },
+        });
+        const screen = await renderScreen(
+            React.createElement(ToolView, { tool, metadata: null, messages: [], sessionId: 's1', messageId: 'm1' }),
+        );
+        catalog.knownTools = {};
+        expect(toolErrorSpy).toHaveBeenCalled();
+        expect(headerTexts(screen as never)).toEqual([]);
     });
 });

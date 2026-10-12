@@ -87,6 +87,9 @@ vi.mock('@/agents/catalog/catalog', () => ({
     getAgentCore: () => ({ toolRendering: { hideUnknownToolsByDefault: false } }),
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolTimelineRow } = await import('./ToolTimelineRow');
+
 describe('ToolTimelineRow (title fallback)', () => {
     beforeEach(() => {
         settings = {
@@ -105,7 +108,6 @@ describe('ToolTimelineRow (title fallback)', () => {
     });
 
     it('does not use description as title when inference did not fall back', async () => {
-        const { ToolTimelineRow } = await import('./ToolTimelineRow');
         const tool: any = {
             name: 'UnknownTool',
             state: 'completed',
@@ -124,7 +126,6 @@ describe('ToolTimelineRow (title fallback)', () => {
     });
 
     it('uses description as title when inference fell back and tool is unknown', async () => {
-        const { ToolTimelineRow } = await import('./ToolTimelineRow');
         const tool: any = {
             name: 'UnknownTool',
             state: 'completed',

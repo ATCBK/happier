@@ -128,10 +128,11 @@ describe('useApprovalDecisionHandler portable Home recovery', () => {
         const hook = await renderHook(() => useApprovalDecisionHandler(artifact, approval, 'session-1'));
         const chosen = { kind: 'window', displayId: ':0', pid: 10, windowId: 3 } as const;
 
-        await expect(hook.getCurrent()('approve', { computerTarget: chosen, computerAccess: 'see' })).resolves.toBe(true);
+        const narrowedInput = { ...approval.actionArgs, target: chosen, access: 'see' };
+        await expect(hook.getCurrent()('approve', { narrowedInput })).resolves.toBe(true);
         expect(boundary.execute).toHaveBeenCalledExactlyOnceWith(
             'approval.request.decide',
-            { artifactId: 'approval-2', decision: 'approve', computerTarget: chosen, computerAccess: 'see' },
+            { artifactId: 'approval-2', decision: 'approve', narrowedInput },
             { surface: 'ui', authority: 'present_user', serverId: 'current-local-home' },
         );
     });

@@ -117,6 +117,9 @@ vi.mock('@/hooks/ui/useElapsedTime', () => ({
     useElapsedTime: () => 0,
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 afterEach(() => {
     standardCleanup();
 });
@@ -129,7 +132,6 @@ describe('ToolView (tap action: expand)', () => {
         ensureSidechainMessagesLoadedMock.mockReset();
         ensureSidechainMessagesLoadedMock.mockResolvedValue('loaded');
 
-        const { ToolView } = await import('./ToolView');
 
         const tool = makeToolCall({
             name: 'Read',
@@ -155,7 +157,6 @@ describe('ToolView (tap action: expand)', () => {
         ensureSidechainMessagesLoadedMock.mockReset();
         ensureSidechainMessagesLoadedMock.mockResolvedValue('loaded');
 
-        const { ToolView } = await import('./ToolView');
 
         const tool = makeToolCall({
             id: 'tool_task_1',
@@ -185,7 +186,6 @@ describe('ToolView (tap action: expand)', () => {
         const request = createDeferred<'loaded' | 'not_ready' | 'in_flight'>();
         ensureSidechainMessagesLoadedMock.mockReturnValueOnce(request.promise);
 
-        const { ToolView } = await import('./ToolView');
 
         const tool = makeToolCall({
             id: 'tool_task_1',
@@ -223,7 +223,6 @@ describe('ToolView (tap action: expand)', () => {
         try {
             ensureSidechainMessagesLoadedMock.mockResolvedValue('not_ready');
 
-            const { ToolView } = await import('./ToolView');
             const tool = makeToolCall({
                 id: 'tool_task_1',
                 name: 'Task',
@@ -259,7 +258,6 @@ describe('ToolView (tap action: expand)', () => {
         ensureSidechainMessagesLoadedMock.mockReset();
         ensureSidechainMessagesLoadedMock.mockResolvedValue('loaded');
 
-        const { ToolView } = await import('./ToolView');
 
         const tool = makeToolCall({
             id: 'tool_subagent_1',
@@ -288,7 +286,6 @@ describe('ToolView (tap action: expand)', () => {
         ensureSidechainMessagesLoadedMock.mockReset();
         ensureSidechainMessagesLoadedMock.mockResolvedValue('loaded');
 
-        const { ToolView } = await import('./ToolView');
 
         const tool = makeToolCall({
             name: 'Read',
@@ -309,7 +306,6 @@ describe('ToolView (tap action: expand)', () => {
         renderedToolViewSpy.mockReset();
         ensureSidechainMessagesLoadedMock.mockReset();
         ensureSidechainMessagesLoadedMock.mockResolvedValue('loaded');
-        const { ToolView } = await import('./ToolView');
 
         const tool = makeToolCall({
             id: 'call_read_1',
@@ -344,7 +340,6 @@ describe('ToolView (tap action: expand)', () => {
         renderedToolViewSpy.mockReset();
         ensureSidechainMessagesLoadedMock.mockReset();
         ensureSidechainMessagesLoadedMock.mockResolvedValue('loaded');
-        const { ToolView } = await import('./ToolView');
 
         const tool = makeToolCall({
             id: 'subagent_run_1',

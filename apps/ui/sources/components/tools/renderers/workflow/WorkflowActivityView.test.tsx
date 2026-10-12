@@ -1,5 +1,5 @@
 import React from 'react';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 
 import {
@@ -61,13 +61,10 @@ function largeSnapshot(count: number): SessionWorkflowRunSnapshotV1 {
     });
 }
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { WorkflowActivityView, projectWorkflowActivityDisplayText } = await import('./WorkflowActivityView');
+
 describe('WorkflowActivityView', () => {
-    let WorkflowActivityView!: React.ComponentType<ReturnType<typeof makeToolViewProps>>;
-
-    beforeAll(async () => {
-        ({ WorkflowActivityView } = await import('./WorkflowActivityView'));
-    }, 60_000);
-
     async function renderCard(): Promise<renderer.ReactTestRenderer> {
         const tool = makeToolCall({ name: 'Workflow', state: 'running', input: { name: 'Build feature' } });
         const props = { ...makeToolViewProps(tool), sessionId: 'sess_1', serverId: 'home-exact' };
@@ -75,12 +72,11 @@ describe('WorkflowActivityView', () => {
     }
 
     it('projects the decoded workflow body and reveals a late agent with unclamped normalized detail', async () => {
-        const module = await import('./WorkflowActivityView');
         const run = largeSnapshot(20);
         const summary = 'line\n'.repeat(10) + 'x'.repeat(2200) + 'needle';
         run.agents[19] = { ...run.agents[19], summary };
         const tool = makeToolCall({ name: 'Workflow', input: { name: 'Shell', hidden: 'private needle' } });
-        const blocks = module.projectWorkflowActivityDisplayText(tool, null, { workflowRun: run });
+        const blocks = projectWorkflowActivityDisplayText(tool, null, { workflowRun: run });
         const detail = blocks.find((block) => block.id === 'tool-workflow-agent-agent-19-detail');
         expect(detail?.text).toBe(summary.trim());
         expect(blocks.some((block) => block.text.includes('private'))).toBe(false);
@@ -89,7 +85,7 @@ describe('WorkflowActivityView', () => {
         const start = summary.trim().indexOf('needle');
         store.publish(new Map([['m1', { blocks: [{ id: detail!.id, sourceRanges: [{ start, end: start + 6, current: true }] }] }]]));
         const { tree } = await renderScreen(<TranscriptFindProvider store={store}>
-            <module.WorkflowActivityView {...makeToolViewProps(tool, { messageId: 'm1', sessionId: 's1' })} />
+            <WorkflowActivityView {...makeToolViewProps(tool, { messageId: 'm1', sessionId: 's1' })} />
         </TranscriptFindProvider>);
         expect(collectHostText(tree)).toContain('Agent 19');
         expect(tree.findByTestId('find-match-current')?.props.children).toBe('needle');

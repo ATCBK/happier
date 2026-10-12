@@ -104,6 +104,9 @@ vi.mock('@/agents/catalog/catalog', () => ({
     resolveAgentIdFromFlavor: () => null,
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView (card density)', () => {
     afterEach(() => {
         standardCleanup();
@@ -111,8 +114,6 @@ describe('ToolView (card density)', () => {
 
     it('renders a separate subtitle line in comfortable density', async () => {
         toolViewDetailLevelDefaultSetting.value = 'summary';
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({ name: 'edit', state: 'running', input: {}, description: null, result: null });
 
         const screen = await renderWithSessionTranscriptSource(React.createElement(ToolView, { tool, metadata: null, messages: [] }));
@@ -122,8 +123,6 @@ describe('ToolView (card density)', () => {
 
     it('does not render a separate subtitle line in compact density', async () => {
         toolViewDetailLevelDefaultSetting.value = 'compact';
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({ name: 'edit', state: 'running', input: {}, description: null, result: null });
 
         const screen = await renderWithSessionTranscriptSource(React.createElement(ToolView, { tool, metadata: null, messages: [] }));
@@ -133,8 +132,6 @@ describe('ToolView (card density)', () => {
 
     it('rounds the card with the theme tool card radius', async () => {
         toolViewDetailLevelDefaultSetting.value = 'summary';
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({ name: 'edit', state: 'running', input: {}, description: null, result: null });
 
         const screen = await renderWithSessionTranscriptSource(React.createElement(ToolView, { tool, metadata: null, messages: [] }));

@@ -91,6 +91,9 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
     };
 });
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolTimelineRow } = await import('./ToolTimelineRow');
+
 describe('ToolTimelineRow (unknown tool collapse)', () => {
     beforeEach(() => {
         settings = {
@@ -109,7 +112,6 @@ describe('ToolTimelineRow (unknown tool collapse)', () => {
     });
 
     it('collapses completed unknown tools to title-only by default', async () => {
-        const { ToolTimelineRow } = await import('./ToolTimelineRow');
         const tool = makeToolCall({
             name: 'TotallyUnknownTool',
             state: 'completed',

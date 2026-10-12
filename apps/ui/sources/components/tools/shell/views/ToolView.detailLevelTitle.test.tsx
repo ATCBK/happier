@@ -103,6 +103,9 @@ vi.mock('@/hooks/ui/useElapsedTime', () => ({
     useElapsedTime: () => 0,
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView (detail level: title)', () => {
     afterEach(() => {
         standardCleanup();
@@ -111,8 +114,6 @@ describe('ToolView (detail level: title)', () => {
     it('hides the tool body even when a tool renderer exists', async () => {
         renderedToolViewSpy.mockReset();
         renderedStructuredSpy.mockReset();
-
-        const { ToolView } = await import('./ToolView');
 
         const tool = makeToolCall({
             name: 'edit',

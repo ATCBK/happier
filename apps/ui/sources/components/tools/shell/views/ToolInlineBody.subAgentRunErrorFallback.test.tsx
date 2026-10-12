@@ -1,7 +1,7 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-    renderScreen,
+    renderWithSessionTranscriptSource as renderScreen,
     standardCleanup,
 } from '@/dev/testkit';
 import { installToolShellCommonModuleMocks } from './ToolView.testHelpers';
@@ -15,39 +15,10 @@ installToolShellCommonModuleMocks({
     },
 });
 
-vi.mock('@/components/ui/text/Text', () => ({
-    TextSelectabilityScope: (props: any) => React.createElement('TextSelectabilityScope', props, props.children),
-}));
-
-vi.mock('@/components/tools/shell/presentation/ToolError', () => ({
-    ToolError: (props: any) => React.createElement('ToolError', props),
-}));
-
-vi.mock('@/components/tools/renderers/core/_registry', () => ({
-    getToolViewComponent: () => () => React.createElement('SpecificToolView'),
-}));
-
-vi.mock('@/components/tools/catalog', () => ({
-    knownTools: {},
-}));
-
-vi.mock('@/components/tools/renderers/system/StructuredResultView', () => ({
-    StructuredResultView: () => React.createElement('StructuredResultView'),
-}));
-
-vi.mock('@/components/tools/shell/presentation/ToolSectionView', () => ({
-    ToolSectionView: (props: any) => React.createElement('ToolSectionView', props, props.children),
-}));
-
-vi.mock('@/components/ui/media/CodeView', () => ({
-    CodeView: () => React.createElement('CodeView'),
-}));
-
-vi.mock('@/utils/errors/toolErrorParser', () => ({
-    parseToolUseError: () => ({ isToolUseError: false }),
-}));
-
 const { ToolInlineBody } = await import('./ToolInlineBody');
+const { SubAgentRunView } = await import('@/components/tools/renderers/workflow/SubAgentRunView');
+const { SubAgentView } = await import('@/components/tools/renderers/workflow/SubAgentView');
+const { ToolError } = await import('@/components/tools/shell/presentation/ToolError');
 
 describe('ToolInlineBody (SubAgentRun error fallback)', () => {
     afterEach(() => {
@@ -68,7 +39,7 @@ describe('ToolInlineBody (SubAgentRun error fallback)', () => {
                     createdAt: 1,
                     startedAt: null,
                     completedAt: null,
-                } as any}
+                }}
                 normalizedToolName="SubAgentRun"
                 metadata={null}
                 messages={[]}
@@ -77,8 +48,9 @@ describe('ToolInlineBody (SubAgentRun error fallback)', () => {
             />,
         );
 
-        expect(screen.findAllByType('SpecificToolView' as any)).toHaveLength(1);
-        expect(screen.findAllByType('ToolError' as any)).toHaveLength(0);
+        expect(screen.findAllByType(SubAgentRunView)).toHaveLength(1);
+        expect(screen.findAllByType(ToolError)).toHaveLength(0);
+        expect(screen.getTextContent()).toContain('Timed out');
     });
 
     it('keeps default ToolError behavior for non-SubAgentRun errors', async () => {
@@ -95,7 +67,7 @@ describe('ToolInlineBody (SubAgentRun error fallback)', () => {
                     createdAt: 1,
                     startedAt: null,
                     completedAt: null,
-                } as any}
+                }}
                 normalizedToolName="Task"
                 metadata={null}
                 messages={[]}
@@ -104,7 +76,8 @@ describe('ToolInlineBody (SubAgentRun error fallback)', () => {
             />,
         );
 
-        expect(screen.findAllByType('SpecificToolView' as any)).toHaveLength(1);
-        expect(screen.findAllByType('ToolError' as any)).toHaveLength(1);
+        expect(screen.findAllByType(SubAgentView)).toHaveLength(1);
+        expect(screen.findAllByType(ToolError)).toHaveLength(1);
+        expect(screen.getTextContent()).toContain('Task failed');
     });
 });

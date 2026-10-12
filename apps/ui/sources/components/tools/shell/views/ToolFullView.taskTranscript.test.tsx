@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, type ReactTestInstance } from 'react-test-renderer';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     installToolShellCommonModuleMocks,
     makeToolCall,
@@ -26,6 +26,9 @@ function wrapToolFullView(element: React.ReactElement) {
     return wrapWithSessionTranscriptSource(element, createTestSessionTranscriptSource({
         sessionId: props.sessionId ?? 's1', serverId: props.serverId,
         messages: props.messages ?? [], metadata: props.metadata, interaction: props.interaction,
+        loadSidechain: (sidechainId) => ensureSidechainMessagesLoadedMock(props.sessionId ?? 's1', sidechainId),
+        // The app source admits paging; the chain supplies its own exact sidechain loader.
+        history: { loadOlder: async () => ({ loaded: 0, hasMore: false, status: 'no_more' }) },
     }));
 }
 
@@ -36,7 +39,9 @@ async function renderScreen(element: React.ReactElement) {
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const ensureSidechainMessagesLoadedMock = vi.fn(async () => 'loaded');
+const ensureSidechainMessagesLoadedMock = vi.fn<
+    (sessionId: string, sidechainId: string) => Promise<'loaded' | 'not_ready' | 'in_flight'>
+>().mockResolvedValue('loaded');
 const loadOlderSidechainMessagesMock = vi.fn();
 const toolTranscriptSyncTuning = vi.hoisted(() => ({
     transcriptEstimatedItemSizePx: 120,
@@ -164,12 +169,10 @@ vi.mock('@/components/sessions/transcript/MessageView', async () => {
     });
 });
 
-describe('ToolFullView (Task transcript reuse)', () => {
-    let ToolFullView: typeof import('./ToolFullView').ToolFullView;
+// Resolve the cold module graph after configuring the boundaries, before testing behavior.
+const { ToolFullView } = await import('./ToolFullView');
 
-    beforeAll(async () => {
-        ({ ToolFullView } = await import('./ToolFullView'));
-    }, 60000);
+describe('ToolFullView (Task transcript reuse)', () => {
 
     it('closes nested navigation while preserving the supplied session action authority', async () => {
         renderedToolSourceSpy.mockClear();

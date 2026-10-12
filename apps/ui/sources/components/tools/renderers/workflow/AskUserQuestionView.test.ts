@@ -283,6 +283,9 @@ vi.mock('@/sync/sync', () => ({
     },
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { AskUserQuestionView, projectAskUserQuestionDisplayText } = await import('./AskUserQuestionView');
+
 describe('AskUserQuestionView', () => {
     type Screen = Awaited<ReturnType<typeof renderScreen>>;
 
@@ -307,7 +310,6 @@ describe('AskUserQuestionView', () => {
     }
 
     it('shows serialized structured answers on the completed question card', async () => {
-        const { AskUserQuestionView, projectAskUserQuestionDisplayText } = await import('./AskUserQuestionView');
         const tool = makeTool({
             state: 'completed',
             result: JSON.stringify({ status: 'answered', answers: { 'Pick one': ['B'] }, hidden: 'private needle' }),
@@ -427,7 +429,6 @@ describe('AskUserQuestionView', () => {
     }
 
     async function renderView(tool: ToolCall, overrides: Record<string, unknown> = {}): Promise<Screen> {
-        const { AskUserQuestionView } = await import('./AskUserQuestionView');
         return renderScreen(React.createElement(
             AskUserQuestionView,
             makeToolViewProps(tool, { sessionId: 's1', ...overrides }),
@@ -1624,7 +1625,6 @@ describe('AskUserQuestionView', () => {
     });
 
     it('withdraws submit when a read-only source contains a pending agent question', async () => {
-        const { AskUserQuestionView } = await import('./AskUserQuestionView');
         const screen = await renderWithSessionTranscriptSource(
             React.createElement(AskUserQuestionView, makeToolViewProps(makeTool(), { sessionId: 's1' })),
             createTestSessionTranscriptSource({ agentState: readSessionFixture().agentState }),

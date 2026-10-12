@@ -5,7 +5,7 @@ import { Typography } from '@/constants/Typography';
 
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
-import { RowActionRevealSlot } from '@/components/sessions/transcript/messageActions/RowActionRevealSlot';
+import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import { readCoarsePrimaryPointer } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
 import {
     shouldShowTranscriptRowActions,

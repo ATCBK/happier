@@ -1,7 +1,7 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-    renderScreen,
+    renderWithSessionTranscriptSource,
     standardCleanup,
 } from '@/dev/testkit';
 import {
@@ -95,21 +95,22 @@ vi.mock('@/agents/catalog/catalog', () => ({
     resolveAgentIdFromFlavor: () => null,
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView (minimal tools)', () => {
     afterEach(() => {
         standardCleanup();
     });
 
     it('renders a specific tool view even when the tool is marked minimal', async () => {
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({
             name: 'Bash',
             input: { command: 'echo hello' },
             result: { stdout: 'hello\n', stderr: '' },
         });
 
-        const screen = await renderScreen(
+        const screen = await renderWithSessionTranscriptSource(
             React.createElement(ToolView, { tool, metadata: null, messages: [], sessionId: 's1', messageId: 'm1' }),
         );
 

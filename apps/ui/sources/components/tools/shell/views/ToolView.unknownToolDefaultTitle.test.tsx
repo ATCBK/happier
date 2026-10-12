@@ -97,14 +97,15 @@ vi.mock('../permissions/PermissionFooter', () => ({
     PermissionFooter: () => null,
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView (unknown tools)', () => {
     afterEach(() => {
         standardCleanup();
     });
 
     it('collapses unknown tools to title-only by default (safe), even when global default is summary', async () => {
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({
             name: 'SomeBrandNewTool',
             state: 'completed',

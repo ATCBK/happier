@@ -145,14 +145,15 @@ vi.mock('@/components/tools/renderers/core/_registry', async () => {
     };
 });
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView (diff header actions)', () => {
     afterEach(() => {
         standardCleanup();
     });
 
     it('surfaces the expand-all control in the tool header for multi-file diffs', async () => {
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({
             name: 'Diff',
             state: 'completed',

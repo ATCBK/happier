@@ -108,6 +108,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: 6,
     },
     button: {
+        justifyContent: 'center',
         paddingHorizontal: BUTTON_HORIZONTAL_PADDING,
         paddingVertical: 6,
         borderRadius: 8,
@@ -120,14 +121,19 @@ const stylesheet = StyleSheet.create((theme) => ({
     buttonAlignedToStart: {
         paddingLeft: 0,
     },
+    // One decision leads (lab `cards-T1`): the approval is the filled primary, a standing grant is
+    // bordered, and refusing stays quiet ink. Colour is not the answer's meaning here; position is.
+    // The press target keeps the platform floor; the drawn control inside it is the compact pill.
     buttonAllow: {
-        backgroundColor: 'transparent',
+        justifyContent: 'center',
+        paddingHorizontal: 2,
     },
     buttonDeny: {
         backgroundColor: 'transparent',
     },
     buttonAllowAll: {
-        backgroundColor: 'transparent',
+        justifyContent: 'center',
+        paddingHorizontal: 2,
     },
     buttonSelected: {
         backgroundColor: 'transparent',
@@ -153,46 +159,67 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexShrink: 1,
     },
     buttonTextAllow: {
-        color: theme.colors.permissionButton.allow.text,
-        fontWeight: '500',
+        color: theme.colors.button.primary.tint,
+        fontWeight: '600',
+        backgroundColor: theme.colors.button.primary.background,
+        borderRadius: 8,
+        overflow: 'hidden',
+        paddingHorizontal: BUTTON_HORIZONTAL_PADDING,
+        paddingVertical: 5,
     },
     buttonTextDeny: {
-        color: theme.colors.permissionButton.deny.text,
+        color: theme.colors.text.secondary,
         fontWeight: '500',
     },
     buttonTextAllowAll: {
-        color: theme.colors.permissionButton.allowAll.text,
+        color: theme.colors.text.primary,
         fontWeight: '500',
+        borderWidth: 1,
+        borderColor: theme.colors.border.default,
+        borderRadius: 8,
+        paddingHorizontal: BUTTON_HORIZONTAL_PADDING - 1,
+        paddingVertical: 4,
     },
     buttonTextSelected: {
         color: theme.colors.permissionButton.selected.text,
         fontWeight: '500',
     },
     buttonForSession: {
-        backgroundColor: 'transparent',
+        justifyContent: 'center',
+        paddingHorizontal: 2,
     },
     buttonTextForSession: {
-        color: theme.colors.permissionButton.allowAll.text,
+        color: theme.colors.text.primary,
         fontWeight: '500',
+        borderWidth: 1,
+        borderColor: theme.colors.border.default,
+        borderRadius: 8,
+        paddingHorizontal: BUTTON_HORIZONTAL_PADDING - 1,
+        paddingVertical: 4,
     },
     buttonTextAllowRule: {
-        color: theme.colors.permissionButton.allow.text,
+        color: theme.colors.text.primary,
         fontWeight: '500',
+        borderWidth: 1,
+        borderColor: theme.colors.border.default,
+        borderRadius: 8,
+        paddingHorizontal: BUTTON_HORIZONTAL_PADDING - 1,
+        paddingVertical: 4,
     },
     loadingIndicatorAllow: {
-        color: theme.colors.permissionButton.allow.text,
+        color: theme.colors.button.primary.tint,
     },
     loadingIndicatorDeny: {
-        color: theme.colors.permissionButton.deny.text,
+        color: theme.colors.text.secondary,
     },
     loadingIndicatorAllowAll: {
-        color: theme.colors.permissionButton.allowAll.text,
+        color: theme.colors.text.primary,
     },
     loadingIndicatorForSession: {
-        color: theme.colors.permissionButton.allowAll.text,
+        color: theme.colors.text.primary,
     },
     loadingIndicatorAllowRule: {
-        color: theme.colors.permissionButton.allow.text,
+        color: theme.colors.text.primary,
     },
     actionError: {
         flexDirection: 'row',
@@ -796,7 +823,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                 disabled: actionsDisabled,
                                 busy: loadingButton === decision.key || executionRunAnswerPending,
                             }}
-                            style={[styles.button, minimumInteractiveTargetStyle, alignedButtonStyle]}
+                            style={[styles.button, minimumInteractiveTargetStyle, alignedButtonStyle, isPending && decision.key === 'allow' && styles.buttonAllow]}
                             onPress={decision.onPress}
                             disabled={actionsDisabled}
                             activeOpacity={isPending ? 0.7 : 1}

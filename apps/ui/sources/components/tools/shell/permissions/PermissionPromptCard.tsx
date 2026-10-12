@@ -6,7 +6,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { Metadata } from '@happier-dev/session-core/state';
 import type { PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
 
-import { Text } from '@/components/ui/text/Text';
+import { ApprovalPromptChrome } from '@/components/tools/shell/approvals/ApprovalPromptChrome';
 import { PermissionFooter } from '@/components/tools/shell/permissions/PermissionFooter';
 import type { PermissionToolCallMessageLocation } from '@/utils/sessions/permissions/permissionToolCallLocationTypes';
 import { buildPermissionToolCallRoute, canOpenPermissionToolCallRoute } from '@/utils/sessions/permissions/buildPermissionToolCallRoute';
@@ -26,11 +26,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import type { PromptResponseOrigin } from './executionRunPromptResponseTarget';
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
 
-const PROMPT_CARD_HORIZONTAL_PADDING = 12;
 const PROMPT_CARD_ICON_SIZE = 18;
-const PROMPT_CARD_ICON_TEXT_GAP = 6;
-const PROMPT_CARD_TEXT_COLUMN_START =
-    PROMPT_CARD_HORIZONTAL_PADDING + PROMPT_CARD_ICON_SIZE + PROMPT_CARD_ICON_TEXT_GAP;
 
 export const PermissionPromptCard = React.memo(function PermissionPromptCard(props: PromptResponseOrigin & {
     request: PendingPermissionRequest;
@@ -115,65 +111,39 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
     }
 
     return (
-        <View testID="permission-prompt-card" style={[styles.container, chrome === 'inline' ? styles.containerInline : null]}>
-            <View style={styles.header}>
-                <View style={styles.icon}>
-                    <Icon name="lock" size={16} color={theme.colors.state.neutral.foreground} />
-                </View>
-                <View style={styles.headerText}>
-                    <Text style={styles.title} numberOfLines={1}>
-                        {headerText.title}
-                    </Text>
-                    {effectiveSubtitle ? (
-                        <Text style={styles.subtitle} numberOfLines={2}>
-                            {effectiveSubtitle}
-                        </Text>
+        <ApprovalPromptChrome
+            testID="permission-prompt-card"
+            title={headerText.title}
+            subtitle={effectiveSubtitle}
+            titleNumberOfLines={1}
+            subtitleNumberOfLines={2}
+            icon="lock"
+            chrome={chrome}
+            bodyBottomInset={0}
+            headerAccessory={(
+                <>
+                    {headerActions ? <View style={styles.headerActions}>{headerActions}</View> : null}
+                    {canOpenToolRoute ? (
+                        <Pressable
+                            testID="permission-prompt-view-tool"
+                            onPress={onViewTool}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('toolView.open')}
+                            style={({ pressed }) => [
+                                styles.viewButton,
+                                {
+                                    minWidth: minimumInteractiveTargetSize,
+                                    minHeight: minimumInteractiveTargetSize,
+                                },
+                                pressed && styles.viewButtonPressed,
+                            ]}
+                        >
+                            <Icon name="arrow-square-out" size={PROMPT_CARD_ICON_SIZE} color={theme.colors.text.secondary} />
+                        </Pressable>
                     ) : null}
-                </View>
-                {headerActions ? <View style={styles.headerActions}>{headerActions}</View> : null}
-                {canOpenToolRoute ? (
-                    <Pressable
-                        testID="permission-prompt-view-tool"
-                        onPress={onViewTool}
-                        accessibilityRole="button"
-                        accessibilityLabel={t('toolView.open')}
-                        style={({ pressed }) => [
-                            styles.viewButton,
-                            {
-                                minWidth: minimumInteractiveTargetSize,
-                                minHeight: minimumInteractiveTargetSize,
-                            },
-                            pressed && styles.viewButtonPressed,
-                        ]}
-                    >
-                        <Icon name="arrow-square-out" size={PROMPT_CARD_ICON_SIZE} color={theme.colors.text.secondary} />
-                    </Pressable>
-                ) : null}
-            </View>
-
-            {isPreviewVisible ? (
-                <View style={styles.preview}>
-                    <ToolInlineBody
-                        mode="timeline"
-                        tool={model.tool}
-                        normalizedToolName={headerText.normalizedToolName}
-                        metadata={props.metadata}
-                        messages={[]}
-                        sessionId={props.sessionId}
-                        serverId={props.serverId}
-                        interaction={{
-                            canSendMessages: false,
-                            canApprovePermissions: props.canApprovePermissions,
-                            permissionDisabledReason: props.disabledReason,
-                        }}
-                        detailLevel={inlineDetailLevel === 'full' ? 'full' : 'summary'}
-                        sectionSpacing="compact"
-                        setHeaderActions={setHeaderActions}
-                    />
-                </View>
-            ) : null}
-
-            <View style={styles.actions}>
+                </>
+            )}
+            footer={(
                 <PermissionFooter
                     {...(props.executionRun === undefined
                         ? { sessionId: props.sessionId }
@@ -195,54 +165,32 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
                     canApprovePermissions={props.canApprovePermissions}
                     disabledReason={props.disabledReason}
                 />
-            </View>
-        </View>
+            )}
+        >
+            {isPreviewVisible ? (
+                <ToolInlineBody
+                    mode="timeline"
+                    tool={model.tool}
+                    normalizedToolName={headerText.normalizedToolName}
+                    metadata={props.metadata}
+                    messages={[]}
+                    sessionId={props.sessionId}
+                    serverId={props.serverId}
+                    interaction={{
+                        canSendMessages: false,
+                        canApprovePermissions: props.canApprovePermissions,
+                        permissionDisabledReason: props.disabledReason,
+                    }}
+                    detailLevel={inlineDetailLevel === 'full' ? 'full' : 'summary'}
+                    sectionSpacing="compact"
+                    setHeaderActions={setHeaderActions}
+                />
+            ) : null}
+        </ApprovalPromptChrome>
     );
 });
 
 const styles = StyleSheet.create((theme) => ({
-    container: {
-        borderRadius: theme.parts.approvalCard.radius,
-        borderWidth: 1,
-        borderColor: theme.colors.border.default,
-        backgroundColor: theme.colors.surface.elevated,
-        overflow: 'hidden',
-    },
-    containerInline: {
-        borderRadius: 0,
-        borderWidth: 0,
-        borderColor: 'transparent',
-        backgroundColor: 'transparent',
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: PROMPT_CARD_ICON_TEXT_GAP,
-        paddingLeft: PROMPT_CARD_HORIZONTAL_PADDING,
-        paddingRight: PROMPT_CARD_HORIZONTAL_PADDING,
-        paddingTop: 12,
-        paddingBottom: 8,
-    },
-    icon: {
-        width: PROMPT_CARD_ICON_SIZE,
-        height: PROMPT_CARD_ICON_SIZE,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    headerText: {
-        flex: 1,
-        minWidth: 0,
-        gap: 2,
-    },
-    title: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: theme.colors.text.primary,
-    },
-    subtitle: {
-        fontSize: 12,
-        color: theme.colors.text.secondary,
-    },
     viewButton: {
         padding: 6,
         borderRadius: 8,
@@ -256,15 +204,5 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
-    },
-    preview: {
-        paddingLeft: PROMPT_CARD_TEXT_COLUMN_START,
-        paddingRight: PROMPT_CARD_HORIZONTAL_PADDING,
-        paddingBottom: 0,
-    },
-    actions: {
-        paddingLeft: PROMPT_CARD_TEXT_COLUMN_START,
-        paddingRight: PROMPT_CARD_HORIZONTAL_PADDING,
-        paddingBottom: 12,
     },
 }));

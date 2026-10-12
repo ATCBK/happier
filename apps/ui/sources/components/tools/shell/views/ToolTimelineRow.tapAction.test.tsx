@@ -115,10 +115,12 @@ vi.mock('@/agents/catalog/catalog', () => ({
     getAgentCore: () => ({ toolRendering: { hideUnknownToolsByDefault: false } }),
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolTimelineRow } = await import('./ToolTimelineRow');
+
 let settings: Partial<Settings> = {};
 
 async function renderToolTimelineRow(overrides: Record<string, unknown> = {}, readOnly = false) {
-    const { ToolTimelineRow } = await import('./ToolTimelineRow');
     const tool = {
         name: 'read',
         state: 'completed',

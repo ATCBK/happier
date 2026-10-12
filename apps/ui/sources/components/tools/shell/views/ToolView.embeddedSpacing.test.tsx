@@ -97,13 +97,15 @@ vi.mock('@/agents/catalog/catalog', () => ({
 // pressable style values the same way.
 const flatten = flattenTestStyle;
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView (embedded group spacing)', () => {
     afterEach(() => {
         standardCleanup();
     });
 
     it('keeps intrinsic vertical margin for a standalone tool card', async () => {
-        const { ToolView } = await import('./ToolView');
         const tool = makeToolCall({ name: 'edit', state: 'running', input: {}, description: null, result: null });
 
         const screen = await renderWithSessionTranscriptSource(React.createElement(ToolView, { tool, metadata: null, messages: [] }));
@@ -113,7 +115,6 @@ describe('ToolView (embedded group spacing)', () => {
     });
 
     it('drops vertical margin when embedded in a tool-calls group so rows stay flush on one continuous card', async () => {
-        const { ToolView } = await import('./ToolView');
         const tool = makeToolCall({ name: 'edit', state: 'running', input: {}, description: null, result: null });
 
         const screen = await renderWithSessionTranscriptSource(

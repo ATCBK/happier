@@ -134,6 +134,9 @@ vi.mock('@/components/sessions/transcript/motion/TranscriptCollapsible', () => (
         expanded ? React.createElement(React.Fragment, null, children) : null,
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolTimelineRow } = await import('./ToolTimelineRow');
+
 let settings: Partial<Settings> = {};
 
 describe('ToolTimelineRow (permission pending)', () => {
@@ -155,7 +158,6 @@ describe('ToolTimelineRow (permission pending)', () => {
     });
 
     it('renders PermissionFooter for pending permission requests in activity-feed rows', async () => {
-        const { ToolTimelineRow } = await import('./ToolTimelineRow');
         const tool: any = {
             id: 'tool-1',
             name: 'Bash',
@@ -182,7 +184,6 @@ describe('ToolTimelineRow (permission pending)', () => {
     });
 
     it('renders approval prompt cards linked to the current transcript tool call', async () => {
-        const { ToolTimelineRow } = await import('./ToolTimelineRow');
         const tool: any = {
             id: 'tool-approval',
             name: 'session_list',
@@ -231,7 +232,6 @@ describe('ToolTimelineRow (permission pending)', () => {
     });
 
     it('does not render approval prompt cards when explicit origin message points at another tool row', async () => {
-        const { ToolTimelineRow } = await import('./ToolTimelineRow');
         const tool: any = {
             id: 'tool-current',
             name: 'session_list',
@@ -279,7 +279,6 @@ describe('ToolTimelineRow (permission pending)', () => {
     });
 
     it('does not render approval prompt cards when explicit origin tool id points at another tool row', async () => {
-        const { ToolTimelineRow } = await import('./ToolTimelineRow');
         const tool: any = {
             id: 'tool-current',
             name: 'session_list',
@@ -329,7 +328,6 @@ describe('ToolTimelineRow (permission pending)', () => {
     it('renders PermissionFooter when transcript prompts are forced even if the global setting prefers the composer', async () => {
         settings = { ...settings, permissionPromptSurface: 'composer' };
 
-        const { ToolTimelineRow } = await import('./ToolTimelineRow');
         const tool: any = {
             id: 'tool-2',
             name: 'Bash',
@@ -357,7 +355,6 @@ describe('ToolTimelineRow (permission pending)', () => {
     });
 
     it('renders the tool row but does not render PermissionFooter when the session is inactive', async () => {
-        const { ToolTimelineRow } = await import('./ToolTimelineRow');
         const tool: any = {
             id: 'tool-inactive',
             name: 'Bash',
@@ -385,7 +382,6 @@ describe('ToolTimelineRow (permission pending)', () => {
     });
 
     it('renders a visible and accessible denied status in an activity-feed row', async () => {
-        const { ToolTimelineRow } = await import('./ToolTimelineRow');
         const tool: any = {
             id: 'tool-denied',
             name: 'writeTextFile',
@@ -418,7 +414,6 @@ describe('ToolTimelineRow (permission pending)', () => {
     });
 
     it('renders a visible and accessible failed status in an activity-feed row', async () => {
-        const { ToolTimelineRow } = await import('./ToolTimelineRow');
         const tool: any = {
             id: 'tool-failed',
             name: 'writeTextFile',

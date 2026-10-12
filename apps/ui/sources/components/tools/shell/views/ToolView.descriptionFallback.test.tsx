@@ -102,14 +102,15 @@ vi.mock('@/agents/catalog/catalog', () => ({
     resolveAgentIdFromFlavor: () => null,
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView (description fallback)', () => {
     afterEach(() => {
         standardCleanup();
     });
 
     it('shows input.description as a subtitle when no tool subtitle is provided', async () => {
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({
             name: 'CodeSearch',
             state: 'running',

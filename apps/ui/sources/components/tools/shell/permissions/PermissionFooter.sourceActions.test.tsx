@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createTestSessionTranscriptSource, pressTestInstanceAsync, renderWithSessionTranscriptSource, renderScreen, wrapWithSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
-import { setPendingNavigationLanding } from '@/activity/source/pendingNavigationRuntime';
+import { createTestSessionTranscriptSource, pressTestInstanceAsync, renderWithSessionTranscriptSource, renderScreen, renderHook, wrapWithSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
+import { markPendingNavigationTranscriptReady, markSessionPendingAnswer, setPendingNavigationLanding, usePendingNavigationLanding } from '@/activity/source/pendingNavigationRuntime';
 import { installPermissionShellCommonModuleMocks } from './permissionShellTestHelpers';
 
 const nativeFocusBoundary = vi.hoisted(() => ({
@@ -105,7 +105,7 @@ describe('PermissionFooter source authority', () => {
         expect(respondToPermission).not.toHaveBeenCalled();
     });
 
-    it('focuses only the selected placement when transcript and composer controls coexist', async () => {
+    it('transfers focus from the prompt to the revealed transcript answer and ignores a late answered landing', async () => {
         const address = { serverId: 'home-a', sessionId: 's1' };
         const promptFocus = vi.fn();
         const transcriptFocus = vi.fn();
@@ -120,15 +120,23 @@ describe('PermissionFooter source authority', () => {
             <PermissionFooter sessionId="s1" messageId="message-1" permission={{ id: 'p1', status: 'pending' }} toolName="Read"
                 metadata={{ flavor: 'claude' }} canApprovePermissions />
         </>;
-        setPendingNavigationLanding(address, 'p1', 'pending', 'transcript');
+        setPendingNavigationLanding(address, 'p1');
+        const intent = await renderHook(() => usePendingNavigationLanding(address));
+        const expectedLanding = intent.getCurrent()!;
         let answerControlIndex = 0;
         await renderScreen(wrapWithSessionTranscriptSource(controls, source), {
             createNodeMock: (element) => hasHostTestId(element, 'permission-footer.allow')
                 ? { focus: answerControlIndex++ === 0 ? promptFocus : transcriptFocus } : null,
         });
-        expect(promptFocus).not.toHaveBeenCalled();
+        expect(promptFocus).toHaveBeenCalledOnce();
+        expect(transcriptFocus).not.toHaveBeenCalled();
+        await React.act(async () => { markPendingNavigationTranscriptReady(expectedLanding); });
+        expect(promptFocus).toHaveBeenCalledOnce();
         expect(transcriptFocus).toHaveBeenCalledOnce();
         expect(respondToPermission).not.toHaveBeenCalled();
+        await React.act(async () => { markSessionPendingAnswer(address, 'p1'); markPendingNavigationTranscriptReady(expectedLanding); });
+        expect(intent.getCurrent()).toBeNull();
+        expect(transcriptFocus).toHaveBeenCalledOnce();
     });
 
     it('focuses the mounted Next target primary answer without answering and ignores another Home', async () => {

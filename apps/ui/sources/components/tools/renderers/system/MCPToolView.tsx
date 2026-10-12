@@ -11,6 +11,8 @@ import { toolTextBlock, type ToolDisplayTextProjector } from '../core/toolDispla
 import { ToolFindText, useToolFindState } from '../core/ToolFindText';
 import { readTranscriptProjectCommandCall } from '@/components/sessions/transcript/references/transcriptProjectCommandReference';
 import { ProjectCommandToolBody } from './ProjectCommandToolBody';
+import { readTranscriptMachineResourcesCall } from '@/components/sessions/transcript/references/transcriptMachineResourcesReference';
+import { MachineResourcesToolBody } from './MachineResourcesToolBody';
 
 
 /**
@@ -139,6 +141,7 @@ export const MCPToolView = React.memo<ToolViewProps>(({ tool, detailLevel, messa
 
     const { title, subtitle, resultText, input, output } = getMCPDisplay(tool);
     const projectCommandCall = readTranscriptProjectCommandCall(tool);
+    const machineResourcesCall = projectCommandCall ? null : readTranscriptMachineResourcesCall(tool);
 
     if (detailLevel === 'summary' && !find.active) {
         const summary = (
@@ -156,6 +159,7 @@ export const MCPToolView = React.memo<ToolViewProps>(({ tool, detailLevel, messa
             </ToolSectionView>
         );
         // An agent's finite Project command shows its run's output, not the acknowledgement JSON.
+        if (machineResourcesCall) return <MachineResourcesToolBody call={machineResourcesCall} serverId={serverId} />;
         return projectCommandCall
             ? <ProjectCommandToolBody tool={tool} call={projectCommandCall} serverId={serverId} fallback={summary} />
             : summary;

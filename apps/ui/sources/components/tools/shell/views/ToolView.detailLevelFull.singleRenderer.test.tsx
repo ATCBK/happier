@@ -106,6 +106,9 @@ vi.mock('@/hooks/ui/useElapsedTime', () => ({
     useElapsedTime: () => 0,
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView (detail level: full)', () => {
     afterEach(() => {
         standardCleanup();
@@ -113,8 +116,6 @@ describe('ToolView (detail level: full)', () => {
 
     it('renders via the single tool renderer and passes detailLevel without calling getToolFullViewComponent', async () => {
         renderedToolViewSpy.mockReset();
-
-        const { ToolView } = await import('./ToolView');
 
         const tool = makeToolCall({
             name: 'Read',
@@ -131,7 +132,6 @@ describe('ToolView (detail level: full)', () => {
     it('keeps inline Task renderer in summary detail level', async () => {
         renderedToolViewSpy.mockReset();
 
-        const { ToolView } = await import('./ToolView');
         const taskTool = makeToolCall({
             name: 'Task',
             input: { operation: 'run', description: 'Explore' },

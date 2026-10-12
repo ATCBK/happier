@@ -4,17 +4,13 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ToolCall } from '@happier-dev/session-core/messages';
 
-import {
-  formatRunClock,
-  presentProjectRun,
-} from '@/components/projects/projectSetup/projectScriptPresentation';
+import { presentProjectRun } from '@/components/projects/projectSetup/projectScriptPresentation';
+import { RunClock } from '@/components/projects/projectSetup/ProjectRunMarks';
 import {
   readTranscriptProjectCommandAcceptance,
   type TranscriptProjectCommandCall,
 } from '@/components/sessions/transcript/references/transcriptProjectCommandReference';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
-import { Text } from '@/components/ui/text/Text';
-import { useElapsedTime } from '@/hooks/ui/useElapsedTime';
 import { isActionOperationTerminal } from '@/sync/domains/actionOperations/actionOperationStore';
 import { useActionOperation } from '@/sync/domains/actionOperations/useActionOperations';
 import { useServerScopedMachine } from '@/sync/store/hooks';
@@ -136,16 +132,6 @@ function LiveRunAccessory(props: Readonly<{ startedAt: number | null }>) {
   );
 }
 
-function RunClock(props: Readonly<{ startedAt: number }>) {
-  const { theme } = useUnistyles();
-  const seconds = useElapsedTime(props.startedAt);
-  return (
-    <Text style={[styles.clock, { color: theme.colors.text.tertiary }]}>
-      {formatRunClock(seconds)}
-    </Text>
-  );
-}
-
 /** The call as its CLI projection reads (`happier project script run test`), from the spec's canonical path. */
 function describeProjectCommandInvocation(
   call: Extract<TranscriptProjectCommandCall, { kind: 'start' }>,
@@ -187,5 +173,4 @@ function describeProjectCommandInvocation(
 
 const styles = StyleSheet.create(() => ({
   accessory: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  clock: { fontSize: 12, fontVariant: ['tabular-nums'] },
 }));

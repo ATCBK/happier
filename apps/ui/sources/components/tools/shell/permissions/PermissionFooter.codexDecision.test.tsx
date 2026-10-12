@@ -121,10 +121,11 @@ describe('PermissionFooter (codexDecision)', () => {
         const denyButtonStyles = getStyleFragments(deny);
         const stopButtonStyles = getStyleFragments(stop);
 
-        expect(allowStyles.some((style) => style.color === lightTheme.colors.permissionButton.allow.text)).toBe(true);
-        expect(allowForSessionStyles.some((style) => style.color === lightTheme.colors.permissionButton.allow.text)).toBe(true);
-        expect(denyStyles.some((style) => style.color === lightTheme.colors.permissionButton.deny.text)).toBe(true);
-        expect(stopStyles.some((style) => style.color === lightTheme.colors.permissionButton.deny.text)).toBe(true);
+        // One decision leads: the approval is the filled primary pill; grants are ink; refusals are quiet ink.
+        expect(allowStyles.some((style) => style.color === lightTheme.colors.button.primary.tint && style.backgroundColor === lightTheme.colors.button.primary.background)).toBe(true);
+        expect(allowForSessionStyles.some((style) => style.color === lightTheme.colors.text.primary)).toBe(true);
+        expect(denyStyles.some((style) => style.color === lightTheme.colors.text.secondary)).toBe(true);
+        expect(stopStyles.some((style) => style.color === lightTheme.colors.text.secondary)).toBe(true);
         expectTextOnlyActionButton(allowButtonStyles, lightTheme.colors.permissionButton.allow.background);
         expectTextOnlyActionButton(allowForSessionButtonStyles, lightTheme.colors.permissionButton.allowAll.background);
         expectTextOnlyActionButton(denyButtonStyles, lightTheme.colors.permissionButton.deny.background);
@@ -151,7 +152,7 @@ describe('PermissionFooter (codexDecision)', () => {
         expect(execPolicyButton).toBeTruthy();
         const execPolicyTextStyle = getTextStyleFragments(execPolicyButton as ReactTestInstance);
         const execPolicyButtonStyle = getStyleFragments(execPolicyButton as ReactTestInstance);
-        expect(execPolicyTextStyle.some((style) => style.color === lightTheme.colors.permissionButton.allowAll.text)).toBe(true);
+        expect(execPolicyTextStyle.some((style) => style.color === lightTheme.colors.text.primary)).toBe(true);
         expectTextOnlyActionButton(execPolicyButtonStyle, lightTheme.colors.permissionButton.allowAll.background);
 
         await pressTestInstanceAsync(execPolicyButton, 'execpolicy approval button');

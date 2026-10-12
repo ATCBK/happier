@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { View, ScrollView, Platform, useWindowDimensions } from 'react-native';
+import { View, ScrollView, useWindowDimensions } from 'react-native';
 import { ToolCall, Message } from "@happier-dev/session-core/messages";
 import { CodeView } from '@/components/ui/media/CodeView';
+import { resolveCodeMonoFontFamily } from '@/components/ui/code/codeTypography';
 import { Metadata } from '@happier-dev/session-core/state';
 import type { DiscardedPendingMessage, PendingMessage } from '@/sync/domains/state/storageTypes';
 import { getToolViewComponent } from '@/components/tools/renderers/core/_registry';
@@ -433,7 +434,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     toolId: {
         fontSize: 12,
-        fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+        fontFamily: resolveCodeMonoFontFamily(),
         color: theme.colors.text.secondary,
     },
     errorContainer: {

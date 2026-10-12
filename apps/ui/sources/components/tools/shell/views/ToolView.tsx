@@ -22,6 +22,7 @@ import { TranscriptCollapsible } from '@/components/sessions/transcript/motion/T
 import { buildToolHeaderModel } from '@/components/tools/shell/presentation/buildToolHeaderModel';
 import { resolveToolStatusIndicatorKind } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
 import { resolveToolErrorSummary } from '@/components/tools/shell/presentation/resolveToolErrorSummary';
+import { doesToolInlineBodyStateError, resolveToolInlineErrorDisplay } from '@/components/tools/shell/presentation/resolveToolInlineErrorDisplay';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     resolveToolViewDetailLevelDefaultForChromeMode,
@@ -46,7 +47,7 @@ import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
 import { buildApprovalToolCallLocation, doesApprovalMatchToolCall } from './toolApprovalPromptMatching';
 import { TranscriptJumpAttention } from '@/components/sessions/transcript/navigation/TranscriptJumpHighlightOverlay';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
-import { RowActionRevealSlot } from '@/components/sessions/transcript/messageActions/RowActionRevealSlot';
+import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import { readCoarsePrimaryPointer, useRowActionHoverHost } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
 import { shouldShowTranscriptRowPinAction } from '@/components/sessions/transcript/transcriptRowActionVisibility';
 import type { ToolRowPinAction } from '@/components/sessions/transcript/toolCalls/ToolCallPinAction';
@@ -63,6 +64,7 @@ import { ComputerActionResultReference } from '@/components/sessions/transcript/
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
 import { useTranscriptFindRow } from '@/components/sessions/transcript/find/TranscriptFindContext';
 import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
+import { formatElapsedDuration } from '@/components/machines/durationWords';
 
 const TOOL_VIEW_HIGHLIGHT_RADIUS = 12;
 
@@ -407,8 +409,20 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
     const headerDescription = effectiveDetailLevel === 'title' ? null : description;
     const headerStatusText = effectiveDetailLevel === 'title' ? null : status;
     const showSubtitleInline = timelineDensity === 'compact' || effectiveDetailLevel === 'compact';
+    // One place states a failure: the open body's error block when it draws one, otherwise the
+    // header summary (a closed or compact card).
+    const bodyStatesError = isBodyVisible && doesToolInlineBodyStateError(
+        resolveToolInlineErrorDisplay({
+            tool: toolForRendering,
+            normalizedToolName,
+            metadata: props.metadata ?? null,
+            permissionDisabledReason: interaction.permissionDisabledReason,
+            historicalAgentId,
+        }),
+        { hasSpecificView: Boolean(getToolViewComponent(normalizedToolName)), minimal },
+    );
     const errorSummary =
-        statusKind === 'error' ? (resolveToolErrorSummary(toolForRendering) ?? t('common.error')) : null;
+        statusKind === 'error' && !bodyStatesError ? (resolveToolErrorSummary(toolForRendering) ?? t('common.error')) : null;
 
     return (
         <TranscriptRowSeqProvider value={transcriptSeq}>
@@ -457,7 +471,7 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
                 <View style={styles.headerRight}>
                     {errorSummary ? (
                         <View style={styles.headerError}>
-                            <Icon name="warning-circle" size={16} color={theme.colors.state.danger.foreground} />
+                            {/* The status glyph beside the title already marks the failure; the summary adds its words only. */}
                             <Text style={styles.headerErrorText} numberOfLines={1}>
                                 {errorSummary}
                             </Text>
@@ -606,7 +620,7 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
 function ElapsedView(props: { from: number }) {
     const { from } = props;
     const elapsed = useElapsedTime(from);
-    return <Text style={styles.elapsedText}>{t('tools.common.elapsedSeconds', { seconds: elapsed.toFixed(1) })}</Text>;
+    return <Text style={styles.elapsedText}>{formatElapsedDuration(elapsed * 1000)}</Text>;
 }
 
 const styles = StyleSheet.create((theme) => ({
@@ -647,13 +661,13 @@ const styles = StyleSheet.create((theme) => ({
     headerError: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        // The status glyph sits just before this summary; the space between them is the icon-to-label gap.
+        marginLeft: theme.space.s6,
         maxWidth: 240,
     },
     headerErrorText: {
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.state.danger.foreground,
-        ...Typography.default('semiBold'),
     },
     headerActionsContainer: {
         flexDirection: 'row',

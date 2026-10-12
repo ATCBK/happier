@@ -113,12 +113,13 @@ afterEach(() => {
     standardCleanup();
 });
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView (ACP kind fallback)', () => {
     it('uses tool.input._acp.kind to pick a specific view when tool.name is not a stable key', async () => {
         renderedSpecificToolViewSpy.mockReset();
         getToolViewComponentSpy.mockClear();
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({
             name: 'Run echo hello',
             input: { _acp: { kind: 'execute', title: 'Run echo hello' }, command: ['/bin/zsh', '-lc', 'echo hello'] },

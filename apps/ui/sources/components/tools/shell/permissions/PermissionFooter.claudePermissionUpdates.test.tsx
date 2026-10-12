@@ -190,7 +190,7 @@ describe('PermissionFooter (Claude permission updates)', () => {
         expect(ops.approveWithUpdates).not.toHaveBeenCalled();
     });
 
-    it('uses permission foreground tokens for pending action labels', async () => {
+    it('draws standing-grant labels in ink rather than decorative tints', async () => {
         const { PermissionFooter } = await import('../permissions/PermissionFooter');
 
         const editScreen = await renderScreen(React.createElement(PermissionFooter, {
@@ -204,7 +204,7 @@ describe('PermissionFooter (Claude permission updates)', () => {
         const allowAllEditsButton = findPermissionFooterButton(editScreen, 'claude.permissions.yesAllowAllEdits');
         const allowAllEditsTextStyle = getTextStyleFragments(allowAllEditsButton);
 
-        expect(allowAllEditsTextStyle.some((style) => style.color === lightTheme.colors.permissionButton.allowAll.text)).toBe(true);
+        expect(allowAllEditsTextStyle.some((style) => style.color === lightTheme.colors.text.primary)).toBe(true);
 
         const shellScreen = await renderScreen(React.createElement(PermissionFooter, {
             permission: { id: 'p2', status: 'pending' },
@@ -216,6 +216,6 @@ describe('PermissionFooter (Claude permission updates)', () => {
         const allowForToolButton = findPermissionFooterButton(shellScreen, 'claude.permissions.yesForTool');
         const allowForToolTextStyle = getTextStyleFragments(allowForToolButton);
 
-        expect(allowForToolTextStyle.some((style) => style.color === lightTheme.colors.permissionButton.allow.text)).toBe(true);
+        expect(allowForToolTextStyle.some((style) => style.color === lightTheme.colors.text.primary)).toBe(true);
     });
 });

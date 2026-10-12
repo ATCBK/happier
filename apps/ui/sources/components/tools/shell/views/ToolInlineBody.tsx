@@ -253,11 +253,7 @@ export const ToolInlineBody = React.memo(function ToolInlineBody(props: {
             <TextSelectabilityScope selectable>
                 <ToolSectionSpacingProvider spacing={sectionSpacing}>
                     <ToolError
-                        message={
-                            typeof tool.result === 'string'
-                                ? tool.result
-                                : JSON.stringify(tool.result, null, 2)
-                        }
+                        message={errorDisplay.generic ?? ''}
                         messageId={props.messageId}
                         blockId="tool-error-append"
                     />

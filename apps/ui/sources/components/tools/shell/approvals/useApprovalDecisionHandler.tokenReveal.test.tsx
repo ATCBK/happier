@@ -4,6 +4,7 @@ import { API_TOKEN_FULL_GRANT_V1, ApprovalRequestSchema } from '@happier-dev/pro
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { ApiTokenSettingsController } from '@/components/settings/apiTokens/apiTokenSettingsController';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 
@@ -14,11 +15,13 @@ vi.mock('@/modal', async () => {
     return modal.boundary.module;
 });
 
-// Only the Home network, device credential store and modal host are replaced.
+// Only the Home network, device credential store, Socket.IO transport and modal host are replaced.
 // The Action executor, Artifact codec/claim, decision hook and reveal controller run for real.
 const home = createHomeGovernanceHarness();
+let restoreNativeFetch: (() => void) | undefined;
 let webLocks: ReturnType<typeof installWebLockManagerMock> | undefined;
 installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary((socket) => { socket.connected = true; });
 // Import the real host graph after transport mocks are installed, as explicit
 // setup. A transform/fetch timeout must not be mistaken for a hung approval.
 const [{ createDefaultActionExecutor }, { useApprovalDecisionHandler }] = await Promise.all([
@@ -31,9 +34,25 @@ const summary = { tokenId, label: 'Requested token', displayPrefix: 'hap_v1_1111
     hasEncryptionAccess: false, hasUnattendedTeamAccess: false, grant: API_TOKEN_FULL_GRANT_V1,
     parentTokenId: null, activeChildCount: 0, embedConfig: null };
 
-async function createRequestedTokenApproval() {
+function expectSuccessfulStoredExecution(serverId: string, artifactId: string) {
+    const request = ApprovalRequestSchema.parse(JSON.parse(home.artifacts(serverId).readPlainBody(artifactId)!));
+    expect(request.execution?.ok).toBe(true);
+}
+
+async function addConnectedHome() {
     const serverId = await home.addHome({ name: 'Home A', serverUrl: 'https://home-a.example',
         serverIdentityId: 'srv_stable-home-a', accountId: 'account-a' });
+    home.answer(serverId, '/v1/auth/ping', { body: {} });
+    home.answer(serverId, '/v2/cursor', { body: { cursor: '0' } });
+    const bearer = home.findByServerUrl('https://home-a.example')?.token;
+    if (!bearer) throw new Error('expected_account_credentials');
+    const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+    await restoreConnectionToActiveServer({ token: bearer });
+    return serverId;
+}
+
+async function createRequestedTokenApproval() {
+    const serverId = await addConnectedHome();
     await home.requireUiApproval(serverId, 'account.apiTokens.create');
     const result = await createDefaultActionExecutor().execute('account.apiTokens.create', { tokenId, label: summary.label }, {
         surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' },
@@ -53,11 +72,27 @@ async function createRequestedTokenApproval() {
 beforeEach(async () => {
     webLocks = installWebLockManagerMock();
     await home.reset();
+    // The native Sync graph also reaches the genuine fetch boundary while restoring
+    // its Account; keep it on the same Home fixture as the scoped Action transports.
+    const boundary = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        return await home.request(input, init);
+    });
+    restoreNativeFetch = () => boundary.mockRestore();
+    const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+    await loadSyncSingletonForTests();
     modal.boundary?.spies.show.mockClear();
     modal.boundary?.spies.hide.mockClear();
 });
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
+    const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+    await disconnectActiveServerConnection();
+    const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+    const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
+    serverScopedRpcSocketPool.resetForTests();
+    resetScopedMachineTransportCacheForTests();
+    restoreNativeFetch?.();
+    restoreNativeFetch = undefined;
     webLocks?.restore();
     webLocks = undefined;
 });
@@ -67,7 +102,9 @@ describe('approved API token reveal', () => {
         const { serverId, artifactId, approval } = await createRequestedTokenApproval();
         home.answer(serverId, 'POST /v1/auth/api-tokens/create', { body: { token, apiToken: summary } });
         const hook = await renderHook(() => useApprovalDecisionHandler({ id: artifactId, header: null }, approval, '', serverId));
-        await expect(hook.getCurrent()('approve')).resolves.toBe(true);
+        const revealed = await hook.getCurrent()('approve');
+        expectSuccessfulStoredExecution(serverId, artifactId);
+        expect(revealed).toBe(true);
         const shown = modal.boundary?.spies.show.mock.calls.at(-1)?.[0];
         expect(shown).toBeDefined();
         // The modal is a genuine boundary; its typed props expose the real lifecycle owner beneath it.
@@ -90,7 +127,10 @@ describe('approved API token reveal', () => {
         });
         const hook = await renderHook(() => useApprovalDecisionHandler({ id: artifactId, header: null }, approval, '', serverId));
         const deciding = hook.getCurrent()('approve');
-        await started;
+        await Promise.race([started, deciding.then(() => {
+            expectSuccessfulStoredExecution(serverId, artifactId);
+            throw new Error('token_issuance_not_reached');
+        })]);
         await home.switchAccount(serverId, 'account-b');
         release();
         await expect(deciding).resolves.toBe(false);
@@ -101,8 +141,7 @@ describe('approved API token reveal', () => {
 describe('approved Team invitation reveal', () => {
     it.each(['teams.invitations.create', 'teams.invitations.reissue'] as const)(
         'delivers the %s bearer only to the approving UI and retires the reveal with its Account', async (actionId) => {
-            const serverId = await home.addHome({ name: 'Home A', serverUrl: 'https://home-a.example',
-                serverIdentityId: 'srv_stable-home-a', accountId: 'account-a' });
+            const serverId = await addConnectedHome();
             const requested = await createDefaultActionExecutor().execute(actionId, actionId === 'teams.invitations.create'
                 ? { v: 1, teamId: 'team-a', role: 'member', historyAccess: 'from_membership', recipientEmail: null,
                     requestKey: 'requested-invitation-create' }
@@ -125,12 +164,15 @@ describe('approved Team invitation reveal', () => {
             const path = `/v1/teams/invitations/${actionId === 'teams.invitations.create' ? 'create' : 'reissue'}`;
             home.answer(serverId, `POST ${path}`, { body: output });
             const hook = await renderHook(() => useApprovalDecisionHandler({ id: artifactId, header: null }, approval, '', serverId));
-            await expect(hook.getCurrent()('approve')).resolves.toBe(true);
+            const revealed = await hook.getCurrent()('approve');
+            expectSuccessfulStoredExecution(serverId, artifactId);
+            expect(revealed).toBe(true);
             const shown = modal.boundary?.spies.show.mock.calls.at(-1)?.[0];
             expect(shown?.props).toMatchObject({ url: joinUrl });
             expect(home.requestsFor(path)).toHaveLength(1);
             expect(home.artifacts(serverId).readPlainBody(artifactId)).not.toContain(joinUrl);
             await home.switchAccount(serverId, 'account-b');
+            expect(modal.boundary?.spies.update).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ url: '' }));
             expect(modal.boundary?.spies.hide).toHaveBeenCalled();
             shown?.onHostUnmount?.();
         },

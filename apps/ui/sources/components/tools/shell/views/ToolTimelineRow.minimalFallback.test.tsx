@@ -89,6 +89,9 @@ vi.mock('@/agents/catalog/catalog', () => ({
     getAgentCore: () => ({ toolRendering: { hideUnknownToolsByDefault: false } }),
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolTimelineRow } = await import('./ToolTimelineRow');
+
 describe('ToolTimelineRow (minimal fallback)', () => {
     beforeEach(() => {
         settings = {
@@ -107,7 +110,6 @@ describe('ToolTimelineRow (minimal fallback)', () => {
     });
 
     it('does not render default input/output chrome for minimal tools', async () => {
-        const { ToolTimelineRow } = await import('./ToolTimelineRow');
         const tool: any = {
             name: 'MinimalTool',
             state: 'completed',

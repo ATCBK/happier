@@ -59,8 +59,9 @@ installToolShellCommonModuleMocks({
 
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
+const elapsed = vi.hoisted(() => ({ seconds: 45.6 }));
 vi.mock('@/hooks/ui/useElapsedTime', () => ({
-    useElapsedTime: () => 123.4,
+    useElapsedTime: () => elapsed.seconds,
 }));
 
 vi.mock('@/components/tools/renderers/core/_registry', () => ({
@@ -104,13 +105,15 @@ vi.mock('@/agents/catalog/catalog', () => ({
     resolveAgentIdFromFlavor: () => null,
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView (permission pending)', () => {
     afterEach(() => {
         standardCleanup();
     });
 
     it('rejects a pending permission surface without its transcript source', async () => {
-        const { ToolView } = await import('./ToolView');
         const tool = makeToolCall({
             state: 'running',
             completedAt: null,
@@ -122,7 +125,6 @@ describe('ToolView (permission pending)', () => {
     });
 
     it('keeps pending permissions closed with a read-only source when the interaction prop is absent', async () => {
-        const { ToolView } = await import('./ToolView');
         const screen = await renderWithSessionTranscriptSource(React.createElement(ToolView, {
             tool: makeToolCall({ state: 'running', completedAt: null, permission: { id: 'perm1', status: 'pending' } }),
             metadata: null, messages: [], sessionId: 's1',
@@ -133,8 +135,6 @@ describe('ToolView (permission pending)', () => {
     });
 
     it('does not show elapsed time while waiting for permission', async () => {
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({
             name: 'execute',
             state: 'running',
@@ -148,12 +148,10 @@ describe('ToolView (permission pending)', () => {
             React.createElement(ToolView, { tool, metadata: null, messages: [], sessionId: 's1', messageId: 'm1' }),
         );
 
-        expect(collectHostText(screen.tree)).not.toContain('123.4s');
+        expect(collectHostText(screen.tree)).not.toContain('45s');
     });
 
     it('shows elapsed time when running without pending permission', async () => {
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({
             name: 'execute',
             state: 'running',
@@ -167,12 +165,32 @@ describe('ToolView (permission pending)', () => {
             React.createElement(ToolView, { tool, metadata: null, messages: [], sessionId: 's1', messageId: 'm1' }),
         );
 
-        expect(collectHostText(screen.tree)).toContain('123.4s');
+        // Under a minute: whole seconds, never a tenth.
+        expect(collectHostText(screen.tree)).toContain('45s');
+    });
+
+    it('says a long-running tool in human units, never as a seconds counter', async () => {
+        elapsed.seconds = 33689.0;
+        const tool = makeToolCall({
+            name: 'execute',
+            state: 'running',
+            input: { command: 'pwd' },
+            result: null,
+            completedAt: null,
+            permission: undefined,
+        });
+
+        const screen = await renderWithSessionTranscriptSource(
+            React.createElement(ToolView, { tool, metadata: null, messages: [], sessionId: 's1', messageId: 'm1' }),
+        );
+
+        const text = collectHostText(screen.tree);
+        expect(text).not.toContain('33689');
+        expect(text).toContain('machineVitals.alerts.durations.hoursMinutes');
+        elapsed.seconds = 45.6;
     });
 
     it('does not render PermissionFooter once the tool is completed', async () => {
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({
             name: 'execute',
             state: 'completed',
@@ -190,8 +208,6 @@ describe('ToolView (permission pending)', () => {
     });
 
     it('renders the tool view but does not render PermissionFooter when the session is inactive', async () => {
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({
             name: 'execute',
             state: 'running',

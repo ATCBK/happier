@@ -99,6 +99,9 @@ vi.mock('@/agents/catalog/catalog', () => ({
     resolveAgentIdFromFlavor: () => null,
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView (detail level: compact)', () => {
     afterEach(() => {
         standardCleanup();
@@ -106,8 +109,6 @@ describe('ToolView (detail level: compact)', () => {
 
     it('hides the tool body but still shows a compact inline subtitle', async () => {
         renderedToolViewSpy.mockReset();
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({ name: 'edit', state: 'running', input: {}, description: null, result: { ok: true } });
 
         const screen = await renderWithSessionTranscriptSource(React.createElement(ToolView, { tool, metadata: null, messages: [] }));

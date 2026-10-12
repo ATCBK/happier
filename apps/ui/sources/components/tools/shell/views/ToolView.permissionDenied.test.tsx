@@ -112,14 +112,15 @@ vi.mock('@/agents/catalog/catalog', () => ({
     },
 }));
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView (permission denied)', () => {
     afterEach(() => {
         standardCleanup();
     });
 
     it('keeps the inferred known tool title even when inference fallback is used', async () => {
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({
             // Force inference fallback: tool name isn't known, but input.permission.toolName is.
             name: 'UnknownTool',
@@ -142,8 +143,6 @@ describe('ToolView (permission denied)', () => {
     });
 
     it('does not attribute denial to Read Only mode for non-codexLike providers', async () => {
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({
             name: 'Bash',
             description: 'Write',
@@ -169,8 +168,6 @@ describe('ToolView (permission denied)', () => {
     });
 
     it('attributes denial to Read Only mode for codexLike providers', async () => {
-        const { ToolView } = await import('./ToolView');
-
         const tool = makeToolCall({
             name: 'Bash',
             description: 'Write',

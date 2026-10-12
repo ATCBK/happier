@@ -175,6 +175,9 @@ const fixtureTools: ReadonlyArray<Readonly<{ label: string; tool: ToolCall }>> =
     },
 ] as const;
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolView } = await import('./ToolView');
+
 describe('ToolView fixtures (v1)', () => {
     beforeEach(() => {
         mockSettings.detailLevelDefault = 'summary';
@@ -187,8 +190,6 @@ describe('ToolView fixtures (v1)', () => {
     });
 
     it.each(fixtureTools)('keeps $label in title mode without selecting a renderer', async ({ tool }) => {
-        const { ToolView } = await import('./ToolView');
-
         renderedSummarySpy.mockClear();
         renderedFullSpy.mockClear();
         mockSettings.detailLevelDefault = 'title';
@@ -201,8 +202,6 @@ describe('ToolView fixtures (v1)', () => {
     });
 
     it.each(fixtureTools)('renders $label with the summary renderer in summary mode', async ({ tool }) => {
-        const { ToolView } = await import('./ToolView');
-
         renderedSummarySpy.mockClear();
         renderedFullSpy.mockClear();
         mockSettings.detailLevelDefault = 'summary';
@@ -223,8 +222,6 @@ describe('ToolView fixtures (v1)', () => {
     });
 
     it.each(fixtureTools)('renders $label with the full renderer in full mode', async ({ tool }) => {
-        const { ToolView } = await import('./ToolView');
-
         renderedSummarySpy.mockClear();
         renderedFullSpy.mockClear();
         mockSettings.detailLevelDefault = 'full';

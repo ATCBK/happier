@@ -45,13 +45,15 @@ function makeToolMessage(overrides: Partial<any> = {}) {
     };
 }
 
+// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const { ToolTimelinePreviewRow } = await import('./ToolTimelinePreviewRow');
+
 describe('ToolTimelinePreviewRow (error indicator)', () => {
     afterEach(() => {
         standardCleanup();
     });
 
     it('shows an inline error badge when tool_use_result contains an Error: prefix', async () => {
-        const { ToolTimelinePreviewRow } = await import('./ToolTimelinePreviewRow');
         const message = makeToolMessage({
             result: {
                 tool_use_result: 'Error: Ripgrep search timed out after 20 seconds.\nTry searching a more specific path.',
@@ -66,7 +68,6 @@ describe('ToolTimelinePreviewRow (error indicator)', () => {
     });
 
     it('does not show the inline error badge for successful completed tools', async () => {
-        const { ToolTimelinePreviewRow } = await import('./ToolTimelinePreviewRow');
         const message = makeToolMessage({
             result: {
                 tool_use_result: 'OK',
@@ -78,7 +79,6 @@ describe('ToolTimelinePreviewRow (error indicator)', () => {
     });
 
     it('shows a visible and accessible denied status in collapsed previews', async () => {
-        const { ToolTimelinePreviewRow } = await import('./ToolTimelinePreviewRow');
         const message = makeToolMessage({
             state: 'error',
             result: null,
