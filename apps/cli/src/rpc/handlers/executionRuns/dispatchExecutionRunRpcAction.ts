@@ -989,7 +989,17 @@ export function createExecutionRunRpcActionExecutor(
     execute: async (actionId, input, context) => {
       // Governance reads the same admitted Account holder as the runtime.
       // Resolve it before policy/approval checks, never through focused state.
-      await params.context.resolveAccountSettings?.();
+      try {
+        await params.context.resolveAccountSettings?.();
+      } catch (error) {
+        if (actionId !== 'execution.run.start') throw error;
+        return {
+          ok: false,
+          errorCode: 'execution_run_failed',
+          error: error instanceof Error ? error.message : 'Execution setup failed',
+          details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
+        };
+      }
       if (context?.authority === 'present_user' && isAgentStartActionV1(actionId)
         && input && typeof input === 'object' && 'roleId' in input && typeof input.roleId === 'string'
         && !context.agentStartContext) {
