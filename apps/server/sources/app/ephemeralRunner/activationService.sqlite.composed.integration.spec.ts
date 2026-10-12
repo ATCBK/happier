@@ -211,8 +211,8 @@ async function activationFixture(encryptionMode: 'plain' | 'e2ee' = 'plain', rec
         };
         const account = await db.account.create({
             data: accountContentBinding === null
-                ? { encryptionMode, firstName: 'Alice', lastName: 'Example', username: `alice-${randomUUID()}` }
-                : { encryptionMode, ...accountContentBinding, firstName: 'Alice', lastName: 'Example', username: `alice-${randomUUID()}` },
+                ? { encryptionMode, name: 'Alice Example', firstName: 'Alice', lastName: 'Example', username: `alice-${randomUUID()}` }
+                : { encryptionMode, ...accountContentBinding, name: 'Alice Example', firstName: 'Alice', lastName: 'Example', username: `alice-${randomUUID()}` },
         });
         const draftId = randomUUID();
         const mutationId = randomUUID();

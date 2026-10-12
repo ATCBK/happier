@@ -6,6 +6,7 @@ import {
 import {
     ACCOUNT_DISPLAY_PROFILE_SELECT,
     projectAccountDisplayProfileV1,
+    resolveAccountDisplayLabelV1,
 } from "@/app/account/profile/accountDisplayProfile";
 import { resolveAuthPolicyFromEnv } from "@/app/auth/authPolicy";
 import { resolveJoinScreenHomeDisplayName } from "@/app/teams/invitations/joinScreenHome";
@@ -35,10 +36,7 @@ export async function readRunnerConsentDisplayFactsInTx(input: Readonly<{
     if (!account || !team) return null;
 
     const profile = projectAccountDisplayProfileV1(account);
-    const requesterName = [profile.firstName, profile.lastName]
-        .filter((part): part is string => Boolean(part?.trim()))
-        .join(" ")
-        || (profile.username ? `@${profile.username}` : "Happier member");
+    const requesterName = resolveAccountDisplayLabelV1(profile) ?? "Happier member";
     const homeName = resolveAuthPolicyFromEnv(process.env).accountServicePresentation?.displayName
         ?? resolveJoinScreenHomeDisplayName(process.env)
         ?? "Happier Home";
