@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { classifySpawnFailure, spawnFailureMessage, type SpawnFailure, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 
 import { resolveWindowsCommandOnPath } from '@happier-dev/cli-common/process';
 
@@ -12,6 +13,7 @@ export async function startHappySessionInWindowsTerminal(params: {
   env: NodeJS.ProcessEnv;
   windowId: string;
   title: string;
+  readSpawnFailureLimits?: SpawnFailureLimitsReader;
   onDispatcherSpawned?: (
     pid: number,
     stopDispatcher: () => void,
@@ -22,12 +24,14 @@ export async function startHappySessionInWindowsTerminal(params: {
       ok: false;
       dispatch: 'not_started';
       errorMessage: string;
+      spawnFailure?: SpawnFailure;
     }
   | {
       ok: false;
       dispatch: 'uncertain';
       custodyPid: number;
       errorMessage: string;
+      spawnFailure?: SpawnFailure;
     }
 > {
   // Resolve the Terminal executable HERE, against the exact environment the PowerShell child is
@@ -47,12 +51,14 @@ export async function startHappySessionInWindowsTerminal(params: {
           ok: false;
           dispatch: 'not_started';
           errorMessage: string;
+          spawnFailure?: SpawnFailure;
         }
       | {
           ok: false;
           dispatch: 'uncertain';
           custodyPid: number;
           errorMessage: string;
+          spawnFailure?: SpawnFailure;
         }
     ) => {
       if (settled) return;
@@ -60,12 +66,18 @@ export async function startHappySessionInWindowsTerminal(params: {
       resolve(result);
     };
 
-    const child = spawn(invocation.command, invocation.args, {
+    let child: ReturnType<typeof spawn>;
+    try { child = spawn(invocation.command, invocation.args, {
       cwd: params.workingDirectory,
       env: params.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-    });
+    }); } catch (error) {
+      const spawnFailure = classifySpawnFailure(error, { syscall: 'spawn', limits: params.readSpawnFailureLimits?.() });
+      safeResolve({ ok: false, dispatch: 'not_started', spawnFailure,
+        errorMessage: spawnFailureMessage(spawnFailure, 'Windows Terminal dispatcher could not be started') });
+      return;
+    }
     const custodyPid =
       Number.isInteger(child.pid) && (child.pid ?? 0) > 0
         ? child.pid!
@@ -99,21 +111,24 @@ export async function startHappySessionInWindowsTerminal(params: {
       void data;
     });
 
-    child.once('error', () => {
+    child.once('error', (error) => {
+      const spawnFailure = classifySpawnFailure(error, { syscall: 'spawn', limits: params.readSpawnFailureLimits?.() });
       safeResolve(
         custodyPid === null
           ? {
               ok: false,
               dispatch: 'not_started',
-              errorMessage:
-                'Windows Terminal dispatcher could not be started',
+              spawnFailure,
+              errorMessage: spawnFailureMessage(spawnFailure,
+                'Windows Terminal dispatcher could not be started'),
             }
           : {
               ok: false,
               dispatch: 'uncertain',
               custodyPid,
-              errorMessage:
-                'Windows Terminal dispatcher failed after launch may have committed',
+              spawnFailure,
+              errorMessage: spawnFailureMessage(spawnFailure,
+                'Windows Terminal dispatcher failed after launch may have committed'),
             },
       );
     });

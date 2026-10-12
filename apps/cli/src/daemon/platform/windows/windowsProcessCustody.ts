@@ -1,10 +1,10 @@
 import { win32 as windowsPath } from 'node:path';
 
-import { execFileWithDeadline, isPidPresent } from '@happier-dev/cli-common/process';
+import { isPidPresent } from '@happier-dev/cli-common/process';
+import { readProcessCensus } from '@/processes/census/processCensus';
+import { censusRowToProcessFact, type ProcessCensusProcessFact } from '@/processes/census/processFacts';
 import { processIdentityMatches } from '@happier-dev/cli-common/processInstance';
-import {
-  taskkillWindowsProcessTree,
-} from '@/subprocess/supervision/taskkillWindowsProcessTree';
+import { terminateProcessTree as terminateOwnedProcessTree } from '@/processes/terminate/terminateProcessTree';
 
 import { readProcessIdentityByPid } from '../../processIdentity';
 import { hashProcessCommand } from '../../sessionRegistry';
@@ -13,10 +13,6 @@ import type {
   StartupLaunchCancellationResult,
 } from '../../spawn/startupLaunchCancellation';
 import { parseWindowsCommandLine } from './windowsCommandLine';
-import {
-  readWindowsProcessInventory,
-  type WindowsProcessInventoryFact,
-} from './windowsProcessInventory';
 
 export type WindowsTerminalLaunchCustody = Readonly<{
   executablePath: string;
@@ -41,7 +37,7 @@ type ReadExactWindowsProcessIdentity = (
 
 export type WindowsProcessCustodyDependencies = Readonly<{
   readAllWindowsProcessFactsFn?: () => Promise<
-    ReadonlyMap<number, WindowsProcessInventoryFact>
+    ReadonlyMap<number, ProcessCensusProcessFact>
   >;
   readProcessIdentityByPidFn?: ReadExactWindowsProcessIdentity;
   terminateProcessTreeFn?: (input: Readonly<{
@@ -60,7 +56,7 @@ function normalizeWindowsExecutablePath(value: string): string {
 }
 
 function matchesExactWindowsTerminalLaunch(
-  process: WindowsProcessInventoryFact,
+  process: Readonly<{ pid: number; executablePath?: string; command?: string }>,
   launch: WindowsTerminalLaunchCustody,
 ): boolean {
   if (
@@ -95,7 +91,7 @@ function matchesExactWindowsTerminalLaunch(
 
 export function captureExactWindowsTerminalLaunchProcess(
   input: Readonly<{
-    process: WindowsProcessInventoryFact;
+    process: Readonly<{ pid: number; processStartTimeMs?: number; executablePath?: string; command?: string }>;
     launch: WindowsTerminalLaunchCustody;
   }>,
 ): ExactWindowsProcessCancellationIdentity | null {
@@ -135,7 +131,10 @@ export function createExactWindowsProcessCancellation(
   const readIdentity =
     params.readProcessIdentityByPidFn ?? readProcessIdentityByPid;
   const terminateProcessTree =
-    params.terminateProcessTreeFn ?? taskkillWindowsProcessTree;
+    params.terminateProcessTreeFn ?? (async (target: Readonly<{ pid: number; force: boolean }>) => {
+      if (params.processStartTimeMs === null) throw new Error('Process identity unavailable');
+      await terminateOwnedProcessTree({ pid: target.pid, start: { startTimeMs: params.processStartTimeMs } });
+    });
   // Shared canonical probe, not a local copy: custody's own version used a bare `catch`, so an
   // access-denied process read as dead and this function reported `{ status: 'stopped' }` for a
   // process that was still running.
@@ -226,13 +225,12 @@ export function createExactWindowsProcessCancellation(
 }
 
 export async function readAllWindowsProcessFacts(): Promise<
-  ReadonlyMap<number, WindowsProcessInventoryFact>
+  ReadonlyMap<number, ProcessCensusProcessFact>
 > {
-  return await readWindowsProcessInventory({
-    // Deadline-owning boundary: a `child_process` `timeout` turns a completed inventory into an
-    // empty one that still reports success, i.e. "no such process" for every live pid.
-    execFile: execFileWithDeadline,
-  });
+  const snapshot = await readProcessCensus({ freshness: 'fresh' });
+  if (snapshot.status !== 'ok') throw new Error(`Windows process census unavailable: ${snapshot.reason}`);
+  const principal = snapshot.rows.find(row => row.pid === process.pid)?.principal ?? null;
+  return new Map(snapshot.rows.map(row => [row.pid, censusRowToProcessFact(row, principal)]));
 }
 
 export async function cancelWindowsTerminalLaunch(
@@ -257,7 +255,7 @@ export async function cancelWindowsTerminalLaunch(
     );
     if (horizonWaitMs > 0) await sleep(horizonWaitMs);
 
-    let inventory: ReadonlyMap<number, WindowsProcessInventoryFact>;
+    let inventory: ReadonlyMap<number, ProcessCensusProcessFact>;
     for (let scan = 0; scan < 2; scan += 1) {
       try {
         inventory = await (

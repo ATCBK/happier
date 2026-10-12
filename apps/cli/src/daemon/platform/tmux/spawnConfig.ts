@@ -6,6 +6,8 @@ import { finalizeSessionChildEnvironment } from '@/session/runtime/control/final
 import { selectTrustedSessionControlEnvironment } from '@/session/runtime/control/sessionControlEnvironment';
 import { resolveStackProcessKindOverrideForSessionSpawn } from '@/daemon/spawn/resolveStackProcessKindOverrideForSessionSpawn';
 import { buildCgroupSelfMigratingHappyCliLaunchSpec } from '../linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
+import { PROCESS_OWNER_ENV_KEY, readHostProcessOwnerTag, withHostProcessOwnerEnvironment, withProcessOwnerEnvironment } from '@/processes/ownerTag';
+import { createHappierLinuxScopeName } from '../linux/systemdUserResourceGovernor';
 
 type TmuxSpawnAgentId = CatalogAgentId | 'acp-catalog';
 
@@ -66,12 +68,16 @@ export async function buildTmuxSpawnConfig(params: {
   unsetEnvKeys?: readonly string[];
   extraArgs?: string[];
   launchOptions?: HappyCliSubprocessLaunchOptions;
+  memoryHighBytes?: number | null;
+  sessionId?: string;
+  happierHomeDir?: string;
 }): Promise<{
   commandTokens: string[];
   tmuxEnv: Record<string, string>;
   tmuxCommandEnv: Record<string, string>;
   directory: string;
   unsetEnvKeys: readonly string[];
+  linuxLaunchUnit?: string;
 }> {
   const args = [
     params.agent,
@@ -83,24 +89,32 @@ export async function buildTmuxSpawnConfig(params: {
   ];
 
   const launchSpec = buildHappyCliSubprocessLaunchSpec(args, params.launchOptions);
+  const stampOwner = (environment: Record<string, string>) => params.sessionId
+    ? withProcessOwnerEnvironment(environment, { kind: 'session', sessionId: params.sessionId }, params.happierHomeDir)
+    : process.platform === 'linux'
+      ? withHostProcessOwnerEnvironment(environment, readHostProcessOwnerTag(process.env))
+      : environment;
+  const requestedUnsetEnvKeys = (params.unsetEnvKeys ?? []).filter(key =>
+    !(params.sessionId || process.platform === 'linux') || key.toUpperCase() !== PROCESS_OWNER_ENV_KEY);
   const initialTmuxEnv = buildTmuxWindowEnv(
     process.env,
-    { ...params.extraEnv, ...(launchSpec.env ?? {}) },
+    stampOwner({ ...params.extraEnv, ...(launchSpec.env ?? {}) }),
     process.platform,
-    params.unsetEnvKeys,
+    requestedUnsetEnvKeys,
   );
   const scopedLaunchSpec = process.platform === 'linux'
-    ? await buildCgroupSelfMigratingHappyCliLaunchSpec({ launchSpec, environment: initialTmuxEnv })
+    ? await buildCgroupSelfMigratingHappyCliLaunchSpec({ launchSpec: { ...launchSpec, env: initialTmuxEnv }, environment: initialTmuxEnv,
+      unit: createHappierLinuxScopeName(initialTmuxEnv.HAPPIER_PROCESS_OWNER), memoryHighBytes: params.memoryHighBytes })
     : null;
   const effectiveLaunchSpec = scopedLaunchSpec ?? launchSpec;
   const commandTokens = [effectiveLaunchSpec.filePath, ...effectiveLaunchSpec.args];
   const ownsCgroupScope = scopedLaunchSpec?.env?.HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP === '';
   const unsetEnvKeys = ownsCgroupScope
-    ? [...new Set([...(params.unsetEnvKeys ?? []), 'HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP'])]
-    : params.unsetEnvKeys ?? [];
+    ? [...new Set([...requestedUnsetEnvKeys, 'HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP'])]
+    : requestedUnsetEnvKeys;
   const tmuxEnv = buildTmuxWindowEnv(
     process.env,
-    { ...params.extraEnv, ...(effectiveLaunchSpec.env ?? {}) },
+    stampOwner({ ...params.extraEnv, ...(effectiveLaunchSpec.env ?? {}) }),
     process.platform,
     unsetEnvKeys,
     ownsCgroupScope ? false : undefined,
@@ -114,6 +128,7 @@ export async function buildTmuxSpawnConfig(params: {
 
   return {
     commandTokens,
+    ...(scopedLaunchSpec?.linuxLaunchUnit ? { linuxLaunchUnit: scopedLaunchSpec.linuxLaunchUnit } : {}),
     tmuxEnv,
     tmuxCommandEnv,
     directory: params.directory,

@@ -24,6 +24,13 @@ function createFakeChildProcess(): SpawnMockChild {
 }
 
 describe('startHappySessionInVisibleWindowsConsole', () => {
+  it('preserves resource failures on the existing failed launch result', async () => {
+    const child = createFakeChildProcess();
+    vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+    const pending = startHappySessionInVisibleWindowsConsole({ workingDirectory: 'C:\\repo', env: {}, filePath: 'agent.exe', args: [] });
+    child.emit('error', Object.assign(new Error('spawn failed'), { code: 'EMFILE', syscall: 'spawn' }));
+    await expect(pending).resolves.toMatchObject({ ok: false, spawnFailure: { reason: 'too_many_open_files', errno: 'EMFILE' }, errorMessage: expect.stringContaining("can't open more files") });
+  });
   const originalAmbientOnly = process.env.HAPPIER_VISIBLE_CONSOLE_AMBIENT_ONLY_TEST;
 
   afterEach(() => {

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { classifySpawnFailure, spawnFailureMessage, type SpawnFailure, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 import type { CancelStartupLaunch } from '../../spawn/startupLaunchCancellation';
 import { createExactWindowsProcessCancellation } from './windowsProcessCustody';
 import {
@@ -13,13 +14,14 @@ type VisibleWindowsConsoleLaunchResult =
       processStartTimeMs: number;
       cancel: CancelStartupLaunch;
     }>
-  | Readonly<{ ok: false; errorMessage: string }>;
+  | Readonly<{ ok: false; errorMessage: string; spawnFailure?: SpawnFailure }>;
 
 export async function startHappySessionInVisibleWindowsConsole(params: {
   filePath: string;
   args: string[];
   workingDirectory: string;
   env: NodeJS.ProcessEnv;
+  readSpawnFailureLimits?: SpawnFailureLimitsReader;
 }): Promise<VisibleWindowsConsoleLaunchResult> {
   const invocation = buildPowerShellStartProcessInvocation({
     filePath: params.filePath,
@@ -35,12 +37,17 @@ export async function startHappySessionInVisibleWindowsConsole(params: {
       resolve(result);
     };
 
-    const child = spawn(invocation.command, invocation.args, {
+    let child: ReturnType<typeof spawn>;
+    try { child = spawn(invocation.command, invocation.args, {
       cwd: params.workingDirectory,
       env: params.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-    });
+    }); } catch (error) {
+      const spawnFailure = classifySpawnFailure(error, { syscall: 'spawn', limits: params.readSpawnFailureLimits?.() });
+      safeResolve({ ok: false, spawnFailure, errorMessage: spawnFailureMessage(spawnFailure, 'Failed to spawn PowerShell') });
+      return;
+    }
     let stdout = '';
     let stderr = '';
 
@@ -62,12 +69,14 @@ export async function startHappySessionInVisibleWindowsConsole(params: {
     });
 
     child.once('error', (error) => {
+      const spawnFailure = classifySpawnFailure(error, { syscall: 'spawn', limits: params.readSpawnFailureLimits?.() });
       safeResolve({
         ok: false,
-        errorMessage:
+        spawnFailure,
+        errorMessage: spawnFailureMessage(spawnFailure,
           error instanceof Error
             ? error.message
-            : 'Failed to spawn PowerShell',
+            : 'Failed to spawn PowerShell'),
       });
     });
 

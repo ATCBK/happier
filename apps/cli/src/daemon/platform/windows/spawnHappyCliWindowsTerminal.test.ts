@@ -25,6 +25,14 @@ function createFakeChildProcess(): SpawnMockChild {
 }
 
 describe('startHappySessionInWindowsTerminal', () => {
+  it('preserves pre-launch resource failure without admitting console fallback', async () => {
+    const child = createFakeChildProcess();
+    child.pid = undefined;
+    vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+    const pending = startHappySessionInWindowsTerminal({ workingDirectory: 'C:\\repo', env: {}, filePath: 'agent.exe', args: [], windowId: 'window', title: 'title' });
+    child.emit('error', Object.assign(new Error('spawn failed'), { code: 'ENOMEM', syscall: 'spawn' }));
+    await expect(pending).resolves.toMatchObject({ ok: false, dispatch: 'not_started', spawnFailure: { reason: 'out_of_memory', errno: 'ENOMEM' } });
+  });
   const originalAmbientOnly = process.env.HAPPIER_WINDOWS_TERMINAL_AMBIENT_ONLY_TEST;
 
   afterEach(() => {
@@ -119,6 +127,7 @@ describe('startHappySessionInWindowsTerminal', () => {
       dispatch: 'not_started',
       errorMessage:
         'Windows Terminal dispatcher could not be started',
+      spawnFailure: { reason: 'other' },
     });
     expect(JSON.stringify(result)).not.toContain('never-return-this');
   });

@@ -1,6 +1,9 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { getPriority, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { readFile } from 'node:fs/promises';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -19,13 +22,36 @@ vi.mock('@happier-dev/cli-common/process', async (importOriginal) => ({
   execFileWithDeadline: mocks.execFileWithDeadline,
 }));
 
-import { buildCgroupSelfMigratingHappyCliLaunchSpec } from './buildCgroupSelfMigratingHappyCliLaunchSpec';
+import { buildCgroupProcessLaunchSpec, buildCgroupSelfMigratingHappyCliLaunchSpec } from './buildCgroupSelfMigratingHappyCliLaunchSpec';
 
 describe('buildCgroupSelfMigratingHappyCliLaunchSpec', () => {
   beforeEach(() => {
     vi.mocked(getPriority).mockReturnValue(0);
   });
   let sandboxDir: string | null = null;
+
+  it('sets the selected soft ceiling before the self-migrated target runs', async () => {
+    sandboxDir = await mkdtemp(join(tmpdir(), 'happier-ceiling-launch-'));
+    const unit = 'happier-session-0123456789ab.session-123-nonce.scope';
+    const scopeDir = join(sandboxDir, unit);
+    await mkdir(scopeDir);
+    await writeFile(join(scopeDir, 'memory.high'), 'max');
+    const spec = buildCgroupProcessLaunchSpec({
+      scope: { kind: 'cgroup', baseDir: sandboxDir }, unit, memoryHighBytes: 1048576,
+      launchSpec: { filePath: '/bin/sh', args: ['-c', 'test "$(cat "$HAPPIER_DAEMON_SESSION_CGROUP_BASE_DIR/$HAPPIER_DAEMON_PROCESS_CGROUP_UNIT/memory.high")" = 1048576'] },
+    });
+    await promisify(execFile)(spec.filePath, spec.args, { env: { ...process.env, ...spec.env } });
+    expect(await readFile(join(scopeDir, 'memory.high'), 'utf8')).toBe('1048576\n');
+  });
+
+  it('refuses a configured-ceiling launch when the runner cannot enter its scope', async () => {
+    sandboxDir = await mkdtemp(join(tmpdir(), 'happier-ceiling-launch-'));
+    const unit = 'happier-session-0123456789ab.session-123-nonce.scope';
+    await mkdir(join(sandboxDir, unit, 'cgroup.procs'), { recursive: true });
+    const spec = buildCgroupProcessLaunchSpec({ scope: { kind: 'cgroup', baseDir: sandboxDir }, unit, memoryHighBytes: 1048576,
+      launchSpec: { filePath: '/bin/sh', args: ['-c', 'exit 0'] } });
+    await expect(promisify(execFile)(spec.filePath, spec.args, { env: { ...process.env, ...spec.env } })).rejects.toThrow();
+  });
 
   afterEach(async () => {
     if (!sandboxDir) return;
@@ -50,6 +76,7 @@ describe('buildCgroupSelfMigratingHappyCliLaunchSpec', () => {
     );
 
     const result = await buildCgroupSelfMigratingHappyCliLaunchSpec({
+      unit: 'happier-session-0123456789ab.session-123-nonce.scope',
       args: ['codex', '--happy-starting-mode', 'remote'],
       daemonPid: 111,
       procfsRootDir,
@@ -59,7 +86,8 @@ describe('buildCgroupSelfMigratingHappyCliLaunchSpec', () => {
     expect(result?.env?.HAPPIER_DAEMON_SESSION_CGROUP_BASE_DIR).toBe(
       '/sys/fs/cgroup/user.slice/user-501.slice/user@501.service',
     );
-    expect(result?.args.join(' ')).toContain('happier-session-$$.scope');
+    expect(result?.env?.HAPPIER_DAEMON_PROCESS_CGROUP_UNIT).toBe('happier-session-0123456789ab.session-123-nonce.scope');
+    expect(result?.args.join(' ')).toContain('$HAPPIER_DAEMON_PROCESS_CGROUP_UNIT');
 
     const shellScript = result?.args[1] ?? '';
     expect(shellScript).toContain('exec "$@"');
@@ -103,6 +131,9 @@ describe('buildCgroupSelfMigratingHappyCliLaunchSpec', () => {
   });
 
   it('uses the provisioned lower-weight jobs slice instead of the daemon control-plane slice', async () => {
+    sandboxDir = await mkdtemp(join(tmpdir(), 'happier-systemd-launch-spec-'));
+    const systemdRunPath = join(sandboxDir, 'systemd-run');
+    await writeFile(systemdRunPath, '#!/bin/sh\n', { mode: 0o755 });
     vi.mocked(getPriority).mockReturnValue(19);
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', {
@@ -120,11 +151,13 @@ describe('buildCgroupSelfMigratingHappyCliLaunchSpec', () => {
         daemonPid: 333,
         procfsRootDir: '/proc-that-is-not-used-when-systemd-is-ready',
         environment: {
+          ...process.env,
           DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/501/bus',
+          PATH: sandboxDir,
         },
       });
 
-      expect(result?.filePath).toBe('systemd-run');
+      expect(result?.filePath).toBe(systemdRunPath);
       expect(result?.args).toEqual(expect.arrayContaining([
         '--user',
         '--scope',
@@ -186,6 +219,7 @@ describe('buildCgroupSelfMigratingHappyCliLaunchSpec', () => {
         daemonPid: 444,
         procfsRootDir,
         environment: {
+          ...process.env,
           DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/501/bus',
         },
       });
