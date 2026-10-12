@@ -127,9 +127,9 @@ const loadRelaySettingsStageSurface = cacheStageSurfaceLoader<StageSurfaceModule
 const RelaySettingsStageSurface = React.lazy(loadRelaySettingsStageSurface);
 
 const loadMachinesSettingsStageSurface = cacheStageSurfaceLoader<StageSurfaceModule>(async () => {
-    const machinesSettingsModule = await import('@/components/settings/machines/MachinesSettingsView');
+    const machinesIndexModule = await import('@/components/machines/index/AllMachinesIndex');
 
-    return { default: machinesSettingsModule.MachinesSettingsView };
+    return { default: machinesIndexModule.AllMachinesIndex };
 });
 
 const MachinesSettingsStageSurface = React.lazy(loadMachinesSettingsStageSurface);

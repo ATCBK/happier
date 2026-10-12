@@ -51,7 +51,7 @@ export function buildJourneyVoiceStageModel(): VoiceSurfaceViewModel {
             availability: 'ready', live: true, canStart: false, canStop: true, canMute: true,
             muted: false, capturing: true, micStateLabel: t('voiceSurface.a11y.microphoneActive'),
             captionLabel: t('voiceSurface.a11y.microphoneActive'), primaryAction: 'end', primaryActionLabel: t('voiceAssistant.endVoice'),
-            primaryActionHint: t('voiceSurface.orbEndHint'), recoveryAvailable: false, recoveryLabel: null, recoveryShortLabel: null,
+            primaryActionHint: t('voiceSurface.orbEndHint'), recoveryAvailable: false, recoveryLabel: null, recoveryIcon: null,
             surfaceState: 'listening', tone: 'active', stop: 'cool', sessionId: 'journey-voice',
             markPose: 'light', statusCell: null,
             statusWord: t('voiceAssistant.listening'), statusLabel: t('voiceAssistant.listening'),

@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { SessionView } from '@/components/sessions/shell/SessionView';
+import { SessionView } from '@/components/sessions/shell/SessionViewHost';
 import { DEMO_RICH_SESSION_ID } from '@/demoMode/world/buildDemoWorld';
 
 /**

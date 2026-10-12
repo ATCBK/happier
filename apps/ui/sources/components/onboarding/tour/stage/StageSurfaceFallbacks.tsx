@@ -2,7 +2,8 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
-import { SelectionListSkeletonRow } from '@/components/ui/selectionList/SelectionListSkeletonRow';
+import { SkeletonRows as LoadingRows } from '@/components/ui/lists/SkeletonRows';
+import { SELECTION_LIST_SKELETON_ROW_SHAPE } from '@/components/ui/selectionList/_constants';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
@@ -20,7 +21,7 @@ import { stageVisualTokens } from './stageVisualTokens';
  *   chrome (sidebar column + detail column, or a single column on phone);
  * - `StageSurfaceUnavailable` states plainly that the surface did not load.
  *
- * The rows reuse the shared `SelectionListSkeletonRow` primitive so the pulse,
+ * The rows reuse the shared loading rows (`SkeletonRows`) so the pulse,
  * reduced-motion behavior, theming, and assistive-tech hiding stay owned in one
  * place instead of being re-implemented for the stage.
  */
@@ -35,13 +36,7 @@ const DETAIL_SKELETON_TOP_INSET_PX = 24;
 function SkeletonRows(props: Readonly<{ count: number; testID: string }>): React.ReactElement {
     return (
         <>
-            {Array.from({ length: props.count }, (_unused, index) => (
-                <SelectionListSkeletonRow
-                    key={index}
-                    index={index}
-                    testID={`${props.testID}-row-${index}`}
-                />
-            ))}
+            <LoadingRows rows={props.count} {...SELECTION_LIST_SKELETON_ROW_SHAPE} rowTestID={(index) => `${props.testID}-row-${index}`} />
         </>
     );
 }
