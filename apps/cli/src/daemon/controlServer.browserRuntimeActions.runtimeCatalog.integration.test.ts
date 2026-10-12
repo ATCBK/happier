@@ -15,6 +15,8 @@ import { createComputerRoutes } from './computer/routes';
 import { createMachineLiveStreamCaptureRegistry } from './peer/mediation/stream/captureRegistry';
 import { createBrowserDaemonControlRoutes } from './browser/control/routes';
 import { createBrowserSidecarCdpControlAdapter } from './browser/sidecar/controlAdapter';
+import { BrowserCommandDispatchResultV1Schema } from '@happier-dev/protocol/browser/control/v1';
+import { createCliBrowserRuntimeActionExecutor } from './browser/actions/controlTransport';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -25,7 +27,7 @@ function createApp(enabled = true, routes: DaemonRuntimeActionRouteOwners = {}, 
     resolveRouteOwners: () => ({ browserDiagnostics: createBrowserDiagnosticsActionRoutes({ store }), ...routes }),
     resolveServerFeaturesSnapshot: () => ({
       status: 'ready', features: FeaturesResponseSchema.parse({ features: {
-        browser: { enabled, viewTargets: { enabled }, internal: { enabled }, diagnostics: { enabled }, automation: { enabled } },
+        browser: { enabled, viewTargets: { enabled }, internal: { enabled }, sidecar: { enabled }, diagnostics: { enabled }, automation: { enabled } },
       } }),
     }),
   });
@@ -47,6 +49,33 @@ function physicalBrowserOwner(transport: BrowserAutomationCdpTransport) {
 }
 
 describe('default browser runtime Action placement', () => {
+  it.each(['before_dispatch', 'after_dispatch', 'acknowledged'] as const)('settles Browser transport cancellation at %s without overwriting acknowledged effects', async phase => {
+    vi.spyOn(persistence, 'readDaemonState').mockResolvedValue({ pid: 123, httpPort: 12345,
+      controlToken: 'browser-control-token', startedAt: 1, startedWithCliVersion: '0.3.0' });
+    const cancellation = new AbortController();
+    let requestsIssued = 0;
+    const acknowledged = BrowserCommandDispatchResultV1Schema.parse({
+      v: 1, commandId: 'open-cancellation', status: 'dispatched', adapterKind: 'chromiumSidecar', events: [],
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      requestsIssued += 1;
+      cancellation.abort();
+      if (phase === 'after_dispatch') throw cancellation.signal.reason;
+      return new Response(JSON.stringify({ result: acknowledged }));
+    });
+    if (phase === 'before_dispatch') cancellation.abort();
+    const execute = createCliBrowserRuntimeActionExecutor({ sessionId: 'session_browser' });
+    const result = await execute({ actionId: 'browser.view.open', input: {
+      kind: 'openView', commandId: 'open-cancellation', browserSessionId: 'session_browser', viewId: 'view',
+      platform: 'web', target: { kind: 'externalUrl', targetId: 'target', url: 'https://example.test' },
+    }, context: { signal: cancellation.signal } });
+    expect(result).toEqual(phase === 'acknowledged' ? acknowledged : {
+      ok: false, errorCode: phase === 'before_dispatch' ? 'cancelled' : 'outcome_unknown',
+      error: phase === 'before_dispatch' ? 'cancelled' : 'outcome_unknown',
+    });
+    expect(requestsIssued).toBe(phase === 'before_dispatch' ? 0 : 1);
+  });
+
   it.each(['takeControl', 'handBack'] as const)('approves agent browser.control.%s through the real Action and authenticated daemon route', async kind => {
     const view = { browserSessionId: 'session_browser', viewId: 'view_browser' };
     const adapter = createBrowserSidecarCdpControlAdapter({ browserSessionId: view.browserSessionId, sidecarId: 'sidecar', transport: {
@@ -337,6 +366,60 @@ describe('default browser runtime Action placement', () => {
       releaseQuery();
       service.dispose();
       await app.close();
+    }
+  });
+
+  it('settles a managed Browser open when its actual HTTP caller disconnects', async () => {
+    let enter: (signal: AbortSignal | undefined) => void = () => undefined;
+    let release: () => void = () => undefined;
+    const entered = new Promise<AbortSignal | undefined>(resolve => { enter = resolve; });
+    const adapter = createBrowserSidecarCdpControlAdapter({
+      browserSessionId: 'session_browser', sidecarId: 'sidecar', transport: {
+        // Chromium is the external boundary. Keep the route, broker, adapter and strict result real.
+        openPage: async ({ signal }) => {
+          enter(signal);
+          await new Promise<void>((resolve, reject) => {
+            release = resolve;
+            if (signal?.aborted) reject(signal.reason);
+            else signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          });
+          return { targetId: 'page' };
+        },
+        dispatchPageCommand: async () => ({}), dispatchBrowserCommand: async () => ({}),
+      },
+    });
+    const broker = createBrowserDaemonControlBroker();
+    broker.registerAdapter(adapter);
+    const control = createBrowserDaemonControlRoutes({ broker });
+    let ownerResult: unknown;
+    const app = createApp(true, { browserControl: { ...control, dispatchCommand: async (command, context) => {
+      ownerResult = await control.dispatchCommand(command, context);
+      return BrowserCommandDispatchResultV1Schema.parse(ownerResult);
+    } } });
+    const controller = new AbortController();
+    try {
+      const origin = await app.listen({ host: '127.0.0.1', port: 0 });
+      const pending = fetch(`${origin}/browser/runtime-actions/execute`, {
+        method: 'POST', signal: controller.signal,
+        headers: { 'content-type': 'application/json', 'x-happier-daemon-token': 'browser-control-token' },
+        body: JSON.stringify({ actionId: 'browser.view.open', sessionId: 'session_browser', input: {
+          kind: 'openView', commandId: 'cancel-open', browserSessionId: 'session_browser', viewId: 'view_browser',
+          platform: 'web', target: { kind: 'externalUrl', targetId: 'target', url: 'https://example.test' },
+        } }),
+      }).catch((error: unknown) => error);
+      const boundarySignal = await Promise.race([entered, pending.then(async (result) => {
+        const detail = result instanceof Response ? await result.text() : String(result);
+        throw new Error(`Browser HTTP request ended before reaching Chromium: ${detail}`);
+      })]);
+      expect(boundarySignal).toBeDefined();
+      controller.abort();
+      await pending;
+      await vi.waitFor(() => expect(ownerResult).toMatchObject({
+        commandId: 'cancel-open', status: 'failed', completion: 'unknown',
+      }));
+      expect(broker.listViews('session_browser')).toEqual([]);
+    } finally {
+      controller.abort(); release(); adapter.dispose(); await app.close();
     }
   });
 });

@@ -31,7 +31,7 @@ export function createCliBrowserRuntimeActionExecutor(params: Readonly<{ session
   const unavailable = createUnavailableRuntimeActionExecutor();
   const sessionId = params.sessionId.trim();
   return async (args) => {
-    args.context.signal?.throwIfAborted();
+    if (args.context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
     const family = resolveRuntimeActionExecutionFamily(args.actionId);
     if (family !== 'browser' && family !== 'computer') return await unavailable(args);
     if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
@@ -40,11 +40,17 @@ export function createCliBrowserRuntimeActionExecutor(params: Readonly<{ session
       ...(args.context.bypassApprovals ? { approvalAdmitted: true } : {}),
     }, {
       timeoutMs: null,
+      mutation: getActionSpec(args.actionId).sideEffectClass !== 'read',
       ...(args.context.signal ? { signal: args.context.signal } : {}),
     });
-    args.context.signal?.throwIfAborted();
     const parsed = BrowserRuntimeActionControlResponseSchema.safeParse(response);
-    return parsed.success ? parsed.data.result : {
+    if (parsed.success) return parsed.data.result;
+    const errorCode = response && typeof response === 'object' && 'errorCode' in response
+      ? response.errorCode : undefined;
+    if (errorCode === 'cancelled' || errorCode === 'outcome_unknown') {
+      return { ok: false, errorCode, error: errorCode };
+    }
+    return {
       ok: false,
       errorCode: 'runtime_action_disabled',
       error: 'runtime_action_disabled:browser:browser_daemon_control_unavailable',

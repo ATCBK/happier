@@ -10,7 +10,7 @@ import type { MachineLiveStreamCaptureRegistry } from '../../peer/mediation/stre
 import type { BrowserAutomationDaemonService } from '../automation/service';
 
 export type BrowserDaemonControlRoutes = Readonly<{
-  dispatchCommand(command: unknown, context?: Pick<ActionExecutorContext, 'authority' | 'bypassApprovals'>): Promise<BrowserCommandDispatchResultV1>;
+  dispatchCommand(command: unknown, context?: Pick<ActionExecutorContext, 'authority' | 'bypassApprovals' | 'signal'>): Promise<BrowserCommandDispatchResultV1>;
   listViews(browserSessionId: string): readonly BrowserDaemonViewV1[];
 }>;
 
@@ -34,8 +34,8 @@ export function createBrowserDaemonControlRoutes(input: Readonly<{
   captureRegistry?: Pick<MachineLiveStreamCaptureRegistry, 'resolve'>;
   automation?: () => BrowserAutomationDaemonService | null;
 }>): BrowserDaemonControlRoutes {
-  async function dispatchToBroker(command: BrowserCommandV1): Promise<BrowserCommandDispatchResultV1> {
-    const result = await input.broker.dispatchCommand(command);
+  async function dispatchToBroker(command: BrowserCommandV1, signal?: AbortSignal): Promise<BrowserCommandDispatchResultV1> {
+    const result = await input.broker.dispatchCommand(command, signal ? { signal } : undefined);
     const parsed = BrowserCommandDispatchResultV1Schema.safeParse(result);
     if (!parsed.success || parsed.data.commandId !== command.commandId) return invalidBrokerResult(command.commandId);
     if (typeof parsed.data.adapterKind !== 'undefined' && !isBrowserDaemonControlAdapterKind(parsed.data.adapterKind)) {
@@ -108,7 +108,7 @@ export function createBrowserDaemonControlRoutes(input: Readonly<{
             if (event.browserSessionId === view.browserSessionId && 'viewId' in event && event.viewId === view.viewId) events.push(event);
           });
           try {
-            const execution = await automation.executeControlCommand(view, context.authority, () => dispatchToBroker(command.data));
+            const execution = await automation.executeControlCommand(view, context.authority, () => dispatchToBroker(command.data, context.signal));
             if (!execution.ok) return browserCommandDispatchFailure({ commandId: command.data.commandId,
               code: 'permission_denied', message: `Browser input controller refused the command: ${execution.errorCode}.` });
             const result = execution.value;
@@ -118,7 +118,7 @@ export function createBrowserDaemonControlRoutes(input: Readonly<{
         if (context.authority === 'account_automation') return browserCommandDispatchFailure({ commandId: command.data.commandId,
           code: 'adapter_unavailable', message: 'Browser input controller is unavailable.' });
       }
-      return dispatchToBroker(command.data);
+      return dispatchToBroker(command.data, context?.signal);
     },
   };
 }

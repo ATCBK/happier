@@ -65,7 +65,7 @@ export function createBrowserDaemonControlBroker(): BrowserDaemonControlBroker {
     };
   }
 
-  async function dispatchCommand(command: BrowserCommandV1) {
+  async function dispatchCommand(command: BrowserCommandV1, scope?: Readonly<{ signal?: AbortSignal; deadlineMs?: number }>) {
     if (adapters.size === 0) {
       return browserCommandDispatchFailure({
         commandId: command.commandId,
@@ -85,7 +85,7 @@ export function createBrowserDaemonControlBroker(): BrowserDaemonControlBroker {
           message: 'No Browser daemon control adapter supports this openView command.',
         });
       }
-      return normalizeAdapterResult(adapter, command, await adapter.dispatchCommand(command));
+      return normalizeAdapterResult(adapter, command, await adapter.dispatchCommand(command, scope));
     }
 
     const adapter = Array.from(adapters).find((candidate) => candidate.ownsView({
@@ -100,7 +100,7 @@ export function createBrowserDaemonControlBroker(): BrowserDaemonControlBroker {
       });
     }
 
-    return normalizeAdapterResult(adapter, command, await adapter.dispatchCommand(command));
+    return normalizeAdapterResult(adapter, command, await adapter.dispatchCommand(command, scope));
   }
 
   return {

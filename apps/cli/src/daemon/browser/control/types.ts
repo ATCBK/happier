@@ -36,7 +36,7 @@ export type BrowserDaemonControlAdapter = Readonly<{
 export type BrowserDaemonControlBroker = Readonly<{
   registerAdapter(adapter: BrowserDaemonControlAdapter): () => void;
   ownsView(input: BrowserDaemonControlViewIdentity): boolean;
-  dispatchCommand(command: BrowserCommandV1): Promise<BrowserCommandDispatchResultV1>;
+  dispatchCommand(command: BrowserCommandV1, scope?: Readonly<{ signal?: AbortSignal; deadlineMs?: number }>): Promise<BrowserCommandDispatchResultV1>;
   hasExecutableAdapters(): boolean;
   listViews(browserSessionId: string): readonly BrowserDaemonViewV1[];
 }>;
