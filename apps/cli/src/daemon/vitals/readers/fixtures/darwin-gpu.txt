@@ -1,0 +1,6 @@
++-o AGXAcceleratorG17X  <class AGXAcceleratorG17X, id 0x100000752, registered, matched, active, busy 0 (87159 ms), retain 61>
+    {
+      "PerformanceStatistics" = {"In use system memory (driver)"=0,"Alloc system memory"=6422708224,"Tiler Utilization %"=0,"recoveryCount"=0,"lastRecoveryTime"=0,"Renderer Utilization %"=0,"TiledSceneBytes"=1441792,"Device Utilization %"=0,"SplitSceneCount"=0,"Allocated PB Size"=200802304,"In use system memory"=2085584896}
+      "model" = "Apple M5 Max"
+      "gpu-core-count" = 40
+    }

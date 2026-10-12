@@ -1,0 +1,293 @@
+import { chmod, mkdir, rm, symlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { MachineVitalsSampleV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
+
+import { createLinuxMachineVitalsReader } from './linux';
+import { createLinuxVitalsFixture } from './linux.testkit';
+
+const fixtures: Awaited<ReturnType<typeof createLinuxVitalsFixture>>[] = [];
+async function fixture() {
+    const result = await createLinuxVitalsFixture();
+    fixtures.push(result);
+    return result;
+}
+afterEach(async () => { await Promise.all(fixtures.splice(0).map((f) => f.cleanup())); });
+
+const input = (monotonicMs: number, overviewExtras = false, intervalMs = 2000) => ({ sampledAt: 1_000_000 + monotonicMs, monotonicMs, intervalMs, overviewExtras });
+
+describe('Linux machine vitals reader', () => {
+    it('reports a D3cold GPU as off, preserves unknown power and observes recovery on the existing extras cadence', async () => {
+        const f = await fixture();
+        await f.put('/sys/class/drm/card0/device/power_state', 'D3cold\n');
+        await f.put('/sys/class/drm/card0/device/gpu_busy_percent', '72');
+        await f.put('/sys/class/drm/card1/device/gpu_busy_percent', '0');
+        const reader = createLinuxMachineVitalsReader({ root: f.root });
+        const off = await reader.read(input(0, true));
+        expect(off.state).toBe('reporting');
+        if (off.state === 'reporting') {
+            expect(off.sample.gpu).toEqual([{ name: 'card0', powerState: 'off' }, { name: 'card1', busyPct: 0 }]);
+            expect(MachineVitalsSampleV1Schema.parse(off.sample).gpu).toEqual(off.sample.gpu);
+        }
+        await f.put('/sys/class/drm/card0/device/power_state', 'D0\n');
+        const active = await reader.read(input(15_000, true));
+        if (active.state === 'reporting') expect(active.sample.gpu).toEqual([{ name: 'card0', busyPct: 72 }, { name: 'card1', busyPct: 0 }]);
+    });
+
+    it('does not wake powered-off NVIDIA GPUs and queries remaining GPUs in the same single spawn', async () => {
+        const f = await fixture();
+        await f.put('/usr/bin/nvidia-smi', 'fixture');
+        await chmod(join(f.root, '/usr/bin/nvidia-smi'), 0o700);
+        await f.put('/proc/driver/nvidia/gpus/0000:01:00.0/information', 'Model: NVIDIA Test');
+        await f.put('/sys/bus/pci/devices/0000:01:00.0/power_state', 'D3cold\n');
+        const args: (readonly string[])[] = [];
+        const reader = createLinuxMachineVitalsReader({ root: f.root, toolPath: '/usr/bin', execFile: async (_command, argv) => {
+            args.push(argv); return { stdout: 'NVIDIA Active, 42, 100, 1000\n', stderr: '' };
+        } });
+        const off = await reader.read(input(0, true));
+        expect(args).toEqual([]);
+        if (off.state === 'reporting') expect(off.sample.gpu).toEqual([{ name: 'NVIDIA Test', powerState: 'off' }]);
+        await f.put('/proc/driver/nvidia/gpus/0000:02:00.0/information', 'Model: NVIDIA Active');
+        await f.put('/sys/bus/pci/devices/0000:02:00.0/power_state', 'D0\n');
+        const mixed = await reader.read(input(15_000, true));
+        expect(args).toHaveLength(1);
+        expect(args[0]).toContain('--id=0000:02:00.0');
+        if (mixed.state === 'reporting') expect(mixed.sample.gpu).toMatchObject([{ name: 'NVIDIA Test', powerState: 'off' }, { name: 'NVIDIA Active', busyPct: 42 }]);
+        await f.put('/sys/bus/pci/devices/0000:01:00.0/power_state', 'unknown\n');
+        await reader.read(input(30_000, true));
+        expect(args[1]).not.toContain('--id=0000:02:00.0');
+    });
+
+    it('keeps an off NVIDIA DRM device even when the driver inventory lists only its awake sibling', async () => {
+        const f = await fixture();
+        await f.put('/usr/bin/nvidia-smi', 'fixture');
+        await chmod(join(f.root, '/usr/bin/nvidia-smi'), 0o700);
+        await f.put('/proc/driver/nvidia/gpus/0000:02:00.0/information', 'Model: NVIDIA Active');
+        await f.put('/sys/bus/pci/devices/0000:01:00.0/vendor', '0x10de');
+        await f.put('/sys/bus/pci/devices/0000:01:00.0/power_state', 'D3cold\n');
+        await mkdir(join(f.root, '/sys/class/drm/card0'), { recursive: true });
+        await symlink(join(f.root, '/sys/bus/pci/devices/0000:01:00.0'), join(f.root, '/sys/class/drm/card0/device'));
+        const args: (readonly string[])[] = [];
+        const reader = createLinuxMachineVitalsReader({ root: f.root, toolPath: '/usr/bin', execFile: async (_command, argv) => {
+            args.push(argv); return { stdout: 'NVIDIA Active, 42, 100, 1000\n', stderr: '' };
+        } });
+        const result = await reader.read(input(0, true));
+        expect(result.state).toBe('reporting');
+        if (result.state === 'reporting') expect(result.sample.gpu).toMatchObject([{ name: 'NVIDIA GPU', powerState: 'off' }, { name: 'NVIDIA Active', busyPct: 42 }]);
+        expect(args).toHaveLength(1);
+        expect(args[0]).toContain('--id=0000:02:00.0');
+        // A DRM slot can be reused without an intervening sampled empty list.
+        await rm(join(f.root, '/sys/class/drm/card0/device'));
+        await f.put('/sys/bus/pci/devices/0000:03:00.0/vendor', '0x10de');
+        await f.put('/sys/bus/pci/devices/0000:03:00.0/power_state', 'D0\n');
+        await symlink(join(f.root, '/sys/bus/pci/devices/0000:03:00.0'), join(f.root, '/sys/class/drm/card0/device'));
+        const replaced = await reader.read(input(15_000, true));
+        if (replaced.state === 'reporting') expect(replaced.sample.gpu).toEqual([
+            { name: 'NVIDIA Active', busyPct: 42, memUsedBytes: 104857600, memTotalBytes: 1048576000 },
+        ]);
+    });
+    it('reports power with no viewer while keeping battery details in Overview and excluding peripherals', async () => {
+        const f = await fixture();
+        for (const [path, value] of Object.entries({
+            'mouse/type': 'Battery', 'mouse/scope': 'Device', 'mouse/capacity': '99', 'mouse/status': 'Discharging',
+            'BAT0/type': 'Battery', 'BAT0/scope': 'System', 'BAT0/capacity': '42', 'BAT0/status': 'Charging',
+            'AC/type': 'Mains', 'AC/online': '1',
+        })) await f.put(`/sys/class/power_supply/${path}`, value);
+        const reader = createLinuxMachineVitalsReader({ root: f.root });
+        const base = await reader.read(input(0));
+        expect(base.state).toBe('reporting');
+        if (base.state === 'reporting') {
+            expect(base.sample).not.toHaveProperty('battery');
+            expect(base.sample).toHaveProperty('power', { onAC: true });
+        }
+        const overview = await reader.read(input(2000, true));
+        expect(overview.state).toBe('reporting');
+        if (overview.state === 'reporting') expect(overview.sample.battery).toEqual({ pct: 42, state: 'charging', onAC: true });
+    });
+
+    it('reports MemAvailable, nice-busy/iowait-idle CPU deltas and filtered per-interface traffic', async () => {
+        const f = await fixture();
+        const reader = createLinuxMachineVitalsReader({ root: f.root });
+        const first = await reader.read(input(0));
+        expect(first.state).toBe('reporting');
+        if (first.state !== 'reporting') return;
+        expect(first.sample.cpu).toMatchObject({ reported: true, busyPct: null });
+        expect(first.sample.memory).toMatchObject({ totalBytes: 102400000, availableBytes: 40960000, usedBytes: 61440000 });
+        await f.put('/proc/stat', 'cpu 110 30 40 450 70 0 0 10 0 0\ncpu0 110 30 40 450 70 0 0 10 0 0\nbtime 100\n');
+        await f.put('/proc/net/dev', 'eth0: 3000 0 0 0 0 0 0 0 6000 0 0 0 0 0 0 0\nveth0: 99000 0 0 0 0 0 0 0 99000 0 0 0 0 0 0 0\n');
+        const second = await reader.read(input(2000, true));
+        expect(second.state).toBe('reporting');
+        if (second.state !== 'reporting') return;
+        expect(second.sample.cpu).toMatchObject({ busyPct: 30, perCore: [30], userPct: 20, systemPct: 10, iowaitPct: 20, stealPct: 0, load1: 1, load5: 2, load15: 3 });
+        expect(second.sample.network).toMatchObject({ rxBps: 1000, txBps: 2000, interfaces: [{ id: 'eth0', included: true }, { id: 'veth0', included: false }] });
+        expect(second.sample.memory).toMatchObject({ composition: expect.any(Array), pressure: { level: 'calm', source: 'psi' } });
+        expect(MachineVitalsSampleV1Schema.safeParse(second.sample).success).toBe(true);
+    });
+
+    it.each([
+        ['full stalls', 'some avg60=0\nfull avg60=0.01\n', 'pswpin 0\npswpout 0\noom_kill 0\n', 40000, 'critical'],
+        ['some stalls and swapping', 'some avg60=0.01\nfull avg60=0\n', 'pswpin 1\npswpout 0\noom_kill 0\n', 40000, 'elevated'],
+        ['OOM', 'some avg60=0\nfull avg60=0\n', 'pswpin 0\npswpout 0\noom_kill 1\n', 40000, 'critical'],
+        ['min watermarks', 'some avg60=0\nfull avg60=0\n', 'pswpin 0\npswpout 0\noom_kill 0\n', 40, 'critical'],
+        ['high watermarks', 'some avg60=0\nfull avg60=0\n', 'pswpin 0\npswpout 0\noom_kill 0\n', 120, 'elevated'],
+    ] as const)('derives pressure from %s', async (_name, psi, vmstat, available, expected) => {
+        const f = await fixture();
+        const reader = createLinuxMachineVitalsReader({ root: f.root });
+        await reader.read(input(0));
+        await f.put('/proc/pressure/memory', psi);
+        await f.put('/proc/vmstat', vmstat);
+        await f.put('/proc/meminfo', `MemTotal: 100000 kB\nMemAvailable: ${available} kB\nSwapTotal: 10000 kB\nSwapFree: 8000 kB\n`);
+        const result = await reader.read(input(2000));
+        expect(result.state).toBe('reporting');
+        if (result.state === 'reporting') expect(result.sample.memory).toMatchObject({ pressure: { level: expected, source: 'psi' } });
+    });
+
+    it('uses the tightest ancestor cgroup memory/high and fractional CPU quota with working-set memory', async () => {
+        const f = await fixture();
+        await f.put('/proc/self/cgroup', '0::/parent/child\n');
+        await f.put('/proc/self/mountinfo', '1 0 0:1 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n2 0 8:1 / / rw - ext4 /dev/sda rw\n');
+        await f.put('/sys/fs/cgroup/parent/memory.max', '50000000');
+        await f.put('/sys/fs/cgroup/parent/memory.high', '40000000');
+        await f.put('/sys/fs/cgroup/parent/cpu.max', '50000 100000');
+        await f.put('/sys/fs/cgroup/parent/cpu.stat', 'nr_throttled 0\n');
+        await f.put('/sys/fs/cgroup/parent/memory.events', 'oom_kill 0\nhigh 0\n');
+        await f.put('/sys/fs/cgroup/parent/pids.max', '5');
+        await f.put('/sys/fs/cgroup/parent/pids.current', '5');
+        await f.put('/sys/fs/cgroup/parent/child/memory.max', '80000000');
+        await f.put('/sys/fs/cgroup/parent/child/memory.current', '30000000');
+        await f.put('/sys/fs/cgroup/parent/child/memory.stat', 'inactive_file 10000000\n');
+        await f.put('/sys/fs/cgroup/parent/child/pids.current', '1');
+        await f.put('/sys/fs/cgroup/parent/child/memory.pressure', 'some avg60=0\nfull avg60=0\n');
+        await f.put('/sys/fs/cgroup/parent/child/memory.events', 'oom_kill 0\nhigh 0\n');
+        await f.put('/sys/fs/cgroup/parent/child/cpu.stat', 'usage_usec 1000000\nuser_usec 600000\nsystem_usec 400000\nnr_throttled 0\n');
+        const reader = createLinuxMachineVitalsReader({ root: f.root });
+        await reader.read(input(0));
+        await f.put('/sys/fs/cgroup/parent/child/cpu.stat', 'usage_usec 1500000\nuser_usec 900000\nsystem_usec 600000\nnr_throttled 0\n');
+        await f.put('/sys/fs/cgroup/parent/cpu.stat', 'nr_throttled 1\n');
+        await f.put('/sys/fs/cgroup/parent/memory.events', 'oom_kill 0\nhigh 1\n');
+        const result = await reader.read(input(2000));
+        expect(result.state).toBe('reporting');
+        if (result.state !== 'reporting') return;
+        expect(result.sample.memory).toMatchObject({ totalBytes: 40000000, usedBytes: 20000000, availableBytes: 20000000, limitSource: 'cgroup', pressure: { level: 'elevated' } });
+        expect(result.sample.cpu).toMatchObject({ busyPct: 50, userPct: 30, systemPct: 20, throttled: true, perCoreNotReportedReason: 'container' });
+        expect(result.host.effectiveCores).toBe(0.5);
+        expect(result.sample.limits).toMatchObject({ processes: { used: 5, max: 5 } });
+    });
+
+    it('uses host PSI for v1 limits and falls back to events where PSI is unavailable', async () => {
+        const f = await fixture();
+        await f.put('/proc/self/cgroup', '5:memory:/child\n');
+        await f.put('/proc/self/mountinfo', '1 0 0:1 / /sys/fs/cgroup/memory rw - cgroup cgroup rw,memory\n');
+        await f.put('/sys/fs/cgroup/memory/child/memory.limit_in_bytes', '40000000');
+        await f.put('/sys/fs/cgroup/memory/child/memory.usage_in_bytes', '30000000');
+        await f.put('/sys/fs/cgroup/memory/child/memory.stat', 'total_inactive_file 10000000\n');
+        await f.put('/proc/pressure/memory', 'some avg60=0\nfull avg60=0.01\n');
+        const result = await createLinuxMachineVitalsReader({ root: f.root }).read(input(0));
+        expect(result.state).toBe('reporting');
+        if (result.state === 'reporting') expect(result.sample.memory).toMatchObject({ totalBytes: 40000000, usedBytes: 20000000, pressure: { level: 'critical', source: 'psi' } });
+        await rm(join(f.root, '/proc/pressure/memory'));
+        const reader = createLinuxMachineVitalsReader({ root: f.root });
+        await reader.read(input(0));
+        await f.put('/proc/vmstat', 'oom_kill 1\npswpin 0\npswpout 0\n');
+        const fallback = await reader.read(input(2000));
+        expect(fallback.state).toBe('reporting');
+        if (fallback.state === 'reporting') expect(fallback.sample.memory).toMatchObject({ pressure: { level: 'critical', source: 'events' } });
+    });
+
+    it('keeps short-span baselines and clears stale, decreasing and changed-interface rates', async () => {
+        const f = await fixture();
+        const reader = createLinuxMachineVitalsReader({ root: f.root });
+        await reader.read(input(0));
+        await f.put('/proc/net/dev', 'eth0: 1500 0 0 0 0 0 0 0 2500 0 0 0 0 0 0 0\nveth0: 9000 0 0 0 0 0 0 0 9000 0 0 0 0 0 0 0\n');
+        const short = await reader.read(input(500));
+        expect(short.state).toBe('reporting');
+        if (short.state === 'reporting') expect(short.sample.network).toMatchObject({ rxBps: null });
+        await f.put('/proc/net/dev', 'eth0: 3000 0 0 0 0 0 0 0 4000 0 0 0 0 0 0 0\nveth0: 9000 0 0 0 0 0 0 0 9000 0 0 0 0 0 0 0\n');
+        const rate = await reader.read(input(2000));
+        expect(rate.state).toBe('reporting');
+        if (rate.state === 'reporting') expect(rate.sample.network).toMatchObject({ rxBps: 1000 });
+        const stale = await reader.read(input(7000));
+        expect(stale.state).toBe('reporting');
+        if (stale.state === 'reporting') expect(stale.sample.network).toMatchObject({ rxBps: null });
+        await f.put('/proc/net/dev', 'eth0: 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0\n');
+        const reset = await reader.read(input(9000));
+        expect(reset.state).toBe('reporting');
+        if (reset.state === 'reporting') expect(reset.sample.network).toMatchObject({ rxBps: null });
+        await f.put('/proc/net/dev', 'eth1: 3000 0 0 0 0 0 0 0 4000 0 0 0 0 0 0 0\n');
+        const change = await reader.read(input(11000));
+        expect(change.state).toBe('reporting');
+        if (change.state === 'reporting') expect(change.sample.network).toMatchObject({ rxBps: null });
+    });
+
+    it('deduplicates mounts by device and uses unprivileged bytes, reserved bytes and inode exhaustion', async () => {
+        const f = await fixture();
+        await f.put('/proc/self/mountinfo', '1 0 8:1 / / rw - ext4 /dev/sda rw\n2 1 8:1 / /bind rw - ext4 /dev/sda rw\n3 1 8:2 / /data rw - ext4 /dev/sdb rw\n4 1 8:2 /homes /home rw - ext4 /dev/sdb rw\n5 1 8:3 / /home/alice2 rw - ext4 /dev/sdc rw\n');
+        const reader = createLinuxMachineVitalsReader({ root: f.root, homePath: '/home/alice', statfs: async () => ({ bsize: 4096, blocks: 100, bfree: 30, bavail: 20, files: 50, ffree: 0 }) });
+        const result = await reader.read(input(0));
+        expect(result.state).toBe('reporting');
+        if (result.state === 'reporting') expect(result.sample.disk).toMatchObject({ reported: true, homeVolumeId: '8:2', volumes: [
+            { id: '8:1', mount: '/', totalBytes: 409600, availableBytes: 81920, reservedBytes: 40960, inodesExhausted: true },
+            { id: '8:2', mount: '/data', totalBytes: 409600, availableBytes: 81920 },
+            { id: '8:3', mount: '/home/alice2', totalBytes: 409600, availableBytes: 81920 },
+        ] });
+    });
+
+    it('reads files and ptys each tick but reads thermal/GPU/inotify only for Overview', async () => {
+        const f = await fixture();
+        await f.put('/proc/sys/fs/file-nr', '20 2 100');
+        await f.put('/proc/sys/kernel/pty/nr', '5');
+        await f.put('/proc/sys/kernel/pty/max', '20');
+        await f.put('/sys/class/thermal/thermal_zone0/temp', '45000');
+        await f.put('/sys/class/thermal/thermal_zone0/type', 'x86_pkg_temp');
+        await f.put('/sys/class/drm/card0/device/gpu_busy_percent', '25');
+        const reader = createLinuxMachineVitalsReader({ root: f.root });
+        const idle = await reader.read(input(0));
+        expect(idle.state).toBe('reporting');
+        if (idle.state !== 'reporting') return;
+        expect(idle.sample.limits).toMatchObject({ files: { used: 18, max: 100 }, ptys: { used: 5, max: 20 } });
+        expect(idle.sample.thermal).toBeUndefined();
+        expect(idle.sample.gpu).toBeUndefined();
+        const overview = await reader.read(input(2000, true));
+        expect(overview.state).toBe('reporting');
+        if (overview.state === 'reporting') {
+            expect(overview.sample.thermal).toMatchObject({ tempC: 45 });
+            expect(overview.sample.gpu).toEqual([{ name: 'card0', busyPct: 25 }]);
+        }
+    });
+
+    it('runs NVIDIA only when an Overview asks, a device exists and nvidia-smi is executable on PATH', async () => {
+        const f = await fixture();
+        await f.put('/usr/bin/nvidia-smi', 'fixture');
+        await chmod(join(f.root, '/usr/bin/nvidia-smi'), 0o700);
+        const calls: string[] = [];
+        const reader = createLinuxMachineVitalsReader({ root: f.root, toolPath: '/usr/bin',
+            execFile: async (command) => { calls.push(command); return { stdout: 'NVIDIA Test, 42, 100, 1000\n', stderr: '' }; },
+        });
+        await reader.read(input(0, true));
+        expect(calls).toEqual([]);
+        await f.put('/proc/driver/nvidia/gpus/0000:00:01.0/information', 'Model: NVIDIA Test');
+        await reader.read(input(2000, false));
+        expect(calls).toEqual([]);
+        const result = await reader.read(input(4000, true));
+        expect(result.state).toBe('reporting');
+        expect(calls).toHaveLength(1);
+        if (result.state === 'reporting') expect(result.sample.gpu).toEqual([{ name: 'NVIDIA Test', busyPct: 42, memUsedBytes: 104857600, memTotalBytes: 1048576000 }]);
+    });
+
+    it('reports inotify watches only when same-user process descriptors are completely readable', async () => {
+        const f = await fixture();
+        await f.put('/proc/sys/fs/inotify/max_user_watches', '100');
+        await f.put('/proc/123/status', `Uid:\t${process.getuid?.() ?? 0}\t0\t0\t0\n`);
+        const reader = createLinuxMachineVitalsReader({ root: f.root });
+        const incomplete = await reader.read(input(0, true));
+        expect(incomplete.state).toBe('reporting');
+        if (incomplete.state === 'reporting') expect(incomplete.sample.limits?.inotify).toBeUndefined();
+        await mkdir(join(f.root, '/proc/123/fd'), { recursive: true });
+        await symlink('anon_inode:inotify', join(f.root, '/proc/123/fd/3'));
+        await symlink('/tmp/regular-file', join(f.root, '/proc/123/fd/4'));
+        await f.put('/proc/123/fdinfo/3', 'pos:\t0\nflags:\t02000000\ninotify wd:1 ino:1\ninotify wd:2 ino:2\n');
+        const complete = await reader.read(input(2000, true));
+        expect(complete.state).toBe('reporting');
+        if (complete.state === 'reporting') expect(complete.sample.limits?.inotify).toEqual({ used: 2, max: 100 });
+    });
+});
