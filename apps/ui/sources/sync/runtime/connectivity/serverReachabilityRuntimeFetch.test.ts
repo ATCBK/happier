@@ -199,7 +199,7 @@ describe('runtimeFetchWithServerReachability', () => {
         expect(runtimeFetchMock.mock.calls.some(([input]) => String(input).endsWith('/health'))).toBe(false);
     });
 
-    it('marks the server offline when the main request fails', async () => {
+    it('rejects a failed main request without declaring a responsive Home offline', async () => {
         process.env.EXPO_PUBLIC_HAPPIER_SERVER_REACHABILITY_WAIT_TIMEOUT_MS = '50';
 
         const runtimeFetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -220,8 +220,10 @@ describe('runtimeFetchWithServerReachability', () => {
 
         const { subscribeServerReachabilityState } = await import('./serverReachabilitySupervisorPool');
         let latestPhase: string | null = null;
+        const phases: string[] = [];
         const unsubscribe = subscribeServerReachabilityState('https://api.example.test', (state) => {
             latestPhase = state.phase;
+            phases.push(state.phase);
         }, 'token-a');
         const { runtimeFetchWithServerReachability } = await import('./serverReachabilityRuntimeFetch');
         await expect(
@@ -237,9 +239,10 @@ describe('runtimeFetchWithServerReachability', () => {
                 },
             }),
         ).rejects.toThrow('Network request failed');
+        await vi.waitFor(() => expect(latestPhase).toBe('online'));
         unsubscribe();
 
-        expect(latestPhase).toBe('offline');
+        expect(phases).not.toContain('offline');
     });
 
     it('publishes request issuance only at the physical request boundary', async () => {

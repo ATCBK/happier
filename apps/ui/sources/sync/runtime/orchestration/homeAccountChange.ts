@@ -1,4 +1,4 @@
-import { HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
+import { HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1, type ChangeEntry } from '@happier-dev/protocol/changes';
 import {
     subscribeHomeCredentialMutations,
     type HomeCredentialMutationEvent,
@@ -20,6 +20,8 @@ export type HomeAccountChangeEvent = Readonly<{
     source?: 'connected';
     /** Exact only for a consumed focused-Home change page; absent wakes remain conservative. */
     entityIds?: readonly string[];
+    /** Present when the publisher knows the changed domains; omitted wakes remain conservative. */
+    changeKinds?: readonly ChangeEntry['kind'][];
     /**
      * Detailed focused-Home catch-up may publish the incumbent change planner's
      * exact Session-list decision. Socket-only concurrent-Home wakes omit it and
@@ -29,16 +31,26 @@ export type HomeAccountChangeEvent = Readonly<{
     sessionListQueryAffects?: boolean | 'structural';
     /** Exact focused-page Profile/Artifact/source decision; content-free wakes omit it. */
     profileCatalogAffects?: boolean;
+    /** Machine-only focused pages are covered by the Usage store's material-input subscription. */
+    usageQueryAffects?: boolean;
     /** An acknowledged local Artifact deletion; no private content or replay guarantee. */
     deletedArtifactIds?: readonly string[];
 }>;
 
 type HomeAccountChangeDetails = Readonly<{
     source?: 'connected';
+    changeKinds?: readonly ChangeEntry['kind'][];
     sessionListQueryAffects?: boolean | 'structural';
     profileCatalogAffects?: boolean;
+    usageQueryAffects?: boolean;
     deletedArtifactIds?: readonly string[];
 }>;
+
+/** An Artifact receipt wakes its readers, without invalidating unrelated mutable domain work. */
+export function isArtifactOnlyHomeAccountChange(event: HomeAccountChangeEvent): boolean {
+    return event.changeKinds !== undefined && event.changeKinds.length > 0
+        && event.changeKinds.every(kind => kind === 'artifact');
+}
 
 /** Focused changes that can alter Home administration eligibility or rows. */
 export function isHomeAdministrationAccountChange(event: HomeAccountChangeEvent): boolean {
@@ -105,10 +117,12 @@ export function publishHomeAccountChange(
         serverId,
         ...(details?.source ? { source: details.source } : {}),
         ...(entityIds ? { entityIds: Object.freeze([...new Set(entityIds)]) } : {}),
+        ...(details?.changeKinds ? { changeKinds: Object.freeze([...new Set(details.changeKinds)]) } : {}),
         ...(details?.sessionListQueryAffects !== undefined
             ? { sessionListQueryAffects: details.sessionListQueryAffects }
             : {}),
         ...(details?.profileCatalogAffects !== undefined ? { profileCatalogAffects: details.profileCatalogAffects } : {}),
+        ...(details?.usageQueryAffects !== undefined ? { usageQueryAffects: details.usageQueryAffects } : {}),
         ...(details?.deletedArtifactIds ? { deletedArtifactIds: Object.freeze([...new Set(details.deletedArtifactIds)]) } : {}),
     });
     for (const observer of [...homeAccountChangeObservers]) {

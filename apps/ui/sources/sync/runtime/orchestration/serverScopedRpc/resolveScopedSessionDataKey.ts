@@ -84,6 +84,7 @@ async function fetchSessionCryptoContext(params: Readonly<SessionAddress & {
   credentials?: AuthCredentials;
   decryptEncryptionKey?: (value: string) => Promise<Uint8Array | null>;
   timeoutMs: number;
+  explicitRetry?: true;
 }>): Promise<ScopedSessionCryptoContext> {
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), Math.max(1, params.timeoutMs)) : null;
@@ -100,7 +101,7 @@ async function fetchSessionCryptoContext(params: Readonly<SessionAddress & {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
       ...(controller ? { signal: controller.signal } : {}),
-    });
+    }, params.explicitRetry ? { retry: 'none' } : undefined);
     if (!response.ok) {
       if (isAuthenticationResponseStatus(response.status)) {
         throw createNotAuthenticatedError(response.status);
@@ -169,19 +170,21 @@ export async function resolveScopedSessionCryptoContext(params: Readonly<Session
   credentials?: AuthCredentials;
   decryptEncryptionKey?: (value: string) => Promise<Uint8Array | null>;
   timeoutMs?: number;
+  explicitRetry?: true;
 }>): Promise<ScopedSessionCryptoContext> {
   const sessionId = normalizeId(params.sessionId);
   const serverId = normalizeId(params.serverId);
   const token = String(params.token ?? '');
   const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS;
-  const keyCacheKey = toSessionDataKeyCacheKey(serverId, sessionId, token);
+  const keyCacheKey = `${toSessionDataKeyCacheKey(serverId, sessionId, token)}${params.explicitRetry ? '::retry' : ''}`;
 
   // Coalesce concurrent callers for the same operation; without this, a burst of
   // callers repeats the by-id fetch and asymmetric envelope open. Settled results
   // deliberately do not survive the operation: the Home may repair or rotate the
   // published envelope while the bearer remains unchanged.
   // `keyCacheKey` covers the target server, the session and the bearer token, and the
-  // token determines the credentials behind the caller's `decryptEncryptionKey`, so a
+  // token determines the credentials behind the caller's `decryptEncryptionKey`. An explicit
+  // retry has different request admission and must not join a passively paused read, so a
   // joiner can only ever adopt a result computed from its own inputs.
   return await sessionCryptoContextResolutions.run(keyCacheKey, async () => {
     const context = await fetchSessionCryptoContext({
@@ -194,6 +197,7 @@ export async function resolveScopedSessionCryptoContext(params: Readonly<Session
       sessionId,
       decryptEncryptionKey: params.decryptEncryptionKey,
       timeoutMs,
+      ...(params.explicitRetry ? { explicitRetry: true } : {}),
     });
     return context;
   });

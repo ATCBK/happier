@@ -56,57 +56,46 @@ export function subscribeServerReachabilityNetworkAllowed(listener: (allowed: bo
     return () => networkAllowedListeners.delete(listener);
 }
 
-type TransportController = Readonly<{
-    transport: ManagedConnectionTransport;
-    emitDisconnect: (event: TransportDisconnectEvent) => void;
-}>;
-
-function createExternallyDisconnectableTransport(): TransportController {
+function createReadinessTransport(): ManagedConnectionTransport {
     const connectedListeners = new Set<() => void>();
     const disconnectedListeners = new Set<(event: TransportDisconnectEvent) => void>();
     const errorListeners = new Set<(error: unknown) => void>();
     let connected = false;
 
     return {
-        transport: {
-            async connect() {
-                connected = true;
-                connectedListeners.forEach((listener) => listener());
-            },
-            async disconnect(params?: { intentional?: boolean }) {
-                connected = false;
-                disconnectedListeners.forEach((listener) =>
-                    listener({
-                        intentional: params?.intentional === true,
-                        reason: params?.intentional === true ? 'manual' : 'disconnect',
-                    }),
-                );
-            },
-            async destroy() {
-                connected = false;
-                connectedListeners.clear();
-                disconnectedListeners.clear();
-                errorListeners.clear();
-            },
-            isConnected() {
-                return connected;
-            },
-            onConnected(listener) {
-                connectedListeners.add(listener);
-                return () => connectedListeners.delete(listener);
-            },
-            onDisconnected(listener) {
-                disconnectedListeners.add(listener);
-                return () => disconnectedListeners.delete(listener);
-            },
-            onError(listener) {
-                errorListeners.add(listener);
-                return () => errorListeners.delete(listener);
-            },
+        async connect() {
+            connected = true;
+            connectedListeners.forEach((listener) => listener());
         },
-        emitDisconnect(event) {
+        async disconnect(params?: { intentional?: boolean }) {
             connected = false;
-            disconnectedListeners.forEach((listener) => listener(event));
+            disconnectedListeners.forEach((listener) =>
+                listener({
+                    intentional: params?.intentional === true,
+                    reason: params?.intentional === true ? 'manual' : 'disconnect',
+                }),
+            );
+        },
+        async destroy() {
+            connected = false;
+            connectedListeners.clear();
+            disconnectedListeners.clear();
+            errorListeners.clear();
+        },
+        isConnected() {
+            return connected;
+        },
+        onConnected(listener) {
+            connectedListeners.add(listener);
+            return () => connectedListeners.delete(listener);
+        },
+        onDisconnected(listener) {
+            disconnectedListeners.add(listener);
+            return () => disconnectedListeners.delete(listener);
+        },
+        onError(listener) {
+            errorListeners.add(listener);
+            return () => errorListeners.delete(listener);
         },
     };
 }
@@ -181,7 +170,6 @@ type ReachabilitySupervisorEntry = {
     token: string | null;
     state: ManagedConnectionState;
     supervisor: ManagedConnectionSupervisor;
-    currentTransportController: TransportController | null;
     subscribers: Set<(state: ManagedConnectionState) => void>;
     invalidateInFlight: Promise<void> | null;
     lastInvalidateAt: number;
@@ -255,11 +243,7 @@ function getOrCreateEntry(serverUrlRaw: string, token: string | null = null): Re
         supervisor: createManagedConnectionSupervisor({
         ...DEFAULT_MANAGED_CONNECTION_POLICY,
         probeBeforeInitialConnect: true,
-        createTransport: () => {
-            const controller = createExternallyDisconnectableTransport();
-            entry.currentTransportController = controller;
-            return controller.transport;
-        },
+        createTransport: createReadinessTransport,
         probeReadiness: async () => probeServerReadiness({
             endpoint: entry.runtimeOrigin ?? entry.serverUrl,
             token: entry.token,
@@ -272,7 +256,6 @@ function getOrCreateEntry(serverUrlRaw: string, token: string | null = null): Re
             subscribers.forEach((listener) => listener(state));
         },
         }),
-        currentTransportController: null,
         subscribers,
         invalidateInFlight: null,
         lastInvalidateAt: Number.NEGATIVE_INFINITY,
@@ -580,13 +563,11 @@ export function reportServerUnreachable(serverUrl: string, error: unknown, token
     if (entry.state.phase !== 'online' && entry.state.phase !== 'connecting') {
         return;
     }
-    const controller = entry.currentTransportController;
-    if (!controller) return;
-    controller.emitDisconnect({
-        intentional: false,
-        reason: 'network_error',
-        error,
-    });
+    // One operation/socket failing does not prove that this Home is offline. In
+    // particular, a secondary socket must not tear down a healthy primary socket
+    // by publishing an unverified offline verdict. The canonical readiness probe
+    // owns that verdict, including credential refusal and restart classification.
+    void invalidateServerReachabilitySupervisor({ serverUrl: entry.serverUrl, token: entry.token }).catch(() => {});
 }
 
 export function reportServerRestarting(serverUrl: string, retryAfterMs?: number, token?: string | null): void {

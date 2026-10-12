@@ -12,6 +12,17 @@ const resolveContextSpy = vi.hoisted(() => vi.fn());
 const createSocketSpy = vi.hoisted(() => vi.fn());
 const createResolvedRequestSpy = vi.hoisted(() => vi.fn());
 const resolvedRequestSpy = vi.hoisted(() => vi.fn());
+const credentialListeners = vi.hoisted(() => new Set<(event: { serverId: string }) => void>());
+
+// Home credential mutation is an environment boundary; transport and ACK
+// cancellation beneath it remain real.
+vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/auth/storage/tokenStorage')>(),
+    subscribeHomeCredentialMutations: (listener: (event: { serverId: string }) => void) => {
+        credentialListeners.add(listener);
+        return () => { credentialListeners.delete(listener); };
+    },
+}));
 
 vi.mock('@/sync/api/session/apiSocket', () => ({
     apiSocket: {
@@ -111,6 +122,7 @@ describe('emitSessionMetadataUpdateWithServerScope', () => {
         createSocketSpy.mockReset();
         createResolvedRequestSpy.mockReset();
         resolvedRequestSpy.mockReset();
+        credentialListeners.clear();
     });
 
     it('keeps an ordinary layout-0 write on the active legacy socket RPC', async () => {
@@ -146,13 +158,46 @@ describe('emitSessionMetadataUpdateWithServerScope', () => {
                 expectedVersion: 3,
                 metadata: 'ciphertext',
             },
-            { timeoutMs: 4000 },
+            { timeoutMs: null, signal: expect.any(AbortSignal) },
         );
         expect(createResolvedRequestSpy).toHaveBeenCalledTimes(1);
         expect(createSocketSpy).not.toHaveBeenCalled();
     });
 
-    it('keeps an ordinary layout-0 scoped write on the ephemeral legacy socket RPC', async () => {
+    it('retains the exact Home write through unrelated credential retirement and cancels when its own credentials retire', async () => {
+        vi.useFakeTimers();
+        resolvePreferredServerIdForSessionIdSpy.mockReturnValue('server-b');
+        resolveContextSpy.mockResolvedValue({
+            scope: 'scoped', targetServerId: 'server-b', targetServerUrl: 'https://server-b.example.test',
+            targetAccountId: 'account-b', token: 'token-b', timeoutMs: 5000, encryption: null,
+        });
+        const disconnect = vi.fn();
+        let issued = false;
+        createSocketSpy.mockResolvedValue({
+            emitWithAck: () => { issued = true; return new Promise(() => {}); },
+            emit: vi.fn(), disconnect,
+        });
+        const { emitSessionMetadataUpdateWithServerScope } = await import('./emitSessionMetadataUpdateWithServerScope');
+        let failure: unknown = null;
+        const pending = emitSessionMetadataUpdateWithServerScope({
+            sessionId: 'session-1', expectedVersion: 3, metadata: 'ciphertext',
+        }).catch((error: unknown) => { failure = error; });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(issued).toBe(true);
+        credentialListeners.forEach((listener) => listener({ serverId: 'server-a' }));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(failure).toBeNull();
+        expect(disconnect).not.toHaveBeenCalled();
+        credentialListeners.forEach((listener) => listener({ serverId: 'server-b' }));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(failure).toMatchObject({ name: 'AbortError', code: 'SOCKET_RPC_ABORTED' });
+        await pending;
+        expect(disconnect).toHaveBeenCalledTimes(1);
+        expect(credentialListeners.size).toBe(0);
+    });
+
+    it('waits for a delayed layout-0 scoped write beyond its connection timeout', async () => {
+        vi.useFakeTimers();
         resolvePreferredServerIdForSessionIdSpy.mockReturnValue('server-b');
         resolveContextSpy.mockResolvedValue({
             scope: 'scoped',
@@ -162,26 +207,31 @@ describe('emitSessionMetadataUpdateWithServerScope', () => {
             timeoutMs: 5000,
             encryption: null,
         });
-        const emitWithAck = vi.fn(async () => ({
-            result: 'success',
-            version: 4,
-            metadata: 'committed',
-        }));
+        let acknowledge!: (value: unknown) => void;
+        const emitWithAck = vi.fn((..._args: unknown[]) => new Promise((resolve) => { acknowledge = resolve; }));
         const disconnect = vi.fn();
         createSocketSpy.mockResolvedValue({
-            timeout: vi.fn(() => ({ emitWithAck })),
+            emitWithAck,
+            timeout: vi.fn((timeoutMs: number) => ({ emitWithAck: (...args: unknown[]) => Promise.race([
+                emitWithAck(...args),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('operation has timed out')), timeoutMs)),
+            ]) })),
             disconnect,
         });
 
         const { emitSessionMetadataUpdateWithServerScope } =
             await import('./emitSessionMetadataUpdateWithServerScope');
 
-        await expect(emitSessionMetadataUpdateWithServerScope({
+        const pending = emitSessionMetadataUpdateWithServerScope({
             sessionId: 'session-1',
             expectedVersion: 3,
             metadata: 'ciphertext',
             timeoutMs: 5000,
-        })).resolves.toEqual({
+        });
+        const outcome = pending.then((value) => value, (error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(250_000);
+        acknowledge({ result: 'success', version: 4, metadata: 'committed' });
+        await expect(outcome).resolves.toEqual({
             result: 'success',
             version: 4,
             metadata: 'committed',
@@ -237,6 +287,7 @@ describe('emitSessionMetadataUpdateWithServerScope', () => {
         }) => {
             expect(params.takeCarrierRelease?.()).toBe(releaseCarrier);
             return {
+                emitWithAck,
                 timeout: vi.fn(() => ({ emitWithAck })),
                 disconnect,
             };
@@ -324,6 +375,7 @@ describe('emitSessionMetadataUpdateWithServerScope', () => {
                 expect(params.takeCarrierRelease?.()).toBe(releaseCarrier);
             }
             return {
+                emitWithAck,
                 timeout: vi.fn(() => ({ emitWithAck })),
                 disconnect,
             };

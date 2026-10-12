@@ -14,7 +14,6 @@ import {
 } from '@happier-dev/protocol/machines/machineStoredContent';
 
 import { getOrCreateScopedCacheTokenKey, resetScopedCacheTokenKeysForTests } from './scopedCacheTokenKey';
-import { createScopedResolutionSingleFlight } from './scopedResolutionSingleFlight';
 import { createServerRequestForExplicitServerScope } from './createServerRequestWithServerScope';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from './serverScopedRpcTypes';
 
@@ -48,7 +47,13 @@ type MachineTransportEvidence = Readonly<{
 }>;
 
 const machineTransportCache = new Map<string, MachineTransportEvidence>();
-const machineTransportResolutions = createScopedResolutionSingleFlight<MachineTransportEvidence | null>();
+const machineTransportResolutions = new Map<string, {
+    cacheKey: string;
+    timeoutMs: number;
+    rowPending: boolean;
+    timedOut: boolean;
+    result: Promise<MachineTransportEvidence | null>;
+}>();
 
 function readMaxMachineKeyCacheEntriesFromEnv(): number {
     const raw = String(process.env.EXPO_PUBLIC_HAPPIER_SCOPED_RPC_MACHINE_KEY_CACHE_MAX ?? '').trim();
@@ -90,11 +95,13 @@ async function fetchMachineTransport(params: Readonly<{
     encryption?: MachineContextAuthority;
     decryptEncryptionKey?: (value: string) => Promise<Uint8Array | null>;
     timeoutMs: number;
+    onRowObserved?: () => void;
+    onTimeout?: () => void;
 }>): Promise<MachineTransportEvidence | null> {
     const incumbentContext = params.encryption?.getMachineEncryptionContext(params.machineId);
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timeoutId = controller
-        ? setTimeout(() => controller.abort(), Math.max(1, params.timeoutMs))
+        ? setTimeout(() => { params.onTimeout?.(); controller.abort(); }, Math.max(1, params.timeoutMs))
         : null;
 
     try {
@@ -131,6 +138,7 @@ async function fetchMachineTransport(params: Readonly<{
                 daemonStateVersion?: number;
             };
         };
+        params.onRowObserved?.();
         const machine = body?.machine;
         if (params.encryption && params.encryption.getMachineEncryptionContext(params.machineId) !== incumbentContext) return null;
         if (normalizeId(machine?.id) !== params.machineId) {
@@ -185,6 +193,48 @@ async function fetchMachineTransport(params: Readonly<{
     }
 }
 
+async function resolveMachineTransportEvidence(
+    params: Parameters<typeof fetchMachineTransport>[0],
+    deadlineAt = Date.now() + params.timeoutMs,
+): Promise<MachineTransportEvidence | null> {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) return null;
+    const flightKey = `${params.cacheKey}::${params.timeoutMs}`;
+    const exact = machineTransportResolutions.get(flightKey);
+    const existing = (exact?.timedOut === false ? exact : undefined)
+        ?? [...machineTransportResolutions.values()].find(entry => entry.cacheKey === params.cacheKey
+            && entry.rowPending && !entry.timedOut);
+    if (existing) {
+        // Each joiner keeps its own supplied deadline and cannot abort the
+        // shared authenticated read when only its own wait expires.
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        let evidence: MachineTransportEvidence | null;
+        try {
+            evidence = await Promise.race([existing.result, new Promise<null>(resolve => {
+                timeoutId = setTimeout(() => resolve(null), remainingMs);
+            })]);
+        } finally {
+            if (timeoutId !== undefined) clearTimeout(timeoutId);
+        }
+        // An earlier caller's deadline is not this caller's deadline. A timed
+        // out shared read can be replaced only within the original remainder;
+        // refusals, stale contexts and ordinary failures are never retried here.
+        const retryRemainingMs = deadlineAt - Date.now();
+        if (!evidence && existing.timedOut && retryRemainingMs > 0) {
+            return await resolveMachineTransportEvidence({ ...params, timeoutMs: retryRemainingMs }, deadlineAt);
+        }
+        return evidence;
+    }
+    const result = fetchMachineTransport({ ...params, timeoutMs: remainingMs,
+        onRowObserved: () => { entry.rowPending = false; }, onTimeout: () => { entry.timedOut = true; } })
+        .finally(() => {
+            if (machineTransportResolutions.get(flightKey) === entry) machineTransportResolutions.delete(flightKey);
+        });
+    const entry = { cacheKey: params.cacheKey, timeoutMs: params.timeoutMs, rowPending: true, timedOut: false, result };
+    machineTransportResolutions.set(flightKey, entry);
+    return await result;
+}
+
 export async function resolveScopedMachineTransport(params: Readonly<{
     serverId: string;
     serverUrl: string;
@@ -207,13 +257,12 @@ export async function resolveScopedMachineTransport(params: Readonly<{
     const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS;
     const keyCacheKey = toMachineTransportCacheKey(serverId, machineId, token);
     const incumbentContext = params.encryption?.getMachineEncryptionContext(machineId);
-    // A cold lookup is bounded by its caller's remaining RPC budget. Calls
-    // with different budgets cannot share the first caller's timeout result.
-    const flightKey = `${keyCacheKey}::${timeoutMs}`;
-
     // Refresh the Home row each call; cached openings are reusable only after
     // that row confirms the exact envelope and authenticated access identity.
-    const evidence = await machineTransportResolutions.run(flightKey, async () => await fetchMachineTransport({
+    // Remaining RPC budgets vary after context/trust setup. Share a pending
+    // row read while preserving each caller's deadline; after a row is observed,
+    // a different-budget read stays fresh even while its key open is pending.
+    const evidence = await resolveMachineTransportEvidence({
             serverId,
             serverUrl: params.serverUrl,
             ...(params.runtimeOrigin ? { runtimeOrigin: params.runtimeOrigin } : {}),
@@ -225,7 +274,7 @@ export async function resolveScopedMachineTransport(params: Readonly<{
             ...(params.encryption ? { encryption: params.encryption } : {}),
             decryptEncryptionKey: params.decryptEncryptionKey,
             timeoutMs,
-        }));
+        });
     if (!evidence) return null;
     const isLocalReadCurrent = () => {
         if (!params.encryption) return true;
@@ -261,6 +310,6 @@ export async function resolveScopedMachineTransport(params: Readonly<{
 
 export function resetScopedMachineTransportCacheForTests(): void {
     machineTransportCache.clear();
-    machineTransportResolutions.reset();
+    machineTransportResolutions.clear();
     resetScopedCacheTokenKeysForTests();
 }

@@ -53,11 +53,14 @@ export function isGuardedMachineRpcMethod(method: string): boolean {
 
 export async function resolveTransferPolicyAllowsMachineRpcDirect(params: Readonly<{
     serverId: string | undefined;
+    timeoutMs?: number;
+    signal?: AbortSignal;
 }>): Promise<boolean> {
     try {
         const serverFeatures = await getReadyServerFeatures({
-            timeoutMs: 500,
+            timeoutMs: params.timeoutMs,
             serverId: params.serverId,
+            signal: params.signal,
         });
 
         // Fail closed: if we cannot evaluate policy, do not attempt `machine_rpc_direct`.

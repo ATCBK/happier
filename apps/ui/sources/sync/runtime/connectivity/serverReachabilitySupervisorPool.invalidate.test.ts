@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { storage } from '@/sync/domains/state/storage';
+
+import { bindEndpointConnectivityStateToRealtimeStore } from './bindManagedConnectionStateToRealtimeStore';
 
 import {
     invalidateServerReachabilitySupervisor,
     peekServerReachabilityState,
+    reportServerUnreachable,
     resetServerReachabilitySupervisors,
     startServerReachabilitySupervisor,
     stopServerReachabilitySupervisor,
@@ -22,8 +26,47 @@ describe('serverReachabilitySupervisorPool (invalidate)', () => {
         vi.useRealTimers();
         resetRuntimeFetch();
         await resetServerReachabilitySupervisors();
+        storage.getState().resetEndpointConnectivity();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
+    });
+
+    it.each([
+        { status: 200, phase: 'online' },
+        { status: 401, phase: 'auth_failed' },
+        { status: 503, phase: 'offline' },
+    ])('re-probes a transport failure before publishing Home readiness ($status)', async ({ status, phase }) => {
+        const serverUrl = 'https://example.test';
+        const token = 'accepted-token';
+        let finishProbe: ((response: Response) => void) | undefined;
+        let holdProbe = false;
+        // The fetch adapter is the network boundary; supervision and classification stay real.
+        setRuntimeFetch(async () => holdProbe
+            ? new Promise<Response>((resolve) => { finishProbe = resolve; })
+            : new Response(null, { status: 200 }));
+        const phases: string[] = [];
+        const unsubscribe = subscribeServerReachabilityState(serverUrl, (state) => {
+            phases.push(state.phase);
+        }, token);
+        const detachStore = bindEndpointConnectivityStateToRealtimeStore({
+            subscribe: (listener) => subscribeServerReachabilityState(serverUrl, listener, token),
+        });
+
+        await startServerReachabilitySupervisor({ serverUrl, token });
+        phases.length = 0;
+        holdProbe = true;
+        reportServerUnreachable(serverUrl, new Error('transport close'), token);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(phases).not.toContain('offline');
+        expect(storage.getState().endpointStatus).toBe('connecting');
+        expect(finishProbe).toBeDefined();
+        finishProbe?.(new Response(null, { status }));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(peekServerReachabilityState(serverUrl, token)?.phase).toBe(phase);
+        if (phase === 'online') expect(phases).not.toContain('offline');
+        detachStore();
+        unsubscribe();
     });
 
     it('allows callers to force a re-probe after an offline cycle', async () => {

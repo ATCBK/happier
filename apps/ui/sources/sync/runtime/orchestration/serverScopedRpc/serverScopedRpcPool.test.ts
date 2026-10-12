@@ -28,6 +28,72 @@ function readAuthorizationHeader(headers: RequestInit['headers']): string {
 }
 
 describe('resolveScopedMachineTransport', () => {
+    it('shares a pending authenticated row across independently constructed RPC deadlines and refreshes after settlement', async () => {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        let machineReads = 0;
+        let withdrawn = false;
+        vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+            if (!url.includes('/v1/machines/')) return Response.json({});
+            machineReads++;
+            if (withdrawn) return new Response(null, { status: 403 });
+            entered.resolve();
+            await release.promise;
+            return Response.json({ machine: { id: 'machine-plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
+        }));
+        const scope = { serverId: 'home-budget', serverUrl: 'https://home-budget.example.test', token: 'budget-token',
+            machineId: 'machine-plain', expectedAccountMode: 'plain' as const };
+        const now = Date.now();
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+        try {
+            const first = resolveScopedMachineTransport({ ...scope, timeoutMs: 5_000 });
+            await entered.promise;
+            // Each RPC constructs its own deadline before asynchronous context/trust
+            // setup. Calls started 1/2/3 ms later reach this owner 100 ms later.
+            clock.mockReturnValue(now + 100);
+            const joined = [4_901, 4_902, 4_903].map(timeoutMs => resolveScopedMachineTransport({ ...scope, timeoutMs }));
+            await Promise.resolve();
+            release.resolve();
+            for (const result of await Promise.all([first, ...joined])) expect(result).toMatchObject({ mode: 'plain' });
+            expect(machineReads).toBe(1);
+            withdrawn = true;
+            await expect(resolveScopedMachineTransport({ ...scope, timeoutMs: 4_996 })).rejects.toMatchObject({ status: 403 });
+            expect(machineReads).toBe(2);
+        } finally { release.resolve(); clock.mockRestore(); }
+    });
+
+    it('lets a shorter-budget joiner time out without aborting the shared row read', async () => {
+        vi.useFakeTimers();
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        let machineReads = 0;
+        const homeCarrier = {
+            endpointId: 'a'.repeat(64), readObservedPath: () => 'relay' as const,
+            request: async (_url: string, init: RequestInit) => {
+                machineReads++;
+                entered.resolve();
+                await new Promise<void>((resolve, reject) => {
+                    init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+                    void release.promise.then(resolve);
+                });
+                return Response.json({ machine: { id: 'machine-plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
+            },
+            createWebSocket: () => { throw new Error('No socket needed'); },
+        };
+        const scope = { serverId: 'home-budget-timeout', serverUrl: 'https://home-budget-timeout.example.test', token: 'budget-token',
+            machineId: 'machine-plain', expectedAccountMode: 'plain' as const, homeCarrier };
+        try {
+            const first = resolveScopedMachineTransport({ ...scope, timeoutMs: 5_000 });
+            await entered.promise;
+            const joined = resolveScopedMachineTransport({ ...scope, timeoutMs: 100 });
+            await vi.advanceTimersByTimeAsync(100);
+            expect(await joined).toBeNull();
+            release.resolve();
+            expect(await first).toMatchObject({ mode: 'plain' });
+            expect(machineReads).toBe(1);
+        } finally { release.resolve(); vi.useRealTimers(); }
+    });
+
     it('keeps a joined caller newer canonical selection when another owner holds the HTTP read', async () => {
         const first = await Encryption.create(new Uint8Array(32).fill(17));
         const joined = await Encryption.create(new Uint8Array(32).fill(17));
@@ -154,33 +220,42 @@ describe('resolveScopedMachineTransport', () => {
             await encryption.getMachineEncryption('machine-1')!.encryptRaw({ current: true }),
         )).toEqual({ current: true });
     });
-    it('does not let a short cold read decide a later caller with a longer budget', async () => {
-        let releaseShortRead!: () => void;
-        const shortReadPending = new Promise<void>((resolve) => { releaseShortRead = resolve; });
+    it.each([
+        { firstBudget: 1_000, nextBudget: 5_000, elapsed: 0 },
+        { firstBudget: 5_000, nextBudget: 2_000, elapsed: 4_000 },
+    ])('does not let a read with less remaining time decide a later caller ($firstBudget/$nextBudget/$elapsed)', async ({ firstBudget, nextBudget, elapsed }) => {
+        vi.useFakeTimers();
+        const entered = createDeferred<void>();
         let machineReads = 0;
-        vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-            if (!url.includes('/v1/machines/')) {
-                return Response.json({});
-            }
-            machineReads += 1;
-            if (machineReads === 1) {
-                await shortReadPending;
-                return new Response(null, { status: 500 });
-            }
-            return Response.json({
-                machine: { id: 'machine-plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER },
-            });
-        }));
+        const homeCarrier = {
+            endpointId: 'a'.repeat(64), readObservedPath: () => 'relay' as const,
+            request: async (_url: string, init: RequestInit) => {
+                machineReads++;
+                if (machineReads === 1) {
+                    entered.resolve();
+                    await new Promise<void>((_resolve, reject) => {
+                        init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+                    });
+                }
+                return Response.json({ machine: { id: 'machine-plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
+            },
+            createWebSocket: () => { throw new Error('No socket needed'); },
+        };
         const input = {
             serverId: 'server-b', serverUrl: 'https://server-b.example.test',
             token: 'token-b', machineId: 'machine-plain', expectedAccountMode: 'plain' as const,
+            homeCarrier,
         };
-        const short = resolveScopedMachineTransport({ ...input, timeoutMs: 1_000 });
-        await vi.waitFor(() => expect(machineReads).toBe(1));
-        const long = resolveScopedMachineTransport({ ...input, timeoutMs: 5_000 });
-        releaseShortRead();
-        await expect(short).resolves.toBeNull();
-        await expect(long).resolves.toMatchObject({ mode: 'plain' });
+        try {
+            const short = resolveScopedMachineTransport({ ...input, timeoutMs: firstBudget });
+            await entered.promise;
+            await vi.advanceTimersByTimeAsync(elapsed);
+            const long = resolveScopedMachineTransport({ ...input, timeoutMs: nextBudget });
+            await vi.advanceTimersByTimeAsync(firstBudget - elapsed);
+            await expect(short).resolves.toBeNull();
+            await expect(long).resolves.toMatchObject({ mode: 'plain' });
+            expect(machineReads).toBe(2);
+        } finally { vi.useRealTimers(); }
     });
 
     it('does not reuse a cached Plain decision for an E2EE caller', async () => {

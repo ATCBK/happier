@@ -4,7 +4,7 @@ import {
     createServerAccountScope,
     type ServerAccountScope,
 } from '@/sync/domains/scope/serverAccountScope';
-import { createServerFetchAtEndpoint } from '@/sync/http/client';
+import { createServerFetchAtEndpoint, type ServerFetchOptions } from '@/sync/http/client';
 import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 
@@ -19,10 +19,7 @@ type ScopedServerAccountRequestContext = Extract<
     { scope: 'scoped' }
 >;
 
-export type ServerAccountRequestOptions = Readonly<{
-    /** Observes the canonical transport boundary; domain controllers must not infer it. */
-    onIssued?: () => void;
-}>;
+export type ServerAccountRequestOptions = Readonly<Pick<ServerFetchOptions, 'onIssued' | 'retry'>>;
 
 export function createServerRequestForExplicitServerScope(params: Readonly<{
     serverUrl: string;
@@ -41,13 +38,14 @@ export function createServerRequestForExplicitServerScope(params: Readonly<{
     return async (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => {
         const headers = new Headers(init?.headers);
         headers.set('Authorization', `Bearer ${params.token}`);
-        if (params.homeCarrier) {
-            // The canonical HTTP owner already knows how to compose a request
-            // for a semantic carrier; this seam supplies the carrier and the
-            // scoped credential rather than adding a second request composer.
+        if (params.homeCarrier || options?.retry === 'none') {
+            // The canonical HTTP owner composes semantic carriers and explicit
+            // no-retry requests. Supply its scoped credential and request policy
+            // here instead of parking user Retry on passive reachability.
             return await createServerFetchAtEndpoint({
                 endpointUrl: params.serverUrl,
-                homeCarrier: params.homeCarrier,
+                ...(params.runtimeOrigin ? { runtimeOrigin: params.runtimeOrigin } : {}),
+                ...(params.homeCarrier ? { homeCarrier: params.homeCarrier } : {}),
                 credentials: { token: params.token },
             })(path, { ...init, method: init?.method ?? 'GET', headers }, {
                 retry: 'none',

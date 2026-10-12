@@ -1,7 +1,7 @@
 import { isMessageStructuredPresentationV1Candidate } from '@happier-dev/protocol/sessions/messages/messageStructuredPresentationV1';
 import { resolveStoredContentKindForSessionEncryptionMode, type SessionEncryptionMode } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
 import type { SessionMessageV1 } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
-import { parseSessionMessageDeliveryResolutionV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
+import { readStoredSessionMessageDeliveryResolutionV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
 
 
 import type { DecryptedMessage } from '@/sync/domains/state/storageTypes';
@@ -86,7 +86,7 @@ export async function readStoredSessionMessage(params: Readonly<{
 
     if (isStoredSessionPlainContent(message.content)) {
         const content = await readStoredSessionRawRecord({ content: message.content });
-        const resolution = parseSessionMessageDeliveryResolutionV1(message.deliveryResolution);
+        const resolution = readStoredSessionMessageDeliveryResolutionV1(message.deliveryResolution);
         const acceptedDelivery = resolution?.kind === 'provider_accepted' && resolution.content.t === 'plain'
             ? resolution.content.v : undefined;
         return {

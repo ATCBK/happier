@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
+import type { FilesystemUploadInput, FilesystemDownloadInput, FilesystemUploadOutput, FilesystemDownloadOutput } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import {
     RPC_METHODS,
     SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS,
@@ -22,6 +23,7 @@ import {
     clearMachineRequestReachabilityForTest,
     readMachineRequestReachabilityObservation,
     recordMachineRequestFailed,
+    isMachineReachable,
 } from '@/sync/domains/machines/reachability/machineReachability';
 
 let machineContextOwner: Encryption;
@@ -82,6 +84,7 @@ vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
 vi.mock('@/sync/api/session/apiSocket', () => ({
     apiSocket: {
         machineRPC: (...args: Parameters<MachineRpcSpy>) => machineRpcSpy(...args),
+        getMachineRequestScope: () => ({ serverId: getAppliedActiveServerSnapshotSpy()?.serverId, accountId: 'account-a' }),
     },
 }));
 
@@ -157,6 +160,15 @@ function mockScopedMachineFetch(machine: Readonly<{
     }));
 }
 
+function filesystemActionHomeResponse(input: string | URL | Request): Response | null {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    if (url.origin !== 'https://server-a.example.test') return null;
+    if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+    if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+    if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') return Response.json({});
+    return null;
+}
+
 function installDefaultPeerMediationFallback(): void {
     machineRpcWithPeerMediationRouteSpy.mockImplementation(async (params: {
         serverId?: string | null;
@@ -195,6 +207,29 @@ await import('./serverScopedMachineRpc');
 getActiveServerSnapshotSpy.mockReset();
 
 describe('machineRpcWithServerScope', () => {
+    it.each(['RPC_METHOD_NOT_AVAILABLE', 'target_unavailable'] as const)(
+        'preserves operation-scoped transition rejection and target reachability (%s)', async rpcErrorCode => {
+            getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', kind: 'custom', generation: 1 });
+            machineRpcSpy.mockRejectedValue(Object.assign(new Error('unavailable'), { rpcErrorCode }));
+            getCredentialsSpy.mockResolvedValue({ token: TOKEN_A, secret: SECRET_A });
+            createEncryptionSpy.mockResolvedValue({ ...machineContextAuthority, decryptEncryptionKey: vi.fn(async () => null),
+                initializeMachines: vi.fn(async () => {}), getMachineEncryption: () => responder.cipher });
+            mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
+            createEphemeralSocketSpy.mockResolvedValue({ timeout: () => ({ emitWithAck: async () => ({ ok: false,
+                error: 'unavailable', errorCode: rpcErrorCode }) }), emit: vi.fn(), disconnect: vi.fn() });
+            const { runSessionAgentTransitionOnMachine } = await import('@/sync/ops/sessionAgentTransition');
+            const result = await runSessionAgentTransitionOnMachine({ machineId: 'machine-1', serverId: 'server-a', request: {
+                v: 1, sessionId: 'session-1', expectedCurrentAgentId: 'claude', selection: { v: 1, agentId: 'codex' },
+                input: { localId: 'transition-1', text: 'Continue this task', meta: {} },
+            } });
+            expect(result).toMatchObject(rpcErrorCode === 'RPC_METHOD_NOT_AVAILABLE'
+                ? { type: 'rejected', code: 'unsupported_operation', sourceEffect: 'none' }
+                : { type: 'outcome_unknown' });
+            expect(isMachineReachable({ serverId: 'server-a', accountId: 'account-a' },
+                { id: 'machine-1', active: true, activeAt: Date.now() }))
+                .toBe(rpcErrorCode === 'RPC_METHOD_NOT_AVAILABLE');
+        },
+    );
     it.each(['envelope', 'custody'] as const)('rejects unavailable Machine %s before opening a socket and retires its previous cipher', async (failure) => {
         const { Encryption } = await import('@/sync/encryption/encryption');
         const encryption = await Encryption.create(new Uint8Array(32).fill(1));
@@ -268,7 +303,7 @@ describe('machineRpcWithServerScope', () => {
             generation: 1,
         });
         machineRpcWithPeerMediationRouteSpy.mockResolvedValueOnce({ direct: true });
-        recordMachineRequestFailed({ serverId: 'server-a', machineId: 'machine-1' });
+        recordMachineRequestFailed({ serverId: 'server-a', accountId: 'account-a', machineId: 'machine-1' });
 
         const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
         const result = await machineRpcWithServerScope({
@@ -289,7 +324,7 @@ describe('machineRpcWithServerScope', () => {
         }));
         expect(machineRpcSpy).not.toHaveBeenCalled();
         expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
-        expect(readMachineRequestReachabilityObservation('server-a', 'machine-1'))
+        expect(readMachineRequestReachabilityObservation({ serverId: 'server-a', accountId: 'account-a' }, 'machine-1'))
             .toMatchObject({ outcome: 'succeeded' });
     });
 
@@ -446,7 +481,7 @@ describe('machineRpcWithServerScope', () => {
         });
         expect(getReadyServerFeaturesSpy).toHaveBeenCalledWith(expect.objectContaining({
             serverId: 'server-a',
-            timeoutMs: undefined,
+            timeoutMs: expect.any(Number),
         }));
     });
 
@@ -594,6 +629,14 @@ describe('machineRpcWithServerScope', () => {
     });
 
     it.each(['daemon.filesystem.upload', 'daemon.filesystem.download'] as const)('keeps concrete transfer custody mounted while blocking approval is pending (%s)', async (actionId) => {
+        const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        listServerProfilesSpy.mockReturnValue([{ id: 'server-a', serverUrl: 'https://server-a.example.test' }]);
+        getCredentialsSpy.mockResolvedValue({ token: TOKEN_A });
+        setRuntimeFetch(async input => {
+            const response = filesystemActionHomeResponse(input);
+            if (!response) throw new Error(`Unexpected Action Home request: ${String(input)}`);
+            return response;
+        });
         vi.useFakeTimers();
         try {
             getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
@@ -605,16 +648,28 @@ describe('machineRpcWithServerScope', () => {
                 return await new Promise(resolve => { resolveResult = resolve; });
             });
             const { callFilesystemTransferAction } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/filesystemTransferActionClient');
+            const input = actionId === 'daemon.filesystem.upload'
+                ? { rootPath: '/repo', path: 'binary.dat', source: { sourceId: 'source-1', sizeBytes: 0 }, overwrite: false } satisfies FilesystemUploadInput
+                : { rootPath: '/repo', path: 'binary.dat', destination: { destinationId: 'destination-1' }, asZip: false } satisfies FilesystemDownloadInput;
             const pending = callFilesystemTransferAction({ actionId, machineId: 'machine-1', serverId: 'server-a',
-                input: { rootPath: '/repo', path: 'binary.dat' }, timeoutMs: 5_000 });
+                input, timeoutMs: 5_000 });
             const settled = vi.fn();
             void pending.then(settled, settled);
             await vi.advanceTimersByTimeAsync(31_000);
             expect(settled).not.toHaveBeenCalled();
-            resolveResult({ success: true, status: 'accepted', operationId: 'transfer-operation' });
+            const accepted = actionId === 'daemon.filesystem.upload'
+                ? { success: true, status: 'accepted', operationId: 'transfer-operation', sourceId: 'source-1',
+                    prepared: { uploadId: 'upload-1', destDisplayPath: '/repo/binary.dat', expectedSizeBytes: 0,
+                        chunkSizeBytes: 64, recipientPublicKeyBase64: SECRET_A, expiresAt: Date.now() + 60_000,
+                        endpointCandidates: [] } } satisfies FilesystemUploadOutput
+                : { success: true, status: 'accepted', operationId: 'transfer-operation', destinationId: 'destination-1',
+                    prepared: { transferId: 'download-1', name: 'binary.dat', sizeBytes: 0,
+                        manifestHash: `sha256:${'a'.repeat(64)}`, expiresAt: Date.now() + 60_000,
+                        endpointCandidates: [] } } satisfies FilesystemDownloadOutput;
+            resolveResult(accepted);
             await expect(pending).resolves.toMatchObject({ status: 'accepted' });
             expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
-        } finally { vi.useRealTimers(); }
+        } finally { vi.useRealTimers(); resetRuntimeFetch(); }
     });
 
     it('keeps recovery Account custody independent of the completed upload signal and retires it on actual Home credential replacement', async () => {
@@ -649,6 +704,8 @@ describe('machineRpcWithServerScope', () => {
     });
 
     it.each(['file', 'entry_tree', 'entry_tree_unknown'] as const)('streams qualified copy bytes into the admitted import before acknowledging the source (%s)', async (mode) => {
+        listServerProfilesSpy.mockReturnValue([{ id: 'server-a', serverUrl: 'https://server-a.example.test' }]);
+        getCredentialsSpy.mockResolvedValue({ token: TOKEN_A });
         getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
         getAppliedActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
         getReadyServerFeaturesSpy.mockResolvedValue(createRootLayoutFeaturesResponse({ features: { machines: { transfer: { enabled: true } } } }));
@@ -691,6 +748,8 @@ describe('machineRpcWithServerScope', () => {
         });
         const encrypted = new Map<string, Awaited<ReturnType<typeof createEncryptedTransferChunkEnvelope>>>();
         setRuntimeFetch(async (request, init) => {
+            const homeResponse = filesystemActionHomeResponse(request);
+            if (homeResponse) return homeResponse;
             const url = String(request);
             const pathname = new URL(url).pathname;
             if (url.includes('/open')) {
@@ -845,7 +904,7 @@ describe('machineRpcWithServerScope', () => {
         expect(socket.timeout).not.toHaveBeenCalled();
         expect(socket.disconnect).toHaveBeenCalledOnce();
     });
-    it.each(['exact', 'ordered'] as const)('fences delayed active preparation after %s scoped fallback starts', async (dispatchMode) => {
+    it.each(['exact', 'ordered'] as const)('fences delayed %s active preparation after the total deadline expires', async (dispatchMode) => {
         vi.useFakeTimers();
         try {
             getActiveServerSnapshotSpy.mockReturnValue({
@@ -880,21 +939,20 @@ describe('machineRpcWithServerScope', () => {
             const result = machineRpcWithServerScope({
                 machineId: 'machine-1', method: RPC_METHODS.SPAWN_HAPPY_SESSION,
                 payload: { sessionId: 'session-1' }, timeoutMs: 25,
-                skipTransferPolicyEvaluation: true,
                 ...(dispatchMode === 'exact' ? { onIssued } : { onDispatched: onIssued }),
             });
+            const rejected = expect(result).rejects.toMatchObject({ code: 'MACHINE_RPC_TIMEOUT', timeoutMs: 25 });
 
             await vi.advanceTimersByTimeAsync(0);
             expect(machineRpcSpy).toHaveBeenCalledTimes(1);
             await vi.advanceTimersByTimeAsync(25);
-            expect(scopedEmit).toHaveBeenCalledTimes(1);
-            await expect(result).resolves.toEqual({ source: 'scoped' });
+            await rejected;
             releaseActive();
             await Promise.resolve();
             await Promise.resolve();
 
-            expect(scopedEmit).toHaveBeenCalledTimes(1);
-            expect(onIssued).toHaveBeenCalledTimes(1);
+            expect(scopedEmit).not.toHaveBeenCalled();
+            expect(onIssued).not.toHaveBeenCalled();
             expect(activeEmits).toBe(0);
         } finally {
             vi.useRealTimers();
@@ -1457,7 +1515,7 @@ describe('machineRpcWithServerScope', () => {
         expect(fakeSocket.disconnect).toHaveBeenCalledTimes(1);
     });
 
-    it('falls back to a scoped socket with a fresh timeout budget when the active machine rpc call hangs', async () => {
+    it('rejects a hung active machine RPC without granting scoped fallback a fresh budget', async () => {
         vi.useFakeTimers();
         getActiveServerSnapshotSpy.mockReturnValue({
             serverId: 'server-a',
@@ -1466,25 +1524,6 @@ describe('machineRpcWithServerScope', () => {
             generation: 1,
         });
         machineRpcSpy.mockImplementation(() => new Promise(() => {}));
-        getCredentialsSpy.mockResolvedValue({ token: TOKEN_A, secret: SECRET_A });
-
-        const machineEncryption = createMachineEncryption();
-        createEncryptionSpy.mockResolvedValue({
-                ...machineContextAuthority,
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(() => machineEncryption),
-        });
-
-        mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
-
-        const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({ ok: true, result: await boundResponse(payload, { decoded: true }) }));
-        const fakeSocket = {
-            timeout: vi.fn(() => ({ emitWithAck })),
-            emit: vi.fn(),
-            disconnect: vi.fn(),
-        };
-        createEphemeralSocketSpy.mockResolvedValueOnce(fakeSocket);
 
         const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
         const rpcPromise = machineRpcWithServerScope({
@@ -1493,25 +1532,13 @@ describe('machineRpcWithServerScope', () => {
             payload: { handoffId: 'handoff_1' },
             timeoutMs: 1_000,
         });
-        const assertion = expect(rpcPromise).resolves.toEqual({ decoded: true });
+        const assertion = expect(rpcPromise).rejects.toMatchObject({ code: 'MACHINE_RPC_TIMEOUT', timeoutMs: 1_000 });
 
         await vi.advanceTimersByTimeAsync(1_000);
 
         await assertion;
         expect(machineRpcSpy).toHaveBeenCalledTimes(1);
-        expect(createEphemeralSocketSpy).toHaveBeenCalledWith(expect.objectContaining({
-            serverUrl: 'https://server-a.example.test',
-            token: TOKEN_A,
-            timeoutMs: 1_000,
-        }));
-        expect(machineEncryption.encryptRaw).toHaveBeenCalledWith(expect.objectContaining({ v: 2, k: 'req', c: expect.stringMatching(/^[0-9a-f]{32}$/), p: { handoffId: 'handoff_1' } }));
-        expect(machineEncryption.decryptRaw).toHaveBeenCalledWith(expect.any(String));
-        expect(emitWithAck).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.CALL, {
-            method: 'machine-1:daemon.sessionHandoff.prepareTarget',
-            params: expect.any(String),
-            timeoutMs: 1_000,
-        });
-        expect(fakeSocket.disconnect).toHaveBeenCalledTimes(1);
+        expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
         vi.useRealTimers();
     });
 
@@ -1542,7 +1569,7 @@ describe('machineRpcWithServerScope', () => {
 
         await assertion;
         expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
-        expect(readMachineRequestReachabilityObservation('server-a', 'machine-1')).toBeNull();
+        expect(readMachineRequestReachabilityObservation({ serverId: 'server-a', accountId: 'account-a' }, 'machine-1')).toBeNull();
         vi.useRealTimers();
     });
 
@@ -1642,7 +1669,7 @@ describe('machineRpcWithServerScope', () => {
         });
         expect(fakeSocket.timeout).toHaveBeenCalledWith(1);
         expect(fakeSocket.disconnect).toHaveBeenCalledTimes(1);
-        expect(readMachineRequestReachabilityObservation('server-a', 'machine-1'))
+        expect(readMachineRequestReachabilityObservation({ serverId: 'server-a', accountId: 'account-a' }, 'machine-1'))
             .toMatchObject({ outcome: 'failed' });
         vi.useRealTimers();
     });

@@ -12,6 +12,7 @@ import {
     type SessionMetadataTuplePatchV1,
 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { apiSocket } from '@/sync/api/session/apiSocket';
+import { emitWithAckCancellable } from '@happier-dev/sync-client';
 import type { UpdateMetadataAck } from '@/sync/domains/session/metadata/updateSessionMetadataWithRetry';
 
 import { createEphemeralServerSocketClient } from './createEphemeralServerSocketClient';
@@ -22,6 +23,8 @@ import {
 } from './createServerRequestWithServerScope';
 import { resolvePreferredServerIdForSessionId } from './resolvePreferredServerIdForSessionId';
 import { resolveServerAccountRequestContext } from './resolveServerAccountRequestContext';
+import { runWithHomeCredentialRequestSignal } from './serverAccountScopeRequestGuard';
+import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 
 type SessionMetadataUpdateScope = Readonly<{
     sessionId: string;
@@ -289,35 +292,42 @@ async function emitLegacySessionMetadataUpdate(params: Readonly<{
         expectedVersion: params.expectedVersion,
         metadata: params.metadata,
     };
-    params.assertCurrent();
-    if (params.context.scope === 'active') {
-        const result = await apiSocket.emitWithAck<UpdateMetadataAck>(
-            'update-metadata',
-            payload,
-            { timeoutMs: params.context.timeoutMs },
-        );
+    const serverId = params.context.scope === 'scoped'
+        ? params.context.targetServerId
+        : getAppliedActiveServerSnapshot().serverId;
+    return await runWithHomeCredentialRequestSignal(serverId, async (signal) => {
         params.assertCurrent();
-        return result;
-    }
-    const socket = await createEphemeralServerSocketClient(
-        createScopedSocketConnectParams(
-            params.context,
-            params.transferCarrierCustody,
-        ),
-    );
-    try {
-        params.assertCurrent();
-        const result = await socket
-            .timeout(params.context.timeoutMs)
-            .emitWithAck(
+        if (params.context.scope === 'active') {
+            const result = await apiSocket.emitWithAck<UpdateMetadataAck>(
                 'update-metadata',
                 payload,
-            ) as UpdateMetadataAck;
-        params.assertCurrent();
-        return result;
-    } finally {
-        socket.disconnect();
-    }
+                { timeoutMs: null, signal },
+            );
+            params.assertCurrent();
+            return result;
+        }
+        const socket = await createEphemeralServerSocketClient(
+            createScopedSocketConnectParams(
+                params.context,
+                params.transferCarrierCustody,
+            ),
+        );
+        try {
+            params.assertCurrent();
+            const result = await emitWithAckCancellable<UpdateMetadataAck>({
+                socket,
+                event: 'update-metadata',
+                payload,
+                // The context timeout bounds carrier setup, not the committed write.
+                timeoutMs: null,
+                signal,
+            });
+            params.assertCurrent();
+            return result;
+        } finally {
+            socket.disconnect();
+        }
+    });
 }
 
 /**

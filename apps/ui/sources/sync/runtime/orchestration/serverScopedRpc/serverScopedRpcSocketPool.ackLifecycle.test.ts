@@ -1,0 +1,149 @@
+import { createServer } from 'node:http';
+import { Server } from 'socket.io';
+import { io, type Socket } from 'socket.io-client';
+import { expect, it } from 'vitest';
+import { emitWithAckCancellable, readRpcRequestDisposition } from '@happier-dev/sync-client';
+import { createServerScopedRpcSocketPool } from './serverScopedRpcSocketPool';
+
+it.each([
+    { firstTimeoutMs: 100, secondTimeoutMs: 2_000 },
+    { firstTimeoutMs: 2_000, secondTimeoutMs: 100 },
+])('lets a longer waiter acquire after a short waiter expires (first caller: $firstTimeoutMs ms)', async ({ firstTimeoutMs, secondTimeoutMs }) => {
+    const http = createServer();
+    const server = new Server(http, { path: '/v1/updates/' });
+    let admitConnection!: () => void;
+    const admitted = new Promise<void>((resolve) => { admitConnection = resolve; });
+    let observeHandshake!: () => void;
+    const handshake = new Promise<void>((resolve) => { observeHandshake = resolve; });
+    server.use(async (_socket, next) => {
+        observeHandshake();
+        await admitted;
+        next();
+    });
+    await new Promise<void>((resolve) => { http.listen(0, '127.0.0.1', resolve); });
+    const address = http.address();
+    if (!address || typeof address === 'string') throw new Error('Missing loopback server address');
+    const sockets: Socket[] = [];
+    const pool = createServerScopedRpcSocketPool({
+        createSocket: ({ serverUrl }) => {
+            const socket = io(serverUrl, { path: '/v1/updates/', autoConnect: false, reconnection: false, forceNew: true });
+            socket.io.timeout(false);
+            sockets.push(socket);
+            return socket;
+        },
+        reachability: {
+            startReachability: async () => {}, waitForReachable: async () => {},
+            reportUnreachable: () => {}, subscribeNetworkAllowed: () => () => {},
+        },
+        readIdleDisconnectMs: () => 0,
+    });
+    const scope = { serverUrl: `http://127.0.0.1:${address.port}`, token: 'synthetic-token' };
+    try {
+        const first = pool.acquire({ ...scope, timeoutMs: firstTimeoutMs });
+        const second = pool.acquire({ ...scope, timeoutMs: secondTimeoutMs });
+        const short = (firstTimeoutMs < secondTimeoutMs ? first : second).catch((error: unknown) => error);
+        const long = firstTimeoutMs > secondTimeoutMs ? first : second;
+        const longOutcome = long.catch((error: unknown) => error);
+        await handshake;
+        expect(await short).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
+        admitConnection();
+        const client = await longOutcome;
+        expect(client).not.toBeInstanceOf(Error);
+        if (client instanceof Error) throw client;
+        expect(sockets).toHaveLength(1);
+        expect(sockets[0]?.connected).toBe(true);
+        (await long).disconnect();
+    } finally {
+        admitConnection();
+        await pool.stopAll();
+        await new Promise<void>((resolve) => { server.close(() => resolve()); });
+    }
+});
+
+it('settles a pending physical connection when the pool stops before the handshake completes', async () => {
+    const http = createServer();
+    const server = new Server(http, { path: '/v1/updates/' });
+    let observeHandshake!: () => void;
+    const handshake = new Promise<void>((resolve) => { observeHandshake = resolve; });
+    server.use((_socket, _next) => { observeHandshake(); });
+    await new Promise<void>((resolve) => { http.listen(0, '127.0.0.1', resolve); });
+    const address = http.address();
+    if (!address || typeof address === 'string') throw new Error('Missing loopback server address');
+    let physicalSocket: Socket | undefined;
+    const pool = createServerScopedRpcSocketPool({
+        createSocket: ({ serverUrl }) => {
+            physicalSocket = io(serverUrl, { path: '/v1/updates/', autoConnect: false, reconnection: false, forceNew: true });
+            return physicalSocket;
+        },
+        reachability: {
+            startReachability: async () => {}, waitForReachable: async () => {},
+            reportUnreachable: () => {}, subscribeNetworkAllowed: () => () => {},
+        },
+        readIdleDisconnectMs: () => 0,
+    });
+    try {
+        let failure: unknown;
+        const pending = pool.acquire({ serverUrl: `http://127.0.0.1:${address.port}`, token: 'synthetic-token', timeoutMs: 2_000 })
+            .catch((error: unknown) => { failure = error; });
+        await handshake;
+        await pool.stopAll();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(failure).toBeInstanceOf(Error);
+        await pending;
+        expect(physicalSocket?.listeners('connect')).toHaveLength(0);
+    } finally {
+        await pool.stopAll();
+        await new Promise<void>((resolve) => { server.close(() => resolve()); });
+    }
+});
+
+it('refuses an ACK write after its pooled physical socket disconnects without buffering a later effect', async () => {
+    const http = createServer();
+    const server = new Server(http, { path: '/v1/updates/' });
+    let writes = 0;
+    server.on('connection', (socket) => {
+        socket.on('update-metadata', () => { writes += 1; });
+        socket.on('probe', (ack: () => void) => { ack(); });
+    });
+    await new Promise<void>((resolve) => { http.listen(0, '127.0.0.1', resolve); });
+    const address = http.address();
+    if (!address || typeof address === 'string') throw new Error('Missing loopback server address');
+    let physicalSocket: Socket | undefined;
+    const pool = createServerScopedRpcSocketPool({
+        createSocket: ({ serverUrl }) => {
+            physicalSocket = io(serverUrl, { path: '/v1/updates/', autoConnect: false, reconnection: false, forceNew: true });
+            return physicalSocket;
+        },
+        // The live loopback server is already reachable; Socket.IO owns dialing.
+        reachability: {
+            startReachability: async () => {}, waitForReachable: async () => {},
+            reportUnreachable: () => {}, subscribeNetworkAllowed: () => () => {},
+        },
+        readIdleDisconnectMs: () => 0,
+    });
+    const scope = { serverUrl: `http://127.0.0.1:${address.port}`, token: 'synthetic-token', timeoutMs: 5_000 };
+    try {
+        const first = await pool.acquire(scope);
+        if (!physicalSocket) throw new Error('Missing pooled physical socket');
+        physicalSocket.disconnect();
+        let failure: unknown = null;
+        const pending = emitWithAckCancellable({
+            socket: first, event: 'update-metadata',
+            payload: { sid: 'session-1', metadata: 'synthetic-ciphertext', expectedVersion: 3 },
+            timeoutMs: null,
+        }).catch((error: unknown) => { failure = error; });
+        const second = await pool.acquire(scope);
+        // Socket.IO packet ordering makes this real ACK a barrier after any
+        // incorrectly buffered write, without a test-only timing assumption.
+        await physicalSocket.emitWithAck('probe');
+        expect(writes).toBe(0);
+        expect(readRpcRequestDisposition(failure)).toBe('notSent');
+        await pending;
+        first.disconnect();
+        second.disconnect();
+    } finally {
+        await pool.stopAll();
+        await new Promise<void>((resolve) => { server.close(() => resolve()); });
+    }
+});

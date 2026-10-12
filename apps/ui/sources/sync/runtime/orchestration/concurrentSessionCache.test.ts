@@ -1,7 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { resolveConcurrentTargets } from './concurrentSessionCache';
+import { primeServerFeaturesSnapshot, deleteServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 
 describe('resolveConcurrentTargets', () => {
+    it('uses the published Home name for remote session lists instead of the saved host', () => {
+        primeServerFeaturesSnapshot({ serverId: 'server-c', snapshot: {
+            status: 'ready', features: { ...createRootLayoutFeaturesResponse(), homePresentation: { v: 1, displayName: 'Studio Home' } },
+        } });
+        try {
+            expect(resolveConcurrentTargets({
+                activeServerId: 'server-a', profiles: [
+                    { id: 'server-a', serverUrl: 'https://a.example.test', name: 'Server A' },
+                    { id: 'server-c', serverUrl: 'http://localhost:52753', name: 'localhost:52753' },
+                ], settings: { serverSelectionGroups: [{ id: 'group-main', name: 'Main', serverIds: ['server-a', 'server-c'], presentation: 'grouped' }],
+                    serverSelectionActiveTargetKind: 'group', serverSelectionActiveTargetId: 'group-main' },
+            })).toMatchObject([{ id: 'server-c', serverName: 'Studio Home' }]);
+        } finally {
+            deleteServerFeaturesSnapshot({ serverId: 'server-c' });
+        }
+    });
     const profiles = [
         { id: 'server-a', serverUrl: 'https://a.example.test', name: 'Server A' },
         { id: 'server-b', serverUrl: 'https://b.example.test', name: 'Server B' },

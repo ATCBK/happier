@@ -118,7 +118,7 @@ describe('sessionDraftSyncRuntime', () => {
             readActiveScope: () => activeScope,
             materializeExact,
         })).resolves.toBe(true);
-        expect(materializeExact).toHaveBeenCalledWith(SCOPE, payload.address);
+        expect(materializeExact).toHaveBeenCalledWith(SCOPE, payload.address, payload.revision);
 
         materializeExact.mockClear();
         activeScope = { serverId: 'server-b', accountId: 'account-a' };

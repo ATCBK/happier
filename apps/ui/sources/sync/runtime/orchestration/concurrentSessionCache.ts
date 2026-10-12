@@ -1,3 +1,4 @@
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { attachManagedSessionHumanPresenceSocket } from '@/sync/domains/session/humanPresence/attachManagedSessionHumanPresenceSocket';
 import { publishHomeAccountChange } from './homeAccountChange';
 import { EphemeralUpdateSchema } from '@happier-dev/protocol/updates';
@@ -368,7 +369,7 @@ export function resolveConcurrentTargets(params: Readonly<{
         targets.push({
             id: scopeId,
             serverUrl,
-            serverName: String(profile.name ?? scopeId).trim() || scopeId,
+            serverName: resolveHomeDisplayLabel(profile, scopeId),
             ...(profile.canonicalServerUrl ? { canonicalServerUrl: serverUrl } : {}),
             ...(profile.homeConnectionDescriptor
                 ? {
@@ -903,6 +904,14 @@ export async function refreshConcurrentOrdinarySessionList(serverIdRaw: string):
     const entry = managedServers.get(normalizeServerId(serverIdRaw));
     if (!entry) return;
     await runRefresh(entry, 'other', 'replace');
+}
+
+/** Manual inventory refresh uses this Home's incumbent Machine fetch/apply lifecycle. */
+export async function refreshConcurrentMachineList(serverIdRaw: string): Promise<boolean> {
+    const entry = managedServers.get(normalizeServerId(serverIdRaw));
+    if (!entry) return false;
+    await runRefresh(entry, 'other', 'machines');
+    return true;
 }
 
 export function isConcurrentSessionListQueryHomeOnline(serverIdRaw: string): boolean {

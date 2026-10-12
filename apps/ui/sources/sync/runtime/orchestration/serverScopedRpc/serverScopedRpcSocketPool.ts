@@ -1,5 +1,6 @@
 import { createHappierSocket } from '@happier-dev/sync-client';
 import { createRpcCallError, MACHINE_RPC_TIMEOUT_ERROR_CODE, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
 import { isTerminalAuthError } from '@/sync/runtime/connectivity/authErrors';
 import {
     CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION,
@@ -45,7 +46,7 @@ type SocketLike = Readonly<{
 type ReachabilityDeps = Readonly<{
     acquireReachability?: (params: Readonly<{ serverUrl: string; runtimeOrigin: string; token: string; homeCarrier?: HomeCarrier | null }>) => Promise<Readonly<{ release: () => Promise<void> }>>;
     startReachability: (params: Readonly<{ serverUrl: string; token: string }>) => Promise<void>;
-    waitForReachable: (params: Readonly<{ serverUrl: string; token: string; timeoutMs: number; homeIdentityId?: string; homeCarrier?: HomeCarrier | null }>) => Promise<void>;
+    waitForReachable: (params: Readonly<{ serverUrl: string; token: string; timeoutMs?: number; signal?: AbortSignal; homeIdentityId?: string; homeCarrier?: HomeCarrier | null }>) => Promise<void>;
     reportUnreachable: (serverUrl: string, error: unknown, token: string) => void;
     subscribeNetworkAllowed: (listener: (allowed: boolean) => void) => () => void;
 }>;
@@ -72,7 +73,7 @@ type PoolEntry = {
     homeCarrier: HomeCarrier | null;
     socket: SocketLike;
     inUseCount: number;
-    connectInFlight: Promise<void> | null;
+    connectInFlight: Readonly<{ result: Promise<void>; controller: AbortController }> | null;
     intentionalDisconnect: boolean;
     idleDisconnectTimer: ReturnType<typeof setTimeout> | null;
     reachabilityRelease: (() => Promise<void>) | null;
@@ -102,19 +103,20 @@ function readScopedRpcSocketIdleDisconnectMsFromEnv(): number {
     return parsed;
 }
 
-async function connectSocketWithTimeout(socket: SocketLike, timeoutMs: number): Promise<void> {
+async function connectSocket(socket: SocketLike, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) throw signal.reason;
     if (socket.connected) return;
     await new Promise<void>((resolve, reject) => {
         let settled = false;
-        const timeoutId = setTimeout(() => {
+        const onAbort = () => {
             if (settled) return;
             settled = true;
             cleanup();
-            reject(Object.assign(new Error('Scoped RPC socket connection timeout'), { code: MACHINE_RPC_TIMEOUT_ERROR_CODE }));
-        }, Math.max(1, timeoutMs));
+            reject(signal.reason);
+        };
 
         const cleanup = () => {
-            clearTimeout(timeoutId);
+            signal.removeEventListener('abort', onAbort);
             socket.off('connect', onConnect);
             socket.off('connect_error', onConnectError);
         };
@@ -138,6 +140,7 @@ async function connectSocketWithTimeout(socket: SocketLike, timeoutMs: number): 
 
         socket.on('connect', onConnect);
         socket.on('connect_error', onConnectError);
+        signal.addEventListener('abort', onAbort, { once: true });
         try {
             socket.connect();
         } catch (error) {
@@ -180,6 +183,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                     serverUrl: params.serverUrl,
                     token: params.token,
                     timeoutMs: params.timeoutMs,
+                    signal: params.signal,
                     ...(params.homeIdentityId ? { homeIdentityId: params.homeIdentityId } : {}),
                     homeCarrier: params.homeCarrier ?? null,
                 });
@@ -226,6 +230,10 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                 entry.idleDisconnectTimer = null;
             }
             entry.intentionalDisconnect = true;
+            entry.connectInFlight?.controller.abort(createRpcCallError({
+                error: 'Scoped RPC socket stopped before connecting',
+                errorCode: 'MACHINE_RPC_UNREACHABLE',
+            }));
             try {
                 entry.socket.disconnect();
             } catch {
@@ -333,41 +341,65 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
         return entry;
     };
 
-    const ensureConnected = async (entry: PoolEntry, timeoutMs: number): Promise<void> => {
+    const ensureConnected = async (entry: PoolEntry, deadlineAt: number): Promise<void> => {
+        const timeoutError = () => Object.assign(new Error('Scoped RPC socket connection timeout'), { code: MACHINE_RPC_TIMEOUT_ERROR_CODE });
+        if (deadlineAt <= deps.now()) throw timeoutError();
         if (entry.socket.connected) return;
-        if (entry.connectInFlight) {
-            await entry.connectInFlight;
-            return;
-        }
-        const run = (async () => {
-            if (!entry.reachabilityRelease && deps.reachability.acquireReachability) {
-                const lease = await deps.reachability.acquireReachability({
+        if (!entry.connectInFlight) {
+            const controller = new AbortController();
+            const run = (async () => {
+                if (!entry.reachabilityRelease && deps.reachability.acquireReachability) {
+                    const lease = await deps.reachability.acquireReachability({
+                        serverUrl: entry.reachabilityServerUrl,
+                        runtimeOrigin: entry.serverUrl,
+                        token: entry.token,
+                        homeCarrier: entry.homeCarrier,
+                    });
+                    if (controller.signal.aborted) {
+                        await lease.release();
+                        throw controller.signal.reason;
+                    }
+                    entry.reachabilityRelease = lease.release;
+                } else if (!entry.reachabilityRelease) {
+                    await deps.reachability.startReachability({ serverUrl: entry.reachabilityServerUrl, token: entry.token });
+                }
+                if (controller.signal.aborted) throw controller.signal.reason;
+                await deps.reachability.waitForReachable({
                     serverUrl: entry.reachabilityServerUrl,
-                    runtimeOrigin: entry.serverUrl,
                     token: entry.token,
+                    signal: controller.signal,
+                    ...(entry.homeIdentityId ? { homeIdentityId: entry.homeIdentityId } : {}),
                     homeCarrier: entry.homeCarrier,
                 });
-                entry.reachabilityRelease = lease.release;
-            } else if (!entry.reachabilityRelease) {
-                await deps.reachability.startReachability({ serverUrl: entry.reachabilityServerUrl, token: entry.token });
-            }
-            await deps.reachability.waitForReachable({
-                serverUrl: entry.reachabilityServerUrl,
-                token: entry.token,
-                timeoutMs,
-                ...(entry.homeIdentityId ? { homeIdentityId: entry.homeIdentityId } : {}),
-                homeCarrier: entry.homeCarrier,
-            });
-            await connectSocketWithTimeout(entry.socket, timeoutMs);
-        })();
-        entry.connectInFlight = run;
-        try {
-            await run;
-        } finally {
-            if (entry.connectInFlight === run) {
+                await connectSocket(entry.socket, controller.signal);
+            })();
+            const result = run.finally(() => {
+                if (entry.connectInFlight !== flight) return;
                 entry.connectInFlight = null;
-            }
+            });
+            const flight = { result, controller };
+            entry.connectInFlight = flight;
         }
+        // Dialing belongs to the retained entry. One logical waiter's expiry
+        // cannot shorten another waiter's budget or disconnect their transport.
+        const connection = entry.connectInFlight;
+        const signal = connection.controller.signal;
+        await new Promise<void>((resolve, reject) => {
+            let settled = false;
+            const settle = (error?: unknown) => {
+                if (settled) return;
+                settled = true;
+                cancelTimer();
+                signal.removeEventListener('abort', onAbort);
+                if (error !== undefined) reject(error);
+                else resolve();
+            };
+            const onAbort = () => settle(signal.reason);
+            const cancelTimer = armDeadlineTimer(Date.now() + Math.max(0, deadlineAt - deps.now()), () => settle(timeoutError()));
+            signal.addEventListener('abort', onAbort, { once: true });
+            if (signal.aborted) onAbort();
+            void connection.result.then(() => settle(), (error: unknown) => settle(error));
+        });
     };
 
     const acquire = async (params: ScopedSocketConnectParams): Promise<ScopedSocketClient> => {
@@ -408,6 +440,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
         const homeCarrier = params.homeCarrier ?? null;
         const releaseCarrier = params.releaseCarrier ?? null;
         const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS;
+        const deadlineAt = deps.now() + timeoutMs;
         if (!serverUrl) {
             throw new Error('Missing server URL');
         }
@@ -468,13 +501,14 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
         };
 
         try {
-            await ensureConnected(entry, timeoutMs);
+            await ensureConnected(entry, deadlineAt);
         } catch (error) {
             releaseOnce();
             throw error;
         }
 
         return {
+            get connected() { return entry.socket.connected; },
             emitWithAck: (event: string, payload: any) => entry.socket.emitWithAck(event, payload),
             timeout: (ms: number) => entry.socket.timeout(ms),
             emit: (event: string, payload: any) => entry.socket.emit(event, payload),

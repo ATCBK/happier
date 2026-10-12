@@ -1,10 +1,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { installSessionOpsNetworkBoundary, type SessionOpsRpcRequest } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 
 const boundary = await installSessionOpsNetworkBoundary();
-const { socketRpcCodec } = await import('@happier-dev/sync-client');
+const { socketRpcCodec, readRpcRequestDisposition } = await import('@happier-dev/sync-client');
 const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
 await loadSyncSingletonForTests();
 const { Encryption } = await import('@/sync/encryption/encryption');
@@ -14,6 +14,13 @@ const { serverScopedRpcSocketPool } = await import('./serverScopedRpcSocketPool'
 const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
 const { resetRunnerCreatorMachineContentKeyTrustProjectionForTests } = await import('@/sync/domains/ephemeralRunner/runnerCreatorMachineContentKeyTrust');
 const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
+const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { fetchMachineDoctorSnapshot } = await import('@/components/machines/doctorSnapshot/readMachineDoctorSnapshot');
+const {
+    clearMachineRequestReachabilityForTest,
+    readMachineRequestReachabilityObservation,
+    recordMachineRequestFailed,
+} = await import('@/sync/domains/machines/reachability/machineReachability');
 
 // The remote Machine owns the same synthetic legacy Account key as the client.
 // Both sides use the real cipher and the current request/response binding codec.
@@ -29,12 +36,45 @@ async function decodeRequest(request: SessionOpsRpcRequest) {
     return await socketRpcCodec.decodeRequestParams(content, request.payload, `${request.targetId}:${request.method}`);
 }
 
+async function enableDirectRoute(method: string) {
+    const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+    const { getStorage } = await import('@/sync/domains/state/storageStore');
+    const endpoint = { v: 1, routeKind: 'loopback_direct', url: 'http://127.0.0.1:3000/',
+        endpointFingerprint: 'r16-endpoint', expiresAt: Date.now() + 300_000 };
+    const machine = createMachineFixture({ daemonState: { peerMediation: { loopback: { endpoint } } } });
+    getStorage().setState({ machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] } });
+    boundary.setHttpResponder(async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/v1/features') return Response.json({ features: { machines: {
+            enabled: true, rpc: { enabled: true, directPeer: { enabled: true } },
+        } }, capabilities: {} });
+        if (url.pathname === '/v1/machines/peer/mediation/route-grants') {
+            const request = JSON.parse(String(init?.body));
+            const now = Date.now();
+            return Response.json({ ok: true, grant: { payload: {
+                v: 2, grantId: 'r16-grant', accountId: 'account-a', machineId: 'machine-1',
+                flowKind: 'machine_rpc', routeKind: 'loopback_direct', scope: request.scope,
+                iat: now, exp: now + 300_000, aud: 'happier-daemon-route-grant',
+                endpointFingerprint: endpoint.endpointFingerprint, proofKind: 'ephemeral_ed25519',
+                ephemeralPublicKeyBase64Url: request.ephemeralPublicKeyBase64Url,
+            }, signature: { keyId: 'r16-key', alg: 'Ed25519',
+                valueBase64Url: Buffer.from(new Uint8Array(64).fill(2)).toString('base64url') } } });
+        }
+        return url.pathname === '/v1/machines/machine-1'
+            ? Response.json({ machine: { id: 'machine-1', dataEncryptionKey: null } }) : null;
+    });
+    return machineRpcWithServerScope({ serverId: home.id, machineId: 'machine-1', method,
+        payload: { command: 'close' }, timeoutMs: 10_000 });
+}
+
 afterAll(() => boundary.dispose());
 
 describe('machineRpcWithServerScope (scoped encrypted network)', () => {
     beforeEach(async () => {
+        clearMachineRequestReachabilityForTest();
         boundary.resetRequests();
         resetScopedMachineTransportCacheForTests();
+        resetServerFeaturesClientForTests();
         resetRunnerCreatorMachineContentKeyTrustProjectionForTests();
         home = await boundary.addHome('https://server-a.example.test', 'account-a');
         // Credential storage is the genuine device boundary; context, custody,
@@ -52,8 +92,166 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
     });
 
     afterEach(async () => {
+        vi.unstubAllGlobals();
         await serverScopedRpcSocketPool.stopAll();
         await resetServerReachabilitySupervisors();
+    });
+
+    it('records a successful reply under the captured credential Account after credentials change', async () => {
+        const issued = createDeferred<void>();
+        const reply = createDeferred<void>();
+        const originalScope = { serverId: home.id, accountId: 'account-a' };
+        const nextScope = { serverId: home.id, accountId: 'account-b' };
+        recordMachineRequestFailed({ ...originalScope, machineId: 'machine-1' });
+        recordMachineRequestFailed({ ...nextScope, machineId: 'machine-1' });
+        boundary.setRpcAckResponder(async (request) => {
+            const decoded = await decodeRequest(request);
+            issued.resolve();
+            await reply.promise;
+            return { ok: true, result: await socketRpcCodec.encodeResponse(content, { ok: true }, decoded.callId) };
+        });
+        const pending = machineRpcWithServerScope({ serverId: home.id, machineId: 'machine-1',
+            method: 'method-test', payload: {}, preferScoped: true });
+        await issued.promise;
+        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValue({
+            token: `header.${Buffer.from(JSON.stringify({ sub: 'account-b' })).toString('base64url')}.signature`,
+            secret: Buffer.from(secret).toString('base64url'),
+        });
+        reply.resolve();
+        await expect(pending).resolves.toEqual({ ok: true });
+        expect(readMachineRequestReachabilityObservation(originalScope, 'machine-1')).toMatchObject({ outcome: 'succeeded' });
+        expect(readMachineRequestReachabilityObservation(nextScope, 'machine-1')).toMatchObject({ outcome: 'failed' });
+    });
+
+    it('records no-reply failure only after the caller deadline expires', async () => {
+        const issued = createDeferred<void>();
+        const reply = createDeferred<void>();
+        boundary.setRpcAckResponder(async () => {
+            issued.resolve();
+            await reply.promise;
+            return { ok: false, error: 'Unavailable' };
+        });
+        vi.useFakeTimers();
+        try {
+            const pending = machineRpcWithServerScope({ serverId: home.id, machineId: 'machine-1',
+                method: 'method-test', payload: {}, preferScoped: true, timeoutMs: 1_000 })
+                .catch((error: unknown) => error);
+            await issued.promise;
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(await pending).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
+            expect(readMachineRequestReachabilityObservation({ serverId: home.id, accountId: 'account-a' }, 'machine-1'))
+                .toMatchObject({ outcome: 'failed' });
+        } finally {
+            reply.resolve();
+            vi.useRealTimers();
+        }
+    });
+
+    it('does not poison reachability when an inner transport timeout precedes the caller deadline', async () => {
+        boundary.setRpcAckResponder(async () => {
+            throw Object.assign(new Error('Inner phase timed out'), { code: 'MACHINE_RPC_TIMEOUT' });
+        });
+        const error = await machineRpcWithServerScope({ serverId: home.id, machineId: 'machine-1',
+            method: 'method-test', payload: {}, preferScoped: true, timeoutMs: 10_000 }).catch((error: unknown) => error);
+        expect(error).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
+        expect(readMachineRequestReachabilityObservation({ serverId: home.id, accountId: 'account-a' }, 'machine-1')).toBeNull();
+    });
+
+    it('does not mark an answering direct daemon unreachable while its HTTP reply is being decoded', async () => {
+        const answered = createDeferred<void>();
+        const body = createDeferred<unknown>();
+        const response = Response.json({});
+        // Response is the HTTP boundary; route selection and timeout accounting remain real.
+        vi.spyOn(response, 'json').mockImplementation(() => body.promise);
+        vi.stubGlobal('fetch', async () => { answered.resolve(); return response; });
+        vi.useFakeTimers();
+        try {
+            const pending = enableDirectRoute(RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH)
+                .catch((error: unknown) => error);
+            await answered.promise;
+            await vi.advanceTimersByTimeAsync(10_000);
+            expect(await pending).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
+            expect(readMachineRequestReachabilityObservation({ serverId: home.id, accountId: 'account-a' }, 'machine-1')).toBeNull();
+        } finally {
+            body.resolve({});
+            vi.useRealTimers();
+        }
+    });
+
+    it.each([RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH, RPC_METHODS.DAEMON_BROWSER_CONTEXT_DISPATCH])(
+        'does not replay an ambiguous direct effect over a successful relay for %s', async (method) => {
+            let effects = 0;
+            vi.stubGlobal('fetch', async () => { effects++; return Response.json({ unreadableResponse: true }); });
+            boundary.setRpcAckResponder(async (request) => {
+                effects++;
+                const decoded = await decodeRequest(request);
+                return { ok: true, result: await socketRpcCodec.encodeResponse(content, { ok: true }, decoded.callId) };
+            });
+            const error = await enableDirectRoute(method).catch((error: unknown) => error);
+            expect(effects).toBe(1);
+            expect(boundary.requests).toHaveLength(0);
+            expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
+        },
+    );
+
+    it('keeps a sent direct outcome unknown when relay preparation cannot emit', async () => {
+        let directCalls = 0;
+        vi.stubGlobal('fetch', async () => { directCalls++; return Response.json({ unreadableResponse: true }); });
+        boundary.setSocketConfigurator(({ socket }) => {
+            socket.timeout.mockImplementation(() => { throw new Error('R16 relay preparation failure'); });
+        });
+        const error = await enableDirectRoute(RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH).catch((error: unknown) => error);
+        expect(directCalls).toBe(1);
+        expect(boundary.requests).toHaveLength(0);
+        expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
+    });
+
+    it.each(['grant_revoked', 'handler_unavailable'] as const)(
+        'distinguishes the direct %s refusal from an ambiguous handler result', async (reasonCode) => {
+            vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+                const request = JSON.parse(String(init?.body));
+                return Response.json({ v: 2, ok: false, receipt: 'peer.rpc.fell_back_to_server',
+                    requestId: request.requestId, method: request.method, reasonCode });
+            });
+            boundary.setSocketConfigurator(({ socket }) => {
+                socket.timeout.mockImplementation(() => { throw new Error('R16 relay preparation failure'); });
+            });
+            const error = await enableDirectRoute(RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH).catch((error: unknown) => error);
+            expect(boundary.requests).toHaveLength(0);
+            expect(readRpcRequestDisposition(error)).toBe(reasonCode === 'grant_revoked' ? 'notSent' : 'outcomeUnknown');
+        },
+    );
+
+    it('can deliver through the encrypted relay after a bound stale-grant refusal', async () => {
+        vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request = JSON.parse(String(init?.body));
+            return Response.json({ v: 2, ok: false, receipt: 'peer.rpc.fell_back_to_server',
+                requestId: request.requestId, method: request.method, reasonCode: 'grant_revoked' });
+        });
+        boundary.setRpcAckResponder(async (request) => {
+            const decoded = await decodeRequest(request);
+            expect(decoded.params).toEqual({ command: 'close' });
+            return { ok: true, result: await socketRpcCodec.encodeResponse(content, { closed: true }, decoded.callId) };
+        });
+        await expect(enableDirectRoute(RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH)).resolves.toEqual({ closed: true });
+        expect(boundary.requests).toHaveLength(1);
+    });
+
+    it('preserves no-effect unavailable-method rejection when the next relay attempt cannot emit', async () => {
+        boundary.setRpcAckResponder(async () => ({ ok: false, error: 'RPC method not available',
+            errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }));
+        let preparationCalls = 0;
+        boundary.setSocketConfigurator(({ socket }) => {
+            const prepare = socket.timeout.getMockImplementation();
+            socket.timeout.mockImplementation((timeoutMs) => {
+                if (++preparationCalls === 2) throw new Error('R16 retry preparation failure');
+                return prepare?.(timeoutMs) ?? socket;
+            });
+        });
+        const error = await machineRpcWithServerScope({ serverId: home.id, machineId: 'machine-1',
+            method: 'method-test', payload: {}, preferScoped: true, timeoutMs: 10_000 }).catch((error: unknown) => error);
+        expect(boundary.requests).toHaveLength(1);
+        expect(readRpcRequestDisposition(error)).toBe('notSent');
     });
 
     it('retries once when the scoped rpc method is not available', async () => {
@@ -80,6 +278,46 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         ]);
     });
 
+    it('spends one total deadline across an unavailable-method reply, retry delay, and the next RPC', async () => {
+        const firstIssued = createDeferred<void>();
+        const firstReply = createDeferred<void>();
+        const retryIssued = createDeferred<void>();
+        const retryReply = createDeferred<void>();
+        boundary.setRpcAckResponder(async () => {
+            if (boundary.requests.length === 1) {
+                firstIssued.resolve();
+                await firstReply.promise;
+            } else {
+                retryIssued.resolve();
+                await retryReply.promise;
+            }
+            return { ok: false, error: 'Not available', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE };
+        });
+        vi.useFakeTimers();
+        try {
+            const settled = vi.fn();
+            const pending = machineRpcWithServerScope({
+                serverId: home.id, machineId: 'machine-1', method: RPC_METHODS.BUGREPORT_COLLECT_DIAGNOSTICS,
+                payload: {}, timeoutMs: 4_000,
+            }).then(settled, settled);
+            await firstIssued.promise;
+            await vi.advanceTimersByTimeAsync(3_000);
+            firstReply.resolve();
+            await vi.advanceTimersByTimeAsync(250);
+            await retryIssued.promise;
+            await vi.advanceTimersByTimeAsync(749);
+            expect(settled).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(settled).toHaveBeenCalledWith(expect.objectContaining({ code: 'MACHINE_RPC_TIMEOUT', timeoutMs: 4_000 }));
+            expect(readRpcRequestDisposition(settled.mock.calls[0]?.[0])).toBe('outcomeUnknown');
+            await pending;
+        } finally {
+            firstReply.resolve();
+            retryReply.resolve();
+            vi.useRealTimers();
+        }
+    });
+
     it('does not retry a scoped exact machine RPC after the real socket emit is issued', async () => {
         boundary.setRpcAckResponder(async (request) => {
             expect((await decodeRequest(request)).params).toEqual({ value: 1 });
@@ -94,6 +332,116 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
 
         expect(onIssued).toHaveBeenCalledOnce();
         expect(boundary.requests).toHaveLength(1);
+    });
+
+    it('includes real peer-route feature discovery in the server fallback deadline', async () => {
+        const featuresRequested = createDeferred<void>();
+        const featuresReply = createDeferred<void>();
+        const issued = createDeferred<void>();
+        const rpcReply = createDeferred<void>();
+        boundary.setHttpResponder(async (input) => {
+            const url = new URL(String(input));
+            if (url.pathname === '/v1/features') {
+                featuresRequested.resolve();
+                await featuresReply.promise;
+                return Response.json({}, { status: 404 });
+            }
+            return url.pathname === '/v1/machines/machine-1'
+                ? Response.json({ machine: { id: 'machine-1', dataEncryptionKey: null } })
+                : null;
+        });
+        boundary.setRpcAckResponder(async () => {
+            issued.resolve();
+            await rpcReply.promise;
+            return { ok: false, error: 'Unavailable' };
+        });
+        vi.useFakeTimers();
+        try {
+            const settled = vi.fn();
+            const pending = machineRpcWithServerScope({
+                serverId: home.id, machineId: 'machine-1', method: RPC_METHODS.DAEMON_MEMORY_STATUS,
+                payload: {}, timeoutMs: 4_000,
+            }).then(settled, settled);
+            await featuresRequested.promise;
+            await vi.advanceTimersByTimeAsync(3_000);
+            featuresReply.resolve();
+            await issued.promise;
+            await vi.advanceTimersByTimeAsync(999);
+            expect(settled).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(settled).toHaveBeenCalledWith(expect.objectContaining({ code: 'MACHINE_RPC_TIMEOUT', timeoutMs: 4_000 }));
+            await pending;
+        } finally {
+            featuresReply.resolve();
+            rpcReply.resolve();
+            vi.useRealTimers();
+        }
+    });
+
+    it('proves saved Workflow admission was not sent when Machine setup exhausts its budget', async () => {
+        const machineRequested = createDeferred<void>();
+        const machineReply = createDeferred<void>();
+        boundary.setHttpResponder(async (input) => {
+            const url = new URL(String(input));
+            if (url.pathname !== '/v1/machines/machine-1') return null;
+            machineRequested.resolve();
+            await machineReply.promise;
+            return Response.json({ machine: { id: 'machine-1', dataEncryptionKey: null } });
+        });
+        vi.useFakeTimers();
+        try {
+            const { createUiWorkflowActionTransport } = await import('@/sync/ops/actions/workflowActionTransport');
+            const execute = createUiWorkflowActionTransport({
+                account: { serverId: home.id, accountId: 'account-a', assertCurrent: () => {} },
+                resolveFallbackMachineId: () => null,
+                transport: request => machineRpcWithServerScope({ ...request, preferScoped: true, timeoutMs: 4_000 }),
+            });
+            const attempt = execute({ actionId: 'workflow.run.start', input: {
+                runId: '11111111-1111-4111-8111-111111111111',
+                source: { kind: 'saved', definitionId: '22222222-2222-4222-8222-222222222222',
+                    revision: { headerVersion: 1, bodyVersion: 1 } },
+            }, context: { surface: 'ui', authority: 'present_user', serverId: home.id, runtimeAccountId: 'account-a',
+                externalActionTarget: { kind: 'machine', machineId: 'machine-1',
+                    project: { machineId: 'machine-1', directory: '/tmp' } } } }).catch((error: unknown) => error);
+            await machineRequested.promise;
+            await vi.advanceTimersByTimeAsync(4_000);
+            const error = await attempt;
+            expect(error).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
+            expect(boundary.requests).toHaveLength(0);
+            expect(readRpcRequestDisposition(error)).toBe('notSent');
+            machineReply.resolve();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(boundary.requests).toHaveLength(0);
+        } finally {
+            machineReply.resolve();
+            vi.useRealTimers();
+        }
+    });
+
+    it('settles the doctor snapshot with an error once the transport budget is spent, even when the daemon never answers', async () => {
+        const issued = createDeferred<void>();
+        const reply = createDeferred<void>();
+        boundary.setRpcAckResponder(async () => {
+            issued.resolve();
+            await reply.promise;
+            return { ok: false, error: 'Unavailable' };
+        });
+        vi.useFakeTimers();
+        try {
+            const settled = vi.fn();
+            const pending = fetchMachineDoctorSnapshot({
+                serverId: home.id, machineId: 'machine-1', timeoutMs: 4_000,
+            }).then(settled);
+            await issued.promise;
+            await vi.advanceTimersByTimeAsync(3_999);
+            expect(settled).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            await pending;
+            expect(settled).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+        } finally {
+            reply.resolve();
+            vi.useRealTimers();
+        }
     });
 
     it('decrypts a scoped E2EE observation after its caller-owned wait without an expired setup budget', async () => {

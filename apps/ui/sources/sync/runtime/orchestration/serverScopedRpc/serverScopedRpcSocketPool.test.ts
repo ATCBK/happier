@@ -193,7 +193,7 @@ describe('serverScopedRpcSocketPool', () => {
     it('passes the selected browser carrier to reachability before probing an ingress-less canonical URL', async () => {
         const { socket } = createFakeSocket();
         const homeCarrier = createFakeHomeCarrier('browser-endpoint');
-        let observedReachability: Readonly<{ serverUrl: string; token: string; timeoutMs: number; homeCarrier?: HomeCarrier | null }> | null = null;
+        let observedReachability: Readonly<{ serverUrl: string; token: string; signal?: AbortSignal; homeCarrier?: HomeCarrier | null }> | null = null;
         const pool = createServerScopedRpcSocketPool({
             createSocket: () => socket,
             reachability: {
@@ -221,7 +221,7 @@ describe('serverScopedRpcSocketPool', () => {
         expect(observedReachability).toMatchObject({
             serverUrl: 'https://home.invalid',
             token: 'token-browser',
-            timeoutMs: 1_000,
+            signal: expect.any(AbortSignal),
             homeCarrier,
         });
         client.disconnect();

@@ -3,6 +3,22 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
+/** An exact Home request keeps its own credentials, independently of the active Home. */
+export async function runWithHomeCredentialRequestSignal<TResult>(
+    serverId: string,
+    operation: (signal: AbortSignal) => Promise<TResult>,
+): Promise<TResult> {
+    const controller = new AbortController();
+    const unsubscribe = subscribeHomeCredentialMutations(event => {
+        if (areServerProfileIdentifiersEquivalent(event.serverId, serverId)) controller.abort();
+    });
+    try {
+        return await operation(controller.signal);
+    } finally {
+        unsubscribe();
+    }
+}
+
 /**
  * The currentness fence every exact-Account Session transport captures around one
  * operation.
@@ -33,26 +49,27 @@ export async function runWithServerAccountScopeRequestGuard<TResult>(
     }>,
     operation: (guard: ServerAccountScopeRequestGuard) => Promise<TResult>,
 ): Promise<TResult> {
-    const lifetime = captureActiveServerAccountScopeLifetime();
-    const controller = new AbortController();
-    const abort = () => controller.abort();
-    const retirement = lifetime?.onRetire(abort);
-    const unsubscribe = subscribeHomeCredentialMutations(event => {
-        if (areServerProfileIdentifiersEquivalent(event.serverId, params.scope.serverId)) abort();
+    return await runWithHomeCredentialRequestSignal(params.scope.serverId, async (credentialSignal) => {
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        const retirement = lifetime?.onRetire(abort);
+        credentialSignal.addEventListener('abort', abort, { once: true });
+        if (credentialSignal.aborted) abort();
+        params.signal?.addEventListener('abort', abort, { once: true });
+        if (params.signal?.aborted) abort();
+        const isCurrent = () => !controller.signal.aborted
+            && params.isCurrent?.() !== false
+            && lifetime?.isCurrent() !== false;
+        const check = () => {
+            if (!isCurrent()) throw params.staleError();
+        };
+        try {
+            return await operation({ signal: controller.signal, isCurrent, check });
+        } finally {
+            retirement?.dispose();
+            credentialSignal.removeEventListener('abort', abort);
+            params.signal?.removeEventListener('abort', abort);
+        }
     });
-    params.signal?.addEventListener('abort', abort, { once: true });
-    if (params.signal?.aborted) abort();
-    const isCurrent = () => !controller.signal.aborted
-        && params.isCurrent?.() !== false
-        && lifetime?.isCurrent() !== false;
-    const check = () => {
-        if (!isCurrent()) throw params.staleError();
-    };
-    try {
-        return await operation({ signal: controller.signal, isCurrent, check });
-    } finally {
-        retirement?.dispose();
-        unsubscribe();
-        params.signal?.removeEventListener('abort', abort);
-    }
 }

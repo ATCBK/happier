@@ -761,6 +761,11 @@ export function plannedChangesAffectProfileCatalog(planned: PlannedChangeActions
         || planned.changes.some(change => change.kind === 'account' && isProfileCatalogAccountChangeEntityIdV1(change.entityId));
 }
 
+/** Usage observes opened Machine inputs directly; their durable wakes are not accounting writes. */
+export function plannedChangesAffectUsageQuery(planned: PlannedChangeActions): boolean {
+    return planned.changes.some(change => change.kind !== 'machine');
+}
+
 function plannedChangesAffectEverySessionListQuery(planned: PlannedChangeActions): boolean {
     if (planned.invalidate.sessions) return true;
     if (

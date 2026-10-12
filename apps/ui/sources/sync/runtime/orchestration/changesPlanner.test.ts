@@ -15,6 +15,7 @@ import {
     classifyChangeForCheckpoint,
     planSyncActionsFromChanges,
     plannedChangesAffectSessionListQuery,
+    plannedChangesAffectUsageQuery,
 } from './changesPlanner';
 import type { ApiChangeEntry } from '@/sync/api/types/apiTypes';
 import { buildProfilePhysicalKey, PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, PROFILE_TRANSFER_ACCOUNT_KV_KEY } from '@happier-dev/protocol/profiles/profileRecordV1';
@@ -219,6 +220,16 @@ describe('planSyncActionsFromChanges', () => {
         expect(planned.workflowRunIdsToRefresh).toEqual(['run-42']);
         expect(planned.invalidate.settings).toBe(false);
         expect(planned.invalidate.profile).toBe(false);
+    });
+
+    it('leaves Machine-only Usage freshness to opened store inputs without suppressing accounting or Session evidence', () => {
+        const machine = buildChange({ cursor: 1, kind: 'machine', entityId: 'machine-a' });
+        expect(plannedChangesAffectUsageQuery(planSyncActionsFromChanges([machine]))).toBe(false);
+        for (const change of [
+            buildChange({ cursor: 2, kind: 'account', entityId: 'provider-account-usage' }),
+            buildChange({ cursor: 3, kind: 'account', entityId: 'self', hint: { settingsVersion: 8 } }),
+            buildChange({ cursor: 4, kind: 'session', entityId: 'session-a' }),
+        ]) expect(plannedChangesAffectUsageQuery(planSyncActionsFromChanges([machine, change]))).toBe(true);
     });
 
     it('routes Saved Secret AccountChange through the catalog materialization owner', () => {

@@ -8,10 +8,8 @@ import type { Metadata } from '@happier-dev/session-core/state';
 /**
  * How long an unqualified server-scoped RPC operation may stay in flight.
  *
- * This is the ceiling every caller inherits when it does not name its own, so
- * it is also the point past which an unsettled daemon call is stuck rather
- * than slow. Consumers that must decide how long to keep waiting on a daemon
- * round-trip derive their bound from this value instead of restating it.
+ * Applies when the caller does not name a duration. Explicit finite deadlines
+ * and caller-owned operation waits remain owned by the caller.
  */
 export const DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS = 30_000;
 
@@ -24,13 +22,13 @@ export type ServerScopedMachineRpcParams<A> = Readonly<{
     serverId?: string | null;
     /** When present, scoped credentials must resolve to this exact Account. */
     accountId?: string | null;
+    /** Total RPC budget, including route discovery, setup, fallback and retries. */
     timeoutMs?: number;
     /** Caller cancellation owns the admitted operation; connection setup remains bounded. */
     operationTimeoutMs?: null;
     preferScoped?: boolean;
     /** Account key material requires Machine encryption or the private installed-key sealed carrier. */
     requireEncryptedPayload?: true;
-    skipTransferPolicyEvaluation?: boolean;
     authorization?: SocketRpcAuthorizationContext;
     signal?: AbortSignal;
     /** Exact-action issuance hook, invoked immediately before the real socket emit. */
@@ -143,6 +141,8 @@ export type ScopedSocketConnectParams = Readonly<{
 }>;
 
 export type ScopedSocketClient = Readonly<{
+    /** Current physical transport readiness, not the logical holder's retention. */
+    connected?: boolean;
     emitWithAck?: (event: string, payload: any) => Promise<unknown>;
     timeout: (ms: number) => { emitWithAck: (event: string, payload: any) => Promise<unknown> };
     emit: (event: string, payload: any) => void;

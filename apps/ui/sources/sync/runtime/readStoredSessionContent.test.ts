@@ -3,6 +3,22 @@ import { describe, it, expect } from 'vitest';
 import { readStoredSessionMessage, readStoredSessionRawRecord } from './readStoredSessionContent';
 
 describe('readStoredSessionRawRecord', () => {
+    it.each(['plain', 'encrypted'] as const)('projects retained nested Agent event fields from stored content (%s)', async kind => {
+        const raw = { role: 'agent', retired: true, content: { type: 'event', id: 'event-a', retired: true,
+            data: { type: 'runtime-config-outcome', runtime: 'codex', status: 'applied', message: 'Updated',
+                changes: [{ key: 'model', effective: 'current', retired: true }] } } };
+        const content = kind === 'plain' ? { t: 'plain', v: raw } : { t: 'encrypted', c: JSON.stringify(raw) };
+        await expect(readStoredSessionRawRecord({ content,
+            decryptEncrypted: ciphertext => JSON.parse(ciphertext) as unknown,
+        })).resolves.toMatchObject({ role: 'agent', content: { type: 'event', data: {
+            type: 'runtime-config-outcome', changes: [{ key: 'model', effective: 'current' }],
+        } } });
+        const parsed = await readStoredSessionRawRecord({ content,
+            decryptEncrypted: ciphertext => JSON.parse(ciphertext) as unknown });
+        expect(parsed).not.toHaveProperty('content.data.changes.0.retired');
+        await expect(readStoredSessionRawRecord({ content: { t: 'plain', v: { ...raw, content: { ...raw.content,
+            data: { ...raw.content.data, status: 'invalid-status' } } } } })).resolves.toBeNull();
+    });
     it('exposes witnessed accepted delivery only from matching plain Session content', async () => {
         const facts = { v: 1, acceptedAtMs: 1234, delivery: { kind: 'newTurn', turnId: 'turn-1' } } as const;
         const message = { id: 'accepted-plain', seq: 1, localId: 'input-1', createdAt: 1, updatedAt: 1,
@@ -10,6 +26,22 @@ describe('readStoredSessionRawRecord', () => {
             deliveryResolution: { v: 1, kind: 'provider_accepted', content: { t: 'plain', v: facts } },
         } as const;
         expect((await readStoredSessionMessage({ message, sessionEncryptionMode: 'plain' }))?.acceptedDelivery).toEqual(facts);
+        const retainedResolution = {
+            ...message.deliveryResolution,
+            retiredResolution: true,
+            content: { ...message.deliveryResolution.content, retiredEnvelope: true, v: {
+                ...facts, retiredFacts: true,
+                delivery: { ...facts.delivery, retiredDelivery: true },
+            } },
+        };
+        expect((await readStoredSessionMessage({
+            message: { ...message, deliveryResolution: retainedResolution }, sessionEncryptionMode: 'plain',
+        }))?.acceptedDelivery).toEqual(facts);
+        expect((await readStoredSessionMessage({
+            message: { ...message, deliveryResolution: { ...retainedResolution, content: {
+                ...retainedResolution.content, v: { ...retainedResolution.content.v, acceptedAtMs: -1 },
+            } } }, sessionEncryptionMode: 'plain',
+        }))?.acceptedDelivery).toBeUndefined();
         expect((await readStoredSessionMessage({ message: { ...message, deliveryResolution: {
             v: 1, kind: 'provider_accepted', content: { t: 'encrypted', c: 'opaque-facts' },
         } }, sessionEncryptionMode: 'plain' }))?.acceptedDelivery).toBeUndefined();
