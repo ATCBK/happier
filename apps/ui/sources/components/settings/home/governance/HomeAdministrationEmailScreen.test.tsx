@@ -21,7 +21,6 @@ import {
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -44,6 +43,7 @@ installSettingsViewCommonModuleMocks({
 // schemas, the registry codec and the page's form logic are the production ones.
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const SETTINGS_GET = '/v1/home/settings/get';
@@ -130,7 +130,9 @@ describe('HomeAdministrationEmailScreen', () => {
         });
 
         const screen = await renderEmail(home);
-        expect(screen.findByTestId('home-email-save')?.props.disabled).toBe(true);
+        // Nothing to save at rest: the Save row appears with an edit and leaves with it.
+        expect(screen.findByTestId('home-email-save')).toBeNull();
+        expect(screen.findByTestId('home-email-cancel')).toBeNull();
         // Links name the host they open at, from the mail owner's readiness answer.
         expect(textUnder(screen.findByTestId('home-email-status-links'))).toContain('homeGovernance.email.linksOpenAt(host=app.example.com)');
 
@@ -190,7 +192,7 @@ describe('HomeAdministrationEmailScreen', () => {
         await act(async () => {
             await screen.pressByTestIdAsync('home-email-save');
         });
-        await waitForHomeGovernance(() => expect(screen.findByTestId('home-email-save')?.props.disabled).toBe(true));
+        await waitForHomeGovernance(() => expect(screen.findByTestId('home-email-save')).toBeNull());
         vi.mocked(Modal.alert).mockClear();
         const leave = vi.fn();
         await act(async () => { await runGuardedNavigation(leave); });

@@ -10,13 +10,15 @@ import {
 } from '@happier-dev/protocol/home/governance';
 
 import type { SettingRef } from '@/components/settings/catalog/settingDeclarations';
+import { SCHEMA_FIELD_INPUT_STYLE, SchemaFieldValueSlot } from '@/components/settings/schemaFields/SchemaFieldRow';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { ItemLoadStateRows, type ItemLoadState } from '@/components/ui/lists/ItemLoadStateRows';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -60,6 +62,7 @@ type TestState =
     | Readonly<{ kind: 'refused'; failure: HomeDomainFailure }>;
 
 const IDLE: TestState = Object.freeze({ kind: 'idle' as const });
+const LOADING: ItemLoadState = Object.freeze({ kind: 'loading' as const });
 
 function securityLabel(secure: boolean): string {
     return secure ? t('homeGovernance.email.tls') : t('homeGovernance.email.starttls');
@@ -195,17 +198,19 @@ const EmailPortRow = React.memo(function EmailPortRow(props: Readonly<{
                 rightElement={(
                     <View style={styles.inlineControls}>
                         {portEditable ? (
-                            <FieldTextInput
-                                testID="home-email-port-input"
-                                accessibilityLabel={t('homeGovernance.email.port')}
-                                value={props.portText ?? portValue}
-                                placeholder={defaultPort(secureValue)}
-                                editable={!props.disabled}
-                                keyboardType="number-pad"
-                                error={props.error ? t(props.error) : null}
-                                onChangeText={handlePort}
-                                style={styles.portField}
-                            />
+                            <SchemaFieldValueSlot kind="number">
+                                <FieldTextInput
+                                    testID="home-email-port-input"
+                                    accessibilityLabel={t('homeGovernance.email.port')}
+                                    value={props.portText ?? portValue}
+                                    placeholder={defaultPort(secureValue)}
+                                    editable={!props.disabled}
+                                    keyboardType="number-pad"
+                                    error={props.error ? t(props.error) : null}
+                                    onChangeText={handlePort}
+                                    style={SCHEMA_FIELD_INPUT_STYLE}
+                                />
+                            </SchemaFieldValueSlot>
                         ) : null}
                         <SegmentedTabBar<'tls' | 'starttls'>
                             role="radiogroup"
@@ -215,7 +220,6 @@ const EmailPortRow = React.memo(function EmailPortRow(props: Readonly<{
                             ]}
                             activeTabId={secureValue ? 'tls' : 'starttls'}
                             onSelectTab={handleSecure}
-                            slidingThumb
                             segmentSizing="content"
                             disabled={!secureEditable || props.disabled}
                             accessibilityLabel={t('homeGovernance.email.security')}
@@ -358,34 +362,35 @@ const EmailTestSection = React.memo(function EmailTestSection(props: Readonly<{
                     )}
                 />
             </SettingAnchor>
+            {/* The answer sits under the field that asked, in the shared line state: its glyph carries the outcome. */}
             {state.kind === 'answered' && state.result.status === 'sent' ? (
-                <Item
+                <SurfaceStateCard
                     testID="home-email-test-sent"
+                    size="line"
+                    kind="success"
+                    accessibilitySemantics="status"
                     title={t('homeGovernance.email.testSent', { to: state.to })}
-                    subtitle={t('homeGovernance.email.testSentDetail')}
-                    accessibilityLiveRegion="polite"
-                    mode="info"
-                    showChevron={false}
+                    reason={t('homeGovernance.email.testSentDetail')}
                 />
             ) : null}
             {state.kind === 'answered' && state.result.status === 'failed' ? (
-                <Item
+                <SurfaceStateCard
                     testID={`home-email-test-failed:${state.result.reason}`}
+                    size="line"
+                    kind="error"
+                    accessibilitySemantics="alert"
                     title={t('homeGovernance.email.testFailed')}
-                    subtitle={testFailureLabel(state.result.reason)}
-                    accessibilityLiveRegion="polite"
-                    mode="info"
-                    showChevron={false}
+                    reason={testFailureLabel(state.result.reason)}
                 />
             ) : null}
             {state.kind === 'refused' ? (
-                <Item
+                <SurfaceStateCard
                     testID="home-email-test-refused"
+                    size="line"
+                    kind="error"
+                    accessibilitySemantics="alert"
                     title={t('homeGovernance.email.testFailed')}
-                    subtitle={homeGovernanceFailureNotice(state.failure).body}
-                    accessibilityLiveRegion="polite"
-                    mode="info"
-                    showChevron={false}
+                    reason={homeGovernanceFailureNotice(state.failure).body}
                 />
             ) : null}
         </ItemGroup>
@@ -492,8 +497,9 @@ const EmailPage = React.memo(function EmailPage(props: Readonly<{ context: HomeA
 
     if (!canView) {
         return (
-            <ItemGroup description={t('homeGovernance.forbiddenBody')}>
-                <Item testID="home-email-forbidden" title={t('homeGovernance.forbiddenTitle')} mode="info" showChevron={false} />
+            <ItemGroup>
+                <SurfaceStateCard testID="home-email-forbidden" kind="denied" size="line"
+                    title={t('homeGovernance.forbiddenTitle')} reason={t('homeGovernance.forbiddenBody')} />
             </ItemGroup>
         );
     }
@@ -501,19 +507,19 @@ const EmailPage = React.memo(function EmailPage(props: Readonly<{ context: HomeA
     if (!mail.settings) {
         if (mail.failure) {
             return (
-                <ItemGroup description={t('homeGovernance.email.loadFailed')}>
-                    <Item
-                        testID="home-email-retry"
-                        title={t('homeGovernance.retry')}
-                        onPress={mail.reload}
-                        showChevron={false}
-                    />
-                </ItemGroup>
+                <SurfaceStateCard
+                    testID="home-email-error"
+                    kind="error"
+                    title={t('homeGovernance.email.loadFailed')}
+                    reason={homeGovernanceFailureNotice(mail.failure, { effect: 'read' }).body}
+                    action={{ testID: 'home-email-retry', label: t('homeGovernance.retry'), onPress: mail.reload }}
+                />
             );
         }
+        // The mail server rows are reserved in their final shape, so nothing moves when they land.
         return (
             <ItemGroup>
-                <Item testID="home-email-loading" title={t('homeGovernance.loading')} loading mode="info" showChevron={false} />
+                <ItemLoadStateRows testID="home-email-loading" state={LOADING} rows={4} lines={1} accessibilityLabel={t('homeGovernance.email.title')} />
             </ItemGroup>
         );
     }
@@ -626,28 +632,27 @@ const EmailPage = React.memo(function EmailPage(props: Readonly<{ context: HomeA
                 {textRow('fromName', HOME_EMAIL_SETTINGS.settings.fromName, t('homeGovernance.email.fromName'))}
             </ItemGroup>
 
-            {anyEditable ? (
+            {/* Save appears with an edit and leaves with it; at rest the page ends on its sections. */}
+            {anyEditable && (unsaved || saving) ? (
                 <ItemGroup surface="none">
-                    <SectionContentRow>
-                        <View style={styles.formActions}>
-                            <RoundButton
-                                testID="home-email-cancel"
-                                size="small"
-                                display="inverted"
-                                title={t('common.cancel')}
-                                disabled={!unsaved || saving}
-                                onPress={cancel}
-                            />
-                            <RoundButton
-                                testID="home-email-save"
-                                size="small"
-                                title={t('common.save')}
-                                loading={saving}
-                                disabled={!unsaved || disabled}
-                                onPress={() => { void save(); }}
-                            />
-                        </View>
-                    </SectionContentRow>
+                    <SectionButtonRow>
+                        <RoundButton
+                            testID="home-email-cancel"
+                            size="small"
+                            display="inverted"
+                            title={t('common.discard')}
+                            disabled={!unsaved || saving}
+                            onPress={cancel}
+                        />
+                        <RoundButton
+                            testID="home-email-save"
+                            size="small"
+                            title={t('common.save')}
+                            loading={saving}
+                            disabled={!unsaved || disabled}
+                            onPress={() => { void save(); }}
+                        />
+                    </SectionButtonRow>
                 </ItemGroup>
             ) : null}
 
@@ -684,17 +689,9 @@ const styles = StyleSheet.create(() => ({
         gap: 8,
         flexShrink: 1,
     },
-    portField: {
-        width: 88,
-    },
     grow: {
         flexGrow: 1,
         flexShrink: 1,
         minWidth: 160,
-    },
-    formActions: {
-        flexDirection: 'row',
-        justifyContent: 'flex-end',
-        gap: 8,
     },
 }));
