@@ -217,6 +217,32 @@ describe('VirtualizedList web DOM integration', () => {
         expect(state.sizeAtIndex(0)).toBe(62);
     });
 
+    it('counts content padding inside the content container\'s full-height minimum, so a short list never scrolls', async () => {
+        await act(async () => {
+            root.render(
+                <div id="virtualized-list-host" style={{ display: 'flex', flexDirection: 'column', height: 400 }}>
+                    <VirtualizedList
+                        backendPreference="legend"
+                        data={[{ id: 'only' }]}
+                        estimatedItemSize={56}
+                        getFixedItemSize={() => 56}
+                        contentContainerStyle={{ paddingBottom: 16 }}
+                        keyExtractor={(item) => item.id}
+                        recycleItems={false}
+                        renderItem={({ item }) => <div data-row-height="56">{item.id}</div>}
+                    />
+                </div>,
+            );
+        });
+        await flushLegendWork();
+
+        const content = container.querySelector<HTMLElement>('.legend-list-content-container');
+        expect(content).not.toBeNull();
+        // Legend sizes this plain element `min-height: 100%`; content-box would add the padding on top of
+        // the viewport and leave a short rail scrollable by exactly its padding.
+        expect(window.getComputedStyle(content!).boxSizing).toBe('border-box');
+    });
+
     it.each(['standalone', 'collection-rail'] as const)('fills a bounded %s host and mounts only a virtualized window', async (surface) => {
         const rows = Array.from({ length: 500 }, (_value, index): Row => ({
             id: `row-${index}`,

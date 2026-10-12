@@ -37,6 +37,10 @@ function resolveLegendWebContentStyle(style: ViewStyle): React.CSSProperties | u
             if (Number.isFinite(pixels)) inlineStyle[property] = pixels;
         }
     }
+    // Legend sizes this plain element `min-height: 100%`. Content-box would add the padding on top of
+    // the viewport, so a list shorter than its viewport could still scroll by exactly its padding and
+    // push its first row under the header. Border-box is what a native ScrollView content container means.
+    inlineStyle.boxSizing = 'border-box';
     return inlineStyle;
 }
 

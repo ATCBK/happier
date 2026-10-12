@@ -116,8 +116,9 @@ export function useScrollEdgeFades(params: UseScrollEdgeFadesParams) {
         recompute();
     }, [recompute]);
 
-    const onScroll = React.useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
-        const ne = e?.nativeEvent;
+    const onScroll = React.useCallback((e: Readonly<{ nativeEvent: unknown }>) => {
+        // Native ScrollView supplies this platform payload; portable callbacks omit synthetic-event metadata.
+        const ne = e?.nativeEvent as NativeScrollEvent | undefined;
         if (!ne) return;
 
         const x = ne.contentOffset?.x ?? 0;
@@ -165,4 +166,3 @@ export function useScrollEdgeFades(params: UseScrollEdgeFadesParams) {
         onMomentumScrollEnd,
     } as const;
 }
-

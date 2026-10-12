@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View, type ViewStyle } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import Color from 'color';
+import { parseThemeColor } from '@/theme/parseThemeColor';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
 export type ScrollEdgeFadeVisibility = Readonly<{
@@ -26,11 +26,7 @@ export function ScrollEdgeFades(props: {
     const fadeColor = paintColor(props.color, 'transparent');
 
     const transparent = React.useMemo(() => {
-        try {
-            return Color(props.color).alpha(0).rgb().string();
-        } catch {
-            return 'transparent';
-        }
+        return parseThemeColor(props.color)?.alpha(0).rgb().string() ?? 'transparent';
     }, [props.color]);
 
     if (!edges.top && !edges.bottom && !edges.left && !edges.right) return null;

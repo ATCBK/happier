@@ -38,4 +38,13 @@ describe('ScrollEdgeIndicators', () => {
 
         expect(collectUnexpectedRawTextNodes(screen.tree.toJSON())).toEqual([]);
     });
+
+    it('shows an edge that appears after the first measurement without changing its hook order', async () => {
+        const { ScrollEdgeIndicators } = await import('./ScrollEdgeIndicators');
+        const { act } = await import('react-test-renderer');
+        const screen = await renderScreen(<ScrollEdgeIndicators edges={{}} color="#999" />);
+        expect(screen.tree.toJSON()).toBeNull();
+        await act(async () => { screen.tree.update(<ScrollEdgeIndicators edges={{ right: true }} color="#999" />); });
+        expect(screen.tree.toJSON()).not.toBeNull();
+    });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveVerticalScrollEdgeMaskStyle } from './resolveScrollEdgeMaskStyle';
+import { resolveHorizontalScrollEdgeMaskStyle, resolveVerticalScrollEdgeMaskStyle } from './resolveScrollEdgeMaskStyle';
 
 describe('resolveVerticalScrollEdgeMaskStyle', () => {
     it('does not apply a mask when no vertical edge is visible', () => {
@@ -50,5 +50,16 @@ describe('resolveVerticalScrollEdgeMaskStyle', () => {
         expect(style?.maskImage).toBe(
             'linear-gradient(to bottom, transparent 0px, black 14px, black calc(100% - 14px), transparent 100%)',
         );
+    });
+});
+
+describe('resolveHorizontalScrollEdgeMaskStyle', () => {
+    it('fades the trailing edge of a rail with more chips to the right, and nothing when it fits', () => {
+        expect(resolveHorizontalScrollEdgeMaskStyle({ top: false, bottom: false, left: false, right: false })).toBeNull();
+        const style = resolveHorizontalScrollEdgeMaskStyle({ top: false, bottom: false, left: false, right: true }, { fadeSize: 24 });
+        expect(style?.maskImage).toContain('to right');
+        expect(style?.maskImage).toContain('black calc(100% - 24px)');
+        expect(style?.maskImage).toContain('transparent 100%');
+        expect(style?.maskImage).toContain('black 0px');
     });
 });

@@ -25,11 +25,13 @@ export function ScrollEdgeIndicators(props: {
     const size = typeof props.size === 'number' ? props.size : 14;
     const opacity = typeof props.opacity === 'number' ? props.opacity : 0.35;
 
-    if (!edges.top && !edges.bottom && !edges.left && !edges.right) return null;
-
+    // Hooks run before the empty-edges return: edges appear after the first measurement, and a hook
+    // that only runs once an edge shows changes the hook order between renders.
     const renderIndicatorIcon = React.useCallback((name: IconName) => {
         return normalizeNodeForView(<Icon name={name} size={size} color={props.color} />);
     }, [props.color, size]);
+
+    if (!edges.top && !edges.bottom && !edges.left && !edges.right) return null;
 
     return (
         <>
