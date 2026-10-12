@@ -127,7 +127,10 @@ function useWebInlineReferenceStyle(scope: string, references: ReadonlyMap<strin
     const css = React.useMemo(() => [...references.entries()].map(([href, reference]) => (
         `[data-happier-md-refs="${scope}"] a[href="${href.replace(/["\\]/g, (char) => `\\${char}`)}"] {`
         + ` color: ${reference.foreground} !important; background-color: ${reference.background} !important;`
-        + ' text-decoration: none !important; border-radius: 6px; padding: 1px 6px; font-size: 0.86em; font-weight: 600; white-space: nowrap; }'
+        + ' text-decoration: none !important; border-radius: 6px; padding: 1px 6px; font-size: 0.86em; font-weight: 600;'
+        // A long reference (a file path) wraps inside its message rather than running past the bubble; each
+        // line keeps the chip's fill and inset.
+        + ' overflow-wrap: anywhere; -webkit-box-decoration-break: clone; box-decoration-break: clone; }'
     )).join('\n'), [references, scope]);
     React.useLayoutEffect(() => {
         if (Platform.OS !== 'web' || typeof document === 'undefined' || !css) return undefined;
