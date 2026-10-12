@@ -77,6 +77,7 @@ export const CURSOR_PLUGIN = definePlugin({
           agentCliSystemTool: { toolId: 'cursor-agent' },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
           sessions: {
             open: ['create', 'resume'],
             delivery: ['newTurn', 'followUp'],
