@@ -9,7 +9,6 @@ import {
   getObservedStackDaemon,
   readStackRuntimeStateWithDaemonSync,
   recordStackRuntimeDaemonPid,
-  startStackRuntimeDaemonPidReconciler,
   syncStackRuntimeDaemonPidFromDaemonState,
 } from './runtime_daemon_state.mjs';
 import { finalizeStackRuntimeStop, recordStackRuntimeStopRequest } from './runtime_state.mjs';
@@ -1034,7 +1033,7 @@ test('readStackRuntimeStateWithDaemonSync returns the refreshed daemon pid after
   assert.deepEqual(runtime?.processes?.daemonPids, [222]);
 });
 
-test('startStackRuntimeDaemonPidReconciler refreshes stale runtime identity after daemon self-restart', async (t) => {
+test('daemon PID synchronization consumes an already observed self-restart without another control probe', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hstack-runtime-daemon-reconcile-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
@@ -1056,42 +1055,30 @@ test('startStackRuntimeDaemonPidReconciler refreshes stale runtime identity afte
     'utf-8',
   );
 
-  const intervals = [];
-  const clearCalls = [];
-  const reconciler = startStackRuntimeDaemonPidReconciler(
+  await syncStackRuntimeDaemonPidFromDaemonState(
     {
       runtimeStatePath,
       cliHomeDir: join(root, 'cli'),
       internalServerUrl: 'http://127.0.0.1:52753',
       env: {},
-      intervalMs: 1000,
-    },
-    {
-      checkDaemonStateImpl: async () => ({
+      daemonState: {
         status: 'running',
         pid: 76071,
+        processInstanceFingerprint: 'process-after-restart',
         distClosureFingerprint: 'fingerprint-after-restart',
-      }),
+      },
+    },
+    {
+      checkDaemonStateImpl: async () => { throw new Error('duplicate control probe'); },
       isPidAliveImpl: (pid) => Number(pid) === 76071,
       resolvePidStackOwnershipImpl: acceptAllStackOwnership,
-      setIntervalImpl: (fn, intervalMs) => {
-        intervals.push({ fn, intervalMs });
-        return { unref() {} };
-      },
-      clearIntervalImpl: (timer) => clearCalls.push(timer),
     },
   );
-
-  await reconciler.syncNow();
 
   const runtime = JSON.parse(await readFile(runtimeStatePath, 'utf-8'));
   assert.equal(runtime?.processes?.serverPid, 1234);
   assert.equal(runtime?.processes?.daemonPid, 76071);
   assert.deepEqual(runtime?.processes?.daemonPids, [76071]);
   assert.equal(runtime?.daemon?.distClosureFingerprint, 'fingerprint-after-restart');
-  assert.equal(intervals.length, 1);
-  assert.equal(intervals[0]?.intervalMs, 1000);
-
-  reconciler.close();
-  assert.equal(clearCalls.length, 1);
+  assert.equal(runtime?.processInstances?.processes?.daemonPid?.fingerprint, 'process-after-restart');
 });

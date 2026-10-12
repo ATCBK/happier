@@ -1,7 +1,131 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { startOwnerDaemonLifecycleReconciler } from './daemonLifecycleReconciler.mjs';
+import { syncStackRuntimeDaemonPidFromDaemonState } from '../stack/runtime_daemon_state.mjs';
+
+test('owner daemon observation persists state in service mode without enabling recovery', async () => {
+  const persisted = [];
+  const reconciler = startOwnerDaemonLifecycleReconciler(
+    {
+      enabled: true,
+      observe: async () => ({ status: 'stopped', pid: null }),
+      onObservation: async (observation) => persisted.push(observation),
+    },
+    {
+      setIntervalImpl: () => ({ unref() {} }),
+      clearIntervalImpl: () => {},
+    },
+  );
+  assert.ok(reconciler);
+  try {
+    assert.equal((await reconciler.reconcileNow()).reason, 'observation-only');
+    assert.equal((await reconciler.reconcileNow()).reason, 'observation-only');
+    assert.deepEqual(persisted, [{ status: 'stopped', pid: null }, { status: 'stopped', pid: null }]);
+  } finally {
+    reconciler.close();
+  }
+});
+
+test('owner daemon observation clears dead membership before recovery consumes it', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hstack-daemon-observation-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const runtimeStatePath = join(root, 'stack.runtime.json');
+  await writeFile(runtimeStatePath, JSON.stringify({
+    stackName: 'test-observer',
+    processes: { daemonPid: 101, daemonPids: [101] },
+    daemon: { distClosureFingerprint: 'old-fingerprint' },
+  }));
+  const reconciler = startOwnerDaemonLifecycleReconciler(
+    {
+      enabled: true,
+      observe: async () => ({ status: 'stopped', pid: null }),
+      onObservation: async (daemonState) => await syncStackRuntimeDaemonPidFromDaemonState({
+        runtimeStatePath, cliHomeDir: join(root, 'cli'), env: {}, daemonState,
+      }, { isPidAliveImpl: () => false }),
+      recover: async () => {
+        const state = JSON.parse(await readFile(runtimeStatePath, 'utf8'));
+        return { started: true, daemonPid: state.processes.daemonPid, daemonPids: state.processes.daemonPids };
+      },
+    },
+    {
+      setIntervalImpl: () => ({ unref() {} }),
+      clearIntervalImpl: () => {},
+    },
+  );
+  try {
+    assert.equal((await reconciler.reconcileNow()).reason, 'daemon-absence-unconfirmed');
+    assert.deepEqual(await reconciler.reconcileNow(), { started: true, daemonPid: null, daemonPids: [] });
+  } finally {
+    reconciler.close();
+  }
+});
+
+test('owner daemon observation retains the membership consumer cadence within its single poll', async () => {
+  let now = 0;
+  const persisted = [];
+  const timers = [];
+  const reconciler = startOwnerDaemonLifecycleReconciler(
+    {
+      enabled: true,
+      observe: async () => ({ status: 'running', pid: now < 10_000 ? 101 : 202 }),
+      onObservation: async (observation) => persisted.push(observation.pid),
+      onObservationIntervalMs: 10_000,
+      recover: async () => { throw new Error('present daemon must not recover'); },
+    },
+    {
+      nowImpl: () => now,
+      setIntervalImpl: (fn) => { timers.push(fn); return { unref() {} }; },
+      clearIntervalImpl: () => {},
+    },
+  );
+  try {
+    await reconciler.reconcileNow();
+    now = 1_000;
+    await reconciler.reconcileNow();
+    assert.deepEqual(persisted, [101]);
+    now = 10_000;
+    await reconciler.reconcileNow();
+    assert.deepEqual(persisted, [101, 202]);
+    assert.equal(timers.length, 1, 'membership and recovery share the observation timer');
+  } finally {
+    reconciler.close();
+  }
+});
+
+test('auth-gated recovery retains membership observation cadence and never starts the daemon', async () => {
+  let now = 0;
+  let probes = 0;
+  let recoveries = 0;
+  const reconciler = startOwnerDaemonLifecycleReconciler({
+    enabled: true,
+    observe: async () => { probes += 1; return { status: 'stopped' }; },
+    onObservation: async () => {},
+    onObservationIntervalMs: 10_000,
+    isRecoveryEnabled: () => false,
+    recover: async () => { recoveries += 1; },
+  }, {
+    nowImpl: () => now,
+    setIntervalImpl: () => ({ unref() {} }),
+    clearIntervalImpl: () => {},
+  });
+  try {
+    await reconciler.reconcileNow();
+    now = 1_000;
+    await reconciler.reconcileNow();
+    assert.equal(probes, 1);
+    assert.equal(recoveries, 0);
+    now = 10_000;
+    await reconciler.reconcileNow();
+    assert.equal(probes, 2);
+    assert.equal(recoveries, 0);
+  } finally {
+    reconciler.close();
+  }
+});
 
 test('owner daemon reconciliation requires corroborated absence and preserves present or inconclusive state', async () => {
   const observations = [

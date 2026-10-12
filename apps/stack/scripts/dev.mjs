@@ -21,7 +21,7 @@ import {
   recordStackRuntimeStart,
   recordStackRuntimeUpdate,
 } from './utils/stack/runtime_state.mjs';
-import { startStackRuntimeDaemonPidReconciler } from './utils/stack/runtime_daemon_state.mjs';
+import { STACK_RUNTIME_DAEMON_MEMBERSHIP_INTERVAL_MS, syncStackRuntimeDaemonPidFromDaemonState } from './utils/stack/runtime_daemon_state.mjs';
 import { startOwnerDaemonLifecycleReconciler } from './utils/dev/daemonLifecycleReconciler.mjs';
 import { resolveStackContext } from './utils/stack/context.mjs';
 import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
@@ -807,33 +807,23 @@ async function main() {
       stackName,
       cliIdentity: 'default',
     });
-    const daemonRuntimeReconciler = startStackRuntimeDaemonPidReconciler(
-      {
+    const daemonLifecycleReconciler = startOwnerDaemonLifecycleReconciler({
+      enabled: true,
+      isShuttingDown: () => shuttingDown,
+      observe: () => checkDaemonStatePingAware(cliHomeDir, {
+        serverUrl: internalServerUrl,
+        env: daemonRuntimeEnv,
+        stackName,
+      }),
+      onObservationIntervalMs: STACK_RUNTIME_DAEMON_MEMBERSHIP_INTERVAL_MS,
+      onObservation: (daemonState) => syncStackRuntimeDaemonPidFromDaemonState({
         runtimeStatePath,
         cliHomeDir,
         internalServerUrl,
         env: daemonRuntimeEnv,
-        isShuttingDown: () => shuttingDown,
-      },
-      { checkDaemonStateImpl: checkDaemonStatePingAware },
-    );
-    if (daemonRuntimeReconciler) {
-      watchers.push(daemonRuntimeReconciler);
-      await daemonRuntimeReconciler.syncNow();
-    }
-
-    const daemonLifecycleReconciler = startOwnerDaemonLifecycleReconciler({
-      enabled: true,
-      isShuttingDown: () => shuttingDown,
-      observe: async () => {
-        const gate = daemonStartGate({ env: baseEnv, cliHomeDir, serverUrl: internalServerUrl });
-        if (!gate.ok) return { status: 'inconclusive', reason: gate.reason };
-        return await checkDaemonStatePingAware(cliHomeDir, {
-          serverUrl: internalServerUrl,
-          env: daemonRuntimeEnv,
-          stackName,
-        });
-      },
+        daemonState,
+      }),
+      isRecoveryEnabled: () => daemonStartGate({ env: baseEnv, cliHomeDir, serverUrl: internalServerUrl }).ok,
       isRecoveryReady: async () => {
         if (!localDaemonWaitsForRemoteServer) return true;
         const serverHealth = await fetchHappierHealth(internalServerUrl);
@@ -858,7 +848,10 @@ async function main() {
         });
       },
     });
-    if (daemonLifecycleReconciler) watchers.push(daemonLifecycleReconciler);
+    if (daemonLifecycleReconciler) {
+      watchers.push(daemonLifecycleReconciler);
+      await daemonLifecycleReconciler.reconcileNow();
+    }
   }
 
   const reloadDescriptors = [];

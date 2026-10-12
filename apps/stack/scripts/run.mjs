@@ -32,7 +32,7 @@ import {
   recordStackRuntimeServerPids,
   recordStackRuntimeStart,
 } from './utils/stack/runtime_state.mjs';
-import { startStackRuntimeDaemonPidReconciler } from './utils/stack/runtime_daemon_state.mjs';
+import { STACK_RUNTIME_DAEMON_MEMBERSHIP_INTERVAL_MS, syncStackRuntimeDaemonPidFromDaemonState } from './utils/stack/runtime_daemon_state.mjs';
 import { startOwnerDaemonLifecycleReconciler } from './utils/dev/daemonLifecycleReconciler.mjs';
 import { resolveStackContext } from './utils/stack/context.mjs';
 import { getPublicServerUrlEnvOverride, resolveServerUrls } from './utils/server/urls.mjs';
@@ -451,7 +451,6 @@ async function main() {
     process.on('SIGTERM', () => dispatchShutdown('SIGTERM'));
 	  let ownedDaemonPid = null;
 	  let daemonAutostarter = null;
-	  let daemonRuntimeReconciler = null;
 	  let daemonLifecycleReconciler = null;
   let sourceRemoteController;
 	  installExitCleanup({ label: 'local', children });
@@ -1026,46 +1025,35 @@ async function main() {
       stackName,
       cliIdentity: 'default',
     });
-    daemonRuntimeReconciler = startStackRuntimeDaemonPidReconciler(
-      {
+    daemonLifecycleReconciler = startOwnerDaemonLifecycleReconciler({
+      enabled: true,
+      intervalMs: serviceMode ? STACK_RUNTIME_DAEMON_MEMBERSHIP_INTERVAL_MS : 1_000,
+      isShuttingDown: () => shuttingDown,
+      observe: async () => await checkDaemonStatePingAware(cliHomeDir, {
+        serverUrl: effectiveInternalServerUrl,
+        env: daemonRuntimeEnv,
+        stackName,
+      }),
+      onObservationIntervalMs: STACK_RUNTIME_DAEMON_MEMBERSHIP_INTERVAL_MS,
+      onObservation: async (daemonState) => await syncStackRuntimeDaemonPidFromDaemonState({
         runtimeStatePath,
         cliHomeDir,
         internalServerUrl: effectiveInternalServerUrl,
         env: daemonRuntimeEnv,
-        isShuttingDown: () => shuttingDown,
+        daemonState,
+      }),
+      isRecoveryEnabled: () => daemonStartGate({
+        env: daemonScopeEnv, cliHomeDir, serverUrl: effectiveInternalServerUrl,
+      }).ok,
+      recover: serviceMode ? undefined : async () => {
+        await startDaemonAndRecord({
+          forceRestart: false,
+          preserveExistingRunning: true,
+        });
+        return { started: true };
       },
-      { checkDaemonStateImpl: checkDaemonStatePingAware },
-    );
-    await daemonRuntimeReconciler?.syncNow?.();
-
-    if (!serviceMode) {
-      daemonLifecycleReconciler = startOwnerDaemonLifecycleReconciler({
-        enabled: true,
-        isShuttingDown: () => shuttingDown,
-        observe: async () => {
-          const gate = daemonStartGate({
-            env: daemonScopeEnv,
-            cliHomeDir,
-            serverUrl: effectiveInternalServerUrl,
-          });
-          if (!gate.ok) return { status: 'inconclusive', reason: gate.reason };
-          return await checkDaemonStatePingAware(cliHomeDir, {
-            serverUrl: effectiveInternalServerUrl,
-            env: daemonRuntimeEnv,
-	        stackName,
-	        runtimeBacked: cliLaunchSpec?.runtimeBacked === true,
-	        admittedDistClosureFingerprint: cliLaunchSpec?.daemonDistClosureFingerprint ?? null,
-	    });
-        },
-        recover: async () => {
-          await startDaemonAndRecord({
-            forceRestart: false,
-            preserveExistingRunning: true,
-          });
-          return { started: true };
-        },
-      });
-    }
+    });
+    await daemonLifecycleReconciler?.reconcileNow();
   }
 
   // Optional: start Expo dev-client Metro for mobile reviewers.
@@ -1137,11 +1125,6 @@ async function main() {
 
     try {
       daemonAutostarter?.stop?.();
-    } catch {
-      // ignore
-    }
-    try {
-      daemonRuntimeReconciler?.close?.();
     } catch {
       // ignore
     }
@@ -1337,10 +1320,19 @@ async function runControlledRemoteStack({ rootDir, flags, json, autostart, runti
             isShuttingDown: () => shuttingDown, ...resolveCliRuntimeLaunchProvenance(localCli) });
         }, logger: console });
       daemonAutostarter.start();
-      daemonReconciler = startStackRuntimeDaemonPidReconciler({ runtimeStatePath: context.runtimeStatePath,
-        cliHomeDir, internalServerUrl, env: getDaemonEnv({ baseEnv: env, cliHomeDir, internalServerUrl,
-          publicServerUrl: urls.publicServerUrl, stackName: context.stackName, cliIdentity: 'default' }),
-        isShuttingDown: () => shuttingDown }, { checkDaemonStateImpl: checkDaemonStatePingAware });
+      const daemonRuntimeEnv = getDaemonEnv({ baseEnv: env, cliHomeDir, internalServerUrl,
+        publicServerUrl: urls.publicServerUrl, stackName: context.stackName, cliIdentity: 'default' });
+      daemonReconciler = startOwnerDaemonLifecycleReconciler({ enabled: true,
+        intervalMs: STACK_RUNTIME_DAEMON_MEMBERSHIP_INTERVAL_MS,
+        isShuttingDown: () => shuttingDown,
+        observe: () => checkDaemonStatePingAware(cliHomeDir, {
+          serverUrl: internalServerUrl, env: daemonRuntimeEnv, stackName: context.stackName,
+        }),
+        onObservation: (daemonState) => syncStackRuntimeDaemonPidFromDaemonState({
+          runtimeStatePath: context.runtimeStatePath, cliHomeDir, internalServerUrl,
+          env: daemonRuntimeEnv, daemonState,
+        }),
+      });
     }
     console.log(`[runtime] ${context.stackName}: ${sourceSnapshot ? 'source snapshot' : runtimeSnapshot.snapshotId} on ${placement.target.name}; server ${urls.publicServerUrl}`);
     await stopRequested;

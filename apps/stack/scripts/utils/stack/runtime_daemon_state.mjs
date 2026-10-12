@@ -3,6 +3,8 @@ import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/proc
 import { resolvePidStackOwnership } from '../proc/ownership.mjs';
 import { isPidAlive, mutateStackRuntimeDaemonMembership, readStackRuntimeStateFile, recordStackRuntimeUpdate } from './runtime_state.mjs';
 
+export const STACK_RUNTIME_DAEMON_MEMBERSHIP_INTERVAL_MS = 10_000;
+
 export function normalizeDaemonPid(value) {
   const pid = Number(value);
   return Number.isFinite(pid) && pid > 1 ? pid : null;
@@ -425,6 +427,7 @@ export async function syncStackRuntimeDaemonPidFromDaemonState(
     runtimeDaemonPids = [],
     daemonDistFingerprint,
     authenticatedProcessInstanceFingerprint = null,
+    daemonState = null,
     env = process.env,
   } = {},
   {
@@ -456,20 +459,26 @@ export async function syncStackRuntimeDaemonPidFromDaemonState(
     String(runtimeState?.stackName ?? '').trim()
     || String(env?.HAPPIER_STACK_STACK ?? '').trim()
     || null;
-  const observed = await getObservedStackDaemonAsync(
-    {
-      cliHomeDir,
-      internalServerUrl,
-      stackName,
-      runtimeDaemonPid: effectiveRuntimeDaemonPid,
-      runtimeDaemonPids: effectiveRuntimeDaemonPids,
-      env,
-    },
-    {
-      checkDaemonStateImpl,
-      isPidAliveImpl,
-    },
-  );
+  const observed = Object.prototype.hasOwnProperty.call(arguments[0] ?? {}, 'daemonState')
+    ? observeStackDaemonRuntime({
+        runtimeDaemonPid: effectiveRuntimeDaemonPid,
+        runtimeDaemonPids: effectiveRuntimeDaemonPids,
+        daemonState,
+      }, { isPidAliveImpl })
+    : await getObservedStackDaemonAsync(
+        {
+          cliHomeDir,
+          internalServerUrl,
+          stackName,
+          runtimeDaemonPid: effectiveRuntimeDaemonPid,
+          runtimeDaemonPids: effectiveRuntimeDaemonPids,
+          env,
+        },
+        {
+          checkDaemonStateImpl,
+          isPidAliveImpl,
+        },
+      );
   const isDaemonPidEligibleImpl = createDaemonPidOwnershipEligibility({
     runtimeStatePath,
     runtimeState,
@@ -565,79 +574,5 @@ export async function syncStackRuntimeDaemonPidFromDaemonState(
       : 'stopped',
     updated: recorded.updated,
     daemonDistFingerprint: recorded.daemonDistFingerprint,
-  };
-}
-
-export function startStackRuntimeDaemonPidReconciler(
-  {
-    runtimeStatePath,
-    cliHomeDir = '',
-    internalServerUrl = '',
-    env = process.env,
-    intervalMs = 10_000,
-    isShuttingDown = () => false,
-  } = {},
-  {
-    checkDaemonStateImpl = null,
-    isPidAliveImpl = isPidAlive,
-    resolvePidStackOwnershipImpl = resolvePidStackOwnership,
-    readStackRuntimeStateFileImpl = readStackRuntimeStateFile,
-    recordStackRuntimeUpdateImpl = recordStackRuntimeUpdate,
-    syncStackRuntimeDaemonPidFromDaemonStateImpl = syncStackRuntimeDaemonPidFromDaemonState,
-    setIntervalImpl = setInterval,
-    clearIntervalImpl = clearInterval,
-    logger = console,
-  } = {},
-) {
-  const statePath = String(runtimeStatePath ?? '').trim();
-  const homeDir = String(cliHomeDir ?? '').trim();
-  if (!statePath || !homeDir) {
-    return null;
-  }
-
-  let closed = false;
-  let inFlight = false;
-
-  const syncNow = async () => {
-    if (closed || isShuttingDown?.() === true || inFlight) {
-      return { skipped: true };
-    }
-    inFlight = true;
-    try {
-      return await syncStackRuntimeDaemonPidFromDaemonStateImpl(
-        {
-          runtimeStatePath: statePath,
-          cliHomeDir: homeDir,
-          internalServerUrl,
-          env,
-        },
-        {
-          checkDaemonStateImpl,
-          isPidAliveImpl,
-          resolvePidStackOwnershipImpl,
-          readStackRuntimeStateFileImpl,
-          recordStackRuntimeUpdateImpl,
-        },
-      );
-    } catch (error) {
-      logger?.warn?.(`[stack] daemon runtime pid reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
-      return { skipped: true, error };
-    } finally {
-      inFlight = false;
-    }
-  };
-
-  const interval = Math.max(1000, Number(intervalMs) || 10_000);
-  const timer = setIntervalImpl(() => {
-    void syncNow();
-  }, interval);
-  timer?.unref?.();
-
-  return {
-    syncNow,
-    close() {
-      closed = true;
-      clearIntervalImpl(timer);
-    },
   };
 }

@@ -1,8 +1,13 @@
+import { performance } from 'node:perf_hooks';
+
 export function startOwnerDaemonLifecycleReconciler(
   {
     enabled,
     observe,
+    onObservation,
+    onObservationIntervalMs = 0,
     recover,
+    isRecoveryEnabled = () => true,
     isRecoveryReady = async () => true,
     isShuttingDown = () => false,
     intervalMs = 1_000,
@@ -11,19 +16,52 @@ export function startOwnerDaemonLifecycleReconciler(
   {
     setIntervalImpl = setInterval,
     clearIntervalImpl = clearInterval,
+    nowImpl = () => performance.now(),
     logger = console,
   } = {},
 ) {
-  if (!enabled || typeof observe !== 'function' || typeof recover !== 'function') return null;
+  if (!enabled || typeof observe !== 'function') return null;
 
   let closed = false;
   let inFlight = null;
   let consecutiveAbsences = 0;
   let recoveryAttempted = false;
+  let lastObservationDeliveryAt = null;
   const requiredAbsences = Math.max(2, Number(absenceConfirmations) || 2);
 
   const runReconciliation = async () => {
+    const observedAt = nowImpl();
+    const deliverObservation = typeof onObservation === 'function' && (
+      lastObservationDeliveryAt === null
+      || observedAt - lastObservationDeliveryAt >= onObservationIntervalMs
+    );
+    const recoveryEnabled = typeof recover === 'function' && isRecoveryEnabled() === true;
+    // Auth-gated recovery previously did no probe between membership samples.
+    // Retain that behavior under the shared observation owner.
+    if (!recoveryEnabled && typeof onObservation === 'function' && !deliverObservation) {
+      consecutiveAbsences = 0;
+      recoveryAttempted = false;
+      return { skipped: true, reason: 'daemon-recovery-not-ready' };
+    }
     const observation = await observe();
+    if (deliverObservation) {
+      // Membership persistence retains its existing cadence while consuming
+      // the lifecycle owner's observation instead of opening another probe.
+      lastObservationDeliveryAt = observedAt;
+      try {
+        await onObservation(observation);
+      } catch (error) {
+        logger?.warn?.(
+          `[stack] daemon runtime pid reconciliation failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    if (typeof recover !== 'function') return { skipped: true, reason: 'observation-only' };
+    if (!recoveryEnabled) {
+      consecutiveAbsences = 0;
+      recoveryAttempted = false;
+      return { skipped: true, reason: 'daemon-recovery-not-ready' };
+    }
     const status = String(observation?.status ?? '').trim();
     if (status === 'running' || status === 'starting' || status === 'unreachable') {
       consecutiveAbsences = 0;
