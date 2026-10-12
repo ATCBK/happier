@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import type { McpValueRefV1 } from '@happier-dev/protocol';
+import type { ValueRefV1 } from '@happier-dev/protocol';
 
 import type { CustomModalInjectedProps } from '@/modal';
 import { Modal } from '@/modal';
@@ -22,7 +22,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
 
 type ValueRefKind = 'env' | 'header';
-type ValueRefSource = McpValueRefV1['t'];
+type ValueRefSource = ValueRefV1['t'];
 
 const ENV_KEY_REGEX = /^[A-Z_][A-Z0-9_]*$/;
 const HEADER_KEY_REGEX = /^[A-Za-z0-9-]+$/;
@@ -70,10 +70,10 @@ export function getValueRefEditorModalTitle(kind: ValueRefKind): string {
 export type ValueRefEditorModalProps = CustomModalInjectedProps & Readonly<{
     kind: ValueRefKind;
     initialKey: string;
-    initialValueRef: McpValueRefV1;
+    initialValueRef: ValueRefV1;
     secrets: SavedSecret[];
     scope?: AccountSettingsScope | null;
-    onSubmit: (result: Readonly<{ key: string; valueRef: McpValueRefV1 }>) => boolean;
+    onSubmit: (result: Readonly<{ key: string; valueRef: ValueRefV1 }>) => boolean;
     onDelete?: (() => void) | null;
 }>;
 
@@ -140,7 +140,7 @@ export function ValueRefEditorModal(props: ValueRefEditorModalProps) {
             return;
         }
 
-        const valueRef: McpValueRefV1 = source === 'sessionAttested'
+        const valueRef: ValueRefV1 = source === 'sessionAttested'
             ? { t: 'sessionAttested', field: props.initialValueRef.t === 'sessionAttested'
                 ? props.initialValueRef.field : 'externalPrincipalId' }
             : source === 'literal'
