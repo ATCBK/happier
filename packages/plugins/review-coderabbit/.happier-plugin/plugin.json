@@ -49,6 +49,7 @@
         "title": "CodeRabbit"
       }
     ],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -93,6 +94,7 @@
     ],
     "hooks": [],
     "inputTypes": [],
+    "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
       "discoverySources": [],
@@ -102,6 +104,7 @@
     "notifications": [],
     "openableContentViewers": [],
     "pluginContributionPoints": [],
+    "projectNativeAdapters": [],
     "promptAssets": [
       {
         "id": "review-prompt",
