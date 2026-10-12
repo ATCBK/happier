@@ -5,10 +5,10 @@ import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { parseSavedSecretRefV1 } from '../../account/settings/savedSecretReferenceV1.js';
 import { AccountSettingsCleanupV1Schema } from '../../account/settings/accountSettingsStoredContentEnvelope.js';
 import { AcpBackendDefinitionV1Schema, AcpBackendAuthConfigV1Schema, AcpBackendCapabilitiesV1Schema, AcpCatalogCommandV1Schema, AcpEnvKeyV1Schema, foldStoredAcpBackendLaunchV1 } from './settingsV1.js';
-import { McpValueRefV1Schema } from '../../mcp/servers/settingsV1.js';
+import { ValueRefV1Schema } from '../../valueRefs/valueRefV1.js';
 
 
-const activeValueReference = lazyZodSchema(() => McpValueRefV1Schema.refine(value => {
+const activeValueReference = lazyZodSchema(() => ValueRefV1Schema.refine(value => {
   if (value.t !== 'savedSecret') return true;
   try { return parseSavedSecretRefV1(value.secretId).kind === 'shared_resource'; }
   catch { return false; }

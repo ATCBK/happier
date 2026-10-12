@@ -2,7 +2,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
 import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 
-import { McpValueRefV1Schema, type McpValueRefV1 } from '../../mcp/servers/settingsV1.js';
+import { ValueRefV1Schema, type ValueRefV1 } from '../../valueRefs/valueRefV1.js';
 import { PluginAgentAcpStderrRulesV2Schema } from '../../plugins/contributions/agentAcpStderrRules.js';
 import { PinnedArchiveAssetsByPlatformSchema, PinnedArchivePlatformSchema } from '../../installables/sourceKind.js';
 
@@ -78,7 +78,7 @@ export const AcpBackendDefinitionV1Schema = lazyZodSchema(() => z.object({
   title: z.string().min(1),
   description: z.string().min(1).optional(),
   launch: AcpBackendLaunchV1Schema,
-  env: z.record(AcpEnvKeyV1Schema, McpValueRefV1Schema).default({}),
+  env: z.record(AcpEnvKeyV1Schema, ValueRefV1Schema).default({}),
   auth: AcpBackendAuthConfigV1Schema.optional(),
   runtime: AcpConfiguredRuntimeV1Schema.optional(),
   compatibility: AcpBackendCompatibilityV1Schema.optional(),
@@ -142,4 +142,4 @@ export const AcpCatalogSettingsV1Schema = lazyZodSchema(() => z.preprocess(
 export type AcpCatalogSettingsV1 = z.infer<typeof AcpCatalogSettingsV1Schema>;
 export const AcpCatalogSettingsV1StoredSchema = createStoredReadSchema(AcpCatalogSettingsV1Schema);
 
-export type AcpCatalogEnvValueRefV1 = McpValueRefV1;
+export type AcpCatalogEnvValueRefV1 = ValueRefV1;
