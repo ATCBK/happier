@@ -12,8 +12,8 @@ import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { DeferredAnchoredTooltip } from '@/components/ui/overlays/DeferredAnchoredTooltip';
 import { StatusDot } from '@/components/ui/status/StatusDot';
-import { resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
-import { getAvatarUrl, getDisplayName } from '@/sync/domains/profiles/profile';
+import { formatAccountDisplayName, resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { getAvatarUrl } from '@/sync/domains/profiles/profile';
 import { useProfile } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
@@ -47,7 +47,7 @@ function resolveAccountIdentity(
     profile: ReturnType<typeof useProfile>,
     accountService: ConnectionStatusTriggerState['accountService'],
 ): AccountIdentity {
-    const displayName = getDisplayName(profile);
+    const displayName = formatAccountDisplayName(profile);
     if (!displayName && accountService.kind === 'service' && accountService.signedIn === false) {
         return {
             kind: 'notLinked',

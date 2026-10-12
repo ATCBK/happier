@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { getDisplayName } from '@/sync/domains/profiles/profile';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { useProfile } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
@@ -21,8 +21,8 @@ export function resolveHomeGreeting(input: Readonly<{ hour: number; name: string
 /** Home's hero line: "Good afternoon, Leeroy". The hour is read when Home mounts. */
 export function useHomeGreeting(): string {
     const profile = useProfile();
-    // A greeting uses the first name: "Leeroy", not "Leeroy Brun" or "leeroy.brun".
-    const name = profile.firstName?.trim() || getDisplayName(profile)?.trim().split(/\s+/)[0] || null;
+    // A greeting uses the first word of the canonical account label.
+    const name = formatAccountDisplayName(profile)?.split(/\s+/)[0] || null;
     const [hour] = React.useState(() => new Date().getHours());
     return resolveHomeGreeting({ hour, name });
 }

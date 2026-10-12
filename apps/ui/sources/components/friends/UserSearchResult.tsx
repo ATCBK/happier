@@ -1,7 +1,8 @@
 import React from 'react';
 import { View, TouchableOpacity, Pressable } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { UserProfile, getDisplayName } from '@/sync/domains/social/friendTypes';
+import type { UserProfile } from '@/sync/domains/social/friendTypes';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { t } from '@/text';
 import { useRouter } from 'expo-router';
@@ -24,7 +25,7 @@ export function UserSearchResult({
     isProcessing = false 
 }: UserSearchResultProps) {
     const router = useRouter();
-    const displayName = getDisplayName(user);
+    const displayName = formatAccountDisplayName(user) ?? t('accountDisplay.unnamed');
     const avatarUrl = user.avatar?.url || user.avatar?.path;
     
     // Determine button state based on relationship status

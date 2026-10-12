@@ -20,8 +20,8 @@ import type { PageHeaderMetaFact } from '@/components/ui/layout/PageHeader';
 import { useHomeViewerRole } from '@/hooks/home/useHomeViewerRole';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
-import { resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
-import { getAvatarUrl, getDisplayName } from '@/sync/domains/profiles/profile';
+import { formatAccountDisplayName, resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { getAvatarUrl } from '@/sync/domains/profiles/profile';
 import { getActiveServerHomeCarrier, getServerProfileById, type ServerProfile } from '@/sync/domains/server/serverProfiles';
 import { useProfile } from '@/sync/domains/state/storage';
 import { t } from '@/text';
@@ -78,7 +78,7 @@ function useHomeAccountServiceLine(profile: ServerProfile | null): string | null
 export const HubIdentityHeader = React.memo(function HubIdentityHeader() {
     const router = useRouter();
     const profile = useProfile();
-    const displayName = resolveViewerAccountDisplayName(getDisplayName(profile));
+    const displayName = resolveViewerAccountDisplayName(formatAccountDisplayName(profile));
     const activeServer = useActiveServerSnapshot();
     useServerProfilesGeneration();
     const homeProfile = getServerProfileById(activeServer.serverId);

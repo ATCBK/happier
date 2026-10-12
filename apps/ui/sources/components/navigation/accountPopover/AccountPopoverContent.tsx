@@ -23,8 +23,8 @@ import { ActionListSection, type ActionListItem } from '@/components/ui/lists/Ac
 import type { SelectableRow } from '@/components/ui/lists/SelectableRow';
 import { StatusDot } from '@/components/ui/status/StatusDot';
 import { useHomeViewSelectionSettingsMutable } from '@/hooks/server/useHomeViewSelectionSettings';
-import { resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
-import { getAvatarUrl, getDisplayName } from '@/sync/domains/profiles/profile';
+import { formatAccountDisplayName, resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { getAvatarUrl } from '@/sync/domains/profiles/profile';
 import { buildServerSelectionActiveTargetForServer } from '@/sync/domains/server/selection/serverSelectionActiveTarget';
 import { resolveServerSelectionGroupActivation } from '@/sync/domains/server/selection/serverSelectionActivation';
 import { listServerSelectionTargets } from '@/sync/domains/server/selection/serverSelectionResolver';
@@ -265,7 +265,7 @@ function IdentitySection(props: Readonly<{
 }>) {
     const { theme } = useUnistyles();
     const profile = useProfile();
-    const displayName = resolveViewerAccountDisplayName(getDisplayName(profile));
+    const displayName = resolveViewerAccountDisplayName(formatAccountDisplayName(profile));
     const identity = resolveAccountServiceIdentity({
         entryStatus: props.service.entry.status,
         signedIn: props.service.signedIn,

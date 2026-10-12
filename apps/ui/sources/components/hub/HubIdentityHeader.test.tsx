@@ -11,7 +11,6 @@ import {
     waitForHomeGovernance,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 import { installSettingsViewCommonModuleMocks } from '../settings/settingsViewTestHelpers';
 
@@ -30,6 +29,7 @@ installSettingsViewCommonModuleMocks({
 // governance store below the header are the production ones.
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 
