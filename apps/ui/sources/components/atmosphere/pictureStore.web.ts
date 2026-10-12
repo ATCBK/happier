@@ -1,0 +1,122 @@
+import { openBrowserRecordDatabase } from '@/sync/domains/state/browserRecordStorage';
+import { createBuiltinPictureEnsurer, createBuiltinThumbnailEnsurer, readPictureSource } from './ensureBuiltinPicture';
+import type { PictureInfo, PictureInput, PictureStore, BuiltinPicture } from './pictureStore.types';
+
+type WebPictureRecord = PictureInfo & Readonly<{ data: Blob; thumb?: Blob; source?: BuiltinPicture['src'] }>;
+const listeners = new Set<() => void>();
+let revision = 0;
+function changed() { revision++; for (const listener of listeners) listener(); }
+
+function readRecord(value: unknown): WebPictureRecord | undefined {
+    if (value === undefined) return undefined;
+    if (typeof value !== 'object' || value === null || !('localId' in value) || typeof value.localId !== 'string'
+        || !('kind' in value) || (value.kind !== 'builtin' && value.kind !== 'user')
+        || !('createdAtMs' in value) || typeof value.createdAtMs !== 'number'
+        || !('size' in value) || typeof value.size !== 'number'
+        || !('data' in value) || !(value.data instanceof Blob)
+        || ('thumb' in value && value.thumb !== undefined && !(value.thumb instanceof Blob))) {
+        throw new Error('Invalid stored atmosphere picture; bytes were preserved.');
+    }
+    const source = 'source' in value ? readPictureSource(value.source) : undefined;
+    return { localId: value.localId, kind: value.kind, createdAtMs: value.createdAtMs, size: value.size,
+        ...(source ? { source } : {}),
+        data: value.data, ...('thumb' in value && value.thumb instanceof Blob ? { thumb: value.thumb } : {}) };
+}
+
+async function asBlob(data: Blob | string): Promise<Blob> {
+    if (typeof data !== 'string') return data;
+    const response = await fetch(data);
+    if (!response.ok) throw new Error(`Atmosphere picture read failed (${response.status}).`);
+    return response.blob();
+}
+
+function fetchBuiltinPicture(source: string): Promise<Response> {
+    const url = new URL(source);
+    // Met's CDN loses CORS headers on reused URLs; stored bytes keep this nonce download-only.
+    url.searchParams.set('happier-atmosphere', crypto.getRandomValues(new Uint32Array(4)).join('-'));
+    return fetch(url.href, { mode: 'cors' });
+}
+
+/** Browser decoding/canvas encoding owns image formats and orientation. */
+async function prepare(data: Blob | string): Promise<Blob> {
+    const bitmap = await createImageBitmap(await asBlob(data));
+    try {
+        const scale = Math.min(1, 2560 / Math.max(bitmap.width, bitmap.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(bitmap.width * scale);
+        canvas.height = Math.round(bitmap.height * scale);
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Atmosphere image canvas is unavailable.');
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        return await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => {
+            if (blob?.type === 'image/webp') resolve(blob); else reject(new Error('Atmosphere WebP encoding failed.'));
+        }, 'image/webp', 0.86));
+    } finally { bitmap.close(); }
+}
+
+async function get(localId: string): Promise<WebPictureRecord | undefined> {
+    const database = await openBrowserRecordDatabase('pictures');
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction('pictures', 'readonly');
+        const request = transaction.objectStore('pictures').get(localId);
+        transaction.oncomplete = () => { try { resolve(readRecord(request.result)); } catch (error) { reject(error); } };
+        transaction.onabort = () => reject(transaction.error ?? new Error('Atmosphere picture read aborted.'));
+        transaction.onerror = () => reject(transaction.error);
+    });
+}
+async function put(input: PictureInput): Promise<WebPictureRecord> {
+    const [data, thumb] = await Promise.all([asBlob(input.data), input.thumb === undefined ? undefined : asBlob(input.thumb)]);
+    const previous = await get(input.localId);
+    const record: WebPictureRecord = { localId: input.localId, kind: input.kind,
+        createdAtMs: previous?.createdAtMs ?? Date.now(), size: data.size + (thumb?.size ?? 0), data,
+        ...(input.source ? { source: input.source } : {}),
+        ...(thumb ? { thumb } : {}) };
+    const database = await openBrowserRecordDatabase('pictures');
+    await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction('pictures', 'readwrite', { durability: 'strict' });
+        transaction.objectStore('pictures').put(record, input.localId);
+        transaction.oncomplete = () => resolve();
+        transaction.onabort = () => reject(transaction.error ?? new Error('Atmosphere picture write aborted.'));
+        transaction.onerror = () => reject(transaction.error);
+    });
+    changed();
+    return record;
+}
+async function remove(localId: string): Promise<void> {
+    const database = await openBrowserRecordDatabase('pictures');
+    await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction('pictures', 'readwrite', { durability: 'strict' });
+        transaction.objectStore('pictures').delete(localId);
+        transaction.oncomplete = () => resolve();
+        transaction.onabort = () => reject(transaction.error ?? new Error('Atmosphere picture removal aborted.'));
+        transaction.onerror = () => reject(transaction.error);
+    });
+    changed();
+}
+async function list(): Promise<PictureInfo[]> {
+    const database = await openBrowserRecordDatabase('pictures');
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction('pictures', 'readonly');
+        const request = transaction.objectStore('pictures').openCursor();
+        const pictures: PictureInfo[] = [];
+        request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) return;
+            try {
+                const record = readRecord(cursor.value);
+                if (record) pictures.push({ localId: record.localId, kind: record.kind, createdAtMs: record.createdAtMs, size: record.size });
+                cursor.continue();
+            } catch (error) { transaction.abort(); reject(error); }
+        };
+        transaction.oncomplete = () => resolve(pictures);
+        transaction.onabort = () => reject(transaction.error ?? new Error('Atmosphere picture listing aborted.'));
+        transaction.onerror = () => reject(transaction.error);
+    });
+}
+export const pictureStore = {
+    prepare, put, get, remove, list,
+    ensureBuiltin: createBuiltinPictureEnsurer({ get, put }, prepare, fetchBuiltinPicture),
+    ensureBuiltinThumbnail: createBuiltinThumbnailEnsurer({ get, put }, prepare, fetchBuiltinPicture),
+    subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    getRevision() { return revision; },
+} satisfies PictureStore;

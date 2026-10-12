@@ -1,0 +1,73 @@
+import * as React from 'react';
+import { act } from 'react';
+import { View } from 'react-native';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderScreen } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storageStore';
+import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
+import { useHomeWelcome, type HomeWelcome } from './useHomeWelcome';
+
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
+
+function Home(props: Readonly<{ eligible: boolean; loadingShown?: boolean; reducedMotion?: boolean; seen: HomeWelcome[] }>) {
+    const welcome = useHomeWelcome({ eligible: props.eligible, loadingShown: props.loadingShown ?? false,
+        reducedMotion: props.reducedMotion ?? false, writing: false });
+    props.seen.push(welcome);
+    return <View testID="home" />;
+}
+
+describe('Home Welcome planet', () => {
+    let previous: ReturnType<typeof storage.getState>;
+    beforeEach(() => {
+        previous = storage.getState();
+        storage.setState(state => ({ ...state, localSettings: { ...localSettingsDefaults, homeWelcomeSeenAt: null } }));
+    });
+    afterEach(async () => {
+        await act(async () => { storage.setState(previous, true); });
+    });
+
+    it('plays once, on the first arrival at Home, and never again on this device', async () => {
+        const first: HomeWelcome[] = [];
+        const screen = await renderScreen(<Home eligible={false} seen={first} />);
+        expect(first.some(welcome => welcome.playing)).toBe(false);
+        await screen.update(<Home eligible seen={first} />);
+        expect(first.at(-1)?.playing).toBe(true);
+        expect(storage.getState().localSettings.homeWelcomeSeenAt).not.toBeNull();
+        await act(async () => { first.at(-1)!.onLanded(); });
+        await screen.update(<Home eligible seen={first} />);
+        expect(first.at(-1)?.playing).toBe(false);
+        await screen.unmount();
+
+        const again: HomeWelcome[] = [];
+        await renderScreen(<Home eligible seen={again} />);
+        expect(again.some(welcome => welcome.playing)).toBe(false);
+    });
+
+    it('counts a Loading cloud that already assembled the planet as the Welcome', async () => {
+        const seen: HomeWelcome[] = [];
+        const screen = await renderScreen(<Home eligible loadingShown seen={seen} />);
+        await screen.update(<Home eligible loadingShown seen={seen} />);
+        expect(seen.at(-1)?.playing).toBe(false);
+        expect(storage.getState().localSettings.homeWelcomeSeenAt).not.toBeNull();
+    });
+
+    it('shows the rest at once under reduced motion, with nothing re-typing', async () => {
+        const seen: HomeWelcome[] = [];
+        const screen = await renderScreen(<Home eligible reducedMotion seen={seen} />);
+        await screen.update(<Home eligible reducedMotion seen={seen} />);
+        expect(seen.at(-1)).toMatchObject({ playing: false, retype: false });
+        expect(storage.getState().localSettings.homeWelcomeSeenAt).not.toBeNull();
+    });
+
+    it('settles an in-progress assembly when reduced motion is selected', async () => {
+        const seen: HomeWelcome[] = [];
+        const screen = await renderScreen(<Home eligible seen={seen} />);
+        expect(seen.at(-1)?.playing).toBe(true);
+        await screen.update(<Home eligible reducedMotion seen={seen} />);
+        expect(seen.at(-1)?.playing).toBe(false);
+        expect(seen.some(welcome => !welcome.playing && welcome.arrive === 'instant')).toBe(true);
+    });
+});

@@ -1,0 +1,147 @@
+import {
+  lookFor,
+  type AtmosphereEffectiveLook,
+  type AtmosphereLookPicture,
+  type AtmosphereRememberedLooks,
+} from '@happier-dev/brand/atmosphere';
+import type {
+  AtmosphereLookOverride,
+  ProjectAtmosphere,
+} from '@happier-dev/protocol/account/settings/accountSettings';
+import { normalizeAtmosphereLooks } from '../atmosphereSettings';
+
+/**
+ * The Look panel's and Settings' one set of edits. Home and a project override share this shape; each
+ * edit returns the next value and never touches what it does not own. Per-picture looks keep only
+ * what differs from the picture's release look (the brand's `releaseLook` through the shared
+ * normalizer), so a value set back to the release disappears from storage.
+ */
+export type PictureRef = ProjectAtmosphere['picture']['ref'];
+type Pictures = readonly AtmosphereLookPicture[];
+
+/** The key a picture's remembered look is stored under: a built-in's id or a user picture's localId. */
+export function pictureLookKey(ref: PictureRef): string {
+  return ref.kind === 'builtin' ? ref.id : ref.localId;
+}
+
+/** A user picture has no release entry; it starts from the brand's default release look. */
+function withLookPicture(pictures: Pictures, key: string): Pictures {
+  return pictures.some((picture) => picture.id === key)
+    ? pictures
+    : [...pictures, { id: key }];
+}
+
+/** Storage names (look, dissolve) mapped onto the brand's memory names (effect, fade). */
+function brandLooks(
+  key: string,
+  override: AtmosphereLookOverride | undefined,
+): AtmosphereRememberedLooks {
+  if (!override) return {};
+  return {
+    [key]: {
+      ...(override.look !== undefined ? { effect: override.look } : {}),
+      ...(override.dissolve !== undefined ? { fade: override.dissolve } : {}),
+      ...(override.strength !== undefined
+        ? { strength: override.strength }
+        : {}),
+    },
+  };
+}
+
+export function effectivePictureLook(
+  atmosphere: Pick<ProjectAtmosphere, 'picture' | 'looks'>,
+  pictures: Pictures,
+): AtmosphereEffectiveLook {
+  const key = pictureLookKey(atmosphere.picture.ref);
+  return lookFor(
+    key,
+    brandLooks(key, atmosphere.looks[key]),
+    withLookPicture(pictures, key),
+  );
+}
+
+/** Which controls differ from the release look, in the panel's order. */
+export function changedPictureLookControls(
+  atmosphere: Pick<ProjectAtmosphere, 'picture' | 'looks'>,
+): ReadonlyArray<'look' | 'dissolve' | 'strength'> {
+  const override =
+    atmosphere.looks[pictureLookKey(atmosphere.picture.ref)] ?? {};
+  return (['look', 'dissolve', 'strength'] as const).filter(
+    (key) => override[key] !== undefined,
+  );
+}
+
+export function withSource<T extends ProjectAtmosphere>(
+  atmosphere: T,
+  source: T['source'],
+): T {
+  return { ...atmosphere, source };
+}
+
+export function withPicture<T extends ProjectAtmosphere>(
+  atmosphere: T,
+  ref: PictureRef,
+): T {
+  return {
+    ...atmosphere,
+    source: 'picture',
+    picture: { ...atmosphere.picture, ref },
+  };
+}
+
+/** Another built-in picture, never the current one. */
+export function withShuffledPicture<T extends ProjectAtmosphere>(
+  atmosphere: T,
+  pictures: Pictures,
+  random: () => number = Math.random,
+): T {
+  const current =
+    atmosphere.source === 'picture'
+      ? pictureLookKey(atmosphere.picture.ref)
+      : null;
+  const others = pictures.filter((picture) => picture.id !== current);
+  const next =
+    others[Math.min(others.length - 1, Math.floor(random() * others.length))];
+  return next
+    ? withPicture(atmosphere, { kind: 'builtin', id: next.id })
+    : atmosphere;
+}
+
+export function withLayout<T extends ProjectAtmosphere>(
+  atmosphere: T,
+  layout: T['picture']['layout'],
+): T {
+  return { ...atmosphere, picture: { ...atmosphere.picture, layout } };
+}
+
+export function withPlanet<T extends ProjectAtmosphere>(
+  atmosphere: T,
+  patch: Partial<T['planet']>,
+): T {
+  return { ...atmosphere, planet: { ...atmosphere.planet, ...patch } };
+}
+
+export function withPictureLook<T extends ProjectAtmosphere>(
+  atmosphere: T,
+  patch: AtmosphereLookOverride,
+  pictures: Pictures,
+): T {
+  const key = pictureLookKey(atmosphere.picture.ref);
+  const looks = {
+    ...atmosphere.looks,
+    [key]: { ...atmosphere.looks[key], ...patch },
+  };
+  return {
+    ...atmosphere,
+    looks: normalizeAtmosphereLooks(looks, atmosphere.picture.ref.kind === 'user' ? withLookPicture(pictures, key) : pictures),
+  };
+}
+
+export function withoutPictureLook<T extends ProjectAtmosphere>(
+  atmosphere: T,
+): T {
+  const key = pictureLookKey(atmosphere.picture.ref);
+  if (!(key in atmosphere.looks)) return atmosphere;
+  const { [key]: _removed, ...looks } = atmosphere.looks;
+  return { ...atmosphere, looks };
+}

@@ -1,0 +1,172 @@
+import * as React from 'react';
+import { PixelRatio, StyleSheet, View } from 'react-native';
+import {
+  createPlanetScene,
+  planetAssembly,
+  type PlanetAssembly,
+  type PlanetSceneDot,
+} from '@happier-dev/brand/planet';
+import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
+import { PlanetCanvas } from '../PlanetCanvas';
+import type { HomePane } from '../homePlanetPlacement';
+import { PlanetMomentCanvas } from './PlanetMomentCanvas';
+import {
+  loadingAssembledFrame,
+  loadingPlanetOrigin,
+  loadingPlanetPhase,
+  loadingPlanetSource,
+  loadingPlanetTravel,
+  type PlanetMomentOrigin,
+  type PlanetMomentTarget,
+} from './planetMomentTimeline';
+import { useMomentClock } from './useMomentClock';
+
+/** `grace`: nothing shown yet; `waiting`: the cloud holds; `resolving`: Home is ready and the planet lands. */
+export type LoadingPlanetStage = 'grace' | 'waiting' | 'resolving' | 'landed';
+
+export type LoadingPlanetProps = Readonly<{
+  pane: HomePane;
+  /** Where the cloud gathers; the lab's centre of the pane when the host has no mark slot. */
+  origin?: PlanetMomentOrigin | null;
+  /** The light's orientation of Home's placement, so the cloud is already the planet it becomes. */
+  orientation: Readonly<{ rotate: number; mirror: boolean }>;
+  /** Home's planet once it is known; `none` when Home shows no planet. */
+  target: PlanetMomentTarget | null;
+  /** Home is ready to be shown. Loading resolves only on this, never on a timer. */
+  ready: boolean;
+  /** Nothing in progress (a decision or failure is on screen): the cloud holds still. */
+  paused: boolean;
+  reducedMotion: boolean;
+  theme: 'light' | 'dark';
+  /** The page Home is revealed from: it covers Home until ready, then fades with the brand's cover. */
+  cover?: React.ReactNode;
+  onStage: (stage: LoadingPlanetStage, fast: boolean) => void;
+}>;
+
+type Prepared = Readonly<{
+  key: string;
+  assembly: PlanetAssembly;
+  haze: readonly PlanetSceneDot[];
+}>;
+
+/**
+ * Loading (plan R-11, lab `MOS.loading4`): after a 0.25 s grace a cloud of faint digits appears and the
+ * limb's digits drift toward their places, a proto-crescent made only of digits that cannot look
+ * finished early. On ready the cover fades, the light sweeps and the planet travels on a critically
+ * damped spring to Home's placement, where Home's own planet takes over. It is decorative: hidden from
+ * accessibility and never a target.
+ */
+export function LoadingPlanet(props: LoadingPlanetProps) {
+  const { pane, target, reducedMotion } = props;
+  const activelyViewed = useHostActivelyViewed();
+  const [landed, setLanded] = React.useState<Readonly<{
+    fast: boolean;
+  }> | null>(null);
+  const t = useMomentClock(landed === null, props.paused || !activelyViewed);
+  const readyAt = React.useRef<number | null>(null);
+  if (readyAt.current === null && props.ready && target !== null)
+    readyAt.current = t;
+  const toPlanet = target?.kind === 'planet';
+  const phase = loadingPlanetPhase(t, readyAt.current, {
+    reducedMotion,
+    toPlanet,
+  });
+
+  const dpr = PixelRatio.get();
+  const origin = props.origin ?? loadingPlanetOrigin(pane);
+  const { rotate, mirror } = props.orientation;
+  const theme = props.theme;
+  const source = React.useMemo(
+    () => loadingPlanetSource({ cx: origin.cx, cy: origin.cy, R: origin.R }, { rotate, mirror }, { theme, pane, dpr }),
+    [dpr, mirror, origin.R, origin.cx, origin.cy, pane, rotate, theme],
+  );
+  // The assembly is prepared after the first frame, inside the grace, so Home's first frame never waits on it.
+  const sourceKey = JSON.stringify(source);
+  const [prepared, setPrepared] = React.useState<Prepared | null>(null);
+  React.useEffect(() => {
+    if (landed || pane.width <= 0 || pane.height <= 0) return;
+    const frame = requestAnimationFrame(() => {
+      setPrepared({
+        key: sourceKey,
+        assembly: planetAssembly(source),
+        haze: createPlanetScene({ ...source, rise: 1 }).haze,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [landed, pane.height, pane.width, source, sourceKey]);
+
+  const stage: LoadingPlanetStage =
+    phase.kind === 'landed'
+      ? 'landed'
+      : readyAt.current !== null
+        ? 'resolving'
+        : phase.kind === 'none'
+          ? 'grace'
+          : 'waiting';
+  const fast = phase.kind === 'landed' && phase.fast;
+  const onStage = React.useRef(props.onStage);
+  onStage.current = props.onStage;
+  React.useEffect(() => {
+    if (stage === 'landed') setLanded((current) => current ?? { fast });
+    onStage.current(stage, fast);
+  }, [fast, stage]);
+
+  // The travelling planet's first crisp frame replaces the assembled one only once it is drawn.
+  const [travelDrawn, setTravelDrawn] = React.useState(false);
+  const onTravelReady = React.useCallback(() => setTravelDrawn(true), []);
+  const travelling =
+    phase.kind === 'travel' ||
+    (phase.kind === 'landed' && !phase.fast && toPlanet && !reducedMotion);
+  const assembly = prepared?.key === sourceKey ? prepared : null;
+  const cover =
+    phase.kind === 'assembly' || phase.kind === 'travel' ? phase.cover : 0;
+
+  return (
+    <View
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={StyleSheet.absoluteFill}
+      testID="loading-planet"
+    >
+      {props.cover && cover > 0 ? (
+        <View style={[StyleSheet.absoluteFill, { opacity: cover }]}>
+          {props.cover}
+        </View>
+      ) : null}
+      {assembly &&
+      (phase.kind === 'assembly' || (travelling && !travelDrawn)) ? (
+        <PlanetMomentCanvas
+          width={pane.width}
+          height={pane.height}
+          dpr={dpr}
+          assembly={assembly.assembly}
+          haze={assembly.haze}
+          frame={
+            phase.kind === 'assembly'
+              ? phase.frame
+              : loadingAssembledFrame()
+          }
+          opacity={phase.kind === 'assembly' ? phase.opacity : 1}
+          style={styles.layer}
+          testID="loading-planet.assembly"
+        />
+      ) : null}
+      {travelling && target?.kind === 'planet' ? (
+        <PlanetCanvas
+          width={pane.width}
+          height={pane.height}
+          options={loadingPlanetTravel(source, target.options, phase.kind === 'travel' ? phase.k : 1)}
+          fade={target.fade}
+          onReady={onTravelReady}
+          style={styles.layer}
+          testID="loading-planet.travel"
+        />
+      ) : null}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  layer: { position: 'absolute', left: 0, top: 0 },
+});
