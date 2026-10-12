@@ -67,9 +67,9 @@ export function buildVoicePresenceFixture(state: VoicePresenceFixtureState): Voi
         hasRecovery: recovery,
         canDismissFailedAttempt: state === 'failed',
     });
-    // The real recovery copy (`resolveVoiceSurfaceRecovery`): a denied microphone opens settings.
-    const recoveryLabel = state === 'blocked' ? t('modals.openSettings') : recovery ? t('common.retry') : null;
-    const recoveryShortLabel = state === 'blocked' ? t('voicePresence.recovery.allow') : recoveryLabel;
+    // The real recovery copy (`resolveVoiceSurfaceRecovery`): a denied microphone is allowed, a lost transport retried.
+    const recoveryLabel = state === 'blocked' ? t('voicePresence.recovery.allow') : recovery ? t('common.retry') : null;
+    const recoveryIcon = state === 'blocked' ? 'microphone' as const : recovery ? 'arrow-clockwise' as const : null;
     // The projection's own failure captions: how to unblock, or the runtime's reason (a lost transport).
     const captionLabel = state === 'blocked'
         ? t('voicePresence.captions.blocked')
@@ -89,7 +89,7 @@ export function buildVoicePresenceFixture(state: VoicePresenceFixtureState): Voi
         primaryActionLabel: control.primaryAction === 'end' ? 'End Voice' : 'Talk with Voice',
         primaryActionHint: null,
         recoveryLabel,
-        recoveryShortLabel,
+        recoveryIcon,
         micStateLabel: t(state === 'muted' ? 'voiceSurface.a11y.microphoneMuted' : control.capturing ? 'voiceSurface.a11y.microphoneActive' : 'voiceSurface.a11y.microphoneInactive'),
         captionLabel,
         onPrimaryAction: NOOP,

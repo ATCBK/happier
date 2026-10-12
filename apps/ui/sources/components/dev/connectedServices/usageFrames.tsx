@@ -6,9 +6,9 @@ import { buildUsageSummary } from '@/components/hub/usage/useUsageSummary';
 import { buildUsagePopoverSession } from '@/components/navigation/shell/sidebarFooter/SessionUsagePopoverContent';
 import {
     SidebarUsagePopoverView,
-    USAGE_POPOVER_WIDTH_PX,
     type SidebarUsageAccountFacts,
 } from '@/components/navigation/shell/sidebarFooter/SidebarUsagePopoverContent';
+import { RAIL_POPOVER_WIDE_WIDTH_PX } from '@/components/navigation/shell/sidebarFooter/sidebarFooterLayout';
 import { useConnectedAccountIdentityPrivacy } from '@/hooks/ui/useConnectedAccountIdentityPrivacy';
 import { connectedServiceProfileKey } from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -135,7 +135,7 @@ function UsageFrame(props: Readonly<{ scope: 'rail' | 'session'; phone: boolean 
 
 const styles = StyleSheet.create((theme) => ({
     popover: {
-        width: USAGE_POPOVER_WIDTH_PX,
+        width: RAIL_POPOVER_WIDE_WIDTH_PX,
         margin: 24,
         paddingVertical: 4,
         borderRadius: 14,

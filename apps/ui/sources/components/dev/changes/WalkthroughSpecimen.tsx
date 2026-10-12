@@ -2,13 +2,15 @@ import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
-import { ScmComparisonBar, ScmComparisonStartReview, ScmComparisonViewSwitch } from '@/components/sessions/files/comparison/ScmComparisonBar';
+import { ScmComparisonBar, ScmComparisonProposeCommits, ScmComparisonStartReview, ScmComparisonViewSwitch } from '@/components/sessions/files/comparison/ScmComparisonBar';
 import { ScmComparisonScopePicker } from '@/components/sessions/files/comparison/ScmComparisonScopePicker';
 import { ScmComparisonPhoneHeader } from '@/components/sessions/files/comparison/ScmComparisonPhoneHeader';
-import { listFilesComparisonScopeOptions } from '@/components/sessions/files/comparison/filesComparison';
+import { listFilesComparisonScopeOptions, resolveFilesComparisonLabel } from '@/components/sessions/files/comparison/filesComparison';
 import { WalkthroughContents } from '@/components/sessions/files/walkthrough/WalkthroughContents';
 import { WalkthroughView, type WalkthroughViewLayout, type WalkthroughViewProps } from '@/components/sessions/files/walkthrough/WalkthroughView';
 import { buildWalkthroughReading, type WalkthroughReadingInput } from '@/components/sessions/files/walkthrough/walkthroughReading';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
+import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -38,8 +40,21 @@ function reviewed(count: number): WalkthroughReadingInput['reviewed'] {
     return { v: 1, comparisonId: SPECIMEN_COMPARISON.id, reviewedChangeRefs: specimenReviewedRefs(count) };
 }
 
-function SpecimenBar(props: Readonly<{ view: 'files' | 'walkthrough'; phone?: boolean; offline?: boolean }>) {
+const PENDING = { kind: 'workingTree' } as const;
+
+function SpecimenBar(props: Readonly<{ view: 'files' | 'walkthrough'; phone?: boolean; offline?: boolean; pending?: boolean }>) {
     const reason = props.offline ? t('walkthrough.notice.offlineA11y') : null;
+    if (props.pending && !props.phone) return (
+        <ScmComparisonBar
+            leading={(
+                <>
+                    <ScmComparisonViewSwitch view={props.view} views={['files', 'walkthrough', 'commits']} onSelect={noop} />
+                    <ScmComparisonScopePicker options={SCOPE_OPTIONS} current={PENDING} currentLabel={resolveFilesComparisonLabel(PENDING, null)} fileCount={9} onSelect={noop} />
+                </>
+            )}
+            trailing={<><ScmComparisonStartReview onPress={noop} /><ScmComparisonProposeCommits onPress={noop} /></>}
+        />
+    );
     if (props.phone) return <ScmComparisonPhoneHeader view={props.view} views={['files', 'walkthrough']}
         scope={{ options: SCOPE_OPTIONS, current: SESSION, currentLabel: t('scmComparison.scope.session'), fileCount: 9, onSelect: noop }}
         onSelectView={noop} onBack={noop} onStartReview={noop} reviewDisabled={props.offline} reviewDisabledReason={reason} />;
@@ -62,6 +77,7 @@ function LiveMarks(props: Readonly<{
     reviewedCount: number;
     view: Omit<WalkthroughViewProps, 'reading' | 'onToggleReviewed'>;
     bar?: boolean;
+    pending?: boolean;
 }>) {
     const [refs, setRefs] = React.useState(() => specimenReviewedRefs(props.reviewedCount));
     const reading = React.useMemo(() => buildWalkthroughReading({
@@ -70,7 +86,7 @@ function LiveMarks(props: Readonly<{
     }), [props.input, refs]);
     return (
         <View style={styles.fill}>
-            {props.bar === false && props.view.layout !== 'phone' ? null : <SpecimenBar view="walkthrough" phone={props.view.layout === 'phone'} offline={Boolean(props.view.offline)} />}
+            {props.bar === false && props.view.layout !== 'phone' ? null : <SpecimenBar view="walkthrough" phone={props.view.layout === 'phone'} offline={Boolean(props.view.offline)} pending={props.pending} />}
             <WalkthroughView
                 {...props.view}
                 reading={reading}
@@ -104,6 +120,7 @@ function base(layout: WalkthroughViewLayout): Omit<WalkthroughViewProps, 'readin
         scopeLabel: t('scmComparison.scope.session'),
         scopeDetail: DETAIL,
         modelLabel: 'Opus 5.5',
+        analysisMark: <AgentIcon agentId="claude" size={ICON_SIZE.xs} />,
         onAsk: noop,
         onOpenFile: noop,
     };
@@ -184,6 +201,7 @@ export const WALKTHROUGH_SPECIMEN_FRAMES: readonly WalkthroughSpecimenFrame[] = 
                 evidence: { state: 'available', unifiedDiff: file.evidence.unifiedDiff?.replace('@@ -18,4 +19,5 @@', '@@ -18,400 +19,500 @@') ?? '' },
             } : file) } } }} reviewedCount={0} bar={false} view={base(phone ? 'phone' : 'wide')} /> },
     { id: 'A', title: 'WT1-A · Walkthrough', render: (phone) => <LiveMarks input={COMPLETE} reviewedCount={0} bar={!phone} view={base(phone ? 'phone' : 'wide')} /> },
+    { id: 'AP', title: 'WT1-A · Walkthrough on Pending changes (Commits and Propose commits)', render: (phone) => <LiveMarks input={COMPLETE} reviewedCount={0} bar={!phone} pending view={{ ...base(phone ? 'phone' : 'wide'), scopeLabel: resolveFilesComparisonLabel(PENDING, null) }} /> },
     { id: 'A3', title: 'WT1-A3 · overview open', render: (phone) => <LiveMarks input={COMPLETE} reviewedCount={0} bar={!phone} view={{ ...base(phone ? 'phone' : 'wide'), initialOverviewOpen: true }} /> },
     { id: 'A2', title: 'WT1-A2p · contents sheet', render: () => <PhoneContents /> },
     { id: 'L', title: 'WT2-L · lifecycle', render: () => <Lifecycle /> },

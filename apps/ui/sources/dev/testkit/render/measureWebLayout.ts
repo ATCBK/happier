@@ -30,6 +30,11 @@ export type WebLayoutRect = Readonly<{
     clipped?: boolean;
     /** The element's rendered text, as a reader sees it. */
     text?: string;
+    /**
+     * Whether a pointer at the box's centre reaches this element (or a descendant): false when another
+     * element, even an invisible one, sits on top of it and takes the click.
+     */
+    receivesPointer?: boolean;
     outlineWidth?: number;
     outlineStyle?: string;
     /**
@@ -217,8 +222,11 @@ export async function measureWebLayout(container: HTMLElement, options: Readonly
                 const r = element.getBoundingClientRect();
                 const clipped = element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1;
                 const computed = getComputedStyle(element);
+                const topmost = r.width > 0 && r.height > 0
+                    ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null;
                 return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height,
                     clipped, text: (element as HTMLElement).innerText ?? '',
+                    receivesPointer: topmost !== null && element.contains(topmost),
                     outlineWidth: parseFloat(computed.outlineWidth), outlineStyle: computed.outlineStyle,
                     fontFamily: computed.fontFamily,
                     clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, scrollLeft: element.scrollLeft };

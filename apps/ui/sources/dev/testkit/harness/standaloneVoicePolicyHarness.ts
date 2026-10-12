@@ -30,6 +30,10 @@ vi.mock('expo-updates', async () => {
     const { createExpoUpdatesMock } = await import('../mocks/expoUpdates');
     return createExpoUpdatesMock();
 });
+vi.mock('expo-file-system', async () => {
+    const { createExpoFileSystemFileMock } = await import('../mocks/expoFileSystem');
+    return createExpoFileSystemFileMock().module;
+});
 vi.mock('react-native-typography', async () => {
     const { createReactNativeTypographyMock } = await import('../mocks/reactNativeTypography');
     return createReactNativeTypographyMock();

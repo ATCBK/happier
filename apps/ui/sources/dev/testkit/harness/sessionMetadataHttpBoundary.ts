@@ -1,0 +1,90 @@
+import { SessionCurrentProjectionRecordV1Schema, SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema, SessionOwnerMetadataEnvelopeV1Schema } from '@happier-dev/protocol';
+import { z } from 'zod';
+import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import type { Session } from '@/sync/domains/state/storageTypes';
+import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
+import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+
+/** Home HTTP persistence boundary; the Sync metadata codec and writer stay real. */
+export function createSessionMetadataHttpBoundary(readSessions: () => Readonly<Record<string, Session>>) {
+    const records = new Map<string, ReturnType<typeof SessionCurrentProjectionRecordV1Schema.parse>>();
+    let rejectPatchFor: string | null = null;
+    const writes: string[] = [];
+    return {
+        writes,
+        /** Replace a persisted seed after a test installs a new server-side fixture. */
+        replaceSession(sessionId: string) { records.delete(sessionId); },
+        /** Mirror the current /v1/sessions hosted plain create/load transport contract. */
+        createSessionFromPost(sessionId: string, init: RequestInit): Response {
+            const body = z.object({ tag: z.string().min(1), metadataLayoutVersion: z.literal(1),
+                sharedMetadata: z.object({ ciphertext: z.string().min(1) }).strict(), ownerMetadata: SessionOwnerMetadataEnvelopeV1Schema,
+                agentState: z.null(), dataEncryptionKey: z.null(), encryptionMode: z.literal('plain') }).strict().parse(JSON.parse(String(init.body)));
+            const current = records.get(sessionId);
+            if (current?.metadataLayoutVersion === 1) return Response.json({ created: false, session: current });
+            if (current) throw new Error('Create/load fixture requires an existing current owner tuple, not a candidate migration');
+            const seed = readSessions()[sessionId];
+            const record = SessionCurrentProjectionRecordV1Schema.parse({ id: sessionId, seq: seed?.seq ?? 0, createdAt: seed?.createdAt ?? 1, updatedAt: seed?.updatedAt ?? 1,
+                active: false, activeAt: seed?.activeAt ?? 1, archivedAt: null, encryptionMode: body.encryptionMode, metadataLayoutVersion: 1,
+                metadata: body.sharedMetadata.ciphertext, metadataVersion: seed?.metadataVersion ?? 0, ownerMetadata: body.ownerMetadata,
+                effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities },
+                responsibleAccountId: null, responsibleAccount: null, share: null, dataEncryptionKey: null,
+                agentState: null, agentStateVersion: seed?.agentStateVersion ?? 0, pendingCount: 0, pendingVersion: 0 });
+            records.set(sessionId, record);
+            return Response.json({ created: true, session: record });
+        },
+        rejectNextPatch(sessionId: string) { rejectPatchFor = sessionId; },
+        handle(input: URL | RequestInfo, init?: RequestInit): Response | null {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v2/session-organization') return Response.json(SessionOrganizationSnapshotResponseSchema.parse({
+                snapshot: { schemaVersion: SESSION_ORGANIZATION_SNAPSHOT_VERSION, version: 0,
+                    pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] },
+            }));
+            if (path === '/v2/sessions/lookup-by-tags') return null;
+            const detail = /^\/v2\/sessions\/([^/]+)$/.exec(path);
+            const listing = path === '/v2/sessions' || path === '/v2/sessions/active' || path === '/v1/sessions';
+            if (!detail && !listing) return null;
+            for (const session of Object.values(readSessions())) {
+                if (records.has(session.id)) continue;
+                if (!session.access) throw new Error('Session HTTP fixture requires canonical access');
+                records.set(session.id, SessionCurrentProjectionRecordV1Schema.parse({
+                    id: session.id, seq: session.seq, createdAt: session.createdAt, updatedAt: session.updatedAt,
+                    active: session.active, activeAt: session.activeAt, archivedAt: null, encryptionMode: 'plain', metadataLayoutVersion: 0,
+                    metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion,
+                    effectiveAccess: { v: 1, level: session.access.level, sources: [{ kind: 'owner' }], capabilities: session.access.capabilities },
+                    responsibleAccountId: null, responsibleAccount: null, share: null, dataEncryptionKey: null,
+                    agentState: session.agentState ? JSON.stringify(session.agentState) : null,
+                    agentStateVersion: session.agentStateVersion ?? 0, pendingCount: 0, pendingVersion: 0,
+                }));
+            }
+            if (listing) return Response.json({ sessions: [...records.values()], hasNext: false, nextCursor: null });
+            const id = decodeURIComponent(detail![1]!);
+            const current = records.get(id);
+            if (!current) return Response.json({}, { status: 404 });
+            if (init?.method !== 'PATCH') return Response.json({ session: current });
+            writes.push(id);
+            if (rejectPatchFor === id) {
+                rejectPatchFor = null;
+                return Response.json({ error: 'Failed to update session' }, { status: 500 });
+            }
+            const patch = SessionMetadataTuplePatchV1Schema.parse(JSON.parse(String(init.body)));
+            if (patch.mode !== 'owner_migration' && patch.mode !== 'owner') throw new Error('Expected owner metadata mutation');
+            if (patch.mode === 'owner_migration') {
+                if (current.metadataLayoutVersion !== 0 || patch.source.metadata.version !== current.metadataVersion
+                    || patch.source.metadata.ciphertext !== current.metadata || patch.source.agentState.version !== current.agentStateVersion
+                    || patch.source.agentState.ciphertext !== current.agentState) throw new Error('Metadata migration fixture CAS mismatch');
+            } else if (current.metadataLayoutVersion !== 1 || patch.sharedMetadata.expectedVersion !== current.metadataVersion
+                || patch.agentState.expectedVersion !== current.agentStateVersion
+                || JSON.stringify(patch.expectedOwnerMetadata) !== JSON.stringify(current.ownerMetadata)) {
+                return Response.json({ code: 'session_metadata_version_conflict', metadataLayoutVersion: 1,
+                    sharedMetadata: { version: current.metadataVersion }, agentState: { version: current.agentStateVersion } }, { status: 409 });
+            }
+            const target = patch.mode === 'owner_migration' ? patch.target : patch;
+            const committed = SessionCurrentProjectionRecordV1Schema.parse({ ...current, metadataLayoutVersion: 1,
+                metadata: target.sharedMetadata.ciphertext, metadataVersion: current.metadataVersion + 1,
+                ownerMetadata: target.ownerMetadata, agentState: target.agentState.ciphertext, agentStateVersion: (current.agentStateVersion ?? 0) + 1 });
+            records.set(id, committed);
+            return Response.json(SessionMetadataTuplePatchSuccessV1Schema.parse({ success: true, metadataLayoutVersion: 1,
+                sharedMetadata: { version: committed.metadataVersion }, agentState: { version: committed.agentStateVersion } }));
+        },
+    };
+}

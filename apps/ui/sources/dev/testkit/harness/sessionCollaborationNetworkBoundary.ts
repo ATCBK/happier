@@ -102,7 +102,7 @@ export function createSessionCollaborationHttpBoundary() {
             const sessionId = decodeURIComponent(publicShare[1]!);
             if (request.method === 'DELETE') home.publications.set(sessionId, null);
             return Response.json({ publicShare: home.publications.get(sessionId) ?? null,
-                isolatedOrigin: 'https://public-viewer.example.test' });
+                viewerOrigin: 'https://public-viewer.example.test' });
         }
         if (request.path === '/v1/teams/list') return Response.json({ items: [], nextCursor: null });
         if (request.path === '/v1/user/search') return Response.json({ users: [], nextCursor: null });

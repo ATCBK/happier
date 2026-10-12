@@ -5,7 +5,8 @@ export function createReactNativeSkiaMock() {
         LinearGradient: 'LinearGradient', RadialGradient: 'RadialGradient', Path: 'Path',
         RoundedRect: 'RoundedRect', DiffRect: 'DiffRect', Picture: 'Picture',
         // A recorded picture is opaque native state; the stub records nothing.
-        createPicture: () => ({}),
+        createPicture: () => ({ dispose: () => undefined }),
+        useFont: () => null,
         Skia: {
             Path: { Make: () => ({ addRect: () => undefined, addRRect: () => undefined }) },
             XYWHRect: () => ({}), RRectXY: () => ({}),

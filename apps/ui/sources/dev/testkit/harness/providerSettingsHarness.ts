@@ -34,13 +34,45 @@ import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } 
 
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { createMachineFixture } from '../fixtures/machineFixtures';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance, type AddHomeOptions } from './homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance, type AddHomeOptions, type HomeGovernanceHarness, type HomeDomainAnswer } from './homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from './serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from './syncSingletonLoader';
+import { createSessionMetadataHttpBoundary } from './sessionMetadataHttpBoundary';
+import { assertBoundaryImportOrder } from './assertBoundaryImportOrder';
 import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '../fixtures/featureFixtures';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
-    type ProviderConnectionsCatalogV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+    ProviderConnectionsRowMutationV1Schema, type ProviderConnectionsCatalogV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+
+/** Stateful Home HTTP leaf; Account semantics, encryption, CAS and receipt classification stay real. */
+export function installProviderConnectionsCatalogHttpBoundary(input: Readonly<{
+    home: HomeGovernanceHarness;
+    serverId: string;
+    catalog: ProviderConnectionsCatalogV1;
+    reply?: (mutation: ReturnType<typeof ProviderConnectionsRowMutationV1Schema.parse>) => HomeDomainAnswer;
+}>) {
+    let catalog = input.catalog;
+    let revision = 1;
+    let writes = 0;
+    input.home.answer(input.serverId, '/v1/account/encryption/currentness', {
+        body: createPlainAccountEncryptionCurrentnessFixture(),
+    });
+    input.home.answer(input.serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+        select: () => ({ body: { status: 'present', revision, content: { t: 'plain', v: catalog } } }),
+    });
+    input.home.answer(input.serverId, `POST ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+        select: value => {
+            const mutation = ProviderConnectionsRowMutationV1Schema.parse(value);
+            if (mutation.expectedRevision !== revision) return { body: { status: 'conflict', revision } };
+            if (mutation.content?.t !== 'plain') throw new Error('Expected a keyless Plain Account catalog write');
+            catalog = mutation.content.v;
+            revision += 1;
+            writes += 1;
+            return input.reply?.(mutation) ?? { body: { status: 'updated', revision, cursor: revision } };
+        },
+    });
+    return { get catalog() { return catalog; }, get revision() { return revision; }, get writes() { return writes; } };
+}
 
 type ProviderRpcResponse =
     | ReturnType<typeof DaemonContributionRegistryProjectionDescribeResponseSchema.parse>
@@ -232,7 +264,7 @@ function defaultResponses(): ProviderRpcResponseByMethod {
 
 function parseResponse(method: string, response: unknown): ProviderRpcResponse {
     switch (method) {
-        case RPC_METHODS.DAEMON_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE:
+        case RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE:
             return DaemonContributionRegistryProjectionDescribeResponseSchema.parse(response);
         case RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE:
             return DaemonProviderConnectionsDescribeResponseV1Schema.parse(response);
@@ -373,6 +405,9 @@ export function createProviderSettingsHarness(options: Readonly<{
 }
 
 export function installProviderSettingsRpcBoundary(harness: ProviderSettingsHarness): void {
+    assertBoundaryImportOrder('installProviderSettingsRpcBoundary', [
+        '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc',
+    ]);
     installedProviderSettingsHarness.current = harness;
     vi.doMock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
         machineRpcWithServerScope: (input: ProviderRpcRequest) => {
@@ -520,6 +555,17 @@ export function createProviderSettingsAccountHarness() {
                 status: 'present', revision: 1, content: catalogContent,
             } });
             home.answer(serverId, '/v2/account/settings/history', { body: { snapshots: [] } });
+            // Provider fixtures own an empty Session census. Let real Sync finish
+            // its bootstrap rather than retain retries for unclaimed list routes
+            // across the next Account restoration.
+            const sessions = createSessionMetadataHttpBoundary(() => ({}));
+            for (const path of ['/v2/sessions', '/v2/sessions/active', '/v2/session-organization']) {
+                home.answer(serverId, path, { select: async () => {
+                    const response = sessions.handle(new URL(path, serverUrl));
+                    if (!response) throw new Error(`Missing Provider bootstrap fixture: ${path}`);
+                    return { status: response.status, body: await response.json() };
+                } });
+            }
             if (options.machines) await publishMachines(serverId, options.machines);
             connection = await restoreServerAccountForTest({ serverUrl, accountId, request: home.request, credentials });
             // The connection helper mounts one Home; credential lookups for a
@@ -535,12 +581,25 @@ export function createProviderSettingsAccountHarness() {
                 const scope = storage.getState().profileScope;
                 if (scope?.accountId !== accountId) throw new Error('Provider fixture Account is not mounted');
             });
+            const waivedActions = options.waivedActions;
+            if (waivedActions?.length) {
+                await waitForHomeGovernance(() => {
+                    const policy = storage.getState().settings.actionsSettingsV1;
+                    if (waivedActions.some(id => !policy.approvalWaivedSurfaces?.[id]?.includes('ui'))) {
+                        throw new Error('Provider fixture approval policy is not hydrated');
+                    }
+                });
+            }
             if (options.machines) {
                 await waitForHomeGovernance(() => {
                     if (!storage.getState().isDataReady) throw new Error('Provider fixture Sync bootstrap is not ready');
                 });
                 await publishMachines(serverId, options.machines);
             }
+            // Removing the prior fixture's only Home may restore the device's
+            // default public Home. This fixture owns one Account: its feature
+            // audience must not wait for that unrelated, uncredentialed Home.
+            await home.selectHomes([serverId]);
             return { serverId, accountId };
         },
         async reset() {

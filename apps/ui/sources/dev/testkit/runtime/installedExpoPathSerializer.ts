@@ -3,6 +3,40 @@ import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { transform } from 'esbuild';
 
+type InstalledRoutingState = Readonly<{
+    key?: string;
+    stale?: boolean;
+    type?: string;
+    index?: number;
+    routes: readonly InstalledRoutingRoute[];
+}>;
+type InstalledRoutingRoute = Readonly<{
+    name: string;
+    params?: Readonly<Record<string, unknown>>;
+    state?: InstalledRoutingState;
+}>;
+
+/** Execute the installed pure routing algorithms with their real dynamic-name matcher.
+ * The surrounding CJS module imports native/browser adapters that these algorithms never use. */
+export async function loadInstalledExpoRoutingState() {
+    const require = createRequire(import.meta.url);
+    const source = await readFile(require.resolve('expo-router/build/global-state/routing'), 'utf8');
+    const start = source.indexOf('function getPayloadFromStateRoute(');
+    const end = source.indexOf('//# sourceMappingURL=', start);
+    if (start < 0 || end < 0) throw new Error('Installed Expo routing algorithms unavailable');
+    const exports: unknown = new Function('matchers_1', `${source.slice(start, end)}\nreturn { findDivergentState, getPayloadFromStateRoute };`)(
+        require('expo-router/build/matchers'),
+    );
+    // The installed CJS boundary is untyped; this is its published algorithm shape.
+    return exports as Readonly<{
+        findDivergentState(action: InstalledRoutingState, navigation: InstalledRoutingState): Readonly<{
+            navigationState: InstalledRoutingState;
+            actionStateRoute: InstalledRoutingRoute;
+        }>;
+        getPayloadFromStateRoute(route: InstalledRoutingRoute): Readonly<{ screen: string; params: object }>;
+    }>;
+}
+
 /** Loads the installed SDK's real serializer without its unrelated native entrypoint. */
 export async function loadInstalledExpoPathSerializer() {
     const require = createRequire(import.meta.url);

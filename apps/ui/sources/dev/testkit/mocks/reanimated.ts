@@ -86,6 +86,7 @@ type ReanimatedLayoutAnimationMock = Readonly<{
     durationV?: number;
     delayV?: number;
     reduceMotionV?: string;
+    initialValuesV?: Record<string, unknown>;
 }>;
 
 /**
@@ -105,6 +106,7 @@ function createLayoutAnimationBuilderMock(presetName: string) {
         duration: (value: number) => Builder;
         delay: (value: number) => Builder;
         reduceMotion: (value: string) => Builder;
+        withInitialValues: (value: Record<string, unknown>) => Builder;
         build: () => () => Record<string, unknown>;
     };
 
@@ -118,6 +120,7 @@ function createLayoutAnimationBuilderMock(presetName: string) {
         easing: (value: unknown): Builder => make({ ...record, easingV: value }),
         duration: (value: number): Builder => make({ ...record, durationV: value }),
         delay: (value: number): Builder => make({ ...record, delayV: value }),
+        withInitialValues: (value: Record<string, unknown>): Builder => make({ ...record, initialValuesV: value }),
         reduceMotion: (value: string): Builder => make({ ...record, reduceMotionV: value }),
         build: () => () => ({ initialValues: {}, animations: {} }),
     }) as Builder;
@@ -238,6 +241,7 @@ export function createReanimatedModuleMock(options: ReanimatedModuleMockOptions 
         // render scope by production code, so a mock without them is not a missing
         // assertion but an import-time crash.
         FadeIn: createLayoutAnimationBuilderMock('FadeIn'),
+        FadeInUp: createLayoutAnimationBuilderMock('FadeInUp'),
         ZoomIn: createLayoutAnimationBuilderMock('ZoomIn'),
         FadeOut: createLayoutAnimationBuilderMock('FadeOut'),
         ZoomOut: createLayoutAnimationBuilderMock('ZoomOut'),

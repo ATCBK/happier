@@ -113,6 +113,10 @@ class AnimatedValue {
     setValue(value: number) {
         this._value = value;
     }
+    stopAnimation(callback?: (value: number) => void) {
+        // Stub animations complete synchronously; RN reports their current value on stop.
+        callback?.(this._value);
+    }
     interpolate() {
         return this as any;
     }

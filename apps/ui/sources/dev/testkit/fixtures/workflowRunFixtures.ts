@@ -1,13 +1,12 @@
+import { AutomationV3RunListItemSchema } from '@happier-dev/protocol/automations/automationApiV3';
+import { WorkflowDefinitionV1Schema, type WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
 import {
-    AutomationV3RunListItemSchema,
-    WorkflowDefinitionV1Schema,
     WorkflowRunInvocationIndexV1Schema,
     WorkflowRunSummaryV1Schema,
-    type WorkflowDefinitionV1,
     type WorkflowInvocationLifecycleV1,
     type WorkflowRunInvocationIndexV1,
     type WorkflowRunSummaryV1,
-} from '@happier-dev/protocol';
+} from '@happier-dev/protocol/workflows/workflowProgressV1';
 
 import type { AutomationDefinitionRun } from '@/sync/domains/automations/automationTypes';
 

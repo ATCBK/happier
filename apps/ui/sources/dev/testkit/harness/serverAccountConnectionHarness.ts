@@ -2,6 +2,8 @@ import { vi } from 'vitest';
 import type { Socket } from 'socket.io-client';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { SessionSystemRecordStored } from '@happier-dev/protocol';
+import type { SessionEffectiveAccessV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { assertBoundaryImportOrder, recordBoundaryImportOriginal } from './assertBoundaryImportOrder';
 
 /** Session/record HTTP fixture below the real Sync, authority, repository and codec owners. */
 export function createSessionSystemRecordHttpFixture(params: Readonly<{
@@ -9,6 +11,7 @@ export function createSessionSystemRecordHttpFixture(params: Readonly<{
     records: readonly SessionSystemRecordStored[];
     encryptionMode?: 'plain' | 'e2ee';
     dataEncryptionKey?: string | null;
+    effectiveAccess?: SessionEffectiveAccessV1;
 }>) {
     const recordReads: string[] = [];
     const request: NonNullable<Parameters<typeof import('@/utils/system/runtimeFetch').setRuntimeFetch>[0]> = async url => {
@@ -19,6 +22,7 @@ export function createSessionSystemRecordHttpFixture(params: Readonly<{
             encryptionMode: params.encryptionMode ?? 'plain', dataEncryptionKey: params.dataEncryptionKey ?? null,
             metadataVersion: 0, metadata: JSON.stringify({ path: '/repo', host: 'test' }),
             agentStateVersion: 1, agentState: null, share: null,
+            ...(params.effectiveAccess ? { effectiveAccess: params.effectiveAccess } : {}),
         } });
         if (parsed.pathname === `${prefix}/system-records/record`) {
             const localId = parsed.searchParams.get('localId');
@@ -39,6 +43,7 @@ const socketBoundary = vi.hoisted(() => ({ configure: undefined as ConfigureSock
 /** Also reusable by cross-package suites whose host imports Socket before the UI harness. */
 export async function createSocketIoClientBoundary(importOriginal: <T>() => Promise<T>) {
     const actual = await importOriginal<typeof import('socket.io-client')>();
+    recordBoundaryImportOriginal(actual);
     const createSocket = (...args: Parameters<typeof actual.io>) => {
         const socket = actual.io(...args);
         // These replacements belong to this cold external transport for its
@@ -75,6 +80,7 @@ export async function createSocketIoClientBoundary(importOriginal: <T>() => Prom
  * This call then only configures it.
  */
 export function installDisconnectedServerSocketBoundary(configure?: ConfigureSocketBoundary): void {
+    assertBoundaryImportOrder('installDisconnectedServerSocketBoundary', ['socket.io-client']);
     socketBoundary.configure = configure;
     vi.doMock('socket.io-client', createSocketIoClientBoundary);
 }
@@ -89,13 +95,14 @@ export async function restoreServerAccountForTest(params: Readonly<{
     credentials?: AuthCredentials;
     /** Other saved Homes remain signed out in a single-Home boundary fixture. */
     credentialScope?: 'restored-home';
-    request?: NonNullable<Parameters<typeof import('@/utils/system/runtimeFetch').setRuntimeFetch>[0]>;
+    /** Unclaimed domain routes return null and remain HTTP 404, not network failures. */
+    request?: (...args: Parameters<NonNullable<Parameters<typeof import('@/utils/system/runtimeFetch').setRuntimeFetch>[0]>>) => Promise<Response | null>;
 }>) {
     // Match the app entry: the real implementation publishes the public Sync
     // singleton before connection restoration can hydrate or switch its Home.
     await import('@/sync/syncEngine');
-    const { upsertServerProfileOnly, setActiveServer } = await import('@/sync/domains/server/serverRuntime');
-    const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+    const { upsertServerProfileOnly, setActiveServer, getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    const { setServerProfileIdentityForUrl, getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     const { restoreConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
@@ -107,7 +114,7 @@ export async function restoreServerAccountForTest(params: Readonly<{
             throw new Error(`Unexpected test Home request origin: ${requestUrl.origin}`);
         }
         if (requestUrl.pathname === '/v1/auth/ping') return new Response('{}', { status: 200 });
-        return params.request ? params.request(url, init) : new Response('{}', { status: 404 });
+        return await params.request?.(url, init) ?? new Response('{}', { status: 404 });
     });
     let home = await upsertServerProfileOnly({ serverUrl: params.serverUrl, name: 'Test Home' });
     if (params.serverIdentityId) {
@@ -126,8 +133,14 @@ export async function restoreServerAccountForTest(params: Readonly<{
     });
     await setActiveServer({ serverId: home.id });
     await restoreConnectionToActiveServer(credentials);
+    // Restoration may adopt the Home's advertised portable identity. Return
+    // the profile that owns the restored lifetime, rather than its pre-adoption alias.
+    const restoredHome = getServerProfileById(getActiveServerSnapshot().serverId);
+    if (!restoredHome || canonicalizeServerUrl(restoredHome.serverUrl) !== restoredHomeUrl) {
+        throw new Error('Test Account restoration did not retain its Home');
+    }
     return {
-        home,
+        home: restoredHome,
         credentials,
         async dispose() {
             await disconnectActiveServerConnection();

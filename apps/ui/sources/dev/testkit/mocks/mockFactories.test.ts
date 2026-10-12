@@ -569,7 +569,8 @@ describe('UI testkit mock factories', () => {
             React.createElement('button', { onClick: onClose }, label);
         function Owner() {
             const [selected, setSelected] = React.useState(false);
-            return React.createElement('owner', { selected, onClick: () => setSelected(true) });
+            const modalKind = modalMock.module.useVisibleModalKind();
+            return React.createElement('owner', { selected, modalKind, onClick: () => setSelected(true) });
         }
         let screen!: ReturnType<typeof renderer.create>;
         await act(async () => {
@@ -577,11 +578,23 @@ describe('UI testkit mock factories', () => {
                 React.createElement('peer'), React.createElement(Owner)));
         });
         try {
+            expect(screen.root.findByType('owner').props.modalKind).toBeNull();
             await act(async () => { screen.root.findByType('owner').props.onClick(); });
             let id = '';
             await act(async () => { id = modalMock.module.Modal.show({ component: Content, props: { label: 'first' } }); });
             expect(screen.root.findByType('button').children).toEqual(['first']);
             expect(screen.root.findByType('owner').props.selected).toBe(true);
+            expect(screen.root.findByType('owner').props.modalKind).toBe('custom');
+            await act(async () => {
+                screen.update(React.createElement(modalMock.module.ModalProvider, { active: false },
+                    React.createElement('peer'), React.createElement(Owner)));
+            });
+            expect(screen.root.findByType('owner').props.modalKind).toBeNull();
+            await act(async () => {
+                screen.update(React.createElement(modalMock.module.ModalProvider, { active: true },
+                    React.createElement('peer'), React.createElement(Owner)));
+            });
+            expect(screen.root.findByType('owner').props.modalKind).toBe('custom');
             await act(async () => { modalMock.module.Modal.update(id, { label: 'updated' }); });
             expect(screen.root.findByType('button').children).toEqual(['updated']);
             await act(async () => { screen.root.findByType('button').props.onClick(); });
@@ -594,6 +607,7 @@ describe('UI testkit mock factories', () => {
             await act(async () => { modalMock.module.Modal.hideAll(); });
             expect(screen.root.findAllByType('button')).toHaveLength(0);
             expect(screen.root.findByType('owner').props.selected).toBe(true);
+            expect(screen.root.findByType('owner').props.modalKind).toBeNull();
         } finally {
             await act(async () => { screen.unmount(); });
         }
@@ -1006,26 +1020,29 @@ describe('UI testkit mock factories', () => {
     });
 
     it('creates a capturing LegendList mock that stores props, renders rows, and assigns ref handles', async () => {
-        const React = await import('react');
         const { createCapturingLegendListMock } = await import('./legendList');
 
         const legendListMock = createCapturingLegendListMock({ renderItems: true });
-        const ref = React.createRef<any>();
-
-        const element = (legendListMock.module.LegendList as any).render({
+        const ref = React.createRef<typeof legendListMock.state.refHandle>();
+        const { renderScreen } = await import('../render/renderScreen');
+        const screen = await renderScreen(React.createElement(legendListMock.module.LegendList, {
             ref,
             data: [{ id: 'row-1' }, { id: 'row-2' }],
             keyExtractor: (item: { id: string }) => item.id,
             renderItem: ({ item }: { item: { id: string } }) => React.createElement('Row', { id: item.id }),
             ListHeaderComponent: React.createElement('Header'),
             ListFooterComponent: React.createElement('Footer'),
-        }, ref);
+        }));
 
-        expect(legendListMock.state.props?.data).toEqual([{ id: 'row-1' }, { id: 'row-2' }]);
-        expect(ref.current).toBe(legendListMock.state.refHandle);
-        expect(element.type).toBe('LegendList');
-        expect(Array.isArray(element.props.children)).toBe(true);
-        expect(element.props.children).toHaveLength(4);
+        try {
+            expect(legendListMock.state.props?.data).toEqual([{ id: 'row-1' }, { id: 'row-2' }]);
+            expect(ref.current).toBe(legendListMock.state.refHandle);
+            expect(screen.findAllByType('Row').map(row => row.props.id)).toEqual(['row-1', 'row-2']);
+            expect(screen.findAllByType('Header')).toHaveLength(1);
+            expect(screen.findAllByType('Footer')).toHaveLength(1);
+        } finally {
+            await screen.unmount();
+        }
     });
 
     it('creates a capturing FlatList mock that stores props and renders rows with headers and footers', async () => {

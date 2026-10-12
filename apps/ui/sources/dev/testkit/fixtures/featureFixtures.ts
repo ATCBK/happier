@@ -39,6 +39,8 @@ type RootLayoutFeaturesOverrides = Omit<Partial<RootLayoutFeatures>, 'features' 
         | 'encryption'
         | 'e2ee'
         | 'pets'
+        | 'providers'
+        | 'teams'
     > &
         Readonly<{
             attachments?: Partial<RootLayoutFeatures['features']['attachments']>;
@@ -60,6 +62,7 @@ type RootLayoutFeaturesOverrides = Omit<Partial<RootLayoutFeatures>, 'features' 
             e2ee?: Partial<RootLayoutFeatures['features']['e2ee']>;
             pets?: Partial<RootLayoutFeatures['features']['pets']>;
             providers?: Partial<RootLayoutFeatures['features']['providers']>;
+            teams?: Partial<RootLayoutFeatures['features']['teams']>;
         }>;
     capabilities?: Omit<
         Partial<RootLayoutFeatures['capabilities']>,
@@ -368,6 +371,14 @@ export function createRootLayoutFeaturesResponse(overrides?: RootLayoutFeaturesO
         features: {
             ...BASE_ROOT_LAYOUT_FEATURES.features,
             ...nextFeatures,
+            providers: {
+                ...BASE_ROOT_LAYOUT_FEATURES.features.providers,
+                ...nextFeatures.providers,
+            },
+            teams: {
+                ...BASE_ROOT_LAYOUT_FEATURES.features.teams,
+                ...nextFeatures.teams,
+            },
             e2ee: {
                 ...BASE_ROOT_LAYOUT_FEATURES.features.e2ee,
                 ...nextE2ee,

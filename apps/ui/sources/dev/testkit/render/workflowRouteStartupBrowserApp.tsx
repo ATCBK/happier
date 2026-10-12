@@ -16,6 +16,8 @@ import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from
 import { materializeWorkflowAcceptedSnapshotV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1,
     serializeWorkflowStoredContentEnvelopeV1, WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol';
 import { WorkflowInvocationListRequestV1Schema, WorkflowRunGetRequestV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
+import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/protocol';
+import { z } from 'zod';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 
 const credentials = { token: 'header.eyJzdWIiOiJhY2NvdW50LWEifQ==.signature' };
@@ -24,6 +26,12 @@ let homeRequests = 0;
 const bootstrapStates: Array<{ isDataReady: boolean; profileScope: unknown }> = [];
 const unservedHttpPaths: string[] = [];
 const httpFetch = globalThis.fetch.bind(globalThis);
+// Server registerWorkflowRunStorageRoutes admits these storage-only fields;
+// they are deliberately not part of the public invocation-list Action input.
+const invocationStorageRequest = WorkflowInvocationListRequestV1Schema.extend({
+    progressEnvelopes: z.literal(true).optional(),
+    pageByteLimit: z.number().int().positive().max(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES).safe(),
+});
 
 async function mount(seed = true, holdHome = false) {
     configureSingleLibraryDefinition();
@@ -73,9 +81,10 @@ async function mount(seed = true, holdHome = false) {
                 if (request.runId !== run.id) return new Response(null, { status: 404 });
                 value = kind === 'get' ? { run, acceptedEnvelope, checkpointEnvelope: null, resultEnvelope: null, keyCensus } : keyCensus;
             } else if (kind === 'invocations.list') {
-                const request = WorkflowInvocationListRequestV1Schema.parse(requestFields);
+                const request = invocationStorageRequest.parse(requestFields);
                 if (request.runId !== run.id) return new Response(null, { status: 404 });
-                value = { invocations: [], parentRevision: run.revision };
+                value = { invocations: [], parentRevision: run.revision,
+                    ...(request.progressEnvelopes ? { progressEnvelopesByInvocationId: {} } : {}) };
             }
             if (value !== undefined) return json(value);
         }

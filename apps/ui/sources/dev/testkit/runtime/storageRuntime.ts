@@ -15,6 +15,7 @@ import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSession
 import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
 import type { StoreApi, UseBoundStore } from 'zustand';
 import type { CurrentSecretBindingsByProfileId } from '@/sync/domains/settings/secretBindings';
+import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 const { isDeepStrictEqual } = getVitestNodeBuiltin<{
     isDeepStrictEqual: (left: unknown, right: unknown) => boolean;
@@ -41,10 +42,48 @@ export type StorageRuntimeOptions = Readonly<{
 const createDefaultMutableSetter: StorageMutableSetterFactory = () => () => undefined;
 const emptyCurrentSecretBindingsByProfileId: CurrentSecretBindingsByProfileId = {};
 const defaultStorageSettings = settingsParse({});
+let readFixtureAccountLifetime: (() => ServerAccountScopeLifetime | null) | null = null;
+
+/** Drive the real Account-lifetime owner from the storage/runtime boundary. Use one active fixture per test. */
+export async function activateStorageAccountScope(
+    scope: ServerAccountScope,
+    fixtureStorage?: StorageStore,
+): Promise<Readonly<{ dispose(): void }>> {
+    const { getStorage } = await import('@/sync/domains/state/storageStore');
+    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
+    const { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } =
+        await import('@/sync/domains/scope/activeServerAccountScope');
+    const runtime = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    const canonicalStorage = getStorage();
+    const storage = fixtureStorage ?? canonicalStorage;
+    const previousScope = storage.getState().profileScope;
+    const previousSnapshot = runtime.getAppliedActiveServerSnapshot();
+    const previousAvailable = runtime.isAppliedActiveServerRuntimeAvailable();
+    runtime.publishAppliedActiveServerRuntimeAvailability(false);
+    storage.setState({ profileScope: scope });
+    registerStorageStateReader(() => storage.getState());
+    runtime.publishAppliedActiveServerSnapshot({ serverId: scope.serverId, serverUrl: 'https://storage-fixture.test',
+        generation: previousSnapshot.generation + 1 });
+    readFixtureAccountLifetime = captureActiveServerAccountScopeLifetime;
+    let disposed = false;
+    return {
+        dispose() {
+            if (disposed) return;
+            disposed = true;
+            retireActiveServerAccountScopeLifetime();
+            runtime.publishAppliedActiveServerRuntimeAvailability(false);
+            storage.setState({ profileScope: previousScope });
+            registerStorageStateReader(() => canonicalStorage.getState());
+            runtime.publishAppliedActiveServerSnapshot(previousSnapshot, previousAvailable);
+            readFixtureAccountLifetime = null;
+        },
+    };
+}
 
 const defaultProfile: Profile = Object.freeze({
     id: '',
     timestamp: 0,
+    name: null,
     firstName: null,
     lastName: null,
     username: null,
@@ -291,7 +330,8 @@ export function createStorageModuleStub<TOverrides extends object>(
         useCurrentSecretBindingsByProfileIdMutable,
         useLocalSetting,
         useLocalSettingMutable,
-        useActiveServerAccountScope: () => null,
+        useActiveServerAccountScope: () => readFixtureAccountLifetime?.()?.scope ?? null,
+        useActiveServerAccountScopeLifetime: () => readFixtureAccountLifetime?.() ?? null,
         useSessionLastMobileSurface: () => null,
         usePersistSessionLastMobileSurface: () => () => undefined,
         useSessionCompanionPreferenceSlot: () => ({ storageKey: null, stored: undefined }),
@@ -301,6 +341,7 @@ export function createStorageModuleStub<TOverrides extends object>(
         usePersistProjectLastMobileSurface: () => () => undefined,
         useProfile: () => store.getState().profile ?? defaultProfile,
         useIsDataReady: () => true,
+        useIsSessionDraftsReady: () => true,
         useAutomations: () => [],
         useWorkflowRunRows: () => [],
         useSessionMessages: () => ({ messages: [], isLoaded: true } as const),
@@ -369,6 +410,7 @@ export function createStorageModuleStub<TOverrides extends object>(
         useArtifact: () => null,
         useOpenApprovalSessionReferences: () => [],
         useOpenApprovalArtifactsForSession: () => [],
+        useTranscriptApprovalArtifactsForSession: () => [],
         useEnabledAutomationsCountForSession: () => 0,
         useWorkspaceReviewCommentsDrafts: () => [],
         useMachineListByServerId: () => ({}),

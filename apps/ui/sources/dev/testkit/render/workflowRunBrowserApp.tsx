@@ -5,6 +5,7 @@ require('@/unistyles');
 import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { NavigationContainer } from '@react-navigation/native';
 import { UnistylesRuntime } from 'react-native-unistyles';
 import {
     AutomationDefinitionListResponseSchema,
@@ -17,6 +18,7 @@ import {
     sealWorkflowProgressStoredEnvelopeV1,
     serializeWorkflowStoredContentEnvelopeV1,
     type WorkflowRunStateV1,
+    type WorkflowRunInvocationIndexV1,
     type WorkflowRunSummaryV1,
     type WorkflowResultContract,
 } from '@happier-dev/protocol';
@@ -26,6 +28,7 @@ import type { WorkspaceNavigationContextValue } from '@/components/appShell/work
 import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { AppShellMaterialFrame } from '@/components/navigation/shell/AppShellMaterialFrame';
+import { GlassMaterialRuntime } from '@/components/ui/glass/GlassMaterialRuntime';
 import { WorkflowRunScreen } from '@/components/workflows/screens/WorkflowRunScreen';
 import { WorkflowsColumn } from '@/components/workflows/column/WorkflowsColumn';
 import { InboxPage } from '@/app/(app)/inbox';
@@ -47,9 +50,13 @@ import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { createWorkflowRunSummaryFixture, createWorkflowInvocationIndexFixture } from '../fixtures/workflowRunFixtures';
+import { ApprovalRequestV1Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { AutomationV3RunListResponseSchema } from '@happier-dev/protocol/automations/automationApiV3';
 import { createMachineFixture } from '../fixtures/machineFixtures';
 import { installUrlMirror } from './workspaceHistoryBrowserBoundary';
 import { WorkspaceBrowserPresentation } from './WorkspaceBrowserPresentation';
+import { createWorkflowRunReleaseScene } from './workflowRunDesignScene';
 
 const accountId = 'run-browser-account';
 const runId = '11111111-1111-4111-8111-111111111111';
@@ -60,20 +67,23 @@ const catalog = resolveCompactAppDestinations({ pages: [], builtins: { workflows
 const search = { open: () => {}, buildCommands: () => [] };
 
 /** External opaque storage fixture. Production Action, codec, store, routing and modal owners stay real. */
-export async function mount(phone: boolean, theme: 'light' | 'dark', initialState: WorkflowRunStateV1 = 'waiting_for_review', defaultWaitName = false, requiredAnswer = false, seams = false) {
+export async function mount(phone: boolean, theme: 'light' | 'dark', initialState: WorkflowRunStateV1 = 'waiting_for_review', defaultWaitName = false, requiredAnswer = false, seams = false, columnProject = false,
+    /** `release`: the design lab's multi-lane Run (DESIGN-13) through the same real owners. */
+    scene: 'hold' | 'release' | 'release-failed' | 'release-review' = 'hold') {
+    const design = scene === 'hold' ? null : createWorkflowRunReleaseScene({ runId, rootId, holdId, failed: scene === 'release-failed', review: scene === 'release-review' });
     UnistylesRuntime.setAdaptiveThemes(false);
     UnistylesRuntime.setTheme(theme);
     // Plain text permits empty strings. Invalid-after-edit needs an authored required-field contract.
     const resultContract: WorkflowResultContract = requiredAnswer
         ? { kind: 'json', schema: { type: 'object', properties: { summary: { type: 'string', title: 'Summary', minLength: 1 } }, required: ['summary'] } }
         : { kind: 'text' };
-    const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], defaults: {}, blocks: [{
+    const definition = design?.definition ?? WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], defaults: {}, blocks: [{
         kind: 'wait', id: 'check', ...(defaultWaitName ? {} : { name: 'Check the release' }),
         document: { text: 'Check **the release notes** before continuing. Are the changes ready to share?', references: [], attachments: [] },
         result: resultContract,
     }] });
     let run = createWorkflowRunSummaryFixture({ id: runId, ownerAccountId: accountId, machineId: 'machine-a',
-        state: initialState, origin: { kind: 'direct' }, revision: 7, attentionRequired: initialState === 'waiting_for_review' });
+        state: initialState, origin: { kind: 'direct' }, revision: 7, attentionRequired: initialState === 'waiting_for_review' || (design !== null && scene !== 'release-failed') });
     // Exact server projection: succeeded + pending custody + existing invocation
     // (workflowRunService.ts#deriveWorkflowRunAvailability), not UI-derived policy.
     const completedAvailability = {
@@ -85,11 +95,14 @@ export async function mount(phone: boolean, theme: 'light' | 'dark', initialStat
             { operation: 'cancel', code: 'run_terminal' },
         ],
     } satisfies WorkflowRunSummaryV1['availability'];
+    // A settled design Run has nothing left to stop: its custody is settled, not pending.
+    if (scene === 'release-failed') run = { ...run, availability: completedAvailability, workflowCustodyState: 'settled' };
     const acceptedSnapshot = WorkflowAcceptedSnapshotV1Schema.parse({ definition, authoredDefinition: definition,
-        workDepth: 0, startedBy: 'user', metadata: { title: 'Release review' }, frozenChildren: {},
-        materializedLeaves: [{ sourceKey: '$root', blockId: 'check', kind: 'wait', selection: {}, authoredWorkspace: { kind: 'inherit' }, executionTarget: { kind: 'session' } }],
+        workDepth: 0, startedBy: 'user', metadata: { title: design?.title ?? 'Release review' }, frozenChildren: {},
+        materializedLeaves: design?.materializedLeaves ?? [{ sourceKey: '$root', blockId: 'check', kind: 'wait', selection: {}, authoredWorkspace: { kind: 'inherit' }, executionTarget: { kind: 'session' } }],
         source: { kind: 'inline' }, inputs: {}, machineId: 'machine-a', executionTarget: { kind: 'session' },
-        workspaceTarget: { project: { machineId: 'machine-a', directory: seams ? '/home/ubuntu' : '/repo', checkoutRootPath: seams ? '/home/ubuntu' : '/repo' } },
+        workspaceTarget: { project: { machineId: 'machine-a', directory: columnProject ? '/home/ubuntu/happier' : seams ? '/home/ubuntu' : '/repo',
+            checkoutRootPath: columnProject ? '/home/ubuntu/happier' : seams ? '/home/ubuntu' : '/repo' } },
         origin: { kind: 'direct' }, authorization: { admittedPermissionCeiling: 'read-only', principal: { kind: 'host' } },
     });
     const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
@@ -99,17 +112,25 @@ export async function mount(phone: boolean, theme: 'light' | 'dark', initialStat
             contentKey: { status: 'unavailable', reason: 'plain_account' }, contentPublicKeyFingerprint: null,
             encryptedDataKey: null, recipientContentPublicKeyFingerprint: null }],
         ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
-    const rows = new Map([true, false].map(isRoot => {
+    const sealProgress = (index: { id: string; sequence: string; parentRecordId: string | null; memberOrdinal: string; attempt: string }, progress: Parameters<typeof sealWorkflowProgressStoredEnvelopeV1>[0]['progress']) =>
+        serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+            binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: index.id, sequence: index.sequence,
+                parentRecordId: index.parentRecordId, memberOrdinal: index.memberOrdinal, attempt: index.attempt }, progress }));
+    type BrowserRow = { index: WorkflowRunInvocationIndexV1; contentEnvelope: string | null; parentRevision: number };
+    const rows = new Map<string, BrowserRow>(design !== null ? design.rows.map(row => [row.index.id, { index: row.index,
+        contentEnvelope: row.progress === null ? null : sealProgress(row.index, row.progress), parentRevision: run.revision }] satisfies [string, BrowserRow])
+        : [true, false].map(isRoot => {
         const index = createWorkflowInvocationIndexFixture({ id: isRoot ? rootId : holdId, runId, sequence: isRoot ? '0' : '1',
             parentRecordId: isRoot ? null : rootId, memberOrdinal: '0', attempt: '0', contentRevision: '7',
             lifecycle: isRoot ? 'running' : 'waiting_for_review' });
         const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', invocationPath: { blockId: isRoot ? '$root' : 'check', scope: [] },
             blockKind: isRoot ? 'root' : 'wait', attempt: '0', logicalInvocationRecordId: index.id,
+            ...(isRoot && seams ? { stepProgress: { completed: 0, total: 1 } } : {}),
             ...(isRoot ? {} : { resultContract }) });
         const contentEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
             binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: index.id, sequence: index.sequence,
                 parentRecordId: index.parentRecordId, memberOrdinal: index.memberOrdinal, attempt: index.attempt }, progress }));
-        return [index.id, { index, contentEnvelope, parentRevision: run.revision }] as const;
+        return [index.id, { index, contentEnvelope, parentRevision: run.revision }] satisfies [string, BrowserRow];
     }));
     const operations: string[] = [];
     let pendingStart: { runId: string; resolve: (reply: unknown) => void } | null = null;
@@ -125,6 +146,7 @@ export async function mount(phone: boolean, theme: 'light' | 'dark', initialStat
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
     setRuntimeFetch(async (url, init) => {
         const path = new URL(String(url)).pathname;
+        operations.push(`http:${path}`);
         if (path === '/health' || path === '/v1/auth/ping') return json({});
         if (path === '/v1/features') return json({ features: { automations: { enabled: true }, workflows: { enabled: true } }, capabilities: {
             accountStoredContentCompatibility: { v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
@@ -139,6 +161,9 @@ export async function mount(phone: boolean, theme: 'light' | 'dark', initialStat
         if (path === '/v3/automations' && (!init?.method || init.method === 'GET')) {
             return json(AutomationDefinitionListResponseSchema.parse({ automations: [], nextCursor: null }));
         }
+        if (path === '/v3/automations/runs' && (!init?.method || init.method === 'GET')) {
+            return json(AutomationV3RunListResponseSchema.parse({ runs: [], nextCursor: null }));
+        }
         if (path !== '/v3/automations/runs/workflow-storage') return json({}, 404);
         const operation: Readonly<Record<string, unknown>> = JSON.parse(String(init?.body));
         operations.push(String(operation.operation));
@@ -151,16 +176,24 @@ export async function mount(phone: boolean, theme: 'light' | 'dark', initialStat
         }
         // Mirror listWorkflowRuns' opaque HTTP projection, including the census
         // for plain Accounts: the public Action opens the private sidecars itself.
-        if (operation.operation === 'list') return json({ runs: [run], acceptedEnvelopesByRunId: { [runId]: acceptedEnvelope },
+        if (operation.operation === 'list') {
+            const attention = operation.request !== null && typeof operation.request === 'object'
+                && 'attention' in operation.request && operation.request.attention === 'required';
+            const held = attention ? [...rows.values()].filter(row => row.index.lifecycle === 'waiting_for_review')
+                .sort((a, b) => BigInt(a.index.sequence) < BigInt(b.index.sequence) ? -1 : 1)[0] : undefined;
+            return json({ runs: [run], acceptedEnvelopesByRunId: { [runId]: acceptedEnvelope },
             keyCensusByRunId: { [runId]: keyCensus }, rootProgressByRunId: {
                 [runId]: { index: rows.get(rootId)!.index, contentEnvelope: rows.get(rootId)!.contentEnvelope },
-            } });
+            }, ...(attention ? { heldProgressByRunId: { [runId]: held ? { index: held.index, contentEnvelope: held.contentEnvelope } : null } } : {}) });
+        }
         if (operation.operation === 'run-key.census') return json(keyCensus);
         if (operation.operation === 'invocations.list') {
-            if (operation.runId !== runId) return json({ invocations: [], parentRevision: admitted.get(String(operation.runId))?.run.revision ?? 1 });
+            if (operation.runId !== runId) return json({ invocations: [], parentRevision: admitted.get(String(operation.runId))?.run.revision ?? 1,
+                ...(operation.progressEnvelopes === true ? { keyCensus: { ...keyCensus, runId: String(operation.runId) }, progressEnvelopesByInvocationId: {} } : {}) });
             const listed = [...rows.values()].filter(row => !Array.isArray(operation.lifecycles) || operation.lifecycles.includes(row.index.lifecycle));
             return json({ invocations: listed.map(row => row.index), parentRevision: run.revision,
-                ...(operation.progressEnvelopes === true ? { progressEnvelopesByInvocationId: Object.fromEntries(listed.map(row => [row.index.id, row.contentEnvelope])) } : {}) });
+                ...(operation.progressEnvelopes === true ? { keyCensus,
+                    progressEnvelopesByInvocationId: Object.fromEntries(listed.flatMap(row => row.contentEnvelope === null ? [] : [[row.index.id, row.contentEnvelope]])) } : {}) });
         }
         if (operation.operation === 'invocations.get') {
             const row = rows.get(String(operation.invocationId));
@@ -185,12 +218,20 @@ export async function mount(phone: boolean, theme: 'light' | 'dark', initialStat
     await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, { token });
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     primeServerFeaturesSnapshot({ serverId: home.id, snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse() } });
-    storage.setState({ profileScope: { serverId: home.id, accountId }, isDataReady: true,
+    storage.setState({ profileScope: { serverId: home.id, accountId }, isDataReady: true, isSessionDraftsReady: true,
         settings: { ...settingsDefaults, experiments: true, featureToggles: { automations: true } },
         machines: { 'machine-a': createMachineFixture({ id: 'machine-a', activeAt: Date.now(),
-            ...(seams ? { metadata: { ...createMachineFixture().metadata!, homeDir: '/home/ubuntu' } } : {}) }) },
+            ...(seams ? { metadata: { ...createMachineFixture().metadata!, homeDir: '/home/ubuntu' } } : {}),
+            ...(design !== null ? { metadata: { ...createMachineFixture().metadata!, displayName: 'MacBook Pro' } } : {}) }) },
         workflowRunListWindows: {}, workflowRunsById: {}, workflowRunInvocationsByRunId: {} });
     if (seams) {
+        const approval = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: Date.now(), updatedAtMs: Date.now(),
+            createdBy: { surface: 'session_agent', sessionId: 'session-opaque-approval-fixture' },
+            actionId: 'session.spawn_new', actionArgs: {}, summary: 'session.spawn_new — session-opaque-approval-fixture' });
+        const header = buildApprovalRequestArtifactHeaderV1(approval, { legacyServerId: home.id });
+        storage.getState().applyArtifacts([{ id: '44444444-4444-4444-8444-444444444444', header, title: header.title,
+            body: JSON.stringify(approval), isDecrypted: true, storageMode: 'plain', headerVersion: 1, bodyVersion: 1,
+            seq: 1, createdAt: approval.createdAtMs, updatedAt: approval.updatedAtMs }]);
         await prepareSessionDraftPersistenceStorage();
         configureSessionDraftRepository({ scope: { serverId: home.id, accountId }, syncEnabled: false });
         writeNewSessionDraft({ scope: { serverId: home.id, accountId }, draftId: '99999999-9999-4999-8999-999999999999',
@@ -220,20 +261,21 @@ export async function mount(phone: boolean, theme: 'light' | 'dark', initialStat
     installUrlMirror();
     root.render(<WorkspaceBrowserPresentation><SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight },
         insets: { top: 0, right: 0, bottom: 0, left: 0 } }}><InjectedAuthProvider credentials={null}><UniversalSearchRuntimeProvider value={search}>
-        <ModalProvider><AppPaneProvider><App /></AppPaneProvider></ModalProvider></UniversalSearchRuntimeProvider></InjectedAuthProvider></SafeAreaProvider></WorkspaceBrowserPresentation>);
-    return { ready: () => Boolean(navigation?.active), themeName: () => UnistylesRuntime.themeName,
-        surfaceColor: () => UnistylesRuntime.getTheme().colors.surface.base,
+        <GlassMaterialRuntime><NavigationContainer><ModalProvider><AppPaneProvider><App /></AppPaneProvider></ModalProvider></NavigationContainer></GlassMaterialRuntime></UniversalSearchRuntimeProvider></InjectedAuthProvider></SafeAreaProvider></WorkspaceBrowserPresentation>);
+    return { reviewId: '55550004-5555-4555-8555-555555555555', ready: () => Boolean(navigation?.active)
+        && document.documentElement.style.getPropertyValue('--happier-glass-floating-opacity') !== '', themeName: () => UnistylesRuntime.themeName,
+        canvasColor: () => UnistylesRuntime.getTheme().colors.background.canvas,
         open: (href: string) => navigation.openHref(href), runHref, holdId,
         operations: () => [...operations],
         startRunId: () => pendingStart?.runId ?? null,
-        settleStart: (refused = false) => {
+        settleStart: (refused = false, errorCode = 'run_access_denied') => {
             if (!pendingStart) throw new Error('No issued start to settle');
             const pending = pendingStart;
             pendingStart = null;
-            if (refused) pending.resolve({ ok: false, errorCode: 'run_access_denied', error: 'run_access_denied' });
+            if (refused) pending.resolve({ ok: false, errorCode, error: errorCode });
             else {
                 const next = createWorkflowRunSummaryFixture({ id: pending.runId, ownerAccountId: accountId,
-                    machineId: 'machine-a', state: 'pending', origin: { kind: 'direct' } });
+                    machineId: 'machine-a', state: 'queued', origin: { kind: 'direct' } });
                 admitted.set(next.id, { run: next, acceptedEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
                     mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId: next.id }, acceptedSnapshot })) });
                 pending.resolve({ admission: 'created', run: next });
@@ -257,7 +299,11 @@ export async function mount(phone: boolean, theme: 'light' | 'dark', initialStat
                 contentRevision: String(BigInt(row.index.contentRevision) + 1n) }, parentRevision: run.revision });
             publishHomeAccountChange(home.id, [`workflow-run:${runId}`]); },
         setCompleted: () => {
-            run = { ...run, state: 'succeeded', revision: run.revision + 1, availability: completedAvailability };
+            run = { ...run, state: 'succeeded', attentionRequired: false, revision: run.revision + 1, availability: completedAvailability,
+                ...(design !== null ? { workflowCustodyState: 'settled' as const } : {}) };
+            // A settled Run has reached its last steps (the design scene stops before them while running).
+            for (const row of design?.lateRows ?? []) rows.set(row.index.id, { index: row.index,
+                contentEnvelope: row.progress === null ? null : sealProgress(row.index, row.progress), parentRevision: run.revision });
             for (const row of rows.values()) {
                 rows.set(row.index.id, { ...row, index: { ...row.index, lifecycle: 'completed',
                     contentRevision: String(BigInt(row.index.contentRevision) + 1n) }, parentRevision: run.revision });

@@ -7,6 +7,7 @@ import type { ScmCommitPublication } from '@happier-dev/protocol/scm';
 import { buildCommitProposal, type CommitProposal } from '@/components/sessions/files/commits/commitProposal';
 import { CommitGroupCard, CommitProposalView, type CommitProposalActions } from '@/components/sessions/files/commits/CommitProposalView';
 import { CommitPlanOutcomeBanner } from '@/components/sessions/files/commits/CommitPlanOutcome';
+import type { CommitHookEvidence } from '@/components/sessions/files/commits/CommitHookChanges';
 import { ScmComparisonBar, ScmComparisonViewSwitch } from '@/components/sessions/files/comparison/ScmComparisonBar';
 import { ScmComparisonScopePicker } from '@/components/sessions/files/comparison/ScmComparisonScopePicker';
 import { ScmComparisonPhoneHeader } from '@/components/sessions/files/comparison/ScmComparisonPhoneHeader';
@@ -131,11 +132,21 @@ function CommitsFrame(props: Readonly<{ proposal: CommitProposal; phone: boolean
     );
 }
 
-function Card(props: Readonly<{ proposal: CommitProposal; groupId: string; open: boolean }>) {
+/** What the hook changed, read from its recorded trees (the state the paused card waits on). */
+const HOOK_EVIDENCE: CommitHookEvidence = {
+    key: `${TREE_A}:${TREE_B}`,
+    state: 'ready',
+    files: [
+        { path: SCREEN, changeKind: 'modified', unifiedDiff: `--- a/${SCREEN}\n+++ b/${SCREEN}\n@@ -4,3 +4,3 @@\n-import {SettingsModal} from '@/components/settings/SettingsModal'\n+import { SettingsModal } from '@/components/settings/SettingsModal';\n` },
+        { path: COPY, changeKind: 'modified', unifiedDiff: `--- a/${COPY}\n+++ b/${COPY}\n@@ -311,1 +311,1 @@\n-    compact: "Compact"\n+    compact: 'Compact',\n` },
+    ],
+};
+
+function Card(props: Readonly<{ proposal: CommitProposal; groupId: string; open: boolean; hookEvidence?: CommitHookEvidence }>) {
     const group = props.proposal.groups.find((candidate) => candidate.id === props.groupId)!;
     return (
         <CommitGroupCard group={group} proposal={props.proposal} choices={null} open={props.open} onToggle={noop}
-            focusedKey={null} onFocusKey={noop} actions={RUN_ACTIONS} phone={false} />
+            focusedKey={null} onFocusKey={noop} actions={RUN_ACTIONS} phone={false} hookEvidence={props.hookEvidence} />
     );
 }
 
@@ -158,7 +169,7 @@ function Divergences() {
             <Cell caption="Signing unavailable" detail="checked before the first commit">
                 <CommitPlanOutcomeBanner proposal={SIGNING} branch="v0.3" actions={RUN_ACTIONS} />
             </Cell>
-            <Cell caption="A hook changed files" detail="shown, then your call"><Card proposal={HOOK_CHANGED} groupId="compact" open /></Cell>
+            <Cell caption="A hook changed files" detail="shown, then your call"><Card proposal={HOOK_CHANGED} groupId="compact" open hookEvidence={HOOK_EVIDENCE} /></Cell>
             <Cell caption="A hook failed" detail="output, earlier commits stay, the rest stay editable"><Card proposal={HOOK_FAILED} groupId="compact" open={false} /></Cell>
             <Cell caption="A hook rewrote the message" detail="allowed, shown"><Card proposal={REWRITTEN} groupId="route-key" open={false} /></Cell>
             <Cell caption="The branch moved while committing" detail="refuse the next, show landed vs remaining, no rollback">

@@ -1,5 +1,6 @@
 import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { vi } from 'vitest';
+import type { ActionSurfaceKey } from '@happier-dev/protocol/actions/actionSettings';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { updateEffectiveHomeViewState } from '@/sync/domains/server/selection/homeViewSelectionState';
@@ -18,6 +19,7 @@ import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/pr
 import { createRootLayoutFeaturesResponse } from '../fixtures/featureFixtures';
 import { createPlainProjectAccountRowListFixture } from '../fixtures/projectAccountRows';
 import { createArtifactStoreBoundary, type ArtifactStoreBoundary } from './artifactStoreBoundary';
+import { assertBoundaryImportOrder, recordBoundaryImportOriginal } from './assertBoundaryImportOrder';
 
 /**
  * One or more Homes, each answering for itself.
@@ -138,6 +140,7 @@ export type HomeGovernanceHarness = Readonly<{
      * A route that serves several methods on one path (a read and a create of
      * the same resource) is answered per method by prefixing it: `'POST /v1/x'`.
      * A method-prefixed answer wins over the bare path for that method.
+     * Exact query answers take precedence over route defaults without a query.
      */
     answer(serverId: string, path: string, answer: HomeDomainAnswer): void;
     /**
@@ -155,6 +158,8 @@ export type HomeGovernanceHarness = Readonly<{
      * is. `reset` therefore removes exactly what this seeded.
      */
     requireUiApproval(serverId: string, actionId: string): Promise<void>;
+    /** Seed the same persisted policy for another real invocation surface. */
+    requireActionApproval(serverId: string, actionId: string, surface: ActionSurfaceKey): Promise<void>;
     /** Requests recorded for one path, for asserting what was asked and where. */
     requestsFor(path: string): RecordedHomeRequest[];
     /**
@@ -261,7 +266,9 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
                 record.answers.set(`POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { body: createPlainProjectAccountRowListFixture() });
             }
 
-            const features = createRootLayoutFeaturesResponse();
+            const features = createRootLayoutFeaturesResponse({ capabilities: {
+                serverIdentity: { serverIdentityId: options.serverIdentityId ?? null },
+            } });
             if (options.teamsEnabled !== undefined
                 || options.credentialResourcesEnabled !== undefined
                 || options.credentialResourcesExternalApiEnabled !== undefined
@@ -327,6 +334,9 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             record.answers.set(path, answer);
         },
         async requireUiApproval(serverId: string, actionId: string): Promise<void> {
+            await this.requireActionApproval(serverId, actionId, 'ui');
+        },
+        async requireActionApproval(serverId: string, actionId: string, surface: ActionSurfaceKey): Promise<void> {
             const record = homesByServerId.get(serverId);
             if (!record) throw new Error(`No Home saved for ${serverId}`);
             if (!record.accountId) {
@@ -343,7 +353,7 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
                 ...current,
                 actionsSettingsV1: normalizeActionsSettingsV1({
                     v: 1,
-                    actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } },
+                    actions: { [actionId]: { approvalRequiredSurfaces: [surface] } },
                 }),
             };
             // The live Account scope, as the sync owner establishes it for the
@@ -481,7 +491,9 @@ async function answerForEndpoint(
     }));
 
     const method = (init?.method ?? 'GET').toUpperCase();
-    const pathAnswer = record?.answers.get(`${method} ${path}`) ?? record?.answers.get(path);
+    const route = new URL(path, serverUrl).pathname;
+    const pathAnswer = record?.answers.get(`${method} ${path}`) ?? record?.answers.get(path)
+        ?? record?.answers.get(`${method} ${route}`) ?? record?.answers.get(route);
     const answer = await pathAnswer?.select?.(input) ?? pathAnswer;
     if (!answer) {
         const artifactResponse = record?.artifacts.handle(path, init);
@@ -521,23 +533,21 @@ async function answerForEndpoint(
  * every Action-backed surface to the network, so a Team read rendered while
  * every Team *mutation* silently stalled.
  *
- * Both are installed with `vi.doMock`, which only reaches modules imported
- * afterwards. A suite must therefore import this harness — and everything else
- * it needs from the testkit — from the owning testkit modules, never from the
- * `@/dev/testkit` barrel: the barrel re-exports `fixtures/agentCatalogFixtures`,
- * whose production projection pulls in
- * `@/sync/runtime/orchestration/connectionManager` and, under it,
- * `@/sync/http/client` and the reachability fetch. Evaluating that graph first
- * binds the real transports into the scoped request owner and freezes the
- * applied active Home to the built-in default, so every Home request leaves
- * this harness, nothing is recorded in `requests`, and the surface never leaves
- * its loading state.
+ * Both are installed with `vi.doMock`, which only reaches later imports.
+ * The testkit barrel stays runtime-free; load screens/runtime consumers after
+ * installation. The shared import-order guard rejects an already captured
+ * real transport rather than letting the surface stall outside this harness.
  */
 export function installHomeGovernanceBoundaries(harness: HomeGovernanceHarness): void {
+    assertBoundaryImportOrder('installHomeGovernanceBoundaries', [
+        '@/sync/http/client',
+        '@/sync/runtime/connectivity/serverReachabilityRuntimeFetch',
+    ]);
     installed.current = harness;
 
     vi.doMock('@/sync/http/client', async (importOriginal) => {
         const actual = await importOriginal<typeof import('@/sync/http/client')>();
+        recordBoundaryImportOriginal(actual);
         return {
             ...actual,
             // Feature/currentness probes for the focused Home use the active

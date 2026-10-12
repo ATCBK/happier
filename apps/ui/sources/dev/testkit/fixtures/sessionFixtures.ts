@@ -21,11 +21,14 @@ export function createSessionAccessFixture(
     } };
 }
 
-export function createSessionFixture(overrides: Partial<Session> = {}): Session {
+export function createSessionFixture(
+    overrides: Partial<Session> = {},
+    options: Readonly<{ memoryEnabled?: boolean }> = {},
+): Session {
     const createdAt = overrides.createdAt ?? 1;
     const updatedAt = overrides.updatedAt ?? createdAt;
 
-    return {
+    const session: Session = {
         id: 'session-1',
         encryptionMode: 'plain',
         encryptedContentAvailability: 'ready',
@@ -51,6 +54,17 @@ export function createSessionFixture(overrides: Partial<Session> = {}): Session 
         presence: 'online',
         ...overrides,
     };
+    if (options.memoryEnabled !== undefined) {
+        const field = session.metadataLayoutVersion === 1 ? 'ownerMetadataView' : 'metadata';
+        const metadata = session[field];
+        if (!metadata) throw new Error('A Session memory fixture requires readable owner metadata');
+        const work = metadata.work;
+        session[field] = { ...metadata, work: {
+            ...(work && typeof work === 'object' && !Array.isArray(work) ? work : {}),
+            memoryEnabled: options.memoryEnabled,
+        } };
+    }
+    return session;
 }
 
 export function createSessionListRenderableSessionFixture(

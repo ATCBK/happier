@@ -6,7 +6,7 @@ import type { ReviewFinding } from '@happier-dev/protocol/reviews/ReviewFinding'
 import type { ScmComparison } from '@happier-dev/protocol/scm/comparison';
 import type { ScmDiffSummaryWalkthrough } from '@happier-dev/protocol/scm/diffSummary';
 
-import { ScmComparisonBar, ScmComparisonViewSwitch } from '@/components/sessions/files/comparison/ScmComparisonBar';
+import { ScmComparisonBar, ScmComparisonStartReview, ScmComparisonViewSwitch } from '@/components/sessions/files/comparison/ScmComparisonBar';
 import { ScmComparisonScopePicker } from '@/components/sessions/files/comparison/ScmComparisonScopePicker';
 import { ScmComparisonPhoneHeader } from '@/components/sessions/files/comparison/ScmComparisonPhoneHeader';
 import { listFilesComparisonScopeOptions } from '@/components/sessions/files/comparison/filesComparison';
@@ -14,11 +14,13 @@ import { WalkthroughNotice, WalkthroughNoticeButton } from '@/components/session
 import { WalkthroughView, type WalkthroughViewLayout } from '@/components/sessions/files/walkthrough/WalkthroughView';
 import { buildWalkthroughReading, type WalkthroughReadingInput } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import { ReviewFindingDecisionControl } from '@/components/sessions/reviews/findings/ReviewFindingRow';
+import { PlanOutputMessageCard } from '@/components/sessions/plans/messages/PlanOutputMessageCard';
+import { DelegateOutputMessageCard } from '@/components/sessions/delegations/messages/DelegateOutputMessageCard';
 import { ReviewFindingsMessageCard } from '@/components/sessions/reviews/messages/ReviewFindingsMessageCard';
 import { useReviewSeverityColorResolver } from '@/components/sessions/reviews/findings/useReviewSeverityColors';
 import { ReviewWalkthroughSteps, WalkthroughReviewExplanation } from '@/components/sessions/reviews/walkthrough/ReviewWalkthroughParts';
 import { ReviewExplainFindingsButton } from '@/components/sessions/reviews/walkthrough/SessionWalkthroughReview';
-import { StartReviewDialogView } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
+import { StartReviewDialogView, startReviewDialogChrome } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
 import { buildWalkthroughReviewOverlay } from '@/components/sessions/reviews/walkthrough/reviewWalkthroughOverlay';
 import { resolveReviewWalkthroughProgress } from '@/components/sessions/reviews/walkthrough/reviewWalkthroughProgress';
 import { buildWalkthroughReviewSlots, type WalkthroughReviewSlotsInput } from '@/components/sessions/reviews/walkthrough/walkthroughReviewSlots';
@@ -28,7 +30,9 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { shadowLevelStyle } from '@/shadowElevation';
+import { ModalCardFrame } from '@/modal/components/card/ModalCardFrame';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
+import type { CustomModalInjectedProps } from '@/modal/types';
 import { resolveReviewWalkthroughPlan, type ReviewWalkthroughEngine } from '@/sync/domains/reviews/reviewWalkthroughPlan';
 import { t } from '@/text';
 
@@ -232,13 +236,14 @@ const ENGINES: readonly ReviewWalkthroughEngine[] = [
     { engineId: 'coderabbit', label: 'CodeRabbit', description: 'Review CLI', enabled: true, structuredNarration: false },
 ];
 
-function DialogFrame(props: Readonly<{ selected: readonly string[]; phone: boolean }>) {
+/** The dialog's own state, so the real modal chrome can host it exactly as `presentStartReviewDialog` does. */
+function SpecimenStartReviewDialog(props: CustomModalInjectedProps & Readonly<{ selected: readonly string[]; phone: boolean }>) {
     const [selected, setSelected] = React.useState(props.selected);
     const [walkthrough, setWalkthrough] = React.useState(true);
     const [narrator, setNarrator] = React.useState<string | null>(null);
     const [instructions, setInstructions] = React.useState('Focus on how the modal and the phone sheet are keyed.');
     const plan = resolveReviewWalkthroughPlan({ engines: ENGINES, selectedEngineIds: selected, walkthrough, narratorEngineId: narrator });
-    const dialog = (
+    return (
         <StartReviewDialogView
             engines={ENGINES}
             selectedEngineIds={selected}
@@ -252,16 +257,25 @@ function DialogFrame(props: Readonly<{ selected: readonly string[]; phone: boole
             narratorEngineId={narrator}
             onSelectNarrator={setNarrator}
             plan={plan}
-            onCancel={noop}
-            onStart={noop}
+            onCancel={props.onClose}
+            onStart={props.onClose}
             phone={props.phone}
         />
     );
+}
+
+/** WT5-R4/R7: Start review in the real modal card chrome (card on wide, sheet on a phone), over the comparison bar. */
+function DialogFrame(props: Readonly<{ selected: readonly string[]; phone: boolean }>) {
+    const chrome = startReviewDialogChrome();
     return (
         <View style={styles.fill}>
-            {props.phone ? null : <Bar trailing={PROPOSE} />}
+            {props.phone ? null : <Bar trailing={<>{PROPOSE}<ScmComparisonStartReview onPress={noop} /></>} />}
             <View style={styles.scrim} />
-            <View style={props.phone ? styles.sheet : styles.dialogCard}>{dialog}</View>
+            <View style={[styles.backdrop, props.phone ? styles.backdropPhone : null]}>
+                <ModalCardFrame header="none" title={chrome.title} presentation={props.phone ? 'sheet' : 'card'} dimensions={chrome.dimensions} testID={chrome.testID}>
+                    <SpecimenStartReviewDialog selected={props.selected} phone={props.phone} onClose={noop} />
+                </ModalCardFrame>
+            </View>
         </View>
     );
 }
@@ -320,8 +334,28 @@ function AfterBoard() {
     );
 }
 
+/** A heavy review for judging density: long titles, deep paths, every severity, a dozen findings. */
+const HEAVY_FINDINGS: readonly ReviewFinding[] = [
+    HIGH,
+    finding('token-refresh-race', 'high', 'correctness', 'Two windows refreshing the session token at once can sign the second request with a token the server already revoked',
+        'Both windows read the expiring token, both refresh, and the slower one stores a revoked token.', { filePath: 'apps/ui/sources/sync/engine/auth/refreshAccountSessionTokenWithRetry.ts', line: 142 }),
+    DOCS, MEMO,
+    finding('modal-focus-trap', 'medium', 'maintainability', 'Focus escapes the settings modal into the sidebar when the last section is collapsed',
+        'Tab from the last disclosure lands on the sidebar behind the scrim.', { filePath: 'apps/ui/sources/components/settings/shell/SettingsModalFocusScope.tsx', line: 58 }),
+    finding('i18n-plural', 'medium', 'correctness', 'The section count uses a hand-built plural instead of the translation plural form',
+        'Languages with more than two plural forms read wrong.', { filePath: 'apps/ui/sources/text/translations/settingsTranslations.shared.ts', line: 311 }),
+    TESTS,
+    finding('resize-observer', 'low', 'performance', 'The resize observer stays attached after the modal closes',
+        'It keeps a reference to the closed modal until the next resize.', { filePath: 'apps/ui/sources/components/ui/modal/useModalLayout.ts', line: 27 }),
+    finding('story-coverage', 'low', 'testing', 'The narrow-window story is missing from the component board',
+        'Reviewers cannot see the compact layout without resizing.'),
+    NIT,
+    finding('import-order', 'nit', 'style', 'Import order in settingsRoutes.ts differs from the rest of the folder', 'Sorted imports keep diffs small.', { filePath: 'apps/ui/sources/components/settings/settingsRoutes.ts', line: 1 }),
+    finding('comment-typo', 'nit', 'style', 'Typo in a comment: “remouting”', 'Remounting.', { filePath: 'apps/ui/sources/components/settings/SettingsModal.tsx', line: 88 }),
+];
+
 /* ── Finished review in the transcript (R8, R8b, R8p) ── */
-function FinishedCard(props: Readonly<{ resumable: boolean; phone: boolean }>) {
+function FinishedCard(props: Readonly<{ resumable: boolean; phone: boolean; heavy?: boolean }>) {
     const source = React.useMemo(() => {
         const base = createReadOnlySessionTranscriptSource({ sessionId: 'specimen-session', messages: [], agentState: null, metadata: null, reducerState: null, workspacePath: '/repo' });
         return { ...base, navigate: noop };
@@ -331,16 +365,47 @@ function FinishedCard(props: Readonly<{ resumable: boolean; phone: boolean }>) {
         comparisonId: SPECIMEN_COMPARISON.id,
         summary: 'Claude and Codex reviewed the settings change: one real bug in the phone sheet, two things to tidy.',
         overviewMarkdown: 'Claude and Codex reviewed the settings change.',
-        findings: [HIGH, DOCS, MEMO, TESTS, NIT],
+        findings: props.heavy ? HEAVY_FINDINGS : [HIGH, DOCS, MEMO, TESTS, NIT],
         questions: [],
         assumptions: [],
         generatedAtMs: new Date(2026, 9, 3, 11, 4).getTime(),
-    }), [props.resumable]);
+    }), [props.heavy, props.resumable]);
     return (
         <SessionTranscriptSourceProvider source={source}>
             <View style={props.phone ? styles.transcriptPhone : styles.transcript}>
                 <View style={styles.userBubble}><Text style={styles.userText}>Review what you changed before I commit.</Text></View>
                 <ReviewFindingsMessageCard payload={payload} sessionId="specimen-session" canSendMessages />
+            </View>
+        </SessionTranscriptSourceProvider>
+    );
+}
+
+/* ── The other transcript Run results that share the result card (consumer check for its owner) ── */
+function OtherRunResults(props: Readonly<{ phone: boolean }>) {
+    const source = React.useMemo(() => ({ ...createReadOnlySessionTranscriptSource({ sessionId: 'specimen-session', messages: [], agentState: null, metadata: null, reducerState: null, workspacePath: '/repo' }), navigate: noop }), []);
+    const plan = React.useMemo(() => ({
+        runRef: runRef('plan-run', 'claude'),
+        summary: 'Key the settings modal by route so a resize never remounts it, then prove it with a resize test.',
+        sections: [
+            { title: 'Change', items: ['Add useSettingsRouteKey and use it in the modal and the phone sheet.', 'Pass the compact layout as a prop instead of reading the window width.'] },
+            { title: 'Prove', items: ['Resize twice in a component test and keep the draft.'] },
+        ],
+        risks: ['Plugins that build SettingsRoute objects need the new route kind.'],
+        generatedAtMs: new Date(2026, 9, 3, 10, 12).getTime(),
+    }), []);
+    const delegation = React.useMemo(() => ({
+        runRef: runRef('delegate-run', 'codex'),
+        summary: 'Audited every caller of the old window-size key; two remain in tests only.',
+        deliverables: [
+            { id: 'callers', title: 'Callers of the size key', details: 'SettingsModal.tsx and SettingsSheet.tsx; both now use the route key.' },
+            { id: 'tests', title: 'Tests still keyed by size', details: 'SettingsModal.test.tsx:65 and :88.' },
+        ],
+    }), []);
+    return (
+        <SessionTranscriptSourceProvider source={source}>
+            <View style={props.phone ? styles.transcriptPhone : styles.transcript}>
+                <PlanOutputMessageCard payload={plan} sessionId="specimen-session" canSendMessages />
+                <DelegateOutputMessageCard payload={delegation} />
             </View>
         </SessionTranscriptSourceProvider>
     );
@@ -389,33 +454,17 @@ export const REVIEW_WALKTHROUGH_SPECIMEN_FRAMES: readonly ReviewWalkthroughSpeci
     },
     { id: 'R8', title: 'WT5-R8 · finished review, the run can continue', render: (phone) => <FinishedCard resumable phone={phone} /> },
     { id: 'R8b', title: 'WT5-R8 · finished review, the run has ended', render: (phone) => <FinishedCard resumable={false} phone={phone} /> },
+    { id: 'R8h', title: 'WT5-R8 · finished review, heavy (12 findings, long titles)', render: (phone) => <FinishedCard resumable phone={phone} heavy /> },
     { id: 'R9', title: 'WT5-R9 · continue versus narrate', render: () => <AfterBoard /> },
+    { id: 'RX', title: 'Run result card consumers · plan and delegation', render: (phone) => <OtherRunResults phone={phone} /> },
 ];
 
 const styles = StyleSheet.create((theme) => ({
     fill: { flex: 1, minHeight: 0, backgroundColor: theme.colors.surface.base },
-    scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: theme.colors.text.primary, opacity: 0.18 },
-    dialogCard: {
-        position: 'absolute',
-        top: 72,
-        bottom: 24,
-        maxHeight: '90%',
-        alignSelf: 'center',
-        width: 520,
-        borderRadius: 16,
-        backgroundColor: theme.colors.surface.elevated,
-        ...shadowLevelStyle(theme.colors.shadowLevels[4]),
-    },
-    sheet: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        maxHeight: '90%',
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
-        backgroundColor: theme.colors.surface.elevated,
-    },
+    // The modal's own dim behind the card (BaseModal's backdrop role), for a static specimen of an open dialog.
+    scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: theme.colors.overlay.scrimWizard, opacity: motionTokens.overlay.modal.backdropMaxOpacity },
+    backdrop: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', paddingVertical: 24 },
+    backdropPhone: { justifyContent: 'flex-end', paddingVertical: 0 },
     grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 24, padding: 24 },
     cell: { width: 640, gap: 8 },
     cellCaption: { fontSize: 12, color: theme.colors.text.secondary, ...Typography.default('semiBold') },

@@ -9,6 +9,8 @@ import { listFilesComparisonScopeOptions } from '@/components/sessions/files/com
 import { TurnChangesCard } from '@/components/sessions/files/turnChanges/TurnChangesCard';
 import { ChangedFilesLayoutSwitch } from '@/components/sessions/panes/git/display/GitDisplayMenu';
 import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
+import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { ChangedFilesReview, type ChangedFilesReviewCoverage } from '@/components/workspaces/scm/review/ChangedFilesReview';
 import { Typography } from '@/constants/Typography';
@@ -17,7 +19,7 @@ import type { ScmFileStatus } from '@/scm/scmStatusFiles';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 import { ScmComparisonExplainToggle, ScmComparisonStartReview, ScmComparisonViewSwitch } from '@/components/sessions/files/comparison/ScmComparisonBar';
-import { WalkthroughExplainNotes, WALKTHROUGH_EXPLAIN_COLUMN_WIDTH_PX } from '@/components/sessions/files/walkthrough/WalkthroughExplainNotes';
+import { WalkthroughExplainNotes, WalkthroughFileStops, WALKTHROUGH_EXPLAIN_COLUMN_WIDTH_PX } from '@/components/sessions/files/walkthrough/WalkthroughExplainNotes';
 import { WalkthroughAnalysisFact, WalkthroughReviewedFact } from '@/components/sessions/files/walkthrough/WalkthroughAtoms';
 import { buildWalkthroughReading } from '@/components/sessions/files/walkthrough/walkthroughReading';
 
@@ -160,7 +162,7 @@ function FilesFrame(props: Readonly<{ stacked: boolean; explain?: boolean }>) {
                 title={EXPLAIN_READING.title}
                 coverage={coverage}
                 changeCount={EXPLAIN_READING.source.changeCount}
-                analysis={EXPLAIN_READING.analysis ? <WalkthroughAnalysisFact analysed={EXPLAIN_READING.analysis.analysed} total={EXPLAIN_READING.analysis.total} model="Opus 5.5" /> : null}
+                analysis={EXPLAIN_READING.analysis ? <WalkthroughAnalysisFact analysed={EXPLAIN_READING.analysis.analysed} total={EXPLAIN_READING.analysis.total} model="Opus 5.5" mark={<AgentIcon agentId="claude" size={ICON_SIZE.xs} />} /> : null}
                 reviewed={<WalkthroughReviewedFact count={EXPLAIN_READING.reviewedCount} total={EXPLAIN_READING.stops.length} />}
                 stacked={props.stacked}
                 accessory={(
@@ -177,6 +179,7 @@ function FilesFrame(props: Readonly<{ stacked: boolean; explain?: boolean }>) {
         renderHunkNotes: explain
             ? (path: string, hunkIndex: number, placement: 'column' | 'inline') => <WalkthroughExplainNotes reading={EXPLAIN_READING} path={path} hunkIndex={hunkIndex} placement={placement} onReadInWalkthrough={noop} />
             : null,
+        renderIndexAccessory: explain ? (path: string) => <WalkthroughFileStops reading={EXPLAIN_READING} path={path} /> : null,
     }), [explain, props.stacked]);
     return (
         <ChangedFilesReview

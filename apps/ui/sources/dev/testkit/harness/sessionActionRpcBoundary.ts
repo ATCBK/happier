@@ -16,8 +16,10 @@ export function installSessionActionRpcBoundary(respond: (request: SocketRpcRequ
             for (const listener of socket.listeners('connect')) listener();
             return socket;
         });
-        vi.spyOn(socket, 'timeout').mockReturnValue(socket);
-        vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload) => {
+        // Scoped sockets can outlive one test's spies. Keep this cold external
+        // transport installed for the socket lifetime, like connect/emit/disconnect.
+        socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
+        socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
             if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
             const wire: unknown = JSON.parse(JSON.stringify(payload));
             if (!wire || typeof wire !== 'object' || !('method' in wire) || typeof wire.method !== 'string' || !('params' in wire)) {

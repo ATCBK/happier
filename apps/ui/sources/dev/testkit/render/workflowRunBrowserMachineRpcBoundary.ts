@@ -1,7 +1,11 @@
 import type { ServerScopedMachineRpcParams } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 
-// Preserve the real dispatch-order owner; only the other-process RPC reply is a fixture.
-export { createOrderedMachineRpcCaller } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc.ts';
+import { createOrderedMachineRpcCaller as createProductionOrderedMachineRpcCaller } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc.ts';
+
+// Preserve real ordering while binding its supported transport dependency to the daemon boundary.
+export function createOrderedMachineRpcCaller(call: typeof machineRpcWithServerScope = machineRpcWithServerScope) {
+    return createProductionOrderedMachineRpcCaller(call);
+}
 
 export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachineRpcParams<A>): Promise<R> {
     const boundary = globalThis as typeof globalThis & {

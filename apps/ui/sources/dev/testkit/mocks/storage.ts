@@ -18,6 +18,7 @@ import {
     createUseSettingMock as createUseSettingRuntimeMock,
     createUseSettingMutableMock as createUseSettingRuntimeMutableMock,
     createStableStorageReader,
+    activateStorageAccountScope,
     createProjectAccountRowHookMocks,
     adaptStorageStoreLike,
     isStorageStoreLike,
@@ -44,7 +45,7 @@ function createVitestMutableSetter(): MutableSetter {
  * live getters; a spread would read them once, and inside an import cycle that read happens before
  * the original module has initialized (the real `storage` store would be captured as `undefined`).
  */
-function extendModuleMock(module: StorageModule, extra: Partial<StorageModule>): StorageModule {
+function extendModuleMock<TModule extends object>(module: TModule, extra: Partial<TModule>): TModule {
     const out: Record<PropertyKey, unknown> = {};
     for (const key of Reflect.ownKeys(module)) {
         const descriptor = Object.getOwnPropertyDescriptor(module, key);
@@ -53,7 +54,7 @@ function extendModuleMock(module: StorageModule, extra: Partial<StorageModule>):
     for (const [key, value] of Object.entries(extra)) {
         Object.defineProperty(out, key, { value, writable: true, enumerable: true, configurable: true });
     }
-    return out as StorageModule;
+    return out as TModule;
 }
 
 export async function createStorageModuleMock(options: CreateStorageModuleMockOptions): Promise<StorageModule> {
@@ -111,7 +112,11 @@ export async function createPartialStorageModuleMock(
 export async function createStorageStoreModuleMock(
     options: CreateStorageStoreModuleMockOptions,
 ): Promise<StorageStoreModule> {
-    return mergeModuleMock<StorageStoreModule>(options);
+    const module = await mergeModuleMock<StorageStoreModule>(options);
+    const storageOverride = (options.overrides as { storage?: unknown }).storage;
+    if (!isStorageStoreLike(storageOverride)) return module;
+    const storage = adaptStorageStoreLike(storageOverride);
+    return extendModuleMock(module, { storage, getStorage: () => storage });
 }
 
 export function createStorageModuleStub<TOverrides extends object>(overrides: TOverrides): StorageModule {
@@ -120,7 +125,7 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
     });
 }
 
-export { createStableStorageReader };
+export { activateStorageAccountScope, createStableStorageReader };
 
 export const createUseSettingMock = createUseSettingRuntimeMock;
 

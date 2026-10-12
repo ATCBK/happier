@@ -9,6 +9,8 @@ export type TextModuleRuntimeOptions = Readonly<{
      * the key itself.
      */
     hasTranslation?: (key: string) => boolean;
+    /** Raw catalog lookup for consumers that fall back to an authored literal title. */
+    getTranslationValue?: (key: string) => unknown;
 }>;
 
 /**
@@ -39,6 +41,7 @@ export function createTextModuleRuntime(options: TextModuleRuntimeOptions = {}) 
         tLoose: translateLoose,
         getPreferredLanguage,
         hasTranslation,
+        getTranslationValue: options.getTranslationValue ?? ((key: string) => hasTranslation(key) ? translate(key) : undefined),
     };
 }
 

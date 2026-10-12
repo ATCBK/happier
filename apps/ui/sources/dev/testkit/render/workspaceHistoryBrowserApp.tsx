@@ -39,7 +39,7 @@ const catalog = resolveCompactAppDestinations({ pages: [], builtins: { workflows
 installWorkspaceBrowserHistory();
 
 export function mount(phone: boolean) {
-    storage.setState({ profileScope: { serverId: 'home-a', accountId: 'alice' }, isDataReady: true });
+    storage.setState({ profileScope: { serverId: 'home-a', accountId: 'alice' }, isDataReady: true, isSessionDraftsReady: true });
     const root = createRoot(document.getElementById('root')!);
     let current: WorkspaceNavigationContextValue;
     function AppShell() {
@@ -99,7 +99,7 @@ async function mountThemeSurface() {
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     await TokenStorage.setCredentialsForServerUrl('http://states-browser.test', { serverId: home.id }, { token: 'header.eyJzdWIiOiJhY2NvdW50LWEifQ==.signature' });
     primeServerFeaturesSnapshot({ serverId: home.id, snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse() } });
-    storage.setState({ profileScope: { serverId: home.id, accountId: 'account-a' }, isDataReady: true,
+    storage.setState({ profileScope: { serverId: home.id, accountId: 'account-a' }, isDataReady: true, isSessionDraftsReady: true,
         settings: { ...settingsDefaults, experiments: true, featureToggles: { automations: true } },
         workflowTriggerSetsById: {}, workflowTriggerSetIdsByQuery: {} });
     createRoot(document.getElementById('root')!).render(<WorkspaceBrowserPresentation><SafeAreaProvider initialMetrics={{

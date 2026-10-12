@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { create } from 'zustand';
+import type { StorageState } from '@/sync/store/types';
 
-import { createLiveStorageStoreMock, createStorageModuleMock, createStorageModuleStub, createStorageStoreMock, createUseSettingMock } from './storage';
+import { activateStorageAccountScope, createLiveStorageStoreMock, createStorageModuleMock, createStorageModuleStub, createStorageStoreModuleMock, createStorageStoreMock, createUseSettingMock } from './storage';
 import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization';
 import { createSessionFixture } from '../fixtures/sessionFixtures';
 import { createToolCallMessageFixture } from '../fixtures/transcriptFixtures';
@@ -8,6 +10,36 @@ import { clearSessionMessageDerivedCachesForServerScopeReset, readSessionMessage
 import { clearSessionTranscriptDerivedCachesForSession } from '@/sync/runtime/sessionTranscriptDerivedCaches';
 
 describe('storage fixture setting readers', () => {
+    it('keeps the real Account lifetime stable until the fixture Home retires', async () => {
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { getStorage } = await import('@/sync/domains/state/storageStore');
+        const { readRegisteredStorageState } = await import('@/sync/domains/state/storageStateReaderBridge');
+        const runtime = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const previousSnapshot = runtime.getAppliedActiveServerSnapshot();
+        const previousAvailable = runtime.isAppliedActiveServerRuntimeAvailable();
+        const canonicalScope = getStorage().getState().profileScope;
+        const fixtureStorage = create<StorageState>(() => createStorageStoreMock({}).getState());
+        const home = await activateStorageAccountScope({ serverId: 'fixture-home', accountId: 'fixture-account' }, fixtureStorage);
+        try {
+            const lifetime = captureActiveServerAccountScopeLifetime();
+            expect(lifetime?.scope).toEqual({ serverId: 'fixture-home', accountId: 'fixture-account' });
+            expect(captureActiveServerAccountScopeLifetime()).toBe(lifetime);
+            expect(createStorageModuleStub({}).useActiveServerAccountScopeLifetime()).toBe(lifetime);
+            expect(createStorageModuleStub({}).useActiveServerAccountScope()).toBe(lifetime?.scope);
+            expect(lifetime?.isCurrent()).toBe(true);
+            home.dispose();
+            expect(lifetime?.isCurrent()).toBe(false);
+            expect(fixtureStorage.getState().profileScope).toBeUndefined();
+            expect(readRegisteredStorageState()).toBe(getStorage().getState());
+            expect(getStorage().getState().profileScope).toBe(canonicalScope);
+            expect(runtime.getAppliedActiveServerSnapshot()).toEqual(previousSnapshot);
+            expect(runtime.isAppliedActiveServerRuntimeAvailable()).toBe(previousAvailable);
+        } finally {
+            home.dispose();
+        }
+        expect(createStorageModuleStub({}).useActiveServerAccountScopeLifetime()).toBeNull();
+    });
+
     it('supports unhydrated organization reads and preserves injected Home-qualified pin records', () => {
         const sessionId = 'shared-session';
         const homeAKey = buildSessionOrganizationSessionKey('home-a', sessionId);
@@ -78,5 +110,22 @@ describe('storage fixture setting readers', () => {
             useSettingMutable: explicit.useSettingMutable,
         } });
         expect(preserved.useSettingMutable('scmGitPaneLayout')[0]).toBe('tabs');
+
+        const fixtureStorage = create<StorageState>(() => createStorageStoreMock({
+            profileScope: { serverId: 'home', accountId: 'account' },
+        }).getState());
+        const storeModule = await createStorageStoreModuleMock({
+            importOriginal: async <T,>() => ({ storage: original.storage, getStorage: original.getStorage }) as T,
+            overrides: { storage: fixtureStorage },
+        });
+        expect(storeModule.getStorage()).toBe(storeModule.storage);
+        const observedScopes: StorageState['profileScope'][] = [];
+        const unsubscribe = storeModule.getStorage().subscribe((state) => observedScopes.push(state.profileScope));
+        storeModule.storage.setState({ profileScope: { serverId: 'next-home', accountId: 'account' } });
+        expect(observedScopes).toEqual([{ serverId: 'next-home', accountId: 'account' }]);
+        expect(storeModule.getStorage().getState().profileScope).toEqual({ serverId: 'next-home', accountId: 'account' });
+        unsubscribe();
+        storeModule.storage.setState({ profileScope: undefined });
+        expect(observedScopes).toHaveLength(1);
     });
 });

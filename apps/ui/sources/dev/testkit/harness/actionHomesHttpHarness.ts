@@ -20,6 +20,7 @@ export type ServedHomeRequest = Readonly<{
     url: URL;
     /** The Account the request authenticated as (the bearer token's subject). */
     accountId: string | null;
+    headers: Headers;
     body: unknown;
     signal: AbortSignal | null | undefined;
 }>;
@@ -94,6 +95,7 @@ export async function serveAccountHomes(params: Readonly<{
             path: target.pathname,
             url: target,
             accountId: accountOf(init),
+            headers: new Headers(init?.headers),
             body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
             signal: init?.signal,
         };
@@ -126,6 +128,15 @@ export async function serveAccountHomes(params: Readonly<{
     return {
         homes,
         requests,
+        /** Mounted content also needs the real applied Home/Account lifetime, beyond saved profiles. */
+        async restoreActiveConnection() {
+            await import('@/sync/syncEngine');
+            const credential = await TokenStorage.getCredentialsForServerUrl(homes[focused.key]!.serverUrl);
+            if (!credential) throw new Error('Served Home Account is unavailable');
+            const { restoreConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+            await restoreConnectionToActiveServer(credential);
+            return disconnectActiveServerConnection;
+        },
         /** The Home now signs in as another Account (a sign-out and sign-in elsewhere). */
         switchAccount(key: string, accountId: string) {
             accounts.set(key, accountId);

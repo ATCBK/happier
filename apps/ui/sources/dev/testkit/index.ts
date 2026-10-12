@@ -1,15 +1,22 @@
 // The barrel is imported for its first render by suites that render nothing
 // agent-shaped, so it must stay free of modules that value-import runtime
-// singletons. `fixtures/agentCatalogFixtures` was the only such re-export: it
+// singletons. `fixtures/agentCatalogFixtures` is one such fixture: it
 // reaches `@/sync/domains/scope/activeServerAccountScope` through
 // `agentCatalogProjection` -> `registryUiBehavior` -> `agentUiBehaviorProjection`,
 // which captures an ambient active-Home snapshot at module evaluation and made
 // unrelated Teams/ops suites render against the real sync runtime. Import that
 // fixture from '@/dev/testkit/fixtures/agentCatalogFixtures' directly.
+// Home and Provider harnesses also reach the live server/runtime owners; import
+// them from their own `harness/homeGovernanceHarness` and
+// `harness/providerSettingsHarness` paths only in suites that need those owners.
+// The Machine Administration selection mock also imports the real target
+// state owner, which reaches Home features/HTTP through display-name lookup.
+// Import it from `mocks/machineAdministrationTargetSelection` after transport
+// installation when the suite also uses Home boundaries.
 //
-// Rule: re-export a module here only when it pulls in fixtures, mocks and
-// render helpers. A module that value-imports `@/sync/**`, `@/agents/registry/**`
-// or any other runtime singleton stays behind its own deep path.
+// Rule: re-export fixtures, mocks and render helpers here only when their
+// transitive value imports stay free of runtime singletons and transports.
+// Runtime-bearing helpers stay behind their own deep paths.
 export * from './cleanup/standardCleanup';
 export * from './fixtures/featureFixtures';
 export * from './fixtures/actionExecutorBoundary';
@@ -34,8 +41,6 @@ export * from './harness/popoverHarness';
 export * from './fixtures/homeGovernanceFixtures';
 export * from './fixtures/teamFixtures';
 export * from './harness/approvalInbox';
-export * from './harness/homeGovernanceHarness';
-export * from './harness/providerSettingsHarness';
 export * from './harness/rootLayoutTestkit';
 export * from './harness/serverScopedContextHarness';
 export * from './harness/settingsViewHarness';
@@ -54,7 +59,6 @@ export * from './mocks/virtualizedList';
 export * from './mocks/legendList';
 export * from './mocks/gestureHandler';
 export * from './mocks/modal';
-export * from './mocks/machineAdministrationTargetSelection';
 export * from './mocks/mainAppTabState';
 export * from './mocks/reactNative';
 export * from './mocks/router';

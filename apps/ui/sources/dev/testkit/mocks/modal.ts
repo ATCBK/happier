@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { IModal } from '@/modal';
+import type { IModal, ModalType } from '@/modal';
 import { vi } from 'vitest';
 
 export type ModalModuleMockOptions = Readonly<{
@@ -26,6 +26,7 @@ export function createModalModuleMock(options: ModalModuleMockOptions = {}) {
     type CustomModalConfig = Parameters<IModal['show']>[0];
     let modals: ReadonlyArray<Readonly<{ id: string; config: CustomModalConfig }>> = [];
     let nextModalId = 0;
+    const VisibleModalKindContext = React.createContext<ModalType | null>(null);
     const listeners = new Set<() => void>();
     const publish = () => { for (const listener of listeners) listener(); };
     const showImplementation = options.spies?.show ?? ((config: Parameters<IModal['show']>[0]) => {
@@ -93,12 +94,14 @@ export function createModalModuleMock(options: ModalModuleMockOptions = {}) {
             () => modals,
             () => modals,
         );
-        return React.createElement('ModalProvider', { active }, children ?? null,
+        return React.createElement(VisibleModalKindContext.Provider, {
+            value: active === false || snapshot.length === 0 ? null : 'custom',
+        }, React.createElement('ModalProvider', { active }, children ?? null,
             snapshot.map(({ id, config }) => React.createElement(config.component, {
                 ...config.props,
                 key: id,
                 onClose: () => spies.hide(id),
-            })));
+            }))));
     }
 
     function ModalProvider({ active, children }: { active?: boolean; children?: React.ReactNode }) {
@@ -121,6 +124,7 @@ export function createModalModuleMock(options: ModalModuleMockOptions = {}) {
                 confirm: spies.confirm,
             },
             ModalProvider,
+            useVisibleModalKind: () => React.useContext(VisibleModalKindContext),
             useOptionalModal: () => ({
                 state: { modals: [] },
                 showModal: spies.show,

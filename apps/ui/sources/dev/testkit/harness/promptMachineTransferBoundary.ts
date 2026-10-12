@@ -237,7 +237,7 @@ export async function createPromptMachineTransferFixture(options: Readonly<{
     storage.getState().applySettingsLocal({ machineAdministrationTargetsLocalV1: {
         [options.selectionKey]: { serverIdentityId: options.serverIdentityId, machineId: 'machine-1' },
     } });
-    storage.setState({ isDataReady: true, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
+    storage.setState({ isDataReady: true, isSessionDraftsReady: true, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
     const { getReadyServerFeatures } = await import('@/sync/api/capabilities/getReadyServerFeatures');
     if (!await getReadyServerFeatures({ serverId, force: true })) throw new Error('Prompt fixture original Home feature admission failed');
     const { resolveMachineCarrierRoute } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease');

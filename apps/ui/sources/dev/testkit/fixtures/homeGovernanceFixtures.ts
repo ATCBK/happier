@@ -61,11 +61,12 @@ export function homeGovernanceProjectionFixture(
  * defines them. A row built any other way is one no Home could ever send.
  */
 export function accountDisplayProfileFixture(
-    firstName: string,
+    name: string,
     overrides?: Partial<AccountDisplayProfileV1>,
 ): AccountDisplayProfileV1 {
     return {
-        firstName,
+        name,
+        firstName: name,
         lastName: null,
         username: null,
         avatarUrl: null,

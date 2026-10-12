@@ -8,6 +8,9 @@ import { resolveCompactAppDestinations } from '@/components/appShell/destination
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { AppShellMaterialFrame } from '@/components/navigation/shell/AppShellMaterialFrame';
 import { WorkflowsLibraryHome } from '@/components/workflows/library/WorkflowsLibraryHome';
+import { WorkflowsDestinationIndex } from '@/components/workflows/library/WorkflowsDestinationIndex';
+import { WorkflowsColumn } from '@/components/workflows/column/WorkflowsColumn';
+import { AppShellColumnContext } from '@/components/navigation/shell/appRail/appShellColumnContext';
 import { WorkflowEditorHostScreen } from '@/components/workflows/screens/WorkflowEditorHostScreen';
 import { usePathname } from '@/components/appShell/workspace/destinationRoute';
 import { installWorkspaceBrowserHistory } from '@/components/appShell/workspace/workspaceBrowserTransport';
@@ -24,7 +27,7 @@ import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeatu
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { createRootLayoutFeaturesResponse } from '../fixtures/featureFixtures';
 import { installUrlMirror } from './workspaceHistoryBrowserBoundary';
-import { settleLibraryDeletion, configureSingleLibraryDefinition, switchLibraryAccount, getLibraryFixtureAccountId, readLibraryFixtureResponse, isLibraryDeletionPending } from '../fixtures/workflowLibraryHttpFixture';
+import { settleLibraryDeletion, configureSingleLibraryDefinition, configureLibraryDesignScene, configureLibraryReadFailure, switchLibraryAccount, getLibraryFixtureAccountId, readLibraryFixtureResponse, isLibraryDeletionPending } from '../fixtures/workflowLibraryHttpFixture';
 import { createWorkflowActionHttpTransport } from '../fixtures/workflowActionHttpTransport';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { WorkspaceBrowserPresentation } from './WorkspaceBrowserPresentation';
@@ -32,13 +35,18 @@ import { WorkspaceBrowserPresentation } from './WorkspaceBrowserPresentation';
 const catalog = resolveCompactAppDestinations({ pages: [], builtins: { workflows: true, friends: false, inbox: false, externalSessions: false } });
 const search = { open: () => {}, buildCommands: () => [] };
 installWorkspaceBrowserHistory();
+/** `destination`: the real `/workflows` index, with the shell's Workflows column beside it on a wide window. */
+let libraryShell: 'home' | 'destination' = 'home';
+const VISIBLE_COLUMN = Object.freeze({ present: true, columnVisible: true });
 function LibraryJourney() {
     const pathname = usePathname();
     const definitionId = /^\/workflows\/([^/]+)$/.exec(pathname)?.[1];
-    return <AppPaneProvider>{definitionId === undefined ? <WorkflowsLibraryHome /> :
+    return <AppPaneProvider>{definitionId === undefined ? libraryShell === 'destination' ? <WorkflowsDestinationIndex /> : <WorkflowsLibraryHome /> :
         <WorkflowEditorHostScreen source={{ kind: 'saved', definitionId }} />}</AppPaneProvider>;
 }
-async function mount(phone: boolean, theme: 'light' | 'dark', singleDefinition = false, surface: 'library' | 'artifacts' = 'library') {
+async function mount(phone: boolean, theme: 'light' | 'dark', singleDefinition = false, surface: 'library' | 'artifacts' = 'library', shell: 'home' | 'destination' = 'home') {
+    libraryShell = shell;
+    const withColumn = shell === 'destination' && !phone && surface === 'library';
     if (singleDefinition) configureSingleLibraryDefinition();
     const transport = createWorkflowActionHttpTransport({ fixtureResponse: readLibraryFixtureResponse, accountId: getLibraryFixtureAccountId });
     const httpTrace: string[] = [];
@@ -54,7 +62,7 @@ async function mount(phone: boolean, theme: 'light' | 'dark', singleDefinition =
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     await TokenStorage.setCredentialsForServerUrl('http://library-browser.test', { serverId: home.id }, { token: 'header.eyJzdWIiOiJhY2NvdW50LWEifQ==.signature' });
     primeServerFeaturesSnapshot({ serverId: home.id, snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse() } });
-    storage.setState({ profileScope: { serverId: home.id, accountId: 'account-a' }, isDataReady: true,
+    storage.setState({ profileScope: { serverId: home.id, accountId: 'account-a' }, isDataReady: true, isSessionDraftsReady: true,
         settings: { ...settingsDefaults, experiments: true, featureToggles: { automations: true } },
         ...(surface === 'artifacts' ? { localSettings: { ...storage.getState().localSettings, artifactsBrowserViewV1: { presentation: 'list' as const } } } : {}),
         workflowRunListWindows: {}, workflowRunsById: {} });
@@ -66,8 +74,9 @@ async function mount(phone: boolean, theme: 'light' | 'dark', singleDefinition =
                 const tab = navigation.state.tabs[group.activeTabId];
                 const pathname = tab.target.kind === 'workflow' ? `/workflows/${tab.target.params.id}`
                     : tab.target.params.workspacePathname ?? (surface === 'library' ? '/workflows' : '/artifacts');
-                return <AppShellMaterialFrame showChrome={!phone} dragEnabled={false} leftOffsetPx={0} sidebarWidth={0}
-                    titleStrip={null} rail={null} column={null} peek={null}>
+                return <AppShellColumnContext.Provider value={withColumn ? VISIBLE_COLUMN : { present: false, columnVisible: false }}>
+                <AppShellMaterialFrame showChrome={!phone} dragEnabled={false} leftOffsetPx={0} sidebarWidth={withColumn ? 320 : 0}
+                    titleStrip={null} rail={null} column={withColumn ? <WorkflowsColumn /> : null} peek={null}>
                     <DestinationInstanceHost tabId={tab.id} ref={tab.target} pathname={pathname} focused visible phone={phone}
                         navigation={navigation.navigationForTab(tab.id)}>{surface === 'library' ? <LibraryJourney /> :
                             <AppPaneProvider><ArtifactsBrowser artifacts={[{
@@ -76,7 +85,7 @@ async function mount(phone: boolean, theme: 'light' | 'dark', singleDefinition =
                                 seq: 1, body: 'A note', createdAt: 1, updatedAt: 1, access: 'owner', storageMode: 'plain',
                             }]} loaded loadFailed={false} onRetry={() => {}} usage={null} /></AppPaneProvider>
                         }</DestinationInstanceHost>
-                </AppShellMaterialFrame>;
+                </AppShellMaterialFrame></AppShellColumnContext.Provider>;
             }}</WorkspaceProvider></ModalProvider>
         </UniversalSearchRuntimeProvider></InjectedAuthProvider>
     </SafeAreaProvider></WorkspaceBrowserPresentation>);
@@ -92,4 +101,4 @@ function reactivateRuntime() {
     publishAppliedActiveServerRuntimeAvailability(false);
     publishAppliedActiveServerSnapshot(getAppliedActiveServerSnapshot());
 }
-Object.assign(globalThis, { libraryHarness: { mount, settleDeletion: settleLibraryDeletion, deletionPending: isLibraryDeletionPending, switchAccount, reactivateRuntime } });
+Object.assign(globalThis, { libraryHarness: { mount, useDesignScene: configureLibraryDesignScene, failLibraryRead: configureLibraryReadFailure, settleDeletion: settleLibraryDeletion, deletionPending: isLibraryDeletionPending, switchAccount, reactivateRuntime } });

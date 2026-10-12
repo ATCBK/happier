@@ -5,16 +5,19 @@ import type { KvItem } from '@/sync/api/account/apiKv';
 /** External opaque KV HTTP facts; Account codecs, CAS and tab reconciliation stay real. */
 export function createAccountKvHttpFixture() {
     const rows = new Map<string, KvItem>();
+    const requests: Array<{ method: string | undefined; path: string }> = [];
     const mutationsSchema = z.object({ mutations: z.array(z.object({
         key: z.string(), value: z.string().nullable(), version: z.number().int(),
     }).strict()) }).strict();
     const bulkSchema = z.object({ keys: z.array(z.string()) }).strict();
     return {
-        reset: () => rows.clear(),
+        reset: () => { rows.clear(); requests.length = 0; },
         read: (key: string) => rows.get(key),
+        readRequests: () => [...requests],
         handle: async (request: IncomingMessage, response: ServerResponse): Promise<boolean> => {
             const url = new URL(request.url ?? '/', 'http://fixture.test');
             if (url.pathname !== '/v1/kv' && !url.pathname.startsWith('/v1/kv/')) return false;
+            requests.push({ method: request.method, path: url.pathname });
             const json = (value: unknown, status = 200) => {
                 response.statusCode = status;
                 response.setHeader('Content-Type', 'application/json');
