@@ -12,6 +12,7 @@ const HEADER_KEY_REGEX = /^[A-Za-z0-9-]+$/;
 export const McpValueRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
   z.object({ t: z.literal('literal'), v: z.string() }).strict(),
   z.object({ t: z.literal('savedSecret'), secretId: z.string().min(1) }).strict(),
+  z.object({ t: z.literal('sessionAttested'), field: z.enum(['externalPrincipalId', 'sourceMessageId', 'sessionId']) }).strict(),
 ]));
 
 export type McpValueRefV1 = z.infer<typeof McpValueRefV1Schema>;
