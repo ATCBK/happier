@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { z } from 'zod';
-import { AutomationDefinitionListRequestSchema, AutomationDefinitionListResponseSchema, AutomationDefinitionDetailSchema, AutomationDefinitionCreateRequestSchema, AutomationDefinitionReconcileRequestSchema, AutomationDeleteResponseSchema, AutomationV3RunMutationResponseSchema, type AutomationV3RunMutationResponse } from '@happier-dev/protocol/automations/automationApiV3';
+import { AutomationDefinitionListRequestSchema, AutomationDefinitionListResponseSchema, AutomationDefinitionDetailSchema, AutomationDefinitionCreateRequestSchema, AutomationDefinitionReconcileRequestSchema, AutomationDeleteResponseSchema, AutomationV3RunMutationResponseSchema, type AutomationV3RunMutationResponse, type AutomationDeleteResponse } from '@happier-dev/protocol/automations/automationApiV3';
 import type { AutomationDefinitionListResponse, AutomationDefinitionListRequest, AutomationDefinitionDetail, AutomationDefinitionCreateRequest, AutomationDefinitionReconcileRequest } from '@happier-dev/protocol';
 
 import {
@@ -126,6 +126,6 @@ export async function reconcileAutomationDefinition(params: Readonly<{ token: st
   return AutomationDefinitionDetailSchema.parse(await requestAutomationDefinition({ token: params.token, automationId: params.automationId,
     method: 'PUT', body: AutomationDefinitionReconcileRequestSchema.parse(params.input) }));
 }
-export async function deleteAutomationDefinition(params: Readonly<{ token: string; automationId: string }>): Promise<void> {
-  AutomationDeleteResponseSchema.parse(await requestAutomationDefinition({ ...params, method: 'DELETE' }));
+export async function deleteAutomationDefinition(params: Readonly<{ token: string; automationId: string }>): Promise<AutomationDeleteResponse> {
+  return AutomationDeleteResponseSchema.parse(await requestAutomationDefinition({ ...params, method: 'DELETE' }));
 }

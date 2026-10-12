@@ -440,7 +440,7 @@ describe("Automation Event CRUD database contract", () => {
         await expect(deleteAutomation({
             accountId: account.id,
             automationId: created.id,
-        })).resolves.toBe(true);
+        })).resolves.toEqual({ removedRevision: expect.any(Number) });
         expect(await readEventCatalogRevision(account.id)).toBe(6n);
         expect(await db.automation.findUniqueOrThrow({
             where: { id: created.id },
@@ -523,7 +523,7 @@ describe("Automation Event CRUD database contract", () => {
         await expect(deleteAutomation({
             accountId: account.id,
             automationId: created.id,
-        })).resolves.toBe(true);
+        })).resolves.toEqual({ removedRevision: created.templateVersion });
         expect(await readEventCatalogRevision(account.id)).toBe(2n);
         await expect(inTx(async (tx) => await finalizeDeletedAutomationsWithoutRetainedRunsTx({
             tx,

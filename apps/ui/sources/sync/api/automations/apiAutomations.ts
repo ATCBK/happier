@@ -16,6 +16,7 @@ import {
     AutomationV3SettingsSchema,
     AutomationV3SettingsUpdateRequestSchema,
     type AutomationV3ClearRunHistoryResponse,
+    type AutomationDeleteResponse,
     type AutomationDefinitionDetail,
     type AutomationDefinitionListRequest,
     type AutomationDefinitionListResponse,
@@ -345,11 +346,11 @@ export async function deleteAutomationDefinition(
     credentials: AuthCredentials,
     automationId: string,
     context?: AutomationRequestContext,
-): Promise<void> {
+): Promise<AutomationDeleteResponse> {
     const response = await requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}`, {
         method: 'DELETE',
         headers: getAutomationAuthHeaders(credentials),
     });
     const raw = await readAutomationJsonOrThrow(response);
-    AutomationDeleteResponseSchema.parse(raw);
+    return AutomationDeleteResponseSchema.parse(raw);
 }

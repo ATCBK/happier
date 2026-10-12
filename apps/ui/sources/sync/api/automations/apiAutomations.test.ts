@@ -144,6 +144,11 @@ function toUrlString(input: RequestInfo | URL): string {
 }
 
 describe('apiAutomations', () => {
+    it.each([{ ok: true, removedRevision: 11 }, { ok: true }])('returns deletion evidence as provided by the Home: %j', async (receipt) => {
+        const request = vi.fn(async () => Response.json(receipt));
+        await expect(deleteAutomationDefinition(credentials, 'deleted-set', { request, serverId: 'test' }))
+            .resolves.toEqual(receipt);
+    });
     afterEach(() => {
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
@@ -153,6 +158,7 @@ describe('apiAutomations', () => {
         const fetchSpy = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<any>>(async () => ({
             ok: true,
             status: 200,
+            headers: new Headers(),
             json: async () => ({ run: { ...runSummary, automationId: 'auto-1' } }),
         }));
 
@@ -177,6 +183,7 @@ describe('apiAutomations', () => {
         vi.stubGlobal('fetch', vi.fn(async () => ({
             ok: true,
             status: 200,
+            headers: new Headers(),
             json: async () => ({
                 run: { ...runSummary, id: 'run-42', automationId: 'auto-1' },
                 workflowRun: { recipeKind: 'workflow-v2', workflowRunId: 'run-42' },
@@ -193,6 +200,7 @@ describe('apiAutomations', () => {
         vi.stubGlobal('fetch', vi.fn(async () => ({
             ok: true,
             status: 200,
+            headers: new Headers(),
             json: async () => ({ run: { ...runSummary, id: 'run-7', automationId: 'auto-1' } }),
         })) as unknown as typeof fetch);
 
@@ -208,6 +216,7 @@ describe('apiAutomations', () => {
             return {
                 ok: true,
                 status: 200,
+                headers: new Headers(),
                 json: async () => url.endsWith('/run-now') ? { run: runSummary }
                     : init?.method === 'PUT' ? eventDetail : { automations: [eventSummary], nextCursor: null },
             } as Response;
@@ -254,12 +263,14 @@ describe('apiAutomations', () => {
                 return {
                     ok: true,
                     status: 200,
+                    headers: new Headers(),
                     json: async () => eventDetail,
                 } as Response;
             }
             return {
                 ok: true,
                 status: 200,
+                headers: new Headers(),
                 json: async () => ({ automations: [eventSummary], nextCursor: 'next-page' }),
             } as Response;
         });
@@ -290,6 +301,7 @@ describe('apiAutomations', () => {
                 return {
                     ok: true,
                     status: 200,
+                    headers: new Headers(),
                     json: async () => ({ run: cancelledRun }),
                 } as Response;
             }
@@ -298,6 +310,7 @@ describe('apiAutomations', () => {
             return {
                 ok: true,
                 status: 200,
+                headers: new Headers(),
                 json: async () => runDetail,
             } as Response;
         });
@@ -327,6 +340,7 @@ describe('apiAutomations', () => {
                 return {
                     ok: true,
                     status: 200,
+                    headers: new Headers(),
                     json: async () => ({ run: readyRun }),
                 } as Response;
             },
@@ -350,6 +364,7 @@ describe('apiAutomations', () => {
                 return {
                     ok: true,
                     status: 200,
+                    headers: new Headers(),
                     json: async () => settings,
                 } as Response;
             }
@@ -357,6 +372,7 @@ describe('apiAutomations', () => {
                 return {
                     ok: true,
                     status: 200,
+                    headers: new Headers(),
                     json: async () => ({ clearedRuns: 3 }),
                 } as Response;
             }
@@ -398,6 +414,7 @@ describe('apiAutomations', () => {
         const fetchSpy = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => ({
             ok: true,
             status: 200,
+            headers: new Headers(),
             json: async () => ({
                 automations: [{
                     ...eventSummary,
@@ -418,12 +435,14 @@ describe('apiAutomations', () => {
                 return {
                     ok: true,
                     status: 200,
-                    json: async () => ({ ok: true }),
+                    headers: new Headers(),
+                    json: async () => ({ ok: true, removedRevision: 11 }),
                 } as Response;
             }
             return {
                 ok: true,
                 status: 200,
+                headers: new Headers(),
                 json: async () => url.endsWith('/run-now') ? { run: runSummary } : eventDetail,
             } as Response;
         });
@@ -437,7 +456,8 @@ describe('apiAutomations', () => {
             priority: 10,
         }]);
         await runAutomationDefinitionNow(credentials, 'automation-event-1');
-        await deleteAutomationDefinition(credentials, 'automation-event-1');
+        await expect(deleteAutomationDefinition(credentials, 'automation-event-1'))
+            .resolves.toEqual({ ok: true, removedRevision: 11 });
 
         const calls = fetchSpy.mock.calls.map(([input, init]) => ({
             url: toUrlString(input),

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { listAutomationDefinitions, reconcileAutomationDefinition, runAutomationNowReceipt } from './automations';
+import { deleteAutomationDefinition, listAutomationDefinitions, reconcileAutomationDefinition, runAutomationNowReceipt } from './automations';
 
 const { get, post, request } = vi.hoisted(() => ({
   get: vi.fn(),
@@ -28,6 +28,15 @@ describe('runAutomationNow', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('unexpected_capability_probe')));
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it('returns removed-revision evidence and preserves older success receipts without inventing evidence', async () => {
+    request.mockResolvedValue({ status: 200, data: { ok: true, removedRevision: 11 } });
+    await expect(deleteAutomationDefinition({ token: 'token-1', automationId: 'automation-1' }))
+      .resolves.toEqual({ ok: true, removedRevision: 11 });
+    request.mockResolvedValue({ status: 200, data: { ok: true } });
+    await expect(deleteAutomationDefinition({ token: 'token-1', automationId: 'automation-1' }))
+      .resolves.toEqual({ ok: true });
+  });
 
   it('preserves the complete saved-occurrence receipt and rejects mismatched Workflow Run correspondence', async () => {
     const receipt = { run: admittedRun, workflowRun: { recipeKind: 'workflow-v2' as const, workflowRunId: 'run-1' } };

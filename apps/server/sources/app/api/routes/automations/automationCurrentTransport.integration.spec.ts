@@ -19,6 +19,30 @@ describe("Automation current transport and retained 0.2 data", () => {
 
     afterAll(async () => await harness.close());
 
+    it("returns the live deleted revision rather than an earlier displayed revision", async () => {
+        const account = await db.account.create({ data: { encryptionMode: "plain" } });
+        const other = await db.account.create({ data: { encryptionMode: "plain" } });
+        const automation = await db.automation.create({ data: {
+            accountId: account.id, name: "Delete receipt", targetType: "new_session",
+            templateCiphertext: AUTOMATION_TEMPLATE_V02_PLAIN, templateVersion: 10,
+        } });
+        await db.automation.update({ where: { id: automation.id }, data: { templateVersion: 11 } });
+        await withAuthenticatedTestApp(automationRoutes, async (app) => {
+            const foreign = await app.inject({ method: "DELETE", url: `/v3/automations/${automation.id}`,
+                headers: { "x-test-user-id": other.id } });
+            expect(foreign.statusCode).toBe(404);
+            const deleted = await app.inject({ method: "DELETE", url: `/v3/automations/${automation.id}`,
+                headers: { "x-test-user-id": account.id } });
+            expect(deleted.statusCode, deleted.body).toBe(200);
+            expect(deleted.json()).toEqual({ ok: true, removedRevision: 11 });
+            const repeated = await app.inject({ method: "DELETE", url: `/v3/automations/${automation.id}`,
+                headers: { "x-test-user-id": account.id } });
+            expect(repeated.statusCode).toBe(404);
+        });
+        expect(await db.automation.findUniqueOrThrow({ where: { id: automation.id } }))
+            .toMatchObject({ templateVersion: 11, deletedAt: expect.any(Date) });
+    });
+
     it("pages Account attention including pre-session failures without per-run history reads, and clears settled attention", async () => {
         const account = await db.account.create({ data: { encryptionMode: "plain" } });
         const other = await db.account.create({ data: { encryptionMode: "plain" } });

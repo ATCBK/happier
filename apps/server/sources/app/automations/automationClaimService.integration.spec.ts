@@ -2402,7 +2402,7 @@ describe("automationClaimService (integration)", () => {
             leaseExpiresAt: new Date(Date.now() - 1_000),
         });
 
-        await expect(deleteAutomation({ accountId, automationId })).resolves.toBe(true);
+        await expect(deleteAutomation({ accountId, automationId })).resolves.toEqual({ removedRevision: expect.any(Number) });
         await expect(listDaemonAssignments({ accountId, machineId })).resolves.toEqual([
             expect.objectContaining({
                 machineId,
@@ -2561,7 +2561,7 @@ describe("automationClaimService (integration)", () => {
             machineId: "machine-recovering-uncertain",
         });
 
-        await expect(deleteAutomation({ accountId, automationId })).resolves.toBe(true);
+        await expect(deleteAutomation({ accountId, automationId })).resolves.toEqual({ removedRevision: expect.any(Number) });
 
         await expect(claimAutomationRun({
             accountId,

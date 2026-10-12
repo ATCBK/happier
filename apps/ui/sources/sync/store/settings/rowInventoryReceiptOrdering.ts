@@ -14,6 +14,13 @@ export function createRowInventoryReceiptOrdering() {
 
     return {
         retain,
+        /** Reads may enrich an equal revision or expose an authoritative same-id recreation.
+         * Receipt history survives disappearance, but is not read authority. */
+        admitRead(scope: ServerAccountScope, id: string, revision: number, displayedRevision?: number): boolean {
+            if (displayedRevision !== undefined && displayedRevision > revision) return false;
+            retain(scope, id, revision);
+            return true;
+        },
         admit(scope: ServerAccountScope, id: string, revision: number | null): boolean {
             if (typeof revision !== 'number') return false;
             const retained = revisionsByScope.get(serverAccountScopeKeySuffix(scope))?.get(id);
@@ -21,7 +28,7 @@ export function createRowInventoryReceiptOrdering() {
             retain(scope, id, revision);
             return true;
         },
-        /** A physical delete acknowledges its admitted input revision, without inventing a successor. */
+        /** Deletion acknowledges the removed or admitted input revision, without inventing a successor. */
         admitRemoval(scope: ServerAccountScope, id: string, revision: number | null | undefined): boolean {
             const retained = revisionsByScope.get(serverAccountScopeKeySuffix(scope))?.get(id);
             if (typeof revision === 'number' && retained !== undefined && retained > revision) return false;

@@ -2,9 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { WorkflowActionIdV1Schema } from '../../actions/actionIds.js';
 import { WorkflowActionInputSchemasV1 } from '../actionsV1.js';
 import { WorkflowActionFailureV1Schema } from '../workflowProgressV1.js';
-import { SessionTriggerListResultV1Schema } from './workflowTriggerActionsV1.js';
+import { SessionTriggerListResultV1Schema, WorkflowTriggerRemoveResultV1Schema } from './workflowTriggerActionsV1.js';
+import { AutomationDeleteResponseSchema } from '../../automations/automationApiV3.js';
 
 describe('workflow trigger Action boundary', () => {
+  it('preserves authoritative removed revisions and accepts identity-only older deletion receipts', () => {
+    const deleted = { automationId: 'deleted-set', deleted: true };
+    expect(WorkflowTriggerRemoveResultV1Schema.parse({ ...deleted, removedRevision: 11 }))
+      .toEqual({ ...deleted, removedRevision: 11 });
+    expect(WorkflowTriggerRemoveResultV1Schema.parse(deleted)).toEqual(deleted);
+    expect(AutomationDeleteResponseSchema.parse({ ok: true, removedRevision: 11 }))
+      .toEqual({ ok: true, removedRevision: 11 });
+    expect(AutomationDeleteResponseSchema.parse({ ok: true })).toEqual({ ok: true });
+    for (const removedRevision of [-1, 1.5, '11']) {
+      expect(WorkflowTriggerRemoveResultV1Schema.safeParse({ ...deleted, removedRevision }).success).toBe(false);
+      expect(AutomationDeleteResponseSchema.safeParse({ ok: true, removedRevision }).success).toBe(false);
+    }
+    expect(WorkflowTriggerRemoveResultV1Schema.safeParse({ ...deleted, extra: true }).success).toBe(false);
+    expect(AutomationDeleteResponseSchema.safeParse({ ok: true, extra: true }).success).toBe(false);
+  });
   it('distinguishes unavailable PR links from a successfully empty projection', () => {
     const unavailable = { sessionId: 'session-one', sets: [], pullRequestLinks: { status: 'unavailable', code: 'target_unavailable' } };
     expect(SessionTriggerListResultV1Schema.safeParse(unavailable).success).toBe(true);
@@ -12,7 +28,7 @@ describe('workflow trigger Action boundary', () => {
     expect(SessionTriggerListResultV1Schema.safeParse({ ...unavailable, pullRequestLinks: { ...unavailable.pullRequestLinks, links: [] } }).success).toBe(false);
   });
   it('qualifies session PR-link reads instead of accepting an unaddressed list', () => {
-    const pullRequestLinks = [{ provider: 'github', repository: 'happier-dev/happier', number: 42 }];
+    const pullRequestLinks = [{ provider: 'github', repository: 'happier-dev/happier', number: 42, url: 'https://github.com/happier-dev/happier/pull/42' }];
     expect(SessionTriggerListResultV1Schema.safeParse({ sets: [], pullRequestLinks }).success).toBe(false);
     expect(SessionTriggerListResultV1Schema.parse({ sessionId: 'session-one', sets: [], pullRequestLinks }))
       .toEqual({ sessionId: 'session-one', sets: [], pullRequestLinks });

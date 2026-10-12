@@ -277,7 +277,7 @@ describe("automationCrudService (integration)", () => {
             input: { name: "Bypass" } })).rejects.toBeInstanceOf(AutomationValidationError);
         await expect(db.automation.findUniqueOrThrow({ where: { id: retained.id } }))
             .resolves.toMatchObject({ name: "Unbound predecessor", templateVersion: 1 });
-        await expect(deleteAutomation({ accountId: account.id, automationId: retained.id })).resolves.toBe(true);
+        await expect(deleteAutomation({ accountId: account.id, automationId: retained.id })).resolves.toEqual({ removedRevision: retained.templateVersion });
     });
 
     it.each(["zero", "plural"] as const)("converts a real 0.2 row through canonical reconciliation without changing its %s placements", async (placement) => {
@@ -880,7 +880,7 @@ describe("automationCrudService (integration)", () => {
         await expect(deleteAutomation({
             accountId: account.id,
             automationId: automationDeletion.id,
-        })).resolves.toBe(true);
+        })).resolves.toEqual({ removedRevision: automationDeletion.templateVersion });
         await expect(db.automationEventCatalogState.findUniqueOrThrow({
             where: { accountId: account.id },
             select: { eventSourceDefinitionsRevision: true },
@@ -1310,7 +1310,7 @@ describe("automationCrudService (integration)", () => {
         await expect(deleteAutomation({
             accountId: account.id,
             automationId: automation.id,
-        })).resolves.toBe(true);
+        })).resolves.toEqual({ removedRevision: automation.templateVersion });
         await expect(db.automationEventSourceStatus.count({
             where: { triggerId: { in: [first.id, second.id] } },
         })).resolves.toBe(0);
@@ -1413,7 +1413,7 @@ describe("automationCrudService (integration)", () => {
         });
         await expect(deleteAutomation({
             accountId: account.id, automationId: created.id,
-        })).resolves.toBe(true);
+        })).resolves.toEqual({ removedRevision: created.templateVersion });
         await expect(listAutomations({ accountId: account.id })).resolves.toEqual([]);
         await expect(db.automationRun.findUniqueOrThrow({
             where: { id: admitted.id },
