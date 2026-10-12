@@ -798,7 +798,9 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
                             gap: 10,
                         }}
                     >
-                        <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        {/* The scope and its actions wrap within their column, so a narrow pane drops them to a
+                            second line instead of running them under the line totals. */}
+                        <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 4, rowGap: 4 }}>
                             {hasChangedFilesViewSelector ? (
                                 <ChangedFilesViewModeMenu
                                     presentation="text"
