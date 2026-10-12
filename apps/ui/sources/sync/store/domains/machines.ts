@@ -120,8 +120,13 @@ function readMachinePresence(machine: MachinePresence): MachinePresence {
     return { active: machine.active, activeAt: machine.activeAt, updatedAt: machine.updatedAt };
 }
 
-function areMachinePresencesEqual(left: MachinePresence | null | undefined, right: MachinePresence): boolean {
-    return left?.active === right.active && left.activeAt === right.activeAt && left.updatedAt === right.updatedAt;
+function retainMachinePresenceForHeartbeat(
+    previous: MachinePresence | undefined,
+    next: MachinePresence,
+): MachinePresence {
+    if (!previous || previous.active !== next.active) return next;
+    Object.assign(previous, { activeAt: next.activeAt, updatedAt: next.updatedAt });
+    return previous;
 }
 
 function retainMachineForPresenceOnly(previous: Machine | undefined, next: Machine): Machine {
@@ -245,8 +250,9 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                         }
                     }
                     for (const machine of normalizedMachines) {
-                        const presence = readMachinePresence(machine);
-                        if (areMachinePresencesEqual(previousPresence[machine.id], presence)) continue;
+                        const previous = previousPresence[machine.id];
+                        const presence = retainMachinePresenceForHeartbeat(previous, readMachinePresence(machine));
+                        if (presence === previous) continue;
                         if (nextPresence === previousPresence) nextPresence = { ...previousPresence };
                         nextPresence[machine.id] = presence;
                     }
@@ -324,8 +330,9 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                     }
                 }
                 for (const machine of normalizedMachines) {
-                    const presence = readMachinePresence(machine);
-                    if (areMachinePresencesEqual(state.machinePresenceById[machine.id], presence)) continue;
+                    const previous = state.machinePresenceById[machine.id];
+                    const presence = retainMachinePresenceForHeartbeat(previous, readMachinePresence(machine));
+                    if (presence === previous) continue;
                     if (machinePresenceById === state.machinePresenceById) machinePresenceById = { ...state.machinePresenceById };
                     machinePresenceById[machine.id] = presence;
                 }

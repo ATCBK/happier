@@ -40,12 +40,17 @@ describe('machine inventory reference stability through the real store', () => {
         const options = { sourceServerId: serverId };
         store.getState().applyMachines([machine('one')], true, options);
         const before = store.getState();
+        let notifications = 0;
+        const unsubscribe = store.subscribe(() => notifications++);
 
         store.getState().applyMachines([
             machine('one', { activeAt: 2, updatedAt: 2 }),
         ], false, options);
+        unsubscribe();
 
         const after = store.getState();
+        expect(notifications).toBe(0);
+        expect(after).toBe(before);
         expect(after.machines).toBe(before.machines);
         expect(after.machines.one).toBe(before.machines.one);
         expect(after.machineDisplayById).toBe(before.machineDisplayById);
@@ -54,8 +59,8 @@ describe('machine inventory reference stability through the real store', () => {
         expect(after.machineListByServerId[serverId]).toBe(before.machineListByServerId[serverId]);
         expect(after.machinePresenceById.one).toEqual({ active: true, activeAt: 2, updatedAt: 2 });
         expect(after.machinePresenceByServerId[serverId]?.one).toEqual({ active: true, activeAt: 2, updatedAt: 2 });
-        expect(after.machinePresenceById).not.toBe(before.machinePresenceById);
-        expect(after.machinePresenceByServerId[serverId]).not.toBe(before.machinePresenceByServerId[serverId]);
+        expect(after.machinePresenceById).toBe(before.machinePresenceById);
+        expect(after.machinePresenceByServerId[serverId]).toBe(before.machinePresenceByServerId[serverId]);
     });
 
     for (const scope of ['active', 'other'] as const) {
