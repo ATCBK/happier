@@ -4,7 +4,8 @@ import { chmod, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 
 const { failingRenameTargets, filesystemFailureState } = vi.hoisted(() => ({
   failingRenameTargets: new Map<string, number>(),
@@ -75,6 +76,22 @@ async function makeTempRoot(): Promise<string> {
 }
 
 describe('promoteManagedCurrentInstall', () => {
+  beforeEach(() => {
+    // This test owns both lock contenders; the worker's publication-order guard is external to the fixture.
+    vi.stubEnv('HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED', '1');
+  });
+  it('keeps an existing version root when concurrent ensure acquisitions finish', async () => {
+    const { promoteManagedCurrentInstall } = await import('./promoteManagedCurrentInstall.js');
+    const installRoot = await makeTempRoot();
+    const currentPath = join(installRoot, 'current');
+    await mkdir(currentPath, { recursive: true });
+    await writeFile(join(currentPath, 'agent'), 'running-version');
+    const candidates = [join(installRoot, 'candidate-a'), join(installRoot, 'candidate-b')];
+    for (const candidate of candidates) { await mkdir(candidate); await writeFile(join(candidate, 'agent'), 'new-download'); }
+    await Promise.all(candidates.map(candidatePath => promoteManagedCurrentInstall({ installRoot, currentPath,
+      candidatePath, preserveExistingCurrent: true })));
+    expect(await readFile(join(currentPath, 'agent'), 'utf8')).toBe('running-version');
+  });
   it('cancels while waiting for promotion and preserves the candidate and current install', async () => {
     const { promoteManagedCurrentInstall } = await import('./promoteManagedCurrentInstall.js');
     const root = await makeTempRoot();
@@ -107,6 +124,7 @@ describe('promoteManagedCurrentInstall', () => {
     await Promise.all([...tempDirs].map((dir) => rm(dir, { recursive: true, force: true })));
     tempDirs.clear();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     vi.resetModules();
   });
 

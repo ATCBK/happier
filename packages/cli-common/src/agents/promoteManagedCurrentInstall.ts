@@ -139,6 +139,8 @@ export async function promoteManagedCurrentInstall(params: Readonly<{
   currentPath?: string;
   reportWarning?: (message: string) => void;
   activateVersionedRelease?: boolean;
+  /** Version-qualified acquisitions may join a completed acquisition under this same commit lock. */
+  preserveExistingCurrent?: boolean;
   signal?: AbortSignal;
 }>): Promise<void> {
   params.signal?.throwIfAborted();
@@ -151,6 +153,7 @@ export async function promoteManagedCurrentInstall(params: Readonly<{
 
   let didReportWait = false;
   await withWorkspaceBundleLock(async () => {
+    if (params.preserveExistingCurrent && await pathExists(currentPath)) return;
     if (
       params.activateVersionedRelease
       && process.platform !== 'win32'
