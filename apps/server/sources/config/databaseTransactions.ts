@@ -1,4 +1,4 @@
-import type { DbProvider } from "@/storage/prisma";
+import type { DbProvider } from './databaseProvider';
 import { resolveLightSqliteBusyTimeoutMsFromEnv } from "@/flavors/light/sqliteConnectionConfig";
 import { parseFloatEnv, parseIntEnv } from "./env";
 

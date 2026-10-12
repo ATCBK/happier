@@ -1,9 +1,11 @@
 import {
     SERVER_CONFIG_REGISTRY_BASE,
     composeServerConfigRegistry,
+    defineServerConfigRegistry,
     type ServerConfigEntry,
     type ServerConfigRegistry,
 } from '@happier-dev/protocol';
+import { normalizePublicReleaseRingId, PUBLIC_RELEASE_RING_IDS } from '@happier-dev/release-runtime/releaseRings';
 
 import { API_RATE_LIMIT_GLOBAL_SERVER_CONFIG, API_ROUTE_RATE_LIMIT_SERVER_CONFIG } from '@/app/api/utils/apiRateLimitDefaults';
 import { FEATURE_SERVER_CONFIG } from '@/app/features/catalog/featureServerConfig';
@@ -11,6 +13,22 @@ import { RETENTION_DOMAIN_SERVER_CONFIG, RETENTION_SERVER_CONFIG } from '@/app/r
 import { USAGE_PRICE_SERVER_CONFIG } from '@/app/usage/usagePriceServerConfig';
 
 type ServerConfigFamily = ServerConfigRegistry | readonly ServerConfigEntry[];
+
+// Release-runtime owns both this closed domain and its historical spellings.
+const RELEASE_SERVER_CONFIG = defineServerConfigRegistry({
+    HAPPIER_PUBLIC_RELEASE_CHANNEL: {
+        type: 'enum',
+        default: 'stable',
+        bounds: { values: PUBLIC_RELEASE_RING_IDS },
+        normalizeEnumValue: normalizePublicReleaseRingId,
+        sensitivity: 'plain',
+        apply: 'restart',
+        editable: 'home',
+        section: 'server',
+        group: 'releases',
+        description: 'Release channel this Home follows for published runner artifacts.',
+    },
+});
 
 /**
  * Joins the protocol's hand-written entries with the families declared by their server owners
@@ -25,6 +43,7 @@ export function registerServerConfigFamilies(families: Readonly<{
 }>): ServerConfigRegistry {
     return composeServerConfigRegistry(
         SERVER_CONFIG_REGISTRY_BASE,
+        RELEASE_SERVER_CONFIG,
         families.features,
         ...families.rateLimits,
         ...families.retention,

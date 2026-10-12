@@ -23,12 +23,17 @@ describe("config/backends", () => {
         expect(getFilesBackendFromEnv({ HAPPIER_FILES_BACKEND: "local" }, "s3")).toBe("local");
         expect(getFilesBackendFromEnv({ HAPPIER_FILES_BACKEND: "S3" }, "local")).toBe("s3");
         expect(getFilesBackendFromEnv({ HAPPIER_FILES_BACKEND: "nope" }, "local")).toBe("local");
+        expect(getFilesBackendFromEnv({ HAPPY_FILES_BACKEND: " DiSk " }, "s3")).toBe("local");
+        expect(getFilesBackendFromEnv({ HAPPIER_FILES_BACKEND: "minio" }, "local")).toBe("s3");
     });
 
     it("parses socket adapter from env", () => {
         expect(getSocketAdapterFromEnv({ HAPPIER_SOCKET_ADAPTER: "memory" }, "redis-streams")).toBe("memory");
         expect(getSocketAdapterFromEnv({ HAPPIER_SOCKET_ADAPTER: "redis" }, "memory")).toBe("redis-streams");
         expect(getSocketAdapterFromEnv({ HAPPIER_SOCKET_ADAPTER: "nope" }, "memory")).toBe("memory");
+        expect(getSocketAdapterFromEnv({ HAPPIER_SOCKET_ADAPTER: "nope", HAPPIER_SOCKET_REDIS_ADAPTER: "1" }, "memory")).toBe("memory");
+        expect(getSocketAdapterFromEnv({ HAPPIER_SOCKET_ADAPTER: "nope" }, "redis-streams")).toBe("redis-streams");
+        expect(getSocketAdapterFromEnv({ HAPPY_SOCKET_ADAPTER: "redis_streams" }, "memory")).toBe("redis-streams");
     });
 
     it("supports legacy boolean redis adapter flags when adapter is unset", () => {

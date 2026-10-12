@@ -3,32 +3,27 @@ export type ServerFlavor = "full" | "light";
 export type FilesBackend = "local" | "s3";
 export type SocketAdapter = "memory" | "redis-streams";
 
-import { parseBooleanEnv } from "./env";
+import { readServerConfig, readServerConfigRaw, SERVER_CONFIG } from "@happier-dev/protocol";
+import { getDbProviderFromEnv, resolveDefaultDbProvider } from './databaseProvider';
 
-function normalizeToken(raw: string): string {
-    return raw.trim().toLowerCase();
+export function resolveServerFlavorFromEnv(env: NodeJS.ProcessEnv, fallback: ServerFlavor): ServerFlavor {
+    const raw = readServerConfig(env, SERVER_CONFIG.HAPPIER_SERVER_FLAVOR)?.trim().toLowerCase();
+    return raw === "light" || raw === "full" ? raw : fallback;
 }
 
 export function getFilesBackendFromEnv(env: NodeJS.ProcessEnv, fallback: FilesBackend): FilesBackend {
-    const raw = (env.HAPPIER_FILES_BACKEND ?? env.HAPPY_FILES_BACKEND)?.toString();
-    if (!raw) return fallback;
-    const v = normalizeToken(raw);
-    if (v === "local" || v === "disk" || v === "fs" || v === "file") return "local";
-    if (v === "s3" || v === "minio") return "s3";
-    return fallback;
+    return readServerConfig(env, SERVER_CONFIG.HAPPIER_FILES_BACKEND) ?? fallback;
 }
 
 export function getSocketAdapterFromEnv(env: NodeJS.ProcessEnv, fallback: SocketAdapter): SocketAdapter {
-    const raw = (env.HAPPIER_SOCKET_ADAPTER ?? env.HAPPY_SOCKET_ADAPTER)?.toString();
-    if (raw && raw.trim()) {
-        const v = normalizeToken(raw);
-        if (v === "memory" || v === "mem") return "memory";
-        if (v === "redis-streams" || v === "redis" || v === "redis_streams") return "redis-streams";
-        return fallback;
+    const entry = SERVER_CONFIG.HAPPIER_SOCKET_ADAPTER;
+    if (readServerConfigRaw(env, entry)) {
+        // This caller supplies the flavor's fallback; a malformed explicit adapter cannot enable legacy Redis.
+        return readServerConfig(env, { ...entry, default: fallback });
     }
 
     // Back-compat: historical boolean flag enabling redis-streams adapter.
-    if (parseBooleanEnv(env.HAPPIER_SOCKET_REDIS_ADAPTER ?? env.HAPPY_SOCKET_REDIS_ADAPTER, false)) {
+    if (readServerConfig(env, SERVER_CONFIG.HAPPIER_SOCKET_REDIS_ADAPTER)) {
         return "redis-streams";
     }
 
@@ -41,6 +36,13 @@ export function resolveDefaultFilesBackend(flavor: ServerFlavor): FilesBackend {
 
 export function resolveDefaultSocketAdapter(_flavor: ServerFlavor): SocketAdapter {
     return "memory";
+}
+
+/** Startup needs local path defaults for either local files or an embedded database. */
+export function shouldApplyLightDefaultEnv(env: NodeJS.ProcessEnv, flavor: ServerFlavor): boolean {
+    const provider = getDbProviderFromEnv(env, resolveDefaultDbProvider(flavor));
+    return getFilesBackendFromEnv(env, resolveDefaultFilesBackend(flavor)) === 'local'
+        || provider === 'pglite' || provider === 'sqlite';
 }
 
 export function isRedisStreamsEnabled(env: NodeJS.ProcessEnv, adapter: SocketAdapter): boolean {
