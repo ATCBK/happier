@@ -29,6 +29,7 @@ import {
     createScopedSnapshotLoader,
     type ScopedLoadTarget,
 } from '@/sync/engine/scope/scopedSnapshotLoader';
+import { loadTeamPageRange } from '@/sync/engine/teams/loadTeamPageRange';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import {
     getTeamCredentialResource,
@@ -258,6 +259,13 @@ export async function refreshTeam(scope: ServerAccountScope, address: TeamAddres
     await teamLoader.refresh(target);
 }
 
+/** An acknowledged membership change withdraws capabilities until the exact Team is revalidated. */
+export async function invalidateTeam(scope: ServerAccountScope, address: TeamAddress): Promise<void> {
+    const target = teamTargetFor(scope, address);
+    if (!target) return;
+    await teamLoader.invalidate(target);
+}
+
 /**
  * Continues the sequence. It is a no-op when the Home reported no further page
  * or when a continuation is already in flight.
@@ -348,24 +356,30 @@ function groupsTargetFor(
 
 const groupsLoader = createScopedSnapshotLoader<TeamGroupsTarget>({
     load: async ({ scope, address, archived, queryKey }, loadContext) => {
+        const loadedRowCount = getTeamGroupsSnapshot(scope, address, queryKey)?.data?.length ?? 0;
         beginTeamGroupsLoad(scope, address, queryKey);
-        // A refresh always re-reads the first page, for the same reason the Team
-        // directory does: a cursor names a position in a sequence that may have
-        // moved, and replaying it would duplicate rows.
-        const request = bindHomeDomainActionHttpRequestV1('teams.groups.list', {
-            v: 1,
-            teamId: address.teamId,
-            archived,
+        const result = await loadTeamPageRange({
+            loadedRowCount,
+            loadPage: async (cursor) => {
+                const request = bindHomeDomainActionHttpRequestV1('teams.groups.list', {
+                    v: 1,
+                    teamId: address.teamId,
+                    archived,
+                    ...(cursor === null ? {} : { cursor }),
+                });
+                const page = await requestHomeDomain({
+                    scope,
+                    method: request.method,
+                    path: request.path,
+                    effect: 'read',
+                    input: request.body,
+                    schema: TeamGroupsPageV1Schema,
+                });
+                return page.ok ? { kind: 'succeeded', value: page.value } : { kind: 'failed', failure: page.failure };
+            },
         });
-        const result = await requestHomeDomain({
-            scope,
-            method: request.method,
-            path: request.path,
-            effect: 'read',
-            input: request.body,
-            schema: TeamGroupsPageV1Schema,
-        });
-        if (result.ok) {
+        if (result === null) return;
+        if (result.kind === 'succeeded') {
             applyTeamGroupsPage({
                 scope,
                 address,
@@ -843,7 +857,7 @@ export function observeTeamGroups(
     return target ? groupsLoader.observe(target) : () => {};
 }
 
-/** Explicitly re-reads one Team's Groups sequence from its first page. */
+/** Explicitly revalidates one Team's loaded Groups range from its first page. */
 export async function refreshTeamGroups(
     scope: ServerAccountScope,
     address: TeamAddress,

@@ -13,6 +13,11 @@ function ready(payload: unknown) {
 }
 
 describe('Pending-input server wire contract', () => {
+    it('selects reset-capable V4 independently of target-aware V3', () => {
+        expect(resolvePendingInputServerWireMode(ready({
+            features: {}, capabilities: { session: { pendingInput: { protocolVersion: 4 } } },
+        }))).toBe('pending_input_v4');
+    });
     it('selects target-aware V3 without treating the main-only V2 epoch as target-capable', () => {
         expect(resolvePendingInputServerWireMode(ready({
             features: {},

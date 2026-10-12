@@ -1,21 +1,18 @@
 import { isTerminalAuthError } from '@/sync/runtime/connectivity/authErrors';
-import { raceSocketIoAckTimeout } from '@happier-dev/sync-client';
 
 export async function socketEmitWithAckFallback<TAck>(params: {
-    emitWithAck: (event: string, payload: any, opts?: { timeoutMs?: number }) => Promise<TAck>;
+    emitWithAck: (event: string, payload: any, opts?: { timeoutMs?: number | null }) => Promise<TAck>;
     send: (event: string, payload: any) => void;
     event: string;
     payload: any;
-    timeoutMs: number;
     onNoAck: () => void;
     beforeFallback?: () => void | Promise<void>;
 }): Promise<TAck | null> {
     const ack: TAck | null = await (async () => {
         try {
-            return await raceSocketIoAckTimeout(
-                params.emitWithAck(params.event, params.payload, { timeoutMs: params.timeoutMs }),
-                params.timeoutMs,
-            );
+            // Admission and transaction retries belong to the server operation.
+            // Transport loss, rather than elapsed ACK time, permits reconciliation.
+            return await params.emitWithAck(params.event, params.payload, { timeoutMs: null });
         } catch (error) {
             if (isTerminalAuthError(error)) {
                 throw error;

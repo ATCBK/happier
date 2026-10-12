@@ -34,7 +34,7 @@ import type {
 import type { ArtifactHeader } from '@/sync/domains/artifacts/artifactTypes';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent, isPlainArtifactDataKeyMarker } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ArtifactBodyV1Schema, ArtifactBodyEnvelopeV1StoredSchema, ArtifactSavedByV1Schema, type ArtifactBodyEnvelopeV1, type ArtifactSavedByV1, type ArtifactWorkspaceSourceV1, ArtifactBlobReferenceV1Schema, type ArtifactBlobReferenceV1, type ArtifactBodyV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
-import { artifactKindHasSharedWidgetInputsV1, artifactKindRequiresTextBodyV1, readArtifactSharedAudienceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
+import { artifactKindHasSharedWidgetInputsV1, artifactKindRequiresTextBodyV1, getArtifactUseTargetV1, readArtifactSharedAudienceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
 import { runArtifactRecipientKeyPreparationV1, prepareArtifactRecipientKeyEnvelopesV1 } from '@happier-dev/protocol/artifacts/artifactRecipientKeyPreparationV1';
 import { withArtifactExcerptV1 } from '@happier-dev/protocol/artifacts/artifactExcerptV1';
 import { canShareArtifactWriteContentV1, prepareArtifactHeaderForRevisionV1, prepareArtifactHeaderForBodyV1 } from '@happier-dev/protocol/artifacts/artifactHeaderRestorationV1';
@@ -775,7 +775,10 @@ export async function fetchArtifactHtmlPreviewFromApi(params: Readonly<{
         throw new HappyError('HTML preview is unavailable', false, { code: 'artifact_html_preview_unavailable' });
     const body = typeof artifact.body === 'string' ? artifact.body
         : await openFetchedArtifactBinary({ ...params, reference: artifact.body }, artifact.storageMode);
-    const bundle = artifactHtmlBundleFromBodyV1(body, typeof artifact.body === 'string' ? undefined : artifact.body.mime);
+    const mime = typeof artifact.body === 'string'
+        ? typeof artifact.rawHeader?.mime === 'string' ? artifact.rawHeader.mime : undefined
+        : artifact.body.mime;
+    const bundle = artifactHtmlBundleFromBodyV1(body, mime, 'stored');
     const url = await fetchArtifactHtmlPreviewLocation(params.credentials, params.artifactId, params);
     if (params.forbiddenOrigins?.some(origin => new URL(origin).origin === new URL(url).origin)) {
         throw new HappyError('HTML preview must use an isolated origin', false, { code: 'artifact_html_preview_unavailable' });
@@ -789,6 +792,13 @@ export type ArtifactViewRead = Readonly<{
     htmlPreview?: ArtifactHtmlPreview;
 }>;
 
+function assertArtifactDocumentReadAllowed(artifact: DecryptedArtifact | null): void {
+    if (artifact?.isDecrypted && getArtifactUseTargetV1({ artifactId: artifact.id,
+        header: artifact.rawHeader ?? artifact.header ?? {}, body: null }).kind === 'approval') {
+        throw Object.assign(new Error('artifact_kind_internal'), { code: 'artifact_kind_internal' });
+    }
+}
+
 /** Open the head and its preview within one finite captured Account operation. */
 export async function fetchArtifactForViewFromApi(params: Readonly<{
     credentials: AuthCredentials; request?: ArtifactApiOptions['request']; artifactId: string;
@@ -797,6 +807,8 @@ export async function fetchArtifactForViewFromApi(params: Readonly<{
 }>): Promise<ArtifactViewRead | null> {
     const artifact = await fetchArtifactWithBodyFromApi(params);
     if (!artifact) return null;
+    // Replay readers retain private custody; the generic Document reader never publishes it.
+    assertArtifactDocumentReadAllowed(artifact);
     if (!artifact.isDecrypted) return { artifact };
     if (isArtifactHtmlHeaderV1(artifact.rawHeader ?? artifact.header)) {
         return { artifact, htmlPreview: await fetchArtifactHtmlPreviewFromApi({ ...params, artifact }) };
@@ -820,6 +832,7 @@ type ArtifactRevisionReadParams = Readonly<{
 }>;
 
 async function openRetainedArtifactBodies(params: ArtifactRevisionReadParams, artifact: Artifact) {
+    assertArtifactDocumentReadAllowed(await decryptArtifactListItem({ ...params, artifact }));
     const inventory = await fetchArtifactRevisions(params.credentials, artifact.id, params);
     const key = artifact.encryptionMode === 'e2ee' ? await resolveArtifactDataKey({ ...params, artifact }) : null;
     if (artifact.encryptionMode === 'e2ee' && !key)

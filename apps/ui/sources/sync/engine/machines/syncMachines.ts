@@ -17,6 +17,7 @@ import { StoredMachinePublishedMetadataV1Schema, StoredMachinePublishedDaemonSta
 import type { DevcontainerChildProjectionV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { readMachineInstallationPublicKey } from '@/sync/domains/machines/machineInstallationPublicKey';
 import { encodeBase64 } from '@/encryption/base64';
+import { yieldToEventLoop } from '@/sync/encryption/cryptoBatchYield';
 
 type MachineEncryption = {
     decryptMetadata: (version: number, value: string) => Promise<any>;
@@ -355,6 +356,33 @@ export async function buildUpdatedMachineFromSocketUpdate(params: {
     return getMachineEncryption(machineId) === machineEncryption ? updatedMachine : null;
 }
 
+const machineActivityPlaceholderContent = {
+    seq: 0,
+    revokedAt: null,
+    metadata: null,
+    metadataVersion: 0,
+    daemonState: null,
+    daemonStateVersion: 0,
+} as const;
+
+/** The first socket heartbeat carries presence, not a content/access context. */
+export function buildMachineActivityPlaceholder(update: { id: string; active: boolean; activeAt: number }): Machine {
+    return {
+        ...machineActivityPlaceholderContent,
+        id: update.id,
+        createdAt: update.activeAt,
+        updatedAt: update.activeAt,
+        active: update.active,
+        activeAt: update.activeAt,
+    };
+}
+
+export function isMachineActivityPlaceholder(machine: Machine): boolean {
+    const placeholder = buildMachineActivityPlaceholder(machine);
+    return Object.keys(machine).every((key) => Object.prototype.hasOwnProperty.call(placeholder, key))
+        && Object.entries(machineActivityPlaceholderContent).every(([key, value]) => machine[key as keyof Machine] === value);
+}
+
 export function buildMachineFromMachineActivityEphemeralUpdate(params: {
     machine: Machine;
     updateData: { active: boolean; activeAt: number };
@@ -373,7 +401,10 @@ function isMachineReadSnapshotCurrent(
     captured: Machine | null | undefined,
 ): boolean {
     if (current === captured) return true;
-    if (!current || !captured) return false;
+    if (!current) return false;
+    if (!captured) {
+        return isMachineActivityPlaceholder(current);
+    }
     return Object.keys(current).length === Object.keys(captured).length
         && Object.entries(current).every(([key, value]) => key === 'active' || key === 'activeAt'
             || value === captured[key as keyof Machine]);
@@ -387,7 +418,8 @@ export async function fetchAndApplyMachines(params: {
     encryption: SyncEncryption | null;
     machineDataKeys: Map<string, MachineDataKeyCacheEntry>;
     request?: (path: string, init: RequestInit) => Promise<Response>;
-    applyMachines: (machines: Machine[], replace?: boolean) => void;
+    /** Accepted raw rows carry the published key/content basis beside hydrated display rows. */
+    applyMachines: (machines: Machine[], replace: boolean, publishedRows: readonly FetchedMachineRow[]) => void;
     getExistingMachine?: (machineId: string) => Machine | null | undefined;
     /** Canonical immutable rows also fence keyless Plain/access reads before HTTP yields. */
     getMachineSnapshot?: () => Readonly<Record<string, Machine | undefined>>;
@@ -496,8 +528,17 @@ export async function fetchAndApplyMachines(params: {
             && Boolean(row && rowIsNotOlder(row));
     };
     const applyCurrentMachines = (incoming: Machine[], replace: boolean) => {
-        const current = incoming.filter((machine) => isMachineCurrent(machine.id));
-        applyMachines(current, replace && current.length === incoming.length);
+        const current = incoming.filter((machine) => isMachineCurrent(machine.id)).map((machine) => {
+            const presence = readIncumbentRow(machine.id);
+            const captured = requestMachineSnapshot ? requestMachineSnapshot[machine.id] : incumbentRows.get(machine.id);
+            return presence && (presence.active !== captured?.active || presence.activeAt !== captured?.activeAt)
+                ? { ...machine, active: presence.active, activeAt: presence.activeAt } : machine;
+        });
+        applyMachines(current, replace && current.length === incoming.length,
+            current.flatMap(machine => {
+                const row = capturedRows.get(machine.id);
+                return row ? [row] : [];
+            }));
         // Warm publication is this read's own synchronous write. Carry its exact
         // resulting row forward so later hydration does not reject itself, but do
         // not adopt a reentrant access/context change made by another producer.
@@ -513,26 +554,11 @@ export async function fetchAndApplyMachines(params: {
         }
     };
 
-    // First, collect and decrypt encryption keys for all machines.
-    //
-    // Unwrap only what this response actually changed. `machineDataKeys` remembers the
-    // exact wrapped envelope each plaintext key came from, so an unchanged envelope is
-    // reused instead of re-opened: unwrapping is a pure function of (envelope, account
-    // content key), and the account content key is fixed for the lifetime of an
-    // `Encryption` instance — the cache is cleared with it on a server-scope reset.
-    // This matters because a machines refresh is not rare: it fires on new-session
-    // screen focus, settings focus, machine screen focus, handoff, resume and
-    // foreground, and every one of those used to re-run a curve25519 open per machine.
-    //
-    // What remains is opened in one batch, not one call per machine.
-    // `decryptEncryptionKeys` is the canonical owner of the native-crypto-worker routing
-    // decision and sizes it on the whole batch: a lone wrapped data-key envelope is ~505
-    // bridge bytes, under the default `minPayloadBytes` (512), so a per-machine call is
-    // forced onto the JS reference path (a curve25519 open, plus a second one whenever
-    // the account key is stored as a seed) no matter how healthy the native worker is.
-    const machineKeysMap = new Map<string, Uint8Array | null>();
     const unavailableMachineIds = new Set<string>();
     const plainMachineIds = new Set<string>();
+    const freshKeyByMachineId = new Map<string, Uint8Array | null>();
+    const initializedMachineIds = new Set<string>();
+    let machineEncryptionReady = encryption !== null;
     type MachineKeyKind = 'plain' | 'legacy' | 'encrypted' | 'encrypted_unavailable';
     const classifyMachineKey = (machine: FetchedMachineRow): Readonly<{ kind: MachineKeyKind; envelope: string | null }> => {
         if (accessLockedReason(machine)) return { kind: 'encrypted_unavailable', envelope: null };
@@ -543,113 +569,131 @@ export async function fetchAndApplyMachines(params: {
         if (!encryption) return { kind: 'encrypted_unavailable', envelope: null };
         return { kind: 'encrypted', envelope: machine.dataEncryptionKey };
     };
-    const reusedKeyByMachineId = new Map<string, Uint8Array>();
-    const pendingMachineIds: string[] = [];
-    const pendingEnvelopes: string[] = [];
-    const machineKeyKinds = machines.map((machine) => {
-        const classified = classifyMachineKey(machine);
-        if (classified.kind === 'encrypted' && classified.envelope) {
-            const cached = machineDataKeys.get(machine.id);
-            if (cached && cached.envelope === classified.envelope) {
-                reusedKeyByMachineId.set(machine.id, cached.dataKey);
-            } else {
-                pendingMachineIds.push(machine.id);
-                pendingEnvelopes.push(classified.envelope);
+    const initializeMachineKeys = async (selectedMachines: readonly FetchedMachineRow[]) => {
+        selectedMachines = selectedMachines.filter(machine => !initializedMachineIds.has(machine.id));
+        if (selectedMachines.length === 0) return;
+        for (const machine of selectedMachines) initializedMachineIds.add(machine.id);
+        const machineKeysMap = new Map<string, Uint8Array | null>();
+        const reusedKeyByMachineId = new Map<string, Uint8Array>();
+        const pendingMachineIds: string[] = [];
+        const pendingEnvelopes: string[] = [];
+        const machineKeyKinds = selectedMachines.map((machine) => {
+            const classified = classifyMachineKey(machine);
+            if (classified.kind === 'encrypted' && classified.envelope) {
+                const cached = machineDataKeys.get(machine.id);
+                if (cached && cached.envelope === classified.envelope) {
+                    reusedKeyByMachineId.set(machine.id, cached.dataKey);
+                } else {
+                    pendingMachineIds.push(machine.id);
+                    pendingEnvelopes.push(classified.envelope);
+                }
             }
-        }
-        return { machineId: machine.id, ...classified };
-    });
-    let pendingDecryptedKeys: Array<Uint8Array | null> = [];
-    if (encryption && pendingEnvelopes.length > 0) {
-        try {
-            pendingDecryptedKeys = await encryption.decryptEncryptionKeys(pendingEnvelopes);
-        } catch {
-            pendingDecryptedKeys = pendingEnvelopes.map(() => null);
-        }
-    }
-    const freshKeyByMachineId = new Map<string, Uint8Array | null>();
-    for (let index = 0; index < pendingMachineIds.length; index += 1) {
-        freshKeyByMachineId.set(pendingMachineIds[index]!, pendingDecryptedKeys[index] ?? null);
-    }
-    const machineById = new Map(machines.map((machine) => [machine.id, machine] as const));
-    // Resolve custody for the whole refresh together, including rows relabelled
-    // by the Home. Concurrent refreshes share cold reads at the custody owner.
-    const runnerTrustByMachineId = new Map(await Promise.all(machines.map(async (machine) => [
-        machine.id,
-        await resolveRunnerMachineContentKeyTrustV1({
-            credentials,
-            homeServerIdentityId: params.sourceServerId,
-            machineId: machine.id,
-        }),
-    ] as const)));
-    if (!shouldContinue()) return;
-    for (const result of machineKeyKinds) {
-        if (!isMachineCurrent(result.machineId)) continue;
-        const reusedKey = reusedKeyByMachineId.get(result.machineId);
-        const decryptedKey = reusedKey ?? freshKeyByMachineId.get(result.machineId) ?? null;
-        const machine = machineById.get(result.machineId)!;
-        // Resolved for every Machine: the trusted classification must not be
-        // suppressed by the very field a hostile Home would rewrite.
-        const runnerTrust = runnerTrustByMachineId.get(machine.id);
-        const resolution = accessLockedReason(machine) || (machine.isShared && result.kind === 'encrypted_unavailable')
-            ? { status: 'unavailable' as const }
-            : !runnerTrust && encryption && result.kind !== 'plain'
-            ? { status: 'unavailable' as const }
-            : resolvePublishedMachineDataEncryptionKeyV1({
-            machine,
-            openedDataEncryptionKey: decryptedKey,
-            viewerAccountId: viewerAccountId ?? undefined,
-            expectedAccountMode: machine.access?.resourceMode ?? machine.storageMode ?? expectedAccountMode,
-            ...(runnerTrust ? { expectedRunnerBinding: runnerTrust.expectedRunnerBinding } : {}),
-            ...(runnerTrust?.trustedMachineKind ? { trustedMachineKind: runnerTrust.trustedMachineKind } : {}),
+            return { machineId: machine.id, ...classified };
         });
-        if (resolution.status !== 'e2ee') {
-            // A rotated envelope that fails to open — or a machine that moved to plain or
-            // legacy storage — must not leave the previous key cached: the next refresh
-            // would reuse a key this machine no longer uses.
-            machineDataKeys.delete(result.machineId);
-        }
-        if (resolution.status === 'unavailable') {
-            if (encryption) {
-                warnMachineDataEncryptionKeyDecryptFailureOnce(encryption, result.machineId);
-            } else {
-                console.warn(`Account encryption material is unavailable for machine ${result.machineId}.`);
+        let pendingDecryptedKeys: Array<Uint8Array | null> = [];
+        if (encryption && pendingEnvelopes.length > 0) {
+            try {
+                pendingDecryptedKeys = await encryption.decryptEncryptionKeys(pendingEnvelopes);
+            } catch {
+                pendingDecryptedKeys = pendingEnvelopes.map(() => null);
             }
-            unavailableMachineIds.add(result.machineId);
-            continue;
         }
-        if (resolution.status === 'plain') {
-            plainMachineIds.add(result.machineId);
-            continue;
+        for (let index = 0; index < pendingMachineIds.length; index += 1) {
+            freshKeyByMachineId.set(pendingMachineIds[index]!, pendingDecryptedKeys[index] ?? null);
         }
-        const acceptedKey = resolution.status === 'e2ee' ? resolution.dataKey : null;
-        machineKeysMap.set(result.machineId, acceptedKey);
-        if (acceptedKey && result.envelope) {
-            machineDataKeys.set(result.machineId, { envelope: result.envelope, dataKey: acceptedKey });
+        const machineById = new Map(selectedMachines.map((machine) => [machine.id, machine] as const));
+        // Every admitted row resolves creator custody, including rows relabelled
+        // by the Home. Concurrent reads share cold work at the custody owner.
+        const runnerTrustByMachineId = new Map(await Promise.all(selectedMachines.map(async (machine) => [
+            machine.id,
+            await resolveRunnerMachineContentKeyTrustV1({
+                credentials,
+                homeServerIdentityId: params.sourceServerId,
+                machineId: machine.id,
+            }),
+        ] as const)));
+        if (!shouldContinue()) return;
+        for (const result of machineKeyKinds) {
+            if (!isMachineCurrent(result.machineId)) continue;
+            const reusedKey = reusedKeyByMachineId.get(result.machineId);
+            const decryptedKey = reusedKey ?? freshKeyByMachineId.get(result.machineId) ?? null;
+            const machine = machineById.get(result.machineId)!;
+            // Resolved for every Machine: the trusted classification must not be
+            // suppressed by the very field a hostile Home would rewrite.
+            const runnerTrust = runnerTrustByMachineId.get(machine.id);
+            const resolution = accessLockedReason(machine) || (machine.isShared && result.kind === 'encrypted_unavailable')
+                ? { status: 'unavailable' as const }
+                : !runnerTrust && encryption && result.kind !== 'plain'
+                ? { status: 'unavailable' as const }
+                : resolvePublishedMachineDataEncryptionKeyV1({
+                machine,
+                openedDataEncryptionKey: decryptedKey,
+                viewerAccountId: viewerAccountId ?? undefined,
+                expectedAccountMode: machine.access?.resourceMode ?? machine.storageMode ?? expectedAccountMode,
+                ...(runnerTrust ? { expectedRunnerBinding: runnerTrust.expectedRunnerBinding } : {}),
+                ...(runnerTrust?.trustedMachineKind ? { trustedMachineKind: runnerTrust.trustedMachineKind } : {}),
+            });
+            if (resolution.status !== 'e2ee') {
+                // A rotated envelope that fails to open — or a machine that moved to plain or
+                // legacy storage — must not leave the previous key cached: the next refresh
+                // would reuse a key this machine no longer uses.
+                machineDataKeys.delete(result.machineId);
+            }
+            if (resolution.status === 'unavailable') {
+                if (encryption) {
+                    warnMachineDataEncryptionKeyDecryptFailureOnce(encryption, result.machineId);
+                } else {
+                    console.warn(`Account encryption material is unavailable for machine ${result.machineId}.`);
+                }
+                unavailableMachineIds.add(result.machineId);
+                continue;
+            }
+            if (resolution.status === 'plain') {
+                plainMachineIds.add(result.machineId);
+                continue;
+            }
+            const acceptedKey = resolution.status === 'e2ee' ? resolution.dataKey : null;
+            machineKeysMap.set(result.machineId, acceptedKey);
+            if (acceptedKey && result.envelope) {
+                machineDataKeys.set(result.machineId, { envelope: result.envelope, dataKey: acceptedKey });
+            }
         }
-    }
 
-    // Initialize machine encryptions
-    let machineEncryptionReady = encryption !== null;
-    if (encryption) {
-        try {
-            await encryption.initializeMachines(machineKeysMap, new Set([...unavailableMachineIds, ...plainMachineIds]), { isMachineCurrent });
-        } catch (error) {
-            machineEncryptionReady = false;
-            console.error('[machinesSnapshot] Failed to initialize machine encryption; continuing with cached/unencrypted machine rows', error);
+        // Initialize machine encryptions
+        if (encryption) {
+            try {
+                const retiredMachineIds = new Set(selectedMachines.filter(machine =>
+                    unavailableMachineIds.has(machine.id) || plainMachineIds.has(machine.id)).map(machine => machine.id));
+                await encryption.initializeMachines(machineKeysMap, retiredMachineIds, { isMachineCurrent });
+            } catch (error) {
+                machineEncryptionReady = false;
+                console.error('[machinesSnapshot] Failed to initialize machine encryption; continuing with cached/unencrypted machine rows', error);
+            }
         }
-    }
+
+    };
+
+    // Re-admit retained opened content before publishing it. Unopened rows need
+    // only a display shell; their fresh keys belong to the existing selective
+    // hydration jobs. Exact/non-display readers await complete crypto admission.
+    const shouldApplyMachineDisplays = typeof params.applyMachineDisplayEntries === 'function';
+    await initializeMachineKeys(shouldApplyMachineDisplays ? machines.filter(machine => {
+        const classified = classifyMachineKey(machine);
+        const retained = incumbentRows.get(machine.id);
+        return classified.kind !== 'encrypted' || machineDataKeys.get(machine.id)?.envelope === classified.envelope
+            || Boolean(retained?.metadata || retained?.daemonState);
+    }) : machines);
 
     if (!shouldContinue()) {
         return;
     }
 
     const cachedMachineDisplayEntries = params.cachedMachineDisplayEntries ?? {};
-    const shouldApplyMachineDisplays = typeof params.applyMachineDisplayEntries === 'function';
     const needsMachineWarmHydration = (machine: typeof machines[number]): boolean => {
         if (plainMachineIds.has(machine.id) || unavailableMachineIds.has(machine.id)) {
             return false;
         }
+        if (!initializedMachineIds.has(machine.id)) return true;
         if (freshKeyByMachineId.has(machine.id)) return true;
         const existingMachine = params.getExistingMachine?.(machine.id);
         if (!existingMachine?.metadata || existingMachine.metadataVersion !== machine.metadataVersion) {
@@ -684,14 +728,14 @@ export async function fetchAndApplyMachines(params: {
         if (!encryption) {
             return createLockedMachineView(machine, 'encryption_material_unavailable');
         }
-        if (unavailableMachineIds.has(machine.id) || !machineEncryptionReady || !encryption.getMachineEncryption(machine.id)) {
+        if (!machineEncryptionReady || (initializedMachineIds.has(machine.id) && !encryption.getMachineEncryption(machine.id))) {
             return createLockedMachineView(machine, 'decryption_failed');
         }
         const hasEncryptedDaemonState = typeof machine.daemonState === 'string' && machine.daemonState.length > 0;
         // Keep decrypted capabilities and their version while a fresh envelope is pending.
         // The availability checks above still fail closed when encryption or trust is unavailable.
-        const canReuseContent = !machine.isShared || (existingMachine?.access?.accessState === 'ready'
-            && existingMachine.dataEncryptionKey === machine.dataEncryptionKey);
+        const canReuseContent = initializedMachineIds.has(machine.id) && (!machine.isShared || (existingMachine?.access?.accessState === 'ready'
+            && existingMachine.dataEncryptionKey === machine.dataEncryptionKey));
         const retainedMetadata = StoredMachinePublishedMetadataV1Schema.safeParse(existingMachine?.metadata);
         const retainedDaemonState = StoredMachinePublishedDaemonStateV1Schema.safeParse(existingMachine?.daemonState);
         const metadata = projectMachinePublishedMetadataFromRowV1(machine.metadata && canReuseContent && retainedMetadata.success ? retainedMetadata.data : null, machine.devcontainerChild);
@@ -712,12 +756,16 @@ export async function fetchAndApplyMachines(params: {
             ...readMachineIdentityFields(machine),
             ...readMachinePublishedContext(machine),
             storageMode: 'e2ee',
-            ...(existingMachine?.storageMode === 'e2ee' && existingMachine.availability
+            // Current key/access checks succeeded. A previous lock is not the
+            // state of this pending hydration; retain only last-known readiness.
+            ...(canReuseContent && existingMachine?.storageMode === 'e2ee' && existingMachine.availability?.kind === 'available'
                 ? { availability: existingMachine.availability } : {}),
         });
     };
 
     const decryptMachine = async (machine: typeof machines[number]): Promise<Machine | null> => {
+        if (!isMachineCurrent(machine.id)) return null;
+        await initializeMachineKeys([machine]);
         if (!isMachineCurrent(machine.id)) return null;
         if (unavailableMachineIds.has(machine.id)) {
             return createLockedMachineView(
@@ -812,13 +860,40 @@ export async function fetchAndApplyMachines(params: {
                 return rightActivity - leftActivity;
             });
         if (machinesNeedingHydration.length > 0) {
+            let hydrationYield: Promise<void> | null = null;
+            const yieldHydrationCohort = () => {
+                if (!hydrationYield) hydrationYield = yieldToEventLoop().then(() => { hydrationYield = null; });
+                return hydrationYield;
+            };
+            // Crypto completions in one microtask turn share one inventory
+            // publication. Publishing each row synchronously repeats all store
+            // selectors and AppShell projections for the whole fleet. A slow
+            // decrypt does not hold its already-completed peers, and the owning
+            // read rechecks Account/key/row currentness at the actual flush.
+            let pendingMachines: Machine[] = [];
+            let publication: Promise<void> | null = null;
+            const publishHydratedMachine = (machine: Machine): Promise<void> => {
+                pendingMachines.push(machine);
+                if (!publication) {
+                    publication = Promise.resolve().then(() => {
+                        const batch = pendingMachines;
+                        pendingMachines = [];
+                        publication = null;
+                        if (shouldContinue()) applyCurrentMachines(batch, false);
+                    });
+                }
+                return publication;
+            };
             void runTasksWithLimit(
                 machinesNeedingHydration.map((machine) => async () => {
+                    // Reuse the crypto owner's cooperative release before the
+                    // next background open; foreground RPCs do not join this fleet.
+                    await yieldHydrationCohort();
                     if (!isMachineCurrent(machine.id)) return null;
                     const decryptedMachine = await decryptMachine(machine);
                     if (!isMachineCurrent(machine.id)) return null;
                     if (decryptedMachine) {
-                        applyCurrentMachines([decryptedMachine], false);
+                        await publishHydratedMachine(decryptedMachine);
                     }
                     return decryptedMachine;
                 }),

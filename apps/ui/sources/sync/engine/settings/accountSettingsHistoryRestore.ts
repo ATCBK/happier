@@ -1,16 +1,20 @@
 import { AccountSettingsV2HistoryDetailResponseSchema, AccountSettingsV2HistoryMutationRequestSchema, AccountSettingsV2HistoryMutationResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { applyAccountSettingsHistoryRestoreV1, type AccountSettingsHistoryDestinationAuthorityV1, type AccountSettingsHistoryRestoreInvalidReasonV1 } from '@happier-dev/protocol/account/settings/accountSettingsHistoryRestoreV1';
 import { captureAccountSettingsHistoryDestinationAuthorityV1, normalizeAccountSettingsHistoryClientV1,
+    areAccountSettingsHistoryRecoveryInputsEqualV1,
     type AccountSettingsHistoryClientPortsV1, type AccountSettingsHistoryCleanupResultV1,
+    type AccountSettingsHistoryNormalizationCheckpointV1,
     type AccountSettingsHistorySavedSecretRecoveryV1 } from '@happier-dev/protocol/account/settings/accountSettingsHistoryClientV1';
 import { PROFILE_TRANSFER_ROUTE_V1, ProfileTransferRowReadResponseV1Schema } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 import { SettingsDeclarationOperationInputV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import tweetnacl from 'tweetnacl';
 
-import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { areCredentialsEqual, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { Encryption } from '@/sync/encryption/encryption';
-import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
+import { accountSettingsScopeKeySuffix, areAccountSettingsScopesEqual, type AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { captureAccountSettingsRequest } from '@/sync/api/account/accountSettingsRequest';
 import type { ServerFetch } from '@/sync/http/client';
 import { fetchAccountEncryptionCurrentness } from '@/sync/api/account/apiAccountEncryptionMode';
@@ -135,6 +139,34 @@ function captureDestinationAuthority(params: Readonly<{
 
 export type AccountSettingsHistoryCleanupResult = AccountSettingsHistoryCleanupResultV1;
 
+// Catalogs share live Account-wide maintenance. Completed evidence below can skip
+// history scans only after Protocol freshly recaptures currentness and destination rows.
+const pendingHistoryNormalizations = new Set<Readonly<{
+    params: Parameters<typeof normalizeAccountSettingsHistoryAfterTransfer>[0];
+    isCurrent: () => boolean;
+    result: Promise<AccountSettingsHistoryCleanupResult>;
+}>>();
+
+// One checkpoint per Account, scoped to the same credentials, cipher and receipts
+// as live sharing. Protocol re-reads head/transfer/destinations before using it.
+const completedHistoryNormalizations = new Map<string, Readonly<{
+    params: Parameters<typeof normalizeAccountSettingsHistoryAfterTransfer>[0];
+    isCurrent: () => boolean;
+    checkpoint: AccountSettingsHistoryNormalizationCheckpointV1;
+}>>();
+
+function sameHistoryNormalizationContext(a: Parameters<typeof normalizeAccountSettingsHistoryAfterTransfer>[0],
+    b: Parameters<typeof normalizeAccountSettingsHistoryAfterTransfer>[0]): boolean {
+    return areAccountSettingsScopesEqual(a.settingsScope, b.settingsScope)
+        && areCredentialsEqual(a.credentials, b.credentials)
+        && (a.encryption === b.encryption || (a.encryption !== null && b.encryption !== null
+            && tweetnacl.verify(a.encryption.getContentPrivateKey(), b.encryption.getContentPrivateKey())))
+        && a.expectedProfileTransferRevision === b.expectedProfileTransferRevision
+        && areAccountSettingsHistoryRecoveryInputsEqualV1(a.savedSecretRecovery, b.savedSecretRecovery)
+        && sameStrictJsonValue(a.destinationAuthority.savedSecretTransfers, b.destinationAuthority.savedSecretTransfers)
+        && sameStrictJsonValue(a.destinationAuthority.legacyRoleArtifactTransfers, b.destinationAuthority.legacyRoleArtifactTransfers);
+}
+
 /** Private transport for the incumbent approved, exact-version purge intent. */
 export async function purgeAccountSettingsHistoryVersions(params: Readonly<{
     credentials: AuthCredentials; settingsScope: AccountSettingsScope; versions: readonly number[]; signal?: AbortSignal;
@@ -185,7 +217,22 @@ export async function normalizeAccountSettingsHistoryAfterTransfer(params: Reado
     const captured = params.requestContext ?? await captureAccountSettingsRequest(params);
     if (!captured) throwStaleRestoreScope();
     try {
-        return await normalizeAccountSettingsHistoryClientV1({ destinationAuthority: params.destinationAuthority,
+        if (!captured.isCurrent()) throwStaleRestoreScope();
+        for (const [key, entry] of completedHistoryNormalizations) {
+            if (!entry.isCurrent()) completedHistoryNormalizations.delete(key);
+        }
+        const incumbent = [...pendingHistoryNormalizations].find(entry => entry.isCurrent()
+            && sameHistoryNormalizationContext(entry.params, params));
+        if (incumbent) {
+            const result = await incumbent.result;
+            if (!captured.isCurrent()) throwStaleRestoreScope();
+            return result;
+        }
+        const key = accountSettingsScopeKeySuffix(params.settingsScope);
+        const previous = completedHistoryNormalizations.get(key);
+        const checkpoint: AccountSettingsHistoryNormalizationCheckpointV1 = previous
+            && sameHistoryNormalizationContext(previous.params, params) ? { ...previous.checkpoint } : {};
+        const result = normalizeAccountSettingsHistoryClientV1({ destinationAuthority: params.destinationAuthority, checkpoint,
             ...(params.savedSecretRecovery ? { savedSecretRecovery: params.savedSecretRecovery } : {}),
             ...(params.expectedProfileTransferRevision === undefined ? {} : { expectedProfileTransferRevision: params.expectedProfileTransferRevision }), ports: {
             ...createHistoryCapturePorts({ ...params, ...captured }),
@@ -195,6 +242,14 @@ export async function normalizeAccountSettingsHistoryAfterTransfer(params: Reado
                     material: { type: 'dataKey', machineKey: params.encryption!.getContentPrivateKey() },
                     payload: raw, randomBytes: getRandomBytes }) },
         } });
+        const entry = { params, isCurrent: captured.isCurrent, result };
+        pendingHistoryNormalizations.add(entry);
+        try {
+            const completed = await result;
+            if (!captured.isCurrent()) throwStaleRestoreScope();
+            if (completed.status === 'complete') completedHistoryNormalizations.set(key, { params, isCurrent: captured.isCurrent, checkpoint });
+            return completed;
+        } finally { pendingHistoryNormalizations.delete(entry); }
     } finally { if ('dispose' in captured) captured.dispose(); }
 }
 

@@ -212,7 +212,8 @@ vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
     return createStorageModuleStub({
     storage: {
-        getState: () => mocks.storageState,
+        // The testkit caches completed snapshots by identity; fixture mutations need a fresh snapshot.
+        getState: () => ({ ...mocks.storageState }),
     },
 });
 });

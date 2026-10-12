@@ -1,10 +1,5 @@
-import {
-    areSessionMcpSelectionsEquivalent,
-    readSessionMcpSelectionRestartRequiredV1FromMetadata,
-    readSessionMcpSelectionV1FromMetadata,
-    SessionMcpSelectionV1Schema,
-    type SessionMcpSelectionV1,
-} from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import type { SessionMcpSelectionV1 } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 
 import type { Metadata } from '@happier-dev/session-core/state';
 
@@ -13,23 +8,11 @@ export function computeNextSessionMcpSelectionMetadata(
     selection: SessionMcpSelectionV1,
     options: Readonly<{ sessionActive: boolean }> = { sessionActive: false },
 ): Metadata {
-    const normalized = SessionMcpSelectionV1Schema.parse(selection);
-    const currentSelection = readSessionMcpSelectionV1FromMetadata(metadata)
-        ?? SessionMcpSelectionV1Schema.parse({});
-    const marker = readSessionMcpSelectionRestartRequiredV1FromMetadata(metadata);
-    const appliedSelection = marker?.appliedSelection ?? currentSelection;
     const {
         mcpSelection: _legacyMcpSelection,
-        mcpSelectionRestartRequiredV1: _previousRestartMarker,
         ...canonicalMetadata
     } = metadata as Metadata & {
         mcpSelection?: unknown;
     };
-    return {
-        ...canonicalMetadata,
-        mcpSelectionV1: normalized,
-        ...(options.sessionActive && !areSessionMcpSelectionsEquivalent(normalized, appliedSelection)
-            ? { mcpSelectionRestartRequiredV1: { v: 1, appliedSelection } }
-            : {}),
-    };
+    return writeSessionCapabilitySelectionToMetadataV1(canonicalMetadata, { mcp: selection }, options);
 }

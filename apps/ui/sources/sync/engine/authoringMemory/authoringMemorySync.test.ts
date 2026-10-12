@@ -44,6 +44,28 @@ function harness(options: { rejectMutation?: boolean } = {}) {
 }
 
 describe('Account authoring memory owner', () => {
+    it('persists and reloads saved Workflow projects independently of unrelated recent Machine paths', async () => {
+        const h = harness();
+        const definitionId = '00000000-0000-4000-8000-000000000005';
+        const otherDefinitionId = '00000000-0000-4000-8000-000000000006';
+        const project = { machineId: 'machine-one', directory: '/repo', workspaceRefId: 'workspace-one' };
+        h.rows.set('recentMachinePaths', { revision: 2, content: { t: 'plain', v: [{ machineId: 'machine-two', path: '/other' }] } });
+        await h.owner.applyDelta({ workflowProjectTargetsByDefinitionId: { [definitionId]: project } });
+        expect(h.rows.get(`workflowProject:${definitionId}`)?.content).toEqual({ t: 'plain', v: project });
+        expect(h.projection()).toMatchObject({ workflowProjectTargetsByDefinitionId: { [definitionId]: project },
+            recentMachinePaths: [{ machineId: 'machine-two', path: '/other' }] });
+        await h.owner.applyDelta({ workflowProjectTargetsByDefinitionId: { [otherDefinitionId]: { machineId: 'machine-three', directory: '/third' } } });
+        const reopened = harness();
+        for (const [key, value] of h.rows) reopened.rows.set(key, value);
+        await reopened.owner.bootstrap();
+        expect(reopened.projection().workflowProjectTargetsByDefinitionId).toEqual({ [definitionId]: project,
+            [otherDefinitionId]: { machineId: 'machine-three', directory: '/third' } });
+        await h.owner.applyDelta({ workflowProjectTargetsByDefinitionId: { [definitionId]: null } });
+        expect(h.rows.get(`workflowProject:${definitionId}`)?.content).toBeNull();
+        expect(h.projection().workflowProjectTargetsByDefinitionId).toEqual({ [otherDefinitionId]: { machineId: 'machine-three', directory: '/third' } });
+        h.retire();
+        await expect(h.owner.applyDelta({ workflowProjectTargetsByDefinitionId: { [definitionId]: project } })).rejects.toThrow();
+    });
     it('keeps qualified Project recency separate from engine memory and writes only explicit navigation', async () => {
         const h = harness();
         const anchor = { serverId: 'home:one', projectKey: 'project/one' };

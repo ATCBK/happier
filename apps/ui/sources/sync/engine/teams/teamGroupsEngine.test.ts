@@ -18,7 +18,7 @@ vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
 }));
 
 vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit');
+    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
     return createTokenStorageModuleMock({
         importOriginal: importOriginal as <T = typeof import('@/auth/storage/tokenStorage')>() => Promise<T>,
         tokenStorage: { getCredentialsForServerUrl: getCredentialsForServerUrlMock },
@@ -227,6 +227,40 @@ describe('Team Group projections', () => {
         expect(moved.data?.[1]).toBe(lastGood[2]);
         expect(runtimeFetchMock.mock.calls.map(([input]) => JSON.parse(input.init.body).cursor ?? null))
             .toEqual([null, 'cursor-1', null, 'fresh-1']);
+
+        // Revalidation stops at the authoritative end even when the loaded
+        // range was longer, so removed rows cannot survive for continuity.
+        runtimeFetchMock.mockResolvedValueOnce(page([group('g2')], null));
+        await refreshTeamGroups(scope, address, ACTIVE);
+        expect(getTeamGroupsSnapshot(scope, address, key)?.data?.map((row) => row.id)).toEqual(['g2']);
+        expect(getTeamGroupsSnapshot(scope, address, key)?.nextCursor).toBeNull();
+        release();
+    });
+
+    it('drops an old continuation that settles after the loaded range was refreshed', async () => {
+        const homeA = await addHome('Home A', 'https://home-a.example');
+        await setActiveServerId(homeA, { scope: 'device' });
+        const scope = createServerAccountScope(homeA, 'account')!;
+        const address = createTeamAddress(homeA, 'team-1')!;
+        const key = groupsQueryKey('team-1');
+        runtimeFetchMock.mockResolvedValueOnce(page([group('g1')], 'cursor-1'));
+        const release = observeTeamGroups(scope, address, ACTIVE);
+        await vi.waitFor(() => expect(getTeamGroupsSnapshot(scope, address, key)?.status).toBe('ready'));
+        runtimeFetchMock.mockResolvedValueOnce(page([group('g2')], 'cursor-2'));
+        await loadMoreTeamGroups(scope, address, ACTIVE);
+
+        const continuation = createDeferred<Response>();
+        runtimeFetchMock.mockReturnValueOnce(continuation.promise);
+        const more = loadMoreTeamGroups(scope, address, ACTIVE);
+        await vi.waitFor(() => expect(runtimeFetchMock).toHaveBeenCalledTimes(3));
+        runtimeFetchMock
+            .mockResolvedValueOnce(page([group('g1')], 'fresh-1'))
+            .mockResolvedValueOnce(page([group('g2')], 'fresh-2'));
+        await refreshTeamGroups(scope, address, ACTIVE);
+        const refreshed = getTeamGroupsSnapshot(scope, address, key)!;
+        continuation.resolve(page([group('g3')], 'cursor-3'));
+        await more;
+        expect(getTeamGroupsSnapshot(scope, address, key)).toBe(refreshed);
         release();
     });
 

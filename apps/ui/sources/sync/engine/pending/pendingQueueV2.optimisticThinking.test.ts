@@ -83,6 +83,12 @@ async function persistLocalPending(params: Readonly<{
 }
 
 describe('pendingQueueV2 optimistic thinking', () => {
+    const resetAction = {
+        v: 1, kind: 'reset_start', reset: {
+            source: { bindingKind: 'account', ref: { service: { pluginId: 'happier.agent.codex', localId: 'codex-account' }, accountId: 'connected-account' } },
+            recordId: 'paug_v1_receipt1', meterId: 'requests', witness: { id: 'accepted-history-row', observedAtMs: 100 },
+        },
+    } as const;
     beforeEach(async () => {
         await resetPendingQueueState(testOutboxScope);
         vi.useFakeTimers();
@@ -93,14 +99,109 @@ describe('pendingQueueV2 optimistic thinking', () => {
         vi.useRealTimers();
     });
 
-    it('admits exact Run input without activating the parent and preserves the route on replay', async () => {
+    it.each(['pending_input_v1', 'pending_input_v3', 'released_server_v0_2_1', 'indeterminate'] as const)(
+        'refuses reset admission on %s before projection or durable custody', async (serverWireMode) => {
+            const sessionId = 'reset-unsupported';
+            storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
+            const request = vi.fn(async (_path: string, init?: RequestInit) => currentPendingEnqueueAck(init));
+            await expect(enqueuePendingMessageV2Impl({
+                sessionId, text: 'held', localId: 'reset-local', encryption: null, outboxScope: testOutboxScope,
+                serverWireMode, requestedAction: resetAction, request,
+            })).rejects.toMatchObject({ code: 'server-upgrade-required' });
+            expect(request).not.toHaveBeenCalled();
+            expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+            expect(await loadPendingOutboxForSession(sessionId, testOutboxScope)).toEqual([]);
+            expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
+        },
+    );
+
+    it('retains the frozen reset request through an unsupported retry and accepts it unchanged on V4', async () => {
+        const sessionId = 'reset-retry';
+        storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
+        await enqueuePendingMessageV2Impl({
+            sessionId, text: 'held', localId: 'reset-local', encryption: null, outboxScope: testOutboxScope,
+            serverWireMode: 'pending_input_v4', requestedAction: resetAction,
+            request: async () => { throw new Error('network disconnected'); },
+        });
+        const [frozen] = await loadPendingOutboxForSession(sessionId, testOutboxScope);
+        const request = vi.fn(async (_path: string, init?: RequestInit) => currentPendingEnqueueAck(init));
+        await expect(retryPendingOutboxOperationV2Impl({
+            sessionId, localId: 'reset-local', outboxScope: testOutboxScope, serverWireMode: 'pending_input_v3', request,
+        })).rejects.toMatchObject({ code: 'server-upgrade-required' });
+        expect(request).not.toHaveBeenCalled();
+        expect((await loadPendingOutboxForSession(sessionId, testOutboxScope))[0]?.request).toEqual(frozen?.request);
+        await retryPendingOutboxOperationV2Impl({
+            sessionId, localId: 'reset-local', outboxScope: testOutboxScope, serverWireMode: 'pending_input_v4', request,
+        });
+        expect(request.mock.calls[0]?.[1]?.body).toBe(frozen?.request.body);
+    });
+
+    it.each(['plain', 'e2ee'] as const)('admits a frozen %s initial user record without rebuilding its metadata', async (encryptionMode) => {
+        const sessionId = `initial-${encryptionMode}`;
+        storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode } })]);
+        const encryption = encryptionMode === 'e2ee' ? await createPendingQueueEncryption({ sessionId }) : null;
+        const rawRecord = { role: 'user' as const, content: { type: 'text' as const, text: 'approved prompt' }, meta: { displayText: 'approved display', model: 'approved-model' } };
+        const initialContent = encryptionMode === 'plain'
+            ? { t: 'plain' as const, v: rawRecord }
+            : { t: 'encrypted' as const, c: await encryption!.getSessionEncryption(sessionId)!.encryptRawRecord(rawRecord) };
+        await enqueuePendingMessageV2Impl({
+            sessionId, text: '', localId: 'initial-local', encryption, initialContent,
+            outboxScope: testOutboxScope, serverWireMode: 'pending_input_v3',
+            request: async () => { throw new Error('network disconnected'); },
+        });
+        const [row] = await loadPendingOutboxForSession(sessionId, testOutboxScope);
+        expect(row).toMatchObject({ text: 'approved prompt', displayText: 'approved display', rawRecord });
+        expect(storage.getState().sessionPending[sessionId]?.messages[0]).toMatchObject({ text: 'approved prompt', rawRecord });
+    });
+
+    it.each(['plain', 'e2ee'] as const)('refuses an initial envelope incompatible with %s before projection', async (encryptionMode) => {
+        const sessionId = `initial-mismatch-${encryptionMode}`;
+        storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode } })]);
+        const request = vi.fn(async (_path: string, init?: RequestInit) => currentPendingEnqueueAck(init));
+        const initialContent = encryptionMode === 'plain' ? { t: 'encrypted' as const, c: 'private' }
+            : { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'private' } } };
+        await expect(enqueuePendingMessageV2Impl({
+            sessionId, text: '', localId: 'initial-local', encryption: null, initialContent,
+            outboxScope: testOutboxScope, serverWireMode: 'pending_input_v3', request,
+        })).rejects.toMatchObject({ code: 'session_message_encryption_mode_mismatch' });
+        expect(request).not.toHaveBeenCalled();
+        expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+        expect(await loadPendingOutboxForSession(sessionId, testOutboxScope)).toEqual([]);
+    });
+
+    it.each([false, true])('returns the reset enqueue write receipt exactly (didWrite=%s)', async (didWrite) => {
+        const sessionId = 'reset-receipt';
+        storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
+        await expect(enqueuePendingMessageV2Impl({
+            sessionId, text: 'held', localId: 'reset-local', encryption: null, outboxScope: testOutboxScope,
+            serverWireMode: 'pending_input_v4', requestedAction: resetAction,
+            request: async () => Response.json({ didWrite, requestedAction: resetAction, pending: { localId: 'reset-local' } }),
+        })).resolves.toMatchObject({ accepted: true, didWrite });
+    });
+
+    it('withholds acceptance when the reset acknowledgement names a different witness', async () => {
+        const sessionId = 'reset-ack-conflict';
+        storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
+        await expect(enqueuePendingMessageV2Impl({
+            sessionId, text: 'held', localId: 'reset-local', encryption: null, outboxScope: testOutboxScope,
+            serverWireMode: 'pending_input_v4', requestedAction: resetAction,
+            request: async () => Response.json({ didWrite: true,
+                requestedAction: { ...resetAction, reset: { ...resetAction.reset, witness: { id: 'another-row', observedAtMs: 100 } } },
+                pending: { localId: 'reset-local' },
+            }),
+        })).resolves.toMatchObject({ accepted: false });
+        const [row] = await loadPendingOutboxForSession(sessionId, testOutboxScope);
+        expect(JSON.parse(row!.request.body).requestedAction).toEqual(resetAction);
+    });
+
+    it.each(['pending_input_v3', 'pending_input_v4'] as const)('admits exact Run input on %s without activating the parent and preserves the route on replay', async (serverWireMode) => {
         const sessionId = 'target-session';
         storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
         const recipient = { kind: 'execution_run' as const, runId: 'run-a' };
         const requests: Array<{ path: string; body: unknown }> = [];
         await enqueuePendingMessageV2Impl({
             sessionId, text: 'run only', localId: 'target-local', encryption: null,
-            recipient, targetMachineId: 'machine-a', serverWireMode: 'pending_input_v3',
+            recipient, targetMachineId: 'machine-a', serverWireMode,
             outboxScope: testOutboxScope,
             request: async (path, init) => {
                 requests.push({ path, body: JSON.parse(String(init?.body)) });
@@ -110,7 +211,7 @@ describe('pendingQueueV2 optimistic thinking', () => {
         expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
         expect(storage.getState().sessionPending[sessionId]?.messages[0]?.recipient).toEqual(recipient);
         await retryPendingOutboxOperationV2Impl({
-            sessionId, localId: 'target-local', outboxScope: testOutboxScope, serverWireMode: 'pending_input_v3',
+            sessionId, localId: 'target-local', outboxScope: testOutboxScope, serverWireMode,
             request: async (path, init) => {
                 requests.push({ path, body: JSON.parse(String(init?.body)) });
                 return currentPendingEnqueueAck(init, { recipient });
@@ -123,6 +224,25 @@ describe('pendingQueueV2 optimistic thinking', () => {
         expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
         expect(requests[1]?.body).toEqual(requests[0]?.body);
         expect(requests[0]?.body).toMatchObject({ v: 1, targetMachineId: 'machine-a', content: { t: 'plain' } });
+    });
+
+    it('refuses incompatible reset routing and activation options before custody', async () => {
+        const sessionId = 'reset-conflict';
+        storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
+        for (const options of [
+            { recipient: { kind: 'execution_run' as const, runId: 'run-a' }, targetMachineId: 'machine-a' },
+            { deliveryMode: 'external_handoff' as const },
+            { resumeWhenAvailable: true as const },
+        ]) {
+            const request = vi.fn();
+            await expect(enqueuePendingMessageV2Impl({
+                sessionId, text: 'held', localId: 'reset-local', encryption: null, outboxScope: testOutboxScope,
+                serverWireMode: 'pending_input_v4', requestedAction: resetAction, request, ...options,
+            })).rejects.toMatchObject({ code: 'session_input_idempotency_conflict' });
+            expect(request).not.toHaveBeenCalled();
+            expect(await loadPendingOutboxForSession(sessionId, testOutboxScope)).toEqual([]);
+            expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+        }
     });
 
     it('cancels exact Run custody without clearing the parent thinking state', async () => {
@@ -273,6 +393,7 @@ describe('pendingQueueV2 optimistic thinking', () => {
         expect(result).toEqual({
             localId: 'voice-local-1',
             accepted: true,
+            didWrite: true,
             externalHandoffClaimed: true,
         });
         expect(storage.getState().sessionPending[sessionId]?.messages[0]?.pendingDeliveryStatus)
@@ -335,6 +456,7 @@ describe('pendingQueueV2 optimistic thinking', () => {
         })).resolves.toEqual({
             localId,
             accepted: true,
+            didWrite: true,
             externalHandoffClaimed: true,
         });
         expect(storage.getState().sessionPending[sessionId]?.messages[0]?.pendingDeliveryStatus)
@@ -608,7 +730,7 @@ describe('pendingQueueV2 optimistic thinking', () => {
         releaseRequest();
         const [enqueueResult] = await Promise.all([enqueuePromise, deletePromise]);
 
-        expect(enqueueResult).toEqual({ localId, accepted: true, cancelled: true });
+        expect(enqueueResult).toEqual({ localId, accepted: true, didWrite: true, cancelled: true });
         expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
         expect(requestCalls).toEqual([
             { path: `/v2/sessions/${sessionId}/pending`, method: 'POST' },

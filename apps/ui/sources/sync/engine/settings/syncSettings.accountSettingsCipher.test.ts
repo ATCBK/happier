@@ -1683,6 +1683,8 @@ describe('syncSettings account settings ciphertext', () => {
                 sessionId: 'session-a',
                 sortKey: '00000001',
                 pinnedAt: 123,
+                listPinned: true,
+                railPinned: false,
             }],
             folders: [],
             folderAssignments: [],

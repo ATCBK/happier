@@ -5,6 +5,8 @@ import { createScopedSnapshotLoader, type ScopedLoadTarget } from '@/sync/engine
 import { materializeSavedSecretResources } from '@/sync/engine/settings/materializeSavedSecretResources';
 import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFacts';
 import type { SavedSecretLegacyImportResult } from '@/sync/domains/settings/savedSecretTypes';
+import type { SavedSecretCatalogEntryV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import {
     applySavedSecretCatalogFailure,
     applySavedSecretCatalogPage,
@@ -13,6 +15,7 @@ import {
     invalidateSavedSecretCatalog,
     invalidateSavedSecretCatalogsForServer,
     removeDeletedSavedSecretCatalogResource,
+    applyAcknowledgedSavedSecretCatalogEntry,
 } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 
 type Target = ScopedLoadTarget & Readonly<{ scope: ServerAccountScope }>;
@@ -109,6 +112,10 @@ const loader = createScopedSnapshotLoader<Target>({
     },
     invalidateServer: invalidateSavedSecretCatalogsForServer,
     invalidateTarget: ({ scope }) => invalidateSavedSecretCatalog(scope),
+    // Material, legacy Settings admission and retained-history cleanup share
+    // the planner's source/resource decision. Machine/Session-only writes do
+    // not withdraw this catalog; content-free secondary wakes still revalidate.
+    matchesWake: event => event.profileCatalogAffects !== false,
 });
 
 export function observeSavedSecretCatalog(scope: ServerAccountScope): () => void {
@@ -124,13 +131,24 @@ export function refreshSavedSecretCatalog(scope: ServerAccountScope): Promise<vo
 export function invalidateSavedSecretCatalogProjection(scope: ServerAccountScope): Promise<void> {
     return loader.invalidate(targetFor(scope));
 }
+/** Invalidate older reads before publishing the exact receipt; the loader owns revalidation. */
+export function applySavedSecretCatalogEntryAcknowledgement(scope: ServerAccountScope, entry: SavedSecretCatalogEntryV1,
+    current: boolean): void {
+    if (!current) return;
+    const revalidation = loader.invalidate(targetFor(scope));
+    fireAndForget(revalidation, { tag: 'savedSecretCatalog.afterAcknowledgedMutation' });
+    try { applyAcknowledgedSavedSecretCatalogEntry(scope, entry, current); }
+    catch { /* A display subscriber cannot retract the durable resource receipt. */ }
+}
 
 /** Reconcile the receipt first; revalidation retains that fact on transport failure. */
-export async function applySavedSecretCatalogDeletion(scope: ServerAccountScope, resourceId: string): Promise<void> {
+export async function applySavedSecretCatalogDeletion(scope: ServerAccountScope, resourceId: string,
+    expectedRevision?: number, current = true): Promise<void> {
+    if (!current) return;
     const revalidation = loader.invalidate(targetFor(scope));
-    removeDeletedSavedSecretCatalogResource(scope, resourceId);
+    removeDeletedSavedSecretCatalogResource(scope, resourceId, expectedRevision, current);
     // The loader publishes its own read failure; it cannot undo a committed deletion.
-    await revalidation.catch(() => undefined);
+    fireAndForget(revalidation, { tag: 'savedSecretCatalog.afterAcknowledgedDeletion' });
 }
 
 export function resetSavedSecretCatalogEngineForTests(): void {

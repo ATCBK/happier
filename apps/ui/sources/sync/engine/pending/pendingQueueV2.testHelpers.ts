@@ -79,6 +79,7 @@ export function currentPendingEnqueueAck(
     }
     const request = body as Readonly<Record<string, unknown>>;
     return Response.json({
+        didWrite: true,
         requestedAction: request.requestedAction,
         pending: {
             localId: request.localId,

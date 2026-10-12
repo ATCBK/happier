@@ -3,7 +3,7 @@ import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/dom
 import { readPromptLibraryCatalogProjection } from '@/sync/api/account/apiPromptLibraryCatalog';
 import { createScopedSnapshotLoader, type ScopedLoadTarget } from '@/sync/engine/scope/scopedSnapshotLoader';
 import { applyPromptLibraryCatalogSnapshot, beginPromptLibraryCatalogLoad, getPromptLibraryCatalogSnapshot,
-    invalidatePromptLibraryCatalogsForServer } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
+    invalidatePromptLibraryCatalogsForServer, type PromptLibraryCatalogProjection } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 type Target = ScopedLoadTarget & Readonly<{ scope: ServerAccountScope }>;
 const targetFor = (scope: ServerAccountScope): Target => ({ key: `prompt-library:${serverAccountScopeKeySuffix(scope)}`, serverId: scope.serverId, scope });
 const publicationGuards = new Map<string, () => void>();
@@ -12,7 +12,7 @@ const loader = createScopedSnapshotLoader<Target>({
         const guard = publicationGuards.get(key);
         try { guard?.(); } catch { return; }
         beginPromptLibraryCatalogLoad(scope);
-        return context.readWithMaintenance({
+        return context.readWithMaintenance<PromptLibraryCatalogProjection>({
             read: publication => readPromptLibraryCatalogProjection(scope, undefined, guard, publication),
             publish: (projection, current) => {
                 try { guard?.(); } catch { return; }

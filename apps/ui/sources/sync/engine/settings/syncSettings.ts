@@ -164,6 +164,8 @@ export type SyncSettingsParams<TOneShotMutationValue = never> = {
     encryption: Encryption | null;
     settingsScope?: AccountSettingsScope | null;
     pendingSettings: Partial<Settings>;
+    /** Latest intents for this captured scope, including those awaiting the quiet disk flush. */
+    getPendingSettings?: () => Partial<Settings>;
     /** Republish only from the fetched exact-Home settings CAS baseline. */
     republishRemoteAlertPolicy?: boolean;
     clearPendingSettings: (nextPendingSettings: Partial<Settings>) => void;
@@ -358,11 +360,9 @@ export async function syncSettings<TOneShotMutationValue = never>(
     const fetchRemoteProjection = () => remoteProjectionPromise ??= fetchPushTokensRemoteAlertProjection(credentials, request)
         .catch(() => null);
     const supportsRemoteProjection = () => fetchRemoteProjection().then((projection) => projection !== null);
-    const remoteAlertPolicyReconciliationStatus = params.republishRemoteAlertPolicy === true
-        ? (await fetchRemoteProjection())?.accountRemoteAlerts.status ?? null
-        : null;
-    const shouldInspectRemoteAlertPolicy = remoteAlertPolicyReconciliationStatus === 'stale'
-        || remoteAlertPolicyReconciliationStatus === 'disabled';
+    // This read does not supply Account mode or the Settings CAS baseline.
+    // Its result is required only before choosing/issuing policy writeback.
+    const remoteProjectionRead = params.republishRemoteAlertPolicy === true ? fetchRemoteProjection() : null;
     const maxRetries = 3;
     let retryCount = 0;
     let lastVersionMismatch: { expectedVersion: number; currentVersion: number; pendingKeys: string[] } | null = null;
@@ -418,6 +418,7 @@ export async function syncSettings<TOneShotMutationValue = never>(
     }
 
     function loadPendingSettingsForCapturedScope(): Partial<Settings> {
+        if (params.getPendingSettings) return params.getPendingSettings();
         // Pre-auth/bootstrap calls may not have a captured account scope yet. Authenticated
         // sync paths always pass a scope and therefore use scoped pending settings.
         return settingsScope ? loadPendingAccountSettings(settingsScope) : loadPendingSettings();
@@ -585,18 +586,37 @@ export async function syncSettings<TOneShotMutationValue = never>(
         };
     }
 
+    let localNormalization: Readonly<{
+        raw: Record<string, unknown> | null;
+        mode: 'plain' | 'e2ee';
+        localSettings: Settings;
+        organizationImported: boolean;
+        settings: Settings;
+    }> | null = null;
+
     function normalizeSettingsForLocalStorage(params: {
         raw: Record<string, unknown> | null;
         mode: 'plain' | 'e2ee';
     }): Settings {
-        return normalizeAccountSettingsForLocalStorage({
+        const localSettings = loadSettingsForCapturedScope().settings;
+        const organizationImported = shouldStripMigratedSessionOrganizationSettings();
+        const previous = localNormalization;
+        if (previous?.raw === params.raw && previous.mode === params.mode
+            && previous.localSettings === localSettings && previous.organizationImported === organizationImported) {
+            return previous.settings;
+        }
+        const settings = normalizeAccountSettingsForLocalStorage({
             raw: params.raw,
             mode: params.mode,
             settingsSecretsKey,
             settingsSecretsReadKeys,
-            localSettings: loadSettingsForCapturedScope().settings,
+            localSettings,
             normalizeServerRaw: stripMigratedSessionOrganizationSettingsForImportedScope,
         });
+        // Baseline validation and publication use the same immutable raw winner.
+        // A local edit or completed legacy import invalidates this attempt-local reuse.
+        localNormalization = { raw: params.raw, mode: params.mode, localSettings, organizationImported, settings };
+        return settings;
     }
 
     function normalizeSettingsForServerStorageResult(params: {
@@ -804,7 +824,11 @@ export async function syncSettings<TOneShotMutationValue = never>(
         }
     }
 
-    let prefetchedFinalBaseline: AccountSettingsServerBaseline | null = null;
+    const initialBaseline = await fetchAccountSettingsBaseline();
+    const remoteAlertPolicyReconciliationStatus = (await remoteProjectionRead)?.accountRemoteAlerts.status ?? null;
+    const shouldInspectRemoteAlertPolicy = remoteAlertPolicyReconciliationStatus === 'stale'
+        || remoteAlertPolicyReconciliationStatus === 'disabled';
+    let prefetchedFinalBaseline: AccountSettingsServerBaseline | null = initialBaseline;
 
     // Apply pending settings
     if (Object.keys(pendingServerSettings).length > 0
@@ -818,7 +842,8 @@ export async function syncSettings<TOneShotMutationValue = never>(
             base: summarizeSettings(storage.getState().settings, { version: storage.getState().settingsVersion }),
         });
 
-        let baseline = await fetchAccountSettingsBaseline();
+        let baseline = initialBaseline;
+        prefetchedFinalBaseline = null;
         let pendingLegacySessionOrganizationImported = await maybeImportLegacySessionOrganization(
             mergePendingLegacySessionOrganizationSettings(baseline.raw),
         );
@@ -1049,7 +1074,7 @@ export async function syncSettings<TOneShotMutationValue = never>(
         // Drop them from pending storage to avoid unnecessary sync attempts.
         if (Object.keys(pendingLegacySessionOrganizationSettings).length > 0) {
             if (settingsScope) {
-                const baseline = await fetchAccountSettingsBaseline();
+                const baseline = initialBaseline;
                 prefetchedFinalBaseline = baseline;
                 const imported = await maybeImportLegacySessionOrganization(
                     mergePendingLegacySessionOrganizationSettings(baseline.raw),
@@ -1095,8 +1120,8 @@ export async function syncSettings<TOneShotMutationValue = never>(
     // - Local writes apply immediately but do not bump `settingsVersion`.
     // - A concurrent sync tick can fetch/apply a newer server version (e.g. migrations/other clients)
     //   and accidentally clobber recent local edits before the pending POST flush runs.
-    // - Pending settings are persisted for crash safety; reload from disk so in-flight sync calls
-    //   don't miss deltas when the Sync instance replaces the pending object reference.
+    // - Read the captured scope's latest intents from Sync, including those awaiting the quiet
+    //   disk flush. Other callers fall back to the persisted pending settings for that scope.
     const pendingLatest = loadPendingSettingsForCapturedScope();
     const nextSettings = applyRawSettingsProjection({
         raw: decryptedSettings,

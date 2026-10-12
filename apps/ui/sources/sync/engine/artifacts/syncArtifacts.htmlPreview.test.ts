@@ -6,13 +6,60 @@ import { Encryption } from '@/sync/encryption/encryption';
 import { ArtifactEncryption } from '@/sync/encryption/artifactEncryption';
 import { hashArtifactBinaryContent, sealArtifactBinaryContent } from '@/sync/domains/artifacts/artifactBinaryContent';
 import { encodeBase64 } from '@/encryption/base64';
-import { createArtifactWithHeaderViaApi, updateArtifactWithHeaderViaApi, fetchArtifactForViewFromApi, type ArtifactDataKeyCache } from './syncArtifacts';
+import { createArtifactWithHeaderViaApi, updateArtifactWithHeaderViaApi, fetchArtifactForViewFromApi, fetchArtifactWithBodyFromApi,
+    fetchArtifactBodyRevisionsFromApi, type ArtifactDataKeyCache } from './syncArtifacts';
+import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 
 const artifactId = '29c6d6dd-8a45-4b30-a362-acdc5c700247';
 const blobId = 'f3d86e48-5552-4b66-af88-709c083bd134';
 const html = '<!doctype html><h1>Private HTML</h1><script>document.title="Executed"</script>';
 
 describe('Artifact HTML private preview', () => {
+    it.each(['plain', 'e2ee'] as const)('retains %s approval replay custody while refusing generic Document and history reads', async mode => {
+        const encryption = mode === 'e2ee' ? await Encryption.create(new Uint8Array(32).fill(12)) : null;
+        const dataKey = new Uint8Array(32).fill(9);
+        const codec = new ArtifactEncryption(dataKey);
+        const envelope = encryption ? encodeBase64(await encryption.encryptEncryptionKey(dataKey)) : ARTIFACT_PLAIN_DATA_KEY_MARKER;
+        const body = JSON.stringify({ executionOriginV1: { externalActionExecutionAuthorization: { v: 1 } } });
+        for (const kind of ['approval_request.v1', 'target_action_approval.v1', 'execution_run_host_action_approval.v1']) {
+            const header = { kind, title: 'Review request', excerpt: body };
+            const stored: Artifact = { id: artifactId, ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
+                dataEncryptionKey: envelope, header: mode === 'plain' ? encodePlainArtifactStoredContent(header) : await codec.encryptHeader(header),
+                body: mode === 'plain' ? encodePlainArtifactStoredContent({ body }) : await codec.encryptBody({ body }),
+                headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+            const request = async (path: string) => {
+                if (path === `/v1/artifacts/${artifactId}`) return Response.json(stored);
+                if (path.endsWith('/recipients')) return Response.json({ artifactId, ownerAccountId: 'owner', access: 'owner',
+                    encryptionMode: mode, dataEncryptionKey: envelope, callerDataEncryptionKey: envelope, recipients: [] });
+                if (path.endsWith('/revisions')) return Response.json({ revisions: [{ bodyVersion: 1,
+                    body: stored.body, createdAt: 1, sizeBytes: 1 }], retentionCount: 10 });
+                throw new Error('Unexpected approval transport request');
+            };
+            const artifactDataKeys: ArtifactDataKeyCache = new Map(mode === 'e2ee' ? [[artifactId, { envelope, dataKey }]] : []);
+            const params = { artifactId, credentials: { token: 'fixture-auth' }, request, encryption, artifactDataKeys };
+            // Project only the outcome, so even a failing confidentiality test cannot dump custody.
+            const outcome = (result: Promise<unknown>) => result.then(() => ({ code: 'returned_content' }),
+                (error: unknown) => ({ code: error && typeof error === 'object' ? Reflect.get(error, 'code') : null }));
+            expect(await outcome(fetchArtifactForViewFromApi({ ...params, includePdfPreview: false })))
+                .toEqual({ code: 'artifact_kind_internal' });
+            expect(await outcome(fetchArtifactBodyRevisionsFromApi(params))).toEqual({ code: 'artifact_kind_internal' });
+            const privateRead = await fetchArtifactWithBodyFromApi(params);
+            expect(privateRead?.body).toBe(body);
+        }
+    });
+    it('opens a saved text-bundle with its stored MIME and effective network policy', async () => {
+        const bundle = { ...artifactHtmlBundleFromBodyV1(html), requestedCapabilities: { networkOrigins: ['https://api.example.com'] } };
+        const artifact = { id: artifactId, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            header: encodePlainArtifactStoredContent({ kind: 'html', title: 'HTML', mime: ARTIFACT_HTML_BUNDLE_MIME_V1 }),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify(bundle) }),
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+        const request = async (path: string) => path.endsWith('/html-preview')
+            ? Response.json({ url: `https://${artifactId}.preview.test/a/${artifactId}` }) : Response.json(artifact);
+        const view = await fetchArtifactForViewFromApi({ artifactId, credentials: { token: 'captured-token' }, request,
+            encryption: null, artifactDataKeys: new Map(), includePdfPreview: false });
+        expect(view?.htmlPreview?.bundle).toEqual(bundle);
+    });
     it.each(['create', 'update'] as const)('rejects malformed HTML bundle bytes before a %s can commit', async (operation) => {
         let committed = false;
         const request = async (path: string, init?: RequestInit) => {

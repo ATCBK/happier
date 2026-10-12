@@ -208,8 +208,8 @@ import { encodeBase64 } from '@/encryption/base64';
 const credentials: AuthCredentials = {
     token: 'token',
     encryption: {
-        publicKey: 'public',
-        machineKey: 'machine',
+        publicKey: encodeBase64(new Uint8Array(32).fill(12), 'base64'),
+        machineKey: encodeBase64(new Uint8Array(32).fill(11), 'base64'),
     },
 };
 
@@ -250,6 +250,12 @@ function jsonResponse(payload: unknown, status = 200): Response {
     });
 }
 
+function currentnessResponse(mode: 'plain' | 'e2ee') {
+    return jsonResponse({ mode, version: 2, settingsVersion: 7, updatedAt: 1,
+        signingKeyFingerprint: mode === 'plain' ? null : 'signing-key',
+        contentKeyFingerprint: mode === 'plain' ? null : 'content-key' });
+}
+
 describe('classification-aware account settings history restore', () => {
     beforeEach(async () => {
         await TokenStorage.setCredentialsForServerUrl('http://127.0.0.1:3009', { serverId: 'server-a' }, credentials);
@@ -260,6 +266,8 @@ describe('classification-aware account settings history restore', () => {
         mocks.createServerFetchAtEndpoint.mockImplementation(() => async (path: string, init?: RequestInit) => {
             if (path === '/v1/account/entity-rows/profiles/transfer') return jsonResponse(mocks.transferControl);
             if (path === '/v1/account/entity-rows/prompt-library') return jsonResponse({}, 404);
+            // These fixtures model a Home without the other private catalog domains.
+            if (path.startsWith('/v1/account/entity-rows/')) return jsonResponse({}, 404);
             return await mocks.serverFetch(path, init);
         });
         mocks.activeLifetime.scope = SETTINGS_SCOPE;
@@ -304,7 +312,7 @@ describe('classification-aware account settings history restore', () => {
             expectedProfileTransferRevision: 2,
             expectedEncryptionCurrentness: { mode: 'plain', signingKeyFingerprint: null, contentKeyFingerprint: null },
             expectedContent: historical, operation: { kind: 'normalize', removedRoots: ['profiles', 'secretBindingsByProfileId'],
-                transferredProfileIds: [],
+                transferredProfileIds: [], savedSecretTransfers: [],
                 content: { t: 'plain', v: { preferredLanguage: 'de', futureSetting: { keep: true } } } } });
     });
 
@@ -451,13 +459,14 @@ describe('classification-aware account settings history restore', () => {
             settingsScope: SETTINGS_SCOPE, destinationAuthority: { activeTransferredRoots: ['profiles'] } })).toEqual({ status: 'complete' });
         const post = mocks.serverFetch.mock.calls.find(([path]) => path === '/v2/account/settings/history/6/mutate');
         expect(JSON.parse(String(post?.[1]?.body)).operation).toEqual({ kind: 'normalize',
-            removedRoots: ['profiles', 'secretBindingsByProfileId'], transferredProfileIds: [inheritedProfileId], content: { t: 'plain', v: {
+            removedRoots: ['profiles', 'secretBindingsByProfileId'], transferredProfileIds: [inheritedProfileId], savedSecretTransfers: [], content: { t: 'plain', v: {
                 profileEnabledById: { anthropic: true }, promptStacksV1: { v: 1, surfaces: { other: { keep: true } } },
             } } });
     });
 
     it('refuses a restore whose captured transfer revision moved without replaying the old roots', async () => {
         mocks.serverFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+            if (path === '/v1/account/encryption/currentness') return currentnessResponse('plain');
             if (path === '/v1/account/encryption') return jsonResponse({ mode: 'plain', updatedAt: 0 });
             if (path === '/v2/account/settings/history/3') return jsonResponse({ content: { t: 'plain', v: HISTORY_SNAPSHOT },
                 version: 3, createdAt: '2026-01-01T00:00:00.000Z' });
@@ -474,6 +483,7 @@ describe('classification-aware account settings history restore', () => {
 
     it('merges the recorded snapshot into the latest baseline under current classification and CASes it in plain mode', async () => {
         mocks.serverFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+            if (path === '/v1/account/encryption/currentness') return currentnessResponse('plain');
             if (path === '/v1/account/encryption') {
                 return jsonResponse({ mode: 'plain', updatedAt: Date.now() });
             }
@@ -555,6 +565,7 @@ describe('classification-aware account settings history restore', () => {
             if (path === '/v1/account/encryption') {
                 return jsonResponse({ mode: 'plain', updatedAt: Date.now() });
             }
+            if (path === '/v1/account/encryption/currentness') return currentnessResponse('plain');
             if (path === '/v2/account/settings' && (init?.method ?? 'GET') === 'GET') {
                 return jsonResponse({ content: { t: 'plain', v: same }, version: 7 });
             }
@@ -581,6 +592,7 @@ describe('classification-aware account settings history restore', () => {
 
     it('reports a typed conflict after a version move and never replays the restore', async () => {
         mocks.serverFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+            if (path === '/v1/account/encryption/currentness') return currentnessResponse('plain');
             if (path === '/v1/account/encryption') {
                 return jsonResponse({ mode: 'plain', updatedAt: Date.now() });
             }
@@ -628,6 +640,7 @@ describe('classification-aware account settings history restore', () => {
             if (path === '/v1/account/encryption') {
                 return jsonResponse({ mode: 'e2ee', updatedAt: Date.now() });
             }
+            if (path === '/v1/account/encryption/currentness') return currentnessResponse('e2ee');
             if (path === '/v2/account/settings' && (init?.method ?? 'GET') === 'GET') {
                 return jsonResponse({ content: { t: 'encrypted', c: latestCiphertext }, version: 7 });
             }
@@ -672,6 +685,7 @@ describe('classification-aware account settings history restore', () => {
 
     it('fails typed without writing when a historical preference cannot satisfy its current schema', async () => {
         mocks.serverFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+            if (path === '/v1/account/encryption/currentness') return currentnessResponse('plain');
             if (path === '/v1/account/encryption') {
                 return jsonResponse({ mode: 'plain', updatedAt: Date.now() });
             }
@@ -760,6 +774,7 @@ describe('classification-aware account settings history restore', () => {
         let resolveWrite!: (response: Response) => void;
         const write = new Promise<Response>((resolve) => { resolveWrite = resolve; });
         mocks.serverFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+            if (path === '/v1/account/encryption/currentness') return currentnessResponse('plain');
             if (path === '/v1/account/encryption') return jsonResponse({ mode: 'plain', updatedAt: 1 });
             if (path === '/v2/account/settings/history/3') return jsonResponse({
                 content: { t: 'plain', v: HISTORY_SNAPSHOT }, version: 3, createdAt: '2026-01-01T00:00:00.000Z',

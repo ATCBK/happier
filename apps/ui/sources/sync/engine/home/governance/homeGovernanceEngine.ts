@@ -117,6 +117,11 @@ export async function refreshHomeGovernanceSnapshot(scope: ServerAccountScope): 
     await loader.refresh(targetFor(scope));
 }
 
+/** An accepted mutation withdraws currentness before revalidating the retained projection. */
+export async function invalidateHomeGovernance(scope: ServerAccountScope): Promise<void> {
+    await loader.invalidate(targetFor(scope));
+}
+
 /** Test-only reset of the engine's observation and single-flight state. */
 export function resetHomeGovernanceEngineForTests(): void {
     loader.resetForTests();

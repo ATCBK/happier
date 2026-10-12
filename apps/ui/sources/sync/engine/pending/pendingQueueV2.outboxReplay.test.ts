@@ -305,6 +305,48 @@ describe('pendingQueueV2 requested-action replay', () => {
     expect((await loadPendingOutboxForSession(sessionId, outboxScope))).toEqual([]);
   });
 
+  it.each(['pending_input_v3', 'pending_input_v4', 'released_server_v0_2_1'] as const)(
+    'projects a retained requested action without changing current-wire custody bytes on %s', async (serverWireMode) => {
+      const sessionId = `retained-action-${serverWireMode}`;
+      const localId = 'retained-action-local';
+      const content = { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'retained' } } };
+      const body = JSON.stringify({ localId, content, messageRole: 'user',
+        requestedAction: { v: 1, kind: 'enqueue', retired: true } });
+      await rewritePersistedRow({ sessionId, localId, requestBody: body });
+      await replayPersistedPendingOutboxForSession(sessionId, outboxScope);
+      expect(storage.getState().sessionPending[sessionId]?.messages[0]?.pendingRequestedAction)
+        .toEqual({ v: 1, kind: 'enqueue' });
+      expect((await loadPendingOutboxForSession(sessionId, outboxScope))[0]?.request.body).toBe(body);
+      let sentBody: unknown;
+      await expect(retryPendingOutboxOperationV2({ sessionId, localId, outboxScope, serverWireMode,
+        request: async (_path, init) => {
+          sentBody = init?.body;
+          return serverWireMode === 'released_server_v0_2_1'
+            ? Response.json({ didWrite: true, pending: { localId, content, status: 'queued', position: 0,
+                createdAt: 1, updatedAt: 1, discardedAt: null, discardedReason: null, authorAccountId: 'account-1' },
+                pendingCount: 1, pendingVersion: 1 })
+            : currentPendingAck('enqueue', { localId });
+        },
+      })).resolves.toEqual({ accepted: true });
+      expect(sentBody).toBe(serverWireMode === 'released_server_v0_2_1'
+        ? JSON.stringify({ localId, content }) : body);
+      expect(await loadPendingOutboxForSession(sessionId, outboxScope)).toEqual([]);
+    },
+  );
+
+  it('rejects a malformed known retained action before network mutation', async () => {
+    const sessionId = 'retained-invalid-action';
+    const localId = 'invalid-action-local';
+    await rewritePersistedRow({ sessionId, localId, requestBody: JSON.stringify({ localId,
+      content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'retained' } } },
+      messageRole: 'user', requestedAction: { v: '1', kind: 'enqueue', retired: true } }) });
+    const request = vi.fn(async () => currentPendingAck('enqueue', { localId }));
+    await expect(retryPendingOutboxOperationV2({ sessionId, localId, outboxScope,
+      serverWireMode: 'pending_input_v4', request })).rejects.toThrow();
+    expect(request).not.toHaveBeenCalled();
+    expect(await loadPendingOutboxForSession(sessionId, outboxScope)).toHaveLength(1);
+  });
+
   it('retains custody while indeterminate and re-resolves the frozen body on retry', async () => {
     const sessionId = 's_indeterminate_retry';
     storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);

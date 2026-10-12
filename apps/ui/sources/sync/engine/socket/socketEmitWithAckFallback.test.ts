@@ -5,10 +5,11 @@ import { HappyError } from '@/utils/errors/errors';
 import { socketEmitWithAckFallback } from './socketEmitWithAckFallback';
 
 describe('socketEmitWithAckFallback', () => {
-    it('falls back when the Socket.IO ACK promise never settles', async () => {
+    it('keeps valid message delivery pending beyond the generic ACK deadline', async () => {
         vi.useFakeTimers();
         try {
-            const emitWithAck = vi.fn(() => new Promise<never>(() => {}));
+            let acknowledge!: (value: { ok: true }) => void;
+            const emitWithAck = vi.fn(() => new Promise<{ ok: true }>((resolve) => { acknowledge = resolve; }));
             const send = vi.fn();
             const onNoAck = vi.fn();
 
@@ -17,7 +18,6 @@ describe('socketEmitWithAckFallback', () => {
                 send,
                 event: 'message',
                 payload: { sid: 's1', message: 'enc', localId: 'l1' },
-                timeoutMs: 7_500,
                 onNoAck,
             });
 
@@ -25,18 +25,19 @@ describe('socketEmitWithAckFallback', () => {
             expect(send).not.toHaveBeenCalled();
             expect(onNoAck).not.toHaveBeenCalled();
 
-            await vi.advanceTimersByTimeAsync(1);
-            expect(send).toHaveBeenCalledWith('message', { sid: 's1', message: 'enc', localId: 'l1' });
-            expect(onNoAck).toHaveBeenCalledTimes(1);
-            await expect(ackPromise).resolves.toBeNull();
+            await vi.advanceTimersByTimeAsync(250_000);
+            expect(send).not.toHaveBeenCalled();
+            expect(onNoAck).not.toHaveBeenCalled();
+            acknowledge({ ok: true });
+            await expect(ackPromise).resolves.toEqual({ ok: true });
         } finally {
             vi.useRealTimers();
         }
     });
 
-    it('falls back to send + onNoAck when emitWithAck rejects (old server / missing ACK)', async () => {
+    it('reconciles the same local input identity when transport loss makes the outcome uncertain', async () => {
         const emitWithAck = vi.fn(async () => {
-            throw new Error('timeout');
+            throw new Error('socket has been disconnected');
         });
         const send = vi.fn();
         const onNoAck = vi.fn();
@@ -46,12 +47,11 @@ describe('socketEmitWithAckFallback', () => {
             send,
             event: 'message',
             payload: { sid: 's1', message: 'enc', localId: 'l1' },
-            timeoutMs: 7_500,
             onNoAck,
         });
 
         expect(ack).toBeNull();
-        expect(emitWithAck).toHaveBeenCalledWith('message', { sid: 's1', message: 'enc', localId: 'l1' }, { timeoutMs: 7_500 });
+        expect(emitWithAck).toHaveBeenCalledWith('message', { sid: 's1', message: 'enc', localId: 'l1' }, { timeoutMs: null });
         expect(send).toHaveBeenCalledWith('message', { sid: 's1', message: 'enc', localId: 'l1' });
         expect(onNoAck).toHaveBeenCalledTimes(1);
     });
@@ -67,7 +67,6 @@ describe('socketEmitWithAckFallback', () => {
             send,
             event: 'message',
             payload: { sid: 's1', message: 'enc', localId: 'l1' },
-            timeoutMs: 7_500,
             onNoAck,
         });
 
@@ -92,7 +91,6 @@ describe('socketEmitWithAckFallback', () => {
             send,
             event: 'message',
             payload: { sid: 's1', message: 'enc', localId: 'l1' },
-            timeoutMs: 7_500,
             onNoAck,
         })).rejects.toMatchObject({
             name: 'HappyError',
@@ -110,7 +108,7 @@ describe('socketEmitWithAckFallback', () => {
             code: 'not_authenticated',
         });
         const emitWithAck = vi.fn(async () => {
-            throw new Error('timeout');
+            throw new Error('socket has been disconnected');
         });
         const send = vi.fn();
         const onNoAck = vi.fn();
@@ -123,7 +121,6 @@ describe('socketEmitWithAckFallback', () => {
             send,
             event: 'message',
             payload: { sid: 's1', message: 'enc', localId: 'l1' },
-            timeoutMs: 7_500,
             onNoAck,
             beforeFallback,
         })).rejects.toMatchObject({
@@ -144,7 +141,7 @@ describe('socketEmitWithAckFallback', () => {
         });
         const calls: string[] = [];
         const emitWithAck = vi.fn(async () => {
-            throw new Error('timeout');
+            throw new Error('socket has been disconnected');
         });
         const send = vi.fn(() => {
             calls.push('send');
@@ -163,7 +160,6 @@ describe('socketEmitWithAckFallback', () => {
             send,
             event: 'message',
             payload: { sid: 's1', message: 'enc', localId: 'l1' },
-            timeoutMs: 7_500,
             onNoAck,
             beforeFallback,
         });
@@ -191,7 +187,6 @@ describe('socketEmitWithAckFallback', () => {
             send,
             event: 'message',
             payload: { sid: 's1', message: 'enc', localId: 'l1' },
-            timeoutMs: 7_500,
             onNoAck,
         });
 

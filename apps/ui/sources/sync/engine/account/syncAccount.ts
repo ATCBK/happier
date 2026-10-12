@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { readAccountNameFromLegacyProfileV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
 
 import { deletePushToken as deletePushTokenApi, registerPushToken as registerPushTokenApi } from '@/sync/api/session/apiPush';
 import type { Encryption } from '@/sync/encryption/encryption';
@@ -238,11 +239,20 @@ export async function handleUpdateAccountSocketUpdate(params: {
         log.log('Ignored invalid Connected Accounts V4 profile update');
     }
 
-    // Build updated profile with new data.
+    const firstName = accountUpdate.firstName !== undefined ? accountUpdate.firstName : currentProfile.firstName;
+    const lastName = accountUpdate.lastName !== undefined ? accountUpdate.lastName : currentProfile.lastName;
+    const hasLegacyNameUpdate = accountUpdate.firstName !== undefined || accountUpdate.lastName !== undefined;
+
+    // Legacy events omit name; decode merged parts without inheriting the stale canonical name.
     const updatedProfile: Profile = {
         ...currentProfile,
-        firstName: accountUpdate.firstName !== undefined ? accountUpdate.firstName : currentProfile.firstName,
-        lastName: accountUpdate.lastName !== undefined ? accountUpdate.lastName : currentProfile.lastName,
+        name: accountUpdate.name !== undefined
+            ? accountUpdate.name
+            : hasLegacyNameUpdate
+                ? readAccountNameFromLegacyProfileV1({ firstName, lastName })
+                : currentProfile.name,
+        firstName,
+        lastName,
         username: accountUpdate.username !== undefined ? accountUpdate.username : currentProfile.username,
         avatar: accountUpdate.avatar !== undefined ? accountUpdate.avatar : currentProfile.avatar,
         linkedProviders:

@@ -14,6 +14,28 @@ const canonicalBody = JSON.stringify({
 });
 
 describe('Pending queue server-wire serialization', () => {
+    it('keeps direct fresh released-server downgrade admission strict', () => {
+        const body = JSON.stringify({ localId: 'fresh-action',
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hello' } } },
+            requestedAction: { v: 1, kind: 'enqueue', retired: true },
+        });
+        expect(serializePendingEnqueueBodyForServerWire(body, 'released_server_v0_2_1')).toBeNull();
+    });
+    it('preserves a frozen reset on V4 and refuses every earlier or unknown wire', () => {
+        const body = JSON.stringify({
+            localId: 'reset-local', messageRole: 'user',
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'held prompt' } } },
+            requestedAction: { v: 1, kind: 'reset_start', reset: {
+                source: { bindingKind: 'account', ref: { service: { pluginId: 'happier.agent.codex', localId: 'codex-account' }, accountId: 'connected-account' } },
+                recordId: 'paug_v1_receipt1', meterId: 'requests', witness: { id: 'accepted-history-row', observedAtMs: 100 },
+            } },
+        });
+        expect(serializePendingEnqueueBodyForServerWire(body, 'pending_input_v4')).toBe(body);
+        for (const mode of ['pending_input_v1', 'pending_input_v3', 'released_server_v0_2_1', 'indeterminate'] as const) {
+            expect(() => serializePendingEnqueueBodyForServerWire(body, mode))
+                .toThrow(expect.objectContaining({ code: 'server-upgrade-required' }));
+        }
+    });
     it('preserves the full canonical body for Pending-input v1', () => {
         expect(serializePendingEnqueueBodyForServerWire(canonicalBody, 'pending_input_v1')).toBe(canonicalBody);
     });

@@ -87,6 +87,39 @@ function createConnectedAccountGroupV4(): Profile['connectedAccountGroupsV4'][nu
 }
 
 describe('handleUpdateAccountSocketUpdate Connected Services profile fields', () => {
+  it('refreshes canonical names from released legacy socket updates, merging only supplied parts', async () => {
+    const { handleUpdateAccountSocketUpdate } = await import('./syncAccount');
+    let profile: Profile = { ...profileDefaults, id: 'account', name: 'Old Person', firstName: 'Old', lastName: 'Person' };
+    const update = async (accountUpdate: unknown) => {
+      await handleUpdateAccountSocketUpdate({ accountUpdate, updateCreatedAt: 5, currentProfile: profile,
+        encryption: null, applyProfile: next => { profile = next; }, applySettings: () => {}, log: { log: () => {} } });
+    };
+    // server-v0.2.16 githubConnect emits firstName/lastName without a canonical name.
+    await update({ firstName: 'New', lastName: 'Person', username: 'new-person' });
+    expect(profile.name).toBe('New Person');
+    await update({ lastName: 'Family' });
+    expect(profile.name).toBe('New Family');
+    await update({ firstName: null });
+    expect(profile.name).toBe('Family');
+    await update({ username: 'other', firstName: undefined });
+    expect(profile.name).toBe('Family');
+    await update({ lastName: null });
+    expect(profile.name).toBeNull();
+  });
+  it('applies and clears the canonical account name without using legacy projections as a second authority', async () => {
+    const { handleUpdateAccountSocketUpdate } = await import('./syncAccount');
+    let profile: Profile = { ...profileDefaults, id: 'account', name: 'Before', firstName: 'Legacy' };
+    const update = async (accountUpdate: unknown) => {
+      await handleUpdateAccountSocketUpdate({ accountUpdate, updateCreatedAt: 5, currentProfile: profile,
+        encryption: null, applyProfile: next => { profile = next; }, applySettings: () => {}, log: { log: () => {} } });
+    };
+    await update({ name: 'Chosen Name', firstName: 'Chosen Name', lastName: null });
+    expect(profile.name).toBe('Chosen Name');
+    await update({ name: null, firstName: 'Old projection' });
+    expect(profile.name).toBeNull();
+    await update({ username: 'someone' });
+    expect(profile.name).toBeNull();
+  });
   it('applies every current Connected Services projection from account socket updates', async () => {
     const { handleUpdateAccountSocketUpdate } = await import('./syncAccount');
 

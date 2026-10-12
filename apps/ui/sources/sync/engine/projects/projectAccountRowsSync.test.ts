@@ -41,6 +41,16 @@ function harness() {
 }
 
 describe('Project Account row sync owner', () => {
+    it('writes and reloads atmosphere through the organization owner while preserving label and pin', async () => {
+        const h = harness();
+        const key = { kind: 'project-organization' as const, serverId: 'home', projectKey: 'anchor' };
+        h.rows.set(buildProjectAccountRowPhysicalKeyV1(key), { key, revision: 4,
+            content: { t: 'plain', v: { key, value: { label: 'Project', pinned: true } } } });
+        const result = await h.owner.mutateOrganizationAtRevision({ ...key, expectedRevision: 4,
+            mutate: value => ({ ...value, atmosphere: 'home' }) });
+        expect(result).toMatchObject({ status: 'updated', value: { label: 'Project', pinned: true, atmosphere: 'home' } });
+        expect((await h.owner.refresh()).organizations).toMatchObject([{ value: { label: 'Project', pinned: true, atmosphere: 'home' } }]);
+    });
     it('updates a label and anchored pin as one admitted batch without changing topology or dropping context', async () => {
         const h = harness();
         const key = { kind: 'project-organization' as const, serverId: 'home', projectKey: 'anchor' };

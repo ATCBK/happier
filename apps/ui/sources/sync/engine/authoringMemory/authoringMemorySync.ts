@@ -9,6 +9,9 @@ import {
 import { mergeCurrentRememberedEngineSelectionsIntoRaw } from '@/sync/domains/settings/sessionAuthoringSelectionPersistence';
 import { areAccountSettingsJsonValuesEqual } from '@/sync/domains/settings/accountSettingsStructuralEquality';
 import type { AuthoringMemory } from '@/sync/store/domains/authoringMemory';
+import { buildWorkflowProjectMemoryKeyV1, parseWorkflowProjectMemoryKeyV1 } from '@happier-dev/protocol/account/authoringMemory';
+import { WorkflowProjectTargetV1Schema } from '@happier-dev/protocol/workflows/workflowWorkspaceV1';
+import type { WorkflowProjectTargetV1 } from '@happier-dev/protocol/workflows/workflowWorkspaceV1';
 
 export type AuthoringMemoryRow = Readonly<{ key: string; revision: number; content: AuthoringMemoryContentV1 | null }>;
 export type AuthoringMemoryTransport = Readonly<{
@@ -23,8 +26,9 @@ export type AuthoringMemoryTransport = Readonly<{
         | Readonly<{ status: 'conflict'; revision: number }>
     >;
 }>;
-type MemoryDelta = Partial<Pick<AuthoringMemory, 'recentMachinePaths' | 'lastUsedProfile' | 'lastEngineSelectionsByScopeV1'>>;
+type MemoryDelta = Partial<Pick<AuthoringMemory, 'recentMachinePaths' | 'lastUsedProfile' | 'lastEngineSelectionsByScopeV1' | 'workflowProjectTargetsByDefinitionId'>>;
 export type AuthoringMemoryDelta = Partial<Pick<AuthoringMemory, 'recentMachinePaths' | 'lastUsedProfile'>> & Readonly<{
+    workflowProjectTargetsByDefinitionId?: Readonly<Record<string, WorkflowProjectTargetV1 | null>>;
     lastUsedProfileReplacement?: Readonly<{ base: string | null; proposed: string | null }>;
     rememberedEngineSelectionReplacement?: Readonly<{
         base: RememberedEngineSelectionsByScopeV1;
@@ -65,12 +69,20 @@ export function createAuthoringMemorySync(options: Readonly<{
             .filter(([key]) => key.startsWith('engineSelection:'))
             .flatMap(([key, value]) => Object.entries(engineRow(key, value))));
     }
+    function workflowProjectProjection() {
+        return Object.fromEntries([...values].flatMap(([key, value]) => {
+            const id = parseWorkflowProjectMemoryKeyV1(key);
+            return id === null ? [] : [[id, WorkflowProjectTargetV1Schema.parse(value)] as const];
+        }));
+    }
     function applyKey(key: string, value: AuthoringMemoryValueV1 | undefined) {
         assertCurrent();
         if (key === 'recentMachinePaths') options.apply({ recentMachinePaths: LegacyRecentMachinePathsSchema.parse(value ?? []) });
         else if (key === 'lastUsedProfile') options.apply({ lastUsedProfile: LegacyLastUsedProfileSchema.parse(value ?? null) });
         else if (key.startsWith('engineSelection:')) {
             options.apply({ lastEngineSelectionsByScopeV1: engineProjection() });
+        } else if (parseWorkflowProjectMemoryKeyV1(key) !== null) {
+            options.apply({ workflowProjectTargetsByDefinitionId: workflowProjectProjection() });
         } else {
             const anchor = parseProjectLastOpenedMemoryKeyV1(key);
             if (anchor) options.onProjectLastOpenedChanged?.(anchor, value === undefined ? undefined : ProjectLastOpenedMemoryValueV1Schema.parse(value));
@@ -121,6 +133,7 @@ export function createAuthoringMemorySync(options: Readonly<{
                 recentMachinePaths: LegacyRecentMachinePathsSchema.parse(values.get('recentMachinePaths') ?? []),
                 lastUsedProfile: LegacyLastUsedProfileSchema.parse(values.get('lastUsedProfile') ?? null),
                 lastEngineSelectionsByScopeV1: engineProjection(),
+                workflowProjectTargetsByDefinitionId: workflowProjectProjection(),
             });
             for (const [key, value] of values) {
                 if (parseProjectLastOpenedMemoryKeyV1(key)) applyKey(key, value);
@@ -158,6 +171,10 @@ export function createAuthoringMemorySync(options: Readonly<{
             await bootstrap();
             if (delta.recentMachinePaths !== undefined) await write('recentMachinePaths', () => assertAuthoringMemoryValueForKeyV1('recentMachinePaths', delta.recentMachinePaths));
             if (delta.lastUsedProfile !== undefined) await write('lastUsedProfile', () => delta.lastUsedProfile!);
+            for (const [id, project] of Object.entries(delta.workflowProjectTargetsByDefinitionId ?? {})) {
+                const key = buildWorkflowProjectMemoryKeyV1(id);
+                await write(key, () => project === null ? undefined : assertAuthoringMemoryValueForKeyV1(key, project));
+            }
             if (delta.lastUsedProfileReplacement) {
                 const intent = delta.lastUsedProfileReplacement;
                 if (options.legacySettings) {

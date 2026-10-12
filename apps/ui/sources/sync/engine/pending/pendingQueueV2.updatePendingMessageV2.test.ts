@@ -22,6 +22,12 @@ import {
 } from './pendingQueueV2.testHelpers';
 
 describe('pendingQueueV2 updatePendingMessageV2', () => {
+    const resetAction = {
+        v: 1, kind: 'reset_start', reset: {
+            source: { bindingKind: 'account', ref: { service: { pluginId: 'happier.agent.codex', localId: 'codex-account' }, accountId: 'connected-account' } },
+            recordId: 'paug_v1_receipt1', meterId: 'requests', witness: { id: 'accepted-history-row', observedAtMs: 100 },
+        },
+    } as const;
     const outboxScope = { serverId: 'server-a', accountId: 'account-a' } as const;
     const updatePendingMessageV2 = (
         params: Omit<Parameters<typeof updatePendingMessageV2Impl>[0], 'outboxScope'>,
@@ -1290,22 +1296,25 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
         ]);
     });
 
+    it.each([undefined, 'indeterminate', 'pending_input_v1', 'pending_input_v3', 'released_server_v0_2_1'] as const)(
+        'refuses a reset PATCH on %s before transport or projection mutation', async (serverWireMode) => {
+            const sessionId = 'reset-patch';
+            const localId = 'reset-patch-local';
+            storage.getState().upsertPendingMessage(sessionId, {
+                id: localId, localId, createdAt: 1, updatedAt: 1, source: 'server_pending', deliveryStatus: 'accepted',
+                pendingRequestedAction: { v: 1, kind: 'enqueue' }, text: 'held input', rawRecord: null,
+            });
+            const request = vi.fn(async () => Response.json({ didUpdate: true, requestedAction: resetAction }));
+            await expect(updatePendingRequestedActionV2({ sessionId, localId, requestedAction: resetAction, serverWireMode, request }))
+                .rejects.toMatchObject({ code: 'server-upgrade-required' });
+            expect(request).not.toHaveBeenCalled();
+            expect(storage.getState().sessionPending[sessionId]?.messages[0]?.pendingRequestedAction).toEqual({ v: 1, kind: 'enqueue' });
+        },
+    );
+
     it.each([true, false])('returns the server requested-action receipt without guessing an update (didUpdate=%s)', async (didUpdate) => {
         const sessionId = 's_test_action_receipt';
         const localId = 'action-receipt';
-        const resetAction = {
-            v: 1,
-            kind: 'reset_start',
-            reset: {
-                source: {
-                    bindingKind: 'account',
-                    ref: { service: { pluginId: 'happier.agent.codex', localId: 'codex-account' }, accountId: 'connected-account' },
-                },
-                recordId: 'paug_v1_receipt1',
-                meterId: 'requests',
-                witness: { id: 'accepted-history-row', observedAtMs: 100 },
-            },
-        } as const;
         const serverAction = didUpdate ? resetAction : { v: 1, kind: 'enqueue' } as const;
         storage.getState().upsertPendingMessage(sessionId, {
             id: localId, localId, createdAt: 1, updatedAt: 1,
@@ -1315,6 +1324,7 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
 
         await expect(updatePendingRequestedActionV2({
             sessionId, localId, requestedAction: resetAction,
+            serverWireMode: 'pending_input_v4',
             request: async () => Response.json({ ok: true, didUpdate, requestedAction: serverAction, pendingVersion: 2 }),
         })).resolves.toEqual({ didUpdate, requestedAction: serverAction });
         expect(storage.getState().sessionPending[sessionId]?.messages[0]?.pendingRequestedAction).toEqual(serverAction);
@@ -1420,6 +1430,12 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
     });
 
     it.each([
+        {
+            label: 'v4',
+            serverWireMode: 'pending_input_v4' as const,
+            expectedBody: { requestedAction: { v: 1, kind: 'enqueue' }, resumeWhenAvailable: true },
+            expectedProjectionAction: { v: 1, kind: 'enqueue' },
+        },
         {
             label: 'v3',
             serverWireMode: 'pending_input_v3' as const,
