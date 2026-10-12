@@ -37,6 +37,11 @@ import { projectRequesterAccountActionAuthorization } from '@/daemon/sessionEncr
 import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
 import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import nacl from 'tweetnacl';
+import { updateSettings } from '@/persistence';
+import { reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 
 class FakePty implements PtyProcess {
   readonly pid = 4321;
@@ -118,8 +123,53 @@ class FakeInteractivePtyProvider implements PtyProvider {
 }
 
 describe('registerMachineTerminalRpcHandlers', () => {
+  it('admits an exact portable Home for Project shell custody and authoritative empty-list cleanup', async () => {
+    const scope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
+    await withTempDir('terminal-portable-home-', async home => {
+      const profileId = 'terminal-private-profile';
+      const homeId = 'srv_terminalHome';
+      scope.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: profileId });
+      reloadConfiguration();
+      const h = await finiteHarness({ observeInteractiveStop: true, homeServerId: homeId });
+      const runtime = { ...h.runtime, serverId: profileId };
+      const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+      const registration = registerMachineTerminalRpcHandlers({
+        rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
+        deps: { serverId: profileId, env: {}, workingDirectory: h.root, sessionManager: h.sessionManager,
+          projectFiniteRuntime: async () => runtime },
+      });
+      const workspace = { serverId: homeId, workspaceId: 'accepted', machineId: 'machine', rootPath: h.root };
+      const input = { workspace, terminalKey: 'portable-shell' };
+      try {
+        const serverUrl = runtime.serverHttpBaseUrl;
+        await updateSettings(settings => ({ ...settings, activeServerId: profileId, servers: { [profileId]: {
+          id: profileId, name: 'Terminal Home', serverUrl, webappUrl: serverUrl, createdAt: 1, updatedAt: 1, lastUsedAt: 1,
+          homeConnectionDescriptorAuthority: 'exact', homeConnectionDescriptor: HomeConnectionDescriptorV1Schema.parse({
+            v: 1, homeServerIdentityId: homeId, canonicalServerUrl: serverUrl, revision: 1, endpoints: [{ kind: 'https', url: serverUrl }],
+          }),
+        } } }));
+        await expect(handlers.get(RPC_METHODS.DAEMON_TERMINAL_LIST)!({ workspace }, h.ingress)).resolves.toMatchObject({ ok: true, terminals: [] });
+        const opened = await handlers.get(RPC_METHODS.DAEMON_TERMINAL_ENSURE)!(input, h.ingress);
+        expect(opened).toMatchObject({ ok: true, reused: false, terminalId: expect.any(String) });
+        if (!opened || typeof opened !== 'object' || !('terminalId' in opened) || typeof opened.terminalId !== 'string') throw new Error('Portable shell missing');
+        const terminalId = opened.terminalId;
+        expect(h.sessionManager.getCustody(terminalId)).toMatchObject({ serverId: profileId, workspaceRefId: 'accepted', requesterAccountId: 'owner' });
+        await expect(handlers.get(RPC_METHODS.DAEMON_TERMINAL_ENSURE)!(input, h.ingress)).resolves.toMatchObject({ ok: true, reused: true, terminalId });
+        await expect(handlers.get(RPC_METHODS.DAEMON_TERMINAL_LIST)!({ workspace }, h.ingress)).resolves.toMatchObject({ ok: true, terminals: [{ terminalId }] });
+        await expect(handlers.get(RPC_METHODS.DAEMON_TERMINAL_INPUT)!({ terminalId, data: 'echo portable\n' }, h.ingress)).resolves.toMatchObject({ ok: true });
+        await expect(handlers.get(RPC_METHODS.DAEMON_TERMINAL_LIST)!({ workspace: { ...workspace, serverId: 'other-home' } }, h.ingress)).resolves.toMatchObject({ ok: false, errorCode: 'terminal_cwd_denied' });
+        await updateSettings(settings => ({ ...settings, servers: {} }));
+        await expect(handlers.get(RPC_METHODS.DAEMON_TERMINAL_CLOSE)!({ terminalId }, h.ingress)).resolves.toMatchObject({ ok: false, errorCode: 'terminal_forbidden' });
+      } finally {
+        registration.dispose();
+        await h.dispose();
+        scope.restore(); reloadConfiguration();
+      }
+    });
+  });
+
   it('opens and reconnects Bob accepted Project shell through private Account ports on Alice installation without a Session', async () => {
-    const h = await finiteHarness({ observeInteractiveStop: true, maxSessions: 2 });
+    const h = await finiteHarness({ observeInteractiveStop: true,  });
     let live = true;
     const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'bob-terminal-root', binding: {
       accountId: 'bob', custodianAccountId: 'alice', authentication: { kind: 'account', tokenEpoch: 1 },
@@ -297,8 +347,8 @@ describe('registerMachineTerminalRpcHandlers', () => {
     } finally { registration.dispose(); await h.dispose(); }
   });
 
-  it('prepares fresh Project shells by waiting for trusted setup to settle before opening the dependent shell', async () => {
-    const h = await finiteHarness({ setup: true, waived: true });
+  it('prepares fresh Project shells by waiting for policy-admitted setup to settle before opening the dependent shell', async () => {
+    const h = await finiteHarness({ setup: true, waived: true, setupWaived: true });
     const workspace = { id: 'accepted', serverId: 'home', machineId: 'machine', rootPath: h.root, projectKey: 'project', createdAtMs: 1 };
     const reviewed = await reviewProjectSetupEffect({ workspace, projectAssociation: { workspace, project: { serverId: 'home', projectId: 'project' } },
       requester: { credentials: h.runtime.credentials, serverHttpBaseUrl: h.runtime.serverHttpBaseUrl }, purpose: 'setup', platform: { os: 'linux', arch: 'x64' }, nativeIo: h.runtime.nativeIo });
@@ -329,7 +379,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const h = await finiteHarness();
     const provider = new FakeInteractivePtyProvider();
     const manager = createTerminalPtySessionManager({ ptyProvider: provider, env: {}, platform: 'linux',
-      config: { maxSessions: 10, idleTimeoutMs: 0, bufferMaxBytes: 1000, bufferMaxEvents: 10,
+      config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
     const refs = [{ id: 'accepted', projectKey: 'project-one' }, { id: 'other-accepted', projectKey: 'project-two' }];
     const rows = refs.map(ref => {
@@ -406,7 +456,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     let credentialCurrent = true;
     const admissionDrain = createDaemonAdmissionDrain();
     const manager = createTerminalPtySessionManager({ ptyProvider: provider, env: {}, platform: 'linux',
-      config: { maxSessions: 1, idleTimeoutMs: 0, bufferMaxBytes: 1000, bufferMaxEvents: 10,
+      config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 },
       stopProcessTree: async () => { await new Promise<void>(resolve => { releaseStop = resolve; }); provider.spawned[0]!.pty.exit(0); } });
     const handlers = new Map<string, RpcHandler<unknown, unknown>>();
@@ -489,7 +539,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     let releaseStop: (() => void) | undefined;
     const stopped: number[] = [];
     const sessionManager = createTerminalPtySessionManager({ ptyProvider: provider, env: {}, platform: 'linux',
-      config: { maxSessions: 10, idleTimeoutMs: 0, bufferMaxBytes: 1000, bufferMaxEvents: 10,
+      config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 },
       stopProcessTree: async ({ pid }) => {
         if (pid === undefined) throw new Error('PTY process id is missing');
@@ -599,20 +649,20 @@ describe('registerMachineTerminalRpcHandlers', () => {
     }
   });
 
-  async function finiteHarness(options: Readonly<{ setup?: boolean; waived?: boolean; acceptedRootTrailingSlash?: boolean; acceptedRoot?: string; unenriched?: boolean; observeInteractiveStop?: boolean; maxSessions?: number }> = {}) {
+  async function finiteHarness(options: Readonly<{ setup?: boolean; waived?: boolean; setupWaived?: boolean; acceptedRootTrailingSlash?: boolean; acceptedRoot?: string; unenriched?: boolean; observeInteractiveStop?: boolean; homeServerId?: string }> = {}) {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-finite-terminal-')));
     await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'web; echo untrusted', packageManager: 'yarn@1', scripts: { dev: 'echo selected' } }));
     if (options.setup) {
       await mkdir(join(root, '.happier'));
       await writeFile(join(root, '.happier/project.json'), JSON.stringify({ version: 1, workspace: { setup: [{ kind: 'command', command: 'echo setup' }] } }));
     }
-    const workspace = { id: 'accepted', serverId: 'home', machineId: 'machine', rootPath: options.acceptedRoot ?? (options.acceptedRootTrailingSlash ? `${root}/` : root), createdAtMs: 1,
+    const workspace = { id: 'accepted', serverId: options.homeServerId ?? 'home', machineId: 'machine', rootPath: options.acceptedRoot ?? (options.acceptedRootTrailingSlash ? `${root}/` : root), createdAtMs: 1,
       ...(options.unenriched ? {} : { projectKey: 'project' }) };
     const get = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 1 } });
     const post = vi.spyOn(axios, 'post').mockImplementation(async url => {
       if (String(url).endsWith('/project-trust/read')) return { status: 200, data: { status: 'absent' } };
       if (!String(url).endsWith(`${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`)) throw new Error('unexpected network request');
-      const key = { kind: 'workspace-ref', serverId: 'home', id: workspace.id };
+      const key = { kind: 'workspace-ref', serverId: workspace.serverId, id: workspace.id };
       return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [{ key, revision: 1, content: { t: 'plain', v: { key, value: workspace } } }] } };
     });
     const provider = new FakeInteractivePtyProvider();
@@ -625,7 +675,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
       }, stopProcessTree: async ({ pid }) => {
       if (options.observeInteractiveStop) provider.spawned.find(entry => entry.pty.pid === pid)!.pty.exit(0);
     },
-      config: { maxSessions: options.maxSessions ?? 1, idleTimeoutMs: 0, bufferMaxBytes: 1000, bufferMaxEvents: 10,
+      config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
     const operationRuntime = createHostActionOperationRuntime({ serverId: 'home', machineId: 'machine',
       custodyBinding: { serverId: 'home', installationId: 'installation' },
@@ -656,7 +706,8 @@ describe('registerMachineTerminalRpcHandlers', () => {
           isCredentialCurrent: async () => current,
           sessionId: 'cli-global', serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl,
           actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1, actions: {},
-            ...(options.waived ? { approvalWaivedSurfaces: { 'projects.script.run': ['api'], 'projects.prepare': ['api'] } } : {}) }) },
+            approvalWaivedSurfaces: { ...(options.waived ? { 'projects.script.run': ['api'] } : {}),
+              ...(options.setupWaived ? { 'projects.prepare': ['api'] } : {}) } }) },
         }, { projectAction: createProjectFiniteAction(boundRuntime, context) }).executor,
       } });
     const invoke = (method: string = RPC_METHODS.DAEMON_TERMINAL_ENSURE, cwd = root, context = ingress) => handlers.get(method)!({
@@ -686,7 +737,8 @@ describe('registerMachineTerminalRpcHandlers', () => {
         workspaceRefId: 'accepted', projectKey: 'project', rootPath: `${h.root}/`,
       });
       h.provider.spawned[0]!.pty.emitBytes(Buffer.from('finite output', 'utf8'));
-      expect(h.sessionManager.ensure({ terminalKey: 'competing', cwd: h.root })).toMatchObject({ ok: false, errorCode: 'terminal_busy' });
+      expect(h.sessionManager.ensure({ terminalKey: 'competing', cwd: h.root })).toMatchObject({ ok: true });
+      expect(h.sessionManager.isFiniteHeld(snapshot.domainRef.terminalId)).toBe(true);
       h.provider.spawned[0]!.pty.exit(7);
       expect(await h.operationRuntime.runner.waitForTerminal({ accountId: 'owner', machineId: 'machine' }, 'operation')).toMatchObject({ state: 'failed', domainRef: { terminalId: snapshot.domainRef.terminalId } });
       const read = await h.sessionManager.readByteStream({ terminalId: snapshot.domainRef.terminalId, byteOffset: 0, maxBytes: 1000, maxFrames: 10 });
@@ -746,7 +798,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
         const provider = new FakeInteractivePtyProvider();
         const env = { SHELL: '/bin/bash', ComSpec: 'cmd.exe' };
         const sessionManager = createTerminalPtySessionManager({ ptyProvider: provider, env, platform,
-          config: { maxSessions: 10, idleTimeoutMs: 0, bufferMaxBytes: 1000, bufferMaxEvents: 10,
+          config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
             bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
         const registered = new Map<string, RpcHandler<unknown, unknown>>();
         registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler: (method: string, handler: (params: unknown) => Promise<unknown>) => registered.set(method, handler) } as unknown as RpcHandlerManager,
@@ -763,7 +815,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
   it('shares the lazy PTY owner with host finite execution and preserves interactive shell commands', async () => {
     const provider = new FakeInteractivePtyProvider();
     const sessionManager = createTerminalPtySessionManager({ ptyProvider: provider, env: { SHELL: '/bin/bash' },
-      config: { maxSessions: 10, idleTimeoutMs: 0, bufferMaxBytes: 1000, bufferMaxEvents: 10,
+      config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
     const handlers = new Map<string, (params: unknown) => Promise<unknown>>();
     const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) {
@@ -779,7 +831,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
   it('lists existing terminals through the owner, rejects unknown input, and narrows restricted sessions', async () => {
     const provider = new FakePtyProvider();
     const sessionManager = createTerminalPtySessionManager({ ptyProvider: provider, env: { SHELL: '/bin/bash' },
-      config: { maxSessions: 10, idleTimeoutMs: 0, bufferMaxBytes: 1000, bufferMaxEvents: 10,
+      config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
     sessionManager.ensure({ terminalKey: 'one', cwd: '/one', sessionId: 'session-one' });
     sessionManager.ensure({ terminalKey: 'two', cwd: '/two', sessionId: 'session-two' });
@@ -819,7 +871,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
   it('attributes restart after daemon state loss from the request and rejects a restricted sibling Session', async () => {
     const provider = new FakePtyProvider();
     const sessionManager = createTerminalPtySessionManager({ ptyProvider: provider, env: { SHELL: '/bin/bash' },
-      config: { maxSessions: 10, idleTimeoutMs: 0, bufferMaxBytes: 1000, bufferMaxEvents: 10,
+      config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
     const register = (requiredSessionId?: string) => {
       const registered = new Map<string, RpcHandler<unknown, unknown>>();
@@ -875,7 +927,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
   it('disposes the terminal owner when the machine RPC lifecycle closes', () => {
     const sessionManager = createTerminalPtySessionManager({ ptyProvider: new FakeInteractivePtyProvider(), env: { SHELL: '/bin/bash' },
       platform: 'linux', stopProcessTree: async () => {},
-      config: { maxSessions: 10, idleTimeoutMs: 0, bufferMaxBytes: 1000, bufferMaxEvents: 10,
+      config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
     const registration = registerMachineTerminalRpcHandlers({
       rpcHandlerManager: { registerHandler() {} }, deps: { env: {}, sessionManager },
@@ -901,8 +953,6 @@ describe('registerMachineTerminalRpcHandlers', () => {
       platform: 'linux',
       now: () => 0,
       config: {
-        maxSessions: 10,
-        idleTimeoutMs: 60_000,
         bufferMaxBytes: 1_000_000,
         bufferMaxEvents: 1000,
         bufferRetentionMs: 10 * 60_000,
@@ -951,8 +1001,6 @@ describe('registerMachineTerminalRpcHandlers', () => {
       platform: 'linux',
       now: () => 0,
       config: {
-        maxSessions: 10,
-        idleTimeoutMs: 60_000,
         bufferMaxBytes: 1_000_000,
         bufferMaxEvents: 1000,
         bufferRetentionMs: 10 * 60_000,
@@ -995,8 +1043,6 @@ describe('registerMachineTerminalRpcHandlers', () => {
       platform: 'linux',
       now: () => 0,
       config: {
-        maxSessions: 10,
-        idleTimeoutMs: 60_000,
         bufferMaxBytes: 1_000_000,
         bufferMaxEvents: 1000,
         bufferRetentionMs: 10 * 60_000,
@@ -1042,8 +1088,6 @@ describe('registerMachineTerminalRpcHandlers', () => {
       platform: 'linux',
       now: () => 0,
       config: {
-        maxSessions: 10,
-        idleTimeoutMs: 60_000,
         bufferMaxBytes: 1_000_000,
         bufferMaxEvents: 1000,
         bufferRetentionMs: 10 * 60_000,
@@ -1095,8 +1139,6 @@ describe('registerMachineTerminalRpcHandlers', () => {
       platform: 'linux',
       now: () => 0,
       config: {
-        maxSessions: 10,
-        idleTimeoutMs: 60_000,
         bufferMaxBytes: 1_000_000,
         bufferMaxEvents: 1000,
         bufferRetentionMs: 10 * 60_000,
@@ -1157,8 +1199,6 @@ describe('registerMachineTerminalRpcHandlers', () => {
       platform: 'linux',
       now: () => 0,
       config: {
-        maxSessions: 10,
-        idleTimeoutMs: 60_000,
         bufferMaxBytes: 1_000_000,
         bufferMaxEvents: 1000,
         bufferRetentionMs: 10 * 60_000,
@@ -1229,8 +1269,6 @@ describe('registerMachineTerminalRpcHandlers', () => {
       platform: 'linux',
       now: () => 0,
       config: {
-        maxSessions: 1,
-        idleTimeoutMs: 60_000,
         bufferMaxBytes: TERMINAL_STREAM_MAX_FRAMES,
         bufferMaxEvents: TERMINAL_STREAM_MAX_FRAMES + 10,
         bufferRetentionMs: 10 * 60_000,
@@ -1287,7 +1325,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
   it('preserves the real owner Windows legacy-only byte-stream projection', async () => {
     const provider = new FakeInteractivePtyProvider();
     const sessionManager = createTerminalPtySessionManager({ ptyProvider: provider, env: { ComSpec: 'cmd.exe' }, platform: 'win32', stopProcessTree: async () => {},
-      config: { maxSessions: 10, idleTimeoutMs: 0, bufferMaxBytes: 1000, bufferMaxEvents: 10,
+      config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
     const registered = new Map<string, RpcHandler<unknown, unknown>>();
     const registration = registerMachineTerminalRpcHandlers({
@@ -1307,7 +1345,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
   it('retains an actual OS resize refusal without falling back to terminal text input', async () => {
     const provider = new FakeInteractivePtyProvider();
     const sessionManager = createTerminalPtySessionManager({ ptyProvider: provider, env: { SHELL: '/bin/bash' }, platform: 'linux', stopProcessTree: async () => {},
-      config: { maxSessions: 10, idleTimeoutMs: 0, bufferMaxBytes: 1000, bufferMaxEvents: 10,
+      config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
     const registered = new Map<string, RpcHandler<unknown, unknown>>();
     const registration = registerMachineTerminalRpcHandlers({

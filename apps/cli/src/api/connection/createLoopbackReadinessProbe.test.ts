@@ -15,6 +15,22 @@ describe('createLoopbackReadinessProbe', () => {
     vi.unstubAllGlobals();
   });
 
+  it('keeps an authentication infrastructure failure retryable and accepts the same token after recovery', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      features: {}, capabilities: { serverIdentity: { serverIdentityId: 'srv_expected' } },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    axiosGet.mockResolvedValueOnce({ status: 500, data: { error: 'Internal Server Error' } });
+    axiosGet.mockResolvedValueOnce({ status: 200 });
+    const probe = createLoopbackReadinessProbe({
+      serverUrl: 'http://127.0.0.1:48123',
+      token: 'account-token',
+      expectedServerIdentityId: 'srv_expected',
+    });
+
+    await expect(probe()).resolves.toMatchObject({ status: 'retry_later' });
+    await expect(probe()).resolves.toEqual({ status: 'ready' });
+  });
+
   it('requires both the expected Home identity and authenticated account access', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       features: {},

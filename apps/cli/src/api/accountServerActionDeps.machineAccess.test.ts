@@ -29,6 +29,8 @@ describe('Machine access headless Action transport', () => {
     const deps = createCliActionInventoryDeps({ token: 'test-token', sessionId: '', mode: 'plain', ctx: null });
     expect(await runWithServerHttpBaseUrl('http://access.test', () => deps.machinesList({ serverId: 'home' })))
       .toMatchObject({ items: [{ serverId: 'home', machineId: 'shared', active: false, access: { accessState: 'key_pending' } }] });
+    expect(await runWithServerHttpBaseUrl('http://access.test', () => deps.machinesList({ serverId: 'home', refresh: true })))
+      .toMatchObject({ items: [{ serverId: 'home', machineId: 'shared', active: false, access: { accessState: 'key_pending' } }] });
   });
   it('executes grant/set/remove and self leave through the declared qualified route', async () => {
     app = fastify();

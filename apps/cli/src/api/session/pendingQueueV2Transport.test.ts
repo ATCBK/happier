@@ -47,6 +47,21 @@ vi.mock('axios', () => ({
 }));
 
 describe('pendingQueueV2Transport', () => {
+    it('keeps admission settlement pending beyond the generic ACK deadline and cancels on disposal', async () => {
+        vi.useFakeTimers();
+        try {
+            const controller = new AbortController();
+            const socket = { connected: true, emitWithAck: () => new Promise(() => {}) };
+            let settled = false;
+            const result = settlePendingQueueV2Admission({ socket: socket as never, sessionId: 'session',
+                localId: 'input', decision: { kind: 'reject', code: 'session_input_invalid' }, signal: controller.signal })
+                .then(() => { settled = true; }, error => { settled = true; return error; });
+            await vi.advanceTimersByTimeAsync(10_001);
+            expect(settled).toBe(false);
+            controller.abort();
+            expect(await result).toMatchObject({ name: 'SocketAckAbortError' });
+        } finally { vi.useRealTimers(); }
+    });
     beforeEach(() => {
         mockGet.mockReset();
         mockPost.mockReset();
@@ -89,6 +104,43 @@ describe('pendingQueueV2Transport', () => {
         await expect(updatePendingQueueV2RequestedAction({ token: 'must-not-use', sessionId: 'session', localId: 'held', requestedAction,
             resolveAuthorizationHeaders: () => ({ 'x-execution-proof': 'signed' }) })).rejects.toBe(denial);
         expect(mockPost).not.toHaveBeenCalled();
+    });
+
+    it.each(['plain', 'encrypted'] as const)('atomically enqueues %s reset custody with body-bound authority and no PATCH', async mode => {
+        const reset = { source: { bindingKind: 'account' as const, ref: {
+            service: { pluginId: 'happier.agent.codex', localId: 'openai' }, accountId: 'account' } },
+            recordId: 'paug_v1_abcdefgh', meterId: 'weekly', witness: { id: 'accepted', observedAtMs: 1000 } };
+        const requestedAction = { v: 1, kind: 'reset_start', reset } as const;
+        const content = mode === 'encrypted' ? { t: 'encrypted' as const, c: 'sealed-input' }
+            : { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'prepared work' } } };
+        const body = { localId: 'input', requestedAction, messageRole: 'user', targetMachineId: 'machine',
+            ...(content.t === 'encrypted' ? { ciphertext: content.c } : { content }) };
+        const authorize = vi.fn(() => ({ 'x-execution-proof': 'signed-enqueue' }));
+        const controller = new AbortController();
+        mockPost.mockResolvedValueOnce({ data: { ok: true, didWrite: true } });
+        mockPatch.mockResolvedValueOnce({ data: { ok: true, didUpdate: true, requestedAction } });
+        expect(await updatePendingQueueV2RequestedAction({ token: 'must-not-cross', sessionId: 'session/one', localId: 'input', requestedAction,
+            ...{ initialInput: { content, targetMachineId: 'machine' } }, signal: controller.signal,
+            resolveAuthorizationHeaders: authorize })).toEqual({ didUpdate: true, requestedAction });
+        expect(authorize).toHaveBeenCalledWith({ method: 'POST', path: '/v2/sessions/session%2Fone/pending', body });
+        expect(mockPost).toHaveBeenCalledWith(expect.stringContaining('/v2/sessions/session%2Fone/pending'), body,
+            expect.objectContaining({ headers: expect.objectContaining({ 'x-execution-proof': 'signed-enqueue' }), signal: controller.signal }));
+        expect(mockPost.mock.calls[0]?.[2]?.headers).not.toHaveProperty('Authorization');
+        expect(mockPatch).not.toHaveBeenCalled();
+    });
+
+    it('never retries refused initial reset admission as an ordinary input or binding', async () => {
+        const reset = { source: { bindingKind: 'account' as const, ref: {
+            service: { pluginId: 'happier.agent.codex', localId: 'openai' }, accountId: 'account' } },
+            recordId: 'paug_v1_abcdefgh', meterId: 'weekly', witness: { id: 'accepted', observedAtMs: 1000 } };
+        const denial = new Error('reset_start_unsupported');
+        mockPost.mockRejectedValueOnce(denial);
+        const requestedAction = { v: 1, kind: 'reset_start', reset } as const;
+        mockPatch.mockResolvedValueOnce({ data: { ok: true, didUpdate: true, requestedAction } });
+        await expect(updatePendingQueueV2RequestedAction({ token: 'must-not-cross', sessionId: 'session', localId: 'input', requestedAction,
+            ...{ initialInput: { content: { t: 'plain' as const, v: {} } } }, resolveAuthorizationHeaders: () => ({ 'x-execution-proof': 'signed' }) })).rejects.toBe(denial);
+        expect(mockPost).toHaveBeenCalledOnce();
+        expect(mockPatch).not.toHaveBeenCalled();
     });
 
     it.each([undefined, 'run/one'])('withdraws through the exact semantic POST owner with full body-bound authority (run %s)', async (targetExecutionRunId) => {

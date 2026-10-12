@@ -6,7 +6,13 @@
 import axios from 'axios';
 import { SESSION_PENDING_RESET_START_RELEASE_EVENT_V1, PendingResetStartReleaseRequestV1Schema, PendingResetStartReleaseResponseV1Schema, type PendingResetStartBindingV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { NOTIFICATION_CHANNELS_ACCOUNT_KV_KEY_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
-import { MachineUpdateMetadataResponseSchema, MachineUpdateStateResponseSchema } from '@happier-dev/protocol/machines/metadataUpdate';
+import { MachineUpdateStateResponseSchema } from '@happier-dev/protocol/machines/metadataUpdate';
+import { publishMachineMetadataOnce, readOpenedMachineMetadataSnapshot } from './machine/machineMetadataPublication';
+import type { MachineMetadataFieldReadV1, MachineMetadataFieldPortV1 } from '@happier-dev/protocol/machines/machineMetadataFieldV1';
+import { registerDaemonMachineResourcesPolicyRpcHandlers, type DaemonMachineResourcesPolicyRoutes } from '@/rpc/handlers/daemonMachineResourcesPolicy';
+import { registerDaemonMachineGuardRpcHandlers, type DaemonMachineGuardRoutes } from '@/rpc/handlers/daemonMachineGuard';
+import { dispatchActionFromRpc } from '@/rpc/handlers/_actionDispatchAdapter';
+import { registerDaemonStorageRpcHandlers, type DaemonStorageRoutes } from '@/rpc/handlers/storage';
 import { parseMachinePublishedMetadataV1, parseMachinePublishedDaemonStateV1, StoredMachinePublishedMetadataV1Schema, StoredMachinePublishedDaemonStateV1Schema, projectMachinePublishedMetadataFromRowV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_OPERATION_RETIRE_EVENT_V1, TeamCredentialExternalProviderOperationRetireV1Schema, TeamCredentialExternalProviderOperationRetireResponseV1Schema } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 import { randomBytes } from 'node:crypto';
@@ -96,6 +102,11 @@ import {
     type DaemonLocalServicesMachineRpcRoutes,
 } from '@/rpc/handlers/daemonLocalServices';
 import {
+    registerDaemonMachineVitalsRpcHandlers,
+    type DaemonMachineVitalsRoutes,
+} from '@/rpc/handlers/daemonMachineVitals';
+import { registerDaemonProcessesRpcHandlers, type DaemonProcessesRoutes } from '@/rpc/handlers/daemonProcesses';
+import {
     registerDaemonBrowserControlHandler,
 } from '@/rpc/handlers/daemonBrowserControl';
 import { registerDaemonComputerHandler } from '@/rpc/handlers/daemonComputer';
@@ -154,6 +165,7 @@ import { buildProjectAccountRowPhysicalKeyV1, ProjectAccountRowChangeHintV1Schem
 import { readAccountChangesCursor, writeAccountChangesCursor } from '@/persistence';
 import {
     publishPluginAccountCollectionWatchInvalidation,
+    publishPluginAccountAvailabilityChanges,
     publishPluginAccountSettingsWatchInvalidation,
     readPluginAccountCollectionWatchInvalidations,
     readPluginAccountSettingsWatchInvalidations,
@@ -164,8 +176,8 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { createInvocationSavedSecretOperationContextV1, hydrateSavedSecretCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import { hydrateSavedSecretCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createExecutionRunAccountSettingsSnapshotResolver } from './machine/resolveExecutionRunAccountSettingsSnapshot';
 import { changesRequireSavedSecretCatalogRefresh } from '@/settings/secrets/savedSecretCatalogChangeInvalidation';
 import { isProfileCatalogAccountChangeEntityIdV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { refreshDemandedActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
@@ -271,7 +283,7 @@ import {
     SocketAckAbortError,
     SocketAckError,
 } from '@/session/transport/shared/socketAck';
-import { resolveSessionControlSocketAckTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
+import { resolveSessionControlSocketAckTimeoutMs, resolveSessionMessageAdmissionTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
 import {
     createDaemonSessionClientDurableMutationOutbox,
     type DaemonSessionClientDurableMutationOutbox,
@@ -400,6 +412,8 @@ export type ConnectedServicesProjectionNotification = Readonly<{
 }>;
 
 export type ApiMachineClientLifecycleDependencies = Readonly<{
+    readSpawnFailureLimits?: MachineRpcHandlerDeps['readSpawnFailureLimits'];
+    ownerRemainder?: MachineRpcHandlerDeps['ownerRemainder'];
     requesterSessionRuntime?: MachineRpcHandlerDeps['requesterSessionRuntime'];
     requesterBootstrapBoundary?: MachineRpcHandlerDeps['requesterBootstrapBoundary'];
     managedActivity?: Pick<ManagedActivityRpcOwner, 'activity' | 'admissionDrain'>;
@@ -524,9 +538,11 @@ export class ApiMachineClient {
     private accountIdPromise: Promise<string> | null = null;
     private readonly connectedServicesProjectionRetry = createConnectedServicesProjectionRetryScheduler();
     private projectionSchedulingClosed = false;
+    private accountChangesObserverTransportGeneration: number | null = null;
     private updateListeners = new Set<(update: Update) => boolean | void>();
     private accountSettingsVersionHintListeners = new Set<(hint: AccountSettingsVersionHintNotification) => void | Promise<void>>();
     private accountProjectRowsChangeListeners = new Set<(change: AccountProjectRowsChangeNotification) => void | Promise<void>>();
+    private automationEventSourcesInvalidationListeners = new Set<() => void | Promise<void>>();
     private pendingSessionActivationHintListeners = new Set<(
         hint: PendingSessionActivationHintNotification,
     ) => void | Promise<void>>();
@@ -557,6 +573,7 @@ export class ApiMachineClient {
     private readonly machineRpcWorkingDirectory: string;
     private readonly filesystemAccessPolicy: FilesystemAccessPolicy;
     private externalActionIngressOwner: ExternalActionIngressOwner | null = null;
+    private machineGuardLocalAction: ActionExecutorDeps['machineGuardAction'] | null = null;
     private additionalAllowedReadDirs: string[] = [];
     private additionalAllowedWriteDirs: string[] = [];
     private readonly transientSessionMediaReadAllowance = createTransientSessionMediaReadAllowance();
@@ -1016,7 +1033,6 @@ export class ApiMachineClient {
                 },
             }),
             projectTransportAcknowledgement: projectMachineRpcTransportAcknowledgement,
-            logger: (msg, data) => logger.debug(msg, data),
             onRegistrationError: (error) => {
                 const probe = classifyTransportErrorToProbeResult(error);
                 const supervisor = this.connectionSupervisor;
@@ -1297,23 +1313,10 @@ export class ApiMachineClient {
             return preflight ? await callExactMachineRpc(input) : await callMachineRpc(input);
         };
         let executionRunAccountSettings: Awaited<ReturnType<typeof bootstrapAccountSettingsContext>>['settings'] | null = null;
-        const resolveExecutionRunAccountSettingsSnapshot = async () => runWithServerHttpBaseUrl(this.machineRuntimeServerHttpBaseUrl, async () => {
-            const unavailable = () => createProviderErrorV1('provider_authorization_changed', { machineId: this.machine.id });
-            const credentials = await readExecutionRunAccountCredentials();
-            if (!credentials) { executionRunAccountSettings = null; throw unavailable(); }
-            const isCurrent = async () => executionRunAccountOwnerCurrent()
-                && sameStoredCredentials(credentials, await readExecutionRunAccountCredentials())
-                && executionRunAccountOwnerCurrent();
-            const snapshot = await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', publication: 'invocation',
-                honorAccountSettingsModeEnv: false, shouldCommit: executionRunAccountOwnerCurrent });
-            if (!await isCurrent()) { executionRunAccountSettings = null; throw unavailable(); }
-            const operation = createInvocationSavedSecretOperationContextV1({ credentials, snapshot,
-                serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl, isCurrent });
-            if (!await operation.isCurrent()) { executionRunAccountSettings = null; throw unavailable(); }
-            const admitted = operation.readSnapshot();
-            if (!admitted) { executionRunAccountSettings = null; throw unavailable(); }
-            executionRunAccountSettings = admitted.settings;
-            return admitted;
+        const resolveExecutionRunAccountSettingsSnapshot = createExecutionRunAccountSettingsSnapshotResolver({
+            machineId: this.machine.id, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl,
+            readCredentials: readExecutionRunAccountCredentials, isOwnerCurrent: executionRunAccountOwnerCurrent,
+            onSettings: settings => { executionRunAccountSettings = settings; },
         });
         const workSummaryInstallation = readInstallationIdentityIfExistsSync();
         const workSummaryAccess = createAccountServerActionDeps({ token: this.token,
@@ -1379,6 +1382,8 @@ export class ApiMachineClient {
                     },
                 } : {}),
                 ownSessionRuntime: (ingress) => this.resolveOwnSessionRuntime(ingress),
+                readSpawnFailureLimits: this.lifecycleDependencies.readSpawnFailureLimits,
+                ownerRemainder: this.lifecycleDependencies.ownerRemainder,
                 executionBudgetRegistry: this.executionBudgetRegistry,
                 ...(this.lifecycleDependencies.managedActivity && workSummaryInstallation && executionRunRuntimeAccountId ? {
                     machineWorkSummary: {
@@ -1779,6 +1784,51 @@ export class ApiMachineClient {
         registerDaemonLocalServicesMachineRpcHandlers(this.rpcHandlerManager, localServices);
     }
 
+    registerMachineVitalsRoutes(options: DaemonMachineVitalsRoutes): void {
+        registerDaemonMachineVitalsRpcHandlers(this.rpcHandlerManager, options);
+    }
+
+    registerMachineProcessesRoutes(options: DaemonProcessesRoutes): void {
+        registerDaemonProcessesRpcHandlers(this.rpcHandlerManager, options);
+    }
+
+    registerMachineResourcesPolicyRoutes(options: DaemonMachineResourcesPolicyRoutes): void {
+        registerDaemonMachineResourcesPolicyRpcHandlers(this.rpcHandlerManager, options);
+    }
+
+    registerMachineGuardRoutes(options: DaemonMachineGuardRoutes): void {
+        this.machineGuardLocalAction = registerDaemonMachineGuardRpcHandlers(this.rpcHandlerManager, { ...options,
+            dispatchUndoAction: options.dispatchUndoAction ?? (async (input, context) => {
+                const owner = this.externalActionIngressOwner;
+                const target = options.target();
+                if (!owner || this.projectionSchedulingClosed || !target || target.serverId !== owner.currentServerId) {
+                    return { ok: false, errorCode: 'scope-retired', error: 'scope-retired' };
+                }
+                // The target admits the outer Undo once; its local Activity owner selects
+                // the original effect through the core's private host-child callback.
+                return dispatchActionFromRpc({ actionId: 'machines.guard.activity.undo', input, executor: owner.executor,
+                    serverId: target.serverId, externalActionTarget: { kind: 'machine', machineId: target.machineId },
+                    signal: context.signal, callerAuthority: context.callerAuthority,
+                    localActionContext: context.localActionContext, sessionActionOrigin: context.sessionActionOrigin,
+                    callerInputConstraints: context.callerInputConstraints, callerInputAuthorization: context.callerInputAuthorization,
+                    machineAdmission: context.machineAdmission, verifyMachineAdmissionCurrent: context.verifyMachineAdmissionCurrent,
+                    runtimeAccountId: context.machineAdmission?.actorAccountId,
+                });
+            }),
+        });
+    }
+
+    executeMachineGuardAction(args: Parameters<NonNullable<ActionExecutorDeps['machineGuardAction']>>[0]): Promise<unknown> {
+        if (this.projectionSchedulingClosed || !this.machineGuardLocalAction) {
+            return Promise.resolve({ ok: false, errorCode: 'scope-retired', error: 'scope-retired' });
+        }
+        return this.machineGuardLocalAction(args);
+    }
+
+    registerStorageRoutes(options: DaemonStorageRoutes): void {
+        registerDaemonStorageRpcHandlers(this.rpcHandlerManager, options);
+    }
+
     registerConnectedAccountDaemonRuntime(runtime: ConnectedAccountDaemonRuntime): void {
         this.connectedAccountDaemonRuntime = runtime;
     }
@@ -1855,6 +1905,18 @@ export class ApiMachineClient {
     onAccountProjectRowsChanged(listener: (change: AccountProjectRowsChangeNotification) => void | Promise<void>): () => void {
         this.accountProjectRowsChangeListeners.add(listener);
         return () => { this.accountProjectRowsChangeListeners.delete(listener); };
+    }
+
+    onAutomationEventSourcesInvalidated(listener: () => void | Promise<void>): () => void {
+        this.automationEventSourcesInvalidationListeners.add(listener);
+        return () => { this.automationEventSourcesInvalidationListeners.delete(listener); };
+    }
+
+    private async notifyAutomationEventSourcesInvalidated(signal: AbortSignal): Promise<void> {
+        for (const listener of this.automationEventSourcesInvalidationListeners) {
+            signal.throwIfAborted();
+            await listener();
+        }
     }
 
     onPendingSessionActivationHint(
@@ -2003,6 +2065,14 @@ export class ApiMachineClient {
             });
             return true;
         });
+    }
+
+    /** A retained inventory requires the live, supported changes reader and its consumer. */
+    hasCurrentAccountChangesObserver(): boolean {
+        return !this.projectionSchedulingClosed
+            && this.connectedServicesProjectionListener !== null
+            && this.socket?.connected === true
+            && this.accountChangesObserverTransportGeneration === this.activeTransportGeneration;
     }
 
     onConnectedServicesProjection(
@@ -2860,6 +2930,7 @@ export class ApiMachineClient {
         request: SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2,
         options?: Readonly<{
             signal?: AbortSignal;
+            timeoutMs?: number;
             callerInputAuthorization?: import('@happier-dev/protocol').ExternalActionExecutionAuthorizationV1;
         }>,
     ): Promise<SessionInputAdmissionResultV1> {
@@ -2901,6 +2972,7 @@ export class ApiMachineClient {
             }),
         } : undefined;
         const payload = { ...unsignedPayload, ...(externalAction ? { externalAction } : {}) };
+        const timeoutMs = options?.timeoutMs ?? resolveSessionMessageAdmissionTimeoutMs();
         try {
             // Keep the Socket.IO event and payload correlated for each protocol
             // version. Passing their unions through the generic ACK helper loses
@@ -2910,12 +2982,14 @@ export class ApiMachineClient {
                     socket,
                     event: SESSION_PENDING_EXECUTION_RUN_ENQUEUE_BY_MACHINE_EVENT_V2,
                     payload,
+                    timeoutMs,
                     ...(options?.signal ? { signal: options.signal } : {}),
                 })
                 : await emitSocketWithAck({
                     socket,
                     event: SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1,
                     payload,
+                    timeoutMs,
                     ...(options?.signal ? { signal: options.signal } : {}),
                 });
             const parsed = payload.v === 2
@@ -3228,9 +3302,7 @@ export class ApiMachineClient {
                 await this.refreshMachineFromServer();
                 if (!this.machineContentReady) throw new Error('Machine content key is unavailable');
             }
-            const codec = this.machineContentCodec;
             const expectedVersion = this.machine.metadataVersion;
-            const expectedDataEncryptionKey = this.readOwnerEnvelopeForWrite();
             const currentMetadata = this.machine.metadata === null ? null : StoredMachinePublishedMetadataV1Schema.parse(this.machine.metadata);
             const updated = parseMachinePublishedMetadataV1(handler(currentMetadata));
 
@@ -3239,47 +3311,39 @@ export class ApiMachineClient {
                 return 'unchanged';
             }
 
-            const answer = MachineUpdateMetadataResponseSchema.parse(await emitSocketWithAck({
-                socket: this.socket,
-                event: 'machine-update-metadata',
-                payload: {
-                    machineId: this.machine.id,
-                    metadata: codec.encodeStored(updated),
-                    expectedVersion,
-                    expectedDataEncryptionKey,
-                },
-            }));
-
-            if ((codec !== this.machineContentCodec || !this.machineContentReady)
-                && !('result' in answer && answer.result === 'key-mismatch')) {
-                throw Object.assign(new Error('Machine content key changed during publication'), { retryable: false });
-            }
-            if (!('result' in answer)) throw Object.assign(new Error('Machine content publication requires a client update'), { code: answer.error, retryable: false });
-            if (answer.result === 'key-mismatch') {
-                this.retireMachineContent();
-                await this.refreshMachineFromServer();
-                throw new Error('Machine content key mismatch');
-            }
-            if (answer.result === 'success') {
-                if (answer.version >= this.machine.metadataVersion) {
-                    this.machine.metadata = projectMachinePublishedMetadataFromRowV1(StoredMachinePublishedMetadataV1Schema.parse(codec.decodeStored(answer.metadata)), this.machine.metadata?.devcontainerChild);
-                    this.machine.metadataVersion = answer.version;
-                    if (this.machine.keyBasis) this.machine.keyBasis = { ...this.machine.keyBasis, metadataVersion: answer.version };
-                    this.notifyMachineMetadataChanged();
-                }
+            const answer = await this.publishMachineMetadataAttempt({ metadata: updated, expectedMetadataVersion: expectedVersion });
+            if (answer.status === 'applied') {
                 logger.debug('[API MACHINE] Metadata updated successfully');
                 return 'published';
-            } else if (answer.result === 'version-mismatch') {
-                if (answer.version > this.machine.metadataVersion) {
-                    this.machine.metadataVersion = answer.version;
-                    this.machine.metadata = projectMachinePublishedMetadataFromRowV1(StoredMachinePublishedMetadataV1Schema.parse(codec.decodeStored(answer.metadata)), this.machine.metadata?.devcontainerChild);
-                    if (this.machine.keyBasis) this.machine.keyBasis = { ...this.machine.keyBasis, metadataVersion: answer.version };
-                    this.notifyMachineMetadataChanged();
-                }
+            } else if (answer.status === 'conflict') {
                 throw new Error('Metadata version mismatch'); // Triggers retry
             }
             throw new Error('Unexpected machine metadata update acknowledgement');
         });
+    }
+
+    getMachineMetadataSnapshot(): MachineMetadataFieldReadV1 {
+        return readOpenedMachineMetadataSnapshot(this.machine, this.machineContentReady);
+    }
+
+    async compareAndSwapMachineMetadata(
+        input: Parameters<MachineMetadataFieldPortV1['compareAndSwap']>[0],
+    ): Promise<Awaited<ReturnType<MachineMetadataFieldPortV1['compareAndSwap']>>> {
+        if (this.shouldSuppressMachinePublication() || !this.socket) return { status: 'unavailable' };
+        if (!this.machineContentReady) return { status: 'locked' };
+        try { return await this.publishMachineMetadataAttempt(input); }
+        catch { return { status: this.machineContentReady ? 'outcomeUnknown' : 'locked' }; }
+    }
+
+    private async publishMachineMetadataAttempt(input: Parameters<MachineMetadataFieldPortV1['compareAndSwap']>[0]) {
+        if (!this.socket) throw new Error('Machine socket is not connected');
+        const codec = this.machineContentCodec;
+        return publishMachineMetadataOnce({
+            getMachine: () => this.machine, socket: this.socket, codec, expectedDataEncryptionKey: this.readOwnerEnvelopeForWrite(),
+            isContentCurrent: () => this.machineContentReady && this.machineContentCodec === codec,
+            retireAndRefreshContent: async () => { this.retireMachineContent(); await this.refreshMachineFromServer(); },
+            notifyMetadataChanged: () => this.notifyMachineMetadataChanged(),
+        }, input);
     }
 
     /** The currently published projection fact; invalidation owns its advancement. */
@@ -3316,10 +3380,14 @@ export class ApiMachineClient {
             const expectedDataEncryptionKey = this.readOwnerEnvelopeForWrite();
             const currentState = this.machine.daemonState === null ? null : StoredMachinePublishedDaemonStateV1Schema.parse(this.machine.daemonState);
             const updated = parseMachinePublishedDaemonStateV1(handler(currentState));
+            if (isDeepStrictEqual(currentState, updated)) {
+                return 'unchanged';
+            }
 
             const answer = MachineUpdateStateResponseSchema.parse(await emitSocketWithAck({
                 socket: this.socket,
                 event: 'machine-update-state',
+                timeoutMs: null,
                 payload: {
                     machineId: this.machine.id,
                     daemonState: codec.encodeStored(updated),
@@ -4194,6 +4262,23 @@ export class ApiMachineClient {
         });
     }
 
+    private async refreshAllDemandedAccountCatalogs(input: {
+        token: string;
+        signal: AbortSignal;
+        serverHttpBaseUrl: string;
+    }): Promise<void> {
+        input.signal.throwIfAborted();
+        await refreshDemandedActiveProfileCatalog(input);
+        await refreshDemandedActivePromptLibraryCatalog(input);
+        await refreshDemandedActiveProviderConnectionsCatalog(input);
+        await refreshDemandedActiveMcpServerCatalog(input);
+        await refreshDemandedActiveAcpCatalog(input);
+        await refreshDemandedActiveConnectedAccountCatalogs(input);
+        await refreshDemandedActiveConnectedMetadataCatalog(input);
+        await refreshDemandedActiveNotificationChannelCatalog(input);
+        input.signal.throwIfAborted();
+    }
+
     private async syncChangesOnConnect(
         opts: { reason: 'connect' | 'reconnect' | 'live' },
         signal: AbortSignal = new AbortController().signal,
@@ -4203,6 +4288,7 @@ export class ApiMachineClient {
             ? 'runtime_recovery' as const
             : 'passive_projection' as const;
         const requestSupervisionScope = this.connectionSupervisor?.captureProbeReportScope?.();
+        const transportGeneration = this.activeTransportGeneration;
         signal.throwIfAborted();
         if (opts.reason !== 'live') {
             try {
@@ -4229,11 +4315,12 @@ export class ApiMachineClient {
             return ['true', '1', 'yes'].includes(raw.toLowerCase());
         })();
         if (!enabled) {
+            if (this.isActiveTransportGeneration(transportGeneration)) {
+                this.accountChangesObserverTransportGeneration = null;
+            }
             if (opts.reason !== 'live') {
                 await this.notifyAccountProjectRowsChanged({ source: opts.reason, signal });
-                await refreshDemandedActiveAcpCatalog({ token: this.token, signal });
-                await refreshDemandedActiveNotificationChannelCatalog({ token: this.token, signal });
-                await refreshDemandedActiveConnectedMetadataCatalog({ token: this.token, signal, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl });
+                await this.refreshAllDemandedAccountCatalogs({ token: this.token, signal, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl });
             }
             return;
         }
@@ -4248,6 +4335,10 @@ export class ApiMachineClient {
         const after = await readAccountChangesCursor(accountId);
         const result = await fetchChanges({ token: this.token, after, limit: CHANGES_PAGE_LIMIT, signal });
         signal.throwIfAborted();
+        if (result.status !== 'ok' && result.status !== 'cursor-gone'
+            && this.isActiveTransportGeneration(transportGeneration)) {
+            this.accountChangesObserverTransportGeneration = null;
+        }
 
         if (result.status === 'cursor-gone') {
             publishSessionFollowWakeInvalidation();
@@ -4261,13 +4352,7 @@ export class ApiMachineClient {
             signal.throwIfAborted();
             await this.notifyAccountProjectRowsChanged({ source: 'cursor-gone', signal });
             await this.notifyAccountSettingsVersionHint({ settingsVersion: null, source: 'cursor-gone' });
-            await refreshDemandedActiveProfileCatalog({ token: this.token, signal });
-            await refreshDemandedActivePromptLibraryCatalog({ token: this.token, signal });
-            await refreshDemandedActiveProviderConnectionsCatalog({ token: this.token, signal });
-            await refreshDemandedActiveMcpServerCatalog({ token: this.token, signal });
-            await refreshDemandedActiveAcpCatalog({ token: this.token, signal });
-            await refreshDemandedActiveConnectedAccountCatalogs({ token: this.token, signal });
-            await refreshDemandedActiveConnectedMetadataCatalog({ token: this.token, signal, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl });
+            await this.refreshAllDemandedAccountCatalogs({ token: this.token, signal, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl });
             signal.throwIfAborted();
             publishPluginAccountSettingsWatchInvalidation({ kind: 'full' });
             publishPluginAccountCollectionWatchInvalidation({
@@ -4278,15 +4363,18 @@ export class ApiMachineClient {
             await this.reconcileConnectedServicesProjection({ source: 'cursor-gone', executionAuthority }, signal);
             signal.throwIfAborted();
             await this.synchronizeSavedSecretCatalog(signal);
-            await refreshDemandedActiveNotificationChannelCatalog({ token: this.token, signal });
             signal.throwIfAborted();
             await this.notifyManagedProviderRetainedCurrentnessInvalidation({
                 source: 'cursor-gone',
                 signal,
             });
+            await this.notifyAutomationEventSourcesInvalidated(signal);
             signal.throwIfAborted();
             await writeAccountChangesCursor(accountId, result.currentCursor);
             signal.throwIfAborted();
+            if (this.isActiveTransportGeneration(transportGeneration)) {
+                this.accountChangesObserverTransportGeneration = transportGeneration;
+            }
             return;
         }
         if (result.status !== 'ok') {
@@ -4314,7 +4402,7 @@ export class ApiMachineClient {
                     source: opts.reason === 'live' ? 'changes' : opts.reason,
                     signal,
                 });
-                await refreshDemandedActiveAcpCatalog({ token: this.token, signal });
+                await this.refreshAllDemandedAccountCatalogs({ token: this.token, signal, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl });
                 return;
             }
 
@@ -4356,6 +4444,8 @@ export class ApiMachineClient {
                 && !Array.isArray(hint)
                 && (hint as { connectedServices?: unknown }).connectedServices === true;
         });
+        const hasAutomationSourceChange = changes.some(change => change.kind === 'automation'
+            && change.entityId !== 'automation-source-status');
         const hasProjectRowsChange = changes.some((change) => {
             if (change.kind !== 'account') return false;
             const hint = ProjectAccountRowChangeHintV1Schema.safeParse(change.hint);
@@ -4473,6 +4563,7 @@ export class ApiMachineClient {
             await refreshDemandedActiveConnectedAccountCatalogs({ token: this.token, signal });
             signal.throwIfAborted();
         }
+        publishPluginAccountAvailabilityChanges(accountScopeKey, changes);
         if (changes.length >= CHANGES_PAGE_LIMIT) {
             publishPluginAccountSettingsWatchInvalidation({ kind: 'full' });
             publishPluginAccountCollectionWatchInvalidation({
@@ -4561,9 +4652,17 @@ export class ApiMachineClient {
             });
         }
 
+        if (opts.reason !== 'live' || changes.length >= CHANGES_PAGE_LIMIT
+            || hasAutomationSourceChange || hasConnectedServicesChange || hasConnectedAccountCatalogChange
+            || highestAccountSettingsVersion !== null) {
+            await this.notifyAutomationEventSourcesInvalidated(signal);
+        }
         signal.throwIfAborted();
         await writeAccountChangesCursor(accountId, nextCursor);
         signal.throwIfAborted();
+        if (this.isActiveTransportGeneration(transportGeneration)) {
+            this.accountChangesObserverTransportGeneration = transportGeneration;
+        }
     }
 
     private startChangesSyncWithRetry(opts: { reason: 'connect' | 'reconnect' | 'live' }): void {

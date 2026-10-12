@@ -6,6 +6,7 @@ import { observeProjectServicePlacementActualV1 } from '@happier-dev/protocol/wo
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { getActiveProjectAccountRowsSnapshot, readProjectAccountRows } from '@/workspaces/projectAccountRows';
 import { readWorkspaceSyncChildMachineFacts } from '@/workspaces/sync/workspaceSyncTargetAuthority';
+import { listCurrentAccountMachines } from '@/api/machine/resolveCurrentAccountMachineTarget';
 import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { createAccountServerMachineFinitePolicyClient } from '@/api/machine/accountServerMachineFinitePolicyClient';
 import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -48,17 +49,22 @@ import {
   type ExternalActionMachineRequestSigningKey,
 } from '@/api/externalActionExecutionAuthorization';
 import { captureSessionOrganizationDisplayHost } from '@/api/sessionOrganizationDisplayHost';
-import { usageQueryToAnalyticsRequest } from '@happier-dev/protocol/inputs/usageQuery';
+import { getUsageQueryKey, usageQueryToAnalyticsRequest } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { UsageModelPriceCatalogSchema } from '@happier-dev/protocol/usage/usageModelPriceCatalog';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
-import { resolveUsagePageAggregation, resolveUsagePageAccountingRequests, resolveUsageAccountingAsOfMs, type UsageAccountingSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { resolveUsagePageAggregation, resolveUsagePageAccountingReads, resolveUsageAccountingAsOfMs, type UsageAccountingSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot, type UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { ConnectedServicePoolSelectionGetResponseV1Schema } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
 import { ConnectedServiceQuotaGetResultV1Schema, projectProviderAccountUsageQuotaReadV1, type ConnectedServiceQuotaGetResultV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { AccountProfileResponseSchema } from '@happier-dev/protocol/account/profile';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
-import { applyUsageCoachPreferences } from '@happier-dev/protocol/usage/coach/evaluateUsageCoach';
+import { admitUsageCoachRemedies, applyUsageCoachPreferences } from '@happier-dev/protocol/usage/coach/evaluateUsageCoach';
+import { buildUsageCoachRemedies } from '@happier-dev/protocol/usage/coach/buildUsageCoachRemedies';
+import { readCliUsageDetail } from '@/usage/readCliUsageDetail';
+import { loadMcpServerCatalogV1, type McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
+import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
 import { readAccountSettingsV2Raw } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -431,8 +437,10 @@ export function createAccountServerActionDeps(input: Readonly<{
         if (mismatch) return mismatch;
         const retired = (): ActionExecuteFailure => ({ ok: false, errorCode: 'credential_scope_retired', error: 'credential_scope_retired' });
         if (input.isCredentialCurrent && !await input.isCredentialCurrent()) return retired();
-        const snapshots = await Promise.all(resolveUsagePageAccountingRequests(request.queries).map(async (query): Promise<UsageAccountingSourceSnapshot | ActionExecuteFailure> => {
-          const body = projectNativeJsonValueForTransport(usageQueryToAnalyticsRequest(query));
+        const accountingNowMs = Date.now();
+        const accountingReads = resolveUsagePageAccountingReads(request.queries, accountingNowMs);
+        const snapshots = await Promise.all(accountingReads.map(async ({ query, period }): Promise<UsageAccountingSourceSnapshot | ActionExecuteFailure> => {
+          const body = projectNativeJsonValueForTransport(usageQueryToAnalyticsRequest({ ...query, period }, accountingNowMs));
           const path = '/v2/usage/query';
           const authorization = resolveRequestHeaders({ context, effectActionId: 'usage.query', method: 'POST', path, body });
           if (!authorization.ok) return externalAuthorizationUnavailable();
@@ -441,13 +449,13 @@ export function createAccountServerActionDeps(input: Readonly<{
             signal: context.signal, sideEffectClass: 'read' });
           if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
           if (input.isCredentialCurrent && !await input.isCredentialCurrent()) return retired();
-          if (!dispatched.ok) return { query, status: 'error', errorCode: dispatched.errorCode };
+          if (!dispatched.ok) return { query, period, status: 'error', errorCode: dispatched.errorCode };
           if (isAuthenticationStatus(dispatched.response.status)) return externalAuthorizationUnavailable();
-          if ([404, 405, 501].includes(dispatched.response.status)) return { query, status: 'unsupported', errorCode: 'unsupported' };
-          if (dispatched.response.status >= 400) return { query, status: 'error', errorCode: 'usage_query_failed' };
+          if ([404, 405, 501].includes(dispatched.response.status)) return { query, period, status: 'unsupported', errorCode: 'unsupported' };
+          if (dispatched.response.status >= 400) return { query, period, status: 'error', errorCode: 'usage_query_failed' };
           const parsed = UsageAnalyticsQueryResponseSchema.safeParse(dispatched.response.data);
-          return parsed.success ? { query, status: 'available', value: parsed.data, asOfMs: resolveUsageAccountingAsOfMs(parsed.data) }
-            : { query, status: 'error', errorCode: 'usage_query_result_invalid' };
+          return parsed.success ? { query, period, status: 'available', value: parsed.data, asOfMs: resolveUsageAccountingAsOfMs(parsed.data) }
+            : { query, period, status: 'error', errorCode: 'usage_query_result_invalid' };
         }));
         if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
         if (input.isCredentialCurrent && !await input.isCredentialCurrent()) return retired();
@@ -467,20 +475,27 @@ export function createAccountServerActionDeps(input: Readonly<{
           if (!result.ok || result.response.status >= 400) throw Object.assign(new Error('Usage source unavailable'), {
             code: result.ok ? result.response.status === 401 || result.response.status === 403 ? 'denied'
               : [404, 405, 501].includes(result.response.status) ? 'unsupported' : 'read_failed' : result.errorCode,
+            ...(result.ok ? { status: result.response.status } : {}),
           });
           return result.response.data;
         };
         const credentials = input.credentials?.token === input.token ? input.credentials : { token: input.token, encryption: null };
         type Quota = NonNullable<Parameters<typeof resolveUsagePageAggregation>[0]['quota']>;
         let quota: Quota = { status: 'unknown' };
+        let quotaSources: UsageQuerySourceState[] = [];
         let pools: UsagePoolSourceSnapshot[] | undefined;
         let preferences: ReturnType<typeof accountSettingsParse>['usageCoachPreferencesV1'] | undefined;
         let pricingOverrides: ReturnType<typeof accountSettingsParse>['usageModelPriceOverridesV1'] | undefined;
+        let accountEncryptionMode: 'plain' | 'e2ee' | null = null;
+        let accountStorage: Awaited<ReturnType<typeof resolveCliAccountStorageContext>> | null = null;
+        let accountId = context.runtimeAccountId;
         try {
           const authorization = resolveRequestHeaders({ context, effectActionId: 'usage.query', method: 'GET', path: '/v1/account/encryption/currentness' });
           if (!authorization.ok) throw Object.assign(new Error('Action authorization unavailable'), { code: 'action_authorization_unavailable' });
           const storage = await resolveCliAccountStorageContext({ credentials, serverBaseUrl: serverHttpBaseUrl,
             authorizationHeaders: authorization.headers, signal: context.signal });
+          accountEncryptionMode = storage.mode;
+          accountStorage = storage;
           await check();
           const settings = await readAccountSettingsV2Raw({ credentials, signal: context.signal, deps: {
             resolveAccountEncryptionMode: async () => storage.mode,
@@ -491,6 +506,7 @@ export function createAccountServerActionDeps(input: Readonly<{
           preferences = parsedSettings.usageCoachPreferencesV1;
           pricingOverrides = parsedSettings.usageModelPriceOverridesV1;
           const profile = AccountProfileResponseSchema.parse(await read('/v1/profile'));
+          accountId = profile.id;
           pools = await Promise.all(request.queries.map(async query => ({ query,
             value: await Promise.all(profile.connectedAccountGroupsV4.map(async group => {
               const machineId = query.machines.length === 1 ? query.machines[0] : undefined;
@@ -527,8 +543,10 @@ export function createAccountServerActionDeps(input: Readonly<{
             })),
           })));
           const accounts = profile.connectedAccountsV4.filter(account => account.status !== 'needs_reauth');
-          const starts = request.queries.flatMap(query => query.period.startMs === undefined ? [] : [query.period.startMs]);
-          const ends = request.queries.flatMap(query => query.period.endMs === undefined ? [] : [query.period.endMs]);
+          const periods = accountingReads.filter(read => request.queries.some(query =>
+            getUsageQueryKey(query) === getUsageQueryKey(read.query))).map(read => read.period);
+          const starts = periods.flatMap(period => period.startMs === undefined ? [] : [period.startMs]);
+          const ends = periods.flatMap(period => period.endMs === undefined ? [] : [period.endMs]);
           const range = starts.length === request.queries.length && ends.length === request.queries.length
             ? { startAtMs: Math.min(...starts), endAtMs: Math.max(...ends) } : undefined;
           const rows = await Promise.all(accounts.map(async account => {
@@ -536,20 +554,25 @@ export function createAccountServerActionDeps(input: Readonly<{
             // Paging exhausts the requested range; page size is not a history result ceiling.
             const history = range && range.endAtMs > range.startAtMs ? { range, pageSize: 100 } : undefined;
             let page = await readQuota({ source, ...(history ? { history } : {}) }, context);
-            if ('ok' in page) return page;
+            if ('ok' in page) return { source, result: page };
             const entries = [...(page.history?.entries ?? [])];
             while (page.history?.nextCursor && history) {
               await check();
               page = await readQuota({ source, history: { ...history, cursor: page.history.nextCursor } }, context);
-              if ('ok' in page) return page;
+              if ('ok' in page) return { source, result: page };
               entries.push(...(page.history?.entries ?? []));
             }
-            return projectProviderAccountUsageQuotaReadV1({ input: { source, ...(history ? { history } : {}) }, current: page.current,
-              ...(history ? { history: { entries, nextCursor: null } } : {}), nowMs: Date.now(), targets: page.targets, waitingWork: page.waitingWork });
+            return { source, result: projectProviderAccountUsageQuotaReadV1({ input: { source, ...(history ? { history } : {}) }, current: page.current,
+              ...(history ? { history: { entries, nextCursor: null } } : {}), nowMs: accountingNowMs, targets: page.targets, waitingWork: page.waitingWork }) };
           }));
           await check();
-          const values = rows.filter((row): row is ConnectedServiceQuotaGetResultV1 => !('ok' in row));
-          const failures = rows.filter((row): row is ActionExecuteFailure => 'ok' in row);
+          quotaSources = rows.map(({ source, result }) => ({ source: `quota:${createCanonicalJsonSigningInput(source)}`,
+            ...('ok' in result ? { status: result.errorCode === 'unsupported' ? 'unsupported' as const : 'error' as const,
+              errorCode: result.errorCode ?? 'usage_quota_read_failed' }
+              : { status: 'available' as const, ...(result.current ? { asOfMs: result.current.fetchedAtMs } : {}) }),
+          }));
+          const values = rows.flatMap(({ result }) => 'ok' in result ? [] : [result]);
+          const failures = rows.flatMap(({ result }) => 'ok' in result ? [result] : []);
           const times = values.flatMap(row => row.current ? [row.current.fetchedAtMs] : []);
           quota = { status: failures.length ? values.length ? 'partial' : 'unknown' : 'available',
             ...(failures.length ? { errorCode: failures[0]!.errorCode ?? 'usage_quota_read_failed' } : {}),
@@ -561,16 +584,37 @@ export function createAccountServerActionDeps(input: Readonly<{
         }
         if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
         if (input.isCredentialCurrent && !await input.isCredentialCurrent()) return retired();
-        const result = resolveUsagePageAggregation({ queries: request.queries, quota, pools, pricingOverrides,
-          accounting: snapshots.filter((snapshot): snapshot is UsageAccountingSourceSnapshot => !('ok' in snapshot)),
-          work: request.queries.map(query => ({ query, status: 'unsupported', errorCode: 'local_detail_unavailable' })),
-          howYouWork: request.queries.map(query => ({ query, detail: { status: 'unknown' } })),
-          sources: [{ source: 'coach_preferences', status: preferences ? 'available' : 'unknown' },
+        const accounting = snapshots.filter((snapshot): snapshot is UsageAccountingSourceSnapshot => !('ok' in snapshot));
+        const detail = await readCliUsageDetail({ queries: request.queries.filter(query => query.includeSessionEvidence || query.includeWorkEvidence),
+          accounting, credentials, serverId, serverHttpBaseUrl, accountEncryptionMode,
+          allowPrivateRead: !context.externalActionCredential && !context.externalActionExecutionAuthorization,
+          nowMs: accountingNowMs, signal: context.signal, assertCurrent: check, read,
+          resolveHeaders: request => {
+            const authorization = resolveRequestHeaders({ context, effectActionId: 'usage.query', ...request });
+            return authorization.ok ? authorization.headers : null;
+          },
+        });
+        await check();
+        let mcpCatalog: McpServerCatalogSnapshotV1 | undefined;
+        if (accountStorage && detail.howYouWork.some(row => row.detail.coach?.detail?.mcpUsage?.length)) {
+          mcpCatalog = await loadMcpServerCatalogV1({ ...accountStorage, signal: context.signal,
+            readRow: async () => McpServerCatalogRowReadResponseV1Schema.parse(await read(MCP_SERVER_CATALOG_ROWS_ROUTE_V1)) });
+          await check();
+        }
+        const result = resolveUsagePageAggregation({ queries: request.queries, quota, pools, pricingOverrides, coachPreferences: preferences ?? null, nowMs: accountingNowMs,
+          accounting, work: detail.work, howYouWork: detail.howYouWork,
+          sources: [...quotaSources, { source: 'coach_preferences', status: preferences ? 'available' : 'unknown' },
             { source: 'pricing_overrides', status: pricingOverrides === undefined ? 'unknown' : 'available' }],
         });
-        const nowMs = Date.now();
-        return preferences ? { ...result, results: result.results.map(slice => slice.coach
-          ? { ...slice, coach: applyUsageCoachPreferences(slice.coach, preferences, nowMs) } : slice) } : result;
+        const nowMs = accountingNowMs;
+        return { ...result, results: result.results.map(slice => {
+          if (!slice.coach) return slice;
+          const evidence = detail.howYouWork.find(row => getUsageQueryKey(row.query) === slice.key)?.detail.coach;
+          const admitted = admitUsageCoachRemedies(slice.coach, buildUsageCoachRemedies({ findings: slice.coach.findings,
+            composition: evidence?.composition ?? [], mcpUsage: evidence?.detail?.mcpUsage,
+            mcpCatalog, sessions: detail.sessions, serverId, accountId }));
+          return { ...slice, coach: preferences ? applyUsageCoachPreferences(admitted, preferences, nowMs) : admitted };
+        }) };
       },
     },
     projectWorkerAction: async ({ actionId, input: actionInput, context, signal }) => {
@@ -624,10 +668,13 @@ export function createAccountServerActionDeps(input: Readonly<{
         try {
           if (!await isCurrent()) return { status: 'unavailable' };
           const rows = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => readProjectAccountRows({ credentials, serverId: targetServerId, signal }));
-          const childMachines = await readWorkspaceSyncChildMachineFacts({ serverId: targetServerId, serverHttpBaseUrl, credentials, signal,
-            purpose: 'admitted_mapping', machineIds: rows.workspaceRefs.filter(ref => ref.serverId === targetServerId).map(ref => ref.machineId) });
+          const machines = await listCurrentAccountMachines({ token: credentials.token, serverHttpBaseUrl, signal });
           const actual = await observeProjectServicePlacementActualV1({ ...request,
-            workspaceRefs: rows.workspaceRefs, relationships: rows.relationships, childMachines,
+            workspaceRefs: rows.workspaceRefs, relationships: rows.relationships,
+            childMachineProjections: machines.flatMap(machine => machine.devcontainerChild
+              ? [{ serverId: targetServerId, machineId: machine.id, projection: machine.devcontainerChild }] : []),
+            readChildMachines: machineIds => readWorkspaceSyncChildMachineFacts({ serverId: targetServerId, serverHttpBaseUrl, credentials, signal,
+              purpose: 'admitted_mapping', machineIds }),
             isCurrent: async () => await isCurrent() && getActiveProjectAccountRowsSnapshot() === rows,
             readSnapshot: snapshot => callExactMachineRpc({ credentials, serverUrl: serverHttpBaseUrl,
               machineId: snapshot.machineId, method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT,

@@ -10,6 +10,7 @@ import {
     type SessionRecordFixture,
 } from '@/testkit/backends/sessionFixtures';
 import { HttpStatusError } from './client/httpStatusError';
+import { SocketAckError } from '@/session/transport/shared/socketAck';
 import { createPermissionModeQueueState } from '@/agent/runtime/createPermissionModeQueueState';
 import type {
     AgentSessionRuntime,
@@ -854,6 +855,117 @@ describe('ApiSessionClient pending queue materialization', () => {
         expect(delivered).toEqual([{ localId: 'local-current-9', seq: 9 }]);
         expect(client.hasPendingQueueMaterializedLocalId('local-current-9')).toBe(true);
     });
+
+    it.each([null, 'run-a'] as const)('reconciles retained acceptance on the same connection after two lost settlement replies without redelivering to the Agent (%s)', async runId => {
+        const localId = 'accepted-response-loss';
+        const recipient = runId ? { kind: 'execution_run' as const, runId } : null;
+        if (recipient) vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+            ...currentFeatures,
+            capabilities: { session: { ...currentFeatures.capabilities.session, pendingInput: { protocolVersion: 3 } } },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })));
+        const session = createMockSession({ encryptionMode: 'plain', pendingCount: recipient ? 0 : 1, pendingVersion: 3 });
+        const content = { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'one input' },
+            meta: recipient ? { happier: { kind: 'participant_message.v1', payload: { recipient } } } : { source: 'ui' } } };
+        const materializeEvent = recipient ? 'session-pending-execution-run-materialize-next-v2' : 'pending-materialize-next';
+        const acceptanceEvent = recipient ? 'session-pending-execution-run-delivery-accepted-v2' : 'pending-delivery-accepted-v1';
+        let settlementAttempts = 0;
+        const sessionSocket = createApiSessionSocketStub({ emitWithAck: async (event) => {
+            if (event === materializeEvent) return {
+                ok: true, didMaterialize: true, didWrite: false,
+                ...(recipient ? { v: 2, recipient, sidechainId: 'chain-a', authorAccountId: 'author-a' } : {}),
+                pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 3,
+                deliveryState: { mode: 'provider', unresolved: true },
+                message: { id: null, seq: null, localId, messageRole: 'user', content,
+                    requestedAction: { v: 1, kind: 'enqueue' }, providerAction: 'send', createdAt: 1, updatedAt: 1 },
+            };
+            if (event === acceptanceEvent) {
+                settlementAttempts += 1;
+                if (settlementAttempts <= 2) throw new SocketAckError({ code: 'socket_ack_timeout', event });
+                // The first lost reply may have committed: reconcile the exact idempotent replay.
+                const result = { ok: true, didResolve: false, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 4,
+                    message: { id: 'committed-input', seq: 9, localId, messageRole: 'user', content, createdAt: 1, updatedAt: 1 } };
+                return recipient ? { v: 2, recipient, sidechainId: 'chain-a', result } : result;
+            }
+            return { ok: true };
+        } });
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket: createApiSessionSocketStub() });
+        installAxiosGetBoundaryMock(async url => ({ status: 200, data: url.endsWith('/pending') ? { pending: [] } : { messages: [] } }));
+        const client = createClient(session);
+        const delivered = vi.fn(() => true);
+        const target = recipient ? client.bindExecutionRunPendingInput({
+            recipient, sidechainId: 'chain-a', isCurrent: () => true, foregroundState: () => 'ready',
+            getMetadataSnapshot: () => client.getMetadataSnapshot(), consume: delivered,
+        }) : null;
+        if (!target) client.onUserMessage(delivered);
+        await waitForPendingInputContract(client, recipient ? 3 : 1);
+        if (target) await expect(target.materializeNextPendingMessageSafely!()).resolves.toMatchObject({ type: 'materialized', localId });
+        else await expect(client.popPendingMessage()).resolves.toBe(true);
+        vi.useFakeTimers();
+        try {
+            const accepted = client.observeProviderInputSettlement({ kind: 'accepted', localId, userMessageSeq: null });
+            await vi.advanceTimersByTimeAsync(1_000);
+            await accepted;
+            expect(client.hasPendingProviderInput(localId)).toBe(true);
+            if (target) {
+                await expect(client.reconcilePendingProviderInputCustodyBeforeMaterialization()).resolves.toBe(true);
+                expect(settlementAttempts).toBe(2);
+                await expect(target.reconcilePendingProviderInputCustodyBeforeMaterialization!()).resolves.toBe(true);
+            } else await expect(client.reconcilePendingProviderInputCustodyBeforeMaterialization()).resolves.toBe(true);
+            expect(client.hasPendingProviderInput(localId)).toBe(false);
+            expect(client.getCommittedUserMessageSeq(localId)).toBe(9);
+            expect(client.getPendingQueueState()).toMatchObject({ known: true, pendingCount: 0, pendingVersion: recipient ? 3 : 4 });
+            expect(delivered).toHaveBeenCalledOnce();
+            expect(settlementAttempts).toBe(3);
+        } finally {
+            vi.useRealTimers();
+            target?.dispose();
+        }
+    });
+
+    it.each(['pending-delivery-accepted-v1', 'session-publisher-authority-check'] as const)(
+        'keeps %s pending until the containing server operation responds beyond the control ACK cutoff', async event => {
+            const localId = 'delayed-operation';
+            const session = createMockSession({ encryptionMode: 'plain', pendingCount: 1, pendingVersion: 3 });
+            const content = { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'slow settlement' }, meta: { source: 'ui' } } };
+            let acknowledge!: (value: unknown) => void;
+            const acknowledgement = new Promise<unknown>(resolve => { acknowledge = resolve; });
+            const sessionSocket = createApiSessionSocketStub({ emitWithAck: async requestedEvent => {
+                if (requestedEvent === event) return acknowledgement;
+                if (requestedEvent === 'pending-materialize-next') return {
+                    ok: true, didMaterialize: true, didWrite: false, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 3,
+                    deliveryState: { mode: 'provider', unresolved: true },
+                    message: { id: null, seq: null, localId, messageRole: 'user', content,
+                        requestedAction: { v: 1, kind: 'enqueue' }, providerAction: 'send', createdAt: 1, updatedAt: 1 },
+                };
+                return { ok: true };
+            } });
+            bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket: createApiSessionSocketStub() });
+            installAxiosGetBoundaryMock(async () => ({ status: 200, data: { messages: [] } }));
+            const client = createClient(session);
+            client.onUserMessage(() => {});
+            await waitForPendingInputContract(client);
+            if (event === 'pending-delivery-accepted-v1') await client.popPendingMessage();
+            vi.useFakeTimers();
+            try {
+                let settled = false;
+                const operation = (event === 'pending-delivery-accepted-v1'
+                    ? client.observeProviderInputSettlement({ kind: 'accepted', localId, userMessageSeq: null })
+                    : client.checkCurrentPublisherAuthority()).then(value => { settled = true; return value; }, error => { settled = true; return error; });
+                await vi.advanceTimersByTimeAsync(30_000);
+                expect(settled).toBe(false);
+                acknowledge(event === 'pending-delivery-accepted-v1'
+                    ? { ok: true, didResolve: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 4,
+                        message: { id: 'committed-input', seq: 9, localId, messageRole: 'user', content, createdAt: 1, updatedAt: 1 } }
+                    : { status: 'current', sessionId: session.id,
+                        publisherPrecondition: { machineId: 'test-machine', committedFenceMs: 1, publisherGeneration: '1' } });
+                const result = await operation;
+                if (event === 'session-publisher-authority-check') expect(result).toBe(true);
+                else expect(client.hasPendingProviderInput(localId)).toBe(false);
+            } finally {
+                vi.useRealTimers();
+            }
+        },
+    );
 
     it('joins a seq-null native delivery to the exact accepted settlement after turn completion', async () => {
         const session = createMockSession({ pendingCount: 1, pendingVersion: 3 });

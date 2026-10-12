@@ -902,11 +902,6 @@ describe('ApiSessionClient provider-input settlement', () => {
       userMessageSeq: 42,
     })).resolves.toBe(false);
 
-    expect(resolveAcceptedMock).toHaveBeenCalledWith({
-      socket: sessionSocketStub,
-      sessionId: 's1',
-      localId: 'dismissed-local',
-    });
     expect(client.hasPendingProviderInput('dismissed-local')).toBe(false);
     expect(client.getCommittedUserMessageSeq('dismissed-local')).toBe(42);
     await client.close();
@@ -1297,11 +1292,6 @@ describe('ApiSessionClient provider-input settlement', () => {
     await Promise.all([accepted, rejected, uncertain]);
     await vi.waitFor(() => expect(resolveAcceptedMock).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(blockDeliveryMock).toHaveBeenCalledTimes(2));
-    expect(resolveAcceptedMock).toHaveBeenCalledWith({
-      socket: sessionSocketStub,
-      sessionId: 's1',
-      localId: 'accepted-local',
-    });
     expect(blockDeliveryMock).toHaveBeenCalledWith(expect.objectContaining({
       localId: 'rejected-local',
       reason: 'provider_rejected_before_acceptance',

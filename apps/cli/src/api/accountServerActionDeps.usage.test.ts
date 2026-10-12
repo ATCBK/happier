@@ -12,6 +12,10 @@ import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/proto
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createApiSessionSocketStub, createAvailableSessionSpawnMachineSnapshot } from '@/testkit/backends/apiSessionSocketHarness';
+import { ScmPullRequestWorkEvidenceSchema } from '@happier-dev/protocol/scm';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { createAccountServerActionDeps } from './accountServerActionDeps';
 import { handleActionsCommand } from '@/cli/commands/actions';
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
@@ -21,14 +25,168 @@ import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider
 import { createCliSettingsDeclarationAction } from '@/session/actions/settingsDeclarationAction';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { QualifiedConnectedAccountGroupV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
+import { McpServerCatalogRowMutationV1Schema, type McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { UsageCoachApplyResultSchema } from '@happier-dev/protocol/usage/coach/coachActions';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { createCliMcpServerActionExecuteV1 } from '@/session/actions/cliActionDeps/createCliMcpServerActionDeps';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+
+const socketBoundary = vi.hoisted(() => vi.fn());
+vi.mock('socket.io-client', () => ({ io: socketBoundary }));
 
 const response = { v: 1, totals: { eventCount: 1,
   tokens: { input: 10, output: 2, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 12 },
   cost: { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' } } };
 let cleanup: (() => void) | undefined;
-afterEach(() => { cleanup?.(); cleanup = undefined; vi.restoreAllMocks(); process.exitCode = undefined; });
+afterEach(() => { cleanup?.(); cleanup = undefined; vi.restoreAllMocks(); socketBoundary.mockReset(); resetActiveAccountSettingsSnapshotForTests(); process.exitCode = undefined; });
 
 describe('CLI and MCP personal usage Account transport', () => {
+  it('opens admitted Session intervals and mixed Claude tools through the real HTTP owners and denies keyless E2EE', async () => {
+    const app = fastify();
+    const sessionId = 'c111111111111111111111111';
+    let mode: 'plain' | 'e2ee' = 'plain';
+    let sessionReads = 0;
+    let malformed = false;
+    let accountingAvailable = true;
+    const reads: string[] = [];
+    app.addHook('preHandler', async request => { reads.push(request.url.split('?')[0]!); });
+    const witness = ScmPullRequestWorkEvidenceSchema.parse({ sessionId, turnId: 'turn', repositoryKey: 'repo',
+      checkpointRef: 'checkpoint/session/turn', checkpointCommitSha: 'a'.repeat(40), commitSha: 'b'.repeat(40),
+      attributionScope: 'no_happier_checkpoint_overlap_observed', pullRequest: { provider: { id: 'forge', kind: 'github',
+        displayName: 'Forge', baseUrl: 'https://github.com', nameWithOwner: 'owner/repo', urlSafety: { allowedSchemes: ['https:'] } },
+        number: 7, title: 'Observed outcome', url: 'https://github.com/owner/repo/pull/7', baseBranch: 'main', headBranch: 'feature', state: 'merged' } });
+    const { pullRequest: _pullRequest, ...checkpoint } = witness;
+    const mcpUsage = { v: 1, evidenceId: 'mcp-window', sessionId, turnId: 'turn', observedAtMs: 150,
+      window: { startMs: 100, endMs: 150 }, coverage: 'complete', bindings: [{ serverId: 'docs', bindingId: 'docs-binding',
+        serverRevision: 10, bindingRevision: 20, catalogRevision: 40, toolCallCount: 0, schemaBytes: null }] };
+    const composition = { v: 1, evidenceId: 'composition', sessionId, turnId: 'turn', inputId: 'input', observedAtMs: 150,
+      boundary: 'host_pre_dispatch', deliveryKind: 'newTurn', coverage: 'host_only', components: ['a', 'c'].map(source => ({
+        sourceId: source.repeat(64), digest: 'b'.repeat(64), kind: 'instructions', location: 'user', byteLength: 200,
+        tokenCount: null, tokenizerId: null, cacheClass: 'unknown', overlap: 'none' })), nativePrefix: null, contextWindowTokens: null };
+    socketBoundary.mockImplementation(() => createApiSessionSocketStub({ emitWithAck: (event, payload) => {
+      if (event !== SOCKET_RPC_EVENTS.CALL) throw new Error('Unexpected socket event');
+      const packet = z.object({ method: z.string(), params: z.object({ cwd: z.string(), workEvidence: z.object({ sessionId: z.string() }),
+        state: z.string().optional() }), authorization: z.unknown().optional() }).parse(payload);
+      expect(packet.params).toMatchObject({ cwd: '/repo', workEvidence: { sessionId } });
+      expect(packet.authorization).toMatchObject({ kind: 'session.write', sessionId });
+      return { ok: true, result: packet.method.endsWith('scm.branch.list')
+        ? { success: true, branches: [], branchEvidenceStatus: 'partial', branchEvidence: [{ ...checkpoint,
+          branch: { ref: 'refs/heads/feature', headSha: 'b'.repeat(40) } }] }
+        : { success: true, pullRequests: [], workEvidenceStatus: 'partial', workEvidence: packet.params.state === 'merged' ? [witness] : [] } };
+    } }));
+    const accounting = { ...response, contributions: [{ id: 'turn-cost', observedAtMs: 150, sessionId,
+      turnId: 'turn', agentId: 'claude', modelId: null, machineId: 'machine', projectKey: null, workspaceId: null,
+      source: 'session', tokens: response.totals.tokens, cost: response.totals.cost }] };
+    app.post('/v2/usage/query', async (_request, reply) => accountingAvailable ? accounting : reply.code(503).send({ error: 'unavailable' }));
+    app.get('/v1/account/encryption/currentness', async () => ({ mode, version: 1, signingKeyFingerprint: null,
+      contentKeyFingerprint: null, updatedAt: 1 }));
+    app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
+    app.get('/v1/profile', async () => ({ id: 'account', connectedAccountsV4: [], connectedAccountGroupsV4: [] }));
+    let revision = 40;
+    let catalog: McpServerCatalogV1 = { v: 1, servers: [{ id: 'docs', name: 'docs', transport: 'stdio', stdio: { command: 'docs', args: [] },
+        env: {}, createdAt: 1, updatedAt: 10 }], bindings: [{ id: 'docs-binding', serverId: 'docs', enabled: true,
+        target: { t: 'allMachines' }, createdAt: 1, updatedAt: 20 }] };
+    app.get('/v1/account/entity-rows/mcp', async () => ({ status: 'present', revision, content: { t: 'plain', v: catalog } }));
+    app.post('/v1/account/entity-rows/mcp', async (request, reply) => {
+      const mutation = McpServerCatalogRowMutationV1Schema.parse(request.body);
+      if (mutation.expectedRevision !== revision) return reply.code(409).send({ status: 'conflict', revision });
+      if (mutation.content?.t !== 'plain') throw new Error('Expected plain Account catalog');
+      catalog = mutation.content.v;
+      return { status: 'updated', revision: ++revision, cursor: revision };
+    });
+    app.get('/v1/account/entity-rows/profiles/transfer', async () => ({ status: 'absent' }));
+    app.get('/v2/account/settings/history', async () => ({ snapshots: [] }));
+    app.get('/v1/machines/machine', async () => ({ machine: { ...createAvailableSessionSpawnMachineSnapshot('machine'), storageMode: 'plain' } }));
+    app.get('/v2/sessions', async () => ({ sessions: [createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', share: null })], hasNext: false }));
+    app.get('/v2/sessions/archived', async () => ({ sessions: [], hasNext: false }));
+    app.get(`/v2/sessions/${sessionId}`, async () => {
+      sessionReads += 1;
+      return { session: createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain',
+        metadata: JSON.stringify({ path: '/repo', machineId: 'machine', agent: 'claude' }), share: null }) };
+    });
+    app.get(`/v1/sessions/${sessionId}/turns`, async () => ({ v: 1, sessionId, updatedAt: 180,
+      turns: [{ turnId: 'turn', agentId: 'claude', status: 'completed', startedAt: 120, terminalAt: 180, updatedAt: 180 }] }));
+    app.get(`/v1/sessions/${sessionId}/messages`, async request => {
+      if (malformed) return { messages: [{ content: 'invalid' }], hasMore: false };
+      const roles = String((request.query as { roles?: string }).roles).split(',');
+      return { hasMore: false, messages: roles.includes('agent') ? [{ id: 'mixed', seq: 1, createdAt: 140,
+        messageRole: 'agent', content: { t: 'plain', v: { role: 'agent', content: { type: 'output',
+          data: { type: 'assistant', message: { role: 'assistant', content: [
+            { type: 'text', text: 'private prose must never be disclosed' }, { type: 'tool_use', id: 'read', name: 'Read', input: { file_path: '/secret' } },
+          ] } } } } } }, { id: 'mcp', seq: 2, createdAt: 150, messageRole: 'event', content: { t: 'plain', v: {
+            role: 'agent', content: { type: 'event', id: 'mcp-event', data: { type: 'mcp-binding-usage', usage: mcpUsage } },
+          } } }, { id: 'composition', seq: 3, createdAt: 150, messageRole: 'event', content: { t: 'plain', v: {
+            role: 'agent', content: { type: 'event', id: 'composition-event', data: { type: 'prompt-composition', composition } },
+          } } }] : [] };
+    });
+    cleanup = installAxiosFastifyAdapter({ app, origin: 'http://usage.test' });
+    const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.signature`, encryption: null };
+    setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+    const executor = createActionExecutor({ ...createAccountServerActionDeps({ token: credentials.token, credentials,
+      serverId: 'home', serverHttpBaseUrl: 'http://usage.test' }),
+      mcpServerAction: createCliMcpServerActionExecuteV1({ credentials, serverId: 'home', serverHttpBaseUrl: 'http://usage.test',
+        callMachineAction: async () => { throw new Error('Binding mutation has no Machine effect'); } }),
+    } as ActionExecutorDeps);
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, session: sessionId });
+    const read = async (selected = query) => {
+      const result = await executor.execute('usage.query', { queries: [selected] }, { surface: 'cli', serverId: 'home' });
+      expect(result.ok, JSON.stringify(result)).toBe(true);
+      return UsageQueryBatchResultSchema.parse(result.ok ? result.result : undefined).results[0]!;
+    };
+    const opened = await read();
+    expect(opened.howYouWork).toMatchObject({ intervals: { agentTimeMs: 60 },
+      autopsy: { events: expect.arrayContaining([expect.objectContaining({ sessionId, kind: 'read', evidenceId: 'read' })]) } });
+    expect(opened.work, JSON.stringify({ sources: opened.sources, socketReads: socketBoundary.mock.calls.length, reads })).toMatchObject({ allocations: [{ reason: 'allocated', outcome: { pullRequest: { number: 7 } } }],
+      branchAllocations: [{ reason: 'allocated', branch: { branch: { ref: 'refs/heads/feature' } } }] });
+    expect(opened.coach?.findings.find(finding => finding.detectorId === 'mcp_overhead')).toMatchObject({
+      remedy: { kind: 'mcp_binding', bindingId: 'docs-binding', serverId: 'docs', target: { t: 'allMachines' }, enabled: false, expectedRevision: 40 },
+      action: { actionId: 'usage.coach.apply' },
+    });
+    expect(opened.coach?.findings.find(finding => finding.detectorId === 'duplicated_instructions')).toMatchObject({
+      remedy: { kind: 'prepared_session', input: { executionTarget: { serverId: 'home', machineId: 'machine' },
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } } },
+      action: { actionId: 'usage.coach.apply' },
+    });
+    const finding = opened.coach!.findings.find(finding => finding.detectorId === 'mcp_overhead')!;
+    const actionContext = { surface: 'cli', serverId: 'home', authority: 'present_user', actionCaller: { kind: 'host' },
+      actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+        'usage.coach.apply': ['cli'], 'usage.coach.undo': ['cli'], 'mcp.rules.set': ['cli'],
+      } }) } as const;
+    const applied = await executor.execute('usage.coach.apply', { query, evidenceKey: finding.evidenceKey }, actionContext);
+    expect(applied, JSON.stringify(applied)).toMatchObject({ ok: true, result: { kind: 'applied', reversal: { kind: 'mcp_binding',
+      owner: { rules: [{ enabled: false }], previous: [{ enabled: true }] } } } });
+    expect(catalog.bindings[0]?.enabled).toBe(false);
+    const receipt = UsageCoachApplyResultSchema.parse(applied.ok ? applied.result : undefined);
+    expect(await executor.execute('usage.coach.undo', { query, evidenceKey: finding.evidenceKey, reversal: receipt.reversal }, actionContext))
+      .toMatchObject({ ok: true, result: { kind: 'undone' } });
+    expect(catalog.bindings[0]?.enabled).toBe(true);
+    expect(JSON.stringify(opened)).not.toContain('private prose');
+    expect(JSON.stringify(opened)).not.toContain('/secret');
+    expect(sessionReads).toBeGreaterThan(0);
+    reads.length = 0;
+    expect((await read({ ...query, includeSessionEvidence: false })).work?.allocations[0]?.reason).toBe('allocated');
+    expect(reads).not.toContain(`/v1/sessions/${sessionId}/messages`);
+    expect(reads).not.toContain(`/v1/sessions/${sessionId}/turns`);
+    const beforeScm = socketBoundary.mock.calls.length;
+    expect((await read({ ...query, includeWorkEvidence: false })).howYouWork?.intervals?.agentTimeMs).toBe(60);
+    expect(socketBoundary.mock.calls.length).toBe(beforeScm);
+    accountingAvailable = false;
+    expect((await read({ ...query, session: null, includeWorkEvidence: false })).howYouWork?.intervals?.agentTimeMs).toBe(60);
+    accountingAvailable = true;
+    malformed = true;
+    expect((await read()).howYouWork?.detailStatus).toBe('unknown');
+    malformed = false;
+    mode = 'e2ee';
+    const denied = await read();
+    expect(denied.howYouWork?.detailStatus).toBe('unknown');
+    expect(denied.howYouWork?.autopsy).toBeUndefined();
+    await app.close();
+  });
   it('composes retained quota/history/targets and dismisses witnessed native findings through the real settings CAS owner', async () => {
     const app = fastify();
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
@@ -52,12 +210,17 @@ describe('CLI and MCP personal usage Account transport', () => {
     let version = 1;
     let mode: 'plain' | 'e2ee' = 'plain';
     let denied = false;
+    let includeUnavailableAccount = false;
+    let quotaUnavailable = false;
+    const unavailableSource = { ...source, ref: { ...source.ref, accountId: 'unavailable' } };
     app.addHook('preHandler', async request => { expect(request.headers.authorization).toBe('Bearer owner-token'); });
     app.post('/v2/usage/query', async () => native);
     app.get('/v1/profile', async (_request, reply) => denied ? reply.code(403).send({ error: 'denied' }) : ({ id: 'account', connectedAccountsV4: [{
       ref: source.ref, status: 'connected', authenticationModeId: null, revisionSemantics: 'revisioned',
       credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: true, configurationRevision: '1', scopes: [],
-    }], connectedAccountGroupsV4: [group] }));
+    }, ...(includeUnavailableAccount ? [{ ref: unavailableSource.ref, status: 'connected', authenticationModeId: null,
+      revisionSemantics: 'revisioned', credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: true,
+      configurationRevision: '1', scopes: [] }] : [])], connectedAccountGroupsV4: [group] }));
     app.get('/v1/account/encryption/currentness', async () => ({ mode, version: 1, signingKeyFingerprint: null,
       contentKeyFingerprint: null, updatedAt: 1 }));
     app.get('/v1/account/encryption', async () => ({ mode, updatedAt: 1 }));
@@ -70,8 +233,12 @@ describe('CLI and MCP personal usage Account transport', () => {
       if (mutation.content?.t === 'plain') raw = mutation.content.v;
       return { success: true, version: ++version };
     });
-    app.get('/v4/connect/qualified/provider-account-usage/sources/resolve', async () => ({ source, recordId: snapshot.recordId,
-      providerAccountId: 'subject', fetchedAt: 150, staleAfterMs: 1000 }));
+    app.get('/v4/connect/qualified/provider-account-usage/sources/resolve', async (request, reply) => {
+      const requested = QualifiedConnectedServiceUsageSourceV4Schema.parse(JSON.parse(z.object({ source: z.string() }).parse(request.query).source));
+      return quotaUnavailable || requested.ref.accountId === unavailableSource.ref.accountId
+        ? reply.code(503).send({ error: 'provider_account_usage_read_failed' })
+        : { source, recordId: snapshot.recordId, providerAccountId: 'subject', fetchedAt: 150, staleAfterMs: 1000 };
+    });
     const record = { content: { t: 'plain', v: snapshot }, metadata: { fetchedAt: 150, staleAfterMs: 1000, status: 'ok' }, sources: [source] };
     app.get('/v4/connect/qualified/provider-account-usage/record', async () => record);
     app.get('/v4/connect/qualified/provider-account-usage/history', async () => ({ entries: [{ id: 'history', observedAtMs: 150, record }], nextCursor: null }));
@@ -94,22 +261,49 @@ describe('CLI and MCP personal usage Account transport', () => {
     expect(slice.pools).toMatchObject([{ group: group.ref, memberAccountIds: ['work'], activeAccountId: 'work',
       selection: { status: 'unsupported', errorCode: 'machine_context_unavailable' } }]);
     expect(slice.sources).toEqual(expect.arrayContaining([{ source: 'accounting', status: 'available', asOfMs: 180 },
-      expect.objectContaining({ source: 'work', status: 'unsupported' })]));
+      expect.objectContaining({ source: 'work', status: 'unknown' })]));
     const finding = slice.coach!.findings.find(row => row.detectorId === 'outside_usage')!;
     expect(finding.currentness).toBe('current');
     const dismissed = await executor.execute('usage.coach.dismiss', { query, evidenceKey: finding.evidenceKey, dismissed: true },
       { surface: 'cli', serverId: 'home', authority: 'present_user' });
     expect(dismissed, JSON.stringify(dismissed)).toMatchObject({ ok: true, result: { kind: 'preference_updated' } });
     expect((await read()).coach!.findings.find(row => row.evidenceKey === finding.evidenceKey)?.state.dismissed).toBe(true);
-    expect(await executor.execute('settings.set', { anchor: 'usage.coachPreferences', value: { v: 1, digestCadence: 'off', suppressions: [] },
+    const preferenceRead = await executor.execute('settings.get', { anchor: 'usage.coachPreferences', includeVersion: true },
+      { surface: 'cli', serverId: 'home' });
+    expect(preferenceRead).toMatchObject({ ok: true, result: { value: { disabledChecks: [], modelSuggestion: 'suggest_with_estimates' } } });
+    const configured = await executor.execute('settings.set', { anchor: 'usage.coachPreferences',
+      value: { v: 1, suppressions: [{ kind: 'dismissed', evidenceKey: finding.evidenceKey }], disabledChecks: ['outside_usage'], modelSuggestion: 'off' },
+      expectedSettingsVersion: version }, { surface: 'cli', serverId: 'home', authority: 'present_user' });
+    expect(configured).toMatchObject({ ok: true });
+    expect((await read()).coach!.evaluations.find(row => row.detectorId === 'outside_usage')?.status).toBe('disabled');
+    expect((await read()).coach!.findings).toEqual([]);
+    expect(await executor.execute('settings.set', { anchor: 'usage.coachPreferences', value: { v: 1, suppressions: [], disabledChecks: [], modelSuggestion: 'off' },
       expectedSettingsVersion: 1 }, { surface: 'cli', serverId: 'home', authority: 'present_user' }))
       .toMatchObject({ ok: false, errorCode: 'account_settings_conflict' });
-    expect((await read()).coach!.findings.find(row => row.evidenceKey === finding.evidenceKey)?.state.dismissed).toBe(true);
+    expect((await read()).coach!.findings).toEqual([]);
+    includeUnavailableAccount = true;
+    const partial = await read();
+    expect(partial.quota).toEqual(slice.quota);
+    expect(partial.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: `quota:${createCanonicalJsonSigningInput(source)}`, status: 'available', asOfMs: 150 }),
+      expect.objectContaining({ source: `quota:${createCanonicalJsonSigningInput(unavailableSource)}`, status: 'error', errorCode: expect.any(String) }),
+    ]));
+    quotaUnavailable = true;
+    const failed = await read();
+    expect(failed.quota).toBeUndefined();
+    expect(failed.pending).toBe(false);
+    expect(failed.sources.filter(row => row.source.startsWith('quota:'))).toEqual([
+      expect.objectContaining({ source: `quota:${createCanonicalJsonSigningInput(source)}`, status: 'error', errorCode: expect.any(String) }),
+      expect.objectContaining({ source: `quota:${createCanonicalJsonSigningInput(unavailableSource)}`, status: 'error', errorCode: expect.any(String) }),
+    ]);
+    quotaUnavailable = false; includeUnavailableAccount = false;
     mode = 'e2ee';
     const locked = await read();
     expect(locked.quota).toBeUndefined();
     expect(locked.sources.find(row => row.source === 'quota')).toMatchObject({ status: 'unknown' });
     expect(locked.pending).toBe(false);
+    expect(locked.coach!.findings).toEqual([]);
+    expect(locked.coach!.evaluations.every(row => row.status === 'insufficient_evidence')).toBe(true);
     mode = 'plain'; denied = true;
     expect((await read()).quota).toBeUndefined();
     await app.close();

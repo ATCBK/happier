@@ -46,6 +46,7 @@ export async function resolveSessionClientConnectionContract(params: Readonly<{
     serverContract: SessionSyncPendingInputServerContractResult;
     sessionId: string;
     socket: TranscriptCapabilitySocket;
+    signal?: AbortSignal;
 }>): Promise<SessionClientConnectionContractResult> {
     if (params.serverContract.pendingInput === 'released_server_v0_2_1') {
         return {
@@ -73,6 +74,8 @@ export async function resolveSessionClientConnectionContract(params: Readonly<{
         let raw = await emitSocketWithAck({
             socket: params.socket,
             event: SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1,
+            timeoutMs: null,
+            signal: params.signal,
             payload: { v: 2, sessionId: params.sessionId },
         });
         let parsed = SessionTranscriptObservationCapabilityAckSchema.safeParse(raw);
@@ -83,6 +86,8 @@ export async function resolveSessionClientConnectionContract(params: Readonly<{
             raw = await emitSocketWithAck({
                 socket: params.socket,
                 event: SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1,
+                timeoutMs: null,
+                signal: params.signal,
                 payload: { v: 1, sessionId: params.sessionId },
             });
             parsed = SessionTranscriptObservationCapabilityAckSchema.safeParse(raw);

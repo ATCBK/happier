@@ -7,8 +7,8 @@ import type {
     SessionStoredMessageContent,
     SessionTurnMutationV1,
 } from '@happier-dev/protocol';
-import { SessionTranscriptObservationProvenanceV1Schema, SessionTranscriptSurfaceItemReferenceV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
-import type { SessionTranscriptSurfaceItemReferenceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import { SessionTranscriptObservationProvenanceV1Schema, SessionTranscriptSurfaceItemReferenceInputV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import type { SessionTranscriptSurfaceItemReferenceInputV1, SessionTranscriptSurfaceItemReferencesV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import type { SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol';
 
@@ -86,7 +86,7 @@ export type TranscriptMessageAppendMutationV1 = Readonly<{
     updatedAt: number;
     sessionEventType?: 'ready';
     provenance: SessionTranscriptObservationProvenanceV1;
-    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceV1;
+    surfaceItemReference?: SessionTranscriptSurfaceItemReferencesV1;
 }>;
 
 /** Recovery-only shape for public-dev journals written before provenance became mandatory. */
@@ -258,7 +258,7 @@ export function createTranscriptMessageAppendMutation(params: Readonly<{
     createdAt?: number;
     updatedAt?: number;
     provenance: SessionTranscriptObservationProvenanceV1;
-    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceV1;
+    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceInputV1;
 }>): TranscriptMessageAppendMutationV1 {
     const sessionId = normalizeRequiredString(params.sessionId, 'sessionId');
     const localId = readRequiredOpaqueString(params.localId, 'localId');
@@ -278,7 +278,7 @@ export function createTranscriptMessageAppendMutation(params: Readonly<{
         updatedAt: Math.max(createdAt, updatedAt),
         provenance: requireTranscriptMessageAppendProvenance(params.provenance),
         ...(params.surfaceItemReference === undefined ? {} : {
-            surfaceItemReference: SessionTranscriptSurfaceItemReferenceV1Schema.parse(params.surfaceItemReference),
+            surfaceItemReference: SessionTranscriptSurfaceItemReferenceInputV1Schema.parse(params.surfaceItemReference),
         }),
         ...(params.sessionEventType ? { sessionEventType: params.sessionEventType } : {}),
     };

@@ -20,6 +20,26 @@ afterEach(() => {
 });
 
 describe('Session usage transport publisher', () => {
+    it('publishes the captured request source after metadata switches and removes forged metadata proof', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ features: {}, capabilities: { server: { usageAnalytics: {
+            version: 1, eventsIngest: { path: '/v2/usage-events' }, query: { path: '/v2/usage/query' },
+            legacy: { usageReportsPath: '/v2/usage-reports', usageQueryPath: '/v1/usage/query' },
+        } } } }), { headers: { 'content-type': 'application/json' } })));
+        const posted: unknown[] = [];
+        vi.spyOn(axios, 'post').mockImplementation(async (_url, body) => { posted.push(body); return { data: { ok: true } }; });
+        const publisher = createSessionClientUsageObservationPublisher({ token: 'token',
+            transport: { serverId: 'home', serverUrl: 'https://usage-request-proof.example.test', createSessionSocketTransport: () => { throw new Error('unused'); } },
+            getSessionMetadata: () => ({ machineId: 'machine', connectedAccount: 'current-account' }),
+            getSocket: () => ({ connected: true, emit: vi.fn() }),
+        });
+        const attribution = { v: 1 as const, turnId: 'old-turn', source: { kind: 'native' as const,
+            connectedAccount: { service: { pluginId: 'acme.accounts', localId: 'native' }, accountId: 'old-account' } } };
+        await publisher.publish({ ...input, turnId: 'old-turn', attribution });
+        expect(posted[0]).toMatchObject({ attribution });
+        await publisher.publish({ ...input, turnId: 'new-turn', metadata: { usageAttribution: attribution } });
+        expect(JSON.stringify(posted[1])).not.toContain('usageAttribution');
+        expect(posted[1]).not.toHaveProperty('attribution');
+    });
     it('publishes current admitted dimensions without disclosing paths or inventing inference identity', async () => {
         vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
             features: {}, capabilities: { server: { usageAnalytics: {

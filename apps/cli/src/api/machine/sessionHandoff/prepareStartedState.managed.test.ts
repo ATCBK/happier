@@ -54,7 +54,7 @@ describe('managed handoff source ownership', () => {
         execution: { machineId: 'a', directory: { kind: 'managed' } }, organization: { folderId: null, tagIds: [] },
         agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
         modelSelection: null, profileId: null, requestedPermissionMode: null, agentModeId: null,
-        configuration: null, connectedServices: null, mcpSelection: null, transcriptStorage: null,
+        configuration: null, connectedServices: null, capabilitySelection: null, transcriptStorage: null,
         terminal: null, agentSessionStartupInstructionsMarkerV1: null, checkout: null,
       } });
       const result = await prepareStartedState({ activeServerDir,

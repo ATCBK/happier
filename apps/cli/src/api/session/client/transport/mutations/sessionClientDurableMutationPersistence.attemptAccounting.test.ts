@@ -55,8 +55,10 @@ describe('durable mutation attempt-accounting persistence', () => {
     });
 
     it('retains an encrypted visual association through journal reload and quarantines malformed references', async () => {
-        const surfaceItemReference = { v: 1 as const, itemId: 'visual-1', itemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',
+        const legacyReference = { v: 1 as const, itemId: 'visual-1', itemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',
             sourceAddress: { serverId: 'home-1', sessionId: 'session-1' } };
+        const surfaceItemReference = { v: 1 as const, references: [legacyReference,
+            { ...legacyReference, itemId: 'visual-2', sourceItemId: 'visual-2', sourceItemRevision: legacyReference.itemRevision }] };
         const payload = createTranscriptMessageAppendMutation({
             sessionId: 'session-1', localId: 'visual-result', content: 'sealed-result',
             createdAt: 100, provenance: { kind: 'non_dependent', source: 'background' },
@@ -68,11 +70,22 @@ describe('durable mutation attempt-accounting persistence', () => {
             expect.objectContaining({ payload: expect.objectContaining({ surfaceItemReference }) }),
         ]);
         await writeRawOutbox([{ kind: 'transcript_message_append', mutationId: payload.mutationId,
-            payload: { ...payload, surfaceItemReference: { ...surfaceItemReference, itemRevision: -1 } },
+            payload: { ...payload, surfaceItemReference: { ...surfaceItemReference,
+                references: [{ ...surfaceItemReference.references[0], itemRevision: -1 }] } },
             createdAt: 100, attempts: 0, nextAttemptAt: 100 }]);
         await expect(loadSessionClientDurableMutationOutbox('session-1')).resolves.toEqual([]);
         await expect(loadSessionClientDurableMutationDeadLetters('session-1')).resolves.toEqual([
             expect.objectContaining({ reason: 'invalid_transcript_message_append_payload' }),
+        ]);
+        // Previously active E1 journals carried one originless member. Recovery uses the same
+        // Protocol adapter as HTTP/socket admission and does not manufacture parent identity.
+        await writeRawOutbox([{ kind: 'transcript_message_append', mutationId: payload.mutationId,
+            payload: { ...payload, surfaceItemReference: legacyReference },
+            createdAt: 100, attempts: 0, nextAttemptAt: 100 }]);
+        await expect(loadSessionClientDurableMutationOutbox('session-1')).resolves.toEqual([
+            expect.objectContaining({ payload: expect.objectContaining({
+                surfaceItemReference: { v: 1, references: [legacyReference] },
+            }) }),
         ]);
     });
 

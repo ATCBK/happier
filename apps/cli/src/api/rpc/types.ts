@@ -51,6 +51,8 @@ export type RpcLocalActionContext = Readonly<Partial<Pick<
 
 export type RpcHandlerContext = Readonly<{
     signal: AbortSignal;
+    /** Content-free host diagnostics only; this does not grant or change admission. */
+    reportAdmissionDenial?: (predicate: RpcAdmissionPredicate) => void;
     /** Host-admitted private ordinary Session bootstrap, never a public Action field. */
     requesterSessionBootstrap?: AdmittedRequesterSessionBootstrap;
     /** Host-owned handoff acceptance immediately before physical launch; never transported. */
@@ -86,6 +88,8 @@ export type RpcHandlerContext = Readonly<{
     workspaceSyncSeedRouting?: WorkspaceSyncSeedRoutingV1;
     /** Host-bound final admission check after preparation, never accepted from caller input. */
     verifyMachineAdmissionCurrent?: () => Promise<boolean>;
+    /** Same current Machine admission owner, independent of a completed/cancelled transport request. */
+    verifyMachineAuthorityCurrent?: () => Promise<boolean>;
     localActionContext?: RpcLocalActionContext;
 }>;
 
@@ -119,9 +123,18 @@ export type RpcHandlerMap = Map<string, RpcHandler>;
 
 export type RpcRequest = SocketRpcRequestPayload;
 
+/** Host-private labels, never arbitrary error text or a transported field. */
+export const RPC_ADMISSION_PREDICATES = [
+    'machine_admission', 'machine_target', 'machine_home', 'machine_actor', 'machine_role',
+    'machine_custodian', 'machine_installation', 'machine_request_target', 'machine_scope',
+    'machine_currentness', 'machine_authority_currentness', 'request_cancelled',
+    'session_authorization', 'session_target', 'authorization_unavailable',
+] as const;
+export type RpcAdmissionPredicate = (typeof RPC_ADMISSION_PREDICATES)[number];
+
 export type RpcAuthorizationResult =
     | Readonly<{ ok: true }>
-    | Readonly<{ ok: false; error: string; errorCode?: string }>;
+    | Readonly<{ ok: false; error: string; errorCode?: string; admissionPredicate?: RpcAdmissionPredicate }>;
 
 export type RpcHandlerActiveExecution = Readonly<{
     method: string;
@@ -165,7 +178,7 @@ type RpcHandlerCommonConfig = {
         result: unknown;
         authorization?: SocketRpcAuthorizationContext;
     }>) => SocketRpcTransportAcknowledgementV1 | null;
-    logger?: (message: string, data?: any) => void;
+    logger?: (message: string, data?: unknown) => void;
     onRegistrationError?: (error: unknown) => void;
     onRegistrationAcknowledged?: (method: string) => void;
     nowMs?: () => number;

@@ -78,4 +78,26 @@ describe('Session read-state HTTP Action adapter', () => {
     });
     expect(requests).toBe(0);
   });
+
+  it('preserves a present-user authority refusal instead of requesting authentication', async () => {
+    app.post('/v2/sessions/:sessionId/read-state', async (_request, reply) => {
+      return reply.code(403).send({ error: 'present_user_required' });
+    });
+    const deps = createSessionReadStateActionDeps({
+      token: 'token',
+      serverId: 'home-a',
+      serverHttpBaseUrl: 'http://read-state.test',
+    });
+
+    await expect(deps.sessionReadStateAction!({
+      context: { surface: 'cli', authority: 'account_automation' },
+      actionId: 'session.read_state.set',
+      serverId: 'home-a',
+      input: { sessionId: 'session-1', state: 'read' },
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'present_user_required',
+      error: 'present_user_required',
+    });
+  });
 });

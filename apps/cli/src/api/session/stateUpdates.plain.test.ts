@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   updateSessionAgentStateWithAck,
@@ -26,6 +26,112 @@ function createMetadata(overrides: Partial<Metadata> = {}): Metadata {
 }
 
 describe('stateUpdates (plaintext sessions)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  const writeKinds = ['metadata', 'agent-state', 'runtime-activity'] as const;
+  function startWrite(kind: typeof writeKinds[number], socket: { emitWithAck: (event: string, payload: unknown) => Promise<unknown> }, signal?: AbortSignal) {
+    const common = { socket, sessionId: 's1', signal };
+    if (kind === 'runtime-activity') {
+      return updateSessionRuntimeActivityProjectionWithAck({ ...common,
+        mutationId: 'runtime-activity-snapshot:s1', state: 'active', runtimeActivityActiveCount: 1 });
+    }
+    if (kind === 'agent-state') {
+      return updateSessionAgentStateWithAck({ ...common, sessionEncryptionMode: 'plain',
+        getAgentState: () => ({}), setAgentState: () => {}, getAgentStateVersion: () => 1,
+        setAgentStateVersion: () => {}, syncSessionSnapshotFromServer: async () => {},
+        handler: (current) => current });
+    }
+    return updateSessionMetadataWithAck({ ...common, sessionEncryptionMode: 'plain',
+      getMetadata: () => createMetadata(), setMetadata: () => {}, getMetadataVersion: () => 1,
+      setMetadataVersion: () => {}, syncSessionSnapshotFromServer: async () => {},
+      handler: (current) => current });
+  }
+
+  it.each(writeKinds)('keeps %s publication pending until the containing server operation acknowledges', async (kind) => {
+    vi.useFakeTimers();
+    let acknowledge!: (response: unknown) => void;
+    const socket = { emitWithAck: vi.fn(() => new Promise<unknown>((resolve) => { acknowledge = resolve; })) };
+    let settled = false;
+    const result = startWrite(kind, socket).then(value => { settled = true; return value; }, error => { settled = true; throw error; });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(settled).toBe(false);
+    // A shorter transport timer must not retry a write the server still owns.
+    expect(socket.emitWithAck).toHaveBeenCalledTimes(1);
+    acknowledge(kind === 'runtime-activity' ? {
+      status: 'applied', sessionId: 's1', mutationId: 'runtime-activity-snapshot:s1',
+      projection: { state: 'active', activeCount: 1, observedAt: 1_000, revision: 1 },
+    } : { result: 'success', version: 2, metadata: '{}', agentState: '{}' });
+    await expect(result).resolves.toMatchObject(kind === 'runtime-activity' ? { disposition: 'applied' } : { version: 2 });
+  });
+
+  it.each(writeKinds)('cancels %s publication at Session disposal without retrying it', async (kind) => {
+    vi.useFakeTimers();
+    const cancellation = new AbortController();
+    const socket = { emitWithAck: vi.fn(() => new Promise<unknown>(() => {})) };
+    let rejection: unknown;
+    const result = startWrite(kind, socket, cancellation.signal).catch(error => { rejection = error; });
+    await vi.advanceTimersByTimeAsync(0);
+    cancellation.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rejection).toMatchObject({ name: 'SocketAckAbortError', retryable: false });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(socket.emitWithAck).toHaveBeenCalledTimes(1);
+    await result;
+  });
+
+  it.each(['metadata', 'agent-state'] as const)('reconciles an uncertain %s CAS by its exact submitted value before reapplying the mutation', async (kind) => {
+    let committed: { value: string; version: number } | undefined;
+    const socket = { emitWithAck: vi.fn(async (_event: string, payload: unknown) => {
+      const request = payload as { metadata?: string; agentState?: string; expectedVersion: number };
+      const value = request.metadata ?? request.agentState!;
+      if (!committed) {
+        committed = { value, version: request.expectedVersion + 1 };
+        throw new Error('socket has been disconnected');
+      }
+      if (request.expectedVersion < committed.version) {
+        return { result: 'version-mismatch', version: committed.version, metadata: committed.value, agentState: committed.value };
+      }
+      committed = { value, version: request.expectedVersion + 1 };
+      return { result: 'success', version: committed.version, metadata: value, agentState: value };
+    }) };
+    let version = 1;
+    let metadata = createMetadata({ name: 'title' });
+    let agentState: import('@/api/types').AgentState = { requests: {} };
+    const result = kind === 'metadata'
+      ? await updateSessionMetadataWithAck({ socket, sessionId: 's1', sessionEncryptionMode: 'plain',
+        getMetadata: () => metadata, setMetadata: value => { metadata = value!; },
+        getMetadataVersion: () => version, setMetadataVersion: value => { version = value; },
+        syncSessionSnapshotFromServer: async () => {}, handler: value => ({ ...value, name: `${value.name}!` }) })
+      : await updateSessionAgentStateWithAck({ socket, sessionId: 's1', sessionEncryptionMode: 'plain',
+        getAgentState: () => agentState, setAgentState: value => { agentState = value!; },
+        getAgentStateVersion: () => version, setAgentStateVersion: value => { version = value; },
+        syncSessionSnapshotFromServer: async () => {}, handler: value => ({ ...value,
+          requests: { ...value.requests, [`r${Object.keys(value.requests ?? {}).length}`]: { tool: 'Read', arguments: {}, createdAt: 1 } } }) });
+    expect(result.version).toBe(2);
+    expect(version).toBe(2);
+    expect(kind === 'metadata' ? metadata.name : Object.keys(agentState.requests ?? {})).toEqual(kind === 'metadata' ? 'title!' : ['r0']);
+  });
+
+  it('reoffers the exact uncertain CAS through the replacement Session transport', async () => {
+    let stored = '';
+    let version = 1;
+    const replacement = { emitWithAck: async () => ({ result: 'version-mismatch', version: 2, metadata: stored }) };
+    const disconnected = { emitWithAck: async (_event: string, payload: unknown) => {
+      // The server database and the socket are external boundaries; retain the real CAS owner.
+      stored = (payload as PlainMetadataAckPayload).metadata;
+      current = replacement;
+      throw new Error('socket has been disconnected');
+    } };
+    let current: Parameters<typeof updateSessionMetadataWithAck>[0]['socket'] = disconnected;
+    const options = {
+      socket: disconnected, getSocket: async () => current, sessionId: 's1', sessionEncryptionMode: 'plain' as const,
+      getMetadata: () => createMetadata({ name: 'title' }), setMetadata: () => {},
+      getMetadataVersion: () => version, setMetadataVersion: (value: number) => { version = value; },
+      syncSessionSnapshotFromServer: async () => {}, handler: (value: Metadata) => ({ ...value, name: `${value.name}!` }),
+    };
+    await expect(updateSessionMetadataWithAck(options)).resolves.toMatchObject({ version: 2 });
+  });
+
   it('reports terminal metadata write failure without leaking the rejected payload or changing local state', async () => {
     const infoFile = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     const original = createMetadata();
@@ -498,79 +604,4 @@ describe('stateUpdates (plaintext sessions)', () => {
     expect(version).toBe(2);
   });
 
-  it('uses socket ACK timeouts for metadata writes when supported by the socket', async () => {
-    const timedSocket = {
-      emitWithAck: vi.fn(async (_event: string, payload: PlainMetadataAckPayload) => ({
-        result: 'success',
-        metadata: payload.metadata,
-        version: payload.expectedVersion + 1,
-      })),
-    };
-    const socket = {
-      timeout: vi.fn(() => timedSocket),
-      emitWithAck: vi.fn(),
-    };
-
-    await updateSessionMetadataWithAck({
-      socket,
-      sessionId: 's1',
-      sessionEncryptionMode: 'plain',
-      getMetadata: () => createMetadata({ path: '/tmp' }),
-      setMetadata: () => {},
-      getMetadataVersion: () => 1,
-      setMetadataVersion: () => {},
-      syncSessionSnapshotFromServer: async () => {},
-      handler: (current) => current,
-    });
-
-    expect(socket.timeout).toHaveBeenCalledWith(expect.any(Number));
-    expect(timedSocket.emitWithAck).toHaveBeenCalledTimes(1);
-    expect(socket.emitWithAck).not.toHaveBeenCalled();
-  });
-
-  it('does not leave metadata updates pending forever when the socket ACK never settles', async () => {
-    const previousTimeout = process.env.HAPPIER_SESSION_SOCKET_ACK_TIMEOUT_MS;
-    process.env.HAPPIER_SESSION_SOCKET_ACK_TIMEOUT_MS = '5';
-    vi.useFakeTimers();
-
-    try {
-      const socket = {
-        connected: true,
-        emitWithAck: vi.fn(() => new Promise<never>(() => {})),
-      };
-
-      const updatePromise = updateSessionMetadataWithAck({
-        socket,
-        sessionId: 's1',
-        sessionEncryptionMode: 'plain',
-        getMetadata: () => createMetadata({ path: '/tmp' }),
-        setMetadata: () => {},
-        getMetadataVersion: () => 1,
-        setMetadataVersion: () => {},
-        syncSessionSnapshotFromServer: async () => {},
-        handler: (current) => current,
-      }).then(
-        () => ({ status: 'resolved' as const }),
-        (error) => ({
-          status: 'rejected' as const,
-          code: error && typeof error === 'object' && 'code' in error ? String(error.code) : null,
-        }),
-      );
-
-      await vi.advanceTimersByTimeAsync(20_000);
-      const outcome = await Promise.race([
-        updatePromise,
-        Promise.resolve({ status: 'pending' as const }),
-      ]);
-
-      expect(outcome).toEqual({ status: 'rejected', code: 'socket_ack_timeout' });
-    } finally {
-      vi.useRealTimers();
-      if (typeof previousTimeout === 'string') {
-        process.env.HAPPIER_SESSION_SOCKET_ACK_TIMEOUT_MS = previousTimeout;
-      } else {
-        delete process.env.HAPPIER_SESSION_SOCKET_ACK_TIMEOUT_MS;
-      }
-    }
-  });
 });

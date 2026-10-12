@@ -5,6 +5,8 @@ import { accountSettingsParse } from '@happier-dev/protocol/account/settings/acc
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { ExecutionRunStartRequestSchema } from '@happier-dev/protocol/execution/runs/startRequest';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { PromptLibraryCatalogKeyV1Schema, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { ApiMachineClient } from '@/api/apiMachine';
@@ -15,11 +17,17 @@ import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
+import { createRoleSourceReader } from '@/session/roles/roleSources';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { readPluginRoleSources } from '@/plugins/projection/registry/roles';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
   setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { registerSessionClientRuntimeHandlers } from './registerSessionClientRuntimeHandlers';
+import type { RegisteredSessionStateFieldMutationV1 } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
 
 const homes: Server[] = [];
 
@@ -38,7 +46,7 @@ afterEach(async () => {
   })));
 });
 
-async function home(settingsVersion: number, rawSettings: Readonly<Record<string, unknown>>) {
+async function home(settingsVersion: number, rawSettings: Readonly<Record<string, unknown>>, roleCatalog = false) {
   const settingsResponse = AccountSettingsV2GetResponseSchema.parse({
     version: settingsVersion, content: { t: 'plain', v: rawSettings },
   });
@@ -53,7 +61,20 @@ async function home(settingsVersion: number, rawSettings: Readonly<Record<string
       response.once('finish', () => server.emit('settings-read'));
       response.end(JSON.stringify(settingsResponse));
     }
-    else { response.statusCode = 404; response.end('{}'); }
+    else if (roleCatalog && request.method === 'GET' && request.url === '/v1/account/encryption/currentness') {
+      response.end(JSON.stringify({ mode: 'plain', version: 1, settingsVersion,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+    } else if (roleCatalog && request.method === 'GET' && request.url === '/v1/account/entity-rows/prompt-library') {
+      response.end(JSON.stringify(PromptLibraryRowsListResponseV1Schema.parse({ status: 'listed',
+        rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
+          content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) })));
+    } else if (roleCatalog && request.method === 'GET' && request.url === '/v1/account/entity-rows/profiles/transfer') {
+      response.end(JSON.stringify({ status: 'absent' }));
+    } else if (roleCatalog && request.method === 'GET' && request.url === '/v2/account/settings/history') {
+      response.end(JSON.stringify({ snapshots: [] }));
+    } else if (roleCatalog && request.method === 'GET' && request.url?.startsWith('/v1/artifacts?')) {
+      response.end(JSON.stringify([]));
+    } else { response.statusCode = 404; response.end('{}'); }
   });
   const settingsRead = once(server, 'settings-read');
   homes.push(server);
@@ -65,6 +86,75 @@ async function home(settingsVersion: number, rawSettings: Readonly<Record<string
 }
 
 describe('Session RPC owner Home Settings custody', () => {
+  it('sets a live Session role from its private owner without borrowing the focused Account catalog', async () => {
+    vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'auto');
+    vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_TTL_MS', '0');
+    const ownerCredentials = { token: accountToken('role-owner-account'), encryption: null } as const;
+    let ownerCurrent = true;
+    const focusedCredentials = { token: accountToken('role-focused-account'), encryption: null } as const;
+    const owner = await home(11, { schemaVersion: 6 }, true);
+    const focused = await home(99, { schemaVersion: 6 });
+    await withTempDir('happier-session-role-owner-', async directory => {
+      await runWithServerHttpBaseUrl(focused.url, async () => {
+        setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+          settingsVersion: 99, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(focusedCredentials),
+          promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
+        const incumbent = getActiveAccountSettingsSnapshot();
+        const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
+        const sessionId = 'role-owner-session';
+        const metadata = createTestMetadata({ path: directory, machineId: 'role-owner-machine' });
+        const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain', logger: () => {} });
+        const queued: RegisteredSessionStateFieldMutationV1[] = [];
+        const unexpectedWrite = async (): Promise<never> => { throw new Error('Unexpected transcript write'); };
+        // An explicitly empty plugin fixture, projected by the real registry;
+        // Role source resolution stays real and does not discover unrelated bundled Agent manifests.
+        const pluginRegistry = createResolvedContributionRegistry({});
+        const registration = registerSessionClientRuntimeHandlers({
+          rpcHandlerManager: rpc, token: ownerCredentials.token, serverId: 'role-owner-home', serverUrl: owner.url,
+          readOwnerAccountCredentials: async () => ownerCurrent ? ownerCredentials : null,
+          readRoleSources: createRoleSourceReader({ accountId: 'role-owner-account',
+            artifactStore: createCredentialedAccountArtifactStore(ownerCredentials),
+            readPluginRoles: () => readPluginRoleSources(pluginRegistry),
+            readRawAccountSettings: async () => {
+              const context = await bootstrapAccountSettingsContext({ credentials: ownerCredentials,
+                mode: 'blocking', publication: 'invocation', honorAccountSettingsModeEnv: false });
+              if (!context.rawSettings) throw new Error('Missing loopback owner Settings');
+              return context.rawSettings;
+            },
+          }),
+          metadataPath: directory, metadata, sessionId, getSessionMetadata: () => metadata,
+          enqueueRegisteredSessionStateFieldMutation: async mutation => { queued.push(mutation); },
+          enqueueSessionUserMessage: unexpectedWrite, enqueueUserTextMessageCommitted: unexpectedWrite,
+          enqueueAgentMessageCommitted: unexpectedWrite, enqueueVoiceAgentTranscriptTurnCommitted: unexpectedWrite,
+          sendAgentMessageEphemeral: () => { throw new Error('Unexpected ephemeral write'); },
+          getTranscriptQueryContext: () => ({ encryptionMode: 'plain' }),
+          persistVoiceAgentRunMetadataFromPublicRun: () => {}, socketEmitExecutionRunUpdated: () => {},
+        });
+        try {
+          const result = await rpc.handleRequest({ method: `${sessionId}:session.role.set`,
+            params: { sessionId, roleId: 'builder' }, callerAuthority: 'present_user' });
+          expect(result).toEqual({ updated: true });
+          expect(queued).toEqual([expect.objectContaining({ sessionId, fieldId: 'intent.role', op: { kind: 'set', value: 'builder' } })]);
+          expect(focused.requests).toEqual([]);
+          expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
+          expect(getActiveAccountSettingsSnapshotLifetimeToken()).toBe(lifetime);
+          const unavailableRole = await rpc.handleRequest({ method: `${sessionId}:session.role.set`,
+            params: { sessionId, roleId: 'missing-role' }, callerAuthority: 'present_user' });
+          expect(unavailableRole).toEqual({ ok: false, errorCode: 'role_target_unavailable',
+            error: 'role_target_unavailable' });
+          expect(queued).toHaveLength(1);
+          ownerCurrent = false;
+          const retired = await rpc.handleRequest({ method: `${sessionId}:session.role.set`,
+            params: { sessionId, roleId: 'scout' }, callerAuthority: 'present_user' });
+          expect(retired).toEqual({ ok: false, errorCode: 'account_role_overrides_unavailable',
+            error: 'account_role_overrides_unavailable' });
+          expect(queued).toHaveLength(1);
+          expect(focused.requests).toEqual([]);
+          expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
+        } finally { await registration.dispose(); }
+      });
+    });
+  });
   it('admits detached Run policy from the authenticated daemon Account without borrowing focused Settings', async () => {
     vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'auto');
     vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_TTL_MS', '0');

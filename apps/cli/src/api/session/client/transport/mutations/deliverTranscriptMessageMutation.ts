@@ -39,14 +39,17 @@ async function trySocketTranscriptMutation(params: Readonly<{
     socket: SessionClientDurableMutationSocket;
     mutation: TranscriptMessageAppendMutationV1;
     version: 1 | 2;
+    signal?: AbortSignal;
 }>): Promise<TranscriptSocketDeliveryResult> {
     if (params.socket.connected !== true) return { status: 'unavailable' };
     try {
-        const socket = params.socket.timeout?.(10_000) ?? params.socket;
+        const socket = params.socket;
         if (typeof socket.emitWithAck !== 'function') return { status: 'unavailable' };
         const raw = await emitSocketWithAck({
             socket,
             event: SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1,
+            timeoutMs: null,
+            signal: params.signal,
             payload: {
                 v: params.version,
                 sessionId: params.mutation.sessionId,
@@ -95,14 +98,17 @@ async function trySocketTranscriptMutation(params: Readonly<{
 async function tryReleasedServerV021TranscriptMutation(params: Readonly<{
     socket: SessionClientDurableMutationSocket;
     mutation: TranscriptMessageAppendMutationV1;
+    signal?: AbortSignal;
 }>): Promise<TranscriptSocketDeliveryResult> {
     if (params.socket.connected !== true) return { status: 'unavailable' };
     try {
-        const socket = params.socket.timeout?.(10_000) ?? params.socket;
+        const socket = params.socket;
         if (typeof socket.emitWithAck !== 'function') return { status: 'unavailable' };
         const raw = await emitSocketWithAck({
             socket,
             event: 'message',
+            timeoutMs: null,
+            signal: params.signal,
             payload: {
                 sid: params.mutation.sessionId,
                 message: params.mutation.content,
@@ -149,6 +155,7 @@ export async function deliverTranscriptMessageMutation(params: Readonly<{
     socket: SessionClientDurableMutationSocket | null;
     connectionContract?: SessionClientConnectionContractResult | null;
     mutation: PersistedTranscriptMessageAppendMutationV1;
+    signal?: AbortSignal;
 }>): Promise<TranscriptMessageMutationDeliveryResult> {
     const parsedProvenance = SessionTranscriptObservationProvenanceV1Schema.safeParse(params.mutation.provenance);
     if (!parsedProvenance.success) {
@@ -160,7 +167,7 @@ export async function deliverTranscriptMessageMutation(params: Readonly<{
     };
     if (params.connectionContract?.transcriptTransport.mode === 'released_server_v0_2_1') {
         const releasedResult = params.socket
-            ? await tryReleasedServerV021TranscriptMutation({ socket: params.socket, mutation })
+            ? await tryReleasedServerV021TranscriptMutation({ socket: params.socket, mutation, signal: params.signal })
             : { status: 'unavailable' as const };
         return toTranscriptMessageMutationDeliveryResult(releasedResult);
     }
@@ -170,6 +177,7 @@ export async function deliverTranscriptMessageMutation(params: Readonly<{
     }
     const socketResult = params.socket
         ? await trySocketTranscriptMutation({ socket: params.socket, mutation,
+            signal: params.signal,
             version: mode === 'session_transcript_observation_v2' ? 2 : 1 })
         : { status: 'unavailable' as const };
     return toTranscriptMessageMutationDeliveryResult(socketResult);

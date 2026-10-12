@@ -291,7 +291,7 @@ function adaptDurableMutationSocket(
     if (!socket) return null;
     const durableSocket = socket as unknown as DurableMutationSocketTransport;
     return {
-        connected: durableSocket.connected,
+        get connected() { return durableSocket.connected; },
         emit: (event, payload, callback) => {
             if (callback) {
                 durableSocket.emit(event, payload, callback);
@@ -493,7 +493,9 @@ export class ApiSessionClient extends EventEmitter {
     private readonly transport: SessionClientTransport;
     private readonly serverBinding: SessionClientServerBinding;
     private readonly machineAdmissionTransport: ApiSessionClientOptions['machineAdmissionTransport'];
+    private readonly readServerFeaturesSnapshot: () => CliServerFeaturesSnapshot | undefined;
     private readonly readInjectedOwnerCredentials: (() => Promise<StoredCredentials | null>) | null;
+    private mcpRequestAuth: import('@/mcp/runtime/mcpRequestAuth').McpRequestAuthPort | undefined;
     private readonly getAccountEncryptionCurrentness: () => Promise<AccountEncryptionCurrentnessResponse>;
     private agentState: AgentState | null;
     private agentStateRequestStore: AgentStateRequestStore | null = null;
@@ -575,6 +577,9 @@ export class ApiSessionClient extends EventEmitter {
     private readonly initialExecutionRunPendingTargetIds: readonly string[];
     private readonly acceptedPendingSettlementLocalIdsInFlight = new Set<string>();
     private readonly acceptedPendingSettlementOperationAbortController = new AbortController();
+    // Ordinary writes drain during connected close; accepted-input custody
+    // retires earlier, before that drain begins.
+    private readonly socketAckAbortController = new AbortController();
     private readonly pendingRegisteredSessionStateFieldUpdates = new Set<Promise<void>>();
     private readonly semanticSessionEndMutationId = `session-end:${randomUUID()}`;
     private endSessionAndClosePromise: Promise<void> | null = null;
@@ -817,7 +822,8 @@ export class ApiSessionClient extends EventEmitter {
 
     private async waitForSessionSocketOnlineForAckWrite(event: SessionSocketAckWriteEvent): Promise<void> {
         if (this.isSessionSocketOnlineForAckWrite()) return;
-        if (this.closed) {
+        const signal = this.acceptedPendingSettlementOperationAbortController.signal;
+        if (this.closed || signal.aborted) {
             throw createSessionSocketNotReadyError({
                 code: 'session_closed',
                 event,
@@ -836,6 +842,7 @@ export class ApiSessionClient extends EventEmitter {
             let settled = false;
             const cleanup = () => {
                 this.off(SESSION_CONNECTION_STATE_EVENT, onStateChange);
+                signal.removeEventListener('abort', onStateChange);
             };
             const settle = (fn: () => void) => {
                 if (settled) return;
@@ -848,7 +855,7 @@ export class ApiSessionClient extends EventEmitter {
                     settle(() => resolve());
                     return;
                 }
-                if (this.closed) {
+                if (this.closed || signal.aborted) {
                     settle(() => reject(createSessionSocketNotReadyError({
                         code: 'session_closed',
                         event,
@@ -869,6 +876,7 @@ export class ApiSessionClient extends EventEmitter {
             const onStateChange = () => check();
 
             this.on(SESSION_CONNECTION_STATE_EVENT, onStateChange);
+            signal.addEventListener('abort', onStateChange);
 
             void ensureSessionConnectionSupervisionActive(supervisor).catch((error) => {
                 settle(() => reject(error));
@@ -1154,6 +1162,7 @@ export class ApiSessionClient extends EventEmitter {
             reconcilePendingExecutionRunTarget: (runId) => this.notifyExecutionRunPendingTarget(runId),
         });
         this.commitQueueRuntime = createSessionClientCommitQueueRuntime({
+            signal: this.socketAckAbortController.signal,
             serverUrl: this.transport.serverUrl,
             token: this.token,
             sessionId: this.sessionId,
@@ -1178,6 +1187,7 @@ export class ApiSessionClient extends EventEmitter {
             },
         });
         this.durableMutationOutbox = createRuntimeSessionClientDurableMutationOutbox({
+            signal: this.socketAckAbortController.signal,
             serverUrl: this.transport.serverUrl,
             token: this.token,
             sessionId: this.sessionId,
@@ -1462,7 +1472,6 @@ export class ApiSessionClient extends EventEmitter {
             scopePrefix: this.sessionId,
             localMachineId: options.localMachineId,
             ...rpcTransportConfig,
-            logger: (msg, data) => logger.debug(msg, data),
             onRegistrationError: (error) => {
                 const probe = classifyTransportErrorToProbeResult(error);
                 const supervisor = this.sessionConnectionSupervisor;
@@ -1513,7 +1522,7 @@ export class ApiSessionClient extends EventEmitter {
             getSimulatorPreviewRoutes: options.getSimulatorPreviewRoutes ?? null,
             getPeerMediationObservabilityRuntimeActionContext:
                 options.getPeerMediationObservabilityRuntimeActionContext ?? null,
-            getServerFeaturesSnapshot: options.getServerFeaturesSnapshot ?? null,
+            getServerFeaturesSnapshot: () => this.getServerFeaturesSnapshot(),
             createCapabilitiesApiClient: options.createCapabilitiesApiClient,
             persistVoiceAgentRunMetadataFromPublicRun: (run, welcomedEpoch) =>
                 this.persistVoiceAgentRunMetadataFromPublicRun(run, welcomedEpoch),
@@ -1527,6 +1536,7 @@ export class ApiSessionClient extends EventEmitter {
         });
 
         this.interactionApi = createSessionClientInteractionApi({
+            signal: this.socketAckAbortController.signal,
             serverUrl: this.transport.serverUrl,
             sessionId: this.sessionId,
             token: this.token,
@@ -1647,7 +1657,7 @@ export class ApiSessionClient extends EventEmitter {
             await this.transcriptApi.preparePendingMessageComposerAdmission(request)
         );
 
-        const { userSocket, sessionConnectionSupervisor } = initializeSessionClientConnection({
+        const { userSocket, sessionConnectionSupervisor, getServerFeaturesSnapshot } = initializeSessionClientConnection({
             token: this.token,
             transport: options.transport,
             sessionId: this.sessionId,
@@ -1757,6 +1767,7 @@ export class ApiSessionClient extends EventEmitter {
         });
         this.userSocket = userSocket;
         this.sessionConnectionSupervisor = sessionConnectionSupervisor;
+        this.readServerFeaturesSnapshot = options.getServerFeaturesSnapshot ?? getServerFeaturesSnapshot;
         void this.sessionConnectionSupervisor.start();
         // A recovered request has no in-process Action continuation. Retire it
         // during owner startup, even if the user never invokes another Action.
@@ -2585,6 +2596,7 @@ export class ApiSessionClient extends EventEmitter {
             );
             let usePreparedValue = true;
             const result = await updateSessionMetadataWithAck({
+                signal: this.socketAckAbortController.signal,
                 socket: this.socket as any,
                 sessionId: this.sessionId,
                 ...(this.storedContentCrypto.mode === 'plain'
@@ -2642,6 +2654,7 @@ export class ApiSessionClient extends EventEmitter {
         await this.waitForSessionSocketOnlineForAckWrite('update-state');
         let usePreparedValue = true;
         const result = await updateSessionAgentStateWithAck({
+            signal: this.socketAckAbortController.signal,
             socket: this.socket as any,
             sessionId: this.sessionId,
             ownerActivityDelivery: this.ownerActivityDelivery,
@@ -2944,8 +2957,20 @@ export class ApiSessionClient extends EventEmitter {
         return this.serverBinding;
     }
 
+    getServerFeaturesSnapshot(): CliServerFeaturesSnapshot | undefined {
+        return this.readServerFeaturesSnapshot();
+    }
+
     getMachineAdmissionTransport(): ApiSessionClientOptions['machineAdmissionTransport'] {
         return this.machineAdmissionTransport;
+    }
+
+    bindMcpRequestAuthPort(port: import('@/mcp/runtime/mcpRequestAuth').McpRequestAuthPort | undefined): void {
+        this.mcpRequestAuth = port;
+    }
+
+    getMcpRequestAuthPort(): import('@/mcp/runtime/mcpRequestAuth').McpRequestAuthPort | undefined {
+        return this.mcpRequestAuth;
     }
 
     getWorkDepth(): number {
@@ -3006,6 +3031,7 @@ export class ApiSessionClient extends EventEmitter {
         mutationId = resolveRuntimeActivitySnapshotMutationId(this.sessionId),
     ): Promise<RuntimeActivityProjectionSettlement> {
         return await updateSessionRuntimeActivityProjectionWithAck({
+            signal: this.socketAckAbortController.signal,
             socket:
                 socket as unknown as Parameters<
                     typeof updateSessionRuntimeActivityProjectionWithAck
@@ -3454,7 +3480,9 @@ export class ApiSessionClient extends EventEmitter {
         mutation: RegisteredSessionStateFieldMutationV1,
     ): Promise<void> {
         const settlement =
-            await this.durableMutationOutbox.enqueueRegisteredSessionStateFieldMutationAndWaitForDelivery(mutation);
+            await this.durableMutationOutbox.enqueueRegisteredSessionStateFieldMutationAndWaitForDelivery(mutation, {
+                signal: this.acceptedPendingSettlementOperationAbortController.signal,
+            });
         if (settlement.status === 'applied' || settlement.status === 'unchanged') {
             return;
         }
@@ -3603,6 +3631,10 @@ export class ApiSessionClient extends EventEmitter {
             const raw = await emitSocketWithAck({
                 socket: contract.socket as any,
                 event: SESSION_PUBLISHER_AUTHORITY_CHECK_EVENT,
+                // The publisher admission lock and inTx own this operation's
+                // duration. A shorter control timer can kill a current runner.
+                timeoutMs: null,
+                signal: this.acceptedPendingSettlementOperationAbortController.signal,
                 payload: SessionPublisherAuthorityCheckRequestSchema.parse({
                     sessionId: this.sessionId,
                 }),
@@ -3649,6 +3681,8 @@ export class ApiSessionClient extends EventEmitter {
         const raw = await emitSocketWithAck<unknown>({
             socket: this.socket as any,
             event: SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1,
+            timeoutMs: null,
+            signal: this.socketAckAbortController.signal,
             payload: request,
         });
         return SessionFollowObservePendingResponseV1Schema.parse(raw);
@@ -3682,6 +3716,8 @@ export class ApiSessionClient extends EventEmitter {
         const raw = await emitSocketWithAck<unknown>({
             socket: this.socket as any,
             event: SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1,
+            timeoutMs: null,
+            signal: this.socketAckAbortController.signal,
             payload: request,
         });
         return SessionFollowAcknowledgeResponseV1Schema.parse(raw);
@@ -3697,6 +3733,8 @@ export class ApiSessionClient extends EventEmitter {
         const raw = await emitSocketWithAck<unknown>({
             socket: this.socket as any,
             event: ACCOUNT_VOICE_FOLLOW_OBSERVE_PENDING_EVENT_V1,
+            timeoutMs: null,
+            signal: this.socketAckAbortController.signal,
             payload: request,
         });
         return AccountVoiceFollowObservePendingResponseV1Schema.parse(raw);
@@ -3712,6 +3750,8 @@ export class ApiSessionClient extends EventEmitter {
         const raw = await emitSocketWithAck<unknown>({
             socket: this.socket as any,
             event: ACCOUNT_VOICE_FOLLOW_ACKNOWLEDGE_EVENT_V1,
+            timeoutMs: null,
+            signal: this.socketAckAbortController.signal,
             payload: request,
         });
         return AccountVoiceFollowAcknowledgeResponseV1Schema.parse(raw);
@@ -3735,8 +3775,11 @@ export class ApiSessionClient extends EventEmitter {
         const raw = await emitSocketWithAck<unknown>({
             socket: this.socket as any,
             event: SESSION_DISCUSSION_AGENT_POST_EVENT_V1,
+            timeoutMs: null,
             payload: request,
-            ...(options?.signal ? { signal: options.signal } : {}),
+            signal: options?.signal
+                ? AbortSignal.any([options.signal, this.socketAckAbortController.signal])
+                : this.socketAckAbortController.signal,
         });
         options?.signal?.throwIfAborted();
         return SessionDiscussionAgentPostResponseV1Schema.parse(raw);
@@ -3752,6 +3795,7 @@ export class ApiSessionClient extends EventEmitter {
             raw = await emitSocketWithAck({
                 socket: this.socket as any,
                 event: SESSION_RUNTIME_ACTIVITY_CLOSE_EVENT,
+                timeoutMs: null,
                 payload: request,
             });
         } catch (error) {
@@ -3809,25 +3853,34 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     async close() {
-        await this.sessionHandlersRegistration.dispose();
-        const disposeSessionFollowWakeReceiver = this.disposeSessionFollowWakeReceiver;
-        this.disposeSessionFollowWakeReceiver = null;
-        disposeSessionFollowWakeReceiver?.();
-        this.acceptedPendingSettlementOperationAbortController.abort();
-        await this.sessionActionConfirmationRecovery;
-        await this.sessionActionConfirmationAdapter?.dispose();
-        this.agentStateResponseTargetDispatcher.dispose();
-        this.committedUserMessageSeqTracker.clear();
-        this.executionRunPendingTargetListeners.clear();
-        await this.drainPendingLifecycleWritesBeforeClose();
-        await this.closeRegisteredRuntimeActivityPublisher().catch((error) => {
-            logger.debug('[API] Failed to close registered runtime Activity publisher (non-fatal)', {
-                error: serializeAxiosErrorForLog(error),
+        const closingSocket = this.socket;
+        const cancelDisconnectedWrites = () => this.socketAckAbortController.abort();
+        closingSocket.on('disconnect', cancelDisconnectedWrites);
+        try {
+            await this.sessionHandlersRegistration.dispose();
+            const disposeSessionFollowWakeReceiver = this.disposeSessionFollowWakeReceiver;
+            this.disposeSessionFollowWakeReceiver = null;
+            disposeSessionFollowWakeReceiver?.();
+            this.acceptedPendingSettlementOperationAbortController.abort();
+            if (!this.socket.connected) this.socketAckAbortController.abort();
+            await this.sessionActionConfirmationRecovery;
+            await this.sessionActionConfirmationAdapter?.dispose();
+            this.agentStateResponseTargetDispatcher.dispose();
+            this.committedUserMessageSeqTracker.clear();
+            this.executionRunPendingTargetListeners.clear();
+            await this.drainPendingLifecycleWritesBeforeClose();
+            await this.closeRegisteredRuntimeActivityPublisher().catch((error) => {
+                logger.debug('[API] Failed to close registered runtime Activity publisher (non-fatal)', {
+                    error: serializeAxiosErrorForLog(error),
+                });
             });
-        });
-        await this.interactionApi.close();
-        await this.durableMutationOutbox.close();
-        this.emit('local-closed');
+            this.socketAckAbortController.abort();
+            await this.interactionApi.close();
+            await this.durableMutationOutbox.close();
+            this.emit('local-closed');
+        } finally {
+            closingSocket.off('disconnect', cancelDisconnectedWrites);
+        }
     }
 
     async listPendingMessageQueueV2LocalIds(): Promise<string[]> {
@@ -3870,8 +3923,12 @@ export class ApiSessionClient extends EventEmitter {
             getMetadataSnapshot: options.getMetadataSnapshot,
             waitForMetadataUpdate: (signal) => this.waitForMetadataUpdate(signal),
             shouldAttemptPendingMaterialization: () => binding.isCurrent(),
-            reconcilePendingProviderInputCustodyBeforeMaterialization: async () => binding.isCurrent()
-                && ![...this.materializationRuntime.pendingQueueMaterializedLocalIds].some(ownsLocalId),
+            reconcilePendingProviderInputCustodyBeforeMaterialization: async () => {
+                if (!binding.isCurrent()) return false;
+                await this.reofferAcceptedProviderInputSettlements(binding);
+                return binding.isCurrent()
+                    && ![...this.materializationRuntime.pendingQueueMaterializedLocalIds].some(ownsLocalId);
+            },
             materializeNextPendingMessageSafely: (opts) => this.interactionApi.materializeNextExecutionRunPendingMessageSafely({
                 ...binding,
                 hasCustody: (localId) => this.hasPendingProviderInput(localId),
@@ -3933,6 +3990,7 @@ export class ApiSessionClient extends EventEmitter {
 
     async blockExecutionRunPendingDelivery(runId: string, localId: string): Promise<boolean> {
         const result = await blockPendingExecutionRunDelivery({
+            signal: this.socketAckAbortController.signal,
             socket: this.socket,
             sessionId: this.sessionId,
             recipient: { kind: 'execution_run', runId },
@@ -4019,6 +4077,11 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     async reconcilePendingProviderInputCustodyBeforeMaterialization(): Promise<boolean> {
+        if (this.closed) return false;
+        // Rejoin witnessed acceptance before interpreting a Pending snapshot.
+        // The server may have committed after a lost reply, or still need the
+        // same idempotent settlement. Neither permits provider redelivery.
+        await this.reofferAcceptedProviderInputSettlements(null);
         if (this.closed) return false;
         const localIds = [...this.materializationRuntime.pendingQueueMaterializedLocalIds]
             .filter((localId) => (
@@ -4117,12 +4180,14 @@ export class ApiSessionClient extends EventEmitter {
                     const acceptedDelivery = this.acceptedPendingSettlementLocalIds.get(localId);
                     const result = authority.executionRun ? await resolveAcceptedPendingExecutionRunDelivery({
                         socket: authority.socket, sessionId: this.sessionId, localId,
+                        signal: authority.abortSignal,
                         recipient: authority.executionRun.recipient, sidechainId: authority.executionRun.sidechainId,
                         ...(acceptedDelivery === undefined ? {} : { acceptedDelivery }),
                     }) : await resolveAcceptedPendingQueueV2Delivery({
                         socket: authority.socket,
                         sessionId: this.sessionId,
                         localId,
+                        signal: authority.abortSignal,
                         ...(acceptedDelivery === undefined ? {} : { acceptedDelivery }),
                     });
                     if (!this.isAcceptedPendingSettlementOperationCurrent(authority, localId)) return;
@@ -4228,32 +4293,44 @@ export class ApiSessionClient extends EventEmitter {
             ) {
                 return;
             }
-            const authority: AcceptedPendingSettlementOperationAuthority = {
-                sessionConnectionEpoch,
-                socket,
-                providerInputConsumer: this.providerInputConsumer,
-                abortSignal: this.acceptedPendingSettlementOperationAbortController.signal,
-            };
-            for (const localId of this.acceptedPendingSettlementLocalIds.keys()) {
-                if (!this.hasPendingProviderInput(localId)) {
-                    this.acceptedPendingSettlementLocalIds.delete(localId);
-                    continue;
-                }
-                const executionRun = this.executionRunPendingCustody.get(localId);
-                void this.trackAcceptedPendingSettlement(localId, { ...authority, ...(executionRun ? { executionRun } : {}) }).catch((error) => {
-                    logger.debug('[pendingQueue] accepted provider-input settlement reoffer failed', {
-                        sessionId: this.sessionId,
-                        localId,
-                        error: serializeAxiosErrorForLog(error),
-                    });
-                });
-            }
+            await this.reofferAcceptedProviderInputSettlements();
         })().catch((error) => {
             logger.debug('[pendingQueue] accepted provider-input settlement reoffer crashed', {
                 sessionId: this.sessionId,
                 error: serializeAxiosErrorForLog(error),
             });
         });
+    }
+
+    private async reofferAcceptedProviderInputSettlements(target?: ExecutionRunPendingInputBinding | null): Promise<void> {
+        const authority: AcceptedPendingSettlementOperationAuthority = {
+            sessionConnectionEpoch: this.sessionConnectionEpoch,
+            socket: this.socket,
+            providerInputConsumer: this.providerInputConsumer,
+            abortSignal: this.acceptedPendingSettlementOperationAbortController.signal,
+        };
+        const settlements: Promise<void>[] = [];
+        for (const localId of this.acceptedPendingSettlementLocalIds.keys()) {
+            if (!this.hasPendingProviderInput(localId)) {
+                this.acceptedPendingSettlementLocalIds.delete(localId);
+                continue;
+            }
+            const executionRun = this.executionRunPendingCustody.get(localId);
+            if (target !== undefined && (executionRun ?? null) !== target) continue;
+            // A normal queue observation may arrive during publication of this
+            // very settlement. Leave the current operation with its owner.
+            if (this.acceptedPendingSettlementLocalIdsInFlight.has(localId)) continue;
+            settlements.push(this.trackAcceptedPendingSettlement(localId, {
+                ...authority, ...(executionRun ? { executionRun } : {}),
+            }).catch((error) => {
+                logger.debug('[pendingQueue] accepted provider-input settlement reoffer failed', {
+                    sessionId: this.sessionId,
+                    localId,
+                    error: serializeAxiosErrorForLog(error),
+                });
+            }));
+        }
+        await Promise.all(settlements);
     }
 
     observeProviderInputSettlement(outcome: SessionProviderInputOutcome): Promise<boolean> {
@@ -4320,6 +4397,7 @@ export class ApiSessionClient extends EventEmitter {
                 ? outcome.reason
                 : 'delivery_outcome_uncertain';
             const result = executionRun ? await blockPendingExecutionRunDelivery({
+                signal: this.socketAckAbortController.signal,
                 socket: this.socket, sessionId: this.sessionId, localId, recipient: executionRun.recipient, reason,
             }) : await this.runSessionRequest(async () => blockPendingQueueV2Delivery({
                 token: this.token,

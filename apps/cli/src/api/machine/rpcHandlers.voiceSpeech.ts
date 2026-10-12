@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -455,7 +455,7 @@ export function registerMachineVoiceSpeechRpcHandlers(params: Readonly<{
     }
   });
 
-  const outputRoot = async () => outputRootPromise ??= mkdtemp(join(tmpdir(), 'happier-voice-speech-'));
+  const outputRoot = async () => outputRootPromise ??= Promise.resolve(createHappierTempDir({ purpose: 'voice-speech' }));
   const clearUpload = async (uploadId: string) => {
     const timer = finalizedUploadTimers.get(uploadId);
     if (timer) clearTimeout(timer);
@@ -986,7 +986,7 @@ export function registerMachineVoiceSpeechRpcHandlers(params: Readonly<{
       await downloadStore.dispose();
       for (const path of outputFiles) await rm(path, { force: true }).catch(() => undefined);
       outputFiles.clear();
-      if (outputRootPromise) await rm(await outputRootPromise, { recursive: true, force: true }).catch(() => undefined);
+      if (outputRootPromise) await removeHappierTempDirAsync(await outputRootPromise).catch(() => undefined);
     },
   });
 }

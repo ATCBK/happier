@@ -17,7 +17,7 @@ import type {
     SessionMessageProvenance,
     SessionTranscriptObservationProvenanceV1,
 } from '@happier-dev/protocol';
-import type { SessionTranscriptSurfaceItemReferenceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import type { SessionTranscriptSurfaceItemReferencesV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
 import type { ManagedConnectionSupervisor } from '@happier-dev/connection-supervisor';
 
@@ -110,7 +110,7 @@ type EnqueueCommittedTranscriptMessageParams = Readonly<{
     createdAt: number;
     updatedAt: number;
     provenance: SessionTranscriptObservationProvenanceV1;
-    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceV1;
+    surfaceItemReference?: SessionTranscriptSurfaceItemReferencesV1;
     admission?: CommittedTranscriptAdmission;
 }>;
 

@@ -17,7 +17,7 @@ import {
 } from '@/settings/actionsSettingsProvider';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, readActiveAccountRoleOverrides } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, readAccountRoleOverridesFromSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
 import { prepareActiveAccountRoleOverrides } from '@/settings/prompts/hydratePromptLibraryCatalog';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
@@ -202,10 +202,17 @@ export function registerSessionClientRuntimeHandlers(
     const roleAccountScopeKey = runWithServerHttpBaseUrl(params.serverUrl,
         () => resolveAccountSettingsScopeKeyForToken(params.token));
     const roleAccountLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
-    const actionsSettingsProvider = params.actionsSettingsProvider ?? createActionSettingsProvider({
+    const actionsSettingsProvider: RuntimeActionSettingsProvider = params.actionsSettingsProvider ?? {
+        ...createActionSettingsProvider({
         scopeKey: roleAccountScopeKey,
         getAccountSettings: () => ownerAccountSettingsForRuntime,
-    });
+        }),
+        getAccountRoleOverrides: () => {
+            const snapshot = ownerAccountSettingsForRuntime ? ownerAccountOperationContext?.readSnapshot() : null;
+            return snapshot ? readAccountRoleOverridesFromSnapshot(snapshot)
+                : { status: 'unavailable', reason: 'source-unavailable' };
+        },
+    };
     const approvalServerId = params.serverId;
     const approvalServerApiUrl = params.serverUrl;
     const tokenAccountId = readAccountIdFromToken(params.token);
@@ -300,6 +307,7 @@ export function registerSessionClientRuntimeHandlers(
     const resolveOwnerAccountSettingsSnapshot = async (input?: Readonly<{
         secretReferenceOverlay?: import('@happier-dev/protocol').SecretReferenceOverlayV1;
         mcpServerCatalog?: boolean;
+        savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[];
         signal?: AbortSignal;
     }>) => runWithServerHttpBaseUrl(params.serverUrl, async () => {
         const credentials = await readOwnerAccountCredentials();
@@ -315,10 +323,11 @@ export function registerSessionClientRuntimeHandlers(
         ownerAccountOperationContext ??= createInvocationSavedSecretOperationContextV1({ credentials,
             snapshot: context, serverHttpBaseUrl: params.serverUrl, isCurrent: ownerAccountIsCurrent });
         if (!await ownerAccountOperationContext.replaceAccountSettings(context)) return null;
-        const operationSnapshot = input?.secretReferenceOverlay
+        const operationSnapshot = input?.secretReferenceOverlay || input?.savedSecretReferences?.length
             ? await refreshSavedSecretCatalogForOperation({
                 expectedScopeKey: scopeKey,
                 secretReferenceOverlay: input.secretReferenceOverlay,
+                references: input.savedSecretReferences,
                 operationContext: ownerAccountOperationContext,
                 signal: input.signal,
             })
@@ -450,12 +459,14 @@ export function registerSessionClientRuntimeHandlers(
                 // An explicit view, not a spread of the live client: the durable
                 // Session client owns prototype-bound behavior the MCP seam must
                 // reach through its real methods.
-                const parentMcpSession: HappyMcpSessionClient = applyRunnerMcpSessionContext({
+                const parentMcpSession = applyRunnerMcpSessionContext({
                     sessionId: parentSessionForTools.sessionId,
                     rpcHandlerManager: params.rpcHandlerManager,
                     updateMetadata: (updater) => parentSessionForTools.updateMetadata(updater),
+                    enqueueSessionEventCommitted: (event, id) => parentSessionForTools.enqueueSessionEventCommitted(event, id),
                     getMetadataSnapshot: () => parentSessionForTools.getMetadataSnapshot(),
                     getBackendTarget: () => parentSessionForTools.getBackendTarget?.() ?? null,
+                    getMcpRequestAuthPort: () => parentSessionForTools.getMcpRequestAuthPort?.(),
                     getServerBinding: () => ({
                         serverId: approvalServerId,
                         serverUrl: approvalServerApiUrl,
@@ -467,7 +478,7 @@ export function registerSessionClientRuntimeHandlers(
                     getStoredContentEncryptionContext: () => transcriptQueryContext.encryptionMode === 'plain'
                         ? { mode: 'plain' as const }
                         : { mode: 'e2ee' as const, ctx: transcriptQueryContext },
-                }, {
+                } satisfies HappyMcpSessionClient, {
                     getCurrentSessionLocation: () => ({
                         path: workingDirectory,
                         machineId: sessionMachineId,
@@ -610,16 +621,20 @@ export function registerSessionClientRuntimeHandlers(
     const transcriptActionExecutor = createCliActionExecutor(sessionActionParams);
     const resolveCredentialedRoleParams = async (signal?: AbortSignal) => runWithServerHttpBaseUrl(approvalServerApiUrl, async () => {
         const credentials = await readOwnerAccountCredentials();
-        if (!credentials || readAccountIdFromToken(credentials.token) !== runtimeAccountId) return null;
-        await resolveOwnerAccountSettings();
+        if (!credentials || readAccountIdFromToken(credentials.token) !== runtimeAccountId) {
+            await ownerAccountOperationContext?.isCurrent();
+            return null;
+        }
+        if (!await resolveOwnerAccountSettings() || !ownerAccountOperationContext) return null;
+        const operationContext = ownerAccountOperationContext;
         const overrides = await prepareActiveAccountRoleOverrides({ credentials, scopeKey: roleAccountScopeKey,
-            lifetimeToken: roleAccountLifetimeToken, signal });
+            lifetimeToken: roleAccountLifetimeToken, signal, operationContext });
         if (overrides.status !== 'ready') return null;
         const sourceReader = sessionActionParams.readRoleSources ?? createRoleSourceReader({
             artifactStore: createCredentialedAccountArtifactStore(credentials), accountId: runtimeAccountId,
             readRawAccountSettings: async () => {
-                const current = await bootstrapAccountSettingsContext({ credentials, mode: 'blocking' });
-                if (current.source === 'none' || !current.rawSettings) {
+                const current = await resolveOwnerAccountSettingsSnapshot({ signal });
+                if (!current || current.source === 'none' || !current.rawSettings) {
                     throw Object.assign(new Error('account_settings_content_unavailable'), { code: 'account_settings_content_unavailable' });
                 }
                 return current.rawSettings;
@@ -627,23 +642,30 @@ export function registerSessionClientRuntimeHandlers(
         });
         const readRoleSources: RoleSourceReader = async (readSignal) => {
             const prepared = await prepareActiveAccountRoleOverrides({ credentials, scopeKey: roleAccountScopeKey,
-                lifetimeToken: roleAccountLifetimeToken, signal: readSignal });
+                lifetimeToken: roleAccountLifetimeToken, signal: readSignal, operationContext });
             if (prepared.status !== 'ready') throw Object.assign(new Error('account_role_overrides_unavailable'), { code: 'account_role_overrides_unavailable' });
             const inventory = await sourceReader(readSignal);
-            if (readActiveAccountRoleOverrides({ scopeKey: roleAccountScopeKey, lifetimeToken: roleAccountLifetimeToken }).status !== 'ready') {
+            if (!await operationContext.isCurrent() || !operationContext.readSnapshot()) {
                 throw Object.assign(new Error('account_role_overrides_unavailable'), { code: 'account_role_overrides_unavailable' });
             }
             return inventory;
         };
         return { ...sessionActionParams, token: credentials.token, credentials,
-            serverId: approvalServerId, serverHttpBaseUrl: approvalServerApiUrl, readRoleSources };
+            serverId: approvalServerId, serverHttpBaseUrl: approvalServerApiUrl, readRoleSources,
+            savedSecretOperationContext: operationContext };
     });
 
     registerActionSpecRpcHandlers({
         rpcHandlerManager: params.rpcHandlerManager,
         resolveActionExecutor: async () => {
             const roleParams = await resolveCredentialedRoleParams();
-            return roleParams ? createCliActionExecutor(roleParams) : transcriptActionExecutor;
+            return roleParams ? createCliActionExecutor(roleParams) : {
+                execute: async () => ({
+                    ok: false as const,
+                    errorCode: 'account_role_overrides_unavailable',
+                    error: 'account_role_overrides_unavailable',
+                }),
+            };
         },
         actionIds: ROLE_ACTION_IDS_V1.filter((actionId) => actionId.startsWith('session.')),
     });

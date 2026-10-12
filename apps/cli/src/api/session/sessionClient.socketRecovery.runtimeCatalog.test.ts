@@ -8,12 +8,17 @@ import { join } from 'node:path';
 
 import { createApiSessionSocketStub, createSessionRuntimeActivityHomeStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { createPlainSessionFixture } from '@/testkit/backends/sessionFixtures';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import type { ClientToServerEvents, ServerToClientEvents } from '@/api/types';
 import { resolveSessionControlSocketConnectTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
 import { ApiSessionClient } from './sessionClient';
 import { reloadConfiguration, configuration } from '@/configuration';
 import { createSessionClientDurableMutationPersistenceContext } from './client/transport/mutations/sessionClientDurableMutationPersistence';
 import { parseRuntimeSessionClientDurableMutation } from './client/transport/mutations/sessionClientDurableMutationPersistence';
+import { createMcpActionEnablementWithServerFeatureAvailability,
+    createMcpActionApprovalRequirement } from '@/mcp/server/createMcpActionEnablement';
+import type { HappyMcpSessionClient } from '@/mcp/startHappyServer';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
 describe('Session activity startup socket recovery', () => {
     const clients: ApiSessionClient[] = [];
@@ -27,7 +32,7 @@ describe('Session activity startup socket recovery', () => {
         reloadConfiguration();
     });
 
-    function createClient(options: Readonly<{ durable?: boolean; sessionId?: string }> = {}) {
+    function createClient(options: Readonly<{ durable?: boolean; sessionId?: string; workflowsEnabled?: boolean }> = {}) {
         let connect!: () => void;
         let connected = new Promise<void>((resolve) => { connect = resolve; });
         let onDisconnected: Parameters<ManagedConnectionTransport['onDisconnected']>[0] | undefined;
@@ -40,12 +45,14 @@ describe('Session activity startup socket recovery', () => {
         // readiness, Activity and disposal owners all remain real.
         vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {} });
         vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-            features: {}, capabilities: { session: {
+            features: { automations: { enabled: true }, workflows: { enabled: options.workflowsEnabled === true } }, capabilities: { session: {
                 runtimeActivity: { protocolVersion: 2 }, pendingInput: { protocolVersion: 1 },
                 publisherAuthority: { protocolVersion: 1 },
             } },
         }), { status: 200, headers: { 'content-type': 'application/json' } })));
-        const client = new ApiSessionClient('test-token', createPlainSessionFixture({ id: options.sessionId ?? 'socket-recovery' }), {
+        const client = new ApiSessionClient('test-token', createPlainSessionFixture({
+            id: options.sessionId ?? 'socket-recovery', metadata: createTestMetadata({ machineId: 'machine-1' }),
+        }), {
             transport: {
                 serverId: 'socket-recovery-test',
                 serverUrl: 'http://127.0.0.1:3000',
@@ -73,6 +80,29 @@ describe('Session activity startup socket recovery', () => {
             onDisconnected?.({ reason: 'transport close' });
         } };
     }
+
+    it('admits Session agent workflow reads from the connected Home projection and retains mutation approval', async () => {
+        const { client, connect, goOffline } = createClient({ workflowsEnabled: true });
+        const agentClient: HappyMcpSessionClient = client;
+        const actionSettingsProvider = {
+            getActionsSettings: () => normalizeActionsSettingsV1({
+                v: 1, actions: { 'workflow.definition.create': { approvalRequiredSurfaces: ['agent'] } },
+            }),
+        };
+        const policy = createMcpActionEnablementWithServerFeatureAvailability({
+            actionSettingsProvider, surface: 'agent', hasAuthenticatedRuntime: true, authorityScope: 'session',
+            readServerFeaturesSnapshot: () => agentClient.getServerFeaturesSnapshot?.(), env: {},
+        });
+        expect(policy('workflow.definition.list')).toBe(false);
+        connect();
+        await vi.waitFor(() => expect(policy('workflow.definition.list')).toBe(true));
+        for (const id of ['workflow.definition.get', 'workflow.run.list', 'workflow.starters.list',
+            'workflow.starters.resolve', 'boards.list'] as const) expect(policy(id), id).toBe(true);
+        const requiresApproval = createMcpActionApprovalRequirement({ actionSettingsProvider, surface: 'agent' });
+        expect(requiresApproval('workflow.definition.create')).toBe(true);
+        goOffline();
+        expect(policy('workflow.definition.list')).toBe(false);
+    });
 
     it('keeps an Activity write pending beyond a transport attempt budget and applies it on recovery', async () => {
         vi.useFakeTimers();
@@ -130,20 +160,28 @@ describe('Session activity startup socket recovery', () => {
             parseQueuedMutation: parseRuntimeSessionClientDurableMutation,
         });
         await expect.poll(async () => {
-            try { return await readFile(persistence.paths.queuePath, 'utf8'); } catch { return ''; }
-        }).toContain('activity-offline');
+            try { return JSON.parse(await readFile(persistence.paths.queuePath, 'utf8')); } catch { return null; }
+        }).toMatchObject({ mutations: [{ payload: {
+            sessionId, fieldId: 'runtime.activity', observedAt: 2, op: mutation.op,
+        } }] });
         let writeOutcome = 'pending';
         void write.then(() => { writeOutcome = 'applied'; }, () => { writeOutcome = 'cancelled'; });
+        let closeOutcome = 'pending';
+        const closing = client.close();
+        void closing.then(() => { closeOutcome = 'closed'; }, () => { closeOutcome = 'failed'; });
         try {
-            await client.close();
-            clients.splice(clients.indexOf(client), 1);
+            await expect.poll(() => closeOutcome).toBe('closed');
             expect(writeOutcome).toBe('cancelled');
             const journal = JSON.parse(await readFile(persistence.paths.queuePath, 'utf8')) as { mutations: unknown[] };
-            expect(journal.mutations).toEqual(expect.arrayContaining([expect.objectContaining({ payload: mutation })]));
+            expect(journal.mutations).toEqual(expect.arrayContaining([expect.objectContaining({
+                payload: expect.objectContaining({ sessionId, fieldId: 'runtime.activity', observedAt: 2, op: mutation.op }),
+            })]));
             expect(socket.connected).toBe(false);
         } finally {
             // Let an intentionally failing RED finish its owned offline waiter.
             connect();
+            await closing;
+            clients.splice(clients.indexOf(client), 1);
         }
     });
 });

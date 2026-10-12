@@ -4,7 +4,7 @@ import axios from 'axios';
 import { isAuthenticationError } from '@/api/client/httpStatusError';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
-import { resolveSessionControlSocketAckTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
+import { emitSocketWithAck } from '@/session/transport/shared/socketAck';
 import { ExactSessionTurnEndMutationV1Schema, isExactSessionTurnMutationPositiveReceiptV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
 import { SessionTurnMutationReceiptV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
 import type { ExactSessionTurnEndMutationV1, SessionTurnMutationDecisionV1, SessionTurnMutationV1 } from '@happier-dev/protocol';
@@ -169,14 +169,16 @@ async function trySocketSessionTurnMutation(params: Readonly<{
     socket: SessionClientDurableMutationSocket;
     mutation: SessionTurnMutationV1;
     exactMutation?: ExactSessionTurnEndMutationV1;
+    signal?: AbortSignal;
 }>): Promise<SessionTurnMutationSocketResult> {
     if (params.socket.connected === false) return { status: 'unsupported', evidence: { transport: 'socket', evidence: 'unavailable' } };
     try {
-        const socket = params.socket.timeout?.(resolveSessionControlSocketAckTimeoutMs()) ?? params.socket;
+        const socket = params.socket;
         if (typeof socket.emitWithAck !== 'function') {
             return { status: 'unsupported', evidence: { transport: 'socket', evidence: 'unavailable' } };
         }
-        const ack = await socket.emitWithAck('session-turn-mutation', params.mutation);
+        const ack = await emitSocketWithAck({ socket, event: 'session-turn-mutation',
+            payload: params.mutation, timeoutMs: null, signal: params.signal });
         if (isUnsupportedAck(ack)) {
             const code = readUnsupportedAckCode(ack);
             return {
@@ -252,14 +254,17 @@ export async function deliverSessionTurnMutation(params: Readonly<{
     token: string;
     socket: SessionClientDurableMutationSocket | null;
     mutation: SessionTurnMutationV1;
+    signal?: AbortSignal;
 }>): Promise<SessionTurnMutationDeliveryResult> {
     const serverUrl = resolveServerHttpBaseUrl();
     const parsedExactMutation = ExactSessionTurnEndMutationV1Schema.safeParse(params.mutation);
     const exactMutation = parsedExactMutation.success ? parsedExactMutation.data : undefined;
     const socketResult = params.socket?.connected === true
-        ? await trySocketSessionTurnMutation({ socket: params.socket, mutation: params.mutation, exactMutation })
+        ? await trySocketSessionTurnMutation({ socket: params.socket, mutation: params.mutation, exactMutation, signal: params.signal })
         : { status: 'failed' as const };
     if (socketResult.status === 'delivered') return { delivered: true, path: 'socket' };
+
+    if (params.signal?.aborted) return { delivered: false, reason: 'session_turn_mutation_transport_unavailable' };
 
     const httpResult = await tryHttpSessionTurnMutation({
         token: params.token,

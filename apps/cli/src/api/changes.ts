@@ -14,8 +14,12 @@ export {
   type CursorGoneError,
 };
 
-export async function fetchChangesAccountId(opts: { token: string; signal?: AbortSignal }): Promise<string> {
-  const serverUrl = resolveServerHttpBaseUrl();
+export async function fetchChangesAccountId(opts: {
+  token: string;
+  serverHttpBaseUrl?: string;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const serverUrl = (opts.serverHttpBaseUrl ?? resolveServerHttpBaseUrl()).replace(/\/+$/, '');
   const response = await axios.get(`${serverUrl}/v1/account/profile`, {
     headers: {
       ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),

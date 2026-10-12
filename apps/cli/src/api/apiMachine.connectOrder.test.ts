@@ -5,6 +5,7 @@ import {
   createApiSessionSocketStub,
 } from '@/testkit/backends/apiSessionSocketHarness';
 import {
+  FeaturesResponseSchema,
   MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1,
   SESSION_SERVER_START_DAEMON_RPC_METHOD_V1,
 } from '@happier-dev/protocol';
@@ -13,6 +14,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { ApiMachineClient } from './apiMachine';
 import type { RpcHandlerManager } from './rpc/RpcHandlerManager';
+import { startPeerMediationLoopback } from '@/daemon/peer/mediation/rpc/startLoopback';
 
 const callOrder = vi.hoisted(() => [] as string[]);
 const ioMock = vi.hoisted(() => vi.fn());
@@ -85,6 +87,89 @@ describe('ApiMachineClient connect ordering', () => {
     loggerDebugMock.mockClear();
     ioMock.mockReset();
     vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
+
+  it('publishes endpoint owner changes while Machine heartbeats only renew reachability', async () => {
+    vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');
+    const socket = createApiSessionSocketStub({
+      id: 'heartbeat-socket',
+      emitWithAck: (event, payload) => event === 'machine-update-state'
+        ? { result: 'success', version: ++version, daemonState: (payload as { daemonState: string }).daemonState }
+        : { result: 'success', version },
+    });
+    let version = 0;
+    bindApiSessionSocketSequenceMock(ioMock, [socket]);
+    const key = new Uint8Array(32).fill(1);
+    const client = new ApiMachineClient('token', {
+      id: 'machine-1', encryptionKey: key, encryptionVariant: 'legacy',
+      metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
+    });
+    const manager = Reflect.get(client, 'rpcHandlerManager') as RpcHandlerManager;
+    registerRequiredMachineControlHandlers(manager);
+    let now = 2_000;
+    const listener = await startPeerMediationLoopback({
+      accountId: 'account-1', machineId: 'machine-1',
+      serverFeatures: FeaturesResponseSchema.parse({
+        features: { machines: { enabled: true, rpc: { enabled: true, directPeer: { enabled: true } } } },
+        capabilities: { machines: { peerMediation: { grantSigningKeys: [{
+          keyId: 'heartbeat-key', publicKey: Buffer.from(new Uint8Array(32).fill(1)).toString('base64url'), expiresAt: null,
+        }] } } },
+      }),
+      rpcHandlerManager: client.getPeerMediationMachineRpcHandlerManager(),
+      nowMs: () => now,
+    });
+    if (!listener) throw new Error('expected listener');
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const publishEndpoint = async () => {
+      const endpoint = listener.readEndpoint();
+      await client.updateDaemonState((state) => ({
+        ...state, status: 'running',
+        peerMediation: { ...state?.peerMediation, loopback: endpoint ? { endpoint, flows: listener.activeFlows.machine_rpc ? { machine_rpc: { active: true } } : {} } : undefined },
+      }));
+    };
+    const unsubscribe = listener.subscribeEndpointChanges(() => { void publishEndpoint(); });
+    let connected = false;
+    try {
+      client.connect({ onConnect: async () => { await publishEndpoint(); connected = true; } });
+      await vi.waitFor(() => expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REGISTER, expect.anything()));
+      for (const [event, registration] of socket.emit.mock.calls) {
+        if (event === SOCKET_RPC_EVENTS.REGISTER && registration && typeof registration === 'object'
+            && 'method' in registration && typeof registration.method === 'string') {
+          socket.trigger(SOCKET_RPC_EVENTS.REGISTERED, { method: registration.method });
+        }
+      }
+      await vi.waitFor(() => expect(connected).toBe(true));
+      const writesBeforeHeartbeat = socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state').length;
+      now += 20_000;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(socket.emit.mock.calls.filter(([event]) => event === 'machine-alive')).toHaveLength(1);
+      expect(socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state')).toHaveLength(writesBeforeHeartbeat);
+      now = listener.endpoint.expiresAt - 150_000;
+      await vi.advanceTimersByTimeAsync(130_000);
+      const { decodeBase64, decryptResult } = await import('@/api/encryption');
+      const readPublishedState = () => {
+        const writes = socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state');
+        const content = (writes.at(-1)![1] as { daemonState: string }).daemonState;
+        return decryptResult(key, 'legacy', decodeBase64(content));
+      };
+      await vi.waitFor(() => expect(readPublishedState()).toMatchObject({
+        status: 'authenticated', value: { peerMediation: { loopback: { endpoint: {
+          ...listener.endpoint, expiresAt: now + 300_000,
+        } } } },
+      }));
+      await listener.stop();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.waitFor(() => expect(readPublishedState()).not.toHaveProperty('value.peerMediation.loopback'));
+      const writesBeforeShutdown = socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state').length;
+      await client.shutdown();
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state')).toHaveLength(writesBeforeShutdown);
+    } finally {
+      unsubscribe();
+      await client.shutdown();
+      await listener.stop();
+    }
   });
 
   it.each([0, 7])('installs the RPC listener before connecting and replays client handlers before state on every generation (projection revision %i)', async (projectionRevision) => {

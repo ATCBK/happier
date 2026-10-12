@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol';
 import { createActionExecutor, getActionSpec, type ActionExecutorContext } from '@happier-dev/protocol/actions';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
-  ExternalActionExecutionAuthorizationV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+  ExternalActionExecutionAuthorizationV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema,
+  projectExternalActionPendingResetStartAdmissionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1, verifyExternalActionMachineRequestV1, verifyExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import * as executionAuthorizationOwner from './externalActionExecutionAuthorization';
 import { openExternalActionRequestV2, sealExternalActionRequestV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
@@ -37,6 +38,62 @@ const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({
 
 describe('requester HTTP authority on the existing external Action carrier', () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it.each(['plain', 'e2ee'] as const)('prepares signed fresh-reset admission from exactly the %s input', async mode => {
+    const reset = { source: { bindingKind: 'account' as const, ref: { service: { pluginId: 'example.usage', localId: 'quota' }, accountId: 'connected' } },
+      recordId: 'paug_v1_abcdefgh', meterId: 'weekly', witness: { id: 'accepted', observedAtMs: 100 } };
+    const resetTarget = { kind: 'machine' as const, machineId: target.machineId };
+    const resetInput = { sessionId: 'session', localId: 'prepared', reset,
+      initialInput: { content: mode === 'plain' ? { t: 'plain', v: { private: 'prepared work' } } : { t: 'encrypted', c: 'session-ciphertext' } } };
+    const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(19) };
+    vi.spyOn(axios, 'post').mockImplementation(async (_url, body) => {
+      if (String(_url).endsWith('/verify')) return { status: 200, data: { ok: true } };
+      const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+      const admission = projectExternalActionPendingResetStartAdmissionV1(resetInput);
+      if (request.envelope.v === 2) {
+        expect(request.envelope).toMatchObject({ pendingResetStartAdmission: admission });
+        expect(JSON.stringify(request.envelope)).not.toContain('session-ciphertext');
+        expect(openExternalActionRequestV2({ envelope: request.envelope, material, binding: {
+          serverIdentityId: 'srv_bob_home', accountId: 'bob', authentication: { kind: 'account', tokenEpoch: 7 },
+          actionId: 'session.pending.resetStart.set', requestId: 'reset-request', target: resetTarget,
+        } })).toEqual({ input: resetInput });
+      } else expect(request.envelope.input).toEqual(resetInput);
+      return { status: 200, data: { v: 1, token: 'reset-proof', binding: {
+        accountId: 'bob', authentication: { kind: 'account', tokenEpoch: 7 },
+        serverIdentityId: 'srv_bob_home', machineId: target.machineId, custodianAccountId: 'bob',
+        installationId: 'alice-installation', actionId: 'session.pending.resetStart.set', requestId: 'reset-request', target: resetTarget,
+        accountEncryptionMode: mode, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
+        pendingResetStartAdmission: admission,
+      } } };
+    });
+    const request = { actionId: 'session.pending.resetStart.set', input: resetInput,
+      requestId: 'reset-request', target: resetTarget, machineId: target.machineId, accountId: 'bob', accountEncryptionMode: mode,
+      tokenEpochHint: 7, token: accountToken, serverId: 'bob-profile', serverIdentityId: 'srv_bob_home',
+      serverHttpBaseUrl: 'https://bob-home.test', installationId: 'alice-installation', privateKey: keys.secretKey,
+      ...(mode === 'e2ee' ? { material } : {}) };
+    const prepared = await prepareExternalActionRequesterAccountAuthorization(request);
+    expect(prepared).toMatchObject({ binding: { pendingResetStartAdmission: projectExternalActionPendingResetStartAdmissionV1(resetInput) } });
+    if (!prepared?.requesterHttpProjection) throw new Error('Fresh-reset preparation did not admit requester signing');
+    const path = `/v4/connect/qualified/provider-account-usage/history?${new URLSearchParams({ query: JSON.stringify({ recordId: reset.recordId, witness: reset.witness }) })}`;
+    const headers = await prepared.requesterHttpProjection.createRequestHeaders({ effectActionId: request.actionId, method: 'GET', path });
+    expect(headers?.[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]).toBe('reset-proof');
+    const signature = headers?.[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER];
+    if (!signature) throw new Error('Fresh-reset preparation did not sign its exact witness read');
+    expect(verifyExternalActionMachineRequestV1({ authorizationToken: 'reset-proof', effectActionId: request.actionId,
+      target: resetTarget, installationId: request.installationId, requestId: request.requestId, method: 'GET', path,
+      signature, publicKey: keys.publicKey })).toBe(true);
+    const accepted = prepared;
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      if (String(url).endsWith('/verify')) return { status: 200, data: { ok: true } };
+      const issued = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+      return { status: 200, data: { v: 1, token: accepted.token, binding: { ...accepted.binding,
+        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(issued.envelope),
+        pendingResetStartAdmission: projectExternalActionPendingResetStartAdmissionV1({ ...resetInput, reset: { ...reset, meterId: 'substituted' } }) } } };
+    });
+    expect(await prepareExternalActionRequesterAccountAuthorization(request)).toBeNull();
+    expect(await prepareExternalActionRequesterAccountAuthorization({ ...request,
+      input: { ...resetInput, reset: { ...reset, witness: { id: 'accepted', observedAtMs: -1 } } } })).toBeNull();
+  });
 
   it('derives read-only handoff preflight without custody and rejects a changed root digest', async () => {
     const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'original-root', binding: {

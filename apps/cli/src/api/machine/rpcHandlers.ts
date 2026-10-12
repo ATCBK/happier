@@ -22,7 +22,8 @@ import { listExecutionRunMarkers } from '@/daemon/executionRunRegistry';
 import { listExecutionRunMarkersForRehydration } from '@/daemon/executionRunRegistry';
 import { resolveDaemonExecutionRunBrokerAuthority } from '@/daemon/executionRunBrokerAuthority';
 import { isPidPresent } from '@happier-dev/cli-common/process';
-import { listProcessSnapshot } from '@/daemon/processSnapshotCache';
+import { readProcessCensus } from '@/processes/census/processCensus';
+import { createProcessCpuSampler } from '@/processes/census/processCpu';
 import {
   StopSessionResultSchema,
   type StopSessionResult,
@@ -294,6 +295,8 @@ export type MachineRpcHandlers = {
 };
 
 export type MachineRpcHandlerDeps = Readonly<{
+  readSpawnFailureLimits?: MachineTerminalRpcHandlerDeps['readSpawnFailureLimits'];
+  ownerRemainder?: MachineTerminalRpcHandlerDeps['ownerRemainder'];
   requesterSessionRuntime?: NonNullable<Parameters<typeof import('@/rpc/handlers/sessionLifecycle').registerSessionLifecycleRpcHandlers>[0]['requesterSessionRuntime']>;
   requesterBootstrapBoundary?: NonNullable<Parameters<typeof registerMachineSessionHandoffRpcHandlers>[0]['requesterBootstrapBoundary']>;
   ownSessionRuntime?: MachineTerminalRpcHandlerDeps['ownSessionRuntime'];
@@ -570,7 +573,16 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
     },
   });
   registerMachineConnectedServiceQuotaRpcHandlers({ rpcHandlerManager });
-  registerApprovalRpcHandlers({ rpcHandlerManager });
+  // Replay consumes the same installed owner that admitted the original Action,
+  // including its native effects and origin currentness. A credential-only
+  // executor would re-enter Machine admission instead of consuming that custody.
+  registerApprovalRpcHandlers({ rpcHandlerManager,
+    ...(externalAction ? { actionExecutor: {
+      execute: (actionId, input, context) => externalAction.executor.execute(
+        actionId as Parameters<typeof externalAction.executor.execute>[0], input, context),
+      replayApprovedApprovalRequest: externalAction.executor.replayApprovedApprovalRequest,
+    } } : {}),
+  });
   // Detached execution runs are owned by this exact authenticated daemon. Reuse
   // the incumbent execution-run bridge/action family with its nullable scope;
   // no Admin target picker, Session projection, or parallel daemon registry.
@@ -712,6 +724,8 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
   const terminalRegistration = registerMachineTerminalRpcHandlers({
     rpcHandlerManager,
     deps: {
+      readSpawnFailureLimits: params.deps?.readSpawnFailureLimits,
+      ownerRemainder: params.deps?.ownerRemainder,
       serverId: params.deps?.currentServerId,
       workingDirectory: params.deps?.workingDirectory,
       accessPolicy: params.deps?.filesystemAccessPolicy,
@@ -1025,25 +1039,25 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
   });
   registerMachineDiagnosticsRpcHandlers({ rpcHandlerManager });
 
+  const executionRunCpu = createProcessCpuSampler();
   rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST, async () => {
     const markers = await listExecutionRunMarkers();
 
     let processIndex = new Map<number, DaemonExecutionRunProcessInfo>();
     try {
-      const processes = await listProcessSnapshot();
-	      processIndex = new Map(
-	        processes.map((proc) => [
-	          proc.pid,
-	          {
-	            pid: proc.pid,
-	            name: typeof proc.name === 'string' ? proc.name : undefined,
-	            cpu: typeof (proc as any).cpu === 'number' ? (proc as any).cpu : undefined,
-	            memory: typeof (proc as any).memory === 'number' ? (proc as any).memory : undefined,
-	          },
-	        ]),
-	      );
+      const snapshot = await readProcessCensus({ freshness: 'shared', pids: markers.map(marker => marker.pid),
+        fields: ['memory', 'cpuTimeUs'] });
+      if (snapshot.status === 'ok') {
+        const cpu = executionRunCpu.sample(snapshot);
+        processIndex = new Map(snapshot.rows.map(row => [row.pid, {
+          pid: row.pid,
+          name: row.name,
+          cpu: cpu.get(row.pid),
+          memory: row.memory?.bytes,
+        }]));
+      }
     } catch {
-      // best-effort; omit process stats if ps-list fails
+      // Optional process statistics remain best-effort when native facts are unavailable.
     }
 
     const runs: DaemonExecutionRunEntry[] = markers.map((marker) => {

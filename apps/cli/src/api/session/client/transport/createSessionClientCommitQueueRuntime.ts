@@ -95,6 +95,7 @@ export function createSessionClientCommitQueueRuntime(
         transcriptStorage: 'persisted' | 'direct';
         getSocket: () => Socket<ServerToClientEvents, ClientToServerEvents>;
         getClosed: () => boolean;
+        signal?: AbortSignal;
         addPendingMaterializedLocalId: (localId: string) => void;
         hasPendingMaterializedLocalId: (localId: string) => boolean;
         markCommittedLocalIdAwaitingEcho: (localId: string) => void;
@@ -133,6 +134,8 @@ export function createSessionClientCommitQueueRuntime(
             const raw = await emitSocketWithAck({
                 socket: deps.getSocket() as any,
                 event: 'message',
+                timeoutMs: null,
+                signal: deps.signal,
                 payload: {
                     sid: deps.sessionId,
                     message: params.message,
@@ -146,13 +149,14 @@ export function createSessionClientCommitQueueRuntime(
 
             const parsed = MessageAckResponseSchema.safeParse(raw);
             return parsed.success ? parsed.data : null;
-        } catch {
+        } catch (error) {
+            if (deps.signal?.aborted) throw error;
             return null;
         }
     };
 
     const queueSessionMessageUntilReconnect = (params: QueuedDisconnectedSessionMessage): void => {
-        if (deps.getClosed()) return;
+        if (deps.getClosed() || deps.signal?.aborted) return;
         queuedDisconnectedSessionMessages.set(params.localId, params);
         deps.requestReconnect?.(params.localId);
     };
@@ -214,7 +218,7 @@ export function createSessionClientCommitQueueRuntime(
     let commitSessionMessageAttempt: (params: CommitSessionMessageParams, token: CommitRetryToken) => Promise<void>;
 
     const scheduleCommitRetry = (token: CommitRetryToken): void => {
-        if (retryDisposed) return;
+        if (retryDisposed || deps.signal?.aborted) return;
         const record = readRetryRecord(token);
         if (!record) return;
         if (!deps.hasPendingMaterializedLocalId(token.localId)) {

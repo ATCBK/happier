@@ -962,21 +962,21 @@ describe('registerMachineRpcHandlers', () => {
     await handler!({
       directory: '/tmp',
       backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['portable-playwright'],
         forceExcludeServerIds: ['workspace-db'],
-      },
+      } },
     });
 
     expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['portable-playwright'],
         forceExcludeServerIds: ['workspace-db'],
-      },
+      } },
     }));
   });
 

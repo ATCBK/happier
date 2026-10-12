@@ -1,11 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
-import { fetchChanges } from './changes';
+import { fetchChanges, fetchChangesAccountId } from './changes';
 import { HttpStatusError } from './client/httpStatusError';
 
 vi.mock('axios');
 
 describe('fetchChanges', () => {
+  it('reads Account identity from the captured Home with its credential', async () => {
+    vi.mocked(axios.get).mockImplementation(async (url, options) => {
+      if (url !== 'https://workflow-home.test/v1/account/profile'
+        || options?.headers?.Authorization !== 'Bearer exact-home-token') {
+        return { status: 401, data: { error: 'not-authenticated' } };
+      }
+      return { status: 200, data: { id: 'workflow-account' } };
+    });
+    await expect(fetchChangesAccountId({ token: 'exact-home-token',
+      serverHttpBaseUrl: 'https://workflow-home.test',
+    })).resolves.toBe('workflow-account');
+  });
+
   it('parses ok response', async () => {
     (axios.get as any).mockResolvedValue({
       status: 200,

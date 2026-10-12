@@ -24,11 +24,31 @@ function serverContract(
 }
 
 describe('deliverTranscriptMessageMutation provenance boundary', () => {
+  it.each(['session_transcript_observation_v1', 'released_server_v0_2_1'] as const)(
+    'awaits a delayed %s transcript commit until acknowledgement or disposal', async mode => {
+      vi.useFakeTimers();
+      try {
+        const controller = new AbortController();
+        const socket = { connected: true, emit: vi.fn(), emitWithAck: () => new Promise(() => {}) };
+        const mutation = createTranscriptMessageAppendMutation({ sessionId: 'session-1', localId: 'delayed',
+          content: 'sealed', createdAt: 100, provenance: { kind: 'non_dependent', source: 'background' } });
+        let settled = false;
+        const result = deliverTranscriptMessageMutation({ token: 'token', socket,
+          connectionContract: { ...serverContract(socket, mode === 'released_server_v0_2_1'
+            ? 'released_server_v0_2_1' : 'session_sync_v2_pending_input_v1'), transcriptTransport: { mode } }, mutation,
+          signal: controller.signal }).then(value => { settled = true; return value; });
+        await vi.advanceTimersByTimeAsync(10_001);
+        expect(settled).toBe(false);
+        controller.abort();
+        expect(await result).toEqual({ delivered: false, reason: 'transcript_message_delivery_failed' });
+      } finally { vi.useRealTimers(); }
+    });
   const surfaceItemReference = {
     v: 1 as const,
-    itemId: 'visual-1',
+    references: ['visual-1', 'visual-2'].map(itemId => ({ v: 1 as const, itemId,
     itemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',
     sourceAddress: { serverId: 'home-1', sessionId: 'session-1' },
+    sourceItemId: itemId, sourceItemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ' })),
   };
 
   it('delivers an encrypted visual association only after v2 negotiation', async () => {

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { configuration } from '@/configuration';
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
 import { getSessionStateFieldDescriptor } from '@happier-dev/agents';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { hasSessionStateFieldMetadataBinding } from '@happier-dev/agents/session/state/metadataWriters';
 import { SessionRoleIdV1Schema, StoredSessionRoleConfigurationV1Schema } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
@@ -20,7 +21,7 @@ import { SessionStateTitleValueSchema } from '@happier-dev/protocol/sessions/sta
 import { SessionStateUsageLimitRecoveryValueSchema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { SessionWorkStateV1Schema as SessionStateWorkStateValueSchema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
 import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
-import { SessionTranscriptObservationProvenanceV1Schema, SessionTranscriptSurfaceItemReferenceV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import { SessionTranscriptObservationProvenanceV1Schema, SessionTranscriptSurfaceItemReferenceInputV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { ExactSessionTurnEndMutationV1Schema, SessionTurnMutationV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
 import type { SessionTurnMutationV1 } from '@happier-dev/protocol';
 import { SessionRuntimeActivitySnapshotSchema } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
@@ -66,7 +67,7 @@ export type SessionClientDurableMutationPersistenceContext = Readonly<{
     custody: SessionClientDurableMutationJournalCustody;
     sessionId: string;
     paths: SessionClientDurableMutationJournalPaths;
-    parseQueuedMutation(value: unknown, expectedSessionId: string): ParseQueuedResult;
+    parseQueuedMutation(value: unknown, expectedSessionId: string, stored?: boolean): ParseQueuedResult;
 }>;
 
 export type SessionClientDurableMutationDeadLetterEntry = Readonly<{
@@ -207,7 +208,7 @@ export function createSessionClientDurableMutationPersistenceContext(params: Rea
     activeServerDir: string;
     sessionId: string;
     custody: SessionClientDurableMutationJournalCustody;
-    parseQueuedMutation(value: unknown, expectedSessionId: string): ParseQueuedResult;
+    parseQueuedMutation(value: unknown, expectedSessionId: string, stored?: boolean): ParseQueuedResult;
 }>): SessionClientDurableMutationPersistenceContext {
     return {
         custody: params.custody,
@@ -402,12 +403,12 @@ function parseSessionEndPayload(value: unknown): SessionEndMutationV1 | null {
     return value as SessionEndMutationV1;
 }
 
-function parseSessionTurnMutationPayload(value: unknown): SessionTurnMutationV1 | null {
-    const parsed = SessionTurnMutationV1Schema.safeParse(value);
+function parseSessionTurnMutationPayload(value: unknown, stored: boolean): SessionTurnMutationV1 | null {
+    const parsed = (stored ? createStoredReadSchema(SessionTurnMutationV1Schema) : SessionTurnMutationV1Schema).safeParse(value);
     return parsed.success ? parsed.data : null;
 }
 
-function parseTranscriptMessageAppendPayload(value: unknown): PersistedTranscriptMessageAppendMutationV1 | null {
+function parseTranscriptMessageAppendPayload(value: unknown, stored: boolean): PersistedTranscriptMessageAppendMutationV1 | null {
     if (!isRecord(value)) return null;
     if (
         value.v !== 1
@@ -428,20 +429,22 @@ function parseTranscriptMessageAppendPayload(value: unknown): PersistedTranscrip
     ) {
         return null;
     }
-    if (value.messageRole !== undefined && !SessionMessageRoleSchema.safeParse(value.messageRole).success) {
+    const messageRole = value.messageRole === undefined ? undefined : SessionMessageRoleSchema.safeParse(value.messageRole);
+    if (messageRole && !messageRole.success) {
         return null;
     }
-    if (
-        value.provenance !== undefined
-        && !SessionTranscriptObservationProvenanceV1Schema.safeParse(value.provenance).success
-    ) {
+    const provenance = value.provenance === undefined ? undefined
+        : (stored ? createStoredReadSchema(SessionTranscriptObservationProvenanceV1Schema) : SessionTranscriptObservationProvenanceV1Schema).safeParse(value.provenance);
+    if (provenance && !provenance.success) {
         return null;
     }
-    if (value.surfaceItemReference !== undefined
-        && !SessionTranscriptSurfaceItemReferenceV1Schema.safeParse(value.surfaceItemReference).success) {
+    const surfaceItemReference = value.surfaceItemReference === undefined ? undefined
+        : (stored ? createStoredReadSchema(SessionTranscriptSurfaceItemReferenceInputV1Schema) : SessionTranscriptSurfaceItemReferenceInputV1Schema).safeParse(value.surfaceItemReference);
+    if (surfaceItemReference && !surfaceItemReference.success) {
         return null;
     }
-    if (typeof value.content !== 'string' && !SessionStoredMessageContentSchema.safeParse(value.content).success) {
+    const content = typeof value.content === 'string' ? undefined : SessionStoredMessageContentSchema.safeParse(value.content);
+    if (content && !content.success) {
         return null;
     }
     if (value.mutationId !== resolveTranscriptMessageAppendMutationId({
@@ -450,13 +453,30 @@ function parseTranscriptMessageAppendPayload(value: unknown): PersistedTranscrip
     })) {
         return null;
     }
-    return value as unknown as PersistedTranscriptMessageAppendMutationV1;
+    if (!stored) {
+        return { ...value, ...(surfaceItemReference?.success ? { surfaceItemReference: surfaceItemReference.data } : {}) } as unknown as PersistedTranscriptMessageAppendMutationV1;
+    }
+    const projected = {
+        v: 1 as const,
+        source: 'transcript_message_append' as const,
+        sessionId: value.sessionId,
+        mutationId: value.mutationId,
+        localId: value.localId,
+        createdAt: value.createdAt,
+        updatedAt: value.updatedAt,
+        content: typeof value.content === 'string' ? value.content : content!.data,
+        ...(messageRole?.success ? { messageRole: messageRole.data } : {}),
+        ...(typeof value.sidechainId === 'string' || value.sidechainId === null ? { sidechainId: value.sidechainId } : {}),
+        ...(value.sessionEventType === 'ready' ? { sessionEventType: 'ready' as const } : {}),
+        ...(surfaceItemReference?.success ? { surfaceItemReference: surfaceItemReference.data } : {}),
+    };
+    return provenance?.success ? { ...projected, provenance: provenance.data } : projected;
 }
 
-function parseVoiceAgentTranscriptTurnPayload(value: unknown): PersistedVoiceAgentTranscriptTurnMutationV1 | null {
+function parseVoiceAgentTranscriptTurnPayload(value: unknown, stored: boolean): PersistedVoiceAgentTranscriptTurnMutationV1 | null {
     if (!isRecord(value)) return null;
-    const user = parseTranscriptMessageAppendPayload(value.user);
-    const assistant = parseTranscriptMessageAppendPayload(value.assistant);
+    const user = parseTranscriptMessageAppendPayload(value.user, stored);
+    const assistant = parseTranscriptMessageAppendPayload(value.assistant, stored);
     if (
         value.v !== 1
         || value.source !== 'voice_agent_transcript_turn'
@@ -549,7 +569,7 @@ function parseMutationPause(value: unknown): SessionClientDurableMutationPause |
     return pause;
 }
 
-function parseRegisteredSessionStateFieldPayload(value: unknown): RegisteredSessionStateFieldMutationV1 | null {
+function parseRegisteredSessionStateFieldPayload(value: unknown, stored: boolean): RegisteredSessionStateFieldMutationV1 | null {
     if (!isRecord(value)) return null;
     const fieldId = SessionStateFieldIdSchema.safeParse(value.fieldId);
     const deliveryClass = SessionStateFieldDeliveryClassSchema.safeParse(value.deliveryClass);
@@ -587,7 +607,7 @@ function parseRegisteredSessionStateFieldPayload(value: unknown): RegisteredSess
     let retainedSessionContextEntry: RegisteredSessionStateFieldMutationV1['retainedSessionContextEntry'];
     if (value.retainedSessionContextEntry !== undefined) {
         if (fieldId.data !== 'intent.sessionRoles' || value.op.kind !== 'set') return null;
-        const parsed = SessionPromptStackV1Schema.safeParse([value.retainedSessionContextEntry]);
+        const parsed = (stored ? createStoredReadSchema(SessionPromptStackV1Schema) : SessionPromptStackV1Schema).safeParse([value.retainedSessionContextEntry]);
         if (!parsed.success) return null;
         const entry = parsed.data[0]!;
         if (entry.id !== 'session.legacy-role-memory' || entry.ref.kind !== 'doc' || entry.placement !== 'system_append') return null;
@@ -619,7 +639,7 @@ function parseRegisteredSessionStateFieldPayload(value: unknown): RegisteredSess
                 storedValue = migrated.sessionRolesV1;
             } catch { return null; }
         }
-        const parsedValue = parseRegisteredSessionStateFieldValue(fieldId.data, storedValue);
+        const parsedValue = parseRegisteredSessionStateFieldValue(fieldId.data, storedValue, stored);
         if (!parsedValue.ok) return null;
         op = {
             kind: 'set',
@@ -649,9 +669,10 @@ function parseRegisteredSessionStateFieldPayload(value: unknown): RegisteredSess
 function parseRegisteredSessionStateFieldValue(
     fieldId: RegisteredSessionStateFieldMutationV1['fieldId'],
     value: unknown,
+    stored: boolean,
 ): Readonly<{ ok: true; value: unknown }> | Readonly<{ ok: false }> {
     if (fieldId === 'intent.context') {
-        const parsed = SessionContextIntentV1Schema.safeParse(value);
+        const parsed = (stored ? createStoredReadSchema(SessionContextIntentV1Schema) : SessionContextIntentV1Schema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'intent.memoryEnabled') return typeof value === 'boolean' ? { ok: true, value } : { ok: false };
@@ -660,14 +681,14 @@ function parseRegisteredSessionStateFieldValue(
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'identity.runtimeDescriptor') {
-        const parsed = SessionStateRuntimeDescriptorValueSchema.safeParse(value);
+        const parsed = (stored ? createStoredReadSchema(SessionStateRuntimeDescriptorValueSchema) : SessionStateRuntimeDescriptorValueSchema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'identity.providerSessionId') {
         return parseProviderSessionIdWriteValue(value);
     }
     if (fieldId === 'intent.model') {
-        const parsed = SessionStateModelValueSchema.safeParse(value);
+        const parsed = (stored ? createStoredReadSchema(SessionStateModelValueSchema) : SessionStateModelValueSchema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'intent.role') {
@@ -679,34 +700,34 @@ function parseRegisteredSessionStateFieldValue(
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'intent.permissionMode') {
-        const parsed = SessionStatePermissionModeValueSchema.safeParse(value);
+        const parsed = (stored ? createStoredReadSchema(SessionStatePermissionModeValueSchema) : SessionStatePermissionModeValueSchema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'intent.acpSessionMode') {
-        const parsed = SessionStateAcpSessionModeValueSchema.safeParse(value);
+        const parsed = (stored ? createStoredReadSchema(SessionStateAcpSessionModeValueSchema) : SessionStateAcpSessionModeValueSchema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'intent.acpConfigOption') {
-        const parsed = SessionStateAcpConfigOptionValueSchema.safeParse(value);
+        const parsed = (stored ? createStoredReadSchema(SessionStateAcpConfigOptionValueSchema) : SessionStateAcpConfigOptionValueSchema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'display.title') {
         return parseDisplayTitleWriteValue(value);
     }
     if (fieldId === 'runtime.workState') {
-        const parsed = SessionStateWorkStateValueSchema.safeParse(value);
+        const parsed = (stored ? createStoredReadSchema(SessionStateWorkStateValueSchema) : SessionStateWorkStateValueSchema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'runtime.activity') {
-        const parsed = SessionRuntimeActivitySnapshotSchema.safeParse(value);
+        const parsed = (stored ? createStoredReadSchema(SessionRuntimeActivitySnapshotSchema) : SessionRuntimeActivitySnapshotSchema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'runtime.usageLimitRecovery') {
-        const parsed = SessionStateUsageLimitRecoveryValueSchema.safeParse(value);
+        const parsed = (stored ? createStoredReadSchema(SessionStateUsageLimitRecoveryValueSchema) : SessionStateUsageLimitRecoveryValueSchema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'runtime.sessionRunner') {
-        const parsed = SessionRunnerRuntimeStateV1Schema.safeParse(value);
+        const parsed = (stored ? createStoredReadSchema(SessionRunnerRuntimeStateV1Schema) : SessionRunnerRuntimeStateV1Schema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (hasSessionStateFieldMetadataBinding(fieldId)) {
@@ -838,7 +859,7 @@ function parseSessionClientDurableMutationAttemptAccounting(
     };
 }
 
-function parseQueuedSessionClientDurableMutation(value: unknown, sessionId: string): ParseQueuedResult {
+function parseQueuedSessionClientDurableMutation(value: unknown, sessionId: string, stored = false): ParseQueuedResult {
     if (!isRecord(value)) {
         return {
             mutations: [],
@@ -936,7 +957,7 @@ function parseQueuedSessionClientDurableMutation(value: unknown, sessionId: stri
     }
 
     if (value.kind === 'session_turn_mutation') {
-        const payload = parseSessionTurnMutationPayload(value.payload);
+        const payload = parseSessionTurnMutationPayload(value.payload, stored);
         if (!payload) {
             return {
                 mutations: [],
@@ -965,7 +986,7 @@ function parseQueuedSessionClientDurableMutation(value: unknown, sessionId: stri
     }
 
     if (value.kind === 'transcript_message_append') {
-        const payload = parseTranscriptMessageAppendPayload(value.payload);
+        const payload = parseTranscriptMessageAppendPayload(value.payload, stored);
         if (!payload || mutationId !== payload.mutationId) {
             return {
                 mutations: [],
@@ -994,7 +1015,7 @@ function parseQueuedSessionClientDurableMutation(value: unknown, sessionId: stri
     }
 
     if (value.kind === 'voice_agent_transcript_turn') {
-        const payload = parseVoiceAgentTranscriptTurnPayload(value.payload);
+        const payload = parseVoiceAgentTranscriptTurnPayload(value.payload, stored);
         if (!payload || mutationId !== payload.mutationId) {
             return {
                 mutations: [],
@@ -1023,7 +1044,7 @@ function parseQueuedSessionClientDurableMutation(value: unknown, sessionId: stri
     }
 
     if (value.kind === 'registered_session_state_field') {
-        const payload = parseRegisteredSessionStateFieldPayload(value.payload);
+        const payload = parseRegisteredSessionStateFieldPayload(value.payload, stored);
         if (hasAdmissionOrder && admissionOrder === null) {
             return {
                 mutations: [],
@@ -1095,8 +1116,9 @@ function parseQueuedSessionClientDurableMutation(value: unknown, sessionId: stri
 export function parseRuntimeSessionClientDurableMutation(
     value: unknown,
     expectedSessionId: string,
+    stored = false,
 ): ParseQueuedResult {
-    const parsed = parseQueuedSessionClientDurableMutation(value, expectedSessionId);
+    const parsed = parseQueuedSessionClientDurableMutation(value, expectedSessionId, stored);
     const mutation = parsed.mutations[0];
     if (!mutation) return parsed;
     const belongsToExpectedSession = mutation.payload.sessionId === expectedSessionId;
@@ -1137,12 +1159,13 @@ export function parseRuntimeSessionClientDurableMutation(
 export function parseDaemonSessionClientDurableMutation(
     value: unknown,
     expectedSessionId: string,
+    stored = false,
 ): ParseQueuedResult {
-    const parsed = parseQueuedSessionClientDurableMutation(value, expectedSessionId);
+    const parsed = parseQueuedSessionClientDurableMutation(value, expectedSessionId, stored);
     const mutation = parsed.mutations[0];
     if (!mutation) return parsed;
     const rawPayload = isRecord(value) && isRecord(value.payload) ? value.payload : null;
-    const exactTurnEnd = ExactSessionTurnEndMutationV1Schema.safeParse(rawPayload);
+    const exactTurnEnd = (stored ? createStoredReadSchema(ExactSessionTurnEndMutationV1Schema) : ExactSessionTurnEndMutationV1Schema).safeParse(rawPayload);
     if (
         mutation.kind === 'session_turn_mutation'
         && exactTurnEnd.success
@@ -1223,8 +1246,8 @@ export async function loadSessionClientDurableMutationOutbox(
         const mutations: QueuedSessionClientDurableMutation[] = [];
         const deadLetters: SessionClientDurableMutationDeadLetterEntry[] = [];
         for (const rawMutation of parsed.mutations) {
-            const parsedMutation = context?.parseQueuedMutation(rawMutation, sessionId)
-                ?? parseQueuedSessionClientDurableMutation(rawMutation, sessionId);
+            const parsedMutation = context?.parseQueuedMutation(rawMutation, sessionId, true)
+                ?? parseQueuedSessionClientDurableMutation(rawMutation, sessionId, true);
             mutations.push(...parsedMutation.mutations);
             deadLetters.push(...parsedMutation.deadLetters);
         }
@@ -1352,8 +1375,8 @@ function readRecoverableAuthoritativeDeadLetterMutation(
             : null
     );
     if (rawMutation) {
-        const parsed = context?.parseQueuedMutation(rawMutation, sessionId)
-            ?? parseQueuedSessionClientDurableMutation(rawMutation, sessionId);
+        const parsed = context?.parseQueuedMutation(rawMutation, sessionId, true)
+            ?? parseQueuedSessionClientDurableMutation(rawMutation, sessionId, true);
         const mutation = parsed.mutations[0];
         if (mutation && isAuthoritativeSessionClientDurableMutation(mutation)) {
             return { ...mutation, nextAttemptAt: 0 } as QueuedSessionClientDurableMutation;
@@ -1361,7 +1384,7 @@ function readRecoverableAuthoritativeDeadLetterMutation(
     }
     const legacy = readLegacyAuthoritativeDeadLetterMutation(entry, sessionId);
     if (!legacy || !context) return legacy;
-    const readmitted = context.parseQueuedMutation(legacy, sessionId);
+    const readmitted = context.parseQueuedMutation(legacy, sessionId, true);
     const mutation = readmitted.mutations[0];
     return mutation && isAuthoritativeSessionClientDurableMutation(mutation) ? mutation : null;
 }

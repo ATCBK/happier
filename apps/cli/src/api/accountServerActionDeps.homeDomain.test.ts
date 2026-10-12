@@ -55,7 +55,7 @@ describe('Home family CLI adapter', () => {
       let stored: ApprovalRequest | null = null;
       const observations: unknown[] = [];
       // HTTP and Artifact persistence are the only substituted system boundaries.
-      const { executor } = createCliActionExecutorHarness({ token: 'bound', sessionId: 'cli-global',
+      const { executor, deps } = createCliActionExecutorHarness({ token: 'bound', sessionId: 'cli-global',
         serverId: 'home', serverHttpBaseUrl: 'http://home.test', mode: 'plain', ctx: null,
       }, {
         ...createAccountServerActionDeps({ token: 'bound', serverId: 'home', serverHttpBaseUrl: 'http://home.test' }),
@@ -90,6 +90,7 @@ describe('Home family CLI adapter', () => {
         context)).toMatchObject({ ok: false, errorCode: 'present_user_required' });
       const result = await executor.execute('approval.request.decide', { artifactId: 'secret-approval', decision: 'approve' },
         { surface: 'ui', authority: 'present_user', serverId: 'home', runtimeAccountId: 'account-1', actionCaller: { kind: 'host' } });
+      expect(result.ok ? null : result.errorCode).toBeNull();
       expect(result).toMatchObject({ ok: true, result: { status: 'executed' } });
       expect(requests).toEqual([getActionSpec(actionId).inputSchema.parse(input)]);
       expect(JSON.stringify(result)).not.toContain(cipher);
@@ -97,13 +98,18 @@ describe('Home family CLI adapter', () => {
       expect(JSON.stringify(observations)).not.toContain(cipher);
       const decided = ApprovalRequestV2Schema.parse(stored);
       expect(decided.execution).toMatchObject({ ok: true, result: output });
-      expect(await executor.execute(actionId, input, { ...context, serverId: 'another-home', bypassApprovals: true }))
+      expect(await deps.homeDomainAction!({ actionId, input, context: { ...context, serverId: 'another-home' } }))
         .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
       expect(requests).toHaveLength(1);
       returned = { ...output, value: 'unexpected-secret-plaintext' };
-      const malformed = await executor.execute(actionId, input, { ...context, bypassApprovals: true });
-      expect(malformed).toMatchObject({ ok: false, errorCode: 'outcome_unknown' });
+      expect(await executor.execute(actionId, input, { ...context, actionRequestId: 'malformed-response-request' }))
+        .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      const malformed = await executor.execute('approval.request.decide', { artifactId: 'secret-approval', decision: 'approve' },
+        { surface: 'ui', authority: 'present_user', serverId: 'home', runtimeAccountId: 'account-1', actionCaller: { kind: 'host' } });
+      expect(malformed).toMatchObject({ ok: true, result: { status: 'failed' } });
+      expect(ApprovalRequestV2Schema.parse(stored).execution).toMatchObject({ ok: false, errorCode: 'outcome_unknown' });
       expect(JSON.stringify(malformed)).not.toContain('unexpected-secret-plaintext');
+      expect(JSON.stringify(stored)).not.toContain('unexpected-secret-plaintext');
       expect(JSON.stringify(observations)).not.toContain('unexpected-secret-plaintext');
     },
   );
@@ -194,8 +200,8 @@ describe('Home family CLI adapter', () => {
     // Root Settings admission cannot widen a narrow caller grant into domain authority.
     expect(await executor.execute('settings.get', { anchor: teamAnchor, target }, { ...context,
       externalActionCredential: { accountId: 'requester', principalId: 'principal', credentialId: 'credential',
-        grant: { ...API_TOKEN_FULL_GRANT_V1, actions: ['settings.get'] } },
-    })).toMatchObject({ ok: false, errorCode: 'token_scope_denied' });
+        grant: { ...API_TOKEN_FULL_GRANT_V1, actions: { ids: ['settings.get'], families: [] } } },
+    })).toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
   });
 
   it('posts a Team intent to the path its Action row declares with the bound Account bearer', async () => {

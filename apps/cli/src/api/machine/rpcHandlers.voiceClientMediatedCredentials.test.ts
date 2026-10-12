@@ -226,6 +226,7 @@ async function registerHandler(input: Readonly<{
   // A prepared plugin module is the daemon composition input. Registry leasing,
   // publication and currentness stay on the real controller beneath this fixture.
   const registry: ResolvedExecutablePluginRuntimeRegistry = {
+      claimReleaseLessDeclarations: async () => undefined,
       durableRevision: registryRevision,
       contributes: {
         agents: [], providers: [], actions: [], resources: [], uiViewsV2: [],

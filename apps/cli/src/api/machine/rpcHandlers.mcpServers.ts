@@ -4,14 +4,15 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DaemonMcpServersDetectRequestSchema, DaemonMcpServersTestRequestSchema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
 import { DaemonMcpServersPreviewRequestSchema } from '@happier-dev/protocol/mcp/servers/previewV1';
 import { listMcpServerCatalogSavedSecretRefsV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
-import type { DaemonMcpServersPreviewResponse, DaemonMcpServersTestErrorCode, DaemonMcpServersDetectResponse, DaemonMcpServersDetectWarningV1, DaemonMcpServersTestRequest, DaemonMcpServersTestResponse, McpServerBindingV1, McpServersSettingsV1, ResolveEffectiveServersV1Result } from '@happier-dev/protocol';
+import type { DaemonMcpServersPreviewResponse, DaemonMcpServersTestErrorCode, DaemonMcpServersDetectResponse, DaemonMcpServersDetectWarningV1, DaemonMcpServersTestRequest, DaemonMcpServersTestResponse, McpServerRuleV1, McpServersSettingsV1, McpServerMaterializationV1 } from '@happier-dev/protocol';
 
 import type { McpServerConfig } from '@/agent';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { bootstrapAccountSettingsContext, type AccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { loadFreshMcpAccountSettingsContext } from '@/cli/commands/mcp/loadFreshMcpAccountSettingsContext';
 import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSettings } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
-import { resolveEffectiveMcpServersForDirectory } from '@/mcp/servers/resolveEffectiveMcpServersForDirectory';
+import { resolveSessionCapabilitiesForDirectory } from '@/mcp/servers/resolveSessionCapabilitiesForDirectory';
+import { projectMcpServerMaterializationV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
 import { materializeMcpServerConfigRecord } from '@/mcp/servers/materializeMcpServerConfigRecord';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
 import { createInvocationSavedSecretOperationContextV1, refreshSavedSecretCatalogForOperation, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
@@ -33,7 +34,7 @@ function nowMs(depsNowMs: (() => number) | undefined): number {
   return Date.now();
 }
 
-function implicitBindingForMachine(params: Readonly<{ serverId: string; machineId: string; nowMs: number }>): McpServerBindingV1 {
+function implicitBindingForMachine(params: Readonly<{ serverId: string; machineId: string; nowMs: number }>): McpServerRuleV1 {
   return {
     id: `implicit_${randomUUID()}`,
     serverId: params.serverId,
@@ -47,7 +48,7 @@ function implicitBindingForMachine(params: Readonly<{ serverId: string; machineI
 function resolveServerForTestRequest(params: Readonly<{
   request: DaemonMcpServersTestRequest;
   accountMcpSettings?: McpServersSettingsV1;
-}>): { ok: true; serverName: string; resolved: ResolveEffectiveServersV1Result } | { ok: false; errorCode: DaemonMcpServersTestErrorCode; error: string } {
+}>): { ok: true; serverName: string; resolved: McpServerMaterializationV1 } | { ok: false; errorCode: DaemonMcpServersTestErrorCode; error: string } {
   const req = params.request;
 
   if (req.t === 'draft') {
@@ -69,11 +70,11 @@ function resolveServerForTestRequest(params: Readonly<{
       bindings: [binding],
     };
 
-    const resolved = resolveEffectiveMcpServersForDirectory({
+    const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesForDirectory({
       settings,
       machineId: req.machineId,
       directory: req.directory,
-    });
+    }), req.directory);
 
     const item = resolved.serversByName[req.server.name];
     if (!item) return { ok: false, errorCode: 'server_not_found', error: 'Server not found after resolution.' };
@@ -99,22 +100,22 @@ function resolveServerForTestRequest(params: Readonly<{
       servers: [server],
       bindings: [binding],
     };
-    const resolved = resolveEffectiveMcpServersForDirectory({
+    const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesForDirectory({
       settings,
       machineId: req.machineId,
       directory: req.directory,
-    });
+    }), req.directory);
     const item = resolved.serversByName[server.name];
     if (!item) return { ok: false, errorCode: 'server_not_found', error: 'Server not found after resolution.' };
     if (item.enabled !== true) return { ok: false, errorCode: 'server_disabled', error: 'Server is not enabled for this target.' };
     return { ok: true, serverName: server.name, resolved: { directory: req.directory, strictMode: true, serversByName: { [server.name]: item } } };
   }
 
-  const resolved = resolveEffectiveMcpServersForDirectory({
+  const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesForDirectory({
     settings: accountMcpSettings,
     machineId: req.machineId,
     directory: req.directory,
-  });
+  }), req.directory);
   const item = resolved.serversByName[server.name];
   if (!item) return { ok: false, errorCode: 'server_not_found', error: 'Server not found after resolution.' };
   if (item.enabled !== true) return { ok: false, errorCode: 'server_disabled', error: 'Server is not enabled for this target.' };
@@ -319,7 +320,8 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
           machineId: parsed.data.machineId,
           directory: parsed.data.directory,
           agentId: parsed.data.agentId,
-          selection: parsed.data.selection ?? null,
+          capabilitySelection: parsed.data.capabilitySelection
+            ?? (parsed.data.selection ? { mcp: parsed.data.selection } : null),
           detectedServers: detected.servers,
           detectedWarnings: detected.warnings,
         });

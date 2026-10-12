@@ -13,12 +13,15 @@ import { ArtifactActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/a
 import { ArtifactBlobWriteV1Schema, type ArtifactBlobReadResponseV1 } from '@happier-dev/protocol';
 import { decryptWithDataKeyResult, decryptWithDataKey, encryptWithDataKey } from '@/api/encryption';
 import { createCliArtifactActions } from '@/session/actions/artifactActions';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 import { createAccountArtifactStore, createAcknowledgedAccountArtifactTransport, createCredentialedAccountArtifactStore, encodeAccountArtifactListCursor } from './accountArtifactStore';
 import { readCarrierMutation } from './accountArtifactStore.testkit';
 import { buildHomeHubArtifactIdV1, createHomeHubArtifactPortV1 } from '@happier-dev/protocol/home';
-import { createWidgetDefinitionArtifactPortV1, createWidgetSurfaceArtifactPortV1, type WidgetDefinitionDraftV1 } from '@happier-dev/protocol/widgets';
+import { buildWidgetDefinitionArtifactHeaderV1, createWidgetDefinitionArtifactPortV1, createWidgetSurfaceArtifactPortV1, flattenWidgetLayoutWidgetsV1,
+  readWidgetDefinitionArtifactSummaryV1, WidgetDefinitionV1Schema, type WidgetDefinitionDraftV1 } from '@happier-dev/protocol/widgets';
+import { readArtifactPublicNetworkPolicyV1 } from '@happier-dev/protocol/sharing/public-viewer';
 import { createActionExecutor } from '@happier-dev/protocol';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { createWorkBoardV1, buildWorkBoardArtifactHeaderV1 } from '@happier-dev/protocol';
@@ -30,7 +33,11 @@ const { mockDelete, mockGet, mockPost } = vi.hoisted(() => ({
 }));
 
 vi.mock('axios', () => ({ default: { delete: mockDelete, get: mockGet, post: mockPost } }));
-vi.mock('@/configuration', () => ({ configuration: { apiServerUrl: 'http://127.0.0.1:24599' } }));
+vi.mock('@/configuration', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configuration')>();
+  // Preserve the harness-owned temporary Account paths for real Action composition.
+  return { ...actual, configuration: { ...actual.configuration, apiServerUrl: 'http://127.0.0.1:24599' } };
+});
 
 describe('createAccountArtifactStore', () => {
   beforeEach(() => {
@@ -64,7 +71,8 @@ describe('createAccountArtifactStore', () => {
       artifactAction: createCliArtifactActions({ store, beforeDelete: async () => {}, resolvePublishCaller: async () => null }),
     });
     expect(await executor.execute('artifact.public_link.create', { artifactId: 'document' },
-      { surface: 'cli', serverId: 'home', bypassApprovals: true })).toMatchObject({ ok: false, errorCode: expected, error: expected });
+      { surface: 'cli', serverId: 'home', authority: 'present_user',
+        presentUserConfirmation: { actionId: 'artifact.public_link.create' } })).toMatchObject({ ok: false, errorCode: expected, error: expected });
     expect(mockPost).toHaveBeenCalledWith(expect.stringContaining('/v1/public-shares'),
       expect.objectContaining({ subject: { kind: 'artifact', id: 'document' } }), expect.objectContaining({ validateStatus: expect.any(Function) }));
   });
@@ -313,8 +321,8 @@ describe('createAccountArtifactStore', () => {
     const instance = { v: 1 as const, id: 'private-copy', definition: { kind: 'builtin' as const, id: 'session_summary' }, bindings: {} };
     await area.apply({ kind: 'add', instance });
     await area.apply({ kind: 'size', instanceId: instance.id, size: 'full' });
-    expect((await createWidgetSurfaceArtifactPortV1(createAcknowledgedAccountArtifactTransport(store), { surface, isCurrent: () => true }).read()).instances)
-      .toEqual([{ instance, size: 'full' }]);
+    const reloadedLayout = await createWidgetSurfaceArtifactPortV1(createAcknowledgedAccountArtifactTransport(store), { surface, isCurrent: () => true }).read();
+    expect(flattenWidgetLayoutWidgetsV1(reloadedLayout.items)).toMatchObject([{ instance, size: 'full' }]);
     if (mode === 'e2ee') expect(JSON.stringify(mockPost.mock.calls)).not.toContain('private-copy');
     const calls = mockPost.mock.calls.length;
     const wrongModeStore = createAccountArtifactStore({ credentials: { token: 'token', encryption: null },
@@ -347,7 +355,9 @@ describe('createAccountArtifactStore', () => {
     await port.apply({ kind: 'widget_add', instance });
     await port.apply({ kind: 'setup_visibility', stepId: 'addPhone', hidden: true });
     const reloaded = createHomeHubArtifactPortV1(createAcknowledgedAccountArtifactTransport(store), { accountId: 'owner' });
-    expect(await reloaded.read()).toMatchObject({ instances: [instance], hidden: expect.arrayContaining(['setup:addPhone']) });
+    const reloadedLayout = await reloaded.read();
+    expect(flattenWidgetLayoutWidgetsV1(reloadedLayout.items).map(widget => widget.instance)).toContainEqual(instance);
+    expect(reloadedLayout.hidden).toContain('setup:addPhone');
     if (mode === 'e2ee') expect(JSON.stringify(mockPost.mock.calls)).not.toContain('setup:addPhone');
     else await expect(mockPost.mock.results.at(-1)?.value).resolves.toMatchObject({ data: { dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER } });
   });
@@ -1074,6 +1084,79 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
     expect(restored?.header).not.toHaveProperty('savedBy');
     expect(restored?.header).not.toHaveProperty('unknown');
   });
+
+  it.each([
+    { priorPolicy: { network: 'open' as const }, expectedPolicy: { network: 'open', networkOrigins: [] } },
+    { priorPolicy: { networkOrigins: ['https://assets.example.test'] },
+      expectedPolicy: { network: 'origins', networkOrigins: ['https://assets.example.test'] } },
+  ])('restores saved HTML widget bytes, discovery and captured egress through the public Action (%j)', async ({ priorPolicy, expectedPolicy }) => {
+      const artifactId = '11111111-1111-4111-8111-111111111111';
+      const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
+      const credentials = { token, encryption: null };
+      const store = createAccountArtifactStore({ credentials,
+        getAccountEncryptionMode: async () => 'plain' });
+      const prior = WidgetDefinitionV1Schema.parse({ v: 1, id: artifactId, name: 'Prior HTML widget',
+        sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+        body: { kind: 'html', requestedCapabilities: { network: 'none' }, source: { v: 1, entrypoint: 'index.html', files: {
+          'index.html': { mime: 'text/html', contentBase64: encodeBase64(new TextEncoder().encode('<button>Retained interaction</button>')) },
+        } } }, networkOverride: priorPolicy, inputs: { fields: [] },
+        inputSchema: { type: 'object', additionalProperties: false }, provenance: { source: { kind: 'authored' } } });
+      const current = WidgetDefinitionV1Schema.parse({ ...prior, name: 'Current static widget', networkOverride: { network: 'none' },
+        body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Current content' } } } });
+      const retainedBody = encodePlainArtifactStoredContent({ body: JSON.stringify(prior) });
+      const currentRow = { id: artifactId, ownerAccountId: 'owner', access: 'owner', publicAudience: 'none', encryptionMode: 'plain',
+        header: encodePlainArtifactStoredContent(buildWidgetDefinitionArtifactHeaderV1(current)),
+        body: encodePlainArtifactStoredContent({ body: JSON.stringify(current) }),
+        headerVersion: 3, bodyVersion: 4, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, seq: 1, createdAt: 1, updatedAt: 2 };
+      let stored: typeof currentRow & { provenance?: string } = currentRow;
+      const reads: string[] = [];
+      mockGet.mockImplementation(async (rawUrl: string) => {
+        const path = new URL(rawUrl).pathname;
+        reads.push(path);
+        if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+        if (path === '/v1/account/profile') return { status: 200, data: { id: 'owner' } };
+        if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+        if (path === `/v1/artifacts/${artifactId}`) return { status: 200, data: stored };
+        if (path === `/v1/artifacts/${artifactId}/revisions`) return { status: 200, data: {
+          revisions: [{ bodyVersion: 2, body: retainedBody, createdAt: 1, sizeBytes: 50 }], retentionCount: 10,
+        } };
+        if (path === `/v1/artifacts/${artifactId}/access/grants`) return { status: 200, data: {
+          artifactId, ownerAccountId: 'owner', access: 'owner', grants: [{ principal: { kind: 'account', accountId: 'viewer' },
+            accessLevel: 'view', createdByAccountId: 'owner', createdAt: 1, display: { name: 'Viewer' } }],
+        } };
+        throw new Error(`Unexpected Artifact HTTP read: ${path}`);
+      });
+      // Only Account HTTP boundaries are mocked: the incumbent restore route
+      // selects retained body bytes while the real store prepares the header/CAS.
+      mockPost.mockImplementationOnce(async (rawUrl: string, wire: unknown) => {
+        expect(new URL(rawUrl).pathname).toBe(`/v1/artifacts/${artifactId}/revisions/2/restore`);
+        const request = z.object({ expectedHeaderVersion: z.literal(3), expectedBodyVersion: z.literal(4),
+          header: z.string(), provenance: z.string() }).strict().parse(wire);
+        expect(decodePlainArtifactStoredContent(request.provenance)).toMatchObject({ artifactId, bodyVersion: 5,
+          provenance: { savedBy: { kind: 'person', accountId: 'owner' }, restoredFromBodyVersion: 2 } });
+        stored = { ...stored, header: request.header, body: retainedBody, provenance: request.provenance, headerVersion: 4, bodyVersion: 5 };
+        return { status: 200, data: { success: true, headerVersion: 4, bodyVersion: 5 } };
+      });
+      const before = await store.read(artifactId);
+      expect(before).toMatchObject({ ownerAccountId: 'owner', access: 'owner', shared: true });
+      expect(before && readArtifactPublicNetworkPolicyV1(before)).toEqual({ network: 'none', networkOrigins: [] });
+      const executor = createActionExecutor(createCliActionDeps({ token, credentials,
+        sessionId: 'cli-global', mode: 'plain', ctx: null,
+        serverId: 'home', serverHttpBaseUrl: 'http://127.0.0.1:24599' }));
+      await expect(executor.execute('artifact.revisions.restore', { artifactId, bodyVersion: 2,
+        expectedRevision: { headerVersion: 3, bodyVersion: 4 } }, { surface: 'cli', serverId: 'home', authority: 'present_user', bypassApprovals: true }))
+        .resolves.toEqual({ ok: true, result: { artifactId, revision: { headerVersion: 4, bodyVersion: 5 } } });
+      const restored = await store.read(artifactId);
+      expect(restored).toMatchObject({ ownerAccountId: 'owner', access: 'owner', shared: true,
+        body: JSON.stringify(prior), revision: { headerVersion: 4, bodyVersion: 5 },
+        header: { kind: 'widget-definition.v1', v: 1, title: 'Prior HTML widget',
+          summary: { artifactId, name: 'Prior HTML widget', bodyKind: 'html', networkOverride: priorPolicy } } });
+      expect(restored && readWidgetDefinitionArtifactSummaryV1(artifactId, restored.header))
+        .toMatchObject({ name: 'Prior HTML widget', bodyKind: 'html', networkOverride: priorPolicy });
+      expect(restored && readArtifactPublicNetworkPolicyV1(restored)).toEqual(expectedPolicy);
+      expect(stored.body).toBe(retainedBody);
+      expect(reads).toContain(`/v1/artifacts/${artifactId}/access/grants`);
+    });
 
   it('restores a renamed launch profile with a matching usable and sharable header', async () => {
     const store = createAccountArtifactStore({ credentials: { token: 'token', encryption: null },

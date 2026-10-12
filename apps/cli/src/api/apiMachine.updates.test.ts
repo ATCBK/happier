@@ -433,7 +433,10 @@ describe('ApiMachineClient updates', () => {
       if (typeof refresh !== 'function') throw new Error('Missing snapshot owner');
       await Reflect.apply(refresh, client, []);
       release();
-      expect(await pending).toEqual(Array.from({ length: 4 }, () => ({ status: 'fulfilled', value: 'published' })));
+      // The refreshed snapshot already contains the current service summary;
+      // that publication settles without another versioned write.
+      expect(await pending).toEqual(['published', 'published', 'unchanged', 'published']
+        .map(value => ({ status: 'fulfilled', value })));
       expect(metadataCommits).toBe(1);
       expect(decrypt(key, 'dataKey', decodeBase64(row.metadata))).toMatchObject({ displayName: 'Later owner edit' });
       expect(decrypt(key, 'dataKey', decodeBase64(row.daemonState!))).toMatchObject({

@@ -18,7 +18,7 @@ import { WorkspaceSyncHandoffSourcePhaseRequestV1Schema, HandoffTargetReplacemen
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { ExternalActionExecutionAuthorizationV1Schema, type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
-import type { RpcAuthorizationResult } from '@/api/rpc/types';
+import type { RpcAuthorizationResult, RpcAdmissionPredicate } from '@/api/rpc/types';
 import { ManagedActivityReadRequestV1Schema, type ManagedActivityReadRequestV1 } from '@happier-dev/protocol/machines/managed/managedIntentV1';
 import { ManagedGuestCurrentOutputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { resolveExternalActionRootInvocationAuthority } from '@/api/externalActionExecutionAuthorization';
@@ -146,13 +146,17 @@ export function doesMachineRpcTargetMatchAdmission(
   request: unknown,
   admission: SocketRpcMachineAdmissionContextV1 | undefined,
   target: Readonly<{ machineId: string; installationId: string; custodianAccountId: string | null }> | null,
+  onDenial?: (predicate: RpcAdmissionPredicate) => void,
 ): boolean {
-  return !!target && !!admission
-    && admission.machineId === target.machineId
-    && admission.installationId === target.installationId
-    && admission.custodianAccountId === target.custodianAccountId
-    && (!request || typeof request !== 'object' || !('machineId' in request)
-      || request.machineId === admission.machineId);
+  const deny = (predicate: RpcAdmissionPredicate) => { onDenial?.(predicate); return false; };
+  if (!target || !admission) return deny('machine_admission');
+  if (admission.machineId !== target.machineId) return deny('machine_target');
+  if (admission.installationId !== target.installationId) return deny('machine_installation');
+  if (admission.custodianAccountId !== target.custodianAccountId) return deny('machine_custodian');
+  if (request && typeof request === 'object' && 'machineId' in request && request.machineId !== admission.machineId) {
+    return deny('machine_request_target');
+  }
+  return true;
 }
 
 /** This read proves current access; the signed context is not a reusable admission ticket. */
@@ -319,11 +323,12 @@ function readSessionIdFromParams(params: unknown): string | null {
   return typeof sessionId === 'string' && sessionId.trim().length > 0 ? sessionId.trim() : null;
 }
 
-function forbidden(): RpcAuthorizationResult {
+function forbidden(admissionPredicate: RpcAdmissionPredicate = 'machine_admission'): RpcAuthorizationResult {
   return {
     ok: false,
     error: RPC_ERROR_MESSAGES.FORBIDDEN,
     errorCode: RPC_ERROR_CODES.FORBIDDEN,
+    admissionPredicate,
   };
 }
 
@@ -452,15 +457,16 @@ export async function authorizeMachineRpcRequest(request: Readonly<{
       const installationId = machine.resolveInstallationId();
       const custodianAccountId = !writerTargetRouting && !seedRouting
         ? await machine.resolveCustodianAccountId(request.signal) : null;
-      if (request.signal?.aborted
-        || !installationId
-        || !sourceRouting && !targetRouting && !writerTargetRouting && !seedRouting
-          && !doesMachineRpcTargetMatchAdmission(request.params, context, {
-            machineId: machine.machineId, installationId, custodianAccountId,
-          })
-        || !request.method.startsWith(`${machine.machineId}:`)
-        || !writerTargetRouting && !seedRouting && context.custodianAccountId !== custodianAccountId
-        || !await machine.verifyMachineAdmission({ context, method: request.method,
+      if (request.signal?.aborted) return forbidden('request_cancelled');
+      if (!installationId) return forbidden('machine_installation');
+      let targetPredicate: RpcAdmissionPredicate = 'machine_target';
+      if (!sourceRouting && !targetRouting && !writerTargetRouting && !seedRouting
+        && !doesMachineRpcTargetMatchAdmission(request.params, context, {
+          machineId: machine.machineId, installationId, custodianAccountId,
+        }, predicate => { targetPredicate = predicate; })) return forbidden(targetPredicate);
+      if (!request.method.startsWith(`${machine.machineId}:`)) return forbidden('machine_scope');
+      if (!writerTargetRouting && !seedRouting && context.custodianAccountId !== custodianAccountId) return forbidden('machine_custodian');
+      if (!await machine.verifyMachineAdmission({ context, method: request.method,
           ...(sourceRouting ? { workspaceSyncSourceRouting: sourceRouting } : {}),
           ...((seedRouting || isProjectSource || writerTargetRouting && request.callerInputAuthorization?.binding.actionId === 'projects.open')
             && request.workspaceSyncSourceExecution ? { workspaceSyncSourceExecution: request.workspaceSyncSourceExecution } : {}),
@@ -470,17 +476,17 @@ export async function authorizeMachineRpcRequest(request: Readonly<{
           ...((sourceRouting || writerTargetRouting || seedRouting) && request.callerInputAuthorization ? { callerInputAuthorization: request.callerInputAuthorization } : {}),
           ...(custodyRequest?.success && 'subjectAccountId' in custodyRequest.data
             ? { custodySubjectAccountId: custodyRequest.data.subjectAccountId } : {}),
-          ...(request.signal ? { signal: request.signal } : {}) })
-        || installationId !== machine.resolveInstallationId()
-        || request.signal?.aborted) return forbidden();
+          ...(request.signal ? { signal: request.signal } : {}) })) return forbidden('machine_currentness');
+      if (installationId !== machine.resolveInstallationId()) return forbidden('machine_installation');
+      if (request.signal?.aborted) return forbidden('request_cancelled');
     } catch {
-      return forbidden();
+      return forbidden('authorization_unavailable');
     }
   }
   const sessionRule = resolveSocketRpcSessionAuthorization(request.method);
   if (sessionRule?.optionalSessionScope) {
     if (request.authorization === undefined) return { ok: true };
-    return parseSocketRpcAuthorizationContext(request.authorization)?.kind === 'session.write' ? { ok: true } : forbidden();
+    return parseSocketRpcAuthorizationContext(request.authorization)?.kind === 'session.write' ? { ok: true } : forbidden('session_authorization');
   }
   const authorizationMethod = resolveSocketRpcSessionWriteAuthorizationMethod(request.method);
   if (!authorizationMethod) {
@@ -503,10 +509,10 @@ export async function authorizeMachineRpcRequest(request: Readonly<{
   }
 
   const authorization = parseSocketRpcAuthorizationContext(request.authorization);
-  if (!authorization) return forbidden();
+  if (!authorization) return forbidden('session_authorization');
 
   if (!requestedSessionId || requestedSessionId !== authorization.sessionId) {
-    return forbidden();
+    return forbidden('session_target');
   }
 
   return { ok: true };

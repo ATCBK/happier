@@ -41,6 +41,7 @@ export function createSessionClientUsageObservationPublisher(
             // metadata dimensions alone do not prove a delayed response's source.
             delete observationMetadata.providerId;
             delete observationMetadata.providerConnectionId;
+            delete observationMetadata.usageAttribution;
             return publisher.publish({
                 ...input,
                 observedAt,

@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { ExternalActionMachineBootstrapV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { AccessibleMachineAccessV1Schema, type AccessibleMachineAccessV1 } from '@happier-dev/protocol/machines/machineAccessV1';
+import { DevcontainerChildProjectionV1Schema, type DevcontainerChildProjectionV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
+import { isMachineReachableV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
 
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -12,7 +14,8 @@ import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/clie
 // `metadata` blob it genuinely needs. Labels remain a CLI projection of that
 // metadata and never alter machine identity.
 const ACCOUNT_MACHINE_ROW_SCHEMA = ExternalActionMachineBootstrapV1Schema
-  .extend({ metadata: z.string().optional(), access: AccessibleMachineAccessV1Schema.optional() })
+  .extend({ metadata: z.string().optional(), activeAt: z.number().nullable().optional(), access: AccessibleMachineAccessV1Schema.optional(),
+    devcontainerChild: z.optional(z.nullable(DevcontainerChildProjectionV1Schema)) })
   .passthrough();
 
 const ACCOUNT_MACHINE_INVENTORY_SCHEMA = z.array(ACCOUNT_MACHINE_ROW_SCHEMA);
@@ -24,9 +27,11 @@ export type CurrentAccountMachineTarget = Readonly<{
 export type CurrentAccountMachineInventoryItem = Readonly<{
   id: string; label: string; kind: 'persistent' | 'ephemeral_session_runner';
   active: boolean; revokedAt: number | null; replacedByMachineId: string | null;
+  activeAt?: number | null;
   access?: AccessibleMachineAccessV1;
   operationProtocolCapabilities?: unknown;
   operationProtocolCapabilitiesRevision?: unknown;
+  devcontainerChild?: DevcontainerChildProjectionV1;
 }>;
 
 export type CurrentAccountMachineTargetResolution =
@@ -94,7 +99,9 @@ export async function listCurrentAccountMachines(params: Readonly<{
     return inventory.data.map((row) => ({
       id: row.id, label: readMachineLabel(row.metadata, row.id), kind: row.kind, active: row.active,
       revokedAt: row.revokedAt, replacedByMachineId: row.replacedByMachineId,
+      ...(row.activeAt === undefined ? {} : { activeAt: row.activeAt }),
       ...(row.access ? { access: row.access } : {}),
+      ...(row.devcontainerChild ? { devcontainerChild: row.devcontainerChild } : {}),
       ...(row.operationProtocolCapabilities === undefined ? {} : { operationProtocolCapabilities: row.operationProtocolCapabilities }),
       ...(row.operationProtocolCapabilitiesRevision === undefined ? {} : { operationProtocolCapabilitiesRevision: row.operationProtocolCapabilitiesRevision }),
     }));
@@ -102,6 +109,15 @@ export async function listCurrentAccountMachines(params: Readonly<{
     params.signal?.throwIfAborted();
     throw Object.assign(new Error('The current machine inventory is unavailable.'), { code: 'machine_inventory_unavailable', cause: error });
   }
+}
+
+/** Background Account administration selects a reachable daemon in the exact Home. */
+export async function resolveCurrentAccountAdministrationMachine(params: Parameters<typeof listCurrentAccountMachines>[0]
+  & Readonly<{ preferredMachineId?: string | null }>): Promise<string | null> {
+  const machines = await listCurrentAccountMachines(params);
+  const reachable = machines.filter(machine => machine.kind === 'persistent' && !machine.replacedByMachineId
+    && (!machine.access || machine.access.accessState === 'ready') && isMachineReachableV1({ machine, nowMs: Date.now() }));
+  return reachable.find(machine => machine.id === params.preferredMachineId)?.id ?? reachable[0]?.id ?? null;
 }
 
 /**

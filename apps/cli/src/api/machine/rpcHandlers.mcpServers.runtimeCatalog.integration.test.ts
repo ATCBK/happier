@@ -16,10 +16,12 @@ vi.mock('@/api/client/serverHttpBaseUrl', async importOriginal => ({
 
 const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true,
   servers: [{ id: 'srv-row', name: 'row-server', transport: 'stdio', stdio: { command: 'fixture', args: [] },
-    env: { KEEP: { t: 'literal', v: 'present' }, REMOVE: { t: 'literal', v: 'removed' } }, createdAt: 1, updatedAt: 1 }],
+    env: { KEEP: { t: 'literal', v: 'present' }, REMOVE: { t: 'literal', v: 'removed' } },
+    configOverrides: [{ target: { t: 'workspace', machineId: 'm1', workspaceRoot: 'C:\\workspace' },
+      envPatch: { REMOVE: null, EXTRA: { t: 'literal', v: 'override' } } }], createdAt: 1, updatedAt: 1 }],
   bindings: [{ id: 'binding-row', serverId: 'srv-row', enabled: true,
     target: { t: 'workspace', machineId: 'm1', workspaceRoot: 'C:\\workspace' },
-    overrides: { envPatch: { REMOVE: null, EXTRA: { t: 'literal', v: 'override' } } }, createdAt: 1, updatedAt: 1 }],
+    createdAt: 1, updatedAt: 1 }],
 });
 const catalog = { v: 1 as const, servers: settings.servers, bindings: settings.bindings };
 
@@ -93,6 +95,21 @@ function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; ret
 describe('Machine MCP catalog admission', () => {
   beforeEach(() => { resetInMemoryAccountSettingsContextForTests(); vi.mocked(axios.get).mockReset(); });
   afterEach(() => resetInMemoryAccountSettingsContextForTests());
+
+  it('keeps released preview input and gives the valid current carrier precedence without malformed fallback', async () => {
+    const { handlers } = register();
+    const preview = handlers.get(RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW)!;
+    const target = { machineId: 'm1', directory: 'C:\\workspace', agentId: 'claude' };
+    const legacy = { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: ['srv-row'] };
+    expect(await preview({ ...target, selection: legacy })).toMatchObject({ ok: true,
+      managed: [{ serverId: 'srv-row', selected: false, reasonCode: 'forced_excluded' }] });
+    expect(await preview({ ...target, selection: legacy, capabilitySelection: {
+      mcp: { ...legacy, forceExcludeServerIds: [] },
+      skills: { v: 1, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: [], excludeNativeSkillNames: [] },
+    } })).toMatchObject({ ok: true, managed: [{ serverId: 'srv-row', selected: true }] });
+    expect(await preview({ ...target, selection: legacy, capabilitySelection: { mcp: 'invalid' } }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_request' });
+  });
 
   it('tests a saved row server with Windows binding roots and nullable env patches', async () => {
     const { handlers, probe } = register();

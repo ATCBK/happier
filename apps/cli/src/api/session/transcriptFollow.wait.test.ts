@@ -11,12 +11,15 @@ describe('Home-backed transcript Action waits', () => {
   it('wakes on append and revision, retains notifications between reads, and releases on abort', async () => {
     let rows: { id: string; seq: number; localId: null; createdAt: number; updatedAt: number; content: { t: 'plain'; v: unknown } }[] = [];
     let reads = 0;
+    let onRead: (() => void) | undefined;
     const http = createServer((request, response) => {
       reads++;
       const url = new URL(request.url ?? '/', 'http://fixture');
       const after = Number(url.searchParams.get('afterSeq') ?? 0);
       response.setHeader('content-type', 'application/json');
-      response.end(JSON.stringify({ messages: rows.filter((row) => row.seq > after), hasMore: false, nextAfterSeq: rows.at(-1)?.seq ?? after }));
+      response.end(JSON.stringify({ messages: rows.filter((row) => row.seq > after), hasMore: false, nextAfterSeq: null }));
+      onRead?.();
+      onRead = undefined;
     });
     const io = new Server(http, { path: '/v1/updates/' });
     await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
@@ -25,8 +28,9 @@ describe('Home-backed transcript Action waits', () => {
     const endpoint = `http://127.0.0.1:${address.port}`;
     const registry = createSessionTranscriptFollowLeaseRegistry({ idleTtlMs: 20 });
     const controller = new AbortController();
+    const store = createServerBackedSessionTranscriptStore({ token: 'terminal-test', sessionId: 'session-1', mode: 'plain', ctx: null });
     const follow = (cursor: string) => runWithServerHttpBaseUrl(endpoint, () => followSessionTranscript({
-      store: createServerBackedSessionTranscriptStore({ token: 'terminal-test', sessionId: 'session-1', mode: 'plain', ctx: null }),
+      store,
       registry, sessionId: 'session-1', signal: controller.signal,
       input: { cursor, leaseId: 'lease-1', waitForChanges: true },
     }));
@@ -52,9 +56,18 @@ describe('Home-backed transcript Action waits', () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       await expect(follow('1')).resolves.toMatchObject({ ok: true, items: [],
         changes: [{ kind: 'revision', messageId: 'row-1', seq: 1 }] });
-      const idle = follow('1');
+      const baseline = new Promise<void>(resolve => { onRead = resolve; });
+      const second = follow('1');
+      await baseline;
+      rows.push({ ...rows[0]!, id: 'row-2', seq: 2 });
+      update({ t: 'new-message', sid: 'session-1', message: rows[1] });
+      const secondResult = await second;
+      expect(secondResult).toMatchObject({ ok: true, items: [{ seq: 2 }], nextCursor: '2' });
+      if (!secondResult.ok) throw new Error('Second follow failed');
+      expect(secondResult.items).toHaveLength(1);
+      const idle = follow('2');
       void idle.catch(() => undefined);
-      await expect.poll(() => reads).toBe(4);
+      await expect.poll(() => reads).toBe(6);
       controller.abort();
       await expect(idle).rejects.toMatchObject({ name: 'AbortError' });
       expect(registry.activeCount()).toBe(0);

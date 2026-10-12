@@ -126,8 +126,11 @@ async function recipientSecret(credentials: Credentials): Promise<Uint8Array> {
 /** Stable private occurrence identity belongs to the admitted Account codec owner. */
 function usageNoticeArtifactId(params: Readonly<{ accountId: string; notice: UsageNoticeArtifactHeaderV1['notice'];
   mode: 'plain' | 'e2ee'; credentials: StoredCredentials }>): string {
-  const occurrence = JSON.stringify(['happier:usage-notice-occurrence:v1', params.accountId,
-    params.notice.serviceId, params.notice.profileId, params.notice.kind, params.notice.issueFingerprint]);
+  const occurrence = JSON.stringify(params.notice.topic === 'resource_limit'
+    ? ['happier:machine-vitals-notice-occurrence:v1', params.accountId, params.notice.machineId,
+      params.notice.kind, 'volumeId' in params.notice ? params.notice.volumeId : null, params.notice.phase, params.notice.at]
+    : ['happier:usage-notice-occurrence:v1', params.accountId,
+      params.notice.serviceId, params.notice.profileId, params.notice.kind, params.notice.issueFingerprint]);
   let bytes: Buffer;
   if (params.mode === 'plain') {
     bytes = createHash('sha1').update(occurrence).digest().subarray(0, 16);

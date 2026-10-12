@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { SessionClientTranscriptSendPort } from './sendMessages';
 import { resolveTranscriptSessionBoardItemReferenceV1 } from '@happier-dev/protocol/sessions/board';
+import type { TranscriptRawAgentEventV1 } from '@happier-dev/protocol';
+import { commitRuntimeSessionEvent } from '@/agent/runtime/session/transcripts/publishRuntimeSessionEvent';
+import type { RuntimeTranscriptProjectionSession } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import {
   prepareCommittedAgentMessageViaPort,
   prepareCommittedUserTextMessageViaPort,
@@ -28,6 +31,31 @@ function createTranscriptSendPort(): SessionClientTranscriptSendPort {
 }
 
 describe('commitMessages', () => {
+  it.each([
+    { type: 'worker-update', update: { v: 1, workerKind: 'session', workerId: 'worker',
+      ownerState: 'settled', wake: 'finished', headline: 'Worker finished', result: 'Done', canInspect: true } },
+    { type: 'message', message: 'Followed context changed, so Happier woke this Agent with the update.' },
+  ] satisfies TranscriptRawAgentEventV1[])('publishes the host $type with event-role metadata for durable Follow acknowledgement', async (event) => {
+    const port = createTranscriptSendPort();
+    const localId = 'session-follow-wake:accepted-worker';
+    let stored: Readonly<{ messageRole: string; sidechainId: string | null; transcriptObservationProvenance: unknown }> | null = null;
+    // Durable storage is the system boundary; host publication and transport classification stay real.
+    const session = {
+      sessionId: port.sessionId,
+      enqueueAgentMessageCommitted: async (provider, body, options) => {
+        const prepared = await prepareCommittedAgentMessageViaPort(port, provider, body, options);
+        stored = { messageRole: prepared.messageRole, sidechainId: prepared.sidechainId,
+          transcriptObservationProvenance: options.provenance };
+        return { persisted: true, delivered: true };
+      },
+    } satisfies RuntimeTranscriptProjectionSession;
+    await commitRuntimeSessionEvent({ session, agentId: 'claude', localId, event });
+    // Event-role metadata is the storage contract required by the server Follow
+    // acceptance owner; its database/authorization checks stay in server suites.
+    expect(stored).toEqual({ messageRole: 'event', sidechainId: null,
+      transcriptObservationProvenance: { kind: 'non_dependent', source: 'external' } });
+  });
+
   it('binds an acknowledged surface identity to its completed encrypted tool result before sealing', async () => {
     const port = { ...createTranscriptSendPort(), serverId: 'home-a',
       buildOutboundSessionMessagePayload: () => 'sealed-message' };
@@ -50,8 +78,8 @@ describe('commitMessages', () => {
       address: { serverId: 'home-a', sessionId: 'session-1' } }))
       .toMatchObject({ itemId: 'visual' });
     expect(prepared.payload).toBe('sealed-message');
-    expect(prepared).toHaveProperty('surfaceItemReference', { v: 1, itemId: 'visual', itemRevision,
-      sourceAddress: { serverId: 'home-a', sessionId: 'session-1' } });
+    expect(prepared).toHaveProperty('surfaceItemReference', { v: 1, references: [{ v: 1, itemId: 'visual', itemRevision,
+      sourceAddress: { serverId: 'home-a', sessionId: 'session-1' }, sourceItemId: 'visual', sourceItemRevision: itemRevision }] });
     await prepareCommittedAgentMessageViaPort(port, 'codex', call, { localId: 'foreign-call' });
     const foreign = await prepareCommittedAgentMessageViaPort(port, 'codex', {
       ...body, output: { ...body.output, serverId: 'other-home' },
@@ -87,7 +115,8 @@ describe('commitMessages', () => {
         type: 'tool-result', callId: 'shell-call', id: 'result', output,
       }, { localId: 'result' });
       expect(prepared.surfaceItemReference, JSON.stringify(scenario)).toEqual(scenario.linked
-        ? { v: 1, itemId: 'visual', itemRevision, sourceAddress: { serverId: 'home-a', sessionId: 'session-1' } }
+        ? { v: 1, references: [{ v: 1, itemId: 'visual', itemRevision, sourceAddress: { serverId: 'home-a', sessionId: 'session-1' },
+          sourceItemId: 'visual', sourceItemRevision: itemRevision }] }
         : undefined);
       expect(resolveTranscriptSessionBoardItemReferenceV1({ toolName: scenario.name ?? 'Bash', state: 'completed',
         input: call.normalizedBody.type === 'tool-call' ? call.normalizedBody.input : null,

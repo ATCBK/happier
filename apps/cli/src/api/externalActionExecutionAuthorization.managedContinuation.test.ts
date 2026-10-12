@@ -7,6 +7,7 @@ import { dispatchLocalManagedMachineEnvironment, dispatchManagedMachineEnvironme
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { projectApiTokenSessionSpawnAdmissionV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { updateSettings } from '@/persistence';
+import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 
 const keyPair = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(8));
 const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(9) };
@@ -92,6 +93,22 @@ describe('managed continuation through the ordinary public Action transport', ()
             serverHttpBaseUrl: 'https://home.example', installationId: 'installation', privateKey: keyPair.secretKey, material }))
             .toMatchObject({ ok: true, result: { operationId: 'setup-operation' } });
         expect(opened).toEqual(setup);
+    });
+
+    it('carries the captured Voice automation ceiling through signed managed setup', async () => {
+        const setup = { homeId: 'srv_home', machineId: 'guest', presetId: 'preset', presetRevision: 4 };
+        let capturedHeaders: unknown;
+        vi.spyOn(axios, 'post').mockImplementation(async (_url, body, config) => {
+            capturedHeaders = config?.headers;
+            const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            return { status: 200, data: { v: 1, actionId: 'machines.environment.apply', requestId: request.envelope.requestId,
+                execution: { ok: true, result: { operationId: 'setup-operation' } } } };
+        });
+        await expect(dispatchManagedMachineEnvironment({ input: setup, serverId: 'home-profile', continuation,
+            authorization: { ...root, binding: { ...root.binding, accountEncryptionMode: 'plain' } },
+            authority: 'account_automation', serverHttpBaseUrl: 'https://home.example',
+            installationId: 'installation', privateKey: keyPair.secretKey })).resolves.toMatchObject({ ok: true });
+        expect(capturedHeaders).toMatchObject({ [AUTHORITY_CEILING_HEADER_V1]: 'account_automation' });
     });
 
     it('qualifies a real local profile to its exact Home before sealing guest input and admission facts', async () => {

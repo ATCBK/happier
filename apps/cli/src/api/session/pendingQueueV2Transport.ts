@@ -10,7 +10,7 @@ import { emitSocketWithAck } from '@/session/transport/shared/socketAck';
 import { ACCEPTED_PENDING_SETTLEMENT_EVENT_V1, AcceptedPendingSettlementRequestV1Schema, AcceptedPendingSettlementResponseV1Schema } from '@happier-dev/protocol/sessions/pending/acceptedPendingSettlementV1';
 import { normalizePendingDeliveryBlockedReason } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
 import { normalizePendingDeliveryStatusV1, parsePendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
-import { normalizePendingRequestedActionV1, PendingRequestedActionV1Schema, PendingResetStartSetResultV1Schema, type PendingRequestedActionV1, type PendingResetStartBindingV1, type PendingResetStartSetResultV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { normalizePendingRequestedActionV1, PendingRequestedActionV1Schema, PendingResetStartSetInputV1Schema, PendingResetStartSetResultV1Schema, type PendingRequestedActionV1, type PendingResetStartBindingV1, type PendingResetStartSetInputV1, type PendingResetStartSetResultV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { PendingProviderActionSchema } from '@happier-dev/protocol/sessions/pending/pendingProviderAction';
 import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1, SessionPendingAdmissionSettlementRequestV1Schema, SessionPendingAdmissionSettlementResponseV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
@@ -45,13 +45,30 @@ export async function readPendingResetStartsForSource(params: Readonly<{
     return PendingResetStartsReadResultV1Schema.parse(response.data);
 }
 
-/** Exact-row intent mutation. Unsupported Homes reject; this never sends another input. */
+/** Binds exact existing custody, or creates a new input already held for reset. */
 export async function updatePendingQueueV2RequestedAction(params: Readonly<{
     token: string; sessionId: string; localId: string; requestedAction: PendingRequestedActionV1; signal?: AbortSignal;
-    resolveAuthorizationHeaders: (request: Readonly<{ method: 'PATCH'; path: string; body: Readonly<{ requestedAction: PendingRequestedActionV1 }> }>) => Readonly<Record<string, string>> | null;
+    initialInput?: PendingResetStartSetInputV1['initialInput'];
+    resolveAuthorizationHeaders: (request: Readonly<{ method: 'PATCH' | 'POST'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
 }>): Promise<PendingResetStartSetResultV1> {
+    const requestedAction = PendingRequestedActionV1Schema.parse(params.requestedAction);
+    if (params.initialInput !== undefined) {
+        if (requestedAction.kind !== 'reset_start') throw new Error('Initial Pending input requires reset admission');
+        const input = PendingResetStartSetInputV1Schema.parse({ sessionId: params.sessionId, localId: params.localId,
+            reset: requestedAction.reset, initialInput: params.initialInput });
+        const initialInput = input.initialInput!;
+        const result = await enqueuePendingQueueV2MessageViaHttp({ token: params.token, sessionId: input.sessionId,
+            body: { localId: input.localId, messageRole: 'user', requestedAction,
+                ...(initialInput.content.t === 'encrypted' ? { ciphertext: initialInput.content.c } : { content: initialInput.content }),
+                ...(initialInput.targetMachineId ? { targetMachineId: initialInput.targetMachineId } : {}),
+            }, ...(params.signal ? { signal: params.signal } : {}),
+            resolveAuthorizationHeaders: request => params.resolveAuthorizationHeaders({ method: 'POST', path: request.path, body: request.body }),
+        });
+        if (result.didWrite === null || result.terminal || result.suppressed) throw new Error('Invalid Pending reset admission acknowledgement');
+        return PendingResetStartSetResultV1Schema.parse({ didUpdate: result.didWrite, requestedAction });
+    }
     const path = `/v2/sessions/${encodeURIComponent(params.sessionId)}/pending/${encodeURIComponent(params.localId)}/action`;
-    const body = { requestedAction: PendingRequestedActionV1Schema.parse(params.requestedAction) };
+    const body = { requestedAction };
     const authorization = params.resolveAuthorizationHeaders({ method: 'PATCH', path, body });
     if (!authorization) throw Object.assign(new Error('admission_unavailable'), { code: 'admission_unavailable' });
     const response = await axios.patch<unknown>(`${resolveServerHttpBaseUrl()}${path}`, body, {
@@ -399,7 +416,7 @@ function readPendingMaterializePayload(payload: unknown): PendingMaterializePayl
 
 function createPendingMaterializeAckSocket(socket: Socket<ServerToClientEvents, ClientToServerEvents>): AckSocket {
     const build = (target: Socket<ServerToClientEvents, ClientToServerEvents>): AckSocket => ({
-        connected: target.connected,
+        get connected() { return target.connected; },
         emitWithAck: async (event, payload) => {
             if (event !== 'pending-materialize-next') {
                 throw new Error(`Unexpected pending queue socket ACK event: ${event}`);
@@ -415,7 +432,7 @@ function createAcceptedPendingSettlementAckSocket(
     socket: Socket<ServerToClientEvents, ClientToServerEvents>,
 ): AckSocket {
     const build = (target: Socket<ServerToClientEvents, ClientToServerEvents>): AckSocket => ({
-        connected: target.connected,
+        get connected() { return target.connected; },
         emitWithAck: async (event, payload) => {
             if (event !== ACCEPTED_PENDING_SETTLEMENT_EVENT_V1) {
                 throw new Error(`Unexpected accepted pending settlement socket ACK event: ${event}`);
@@ -434,7 +451,7 @@ function createPendingAdmissionSettlementAckSocket(
     socket: Socket<ServerToClientEvents, ClientToServerEvents>,
 ): AckSocket {
     const build = (target: Socket<ServerToClientEvents, ClientToServerEvents>): AckSocket => ({
-        connected: target.connected,
+        get connected() { return target.connected; },
         emitWithAck: async (event, payload) => {
             if (event !== SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1) {
                 throw new Error(`Unexpected Session input settlement socket ACK event: ${event}`);
@@ -519,10 +536,13 @@ function parseReleasedServerPendingQueueMaterializeAck(rawAck: unknown): Release
 export async function materializeNextPendingQueueV2MessageViaReleasedServerSocket(params: Readonly<{
     socket: Socket<ServerToClientEvents, ClientToServerEvents>;
     sessionId: string;
+    signal?: AbortSignal;
 }>): Promise<ReleasedServerPendingQueueMaterializeResult> {
     const rawAck = await emitSocketWithAck<unknown>({
         socket: params.socket as AckSocket,
         event: 'pending-materialize-next',
+        timeoutMs: null,
+        signal: params.signal,
         payload: { sid: params.sessionId },
     });
     return parseReleasedServerPendingQueueMaterializeAck(rawAck);
@@ -1102,12 +1122,17 @@ export async function resolveAcceptedPendingQueueV2Delivery(params: {
     sessionId: string;
     localId: string;
     acceptedDelivery?: SessionMessageAcceptedDeliveryContentV1;
+    signal?: AbortSignal;
 }): Promise<{ didResolve: boolean; pendingQueueState?: KnownPendingQueueState; message?: PendingQueueMaterializedMessage | null }> {
     const localId = readPendingLocalId(params.localId);
     if (localId === null) throw new Error('Invalid pending delivery accepted local id');
     const raw = await emitSocketWithAck<Record<string, unknown>>({
         socket: createAcceptedPendingSettlementAckSocket(params.socket),
         event: ACCEPTED_PENDING_SETTLEMENT_EVENT_V1,
+        // Publisher/receive admission queues have no fixed deadline. The server
+        // transaction owns settlement; a control ACK timer cannot shorten it.
+        timeoutMs: null,
+        signal: params.signal,
         payload: AcceptedPendingSettlementRequestV1Schema.parse({
             v: 1, sessionId: params.sessionId, localId,
             ...(params.acceptedDelivery === undefined ? {} : { acceptedDelivery: params.acceptedDelivery }),
@@ -1145,16 +1170,18 @@ function readAcceptedPendingSettlementResult(result: AcceptedPendingSettlementRe
 /** Target requests never share the permissive main event or HTTP fallback. */
 export async function materializeNextPendingExecutionRunMessage(params: Omit<SessionPendingExecutionRunMaterializeNextRequestV2, 'v'> & {
     socket: Socket<ServerToClientEvents, ClientToServerEvents>;
+    signal?: AbortSignal;
 }): Promise<PendingQueueMaterializeNextResult & {
     recipient: SessionPendingExecutionRunMaterializeNextRequestV2['recipient'];
     sidechainId: string;
     authorAccountId: string | null;
 }> {
-    const { socket, ...input } = params;
+    const { socket, signal, ...input } = params;
     const request = SessionPendingExecutionRunMaterializeNextRequestV2Schema.parse({ v: 2, ...input });
     try {
         const raw = await emitSocketWithAck({
             socket, event: SESSION_PENDING_EXECUTION_RUN_MATERIALIZE_NEXT_EVENT_V2, payload: request,
+            timeoutMs: null, signal,
         });
         const parsed = SessionPendingExecutionRunMaterializeNextResponseV2Schema.safeParse(raw);
         if (!parsed.success) {
@@ -1193,10 +1220,12 @@ export async function materializeNextPendingExecutionRunMessage(params: Omit<Ses
 
 export async function resolveAcceptedPendingExecutionRunDelivery(params: Omit<SessionPendingExecutionRunAcceptedRequestV2, 'v'> & {
     socket: Socket<ServerToClientEvents, ClientToServerEvents>;
+    signal?: AbortSignal;
 }): Promise<ReturnType<typeof readAcceptedPendingSettlementResult>> {
-    const { socket, ...input } = params;
+    const { socket, signal, ...input } = params;
     const request = SessionPendingExecutionRunAcceptedRequestV2Schema.parse({ v: 2, ...input });
-    const raw = await emitSocketWithAck({ socket, event: SESSION_PENDING_EXECUTION_RUN_ACCEPTED_EVENT_V2, payload: request });
+    const raw = await emitSocketWithAck({ socket, event: SESSION_PENDING_EXECUTION_RUN_ACCEPTED_EVENT_V2,
+        payload: request, timeoutMs: null, signal });
     const response = SessionPendingExecutionRunAcceptedResponseV2Schema.parse(raw);
     if (response.recipient.runId !== request.recipient.runId || response.sidechainId !== request.sidechainId) {
         throw new Error('Target pending settlement identity mismatch');
@@ -1206,10 +1235,12 @@ export async function resolveAcceptedPendingExecutionRunDelivery(params: Omit<Se
 
 export async function blockPendingExecutionRunDelivery(params: Omit<SessionPendingExecutionRunBlockRequestV2, 'v'> & {
     socket: Socket<ServerToClientEvents, ClientToServerEvents>;
+    signal?: AbortSignal;
 }): Promise<{ didUpdate: boolean; pendingQueueState: KnownPendingQueueState | null }> {
-    const { socket, ...input } = params;
+    const { socket, signal, ...input } = params;
     const request = SessionPendingExecutionRunBlockRequestV2Schema.parse({ v: 2, ...input });
-    const raw = await emitSocketWithAck({ socket, event: SESSION_PENDING_EXECUTION_RUN_BLOCK_EVENT_V2, payload: request });
+    const raw = await emitSocketWithAck({ socket, event: SESSION_PENDING_EXECUTION_RUN_BLOCK_EVENT_V2,
+        payload: request, timeoutMs: null, signal });
     const response = SessionPendingExecutionRunBlockResponseV2Schema.parse(raw);
     if (response.recipient.runId !== request.recipient.runId || response.localId !== request.localId) {
         throw new Error('Target pending block identity mismatch');
@@ -1223,6 +1254,7 @@ export async function settlePendingQueueV2Admission(params: Readonly<{
     sessionId: string;
     localId: string;
     decision: SessionPendingAdmissionSettlementRequestV1['decision'];
+    signal?: AbortSignal;
 }>): Promise<import('@happier-dev/protocol').SessionInputAdmissionResultV1> {
     const request = SessionPendingAdmissionSettlementRequestV1Schema.parse({
         v: 1,
@@ -1233,6 +1265,8 @@ export async function settlePendingQueueV2Admission(params: Readonly<{
     const raw = await emitSocketWithAck<Record<string, unknown>>({
         socket: createPendingAdmissionSettlementAckSocket(params.socket),
         event: SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1,
+        timeoutMs: null,
+        signal: params.signal,
         payload: request,
     });
     return SessionPendingAdmissionSettlementResponseV1Schema.parse(raw).result;
@@ -1317,6 +1351,7 @@ async function postPendingQueueV2DeliveryAction(params: {
 }
 
 async function tryMaterializeNextViaSocket(params: {
+    signal?: AbortSignal;
     socket: Socket<ServerToClientEvents, ClientToServerEvents>;
     sessionId: string;
     knownPendingVersion?: number;
@@ -1329,6 +1364,8 @@ async function tryMaterializeNextViaSocket(params: {
         const rawAck = await emitSocketWithAck<Record<string, unknown>>({
             socket: createPendingMaterializeAckSocket(params.socket),
             event: 'pending-materialize-next',
+            timeoutMs: null,
+            signal: params.signal,
             payload: {
                 sid: params.sessionId,
                 ...(typeof params.knownPendingVersion === 'number' ? { pendingVersion: params.knownPendingVersion } : {}),
@@ -1483,6 +1520,7 @@ export async function materializeNextPendingQueueV2MessageViaHttp(params: {
 }
 
 export async function materializeNextPendingQueueV2Message(params: {
+    signal?: AbortSignal;
     token: string;
     sessionId: string;
     socket: Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -1495,6 +1533,7 @@ export async function materializeNextPendingQueueV2Message(params: {
     const requiresBoundSessionSocket = Boolean(params.deliveryStateOptIn);
     const socketRes = params.socket.connected
         ? await tryMaterializeNextViaSocket({
+            signal: params.signal,
             socket: params.socket,
             sessionId: params.sessionId,
             knownPendingVersion: params.knownPendingVersion,

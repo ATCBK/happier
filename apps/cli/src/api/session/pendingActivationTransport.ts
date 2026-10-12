@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { PendingActivationFailureRequestV1Schema, PendingActivationFailureResponseV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+import { PendingActivationFailureDetailsV1Schema, PendingActivationFailureRequestV1Schema, PendingActivationFailureResponseV1Schema, type PendingActivationFailureDetailsV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import type { PendingActivationFailureCodeV1 } from '@happier-dev/protocol';
 
 import { configuration } from '@/configuration';
@@ -11,6 +11,7 @@ export async function reportPendingSessionActivationFailure(params: Readonly<{
   requestId: string;
   requestedAt: number;
   failureCode: PendingActivationFailureCodeV1;
+  failureDetails?: PendingActivationFailureDetailsV1;
 }>): Promise<Readonly<{ didFail: boolean }>> {
   const body = PendingActivationFailureRequestV1Schema.parse({
     requestId: params.requestId,
@@ -23,6 +24,7 @@ export async function reportPendingSessionActivationFailure(params: Readonly<{
     {
       headers: { Authorization: `Bearer ${params.token}`, 'Content-Type': 'application/json' },
       timeout: configuration.sessionControlHttpTimeoutMs,
+      ...(params.failureDetails ? { params: { failureDetails: JSON.stringify(PendingActivationFailureDetailsV1Schema.parse(params.failureDetails)) } } : {}),
     },
   );
   const parsed = PendingActivationFailureResponseV1Schema.parse(response.data);

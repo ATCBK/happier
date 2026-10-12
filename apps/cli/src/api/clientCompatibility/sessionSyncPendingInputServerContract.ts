@@ -148,6 +148,7 @@ export function createSessionSyncPendingInputServerContractController(options: R
         readonly sessionConnectionEpoch: number;
         readonly socket: ProbeSocket;
         promise: Promise<SessionSyncPendingInputServerContractResult> | null;
+        serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
     } | null = null;
 
     const answer = (
@@ -180,6 +181,7 @@ export function createSessionSyncPendingInputServerContractController(options: R
             if (!isCurrent(attempt) || probe.socket.connected !== true) {
                 return answer(probe, INDETERMINATE);
             }
+            attempt.serverFeaturesSnapshot = snapshot;
             if (
                 snapshot.status === 'error'
                 && (snapshot.httpStatus === 401 || snapshot.httpStatus === 403)
@@ -198,6 +200,10 @@ export function createSessionSyncPendingInputServerContractController(options: R
     }
 
     return {
+        /** Reuse the exact connection's Home observation for Session Action policy. */
+        getServerFeaturesSnapshot(): CliServerFeaturesSnapshot | undefined {
+            return active?.socket.connected === true ? active.serverFeaturesSnapshot : undefined;
+        },
         resolve(probe: EpochProbe): Promise<SessionSyncPendingInputServerContractResult> {
             if (!probe.machineId?.trim() || probe.socket.connected !== true) {
                 active = null;

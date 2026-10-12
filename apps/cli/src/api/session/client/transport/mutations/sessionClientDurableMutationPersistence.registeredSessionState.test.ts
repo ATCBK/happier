@@ -22,6 +22,9 @@ import {
     loadSessionClientDurableMutationOutbox,
     recoverAuthoritativeSessionClientDurableMutationDeadLetters,
     resolveSessionClientDurableMutationDeadLetterPath,
+    createSessionClientDurableMutationPersistenceContext,
+    parseRuntimeSessionClientDurableMutation,
+    parseDaemonSessionClientDurableMutation,
     saveSessionClientDurableMutationOutbox,
 } from './sessionClientDurableMutationPersistence';
 
@@ -70,6 +73,46 @@ describe('registered session-state durable mutation persistence', () => {
         await rm(configurationMock.activeServerDir, { recursive: true, force: true });
     });
 
+    it.each(['runtime', 'daemon'] as const)('opens retained %s turn mutations while keeping live admission strict', async (custody) => {
+        const sessionId = 'sess-retained-turn';
+        const parseQueuedMutation = custody === 'runtime' ? parseRuntimeSessionClientDurableMutation : parseDaemonSessionClientDurableMutation;
+        const context = createSessionClientDurableMutationPersistenceContext({
+            custody, sessionId, activeServerDir: configurationMock.activeServerDir, parseQueuedMutation,
+        });
+        const payload = { v: 1, sessionId, mutationId: 'retained-turn', turnId: 'turn-1', observedAt: 100,
+            action: custody === 'runtime' ? 'begin' : 'end_session' } as const;
+        const queued = { kind: 'session_turn_mutation', mutationId: payload.mutationId,
+            payload: { ...payload, retiredField: true }, createdAt: 100, attempts: 0, nextAttemptAt: 0 };
+        expect(parseQueuedMutation(queued, sessionId).mutations).toEqual([]);
+        await mkdir(dirname(context.paths.queuePath), { recursive: true });
+        await writeFile(context.paths.queuePath, JSON.stringify({ v: 1, retiredField: true, mutations: [queued] }));
+        const restored = await loadSessionClientDurableMutationOutbox(sessionId, context);
+        expect(restored).toMatchObject([{ kind: 'session_turn_mutation', payload }]);
+        expect(restored[0]?.payload).not.toHaveProperty('retiredField');
+        await expect(loadSessionClientDurableMutationDeadLetters(sessionId, context)).resolves.toEqual([]);
+    });
+
+    it('opens retained transcript envelopes and provenance without losing the pending message', async () => {
+        const sessionId = 'sess-retained-transcript';
+        const payload = { v: 1, sessionId, mutationId: `transcript:${sessionId}:message-1`, source: 'transcript_message_append',
+            localId: 'message-1', createdAt: 100, updatedAt: 100,
+            content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Retained output' } }, retiredField: true },
+            provenance: { kind: 'non_dependent', source: 'history', retiredField: true } };
+        const context = createSessionClientDurableMutationPersistenceContext({ custody: 'runtime', sessionId,
+            activeServerDir: configurationMock.activeServerDir, parseQueuedMutation: parseRuntimeSessionClientDurableMutation });
+        await mkdir(dirname(context.paths.queuePath), { recursive: true });
+        await writeFile(context.paths.queuePath, JSON.stringify({ v: 1, mutations: [{ kind: 'transcript_message_append',
+            mutationId: payload.mutationId, payload, createdAt: 100, attempts: 0, nextAttemptAt: 0 }] }));
+        const restored = await loadSessionClientDurableMutationOutbox(sessionId, context);
+        expect(restored).toHaveLength(1);
+        expect(restored[0]?.payload).toMatchObject({ content: { t: 'plain', v: payload.content.v },
+            provenance: { kind: 'non_dependent', source: 'history' } });
+        const opened = restored[0]?.payload as Record<string, unknown>;
+        expect(opened.content).not.toHaveProperty('retiredField');
+        expect(opened.provenance).not.toHaveProperty('retiredField');
+        await expect(loadSessionClientDurableMutationDeadLetters(sessionId, context)).resolves.toEqual([]);
+    });
+
     it('loads queued runtime.sessionRunner set mutations instead of dead-lettering them', async () => {
         const sessionId = 'sess-runtime-runner';
         const mutation = createRegisteredSessionStateFieldMutation({
@@ -78,7 +121,8 @@ describe('registered session-state durable mutation persistence', () => {
             deliveryClass: 'durable_best_effort',
             source: 'daemon',
             observedAt: 100,
-            op: { kind: 'set', value: runtimeState },
+            op: { kind: 'set', value: { ...runtimeState, retiredField: true,
+                runner: { ...runtimeState.runner, retiredField: true } } },
         });
 
         await saveSessionClientDurableMutationOutbox(sessionId, [{

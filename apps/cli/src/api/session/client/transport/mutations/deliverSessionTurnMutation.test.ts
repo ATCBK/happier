@@ -7,6 +7,25 @@ import { deliverSessionTurnMutation } from './deliverSessionTurnMutation';
 
 vi.mock('axios');
 
+it('keeps a delayed turn mutation pending past a control timeout and retires its transport on cancellation', async () => {
+    vi.useFakeTimers();
+    try {
+        vi.mocked(axios.post).mockResolvedValue({ data: { success: false } } as never);
+        const controller = new AbortController();
+        const socket = { connected: true, emit: vi.fn(), emitWithAck: () => new Promise(() => {}),
+            timeout: (ms: number) => ({ connected: true, emit: vi.fn(), emitWithAck: () =>
+                new Promise((_, reject) => { setTimeout(() => reject(new Error('operation has timed out')), ms); }) }) };
+        let settled = false;
+        const result = deliverSessionTurnMutation({ token: 'token', socket, mutation, signal: controller.signal })
+            .then(value => { settled = true; return value; });
+        await vi.advanceTimersByTimeAsync(10_001);
+        expect(settled).toBe(false);
+        controller.abort();
+        expect(await result).toMatchObject({ delivered: false });
+        expect(axios.post).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+});
+
 const mutation = {
     v: 1,
     sessionId: 'session-1',

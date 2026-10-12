@@ -80,7 +80,7 @@ function resolveTextSnapshot(params: Readonly<{
       visibleText: content.text,
       structuredPresentationSummary: null,
       provenanceCategory: projectMessageActionProvenanceCategoryV1(
-        readSessionMessageProvenanceV1(decrypted?.meta),
+        readSessionMessageProvenanceV1(decrypted?.meta, 'stored'),
       ),
     },
   };

@@ -8,7 +8,7 @@ import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/meta
 import { SOCKET_RPC_EVENTS, SessionActionRpcOriginV1Schema, type WorkspaceSyncSourceWriterTargetRoutingV1 } from '@happier-dev/protocol/socketRpc';
 import { signMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
-import { EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionHttpErrorSchema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionHttpErrorSchema, ExternalActionResponseEnvelopeV1Schema, projectExternalActionPendingResetStartAdmissionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { openExternalActionResponseV2, sealExternalActionRequestV2, type ExternalActionEncryptionBindingV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import { projectApiTokenSessionSpawnAdmissionV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import type { AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
@@ -494,9 +494,12 @@ export async function prepareExternalActionRequesterAccountAuthorization(input: 
   let actionId: string;
   let authenticationKind: 'account' | 'terminal';
   let envelope: ExternalActionRequestEnvelope;
+  let pendingResetStartAdmission: ExternalActionExecutionAuthorizationV1['binding']['pendingResetStartAdmission'];
   let sessionActionOrigin: ExternalActionExecutionAuthorizationRequestV1['sessionActionOrigin'];
   try {
     actionId = ExternalActionActionIdV1Schema.parse(input.actionId);
+    pendingResetStartAdmission = actionId === 'session.pending.resetStart.set'
+      ? projectExternalActionPendingResetStartAdmissionV1(input.input) : undefined;
     sessionActionOrigin = input.sessionActionOrigin === undefined ? undefined
       : SessionActionRpcOriginV1Schema.parse(input.sessionActionOrigin);
     if (sessionActionOrigin && sessionActionOrigin.requestId !== input.requestId) return null;
@@ -557,6 +560,7 @@ export async function prepareExternalActionRequesterAccountAuthorization(input: 
     || binding.actionId !== actionId
     || binding.requestId !== input.requestId
     || binding.requestEnvelopeDigest !== computeExternalActionRequestEnvelopeDigestV1(envelope)
+    || !sameStrictJsonValue(binding.pendingResetStartAdmission, pendingResetStartAdmission)
     || !sameStrictJsonValue(binding.sessionActionOrigin, sessionActionOrigin)
     || !sameStrictJsonValue(binding.workflowActionOrigin, input.workflowActionOrigin)
     || !sameStrictJsonValue(binding.sessionActionSource, sessionActionOrigin
@@ -638,6 +642,7 @@ export function isManagedSessionStartTransportAvailable(params: Readonly<{
 
 type ManagedChildDispatchParams = Readonly<{
   input: SessionSpawnNewInputV2;
+  authority?: ActionRequiredAuthority;
   continuation: NonNullable<ExternalActionExecutionAuthorizationRequestV1['managedContinuation']>;
   authorization: ExternalActionExecutionAuthorizationV1;
   installationId: string;
@@ -703,7 +708,8 @@ async function dispatchManagedChild(params: Omit<ManagedChildDispatchParams, 'in
     method: 'POST', path, body, privateKey: params.privateKey });
   try {
     const response = await axios.post<unknown>(`${params.serverHttpBaseUrl}${path}`, body, {
-      headers: { ...headers, 'Content-Type': 'application/json' },
+      headers: { ...headers, 'Content-Type': 'application/json',
+        ...(params.authority === 'account_automation' ? { [AUTHORITY_CEILING_HEADER_V1]: params.authority } : {}) },
       ...(params.signal ? { signal: params.signal } : {}), validateStatus: () => true,
     });
     if (response.status < 200 || response.status >= 300) {

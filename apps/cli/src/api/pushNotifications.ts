@@ -68,6 +68,7 @@ function resolvePushRequestKindFromPushData(data: Record<string, unknown> | unde
 }
 
 function resolveCategoryIdFromPushData(data: Record<string, unknown> | undefined): string | undefined {
+    if (data?.topic === 'guard_stop_warning') return PUSH_NOTIFICATION_CATEGORY_IDS.guardStopWarningV1
     const kind = resolvePushRequestKindFromPushData(data)
     if (kind === 'permission') return PUSH_NOTIFICATION_CATEGORY_IDS.permissionRequestV1
     if (kind === 'user_action') return PUSH_NOTIFICATION_CATEGORY_IDS.userActionRequestV1

@@ -83,6 +83,7 @@ export function initializeSessionClientConnection(
 ): Readonly<{
     userSocket: Socket<ServerToClientEvents, ClientToServerEvents> | null;
     sessionConnectionSupervisor: ManagedConnectionSupervisor;
+    getServerFeaturesSnapshot: ReturnType<typeof createSessionSyncPendingInputServerContractController>['getServerFeaturesSnapshot'];
 }> {
     const userSocket = params.userScopedAccountUpdates
         ? params.transport.createAccountUpdatesSocket?.() ?? null
@@ -174,6 +175,7 @@ export function initializeSessionClientConnection(
                     return;
                 }
                 const contractResult = await resolveSessionClientConnectionContract({
+                    signal: connectionPublisherReadiness.signal,
                     serverContract: serverContractResult,
                     sessionId: params.sessionId,
                     socket: currentTransportSocket,
@@ -297,5 +299,6 @@ export function initializeSessionClientConnection(
     return {
         userSocket,
         sessionConnectionSupervisor,
+        getServerFeaturesSnapshot: serverContractController.getServerFeaturesSnapshot,
     };
 }

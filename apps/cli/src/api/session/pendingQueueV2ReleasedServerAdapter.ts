@@ -44,6 +44,7 @@ function readCanonicalUserTextMessage(params: Readonly<{
 export async function runPendingQueueV2ReleasedServerAdapter(params: Readonly<{
     token: string;
     serverUrl: string;
+    signal?: AbortSignal;
     sessionId: string;
     contractResult: SessionSyncPendingInputServerContractResult;
     getContractResult: () => SessionSyncPendingInputServerContractResult | null;
@@ -69,6 +70,7 @@ export async function runPendingQueueV2ReleasedServerAdapter(params: Readonly<{
     try {
         params.reportDiagnosticPhase?.('materialize.server_claim');
         materialized = await materializeNextPendingQueueV2MessageViaReleasedServerSocket({
+            signal: params.signal,
             socket: contractSocket,
             sessionId: params.sessionId,
         });

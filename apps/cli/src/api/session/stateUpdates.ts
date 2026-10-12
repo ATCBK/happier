@@ -1,6 +1,6 @@
 import { logger } from '@/ui/logger'
 import { backoff } from '@/utils/time';
-import { emitSocketWithAck } from '@/session/transport/shared/socketAck';
+import { emitSocketWithAck, SocketAckError } from '@/session/transport/shared/socketAck';
 import type { AgentState, Metadata } from '../types';
 import { decodeBase64, decrypt, encodeBase64, encrypt } from '../encryption';
 import { deriveActivitySummaryFromAgentState } from './deriveActivitySummaryFromAgentState';
@@ -55,6 +55,7 @@ function readLoggedCurrentModeId(metadata: Record<string, unknown> | null | unde
 
 export async function updateSessionMetadataWithAck(opts: {
     socket: AckableSocket;
+    signal?: AbortSignal;
     sessionId: string;
     getMetadata: () => Metadata | null;
     setMetadata: (metadata: Metadata | null) => void;
@@ -67,6 +68,7 @@ export async function updateSessionMetadataWithAck(opts: {
     version: number;
     ciphertext: string;
 }>> {
+    let attempt: { metadata: Metadata; payload: string; expectedVersion: number; uncertain: boolean } | undefined;
     return await backoff(async () => {
         if (opts.getMetadataVersion() < 0) {
             await opts.syncSessionSnapshotFromServer();
@@ -80,7 +82,7 @@ export async function updateSessionMetadataWithAck(opts: {
         }
 
         const current = opts.getMetadata() ?? ({} as Metadata);
-        const updated = opts.handler(current);
+        const updated = attempt?.metadata ?? opts.handler(current);
         const wireMetadata =
             projectSessionMetadataForWire(projectSessionMetadataAgentVocabularyWriteCompatibilityV1(
                 updated,
@@ -92,25 +94,32 @@ export async function updateSessionMetadataWithAck(opts: {
             hasOpenCodeSessionId: typeof (updated as Record<string, unknown> | null)?.opencodeSessionId === 'string',
             currentModeId: readLoggedCurrentModeId(updated as Record<string, unknown> | null),
         });
-        const metadataPayload =
+        const metadataPayload = attempt?.payload ?? (
             opts.sessionEncryptionMode === 'plain'
                 ? JSON.stringify(wireMetadata)
                 : encodeBase64(encrypt(
                     opts.encryptionKey,
                     opts.encryptionVariant,
                     wireMetadata,
-                ));
+                )));
+        const submittedAttempt = attempt ??= { metadata: updated, payload: metadataPayload, expectedVersion: opts.getMetadataVersion(), uncertain: false };
         const answer = await emitSocketWithAck<any>({
             socket: opts.socket,
             event: 'update-metadata',
+            timeoutMs: null,
+            signal: opts.signal,
             payload: {
                 sid: opts.sessionId,
-                expectedVersion: opts.getMetadataVersion(),
+                expectedVersion: submittedAttempt.expectedVersion,
                 metadata: metadataPayload,
             },
+        }).catch((error: unknown) => {
+            if (!(error instanceof SocketAckError && error.code === 'socket_not_connected')) submittedAttempt.uncertain = true;
+            throw error;
         });
 
-        if (answer.result === 'success') {
+        if (answer.result === 'success' || (answer.result === 'version-mismatch'
+            && submittedAttempt.uncertain && answer.version === submittedAttempt.expectedVersion + 1 && answer.metadata === metadataPayload)) {
             logger.debug('[API] updateMetadata success', {
                 version: answer.version,
                 hasModeOverride: Boolean((updated as Record<string, unknown> | null)?.acpSessionModeOverrideV1),
@@ -128,6 +137,7 @@ export async function updateSessionMetadataWithAck(opts: {
         }
 
         if (answer.result === 'version-mismatch') {
+            attempt = undefined;
             if (answer.version > opts.getMetadataVersion()) {
                 opts.setMetadataVersion(answer.version);
                 const decoded: Metadata | null = opts.sessionEncryptionMode === 'plain'
@@ -171,6 +181,7 @@ export async function updateSessionMetadataWithAck(opts: {
 
 export async function updateSessionAgentStateWithAck(opts: {
     socket: AckableSocket;
+    signal?: AbortSignal;
     sessionId: string;
     ownerActivityDelivery?: 'rich_sender' | 'home_required';
     getAgentState: () => AgentState | null;
@@ -184,6 +195,7 @@ export async function updateSessionAgentStateWithAck(opts: {
     version: number;
     ciphertext: string | null;
 }>> {
+    let attempt: { agentState: AgentState; payload: string | null; expectedVersion: number; uncertain: boolean } | undefined;
     return await backoff(async () => {
         if (opts.getAgentStateVersion() < 0) {
             await opts.syncSessionSnapshotFromServer();
@@ -197,11 +209,12 @@ export async function updateSessionAgentStateWithAck(opts: {
         }
 
         const previous = opts.getAgentState() || {};
-        const updated = opts.handler(previous);
-        const agentStatePayload =
+        const updated = attempt?.agentState ?? opts.handler(previous);
+        const agentStatePayload = attempt ? attempt.payload : (
             opts.sessionEncryptionMode === 'plain'
                 ? JSON.stringify(updated)
-                : (updated ? encodeBase64(encrypt(opts.encryptionKey, opts.encryptionVariant, updated)) : null);
+                : (updated ? encodeBase64(encrypt(opts.encryptionKey, opts.encryptionVariant, updated)) : null));
+        const submittedAttempt = attempt ??= { agentState: updated, payload: agentStatePayload, expectedVersion: opts.getAgentStateVersion(), uncertain: false };
         const activitySummaryV1 = {
             ...deriveActivitySummaryFromAgentState(updated, previous),
             ...(opts.ownerActivityDelivery
@@ -211,15 +224,21 @@ export async function updateSessionAgentStateWithAck(opts: {
         const answer = await emitSocketWithAck<any>({
             socket: opts.socket,
             event: 'update-state',
+            timeoutMs: null,
+            signal: opts.signal,
             payload: {
                 sid: opts.sessionId,
-                expectedVersion: opts.getAgentStateVersion(),
+                expectedVersion: submittedAttempt.expectedVersion,
                 agentState: agentStatePayload,
                 activitySummaryV1,
             },
+        }).catch((error: unknown) => {
+            if (!(error instanceof SocketAckError && error.code === 'socket_not_connected')) submittedAttempt.uncertain = true;
+            throw error;
         });
 
-        if (answer.result === 'success') {
+        if (answer.result === 'success' || (answer.result === 'version-mismatch'
+            && submittedAttempt.uncertain && answer.version === submittedAttempt.expectedVersion + 1 && answer.agentState === agentStatePayload)) {
             const next =
                 !answer.agentState
                     ? null
@@ -239,6 +258,7 @@ export async function updateSessionAgentStateWithAck(opts: {
         }
 
         if (answer.result === 'version-mismatch') {
+            attempt = undefined;
             if (answer.version > opts.getAgentStateVersion()) {
                 opts.setAgentStateVersion(answer.version);
                 const next =
@@ -262,6 +282,7 @@ export async function updateSessionAgentStateWithAck(opts: {
 
 export async function updateSessionRuntimeActivityProjectionWithAck(opts: {
     socket: AckableSocket;
+    signal?: AbortSignal;
     sessionId: string;
     mutationId: string;
     state: 'active' | 'idle' | 'unknown';
@@ -287,6 +308,8 @@ export async function updateSessionRuntimeActivityProjectionWithAck(opts: {
         const rawAnswer = await emitSocketWithAck<unknown>({
             socket: opts.socket,
             event: SESSION_RUNTIME_ACTIVITY_SNAPSHOT_EVENT,
+            timeoutMs: null,
+            signal: opts.signal,
             payload: request,
         });
         const parsedAnswer =

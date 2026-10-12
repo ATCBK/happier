@@ -207,6 +207,7 @@ describe('ApiSessionClient socket write readiness', () => {
           publisherPrecondition: {
             machineId: 'machine-1',
             committedFenceMs: 1_000,
+            publisherGeneration: '1',
           },
         };
       },
@@ -428,6 +429,7 @@ describe('ApiSessionClient socket write readiness', () => {
           publisherPrecondition: {
             machineId: 'machine-1',
             committedFenceMs: 1_000,
+            publisherGeneration: '1',
           },
         };
       },
@@ -508,6 +510,7 @@ describe('ApiSessionClient socket write readiness', () => {
           publisherPrecondition: {
             machineId: 'machine-1',
             committedFenceMs: 1_000,
+            publisherGeneration: '1',
           },
         }),
       }),

@@ -457,7 +457,7 @@ describe('daemon speech host-mediated Voice Account operations', () => {
       catalog: 'models',
     });
 
-    expect(response).toMatchObject({
+    expect(response, JSON.stringify(response)).toMatchObject({
       ok: true,
       items: [{ id: 'external-stt-1', name: 'External STT v1' }],
     });

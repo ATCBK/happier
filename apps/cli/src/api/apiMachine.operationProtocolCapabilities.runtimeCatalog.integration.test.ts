@@ -383,6 +383,7 @@ describe('ApiMachineClient operation protocol capability publication', () => {
     });
     const socket = {
       connected: true,
+      emitWithAck,
       timeout: vi.fn(() => ({ emitWithAck })),
     };
     (client as unknown as { socket: unknown }).socket = socket;
@@ -450,6 +451,7 @@ describe('ApiMachineClient operation protocol capability publication', () => {
       : { v: 1, result: 'success', revision: 4 });
     (client as unknown as { socket: unknown }).socket = {
       connected: true,
+      emitWithAck,
       timeout: vi.fn(() => ({ emitWithAck })),
     };
 
@@ -477,6 +479,7 @@ describe('ApiMachineClient operation protocol capability publication', () => {
       : { v: 1, result: 'success', revision: 4 });
     (client as unknown as { socket: unknown }).socket = {
       connected: true,
+      emitWithAck,
       timeout: vi.fn(() => ({ emitWithAck })),
     };
 
@@ -517,6 +520,7 @@ describe('ApiMachineClient operation protocol capability publication', () => {
     });
     (client as unknown as { socket: unknown }).socket = {
       connected: true,
+      emitWithAck,
       timeout: vi.fn(() => ({ emitWithAck })),
     };
 

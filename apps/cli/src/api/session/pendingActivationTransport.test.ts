@@ -10,6 +10,13 @@ vi.mock('axios', () => ({
 
 describe('pending activation transport', () => {
   beforeEach(() => post.mockReset());
+  it('keeps the predecessor failure body and sends optional diagnostic query facts', async () => {
+    post.mockResolvedValueOnce({ data: { ok: true, didFail: true } });
+    await reportPendingSessionActivationFailure({ token: 'token', sessionId: 'session', requestId: 'p1', requestedAt: 1,
+      failureCode: 'runtime_start_failed', failureDetails: { reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED' } });
+    expect(post.mock.calls[0]?.[1]).toEqual({ requestId: 'p1', requestedAt: 1, failureCode: 'runtime_start_failed' });
+    expect(post.mock.calls[0]?.[2]?.params).toEqual({ failureDetails: JSON.stringify({ reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED' }) });
+  });
 
   it('reports terminal runtime-start failure through the exact request CAS route', async () => {
     post.mockResolvedValueOnce({ data: { ok: true, didFail: true } });

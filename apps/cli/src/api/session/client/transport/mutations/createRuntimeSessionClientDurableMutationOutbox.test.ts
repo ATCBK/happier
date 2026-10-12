@@ -54,6 +54,41 @@ function createDeferred<T = void>() {
 }
 
 describe('runtime session client durable mutation outbox', () => {
+    it('cancels only the selected delivery handle on close and preserves the same transcript for its successor', async () => {
+        const started = createDeferred();
+        const lateAck = createDeferred<unknown>();
+        const sessionId = 'selected-delivery-lifetime';
+        const first = createRuntimeSessionClientDurableMutationOutbox({ token: 'token', sessionId,
+            getSocket: () => ({ connected: true, emit: vi.fn(), emitWithAck: async () => {
+                started.resolve(); return await lateAck.promise;
+            } }), requestReconnect: () => undefined });
+        await first.setSessionSyncPendingInputServerContract(serverContract('session_sync_v2_pending_input_v1'));
+        let firstSettled = false;
+        const pending = first.enqueueTranscriptMessage(createTranscriptMessageAppendMutation({ sessionId,
+            localId: 'retained-transcript', content: 'sealed', createdAt: 100,
+            provenance: { kind: 'non_dependent', source: 'background' } }))
+            .then(result => { firstSettled = true; return result; });
+        await started.promise;
+        const successorAck = vi.fn(async (_event: string, payload: unknown) => ({ ok: true, status: 'observed',
+            id: 'committed', seq: 47, localId: (payload as { localId: string }).localId, didWrite: true, ingestedAt: 200 }));
+        const successor = createRuntimeSessionClientDurableMutationOutbox({ token: 'token', sessionId,
+            getSocket: () => ({ connected: true, emit: vi.fn(), emitWithAck: successorAck }), requestReconnect: () => undefined });
+        try {
+            await first.close();
+            await vi.waitFor(() => expect(firstSettled).toBe(true));
+            expect(await pending).toMatchObject({ persisted: true, delivered: false, localId: 'retained-transcript' });
+            await successor.flush('flush');
+            expect(successorAck).toHaveBeenCalledWith(SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1,
+                expect.objectContaining({ localId: 'retained-transcript' }));
+            lateAck.resolve({ ok: true, status: 'observed', id: 'stale', seq: 99,
+                localId: 'retained-transcript', didWrite: true, ingestedAt: 200 });
+            expect(await pending).toMatchObject({ delivered: false });
+        } finally {
+            lateAck.resolve(null);
+            await first.close();
+            await successor.close();
+        }
+    });
     beforeEach(async () => {
         configurationMock.activeServerDir = await mkdtemp(join(tmpdir(), 'happier-runtime-session-mutations-'));
     });

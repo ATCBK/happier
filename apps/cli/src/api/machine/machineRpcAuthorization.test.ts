@@ -11,6 +11,28 @@ import { MACHINE_ACCESS_LOSS_SERVER_ORIGIN, SOCKET_RPC_AUTHORIZATION_CONTEXT_KIN
 import { authorizeMachineRpcRequest, verifyMachineRpcAdmissionCurrent, verifyManagedActivityTargetCurrent, type MachineRpcAdmissionBoundary } from './machineRpcAuthorization';
 
 describe('authorizeMachineRpcRequest', () => {
+  it.each([RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ, RPC_METHODS.DAEMON_PLUGIN_UI_ARTIFACT_BYTES_READ])(
+    'admits %s through the connected Home regardless of caller-local labels, retaining Machine custody', async method => {
+      const machineAdmission = { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: 'machine',
+        installationId: 'installation', role: 'manage' as const, encryptionMode: 'plain' as const };
+      let current = true;
+      let installationId = 'installation';
+      const boundary = { machineId: 'machine', resolveInstallationId: () => installationId,
+        resolveCustodianAccountId: async () => 'owner', verifyMachineAdmission: async () => current };
+      const request = { method: `machine:${method}`, params: { serverId: 'browser-local-home', machineId: 'machine' }, machineAdmission };
+      expect(await authorizeMachineRpcRequest(request, boundary)).toEqual({ ok: true });
+      for (const refused of [
+        { ...request, params: { ...request.params, machineId: 'another-machine' } },
+        { ...request, machineAdmission: { ...machineAdmission, machineId: 'another-machine' } },
+        { ...request, machineAdmission: { ...machineAdmission, custodianAccountId: 'another-owner' } },
+      ]) expect(await authorizeMachineRpcRequest(refused, boundary)).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+      installationId = 'replacement';
+      expect(await authorizeMachineRpcRequest(request, boundary)).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+      installationId = 'installation';
+      current = false;
+      expect(await authorizeMachineRpcRequest(request, boundary)).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+    },
+  );
   it('verifies physical TARGET preflight with the parent key while preserving the admitted shared child and read-only ceiling', async () => {
     const machineAdmission = { actorAccountId: 'shared-actor', custodianAccountId: 'owner', machineId: 'target-child',
       installationId: 'target-child-installation', role: 'use' as const, encryptionMode: 'plain' as const };
@@ -283,6 +305,7 @@ describe('authorizeMachineRpcRequest', () => {
       ok: false,
       error: RPC_ERROR_MESSAGES.FORBIDDEN,
       errorCode: RPC_ERROR_CODES.FORBIDDEN,
+      admissionPredicate: 'session_authorization',
     });
   });
 
@@ -305,6 +328,7 @@ describe('authorizeMachineRpcRequest', () => {
       ok: false,
       error: RPC_ERROR_MESSAGES.FORBIDDEN,
       errorCode: RPC_ERROR_CODES.FORBIDDEN,
+      admissionPredicate: 'session_authorization',
     });
   });
 
@@ -317,6 +341,7 @@ describe('authorizeMachineRpcRequest', () => {
       ok: false,
       error: RPC_ERROR_MESSAGES.FORBIDDEN,
       errorCode: RPC_ERROR_CODES.FORBIDDEN,
+      admissionPredicate: 'session_authorization',
     });
   });
 
@@ -332,6 +357,7 @@ describe('authorizeMachineRpcRequest', () => {
       ok: false,
       error: RPC_ERROR_MESSAGES.FORBIDDEN,
       errorCode: RPC_ERROR_CODES.FORBIDDEN,
+      admissionPredicate: 'session_target',
     });
   });
 
@@ -376,6 +402,7 @@ describe('authorizeMachineRpcRequest', () => {
       ok: false,
       error: RPC_ERROR_MESSAGES.FORBIDDEN,
       errorCode: RPC_ERROR_CODES.FORBIDDEN,
+      admissionPredicate: 'session_authorization',
     });
   });
 
@@ -391,6 +418,7 @@ describe('authorizeMachineRpcRequest', () => {
       ok: false,
       error: RPC_ERROR_MESSAGES.FORBIDDEN,
       errorCode: RPC_ERROR_CODES.FORBIDDEN,
+      admissionPredicate: 'session_target',
     });
   });
 

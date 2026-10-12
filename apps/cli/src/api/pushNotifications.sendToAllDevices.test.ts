@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import axios from 'axios';
 
@@ -13,8 +13,9 @@ import {
   PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS,
   PUSH_NOTIFICATION_CATEGORY_IDS,
   type LiveActivityRemoteUpdateRequestV1,
-  accountSettingsParse,
 } from '@happier-dev/protocol';
+import { notificationSettingsFixture as accountSettingsParse, notificationCatalogFixture } from '@/notifications/activity/activityNotification.testkit';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 type MockExpoPushTicket = Readonly<{
   status: string;
@@ -67,6 +68,7 @@ describe('PushNotificationClient.sendToAllDevicesAsync', () => {
   const originalDebugPush = process.env.HAPPIER_DEBUG_PUSH;
 
   beforeEach(() => {
+    resetActiveAccountSettingsSnapshotForTests();
     sendPushNotificationsAsyncSpy.mockClear();
     getPushNotificationReceiptsAsyncSpy.mockClear();
     (logger.debug as any).mockClear();
@@ -80,12 +82,30 @@ describe('PushNotificationClient.sendToAllDevicesAsync', () => {
       delete process.env.HAPPIER_DEBUG_PUSH;
     }
   });
+  afterEach(() => resetActiveAccountSettingsSnapshotForTests());
+
+  it('delivers a guard warning with its actionable category and content-free occurrence identity', async () => {
+    vi.mocked(axios.get)
+      .mockResolvedValueOnce({ data: { tokens: [{ id: 'device', token: 'ExponentPushToken[guard]' }] } })
+      .mockResolvedValueOnce({ data: { badgeCount: 0 } });
+    const sender = new PushNotificationClient('account-token', 'https://owner-home.example.test');
+    await sender.sendToAllDevicesAsync('Session will stop soon', 'Keep it running to continue.', {
+      topic: 'guard_stop_warning', machineId: 'machine-1', sessionId: 'session-1', stopAt: 300_000,
+      rule: 'memory_guard', notificationId: 'guard-stop:session-1:300000',
+    });
+    expect(sendPushNotificationsAsyncSpy.mock.calls[0]?.[0]).toEqual([
+      expect.objectContaining({ categoryId: PUSH_NOTIFICATION_CATEGORY_IDS.guardStopWarningV1,
+        data: expect.objectContaining({ notificationId: 'guard-stop:session-1:300000', topic: 'guard_stop_warning' }) }),
+    ]);
+  });
 
   it('reports no delivery without push tokens and permits the same Notify me request after device registration', async () => {
     vi.mocked(axios.get).mockResolvedValueOnce({ data: { tokens: [] } });
     const sender = new PushNotificationClient('account-token', 'https://owner-home.example.test');
+    const settings = accountSettingsParse({});
     const params = {
-      settings: accountSettingsParse({}),
+      settings,
+      ...notificationCatalogFixture(settings),
       expoPushSender: sender,
       pluginNotifications: null,
       channels: ['builtin:expo_push'],
@@ -108,8 +128,10 @@ describe('PushNotificationClient.sendToAllDevicesAsync', () => {
   });
 
   it('does not dedupe Notify me after a push-token read failure', async () => {
+    const settings = accountSettingsParse({});
     const params = {
-      settings: accountSettingsParse({}),
+      settings,
+      ...notificationCatalogFixture(settings),
       pluginNotifications: null,
       channels: ['builtin:expo_push'],
       event: { topic: 'notify_me' as const, message: 'Digest ready', actionRequestId: 'token-read-failure-retry' },
@@ -148,6 +170,9 @@ describe('PushNotificationClient.sendToAllDevicesAsync', () => {
     });
     const pushSender = new PushNotificationClient('account-token', 'https://owner-home.example.test');
     const settings = accountSettingsParse({});
+    setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: 'push-fixture-account', settings,
+      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+      notificationChannelCatalog: notificationCatalogFixture(settings).notificationChannelCatalog });
     const send = async () => {
       if (kind === 'ready' || kind === 'ready_without_settings') {
         await sendReadyWithPushNotification({

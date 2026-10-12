@@ -34,7 +34,7 @@ export async function createAccountServerMachineFinitePolicyClient(params: Reado
           }
           if (!await current()) return { result: 'error' };
           return await emitSocketWithAck<MachineUpdateMetadataResponse, 'machine-update-metadata', typeof request>({
-            socket: lifecycle.connection.socket, event: 'machine-update-metadata', payload: request, signal: params.signal,
+            socket: lifecycle.connection.socket, event: 'machine-update-metadata', payload: request, timeoutMs: null, signal: params.signal,
           });
         },
       });

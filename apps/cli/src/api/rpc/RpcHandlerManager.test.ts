@@ -428,8 +428,8 @@ it.each(['plain', 'e2ee'] as const)('admits arbitrary %s requester custody throu
     actionId: 'machines.managed.list', requestId: 'original-request', requestEnvelopeDigest: 'a'.repeat(43),
     target: { kind: 'machine', machineId: 'machine' },
   } };
-  const seal = (root = authorization, payload = params) => sealExternalActionRequesterAccountContextV1({ authorization: root,
-    credentials: encodeStoredCredentials(credentials), purpose: { kind: 'machine_rpc', method, params: payload },
+  const seal = (root = authorization, payload = params, purposeMethod = 'machines.managed.list') => sealExternalActionRequesterAccountContextV1({ authorization: root,
+    credentials: encodeStoredCredentials(credentials), purpose: { kind: 'machine_rpc', method: purposeMethod, params: payload },
     installationPublicKey: installation.publicKey, randomBytes: tweetnacl.randomBytes });
   const settings = prepareAccountSettingsV2Content({ credentials, raw: {}, envelopeKind: mode === 'plain' ? 'plain' : 'encrypted' });
   let current = true;
@@ -495,6 +495,9 @@ it.each(['plain', 'e2ee'] as const)('admits arbitrary %s requester custody throu
   try {
     expect(await run()).toMatchObject({ ok: true, result: { machines: [] } });
     expect(await retired?.()).toBe(false);
+    expect(await run(seal(authorization, params, method))).toMatchObject({ ok: true, result: { machines: [] } });
+    expect(await run(seal(authorization, params, 'other:machines.managed.list'))).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
+    expect(await run(seal(authorization, params, 'machines.managed.get'))).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
     expect(await run(seal(), { homeId: 'other' })).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
     expect(await run({ ...seal(), token: 'swapped-root' })).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
     get.mockClear();
@@ -1238,7 +1241,7 @@ describe('RpcHandlerManager.handleRequest (plaintext)', () => {
     expect(res).toEqual({ ok: true, echoed: { a: 1 } });
   });
 
-  it('retains structured error details when a plaintext handler throws', async () => {
+  it('records a correlated failure without copying plaintext error details', async () => {
     const logger = vi.fn();
     const rpc = new RpcHandlerManager({
       scopePrefix: 'sess_1',
@@ -1254,15 +1257,10 @@ describe('RpcHandlerManager.handleRequest (plaintext)', () => {
       params: {},
     })).resolves.toEqual({ error: 'handler failed' });
 
-    const errorLog = logger.mock.calls.find(
-      ([message]) => message === '[RPC] [ERROR] Error handling request',
-    );
-    expect(errorLog).toBeDefined();
-
-    const serializedLogData = JSON.stringify(errorLog![1]);
-    expect(serializedLogData).toContain('"name":"Error"');
-    expect(serializedLogData).toContain('"message":"handler failed"');
-    expect(serializedLogData).toContain('"stack":"Error: handler failed');
+    expect(logger.mock.calls).toEqual([['[RPC] Request completed', expect.objectContaining({
+      method: 'demo.failure', requestId: expect.any(String), outcomeCode: 'unclassified_error',
+    })]]);
+    expect(JSON.stringify(logger.mock.calls)).not.toContain('handler failed');
   });
 
   it('projects only explicit protocol RPC error codes into the plaintext response', async () => {

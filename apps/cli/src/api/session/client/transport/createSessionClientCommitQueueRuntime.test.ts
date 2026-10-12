@@ -17,10 +17,7 @@ function createRuntime(
         transcriptStorage: 'persisted',
         getSocket: () => ({
             connected: true,
-            timeout: () => ({
-                connected: true,
-                emitWithAck: async () => ({ ok: false, error: 'server rejected commit' }),
-            }),
+            emitWithAck: async () => ({ ok: false, error: 'server rejected commit' }),
         } as never),
         getClosed: () => false,
         addPendingMaterializedLocalId: vi.fn(),
@@ -35,6 +32,23 @@ function createRuntime(
 }
 
 describe('createSessionClientCommitQueueRuntime definitive commit failures', () => {
+    it('retains a delayed required commit beyond the control deadline until Session cancellation', async () => {
+        vi.useFakeTimers();
+        try {
+            const controller = new AbortController();
+            const runtime = createRuntime({ transcriptStorage: 'direct', signal: controller.signal,
+                getSocket: () => ({ connected: true, emitWithAck: () => new Promise(() => {}) } as never) });
+            let settled = false;
+            const result = runtime.commitSessionMessage({ message: 'ciphertext', localId: 'delayed',
+                sidechainId: null, messageRole: 'agent', requireCommit: true })
+                .then(() => { settled = true; }, error => { settled = true; return error; });
+            await vi.advanceTimersByTimeAsync(10_001);
+            expect(settled).toBe(false);
+            controller.abort();
+            expect(await result).toBeInstanceOf(Error);
+            runtime.clearState();
+        } finally { vi.useRealTimers(); }
+    });
     it('marks explicit server commit rejection as definitive', async () => {
         const runtime = createRuntime();
 
@@ -75,14 +89,11 @@ describe('createSessionClientCommitQueueRuntime retry intent ordering', () => {
         const runtime = createRuntime({
             getSocket: () => ({
                 connected: true,
-                timeout: () => ({
-                    connected: true,
-                    emitWithAck: async (_event: string, payload: unknown) => {
-                        emitted.push(payload);
-                        if (emitted.length === 1) return null;
-                        return { ok: true, id: 'message-2', seq: 2, localId: 'stable-local-id' };
-                    },
-                }),
+                emitWithAck: async (_event: string, payload: unknown) => {
+                    emitted.push(payload);
+                    if (emitted.length === 1) return null;
+                    return { ok: true, id: 'message-2', seq: 2, localId: 'stable-local-id' };
+                },
             } as never),
         });
 
@@ -111,13 +122,10 @@ describe('createSessionClientCommitQueueRuntime retry intent ordering', () => {
         const runtime = createRuntime({
             getSocket: () => ({
                 connected: true,
-                timeout: () => ({
-                    connected: true,
-                    emitWithAck: async (_event: string, payload: unknown) => {
-                        emitted.push(payload);
-                        return null;
-                    },
-                }),
+                emitWithAck: async (_event: string, payload: unknown) => {
+                    emitted.push(payload);
+                    return null;
+                },
             } as never),
         });
 
@@ -140,18 +148,15 @@ describe('createSessionClientCommitQueueRuntime retry intent ordering', () => {
         const runtime = createRuntime({
             getSocket: () => ({
                 connected,
-                timeout: () => ({
-                    connected,
-                    emitWithAck: async (_event: string, payload: unknown) => {
-                        emitted.push(payload);
-                        return {
-                            ok: true,
-                            id: 'message-1',
-                            seq: 1,
-                            localId: 'stable-local-id',
-                        };
-                    },
-                }),
+                emitWithAck: async (_event: string, payload: unknown) => {
+                    emitted.push(payload);
+                    return {
+                        ok: true,
+                        id: 'message-1',
+                        seq: 1,
+                        localId: 'stable-local-id',
+                    };
+                },
             } as never),
         });
 
@@ -185,13 +190,10 @@ describe('createSessionClientCommitQueueRuntime retry intent ordering', () => {
         const runtime = createRuntime({
             getSocket: () => ({
                 connected,
-                timeout: () => ({
-                    connected,
-                    emitWithAck: async (_event: string, payload: unknown) => {
-                        emitted.push(payload);
-                        return null;
-                    },
-                }),
+                emitWithAck: async (_event: string, payload: unknown) => {
+                    emitted.push(payload);
+                    return null;
+                },
             } as never),
         });
 

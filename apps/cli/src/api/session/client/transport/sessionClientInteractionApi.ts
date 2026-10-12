@@ -47,7 +47,8 @@ import {
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import type { SessionCatchUpRequest } from '../../sessionChangesSyncOnConnect';
 import { coerceSessionUserPromptV1 } from '@happier-dev/protocol/sessions/messages/coerceSessionUserPromptV1';
-import { SessionInputAdmissionReceiptV1Schema, assertSessionInputAdmissionReceiptForRequest, SESSION_INPUT_REQUEST_META_KEY, SESSION_MESSAGE_PROVENANCE_META_KEY, readSessionInputRequest, settleSessionInputRequestV2, settleSessionMessageProvenanceV1, settleSessionMessageProvenanceV2, withSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionInputAdmissionReceiptV1Schema, assertSessionInputAdmissionReceiptForRequest, SESSION_INPUT_REQUEST_META_KEY, SESSION_MESSAGE_PROVENANCE_META_KEY, readSessionInputRequest, readSessionMessageProvenance, settleSessionInputRequestV2, settleSessionMessageProvenanceV1, settleSessionMessageProvenanceV2, withSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { PENDING_INPUT_PROTOCOL_VERSION_V3 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import { settleSessionInputRequestV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionBroadcastContainerSchema } from '@happier-dev/protocol/updates';
@@ -204,6 +205,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
     metadata: Metadata | null;
     crypto: SessionStoredContentCryptoContext;
     executionRun?: boolean;
+    signal?: AbortSignal;
 }>): Promise<ReconciledPendingInput> {
     const localId = params.message.localId;
     const payload = readPendingStoredPayload(params.message, params.crypto);
@@ -211,7 +213,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
     const meta = payload.meta && typeof payload.meta === 'object' && !Array.isArray(payload.meta)
         ? payload.meta as Record<string, unknown>
         : {};
-    const request = readSessionInputRequest(meta);
+    const request = readSessionInputRequest(meta, 'stored');
     const requestEqualityEvidenceV1 = params.executionRun && params.crypto.mode === 'e2ee'
         ? {
             kind: 'e2eeTag' as const,
@@ -226,6 +228,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
     if (!Object.hasOwn(meta, SESSION_INPUT_REQUEST_META_KEY)) {
         if (requestEqualityEvidenceV1) {
             const result = await settlePendingQueueV2Admission({
+                signal: params.signal,
                 socket: params.socket, sessionId: params.sessionId, localId,
                 decision: { kind: 'admit', finalContent: params.message.content, requestEqualityEvidenceV1 },
             });
@@ -236,6 +239,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
     }
     if (!request) {
         const result = await settlePendingQueueV2Admission({
+            signal: params.signal,
             socket: params.socket,
             sessionId: params.sessionId,
             localId,
@@ -250,11 +254,12 @@ async function reconcileProtectedPendingInput(params: Readonly<{
     try {
         inputAdmissionReceipt = assertSessionInputAdmissionReceiptForRequest({
             request,
-            inputAdmissionReceipt: params.message.inputAdmissionReceipt,
+            inputAdmissionReceipt: createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).parse(params.message.inputAdmissionReceipt),
         });
     } catch {
         const validation = buildInputSettlementValidation(request);
         const result = await settlePendingQueueV2Admission({
+            signal: params.signal,
             socket: params.socket,
             sessionId: params.sessionId,
             localId,
@@ -278,6 +283,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
             : settleSessionInputRequestV1({ request, currentSessionPermissionCeiling, inputAdmissionReceipt });
     } catch {
         const result = await settlePendingQueueV2Admission({
+            signal: params.signal,
             socket: params.socket,
             sessionId: params.sessionId,
             localId,
@@ -300,12 +306,12 @@ async function reconcileProtectedPendingInput(params: Readonly<{
             [SESSION_MESSAGE_PROVENANCE_META_KEY]: request.v === 2
                 ? settleSessionMessageProvenanceV2({
                     request,
-                    requestedProvenance: meta[SESSION_MESSAGE_PROVENANCE_META_KEY],
+                    requestedProvenance: readSessionMessageProvenance(meta, 'stored'),
                     inputAdmissionReceipt,
                 })
                 : settleSessionMessageProvenanceV1({
                     request,
-                    requestedProvenance: meta[SESSION_MESSAGE_PROVENANCE_META_KEY],
+                    requestedProvenance: readSessionMessageProvenance(meta, 'stored'),
                     inputAdmissionReceipt,
                 }),
         },
@@ -321,6 +327,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
     if (!finalContent) return { status: 'outcomeUnknown' };
     const validation = buildInputSettlementValidation(request);
     const result = await settlePendingQueueV2Admission({
+        signal: params.signal,
         socket: params.socket,
         sessionId: params.sessionId,
         localId,
@@ -381,6 +388,7 @@ export function createSessionClientInteractionApi(
         sessionId: string;
         token: string;
         serverUrl?: string;
+        signal?: AbortSignal;
         getClosed: () => boolean;
         setClosed: (value: boolean) => void;
         getSocket: () => Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -501,6 +509,7 @@ export function createSessionClientInteractionApi(
                     requireAuth: true,
                     requireOnline: false,
                     request: () => runPendingQueueV2ReleasedServerAdapter({
+                        signal: deps.signal ?? metadataWaitAbortController.signal,
                         token: deps.token,
                         serverUrl,
                         sessionId: deps.sessionId,
@@ -536,6 +545,7 @@ export function createSessionClientInteractionApi(
                 request: async () => {
                     if (target) {
                         const result = await materializeNextPendingExecutionRunMessage({
+                            signal: deps.signal ?? metadataWaitAbortController.signal,
                             socket, sessionId: deps.sessionId, recipient: target.recipient,
                             sidechainId: target.sidechainId,
                             deliveryTiming: deliveryTiming ?? 'after_foreground_ready',
@@ -546,6 +556,7 @@ export function createSessionClientInteractionApi(
                     }
                     const pendingQueueState = deps.getPendingQueueState();
                     return await runWithServerHttpBaseUrl(serverUrl, async () => materializeNextPendingQueueV2Message({
+                        signal: deps.signal ?? metadataWaitAbortController.signal,
                         token: deps.token,
                         sessionId: deps.sessionId,
                         socket,
@@ -619,6 +630,7 @@ export function createSessionClientInteractionApi(
             reportDiagnosticPhase('materialize.input_admission');
             const messageToReconcile = materializedMessage;
             const reconciled = await runWithServerHttpBaseUrl(serverUrl, () => reconcileProtectedPendingInput({
+                signal: deps.signal ?? metadataWaitAbortController.signal,
                 socket,
                 sessionId: deps.sessionId,
                 message: messageToReconcile,

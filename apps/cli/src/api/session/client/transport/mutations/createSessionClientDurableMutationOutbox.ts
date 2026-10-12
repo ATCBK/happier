@@ -164,6 +164,7 @@ type RegisteredSessionStateFieldDeliveryResult =
     }>;
 
 type CreateGenericSessionClientDurableMutationOutboxParams = Readonly<{
+    signal?: AbortSignal;
     token: string;
     serverUrl?: string;
     sessionId: string;
@@ -810,6 +811,13 @@ function createGenericSessionClientDurableMutationOutbox(
         shared = {
             handles,
             outbox: createGenericSessionClientDurableMutationOutboxInstance({
+                get signal() {
+                    return selectActiveGenericSessionClientDurableMutationOutboxHandle(
+                        handles,
+                        (handle) => handle.supportsSocketDelivery !== false
+                            && handle.isDeliveryActive?.() !== false,
+                    ).signal;
+                },
                 get token() {
                     return selectActiveGenericSessionClientDurableMutationOutboxHandle(
                         handles,
@@ -886,7 +894,12 @@ function createGenericSessionClientDurableMutationOutbox(
     const handleId = Symbol(params.sessionId);
     let handleClosed = false;
     const deliveryWaitAbort = new AbortController();
-    sharedEntry.handles.set(handleId, params);
+    sharedEntry.handles.set(handleId, {
+        ...params,
+        signal: params.signal
+            ? AbortSignal.any([params.signal, deliveryWaitAbort.signal])
+            : deliveryWaitAbort.signal,
+    });
 
     const closeHandle = async (): Promise<void> => {
         if (handleClosed) return;
@@ -992,6 +1005,7 @@ export type RuntimeSessionClientDurableMutationOutbox = Readonly<{
 }>;
 
 export function createRuntimeSessionClientDurableMutationOutbox(params: Readonly<{
+    signal?: AbortSignal;
     token: string;
     serverUrl?: string;
     sessionId: string;
@@ -1112,6 +1126,7 @@ export type DaemonSessionClientDurableMutationOutbox = Readonly<{
 }>;
 
 export function createDaemonSessionClientDurableMutationOutbox(params: Readonly<{
+    signal?: AbortSignal;
     token: string;
     serverUrl?: string;
     sessionId: string;
@@ -1788,6 +1803,7 @@ function createGenericSessionClientDurableMutationOutboxInstance(
     async function deliver(mutation: QueuedSessionClientDurableMutation): Promise<DurableMutationDeliveryOutcome> {
         if (mutation.kind === 'session_turn_mutation') {
             const result = await runWithServerHttpBaseUrl(serverUrl, async () => deliverSessionTurnMutation({
+                signal: params.signal,
                 token: params.token,
                 socket: params.getSocket(),
                 mutation: mutation.payload,
@@ -1810,6 +1826,7 @@ function createGenericSessionClientDurableMutationOutboxInstance(
                 return { delivered: overriddenDelivery };
             }
             const result = await runWithServerHttpBaseUrl(serverUrl, async () => deliverTranscriptMessageMutation({
+                signal: params.signal,
                 token: params.token,
                 socket: params.getSocket(),
                 connectionContract: sessionSyncPendingInputServerContractResult,
@@ -1832,6 +1849,7 @@ function createGenericSessionClientDurableMutationOutboxInstance(
         if (mutation.kind === 'voice_agent_transcript_turn') {
             params.onTranscriptMessageDeliveryAttempt?.(mutation.payload.user);
             const user = await runWithServerHttpBaseUrl(serverUrl, async () => deliverTranscriptMessageMutation({
+                signal: params.signal,
                 token: params.token,
                 socket: params.getSocket(),
                 connectionContract: sessionSyncPendingInputServerContractResult,
@@ -1847,6 +1865,7 @@ function createGenericSessionClientDurableMutationOutboxInstance(
             }
             params.onTranscriptMessageDeliveryAttempt?.(mutation.payload.assistant);
             const assistant = await runWithServerHttpBaseUrl(serverUrl, async () => deliverTranscriptMessageMutation({
+                signal: params.signal,
                 token: params.token,
                 socket: params.getSocket(),
                 connectionContract: sessionSyncPendingInputServerContractResult,

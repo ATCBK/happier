@@ -363,9 +363,9 @@ export type SessionCreateOrLoadResult = Session & Readonly<{
 /**
  * Machine metadata - static information (rarely changes)
  */
-export const MachineMetadataSchema = StoredMachinePublishedMetadataV1Schema;
+export { StoredMachinePublishedMetadataV1Schema as MachineMetadataSchema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 
-export type MachineMetadata = z.infer<typeof MachineMetadataSchema>
+export type MachineMetadata = z.infer<typeof StoredMachinePublishedMetadataV1Schema>
 
 export const MachineRegistrationIdentitySchema = z.object({
   installationId: z.string().trim().min(1),
@@ -400,9 +400,9 @@ export type DaemonTransferRuntimeState = z.infer<typeof DaemonTransferRuntimeSta
 /**
  * Daemon state - dynamic runtime information (frequently updated)
  */
-export const DaemonStateSchema = MachinePublishedDaemonStateV1Schema;
+export { MachinePublishedDaemonStateV1Schema as DaemonStateSchema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 
-export type DaemonState = z.infer<typeof DaemonStateSchema>
+export type DaemonState = z.infer<typeof MachinePublishedDaemonStateV1Schema>
 
 type MachineCommon = {
   id: string,
@@ -611,6 +611,7 @@ export type Metadata = Readonly<Partial<RuntimeDescriptorMetadataCarrier>> & Rea
     updatedAt: number
   },
   machineId?: string,
+  sessionGuardStateV1?: import('@happier-dev/protocol/machines/guard/sessionGuardStateV1').SessionGuardStateV1,
   sessionWorkspaceLocationV1?: SessionWorkspaceLocationV1,
   /** Presentation/routing marker; managed filesystem ownership remains daemon-owned. */
   sessionDirectoryV1?: SessionDirectoryV1,

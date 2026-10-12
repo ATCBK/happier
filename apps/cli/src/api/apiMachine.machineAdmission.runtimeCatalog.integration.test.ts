@@ -95,6 +95,49 @@ async function enqueueMachineAdmissionWithCancellation(
 }
 
 describe('ApiMachineClient machine admission transport', () => {
+  it('does not republish an unchanged activity projection, but publishes its next semantic edge', async () => {
+    const machine = { ...createMachine(), daemonState: { status: 'running' as const,
+      managedActivity: { kind: 'busy' as const, reasons: ['finite' as const] } }, daemonStateVersion: 4 };
+    const client = new ApiMachineClient('token', machine);
+    const socket = createApiSessionSocketStub({ connected: true, emitWithAck: (_event, raw) => {
+      const payload = raw as { daemonState: string; expectedVersion: number };
+      return { result: 'success', version: payload.expectedVersion + 1, daemonState: payload.daemonState };
+    } });
+    Reflect.set(client, 'socket', socket);
+
+    await expect(client.updateDaemonState(state => ({ managedActivity: { reasons: ['finite'], kind: 'busy' },
+      status: state!.status }))).resolves.toBe('unchanged');
+    expect(socket.emitWithAck).not.toHaveBeenCalled();
+    expect(machine.daemonStateVersion).toBe(4);
+
+    await expect(client.updateDaemonState(state => ({ ...state!, managedActivity: { kind: 'idle', since: 100 } })))
+      .resolves.toBe('published');
+    expect(machine.daemonStateVersion).toBe(5);
+    expect(machine.daemonState).toMatchObject({ managedActivity: { kind: 'idle', since: 100 } });
+  });
+
+  it.each([1, 2] as const)('accepts a delayed V%s admission ACK within the caller budget without replay', async version => {
+    vi.useFakeTimers();
+    onTestFinished(() => vi.useRealTimers());
+    const client = new ApiMachineClient('token', createMachine());
+    const socket = createApiSessionSocketStub({ connected: true, emitWithAck: (_event, raw) => {
+      const payload = raw as { localId: string };
+      return new Promise(resolve => setTimeout(() => resolve({ v: version,
+        result: { status: 'accepted', localId: payload.localId } }), 11_000));
+    } });
+    Reflect.set(client, 'socket', socket);
+    const request = { v: version, sessionId: 'session-1', targetMachineId: 'machine-1', localId: 'first-input',
+      ...(version === 2 ? { recipient: { kind: 'execution_run' as const, runId: 'run-a' } } : {}),
+      content: { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'First turn' }, meta: {} } },
+      requestedAction: { v: 1 as const, kind: 'enqueue' as const } };
+    const parsed = version === 2 ? SessionPendingExecutionRunEnqueueByMachineRequestV2Schema.parse(request)
+      : SessionPendingEnqueueByMachineRequestV1Schema.parse(request);
+    const result = client.enqueueSessionPendingByMachine(parsed, { timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(11_000);
+    await expect(result).resolves.toEqual({ status: 'accepted', localId: 'first-input' });
+    expect(socket.emitWithAck).toHaveBeenCalledOnce();
+  });
+
   it('emits source settlement only for its current installed Machine lifetime', async () => {
     const previousIdentity = identityStore.identity;
     const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));

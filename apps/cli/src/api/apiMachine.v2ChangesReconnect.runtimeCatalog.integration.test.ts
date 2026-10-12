@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,6 +37,13 @@ import { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runt
 import { bootstrapMachineSyncRuntime } from '@/daemon/machine/bootstrapMachineSyncRuntime';
 import { startDaemonSessionControlRuntime } from '@/daemon/startup/startDaemonSessionControlRuntime';
 import { ApiMachineClient } from './apiMachine';
+import {
+    publishPluginAccountCollectionWatchInvalidation as publishCollectionChange,
+    readPluginAccountAvailabilityChangeKey,
+    retirePluginAccountCollectionWatchScope,
+    subscribePluginAccountCollectionWatchInvalidation,
+    subscribePluginAccountSettingsWatchInvalidation,
+} from '@/plugins/runtime/context/pluginAccountSettingsChangeBroker';
 
 const { claudeProvenanceReplaceCount } = vi.hoisted(() => ({
     claudeProvenanceReplaceCount: { current: 0 },
@@ -47,10 +54,7 @@ const {
     axiosPost,
     axiosIsAxiosError,
         readAccountChangesCursor,
-        retirePluginAccountCollectionWatchScope,
         writeAccountChangesCursor,
-        publishPluginAccountCollectionWatchInvalidation,
-        publishPluginAccountSettingsWatchInvalidation,
 } = vi.hoisted(() => {
     return {
         mockIo: vi.fn(),
@@ -60,10 +64,7 @@ const {
             typeof error === 'object' && error !== null && (error as { isAxiosError?: unknown }).isAxiosError === true
         )),
         readAccountChangesCursor: vi.fn(async () => 0),
-        retirePluginAccountCollectionWatchScope: vi.fn(),
         writeAccountChangesCursor: vi.fn(async () => {}),
-        publishPluginAccountCollectionWatchInvalidation: vi.fn(),
-        publishPluginAccountSettingsWatchInvalidation: vi.fn(),
     };
 });
 
@@ -112,46 +113,26 @@ vi.mock('@/ui/logger', () => ({
     },
 }));
 
-vi.mock('@/plugins/runtime/context/pluginAccountSettingsChangeBroker', () => ({
-    publishPluginAccountCollectionWatchInvalidation,
-    publishPluginAccountSettingsWatchInvalidation,
-    retirePluginAccountCollectionWatchScope,
-    readPluginAccountCollectionWatchInvalidations: (changes: readonly unknown[]) => changes.flatMap((change) => {
-        if (!change || typeof change !== 'object') return [];
-        const entry = change as { cursor?: unknown; kind?: unknown; hint?: unknown };
-        if (entry.kind !== 'pluginDomain' || !entry.hint || typeof entry.hint !== 'object') return [];
-        const hint = entry.hint as {
-            pluginDomain?: unknown;
-            pluginId?: unknown;
-            collectionId?: unknown;
-            contractDigest?: unknown;
-        };
-        return hint.pluginDomain === 'dataCollection'
-            && typeof entry.cursor === 'number'
-            && typeof hint.pluginId === 'string'
-            && typeof hint.collectionId === 'string'
-            && typeof hint.contractDigest === 'string'
-            ? [{
-                kind: 'collection' as const,
-                pluginId: hint.pluginId,
-                collectionId: hint.collectionId,
-                contractDigest: hint.contractDigest,
-                changeCursor: entry.cursor,
-            }]
-            : [];
-    }),
-    readPluginAccountSettingsWatchInvalidations: (changes: readonly unknown[]) => changes.flatMap((change) => {
-        if (!change || typeof change !== 'object') return [];
-        const entry = change as { kind?: unknown; hint?: unknown };
-        if (entry.kind !== 'pluginDomain' || !entry.hint || typeof entry.hint !== 'object') return [];
-        const hint = entry.hint as { pluginDomain?: unknown; pluginId?: unknown; revision?: unknown };
-        return hint.pluginDomain === 'settings'
-            && typeof hint.pluginId === 'string'
-            && typeof hint.revision === 'number'
-            ? [{ kind: 'record' as const, pluginId: hint.pluginId, revision: hint.revision }]
-            : [];
-    }),
-}));
+// Observe real consumer notifications; parsing, coalescing and retention remain real.
+const publishPluginAccountCollectionWatchInvalidation = vi.fn();
+const publishPluginAccountSettingsWatchInvalidation = vi.fn();
+let unsubscribeCollection: () => void;
+let unsubscribeSettings: () => void;
+beforeEach(() => {
+    const accountScopeKey = resolveAccountSettingsScopeKeyForToken('token');
+    retirePluginAccountCollectionWatchScope(accountScopeKey);
+    publishPluginAccountCollectionWatchInvalidation.mockClear();
+    publishPluginAccountSettingsWatchInvalidation.mockClear();
+    unsubscribeCollection = subscribePluginAccountCollectionWatchInvalidation({
+        accountScopeKey, pluginId: 'example.tasks', collectionId: 'tasks', contractDigest: 'a'.repeat(43),
+    }, publishPluginAccountCollectionWatchInvalidation);
+    unsubscribeSettings = subscribePluginAccountSettingsWatchInvalidation(publishPluginAccountSettingsWatchInvalidation);
+});
+afterEach(() => {
+    unsubscribeCollection();
+    unsubscribeSettings();
+    retirePluginAccountCollectionWatchScope(resolveAccountSettingsScopeKeyForToken('token'));
+});
 
 function createMachineSocket(options: {
     emitWithAck?: (event: string, payload: unknown) => Promise<unknown> | unknown;
@@ -184,6 +165,76 @@ function createMachineSocket(options: {
 }
 
 describe('ApiMachineClient /v2/changes reconnect', () => {
+    it('invalidates Automation source observers from durable changes and completeness recovery', async () => {
+        const machine: Machine = { id: 'source-observer-machine', encryptionMode: 'plain', metadata: null,
+            metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
+        let changes: Array<{ cursor: number; kind: 'automation' | 'account'; entityId: string; changedAt: number; hint: null }> = [];
+        let cursorGone = false;
+        axiosGet.mockImplementation(async (url: string) => {
+            if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'source-observer-account' } };
+            if (url.includes('/v2/changes')) return cursorGone
+                ? { status: 410, data: { error: 'cursor-gone', currentCursor: 2 } }
+                : { status: 200, data: { changes, nextCursor: 1 } };
+            if (url.includes('/v1/machines/')) return { status: 200, data: { machine: {
+                id: machine.id, metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
+            } } };
+            throw new Error(`Unexpected source observer request: ${new URL(url).pathname}`);
+        });
+        const client = new ApiMachineClient('token', machine);
+        client.onConnectedServicesProjection(async () => {});
+        const notified = vi.fn();
+        client.onAutomationEventSourcesInvalidated(notified);
+        const sync = (reason: 'live' | 'reconnect') => (
+            client as unknown as { syncChangesOnConnect(options: { reason: 'live' | 'reconnect' }): Promise<void> }
+        ).syncChangesOnConnect({ reason });
+        await sync('live');
+        expect(notified).not.toHaveBeenCalled();
+        changes = [{ cursor: 1, kind: 'automation', entityId: 'automation-source-status', changedAt: 1, hint: null }];
+        await sync('live');
+        expect(notified).not.toHaveBeenCalled();
+        changes = [{ cursor: 1, kind: 'automation', entityId: 'automation-a', changedAt: 1, hint: null }];
+        await sync('live');
+        expect(notified).toHaveBeenCalledTimes(1);
+        changes = [];
+        await sync('reconnect');
+        expect(notified).toHaveBeenCalledTimes(2);
+        cursorGone = true;
+        await sync('live');
+        expect(notified).toHaveBeenCalledTimes(3);
+    });
+
+    it('publishes observer currentness only after a supported changes read on the live transport', async () => {
+        const previousV2Changes = process.env.HAPPY_ENABLE_V2_CHANGES;
+        delete process.env.HAPPY_ENABLE_V2_CHANGES;
+        const machine: Machine = { id: 'observer-machine', encryptionMode: 'plain', metadata: null,
+            metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
+        const socket = createMachineSocket();
+        bindApiSessionSocketMock(mockIo, socket);
+        axiosGet.mockImplementation(async (url: string) => {
+            if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'observer-account' } };
+            if (url.includes('/v2/changes')) return { status: 200, data: { changes: [], nextCursor: 1 } };
+            throw new Error(`Unexpected observer transport request: ${new URL(url).pathname}`);
+        });
+        const client = new ApiMachineClient('token', machine);
+        client.onConnectedServicesProjection(async () => {});
+        try {
+            expect(client.hasCurrentAccountChangesObserver()).toBe(false);
+            client.connect();
+            await vi.waitFor(() => expect(client.hasCurrentAccountChangesObserver()).toBe(true));
+            socket.connected = false;
+            expect(client.hasCurrentAccountChangesObserver()).toBe(false);
+            socket.connected = true;
+            process.env.HAPPY_ENABLE_V2_CHANGES = 'false';
+            await (client as unknown as { syncChangesOnConnect(options: { reason: 'live' }): Promise<void> })
+                .syncChangesOnConnect({ reason: 'live' });
+            expect(client.hasCurrentAccountChangesObserver()).toBe(false);
+        } finally {
+            await client.shutdown();
+            if (previousV2Changes === undefined) delete process.env.HAPPY_ENABLE_V2_CHANGES;
+            else process.env.HAPPY_ENABLE_V2_CHANGES = previousV2Changes;
+        }
+    });
+
     it('reopens a demanded Provider catalog on its content-free Account hint without advancing Settings', async () => {
         const previous = getActiveAccountSettingsSnapshot();
         const credentials = { token: 'provider-row-change-token', encryption: null };
@@ -934,6 +985,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             collectionId: 'tasks',
             contractDigest: 'a'.repeat(43),
             changeCursor: 8,
+            full: true,
         });
     });
 
@@ -2074,6 +2126,10 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         readAccountChangesCursor.mockClear();
         publishPluginAccountCollectionWatchInvalidation.mockClear();
 
+        writeAccountChangesCursor.mockImplementationOnce(async () => {
+            expect(readPluginAccountAvailabilityChangeKey(resolveAccountSettingsScopeKeyForToken('token'), 'example.tasks')).toBe('9\u0000');
+        });
+
         const onAccountSettingsVersionHint = vi.fn(async () => {});
         const client = new ApiMachineClient('token', machine);
         client.onAccountSettingsVersionHint(onAccountSettingsVersionHint);
@@ -2091,9 +2147,6 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             changeCursor: 9,
         });
         expect(writeAccountChangesCursor).toHaveBeenCalledWith('acc-1', 9);
-        expect(
-            publishPluginAccountCollectionWatchInvalidation.mock.invocationCallOrder[0],
-        ).toBeLessThan(writeAccountChangesCursor.mock.invocationCallOrder[0]!);
     });
 
     it('applies a live permanent-removal witness before acknowledging its Account cursor without a Session detail read', async () => {
@@ -3327,7 +3380,9 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             collectionId: 'tasks',
             contractDigest: 'a'.repeat(43),
             changeCursor: 8,
+            full: true,
         });
+        expect(readPluginAccountAvailabilityChangeKey(resolveAccountSettingsScopeKeyForToken('token'), 'example.tasks')).toBe('\u00009');
         await client.shutdown();
     });
 
@@ -3341,14 +3396,14 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        retirePluginAccountCollectionWatchScope.mockClear();
+        const accountScopeKey = resolveAccountSettingsScopeKeyForToken('account-token-retirement');
+        publishCollectionChange({ accountScopeKey, kind: 'reset', changeCursor: 9 });
+        expect(readPluginAccountAvailabilityChangeKey(accountScopeKey, 'example.tasks')).toBe('9\u0000');
         const client = new ApiMachineClient('account-token-retirement', machine);
 
         await client.shutdown();
 
-        expect(retirePluginAccountCollectionWatchScope).toHaveBeenCalledExactlyOnceWith(
-            resolveAccountSettingsScopeKeyForToken('account-token-retirement'),
-        );
+        expect(readPluginAccountAvailabilityChangeKey(accountScopeKey, 'example.tasks')).toBe('\u0000');
     });
 
     it('routes durable session-access revocations to listeners before acknowledging the Account cursor', async () => {

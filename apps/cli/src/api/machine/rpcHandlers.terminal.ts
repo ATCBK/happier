@@ -24,6 +24,7 @@ import type { ProjectFiniteActionRuntime } from '@/workspaces/projectSetup/proje
 import type { HostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
 import { dispatchActionFromRpc, type RpcActionExecutor } from '@/rpc/handlers/_actionDispatchAdapter';
 import { resolveMachineRpcWorkingDirectory } from './resolveMachineRpcWorkingDirectory';
+import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 import {
   resolveFilesystemAccessPolicy,
   type FilesystemAccessPolicy,
@@ -98,6 +99,8 @@ export type MachineTerminalRpcHandlerDeps = Readonly<{
    * is rejected before a terminal is opened.
    */
   requiredSessionId?: string;
+  readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
+  ownerRemainder?: import('@/daemon/processes/endOwnerRemainder').OwnerRemainderPort;
 }>;
 
 export type MachineTerminalAccountReadRuntime = Readonly<{
@@ -172,7 +175,9 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
   const getSessionManager = (): TerminalBridgeSessionManager => {
     if (sessionManager) return sessionManager;
     sessionManager = createTerminalPtySessionManager({
-      ptyProvider: createNodePtyProvider(),
+      ptyProvider: createNodePtyProvider({ readSpawnFailureLimits: params.deps?.readSpawnFailureLimits }),
+      readSpawnFailureLimits: params.deps?.readSpawnFailureLimits,
+      ownerRemainder: params.deps?.ownerRemainder,
       config: config.sessionManager,
       env,
       platform: params.deps?.platform,
@@ -261,7 +266,8 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
     // authorizes reading the custodian's private accepted-workspace catalog.
     if (!runtime || runtime.accountId !== admission.actorAccountId) return err('terminal_unavailable');
     if (runtime.machineId !== admission.machineId || params.deps?.serverId !== undefined && runtime.serverId !== params.deps.serverId) return err('terminal_forbidden');
-    if (input.workspace && (input.workspace.serverId !== runtime.serverId || input.workspace.machineId !== runtime.machineId)) return err('terminal_cwd_denied');
+    if (input.workspace && (!await isServerProfileHomeIdentity(runtime.serverId, input.workspace.serverId)
+      || input.workspace.machineId !== runtime.machineId)) return err('terminal_cwd_denied');
     try {
       if (runtime.isCurrent && !await runtime.isCurrent()) return err('terminal_forbidden');
       const rows = await runWithServerHttpBaseUrl(runtime.serverHttpBaseUrl, () => readProjectAccountRows({
@@ -273,9 +279,10 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
         const requested = resolveCwd(input.cwd);
         if (!requested.ok || normalizeWorkspaceRootPathV1(requested.cwd) !== normalizeWorkspaceRootPathV1(cwd.cwd)) return err('terminal_cwd_denied');
       }
+      const homeServerId = await resolveServerProfileHomeIdentityId(runtime.serverId) ?? runtime.serverId;
       const accepted = resolveWorkspaceRefV1(rows.workspaceRefs, input.workspace ?? {
         serverId: runtime.serverId, machineId: runtime.machineId, rootPath: cwd.cwd,
-      });
+      }, { normalizeServerId: id => id === runtime.serverId ? homeServerId : id });
       if (accepted.kind !== 'resolved') return err('terminal_cwd_denied');
       const acceptedCwd = resolveCwd(accepted.ref.rootPath);
       if (!acceptedCwd.ok || normalizeWorkspaceRootPathV1(acceptedCwd.cwd) !== normalizeWorkspaceRootPathV1(cwd.cwd)) return err('terminal_cwd_denied');
@@ -383,6 +390,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
       };
       const platform = runtime.platform ?? params.deps?.platform ?? process.platform;
       const preparation = { workspace: association.workspace, projectAssociation: association,
+        approvalContext: context.localActionContext,
         requester: { ...accountAccess, serverHttpBaseUrl: runtime.serverHttpBaseUrl }, purpose: 'setup' as const,
         platform: { os: platform === 'win32' ? 'windows' : platform, arch: runtime.arch ?? process.arch },
         nativeIo: runtime.nativeIo, signal: context.signal, retainNativeInvocation: nativeCustody.retain,
@@ -486,7 +494,9 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
       if (!await isCurrent()) return refused('machine_admission_changed');
       // Directory selects only an exact accepted checkout. Its stored Project anchor,
       // never an inferred enclosing root, supplies preparation/trust association.
-      const accepted = resolveWorkspaceRefV1(rows.workspaceRefs, { serverId: runtime.serverId, machineId: runtime.machineId, rootPath: cwd });
+      const homeServerId = await resolveServerProfileHomeIdentityId(runtime.serverId) ?? runtime.serverId;
+      const accepted = resolveWorkspaceRefV1(rows.workspaceRefs, { serverId: runtime.serverId, machineId: runtime.machineId, rootPath: cwd },
+        { normalizeServerId: id => id === runtime.serverId ? homeServerId : id });
       if (accepted.kind !== 'resolved' || !accepted.ref.projectKey) return refused('project_workspace_unavailable');
       const targets = await discoverLocalServiceRunTargets({ roots: [accepted.ref.rootPath] });
       if (!await isCurrent()) return refused('machine_admission_changed');
@@ -566,6 +576,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
       && terminal.terminalKey === parsed.data.terminalKey && terminal.sessionId === sessionId
       && sameTerminalCustody(getSessionManager().getCustody(terminal.terminalId), projectCustody));
     if (projectCustody && !warm && params.deps?.admissionDrain?.isQuiescing()) return err('terminal_busy');
+    await getSessionManager().prepare?.();
     const prepared = projectCustody && !warm ? await prepareProjectShell(projectCustody, launch.launchProcess, context) : undefined;
     if (prepared && !prepared.ok) return prepared;
     const result = getSessionManager().ensure({
@@ -689,6 +700,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
       ?? ('custody' in cwd && cwd.custody?.kind === 'session' ? cwd.custody.sessionId : undefined);
 
     const projectCustody = 'custody' in cwd && cwd.custody?.kind === undefined ? cwd.custody : undefined;
+    await getSessionManager().prepare?.();
     const prepared = projectCustody ? await prepareProjectShell(projectCustody, launch.launchProcess, context) : undefined;
     if (prepared && !prepared.ok) return prepared;
     let handedOff = false;

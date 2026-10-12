@@ -312,7 +312,10 @@ async function followWaitingSessionTranscript<TItem>(params: FollowSessionTransc
             ...(params.signal ? { signal: params.signal } : {}),
         });
         let page = await read();
-        readCursor = page.nextCursor ?? params.store.getTailCursor() ?? readCursor;
+        // Only a tail baseline needs the store's observed tail. An empty read
+        // after an explicit cursor must retain that cursor, even if the store
+        // still remembers an older tail from the first follow call.
+        readCursor = page.nextCursor ?? (params.cursor === 'tail' ? params.store.getTailCursor() : null) ?? readCursor;
         params.signal?.throwIfAborted();
         if (!page.items.length && !page.truncated && !page.agentState && !page.sharedMetadata && !changes.pending()) {
             await changes.wait(params.signal);
