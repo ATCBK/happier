@@ -61,6 +61,13 @@ describe('Run lifecycle source admission (retained SQLite owners)', () => {
       .rejects.toThrow('source_unavailable');
     await db.automationTrigger.create({ data: { automationId: f.automationId, kind: 'runLifecycle', enabled: true,
       sourceRunId: run.id, remainingOccurrences: 1, runLifecycleConfigurationJson: JSON.stringify(definition) } });
+    // Physical interruption alone is not a public attention fact. The actual
+    // retained leaf is what makes this source match needs_attention.
+    await inTx(tx => catchUpAutomationRunLifecycleSourcesTx(tx, f.automationId));
+    expect(await db.automationRun.count({ where: { automationId: f.automationId } })).toBe(0);
+    await db.workflowRunInvocation.create({ data: { id: randomUUID(), runId: run.id, sequence: 1n,
+      parentRecordId: null, memberOrdinal: 0n, attempt: 0n, contentRevision: 1n,
+      lifecycle: 'needs_attention', contentEnvelope: '{}' } });
     await inTx(tx => catchUpAutomationRunLifecycleSourcesTx(tx, f.automationId));
     await inTx(tx => catchUpAutomationRunLifecycleSourcesTx(tx, f.automationId));
     expect(await db.automationRun.count({ where: { automationId: f.automationId } })).toBe(1);
