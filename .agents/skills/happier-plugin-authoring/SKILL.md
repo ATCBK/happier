@@ -19,6 +19,8 @@ A plugin settings or detail page uses the same anatomy as Happier's own settings
 
 Load `.agents/skills/happier-ui-craft` for the method: hierarchy, control choice, copy, states and the side-by-side check.
 
+For a few operations, use public `SelectionTiles variant="action"` with `onPress`: the shared owner turns a narrow page section into rows of one sheet; footer-bearing actions retain their cards. Public `CountedDisclosureItem` folds quiet aggregate details behind a title and optional count or subtitle; use public `List` controlled expansion for a collection item's own details. Import author adapters from `@happier-dev/plugin-ui/components`; `presentation` is host-internal, not an author renderer/metrics API. Public `Collection presentation="grid"` already owns compact tiles: return `null` for absent descriptions and omit unused footer slots. Check these development-source exports in the package API inventory before using them from a published toolchain.
+
 ## Cross-plugin integrations
 
 For broader public composition patterns, read `node_modules/@happier-dev/plugin-sdk/examples/public-authoring/` and `node_modules/@happier-dev/plugin-sdk/examples/advanced-package-root/`. Use only contribution and service families marked available in the capability matrix; an example demonstrates public package boundaries but does not create product availability. This beginner scaffold does not declare a feature integration.

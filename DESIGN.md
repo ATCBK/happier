@@ -205,7 +205,7 @@ Use visual intensity intentionally:
 
 Interaction frequency determines expressive intensity. High-frequency actions should feel immediate, tactile, and nearly effortless. Occasional transitions may explain spatial change. Rare signature moments may use richer choreography. Repeated exposure must make the interface feel faster and more natural, not force people to watch the design perform.
 
-Do not spread a signature visual device across the entire product until it loses meaning. The onboarding planet, cinematic stage, word-by-word narration, and demo-world machinery are references for experience quality, not default app chrome.
+Home, new session and projects may carry the user's atmosphere; it stays decorative, behind content, never animated at rest. The onboarding cinematic stage, word-by-word narration, and demo-world machinery remain references for experience quality rather than default app chrome.
 
 ## Motion: fluid, physical, and purposeful
 
@@ -296,6 +296,7 @@ Art-directed imagery and narrative surfaces may need locally owned visual tokens
 
 - Inter is the default interface typeface on every platform, including native iOS and Apple web. Theme-held font choices continue to override the default; monospace keeps its own canonical family.
 - Inter ships as static faces — Regular 400, Medium 500, SemiBold 600 — chosen by face through the one font owner (`constants/Typography.ts`). React Native exposes no variable-axis control and Android selects a weight by face, so in-between weights from a lab snap to the nearest shipped face, ties to the lighter: 450 → 400; 560, 620, 640, 650 and 660 → 600.
+- **Type roles.** Interface text is one of eight roles — `display`, `title`, `heading`, `label`, `reading`, `body`, `meta`, `micro` — owned by `HAPPIER_TYPE_SCALE` (`packages/plugin-ui/src/presentation/text/typeScale.ts`) and applied through `Text`'s `variant` and `emphasis` or `Typography.variant`. Sizes are whole pixels; another weight is an emphasis, not another size. A slot that seems to need a value no role has is a change to the role for every consumer, never a local number. Transcript text, Markdown, terminal and code keep their own domain scales. Design labs read the same roles from the generated `product-tokens.css`.
 - Use Happier’s canonical text primitives and typography tokens so scaling, platform rendering, theme, and localization continue to work.
 - Build hierarchy from size, weight, leading, tracking, color, and spacing as a coherent set.
 - Large display text may use tighter leading and tracking; body and dense UI text prioritize legibility.
@@ -313,6 +314,7 @@ Art-directed imagery and narrative surfaces may need locally owned visual tokens
 ### Spacing, shape, and alignment
 
 - Use the existing spacing, radius, size, and layout tokens or primitives.
+- **Spacing steps and layout roles.** Gaps and padding are steps of `theme.space` (2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48). Page columns, gutters, section gaps, card padding, row, control and pane-header heights are layout roles in `HAPPIER_PAGE_METRICS`, and `PageFrame` renders the page column. Hairlines and optical offsets (0, 1, 3 px, negatives) stay literal. A value no step or role has is a proposal for that owner.
 - Repeated spacing values should express a rhythm, not a collection of nearby guesses.
 - Nested rounded surfaces should appear optically concentric when they represent layers of one object.
 - **Radii derive from one base.** Small, control, menu, card and dialog radii are steps of one base
@@ -329,16 +331,57 @@ Art-directed imagery and narrative surfaces may need locally owned visual tokens
 
 - Use translucency to express a floating functional layer or preserve spatial context, not as a default decoration.
 - Ensure text and controls remain legible over changing backgrounds.
+- **Glass follows five layers.** Window is the app over the desktop (`content`); a browser cannot
+  show the desktop. Title bar and rail (`chrome`), Sidebar (`sidebar`), Elements (`card`) and
+  Menus and dialogs (`floating`) each use the same canonical material owner. Elements include
+  cards, widgets, the composer, settings groups and the sidebar's rounded list groups. Presets
+  remain quick choices above one Glass/Solid row per layer; blur strength stays global. Changing
+  Elements keeps the preset selected, and switching presets preserves its Glass/Solid choice.
+- **Elements need a backing.** Their default Glass choice becomes translucent only over a live
+  translucent content plane or an atmosphere band or wallpaper. With nothing behind, they retain
+  their exact solid paint without tint, blur or an extra layer. The glass owner decides this once
+  for core, plugin and embedded surfaces. Native Elements use translucent tint without a BlurView
+  or Liquid Glass view per card. Same-group nested cards inherit their containing coat and finish.
+- **Background and glass are independent.** Planet and Picture remain visible under every glass
+  setting. Wallpaper keeps its full-window layout under Solid, Auto on web, inactive windows,
+  Custom and Reduce Transparency. The glass owner's `atmosphereBehind` (`none`, `band`, `wallpaper`)
+  input clears the content-plane paint whenever a background is shown; the atmosphere supplies the
+  page colour outside its artwork, opaque under Solid and Reduce Transparency. Home and its lists
+  do not override transparency. Title bar, sidebar, cards, widgets and composer retain their
+  owner-assigned material and stay opaque under Solid and Reduce Transparency; cards, widgets and
+  composer consume the glass owner's Elements group. Look's chip
+  and popover remain menus/dialogs. Chrome and sidebar blur Wallpaper on a sibling layer when their
+  material allows it, using the existing glass radius and tone owners; the planes never become
+  backdrop roots that cut off nested popovers. Content uses the picture's pre-rendered haze.
+  Check popover and secondary-text contrast over every built-in picture in light and dark;
+  preserve custom values without contrast floors or extra coats.
 - **Floating glass is the enabled default.** Auto, Everywhere and Clear all give menus, popovers,
   dialogs, floating sheets, tooltips and toasts the same low-tint floating material. Web uses 24px
   frost and a fixed dark/light backdrop treatment, not a near-opaque coat or content-reactive scrim;
   native uses adaptive Liquid Glass or the existing tinted blur fallback. Solid and Reduce
   Transparency remove translucency. Custom per-group opacity and blur remain exactly authored.
-  The web tone preserves at least a quarter of the black-to-white sRGB range and never reduces
-  saturation; dark uses `contrast(.55) brightness(.5) saturate(1.4)` with 2% tint,
-  retaining a .275 sRGB tone band, and light mirrors the same curve around white.
-  It lifts a dark page slightly. Glass identity and that lift take priority over forcing muted
-  ink to meet extreme-backdrop contrast. Accepted limits are secondary ink over saturated
+  A **Tint** choice (Subtle, Medium, Strong; Subtle by default) sets how much of its own paint
+  named-preset Elements and menus carry. At every tint, glass over the plain page lands exactly on
+  the surface's warm solid paint (within one level); the tint only sets how thin the coat carrying
+  that paint is. Subtle is the thinnest coat that carries it without a neutral lift (7% Elements, 11%
+  menus), so over a picture it is close to monocode's blur with a near-invisible tint; Medium and
+  Strong are progressively frosted. The soft finish and rim stay on glass as on solid surfaces. Shell planes keep each preset's own coats, custom
+  tables apply exactly as set, and native renderers (no web backdrop tone, no card blur) keep the
+  Medium coats. Web glass is an affine map of the blurred backdrop X, k·X + c, from a `brightness()`
+  tone and a coat solved so the plain page lands on the tint's paint, never a grey lift or a hole.
+  `contrast()` is never used on dark: it pivots at mid-grey and lifts a dark page into a grey slab.
+  Over an ordinary page Subtle and Medium pass the backdrop through (k = 1); over a picture k drops
+  only as far as primary ink needs 4.5:1 over a bright sky (Subtle .6 Elements and .55 menus, Medium
+  .45, Strong .35).
+  Light hangs its band from white (`invert(1) brightness() invert(1)`), so a white page stays white
+  and the darkest backdrop still carries primary ink. Saturation is kept at 1.05, never reduced
+  (our one deviation from monocode). Centred dialogs (`ModalCardFrame`: alerts, prompts, the command
+  palette) carry the page at a heavy coat behind their blur, as monocode's modals do: 55% at Subtle,
+  70% Medium, 85% Strong, still landing on the floating paint over a plain page; menus and popovers
+  keep the hair. On glass with a picture or the live desktop behind it, faint (secondary) ink takes a
+  stronger step, primary ink at 70%, so it holds about 3:1 over a bright sky; ordinary pages and
+  unbacked glass keep the theme's secondary ink.
+  Glass identity takes priority over forcing muted ink to meet extreme-backdrop contrast. Accepted limits are secondary ink over saturated
   colourful backdrops and primary ink on selection/hover at the pure-white dark-theme extreme;
   do not darken or flatten the material to remove those limits.
   Surrounding chrome, sidebar and content retain each preset's own recipe. Inner rows, fields,
@@ -355,7 +398,12 @@ Art-directed imagery and narrative surfaces may need locally owned visual tokens
   whether solid, tinted, blurred or Liquid Glass. Flat keeps the same border and edge without that
   overlay. Appearance selects the finish globally or per role; card-framed widgets follow the card
   role. Nested glass surfaces in the same material group inherit the containing finish rather than
-  stacking another coat. Fields, rows, chips and ghost buttons stay flat.
+  stacking another coat. Dark surfaces step up in the theme's own warm hue: cards take the authored
+  raised surface (`surface.elevated`), floating surfaces one quiet step above it, and the sidebar's
+  list sheets the page colour, one quiet step above the sidebar. Fields, rows, chips and ghost buttons stay flat.
+  Dark Soft lifts the card surface's own hue and saturation with a peak alpha of 0.025, tapering by
+  70% of the surface height; light keeps its existing finish. The theme's single editable
+  `effect.surfaceFinish` ink controls colour and strength, with custom values left as authored.
 - **Flat edge in flow; the rim only for what floats.** Controls, rows, cards, grouped sheets and the
   composer use the flat edge, in every theme. Popovers, menus, dialogs, sheets over content, toasts,
   tooltips and the message bubble use the directional rim: one corner light anchored top-left,

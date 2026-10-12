@@ -8,6 +8,17 @@ surface use `SurfaceStateCard` (sized by its container: pane, details, page, pho
 inside a list a section's state is `SurfaceStateCard size="line"` (the section title stays); stale content keeps
 its rows at full strength under one `SurfaceFreshnessLine`.
 
+## Unknown and partial data stay quiet
+
+- An unknown value keeps its slot but never takes a headline or metric slot as a word
+  ("Unavailable", "Unknown"). Show an em dash and give the reason in secondary text or on tap.
+  Never show unknown as zero.
+- Coverage, provenance and freshness caveats get one quiet indicator per surface, such as a dot or a
+  short "Partial" label in its header. Its detail opens on demand and links to where it can be
+  fixed. Never repeat a caveat paragraph under every card.
+- A section with no basis yet says so in one line, or stays hidden when nothing useful can be said.
+  It never keeps a full-size box that only explains why it is empty.
+
 ## Empty is designed, not left over
 
 - Anatomy (`EmptyState layout="page"`): a calm mark with no tile — a Daybreak scene when the

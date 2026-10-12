@@ -47,7 +47,8 @@ its product thinking was sound. The difference was the method, not the designer.
    owners.
 8. **Load the taste layers.** Load this skill and `references/premium-feel.md` first, and run its
    self-check on every frame. Then load `make-interfaces-feel-better` and
-   `interface-details`. Describe motion (morphs, drag, expansion) in the notes if the lab can't prototype
+   `interface-details` (Claude Code skills; a lane that cannot load them is not a lab or composition
+   lane). Describe motion (morphs, drag, expansion) in the notes if the lab can't prototype
    it.
 9. **A fixed output contract.**
    - The rationale for each frame.
@@ -59,6 +60,36 @@ its product thinking was sound. The difference was the method, not the designer.
     (`references/validation.md`).
 11. **The orchestrator looks before the user does.** Open the rendered shots and check them against rules
     1–7. Reject any format drift before presenting.
+
+12. **Each chosen scene gets a short spec**, a few lines in its notes:
+    - the content column width and gutters;
+    - how it behaves at 1440, 1920, 2560 and 390;
+    - long and heavy content;
+    - its states;
+    - the motion intent.
+
+    Draw on the product's roles, so the lab is built at the scale it was drawn. From the repo root,
+    run `node apps/ui/scripts/exportDesignLabTokens.mjs` to refresh
+    `.happier/design-lab/_shared/product-tokens.css` from the current light/dark web themes and the
+    scale owners: the type roles (`HAPPIER_TYPE_SCALE`: `display`, `title`, `heading`, `label`,
+    `reading`, `body`, `meta`, `micro`), the spacing steps (`theme.space`, `s2` to `s48`) and the
+    layout roles (`HAPPIER_PAGE_METRICS`). The shared kit (`settings/lab.css`, `settings/craft.css`,
+    `app-surfaces/app.css`) imports it and holds no type or spacing number of its own:
+    - Text takes a role: `font-size: var(--product-type-body-size)` with
+      `line-height: var(--product-type-body-line)` (and `-weight`, `-tracking`), or the `.t-body`
+      class. Another weight is an emphasis (`var(--product-font-weights-semi-bold)`), never a number.
+      `var(--product-type-face-default)` and `var(--product-type-face-mono)` pick the shipped static
+      face by weight, as the app does.
+    - Gaps and padding take a step (`var(--product-space-s12)`); frames take layout roles
+      (`--product-page-column-reading`, `--product-page-sheet-inset-px`,
+      `--product-page-section-gap-px`, `--product-page-row-min-height-px`,
+      `--product-page-control-height-px`, …). Hairlines (0, 1, 3 px), negative optical offsets and
+      glyphs sized to their box stay literal.
+    - No half sizes and no in-between weights. When a scene needs a value no role has, propose a role
+      change for every consumer, app included, in the round's report; never add a lab-only number.
+
+    Feature lab CSS moves onto the roles when it is next touched. Serve labs from the repo root so the
+    exported font-face URLs reach the app's font assets.
 
 ## Brief skeleton
 

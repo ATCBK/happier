@@ -47,6 +47,8 @@ Do not create a separate truth/artifact matrix when the plan's intent, target-st
 
 Include a constraint only when it excludes or materially changes a plausible implementation. Convert vague qualities such as “robust,” “clean,” “premium,” or “scalable” into an observable contract, deciding principle, or acceptance signal; otherwise omit the decorative wording.
 
+When a plan builds surfaces from a design lab, give each designed page one whole-page fidelity acceptance, owned by a named design lane: the full lab page beside the full live page, with real data, in light, dark and phone, and each difference classified per `happier-ui-craft` validation (defect, accepted refinement or lab outdated). Component shots spread across units never add up to page fidelity. The lab is the design intent, not a pixel contract.
+
 Do not promote an architectural possibility, speculative future consumer, generalized reuse opportunity, another proposed mechanism, or unsupported robustness/scalability target into a requirement. Establish requirements from an approved outcome, constitution rule, external contract, reproduced failure, or reachable derived risk; mechanism selection and the recursive deletion test belong in the target-design step below.
 
 ## 3. Investigate the current system

@@ -60,6 +60,8 @@ the global choice. Card-framed widgets follow the card choice; plain widgets
 keep their unframed presentation. These preferences are saved on this device.
 
 Soft works over glass too, preserving the backdrop through its tint or blur.
+In dark themes, its top light takes the card surface's hue and uses a gentler
+strength. Light themes keep their existing finish.
 In a custom theme, the **Soft finish** colour controls the ink and its alpha
 controls the strength. Transparent removes the gradient.
 
@@ -70,19 +72,71 @@ tooltips and toasts use clear glass by default whenever glass is enabled.
 **Auto**, **Everywhere** and **Clear** share that floating material; their
 surrounding chrome, sidebar and content still have different coats.
 
-On the web, the floating layer uses 24px frost and a 2% tint, with a fixed
-dark/light backdrop treatment that keeps the backdrop's colour and variation
-visible, lifting dark surfaces slightly and mirroring that treatment in light
-mode. The dark treatment uses contrast 0.55, brightness 0.5 and saturation 1.4;
-light mirrors it around white. This preserves a 0.275-wide black-to-white tone
-range before tint. Secondary text over strongly saturated colour, and selected
-or hovered primary text over pure white in dark mode, can fall below their
-contrast targets; these are accepted design limits of the clear material.
+The presets are quick choices above five layers: **Window** (the app over your
+desktop), **Title bar and rail**, **Sidebar**, **Elements** and **Menus and dialogs**.
+Each layer offers **Glass** or **Solid**, with one global blur strength. Window
+glass needs the desktop app; a browser cannot show your desktop.
+
+Elements covers cards, widgets, the composer, settings groups and the sidebar's
+rounded list groups. Its default **Glass** choice shows glass when a backdrop
+or a translucent window is behind it. Without either, it keeps its usual solid
+fill. Changing Elements keeps the selected preset, and switching presets
+preserves your Elements choice. Changing another layer makes the preset **Custom**.
+On phones, glass Elements uses translucent tint.
+
+On the web, glass surfaces use 24px frost. **Settings › Appearance › Glass and backdrop ›
+Tint** sets how much colour menus, dialogs, cards and the composer add over
+what is behind them: Subtle (the default) is almost pure blur with a hair of
+tint, Medium shows each surface's own fill, and Strong is clearly frosted.
+Over the plain page, glass never looks lighter or greyer than the page it sits
+on. Over a background picture, the picture is dimmed only enough to keep
+primary text readable, and keeps its colour. Light mode keeps glass close to
+white. Secondary text over very bright, saturated pictures can fall below its
+contrast target; this is an accepted limit of the clear material. Tint applies
+to the named presets; custom materials keep their exact values.
+This development change is not an availability claim for released clients.
 It does not turn a bright or dark page into a uniform fill. Native
 clients use Liquid Glass where available, or their existing tinted blur.
 **Solid** and the system's **Reduce Transparency** setting remove translucency;
 an unavailable native material also falls back to solid paint. Custom per-group
 opacity and blur are left exactly as you set them.
+
+## Home backdrop (0.3 development)
+
+Home, new sessions and projects can show a backdrop behind the page: our dot
+planet (the default, in the top-right corner), a picture, or nothing. Open
+**Look** from the chip at the top right of Home or from **Customize → Look**;
+on a phone it opens as a sheet. Every choice applies as you make it and follows
+your account to your other devices.
+
+- **Planet**: choose where it sits (**Corner**, **Side** or **Rise**; phones
+  show Rise as Corner), its style (**Airy**, **Balanced** or **Rich**) and
+  whether faint typed digits surround it.
+- **Picture**: choose one of the built-in photos and paintings (each is
+  credited under the thumbnails), **Shuffle**, or **Your picture…** to add one
+  of your own. Built-in pictures download from their source the first time they
+  are shown and are then kept on the device. Your own picture stays on the
+  device you added it on; other devices show the default backdrop instead.
+- **Look**, **Fade** and **Strength** change how the picture is drawn. Each
+  picture remembers your changes; **Reset to this picture's look** returns it
+  to the look it ships with. Fade chooses **Ordered**, **Gradient**, **Haze**,
+  **Shrink** or **Rows**; Strength mixes the look from 0% to 100%.
+- **Layout**: **Horizon** draws the picture as a band behind the greeting and
+  composer; **Wallpaper** fills the window. The backdrop and glass are independent:
+  Wallpaper keeps that layout with every glass setting, including **Solid** and
+  Reduce Transparency. The title bar, sidebar, cards and composer stay opaque
+  under Solid and Reduce Transparency while the backdrop remains visible around them.
+- **Glass**: the same glass material and intensity as above.
+
+With a built-in picture, the chip at the top right of Home shows the app's
+version and the picture's name (a phone shows only the version). Press it for
+the picture's credit and a link to its source, **What's new in** this version
+(the release notes), and **Backdrop**, which opens Look. The **Release caption**
+moment switch turns this off and leaves only the picture's name.
+
+**Settings → Appearance → Glass and backdrop** has the same controls, a preview
+of your Home in the glass tiles, whether the backdrop also shows behind
+sessions (off by default), and a switch for each of the backdrop's moments.
 
 ## Loading indicator
 
