@@ -436,11 +436,36 @@ describe('Agent runtime package-local publication projection', () => {
     expect(exportedSymbol(program, 'src/agentRuntime/session.ts', 'AgentSessionRuntimeEvent')).not.toBe(
       ownerSymbol(program, '@happier-dev/protocol/runtime', 'AgentSessionRuntimeEvent'),
     );
-    expectTypeOf<AgentSessionRuntimeEvent>()
-      .toMatchTypeOf<CanonicalAgentSessionRuntimeEvent>();
-    expectTypeOf<CanonicalAgentSessionRuntimeEvent>()
-      .toMatchTypeOf<AgentSessionRuntimeEvent>();
+    // Assignment checks preserve both directions without expectTypeOf's
+    // synthetic intersection of mutually exclusive event-union properties.
+    const publicFitsCanonical = (event: AgentSessionRuntimeEvent): CanonicalAgentSessionRuntimeEvent => event;
+    const canonicalFitsPublic = (event: CanonicalAgentSessionRuntimeEvent): AgentSessionRuntimeEvent => event;
+    void publicFitsCanonical;
+    void canonicalFitsPublic;
   }, 120_000);
+
+  it('admits witnessed MCP usage through the public parser and rejects unknown evidence fields', () => {
+    const event = {
+      sequence: 1,
+      sessionId: 'session-mcp',
+      emittedAtMs: 20,
+      turnId: 'turn-mcp',
+      kind: 'mcp-tool-usage',
+      window: { startMs: 10, endMs: 20 },
+      coverage: 'complete',
+      servers: [{ serverName: 'tools', toolCallCount: 0, schemaBytes: null }],
+    } satisfies AgentSessionRuntimeEvent;
+
+    expect(agentRuntimeProjection.AgentSessionRuntimeEventSchema.parse(event)).toEqual(event);
+    for (const unknownEvidence of [
+      { ...event, bindingId: 'unwitnessed-binding' },
+      { ...event, window: { ...event.window, inferred: true } },
+      { ...event, servers: [{ ...event.servers[0], bindingId: 'unwitnessed-binding' }] },
+    ]) {
+      expect(agentRuntimeProjection.AgentSessionRuntimeEventSchema.safeParse(unknownEvidence).success)
+        .toBe(false);
+    }
+  });
 
   it('projects the Agent connected-account limit category from the canonical Protocol owner', () => {
     expectTypeOf<AgentConnectedAccountRuntimeLimitCategoryV1>()

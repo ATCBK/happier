@@ -1,4 +1,4 @@
-import type { PluginAgentAcpTransport } from '@happier-dev/protocol';
+import type { PluginAgentAcpTransport, PluginAgentAcpSkillsSessionDeliveryV2 } from '@happier-dev/protocol';
 
 import type { JsonValue, PluginContributionRef } from '../identity.js';
 import type {
@@ -82,13 +82,17 @@ export type AgentAcpAuthenticationSelection = Readonly<{
   metadata?: Readonly<Record<string, JsonValue>>;
 }>;
 
-export type AgentAcpAuthenticationDefinition =
+export type AgentAcpAuthenticationDefinition = Readonly<{
+  /** Exact provider declaration; the host exposes only the fixed setup-failure boolean. */
+  setupFailure?: Readonly<{ requestErrorCode: number; dataReason: string }>;
+}> & (
   | Readonly<{ methodId: string }>
   | Readonly<{
       selectMethod(
         context: AgentAcpAuthenticationContext,
       ): AgentAcpAuthenticationSelection | null | Promise<AgentAcpAuthenticationSelection | null>;
-    }>;
+    }>
+);
 
 export type AgentAcpToolUpdateContentSanitizer = <T extends { content?: unknown }>(update: T) => T;
 
@@ -245,6 +249,7 @@ export type AgentAcpRuntimeDefinition = Readonly<{
     ): AgentSessionConversationRollbackControl;
   }>;
   mcp: AgentAcpMcpInputPolicy;
+  skills?: Readonly<{ sessionDelivery: PluginAgentAcpSkillsSessionDeliveryV2 }>;
 }>;
 
 export interface AgentAcpRuntimeComposer {

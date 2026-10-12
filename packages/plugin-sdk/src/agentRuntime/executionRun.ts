@@ -42,6 +42,8 @@ export type AgentExecutionRunOpenRequest =
     stateSharing?: AgentSessionOpenRequest['stateSharing'];
     /** Exact host-resolved MCP process bindings for this Run open. */
     mcpServers?: AgentSessionOpenRequest['mcpServers'];
+    /** Exact host-resolved session-private skills for this Run. */
+    skills?: AgentSessionOpenRequest['skills'];
   }> & (
     | Readonly<{
         kind: 'create';
@@ -583,6 +585,7 @@ function createSessionOpenRequestFromExecutionRun(
     ...(request.providerBinding ? { providerBinding: request.providerBinding } : {}),
     ...(request.stateSharing ? { stateSharing: request.stateSharing } : {}),
     ...(request.mcpServers ? { mcpServers: request.mcpServers } : {}),
+    ...(request.skills ? { skills: request.skills } : {}),
   };
   return request.kind === 'resume'
     ? { ...common, kind: 'resume', providerSessionId: request.checkpointId }

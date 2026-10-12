@@ -266,6 +266,7 @@ const emptyRuntime = undefined as never; /* @sdk-negative-type-case-end */
       | 'requestAuthUses'
       | 'fileEnvironmentUses'
       | 'environmentUses'
+      | 'environmentUnsetUses'
       | 'switchContinuity'
       | 'stateSharingDescriptor'
       | 'continuity'

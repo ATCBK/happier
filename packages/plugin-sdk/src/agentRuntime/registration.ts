@@ -385,10 +385,20 @@ export type AgentConnectedAccountStateSharingDynamicEntryPatternV1 = Readonly<{
   allowHardLinkFallback?: boolean;
 }>;
 
-/** Exact native home used as the source for host-owned state sharing. */
+/** Native source and optional bound-account home layout consumed by the host. */
 export type AgentConnectedAccountNativeHomeV1 = Readonly<{
   environmentKey: string;
   defaultRelativePath: string;
+  /** Opts native credential-bound account/group launches into the host's durable home lifecycle. */
+  materializedDirectoryName?: string;
+  /** Group homes share state by default; account-bound agents opt into the selected member's home. */
+  groupHome?: 'group' | 'selectedAccount';
+  /** Agent-owned connected-service history location in the existing runtime descriptor. */
+  runtimeDescriptorHome?: Readonly<{
+    pathField: string;
+    scopeField: string;
+    scopeValue: string;
+  }>;
 }>;
 
 /**
@@ -479,6 +489,8 @@ export type AgentConnectedAccountLaunchContributionV1 = Readonly<{
   requestAuthUses?: readonly AgentConnectedAccountRequestAuthUseV1[];
   fileEnvironmentUses?: readonly AgentConnectedAccountFileEnvironmentUseV1[];
   environmentUses?: readonly AgentConnectedAccountEnvironmentUseV1[];
+  /** Exact inherited keys removed only while the declared Connected Account purpose is bound. */
+  environmentUnsetUses?: readonly AgentConnectedAccountEnvironmentUseV1[];
   switchContinuity?: AgentConnectedAccountSwitchContinuityV1;
   stateSharingDescriptor?: AgentConnectedAccountStateSharingDescriptorV1;
   /**

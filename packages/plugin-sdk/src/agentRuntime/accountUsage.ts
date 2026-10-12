@@ -213,6 +213,7 @@ export type AgentAccountUsageSnapshot = Readonly<{
   accountLabel?: string | null;
   subscription?: AgentAccountUsageSubscription;
   recoveryCredits?: AgentAccountUsageRecoveryCredits;
+  recoveryCreditDetails?: import('@happier-dev/protocol/connect/connected-service-schemas').ConnectedServiceQuotaRecoveryCreditDetailsByIdV1;
   meters: AgentAccountUsageMeter[];
   diagnostics?: AgentAccountUsageDiagnostic[];
 }>;

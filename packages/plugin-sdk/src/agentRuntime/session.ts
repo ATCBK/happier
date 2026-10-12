@@ -4,6 +4,7 @@ import type {
   RuntimeCapabilities,
   TerminalHostHandle,
 } from '@happier-dev/agents';
+import type { $brand } from 'zod';
 import type { AgentTerminalLaunchPlan, AgentTerminalLaunchRequest } from './surfaces.js';
 
 import type { JsonValue } from '../identity.js';
@@ -41,6 +42,8 @@ export type AgentLaunchEnvironment = Readonly<{
 
 export type AgentSessionMcpLaunchConfig = Readonly<{
   command: string;
+  /** Host-filtered real tool catalog; an empty list exposes no tools. */
+  enabledTools?: readonly string[];
   args?: readonly string[];
   env?: Readonly<Record<string, string>>;
 }>;
@@ -286,6 +289,21 @@ export type AgentSessionRuntimeEvent =
       sequence: number;
       sessionId: string;
       emittedAtMs: number;
+      turnId: string;
+      agentTurnId?: string;
+      kind: 'mcp-tool-usage';
+      window: Readonly<{ startMs: number; endMs: number }>;
+      coverage: 'complete' | 'partial';
+      servers: Array<Readonly<{
+        serverName: string;
+        toolCallCount: number;
+        schemaBytes: number | null;
+      }>>;
+    }>
+  | Readonly<{
+      sequence: number;
+      sessionId: string;
+      emittedAtMs: number;
       /** Omit for Session output that does not belong to a foreground host turn. */
       turnId?: string;
       agentTurnId?: string;
@@ -367,6 +385,12 @@ export type AgentSessionRuntimeEvent =
       emittedAtMs: number;
       kind: 'usage-observed';
       observationId: string;
+      /** Native request evidence; the host validates it against the accepted source and matching turn. */
+      attribution?: Readonly<{
+        v: 1; turnId: string;
+        source: Readonly<{ kind: 'native'; connectedAccount: Readonly<{ service: Readonly<{ pluginId: string; localId: string }>; accountId: string }> | null }>
+          | Readonly<{ kind: 'provider'; providerId: string | null; providerConnectionId: string & $brand<'ProviderConnectionId'> }>;
+      }>;
       /** Witnessed accounting identity and counter semantics, never an inferred host turn identity. */
       accounting?: Readonly<{
         nativeSessionId?: string;
@@ -642,6 +666,8 @@ export type AgentConfigurationScalar = string | number | boolean | null;
 export type AgentPermissionIntent = 'default' | 'read-only' | 'safe-yolo' | 'yolo' | 'plan';
 
 export type AgentSessionConfigurationSnapshot = Readonly<{
+  allowedTools?: readonly string[];
+  unlistedTools?: 'ask' | 'deny';
   mode: TimestampedAgentValue<string | null>;
   model: TimestampedAgentValue<string | null>;
   permissionIntent: TimestampedAgentValue<AgentPermissionIntent | null>;
@@ -659,6 +685,17 @@ export type AgentSessionStartupInstructions = Readonly<{
   instructions: string;
 }>;
 
+export type AgentSessionSkillDelivery = Readonly<{
+  /** Host-owned, read-only to the Agent; the host deletes this root at runner exit.
+   * .claude-plugin/plugin.json declares name "happier"; skills/<name>/SKILL.md includes supporting files. */
+  pluginRoot: string;
+  /** The skills directory inside pluginRoot. */
+  skillsRoot: string;
+  items: readonly Readonly<{ name: string; skillId: string; digest: string }>[];
+  /** Native SKILL.md paths, supplied only when nativeDisable is supported. */
+  nativeDisables: readonly Readonly<{ name: string; path: string }>[];
+}>;
+
 export type AgentSessionOpenRequest =
   Readonly<{
     sessionId: string;
@@ -671,6 +708,7 @@ export type AgentSessionOpenRequest =
     configuration?: AgentSessionConfigurationSnapshot;
     connectedAccounts?: readonly AgentSessionConnectedAccountSelection[];
     mcpServers?: Readonly<Record<string, AgentSessionMcpLaunchConfig>>;
+    skills?: AgentSessionSkillDelivery;
     providerBinding?: AgentSessionProviderBinding;
     /**
      * The account's resolved provider state-sharing policy for this Agent, as
@@ -797,6 +835,13 @@ export interface AgentSessionRuntime extends Disposable {
   readonly runtimeCapabilities?: AgentSessionRuntimeCapabilities;
   /** Per-open active goal support; false suppresses manifest-declared live goal controls. */
   readonly nativeGoalControlsSupported?: boolean;
+  /** False when this opened launch path cannot honor the requested skills. */
+  readonly skillsDelivered?: boolean;
+  /** Invoked by the host only for declared liveReload support. */
+  refreshSkills?(
+    request: Readonly<{ skills: AgentSessionSkillDelivery }>,
+    options?: Readonly<{ signal?: AbortSignal }>,
+  ): Promise<Readonly<{ kind: 'applied' }> | Readonly<{ kind: 'restart_required'; reason: 'launch_path_unsupported' }>>;
   readonly conversationRollback?: AgentSessionConversationRollbackControl;
   readonly runtimeAuth?: AgentSessionRuntimeAuthControl;
   /**

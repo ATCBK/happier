@@ -322,6 +322,7 @@ export type {
   AgentSessionConnectedAccountSelection,
   AgentSessionInput,
   AgentSessionMcpLaunchConfig,
+  AgentSessionSkillDelivery,
   AgentSessionOpenRequest,
   RuntimeDescriptorV1,
   AgentSessionProviderBinding,
@@ -457,6 +458,8 @@ export type {
   AgentAcpToolNamePattern,
   AgentAcpToolNameResolver,
   PluginAgentAcpNativeSessionMcpConfigV2,
+  PluginAgentAcpMcpInputPolicyV2,
+  PluginAgentAcpSkillsSessionDeliveryV2,
 } from './acpTypes.js';
 export type {
   AgentProviderBindingEnvironmentEntry,
