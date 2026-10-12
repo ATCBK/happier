@@ -29,28 +29,44 @@ export async function readExternalSessionExchange(input: Readonly<{
         const items = [...page.items, ...adjacent];
         const normalized = normalizeExternalSessionTranscriptMessages(items);
         const target = normalized.findIndex(message => message.id === input.sourceItemId);
+        const isPrompt = (message: (typeof normalized)[number] | undefined) => message !== undefined
+            && (message.role === 'user' || (message.role === 'agent' && message.content[0]?.type === 'sidechain'));
+        const retainedIds = new Set<string>();
         if (target >= 0) {
             const scope = normalized[target]!.sidechainId;
-            const isPrompt = (message: (typeof normalized)[number] | undefined) => message !== undefined && message.sidechainId === scope
-                && (message.role === 'user' || (message.role === 'agent' && message.content[0]?.type === 'sidechain'));
+            const isScopePrompt = (message: (typeof normalized)[number] | undefined) => message?.sidechainId === scope && isPrompt(message);
             let from = target;
-            while (from > 0 && !isPrompt(normalized[from])) from--;
-            const hasPrompt = isPrompt(normalized[from]);
+            while (from > 0 && !isScopePrompt(normalized[from])) from--;
+            const hasPrompt = isScopePrompt(normalized[from]);
+            let to = target + 1;
+            while (to < normalized.length && !isScopePrompt(normalized[to])) to++;
             if (hasPrompt || !page.hasMore) {
-                let to = target + 1;
-                while (to < normalized.length && !isPrompt(normalized[to])) to++;
                 const state = createReducer();
                 const result = reducer(state, normalized.slice(from, to).filter(message => message.sidechainId === scope));
                 return scope ? [...projectSidechainMessages(state, scope)] : result.messages;
             }
             // The prompt is across the page boundary. Keep this turn until its preceding page arrives.
-            adjacent = items;
+            for (const message of normalized.slice(from, to)) {
+                if (message.sidechainId === scope) retainedIds.add(message.id);
+            }
         } else {
-            // A selected answer can precede several answer-only pages. Keep the
-            // newer suffix until its prompt is found; the turn boundary above
-            // excludes following prompts and their answers from the result.
-            adjacent = items;
+            // Only the leading answer tail in each scope can continue an older
+            // selected exchange. A prompt closes that scope's newer turns.
+            const closedScopes = new Set<string | undefined>();
+            for (const message of normalized) {
+                if (isPrompt(message)) closedScopes.add(message.sidechainId);
+                if (!closedScopes.has(message.sidechainId)) retainedIds.add(message.id);
+            }
         }
+        const normalizedIds = new Set(normalized.map(message => message.id));
+        let lastRetained = -1;
+        for (let index = 0; index < items.length; index++) {
+            if (retainedIds.has(items[index]!.id)) lastRetained = index;
+        }
+        // Nonvisible raw rows within the unresolved prefix can carry sequence
+        // normalization context (for example a suppressed empty tool call).
+        adjacent = items.filter((item, index) => index <= lastRetained
+            && (retainedIds.has(item.id) || !normalizedIds.has(item.id)));
         if (!page.hasMore) return [];
         if (!page.nextCursor || visited.has(page.nextCursor)) throw new Error('Transcript cursor did not advance');
         visited.add(page.nextCursor);

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExternalSessionTranscriptRawMessageV1 } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
+import * as transcriptNormalization from '@/sync/runtime/external/normalizeExternalSessionTranscriptMessages';
 import { readExternalSessionExchange } from './readExternalSessionExchange';
 
 const boundary = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -18,6 +19,31 @@ const input = () => ({
 
 describe('readExternalSessionExchange', () => {
     beforeEach(() => boundary.rpc.mockReset());
+    it('does not normalize completed later turns again while seeking an older selected exchange', async () => {
+        // Observe the real normalizer without replacing its implementation.
+        const normalize = vi.spyOn(transcriptNormalization, 'normalizeExternalSessionTranscriptMessages');
+        try {
+            const pageCount = 10;
+            const turnsPerPage = 100;
+            for (let pageIndex = pageCount - 1; pageIndex >= 0; pageIndex--) {
+                const items = Array.from({ length: turnsPerPage }, (_, turnIndex) => {
+                    const turn = pageIndex * turnsPerPage + turnIndex;
+                    return [
+                        { ...prompt, id: `prompt-${turn}`, createdAtMs: turn * 2 + 1 },
+                        { ...answer, id: `answer-${turn}`, createdAtMs: turn * 2 + 2 },
+                    ];
+                }).flat();
+                boundary.rpc.mockResolvedValueOnce({ ok: true, items, hasMore: pageIndex > 0,
+                    ...(pageIndex > 0 ? { nextCursor: `page-${pageIndex - 1}` } : {}) });
+            }
+            const messages = await readExternalSessionExchange({ ...input(), sourceItemId: 'answer-0' });
+            expect(messages.map(message => message.realID)).toEqual(['prompt-0', 'answer-0']);
+            expect(normalize.mock.calls.reduce((total, [items]) => total + items.length, 0))
+                .toBe(pageCount * turnsPerPage * 2);
+        } finally {
+            normalize.mockRestore();
+        }
+    });
     it('keeps every answer page before finding the selected item in a three-page exchange', async () => {
         boundary.rpc.mockResolvedValueOnce({ ok: true, items: [{ ...answer, id: 'answer-end', createdAtMs: 4 },
             { ...prompt, id: 'next', createdAtMs: 5 }, { ...answer, id: 'next-answer', createdAtMs: 6 }], hasMore: true, nextCursor: 'middle' })
