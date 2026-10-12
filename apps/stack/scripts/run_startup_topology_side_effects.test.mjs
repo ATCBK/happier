@@ -6,11 +6,66 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { runNodeCapture as runNode } from './testkit/core/run_node_capture.mjs';
+import { sanitizeStackTestRunnerEnv } from './utils/test/test_env.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = dirname(dirname(dirname(scriptsDir)));
 const runScript = join(scriptsDir, 'run.mjs');
 const devScript = join(scriptsDir, 'dev.mjs');
+
+for (const failure of ['preflight', 'missing-directory']) {
+test(`dev isolates a cold Expo ${failure} failure instead of terminating the disposable stack`, { timeout: 15000 }, async t => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'hstack-dev-component-failure-'));
+  let child;
+  t.after(async () => { await stopProcess(child); await rm(tempRoot, { recursive: true, force: true }); });
+  const fakeRepo = join(tempRoot, 'repo');
+  for (const app of ['cli', 'server', 'ui']) {
+    if (app === 'ui' && failure === 'missing-directory') continue;
+    await mkdir(join(fakeRepo, 'apps', app), { recursive: true });
+    await writeFile(join(fakeRepo, 'apps', app, 'package.json'), JSON.stringify({ name: `fixture-${app}` }));
+  }
+  await writeFile(join(fakeRepo, 'package.json'), '{"private":true}');
+  await writeFile(join(fakeRepo, 'yarn.lock'), '# fixture');
+  if (failure === 'preflight') {
+    await mkdir(join(fakeRepo, 'apps/ui/scripts'));
+    await writeFile(join(fakeRepo, 'apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs'), `
+    export function resolveUiWorkspaceStartupOutputs() { return []; }
+    export async function ensureUiWorkspacePackagesBuilt() {
+      throw Object.assign(new Error('fixture preflight permission denied'), {code: 'EACCES'});
+    }
+  `);
+  }
+  child = spawn(process.execPath, [devScript, '--no-server', '--server-url=http://127.0.0.1:1',
+    '--no-daemon', '--no-watch', '--no-dev-targets', '--no-browser'], {
+    cwd: repoRoot, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: tempRoot, repoDir: fakeRepo }),
+      CI: '1', HAPPIER_STACK_RUNTIME_MODE: 'source',
+      HAPPIER_STACK_REPO_DIR: fakeRepo, HAPPIER_STACK_STACK: 'last-green-qa',
+      HAPPIER_STACK_STORAGE_DIR: join(tempRoot, 'stacks'),
+      HAPPIER_STACK_RUNTIME_STATE_PATH: join(tempRoot, 'runtime.json'),
+      HAPPIER_STACK_ENV_FILE: join(tempRoot, 'env'),
+      HAPPIER_STACK_SERVER_COMPONENT: 'happier-server', HAPPIER_STACK_AUTH_FLOW: '0',
+      HAPPIER_STACK_EXPO_TAILSCALE: '0', HAPPIER_STACK_EXPO_SOURCE_STACK: '',
+    },
+  });
+  const observed = await new Promise(resolve => {
+    let output = '';
+    const onAbort = () => resolve({ output, timedOut: true });
+    t.signal.addEventListener('abort', onAbort, { once: true });
+    const receive = chunk => {
+      output += chunk;
+      if (output.includes('expo startup failed; keeping other components running')) {
+        t.signal.removeEventListener('abort', onAbort); resolve({ output });
+      }
+    };
+    child.stdout.on('data', receive); child.stderr.on('data', receive);
+    child.once('exit', code => { t.signal.removeEventListener('abort', onAbort); resolve({ output, code }); });
+  });
+  assert.match(observed.output, /expo startup failed; keeping other components running/);
+  assert.equal(child.exitCode, null, observed.output);
+  assert.match(observed.output, failure === 'preflight' ? /fixture preflight permission denied/ : /happier-ui/);
+});
+}
 
 async function stopProcess(child) {
   if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
