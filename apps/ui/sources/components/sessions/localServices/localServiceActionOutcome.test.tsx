@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
 const modalSpies = vi.hoisted(() => ({ alert: vi.fn() }));
 
@@ -18,6 +19,13 @@ import {
 } from './localServiceActionOutcome';
 
 describe('readLocalServiceActionOutcome', () => {
+    it('retains the local-services refusal detail instead of its generic Action wrapper', () => {
+        expect(readLocalServiceActionOutcome({ ok: false, errorCode: 'runtime_action_disabled',
+            error: 'runtime_action_disabled:localServices:local_services_inventory_request_failed' }))
+            .toEqual({ kind: 'failed', reasonCode: 'local_services_inventory_request_failed' });
+        expect(readLocalServiceActionOutcome(new RpcError('private transport detail', RPC_ERROR_CODES.FORBIDDEN)))
+            .toEqual({ kind: 'failed', reasonCode: RPC_ERROR_CODES.FORBIDDEN });
+    });
     it('keeps a real Ask-first receipt pending rather than reporting a successful mutation', () => {
         const receipt = ActionApprovalRequestCreatedResultSchema.parse({ kind: 'approval_request_created',
             artifactId: 'service-approval', actionId: 'localServices.launcher.start' });
@@ -117,10 +125,10 @@ describe('useLocalServiceActionRunner', () => {
         expect(modalSpies.alert).toHaveBeenCalledTimes(1);
         const [title, body] = modalSpies.alert.mock.calls[0] ?? [];
         expect(title).toBe('Could not start Vite');
-        // The user gets a sentence, never the daemon's internal code.
+        // The existing diagnostic-copy format keeps the typed cause, never private error text.
         expect(typeof body).toBe('string');
         expect(String(body).length).toBeGreaterThan(0);
-        expect(String(body)).not.toContain('policy_forbids_action');
+        expect(String(body)).toContain('policy_forbids_action');
         expect(value.current?.pendingId).toBeNull();
     });
 
@@ -133,12 +141,14 @@ describe('useLocalServiceActionRunner', () => {
             outcome = await value.current?.run({
                 id: 'row-a:inline',
                 failureTitle: 'Could not open Vite',
-                action: async () => { throw new Error('socket closed'); },
+                action: async () => { throw new RpcError('private transport detail', RPC_ERROR_CODES.FORBIDDEN); },
             });
         });
 
         expect(outcome).toBe(false);
         expect(modalSpies.alert).toHaveBeenCalledTimes(1);
+        expect(modalSpies.alert.mock.calls[0]?.[1]).toContain(RPC_ERROR_CODES.FORBIDDEN);
+        expect(modalSpies.alert.mock.calls[0]?.[1]).not.toContain('private transport detail');
         expect(value.current?.pendingId).toBeNull();
     });
 });

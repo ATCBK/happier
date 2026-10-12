@@ -11,7 +11,7 @@ import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccoun
 import { readUiWorkspaceSyncChildMachineFacts } from '@/sync/ops/workspaceSyncChildMachineFacts';
 import { createFrontDoorRuntimeActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { t } from '@/text';
-import { presentLocalServiceActionFailure, readLocalServiceActionOutcome } from './localServiceActionOutcome';
+import { presentLocalServiceActionFailure, readLocalServiceActionFailureReason, readLocalServiceActionOutcome } from './localServiceActionOutcome';
 import { applyLocalServiceLauncherSnapshot, selectLocalServiceLaunchTargets, snapshotFromLocalServiceLauncherState } from '@/sync/domains/local/services/launch';
 
 import {
@@ -127,8 +127,8 @@ async function refreshLocalServiceMachine(input: Readonly<{ serverId: string; ma
         const outcome = readLocalServiceActionOutcome(result);
         if (outcome.kind === 'succeeded') return true;
         if (outcome.kind === 'failed') presentLocalServiceActionFailure({ title: t('common.refresh'), reasonCode: outcome.reasonCode });
-    } catch {
-        if (input.isCurrent()) presentLocalServiceActionFailure({ title: t('common.refresh'), reasonCode: null });
+    } catch (error) {
+        if (input.isCurrent()) presentLocalServiceActionFailure({ title: t('common.refresh'), reasonCode: readLocalServiceActionFailureReason(error) });
     }
     return false;
 }

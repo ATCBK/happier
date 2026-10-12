@@ -14,26 +14,11 @@ import type { LocalServicePublicPreviewState } from '@/sync/domains/local/servic
 import type { LocalServicePublicPreviewStatusClient } from '@/sync/domains/local/services/publicPreview/useLocalServicePublicPreviewState';
 import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/url';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
-import { createFrontDoorRuntimeActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
-import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
-import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 
 import { DetectedLocalServicesPane } from './DetectedLocalServicesPane';
 import type { ServiceRow } from '@/sync/domains/local/services/serviceRow';
 import type { ServiceRowOpenHandler } from './ServiceRowView';
-import { useLocalServiceLauncherStartAction } from './launcherStartAction';
-import type { LocalServiceActionAdmission, LocalServiceEffectReview, LocalServiceSetupConsentReview } from './localServiceActionAdmission';
-import { LocalServiceEffectReviewCard } from './LocalServiceEffectReviewCard';
-import { LocalServiceSetupConsentContinuation } from './LocalServiceSetupConsentContinuation';
-import {
-    useDetectedLocalServiceForgetAction,
-    useDetectedLocalServiceTerminateAction,
-    useLocalServiceCopyUrlAction,
-    useLocalServiceLauncherHistoryClearAction,
-    useManagedLocalServiceControlAction,
-} from './lifecycleActions';
-import { useLocalServicePublicPreviewActions } from './publicPreviewActions';
+import { useLocalServiceEntryActions } from './useLocalServiceEntryActions';
 import { useLocalServiceLiveFeeds } from './useLocalServiceLiveFeeds';
 import {
     useLocalServiceCapabilityDisabledReasons,
@@ -63,6 +48,8 @@ export type LocalServicesSurfaceHostProps = Readonly<{
     platform?: LocalServicePreviewPlatform;
     /** `page` on the Project Services page; the rail and Session panel keep the pane chrome. */
     presentation?: 'pane' | 'page';
+    /** Leads the empty state to where a service is declared (Project Scripts page). */
+    onAddService?: () => void;
     /** The placement owner's per-row "Runs on" control (plan 32), hosted in each row's expansion. */
     renderServicePlacement?: (row: ServiceRow) => React.ReactNode;
     testID: string;
@@ -94,88 +81,16 @@ export function LocalServicesSurfaceHost(props: LocalServicesSurfaceHostProps): 
         launcherSnapshotClient: props.launcherSnapshotClient,
     });
     const { inventoryState, launcherState, refresh: onRefresh } = feeds;
-    // Single front door (FINALIZATION-PLAN §3.1/§12.6): local-service runtime actions dispatch
-    // through ActionExecutor.execute via the canonical bridge, so ActionsSettings enablement and
-    // approval routing apply — never the raw runtime executor.
-    const runtimeActionExecute = React.useMemo(
-        () => props.runtimeActionExecute ?? createFrontDoorRuntimeActionExecutor(),
-        [props.runtimeActionExecute],
-    );
-    const credentialBindings = useServerCredentialAccountScopeBindings([serverId]);
-    const credentialBinding = credentialBindings.get(resolveServerProfileScopeIdForIdentifier(serverId));
-    const actionScopeKey = JSON.stringify([serverId, credentialBinding?.accountId, credentialBinding?.revision, machineId, workspaceRoot, sessionId]);
-    const cancellation = React.useMemo(() => new AbortController(), [actionScopeKey]);
-    React.useEffect(() => {
-        const retirement = credentialBinding?.onRetire(() => cancellation.abort());
-        return () => { retirement?.dispose(); cancellation.abort(); };
-    }, [credentialBinding, cancellation]);
-    const refreshAfterApproval = React.useCallback(() => { void onRefresh(); }, [onRefresh]);
-    const approval = useActionApprovalContinuation({ scopeKey: actionScopeKey, serverId: serverId ?? '', onExecuted: refreshAfterApproval });
-    const isActionScopeCurrent = React.useCallback(() => Boolean(credentialBinding?.isCurrent()) && !cancellation.signal.aborted,
-        [credentialBinding, cancellation]);
-    const effectReview = useLocalServiceReview<LocalServiceEffectReview>();
-    const setupReview = useLocalServiceReview<LocalServiceSetupConsentReview>();
-    const actionAdmission: LocalServiceActionAdmission = {
-        expectedAccountId: credentialBinding?.accountId,
-        signal: cancellation.signal,
-        isCurrent: isActionScopeCurrent,
-        onApprovalPending: approval.requestApproval,
-        reviewEffect: effectReview.request,
-        reviewSetupConsent: setupReview.request,
-    };
-    const onTerminateDetectedService = useDetectedLocalServiceTerminateAction({
-        ...actionAdmission,
-        runtimeActionExecute,
+    const entryActions = useLocalServiceEntryActions({
         machineId,
         serverId,
         sessionId,
-    });
-    const onForgetDetectedService = useDetectedLocalServiceForgetAction({
-        ...actionAdmission,
-        runtimeActionExecute,
-        machineId,
-        serverId,
-        sessionId,
-    });
-    const onCopyServiceUrl = useLocalServiceCopyUrlAction({
-        ...actionAdmission,
-        runtimeActionExecute,
-        machineId,
-        serverId,
-        sessionId,
-    });
-    // Stop and Restart a managed lifetime through its exact occurrence; the result settles the row.
-    const managedControl = useManagedLocalServiceControlAction({
-        ...actionAdmission,
-        runtimeActionExecute,
-        machineId,
-        serverId,
-        sessionId,
-    });
-    const onStopManagedService = React.useMemo(() => managedControl
-        ? (target: Parameters<typeof managedControl>[0]) => managedControl(target, 'localServices.actions.stopManaged')
-        : undefined, [managedControl]);
-    const onRestartManagedService = React.useMemo(() => managedControl
-        ? (target: Parameters<typeof managedControl>[0]) => managedControl(target, 'localServices.actions.restartManaged')
-        : undefined, [managedControl]);
-    const onStartLauncherTarget = useLocalServiceLauncherStartAction({
-        ...actionAdmission,
-        runtimeActionExecute,
-        machineId,
-        serverId,
-        sessionId,
+        workspaceRoot,
+        scope,
+        runtimeActionExecute: props.runtimeActionExecute,
+        onRefresh,
         applyLauncherSnapshot: feeds.applyLauncherSnapshot,
-    });
-    const onClearLauncherHistory = useLocalServiceLauncherHistoryClearAction({ ...actionAdmission,
-        runtimeActionExecute, machineId, serverId, sessionId, scope, workspaceRoot,
-        applyLauncherSnapshot: feeds.applyLauncherSnapshot,
-    });
-    const publicPreviewActions = useLocalServicePublicPreviewActions({
-        ...actionAdmission,
-        runtimeActionExecute,
-        machineId,
-        serverId,
-        sessionId,
+        testID: props.testID,
     });
     const hasAdmittedPluginProjection = props.pluginUiProjection !== undefined;
     // AppPane has already admitted the exact projection for a driver-rendered
@@ -221,85 +136,18 @@ export function LocalServicesSurfaceHost(props: LocalServicesSurfaceHostProps): 
             sessionId={sessionId}
             scope={scope}
             onChangeScope={setScope}
-            onTerminateDetectedService={onTerminateDetectedService}
-            onForgetDetectedService={onForgetDetectedService}
-            onStopManagedService={onStopManagedService}
-            onRestartManagedService={onRestartManagedService}
-            onCopyServiceUrl={onCopyServiceUrl}
-            onStartLauncherTarget={onStartLauncherTarget}
-            onClearLauncherHistory={onClearLauncherHistory}
+            {...entryActions.handlers}
             onOpenServiceInBrowser={props.onOpenServiceInBrowser}
-            publicPreviewActions={publicPreviewActions}
             publicPreviewCapabilityDisabledReasons={publicPreviewCapabilityDisabledReasons}
             machine={machine}
             onRefresh={onRefresh}
             presentation={props.presentation}
+            onAddService={props.onAddService}
             renderServicePlacement={props.renderServicePlacement}
-            viewerAccountId={credentialBinding?.accountId ?? null}
-            effectReview={<>
-                {setupReview.pending && credentialBinding ? <LocalServiceSetupConsentContinuation
-                    key={JSON.stringify([setupReview.pending.review.target.id, setupReview.pending.review.consent.reviewedEffectDigest])}
-                    review={setupReview.pending.review}
-                    binding={credentialBinding}
-                    runtimeActionExecute={runtimeActionExecute}
-                    onComplete={setupReview.pending.settle}
-                    testID={props.testID}
-                /> : null}
-                {effectReview.pending && serverId ? (
-                <LocalServiceEffectReviewCard
-                    review={effectReview.pending.review}
-                    serverId={serverId}
-                    machineId={machineId}
-                    onDecide={effectReview.pending.settle}
-                    testID={`${props.testID}-effect-review`}
-                />
-                ) : null}
-            </>}
+            viewerAccountId={entryActions.viewerAccountId}
+            effectReview={entryActions.review}
             testID={props.testID}
             footer={pluginStack}
         />
     );
-}
-
-type PendingReview<T> = Readonly<{ review: T; settle: (accepted: boolean) => void }>;
-
-/**
- * The one current-effect review of this Services surface: Start/Restart hand it the effect the
- * daemon disclosed and wait for the person. Only an explicit Start/Restart rejoins the Action with
- * that digest; Not now, a newer review or the scope's retirement (its Account, machine or checkout
- * changing aborts the signal) settles it as declined, so nothing re-enters on its own.
- */
-function useLocalServiceReview<T extends Readonly<{ signal?: AbortSignal }>>(): Readonly<{
-    pending: PendingReview<T> | null;
-    request: (review: T) => Promise<boolean>;
-}> {
-    const [pending, setPending] = React.useState<PendingReview<T> | null>(null);
-    const current = React.useRef<PendingReview<T> | null>(null);
-    const request = React.useCallback((review: T) => new Promise<boolean>((resolve) => {
-        current.current?.settle(false);
-        if (review.signal?.aborted) {
-            resolve(false);
-            return;
-        }
-        let settled = false;
-        const onAbort = () => entry.settle(false);
-        const entry: PendingReview<T> = {
-            review,
-            settle: (accepted) => {
-                if (settled) return;
-                settled = true;
-                review.signal?.removeEventListener('abort', onAbort);
-                if (current.current === entry) {
-                    current.current = null;
-                    setPending(null);
-                }
-                resolve(accepted);
-            },
-        };
-        current.current = entry;
-        setPending(entry);
-        review.signal?.addEventListener('abort', onAbort, { once: true });
-    }), []);
-    React.useEffect(() => () => current.current?.settle(false), []);
-    return { pending, request };
 }

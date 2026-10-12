@@ -202,7 +202,6 @@ const LocalServiceExposureSheet: React.FC<ExposureSheetProps> = (props) => {
                         onSelectTab={(next) => setMode(next as LocalServicePublicExposureModeV1)}
                         accessibilityLabel={t('localServices.publicPreview.linkTypeLabel')}
                         testIDPrefix={`${props.testIDPrefix}-mode`}
-                        slidingThumb
                         compact
                     />
                 </View>
@@ -218,7 +217,6 @@ const LocalServiceExposureSheet: React.FC<ExposureSheetProps> = (props) => {
                         onSelectTab={(next) => setTtlMs(Number.parseInt(next, 10))}
                         accessibilityLabel={t('localServices.publicPreview.lifetimeLabel')}
                         testIDPrefix={`${props.testIDPrefix}-ttl`}
-                        slidingThumb
                         compact
                     />
                 </View>

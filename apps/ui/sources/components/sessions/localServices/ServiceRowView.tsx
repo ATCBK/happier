@@ -4,8 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { Icon } from '@/components/ui/icons/Icon';
-import { SurfaceCard, SURFACE_CARD_PADDING_PX } from '@/components/ui/cards/SurfaceCard';
+import { SURFACE_CARD_PADDING_PX, SURFACE_CARD_RADIUS_PX } from '@/components/ui/cards/SurfaceCard';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
 import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
@@ -16,7 +15,6 @@ import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { Modal } from '@/modal';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import type { LocalServiceLaunchTarget } from '@/sync/domains/local/services/launch';
 import type { ServicesOpenInBrowserResult } from '@/components/browser/surfaces/openBrowserTargetInWorkspace';
@@ -29,10 +27,19 @@ import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 import { useLocalServiceActionRunner } from './localServiceActionOutcome';
 import {
+    copyLocalServiceAddress,
+    formatLocalServiceRowAddress,
+    hasUnsettledLocalServiceCustody,
+    resolveLocalServiceEntryActions,
+} from './localServiceEntryActions';
+import {
     hasLocalServicePublicPreviewSurface,
     LocalServicePublicPreviewControls,
+    LocalServiceShareLinkButton,
+    resolveLocalServicePublicLinkOffer,
 } from './LocalServicePublicPreviewControls';
 import type { LocalServicePublicPreviewActions } from './publicPreviewActions';
+import { ServiceMark } from './ServiceMark';
 import { ServiceStatusDot } from './ServiceStatusDot';
 import type { LocalServiceCapabilityDisabledReasons } from './useLocalServicePublicPreviewFeature';
 
@@ -81,13 +88,17 @@ const stylesheet = StyleSheet.create((theme) => ({
     /** Lead facts, the source badge, then the trailing facts on one line (lab s-services). */
     factsRow: {
         flexDirection: 'row',
+        flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 6,
+        columnGap: 6,
         maxWidth: '100%',
     },
-    /** The lead (an address, a command) stays readable; the trailing facts are what truncates. */
+    /**
+     * The lead (an address, a command) stays readable: when the pane is too narrow for the trailing
+     * facts beside it (a phone), they wrap to their own line instead of cutting the address.
+     */
     factsLead: {
-        maxWidth: '70%',
+        maxWidth: '100%',
     },
     factsTail: {
         flexShrink: 1,
@@ -101,29 +112,28 @@ const stylesheet = StyleSheet.create((theme) => ({
         lineHeight: 17,
         color: theme.colors.text.secondary,
     },
-    identity: {
-        ...Typography.default('bold'),
-        fontSize: 16,
-        color: theme.colors.text.secondary,
-    },
     reasonText: {
         color: theme.colors.text.secondary,
     },
     /**
-     * The expansion: the row's own controls and, when it has one, its live public link, in the app's
-     * bordered card (the Home tiles' `SurfaceCard`) spanning the row's full width — not a grey band
-     * indented under the title.
+     * An open row is ONE filled tile (services lab O): the header, the action line and the live link
+     * sit together on the selected surface, with no second bordered card inside it.
      */
+    tile: {
+        backgroundColor: theme.colors.surface.selected,
+        borderRadius: SURFACE_CARD_RADIUS_PX,
+        overflow: 'hidden',
+    },
     expansion: {
-        paddingHorizontal: 12,
-        paddingBottom: 12,
+        paddingBottom: 4,
     },
     actions: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: ROW_ACTION_GAP_PX,
         paddingHorizontal: SURFACE_CARD_PADDING_PX.sm.horizontal,
-        paddingVertical: SURFACE_CARD_PADDING_PX.sm.vertical,
+        paddingTop: 0,
+        paddingBottom: SURFACE_CARD_PADDING_PX.sm.vertical,
     },
     actionsSpacer: {
         flex: 1,
@@ -147,40 +157,10 @@ function isNotStarted(row: ServiceRow): boolean {
         && row.target.serviceState === undefined;
 }
 
-/**
- * A managed native occurrence whose state is unknown, or stopped while its starter tree is still
- * owned (CA2-02). It is not Running, but it is not settled either: it keeps Stop for cleanup.
- */
-function hasUnsettledCustody(row: ServiceRow): boolean {
-    return row.target.source === 'managed_service'
-        && row.target.actions.includes('manage')
-        && (row.reasonCode === 'managed_service_native_state_unknown'
-            || row.reasonCode === 'managed_service_native_cleanup_unconfirmed');
-}
-
 /** Nothing to do with it here: no Start, no Open, not live. Its title steps back. */
 function isInert(row: ServiceRow): boolean {
-    return row.primaryAction === null && !hasUnsettledCustody(row)
+    return row.primaryAction === null && !hasUnsettledLocalServiceCustody(row)
         && (row.status === 'stopped' || row.status === 'unavailable' || row.status === 'failed');
-}
-
-/**
- * The row's address, as a URL.
- *
- * An IPv6 literal must be bracketed or the result is not a URL at all — `http://::1:5173` has no
- * meaningful port. The projected address label is preferred for display; this URL-shaped value
- * remains the copy action's source and the fallback when no display label is available.
- */
-function formatRowAddress(row: ServiceRow): string | null {
-    // A managed lifetime's observed endpoint is its address when no listener row is joined.
-    if (!row.host) return row.target.endpointUrl ?? null;
-    // A service bound to every interface answers on localhost: show and copy that, never the bind
-    // address (`0.0.0.0`, `::`), which is not somewhere a person can go.
-    const wildcard = row.host === '0.0.0.0' || row.host === '::' || row.host === '[::]' || row.host === '*';
-    const bound = wildcard ? 'localhost' : row.host;
-    const host = bound.includes(':') && !bound.startsWith('[') ? `[${bound}]` : bound;
-    const scheme = row.scheme && row.scheme !== 'unknown' ? `${row.scheme}://` : '';
-    return `${scheme}${host}${row.portLabel ?? ''}`;
 }
 
 /** The name, then the status in words beside its dot ("web ● Running"), as the lab draws it. */
@@ -192,7 +172,7 @@ function ServiceRowTitle(props: Readonly<{
     testID: string;
 }>): React.ReactElement {
     const styles = stylesheet;
-    const unsettled = !props.offline && hasUnsettledCustody(props.row);
+    const unsettled = !props.offline && hasUnsettledLocalServiceCustody(props.row);
     const statusLabel = props.offline
         ? t('localServices.rowStatus.lastKnown')
         : unsettled ? t('localServices.rowStatus.unknown') : t(STATUS_LABEL_KEYS[props.row.status]);
@@ -225,6 +205,8 @@ function resolveRowFacts(row: ServiceRow, machineName: string | null, startedByN
     /** The tail is the reason the row cannot act (lab `db`: "Docker isn't available on devbox"). */
     tailReason: ReturnType<typeof resolveReasonCopy> | null;
     reason: ReturnType<typeof resolveReasonCopy> | null;
+    /** The declaring file is already part of `lead`: the facts line draws no source chip. */
+    sourceInline?: boolean;
 }> {
     const reason = row.reasonCode
         ? resolveReasonCopy({ reasonCode: row.reasonCode, kind: 'localServiceLauncher' })
@@ -243,14 +225,16 @@ function resolveRowFacts(row: ServiceRow, machineName: string | null, startedByN
     if (row.addressNote === 'waiting') {
         return { lead: [t('localServices.row.waitingAddress')], tail: [], tailReason: null, reason };
     }
-    if (isNotStarted(row) || isInert(row) || hasUnsettledCustody(row)) {
+    if (isNotStarted(row) || isInert(row) || hasUnsettledLocalServiceCustody(row)) {
         const lead = [row.processLabel].filter((part): part is string => Boolean(part));
         if (row.status === 'failed') return { lead, tail: [t('localServices.row.failed')], tailReason: null, reason };
         if (reason) return { lead, tail: [reason.body], tailReason: reason, reason: null };
-        return { lead, tail: isNotStarted(row) ? [t('localServices.row.notStarted')] : [], tailReason: null, reason: null };
+        // "Ready to start" already says it is not started: one quiet line, the command and its source.
+        if (isNotStarted(row)) return { lead: [...lead, ...(row.sourceBadge ? [row.sourceBadge] : [])], tail: [], tailReason: null, reason: null, sourceInline: true };
+        return { lead, tail: [], tailReason: null, reason: null };
     }
     const address = row.addressLabel
-        ?? formatRowAddress(row)?.replace(/^https?:\/\//, '').replace(/^127\.0\.0\.1(?=:)/, 'localhost')
+        ?? formatLocalServiceRowAddress(row)?.replace(/^https?:\/\//, '').replace(/^127\.0\.0\.1(?=:)/, 'localhost')
         ?? row.portLabel
         ?? (row.addressNote === 'none' ? t('localServices.row.noAddress') : null);
     // Where it runs names the machine on a machine-scoped host; elsewhere the source says what it is.
@@ -278,7 +262,7 @@ function ServiceRowFacts(props: Readonly<{
     const styles = stylesheet;
     const { row } = props;
     const facts = resolveRowFacts(row, props.machineName, props.startedByName);
-    const badge = row.sourceBadge ?? null;
+    const badge = facts.sourceInline ? null : row.sourceBadge ?? null;
     const lead = facts.lead.join(' · ');
     const tail = facts.tail.join(' · ');
     // One line of facts: lead · [source badge] tail. Without a badge the separator joins lead and tail.
@@ -336,17 +320,9 @@ function CopyAddressButton(props: Readonly<{
     const { addressValue, onCopyServiceUrl, target } = props;
     const copyAddress = React.useCallback(() => {
         void (async () => {
-            const copied = onCopyServiceUrl
-                ? await onCopyServiceUrl(target, addressValue)
-                : target.source === 'managed_service' ? false : await setClipboardStringSafe(addressValue);
-            if (copied) {
+            if (await copyLocalServiceAddress(target, addressValue, onCopyServiceUrl, setClipboardStringSafe)) {
                 copyFeedback.markCopied('address');
-                return;
             }
-            Modal.alert(
-                t('localServices.actions.failureTitle.copyAddress'),
-                resolveReasonCopy({ reasonCode: null, kind: 'localServiceAction' }).body,
-            );
         })();
     }, [addressValue, copyFeedback, onCopyServiceUrl, target]);
     return (
@@ -412,24 +388,16 @@ export function ServiceRowView(props: Readonly<{
     const { row } = props;
     const runner = useLocalServiceActionRunner();
     const primary = row.primaryAction;
-    const canOpen = primary?.kind === 'open' && Boolean(props.onOpenServiceInBrowser);
-    const canStart = primary?.kind === 'start' && Boolean(props.onStartLauncherTarget);
+    // The one decision of what this entry offers, shared with the Processes port menu (plan 30 RU-3).
+    const offered = resolveLocalServiceEntryActions(row, props);
+    const canOpen = offered.open !== null;
+    const canStart = offered.start !== null;
     const startLabel = t('localServices.actions.startA11y');
-    const canTerminate = row.target.source === 'inventory_entry'
-        && row.target.actions.includes('terminate_detected')
-        && Boolean(props.onTerminateDetectedService);
-    // `forget` hides a detected row or a managed occurrence's history; it needs no daemon capability
-    // bit because the suppression is always available, and it never stops anything.
-    const canForget = (row.target.source === 'inventory_entry' || row.target.source === 'managed_service')
-        && Boolean(props.onForgetDetectedService);
-    // Stop and Restart exist only where the supervisor actually controls the lifetime (`manage`), and
-    // only while it is live: a settled or never-started declaration has nothing to stop.
-    const managedLive = row.target.source === 'managed_service'
-        && row.target.actions.includes('manage')
-        && (row.status === 'running' || row.status === 'starting' || row.status === 'stopping' || hasUnsettledCustody(row));
-    const canStop = managedLive && Boolean(props.onStopManagedService);
-    const canRestart = managedLive && row.status === 'running' && Boolean(props.onRestartManagedService);
-    const addressValue = formatRowAddress(row);
+    const canTerminate = offered.terminateDetected;
+    const canForget = offered.forget;
+    const canStop = offered.stopManaged;
+    const canRestart = offered.restartManaged;
+    const addressValue = offered.address;
 
     /**
      * Two pending ids for one row, because feedback belongs where the user acted.
@@ -567,13 +535,7 @@ export function ServiceRowView(props: Readonly<{
     const machineName = props.machineName ?? null;
     const title = <ServiceRowTitle row={row} offline={offline} animationEnabled={props.animationEnabled} testID={props.testID} />;
     const subtitle = <ServiceRowFacts row={row} machineName={machineName} startedByName={props.startedByName ?? null} testID={props.testID} />;
-    // A Project declaration is a service of this checkout (the Services page's own mark, lab
-    // s-services); an undeclared script is a terminal command; a detected listener keeps its letter.
-    const identity = row.target.declaration
-        ? <Icon testID={`${props.testID}-identity`} name="hard-drives" size={18} />
-        : row.target.source === 'package_script'
-        ? <Icon name="terminal" size={18} />
-        : <Text testID={`${props.testID}-identity`} style={styles.identity}>{(row.serviceLabel ?? row.title).slice(0, 1).toLocaleUpperCase()}</Text>;
+    const identity = <ServiceMark row={row} testID={`${props.testID}-identity`} />;
     // One tap: a running row's signature action sits on the row itself, like ▶ on a row that can be
     // started (services lab O, H-UX F-8). Pressing the row still grows it into what you do less often.
     const openControl = canOpen ? (
@@ -617,7 +579,23 @@ export function ServiceRowView(props: Readonly<{
     // With no address to copy and no Open or ▶ on the row, the overflow stays on the row (lab `jobs`).
     const overflowOnRow = !addressValue && !openControl && !startControl;
     const rowControl = openControl ?? startControl ?? (overflowOnRow ? overflowControl : null);
-    const actionBar = addressValue || (overflowControl && !overflowOnRow) ? (
+    // "Share a link" sits in the action line beside Copy address (services lab O); an issued link and
+    // the reasons a link cannot be made are the public-preview block's below it.
+    const shareOffer = props.publicPreviewActions
+        ? resolveLocalServicePublicLinkOffer({
+            state: props.publicPreviewState,
+            launchTarget: row.target,
+            capabilityDisabledReasons: props.publicPreviewCapabilityDisabledReasons,
+        })
+        : null;
+    const shareControl = shareOffer?.kind === 'create' && props.publicPreviewActions ? (
+        <LocalServiceShareLinkButton
+            testID={`${props.testID}-share`}
+            offer={shareOffer}
+            actions={props.publicPreviewActions}
+        />
+    ) : null;
+    const actionBar = addressValue || shareControl || (overflowControl && !overflowOnRow) ? (
         <View style={styles.actions}>
             {addressValue ? (
                 <CopyAddressButton
@@ -627,6 +605,7 @@ export function ServiceRowView(props: Readonly<{
                     testID={props.testID}
                 />
             ) : null}
+            {shareControl}
             <View style={styles.actionsSpacer} />
             {overflowOnRow ? null : overflowControl}
         </View>
@@ -634,23 +613,22 @@ export function ServiceRowView(props: Readonly<{
     // One body for the desktop expansion and the phone's pushed detail; only the container differs.
     const body = (
         <View testID={`${props.testID}-expansion`} style={styles.expansion}>
-            <SurfaceCard padding="none">
-                {actionBar}
-                {props.placement}
-                <LocalServicePublicPreviewControls
-                    launchTargets={[row.target]}
-                    state={props.publicPreviewState}
-                    actions={props.publicPreviewActions}
-                    capabilityDisabledReasons={props.publicPreviewCapabilityDisabledReasons}
-                    testID={`${props.testID}-public-preview`}
-                />
-            </SurfaceCard>
+            {actionBar}
+            {props.placement}
+            <LocalServicePublicPreviewControls
+                launchTargets={[row.target]}
+                state={props.publicPreviewState}
+                actions={props.publicPreviewActions}
+                capabilityDisabledReasons={props.publicPreviewCapabilityDisabledReasons}
+                shareInActionLine
+                testID={`${props.testID}-public-preview`}
+            />
         </View>
     );
 
     if (props.presentation === 'detail') {
         return (
-            <View testID={props.testID}>
+            <View testID={props.testID} style={styles.tile}>
                 <Item
                     testID={`${props.testID}-item`}
                     title={title}
@@ -710,7 +688,7 @@ export function ServiceRowView(props: Readonly<{
     }
 
     return (
-        <View testID={props.testID}>
+        <View testID={props.testID} style={expanded ? styles.tile : null}>
             <ExpandableItem
                 expanded={expanded}
                 onExpandedChange={onExpandedChange}

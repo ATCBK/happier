@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeWorkspaceSyncPolicyDigest, type WorkspaceSyncRelationshipV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import type { LocalServiceLaunchTargetV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { managedMachineActionEndpointPathV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -13,13 +14,44 @@ import { publishLocalServiceInventorySnapshot, resetLocalServiceInventoryStoreFo
 import { useLocalServiceLiveFeeds } from './useLocalServiceLiveFeeds';
 
 const remote = vi.hoisted(() => vi.fn());
+const alert = vi.hoisted(() => vi.fn());
+vi.mock('@/modal', async () => {
+  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+  return createModalModuleMock({ spies: { alert } }).module;
+});
 // Only the daemon transport is replaced; accepted topology, observation and both stores stay real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: remote }));
 let home: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
 afterEach(() => { home?.dispose(); home = undefined; resetLocalServiceLauncherStoreForTests(); resetLocalServiceInventoryStoreForTests();
-  storage.getState().clearProjectAccountRowsScope(); remote.mockReset(); });
+  storage.getState().clearProjectAccountRowsScope(); remote.mockReset(); alert.mockReset(); });
 
 describe('Project Services source feed plus actual native binding', () => {
+  it('shows the typed daemon refusal through Refresh without exposing the transport message', async () => {
+    home = await createPlainArtifactHomeFixture('https://project-services-refusal.test', { handleRequest: async path =>
+      path === '/v2/account/settings' ? new Response(JSON.stringify({ content: { t: 'plain', v: {} }, version: 0 })) : null });
+    await home.hydrateAccountSettings();
+    let refuseRefresh = false;
+    remote.mockImplementation(async ({ method, machineId }: { method: string; machineId: string }) => {
+      if (method.endsWith('.watch')) return new Promise(() => {});
+      if (refuseRefresh && method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH) {
+        throw new RpcError('private transport detail', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
+      }
+      return { protocolVersion: 1, snapshot: { v: 1, machineId, generatedAt: 2,
+        refreshState: 'idle', entries: [], diagnostics: [] } };
+    });
+    const hook = await renderHook(() => useLocalServiceLiveFeeds({ machineId: 'source', serverId: home!.home.id,
+      scope: 'machine', launcherState: null }));
+    try {
+      await vi.waitFor(() => expect(hook.getCurrent().inventoryState.generatedAt).toBe(2));
+      refuseRefresh = true;
+      await act(async () => { await hook.getCurrent().refresh!(); });
+      expect(alert).toHaveBeenCalledTimes(1);
+      expect(alert.mock.calls[0]?.[1]).toContain(RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
+      expect(alert.mock.calls[0]?.[1]).not.toContain('private transport detail');
+    } finally {
+      await hook.unmount();
+    }
+  });
   it.each([false, true])('explicit Refresh obeys Action enablement (%s), while automatic observations remain available', async enabled => {
     home = await createPlainArtifactHomeFixture('https://project-services-refresh.test', { handleRequest: async path =>
       path === '/v2/account/settings' ? new Response(JSON.stringify({ content: { t: 'plain', v: {

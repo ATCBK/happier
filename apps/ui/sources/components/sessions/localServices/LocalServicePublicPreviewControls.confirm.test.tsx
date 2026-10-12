@@ -332,10 +332,11 @@ describe('LocalServicePublicPreviewControls (consequence sheet before create)', 
         expect(result.tree.root.findByProps({
             testID: 'local-service-public-preview-controls-target:preview_1-disabled',
         })).toBeTruthy();
-        const mode = result.tree.root.findByProps({
-            testID: 'local-service-public-preview-controls-target:preview_1-disabled-mode',
+        const reason = result.tree.root.findByProps({
+            testID: 'local-service-public-preview-controls-target:preview_1-disabled',
         });
-        expect(mode.props.children).not.toBe('secret_link');
+        // The reason is a sentence, never a raw protocol id.
+        expect(String(reason.props.children)).not.toContain('secret_link');
         await result.unmount();
     });
 
@@ -553,10 +554,10 @@ describe('LocalServicePublicPreviewControls (consequence sheet before create)', 
             />,
         );
 
-        const mode = result.tree.root.findByProps({
-            testID: 'local-service-public-preview-controls-exposure:public_preview_1-mode',
-        });
-        expect(mode.props.children).not.toBe('secret_link');
+        // What the issued link allows is a sentence ("Anyone who has the link…"), not the protocol id.
+        expect(result.tree.root.findAll((node) => typeof node.props?.children === 'string'
+            && node.props.children.includes('Anyone who has the link can open'))).not.toHaveLength(0);
+        expect(result.tree.root.findAll((node) => node.props?.children === 'secret_link')).toHaveLength(0);
         await result.unmount();
     });
 });

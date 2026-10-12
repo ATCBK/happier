@@ -156,9 +156,7 @@ function useServiceStarterNames(rows: readonly ServiceRow[], viewerAccountId: st
         const names: Record<string, string | null> = {};
         for (const id of ids) {
             const user = state.users[id];
-            names[id] = user ? formatAccountDisplayName({
-                firstName: user.firstName, lastName: user.lastName, username: user.username, avatarUrl: null,
-            }) : null;
+            names[id] = user ? formatAccountDisplayName(user) : null;
         }
         return names;
     }, [ids])));
@@ -186,6 +184,8 @@ function sectionTitle(section: ServiceRowSection, machineName: string | null): s
  */
 function buildHeaderLine(input: Readonly<{
     offline: boolean;
+    /** The first scan is still running or failed: nothing is known about what runs, so the line says none of it. */
+    scanUnknown: boolean;
     runningCount: number;
     machineName: string | null;
     runningMark: React.ReactNode;
@@ -206,6 +206,9 @@ function buildHeaderLine(input: Readonly<{
                 ? t('localServices.pane.runningOn', { count: input.runningCount, machine })
                 : t('localServices.pane.running', { count: input.runningCount })],
         };
+    }
+    if (input.scanUnknown) {
+        return { leading: input.idleMark, segments: machine ? [machine] : [] };
     }
     return {
         leading: input.idleMark,
@@ -241,9 +244,9 @@ function ServicesScopeBar(props: Readonly<{
                 tabs={tabs}
                 activeTabId={props.scope}
                 onSelectTab={props.onChangeScope}
+                segmentSizing={props.page ? 'content' : 'equal'}
                 accessibilityLabel={t('localServices.scope.toggleA11y')}
                 testIDPrefix={props.testID}
-                slidingThumb
             />
         </View>
     );
@@ -330,6 +333,11 @@ export function DetectedLocalServicesPane(props: Readonly<{
      * the explicit control and the recovery path when that watch is unavailable.
      */
     onRefresh?: () => void;
+    /**
+     * Where a service is declared (the Project's Scripts page). Only surfaces that have one pass it;
+     * the empty state then offers it next to the re-read instead of leaving Retry as the only move.
+     */
+    onAddService?: () => void;
     testID?: string;
 }>): React.ReactElement {
     const testID = props.testID ?? 'detected-local-services-pane';
@@ -407,14 +415,16 @@ export function DetectedLocalServicesPane(props: Readonly<{
     const offlineMark = React.useMemo(() => (
         <ServiceStatusDot status="unavailable" animationEnabled={false} testID={`${testID}-header-offline-dot`} />
     ), [testID]);
+    const scanUnknown = (viewModel.status === 'loading' || viewModel.status === 'error') && !hasLauncherTargets;
     const headerLine = React.useMemo(() => buildHeaderLine({
         offline,
+        scanUnknown,
         runningCount,
         machineName,
         runningMark,
         idleMark,
         offlineMark,
-    }), [idleMark, machineName, offline, offlineMark, runningCount, runningMark]);
+    }), [idleMark, machineName, offline, offlineMark, runningCount, runningMark, scanUnknown]);
     const onRefresh = props.onRefresh;
     const isRefreshing = viewModel.isRefreshing;
     const headerAction = React.useMemo(() => (onRefresh ? (
@@ -510,6 +520,21 @@ export function DetectedLocalServicesPane(props: Readonly<{
     // What the person can see or do: rows that are neither running nor startable are not shown.
     const hasRows = sections.length > 0;
     const checkAgain = onRefresh ? { label: t('localServices.pane.checkAgain'), onPress: onRefresh } : undefined;
+    // One empty state for "nothing to show" however it is reached. Adding a service leads; re-reading is the quiet second move.
+    const addService = props.onAddService ? { label: t('localServices.pane.addService'), onPress: props.onAddService } : undefined;
+    const emptyCard = (
+        <SurfaceStateCard
+            testID={`${testID}-empty`}
+            kind="empty"
+            iconName="globe"
+            scene="nothingListening"
+            title={t('localServices.pane.emptyTitle')}
+            reason={t('localServices.pane.emptyReason')}
+            {...(addService
+                ? { action: addService, ...(checkAgain ? { secondaryAction: checkAgain } : {}) }
+                : checkAgain ? { action: checkAgain } : {})}
+        />
+    );
 
     // A whole-pane state keeps the Services panel's plugin surfaces reachable below it.
     const withFooter = (state: React.ReactElement): React.ReactElement => (props.footer ? (
@@ -545,17 +570,7 @@ export function DetectedLocalServicesPane(props: Readonly<{
 
     if (viewModel.status === 'empty' && !hasLauncherTargets) {
         // Pane-states E: an empty pane that invites — what shows up here and why it is worth it.
-        return withFooter(
-            <SurfaceStateCard
-                testID={`${testID}-empty`}
-                kind="empty"
-                iconName="globe"
-                scene="nothingListening"
-                title={t('localServices.pane.emptyTitle')}
-                reason={t('localServices.pane.emptyReason')}
-                {...(checkAgain ? { action: checkAgain } : {})}
-            />
-        );
+        return withFooter(emptyCard);
     }
 
     if (viewModel.status === 'error' && !hasLauncherTargets) {
@@ -642,28 +657,7 @@ export function DetectedLocalServicesPane(props: Readonly<{
                                     )}
                                 </View>
                             ))
-                            : rows.length > 0 ? (
-                                // Only services with nothing to offer were found: the pane is empty (pane-states E).
-                                <SurfaceStateCard
-                                    testID={`${testID}-empty`}
-                                    kind="empty"
-                                    iconName="globe"
-                                    scene="nothingListening"
-                                    title={t('localServices.pane.emptyTitle')}
-                                    reason={t('localServices.pane.emptyReason')}
-                                    {...(checkAgain ? { action: checkAgain } : {})}
-                                />
-                            ) : (
-                                <SurfaceStateCard
-                                    testID={`${testID}-empty`}
-                                    kind="empty"
-                                    iconName="globe"
-                                    scene="nothingListening"
-                                    title={t('localServices.pane.emptyTitle')}
-                                    reason={t('localServices.pane.emptyReason')}
-                                    {...(checkAgain ? { action: checkAgain } : {})}
-                                />
-                            )}
+                            : emptyCard}
                         {props.footer}
                     </ConstrainedScreenContent>
                 </ScrollView>

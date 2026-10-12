@@ -72,6 +72,58 @@ export function readSuccessfulLocalServiceLauncherStartSnapshot(
     return response.snapshot;
 }
 
+export type LocalServiceLauncherStartReviewContext = LocalServiceActionAdmission & Readonly<{
+    runtimeActionExecute: RuntimeActionExecute;
+    serverId?: string | null;
+    applyLauncherSnapshot?: (snapshot: LocalServiceLauncherSnapshot) => void;
+}>;
+
+/** One native Setup/effect review continuation for every launcher Start consumer. */
+export async function executeLocalServiceLauncherStartWithReview(input: Readonly<{
+    request: DaemonLocalServiceLauncherStartRequestV1;
+    target: LocalServiceLaunchTarget;
+    context: LocalServiceLauncherStartReviewContext;
+    initialResponse?: unknown;
+    defaultSessionId?: string;
+}>): Promise<unknown> {
+    let request = input.request;
+    const { target, context } = input;
+    const requestServerId = target.workspace?.serverId ?? normalizeNonEmptyString(context.serverId);
+    const dispatch = () => executeLocalServiceActionWithAdmission({ execute: context.runtimeActionExecute, admission: context, request: {
+        actionId: 'localServices.launcher.start', input: request,
+        context: { ...(input.defaultSessionId ? { defaultSessionId: input.defaultSessionId } : {}),
+            ...(requestServerId ? { serverId: requestServerId } : {}), surface: 'ui' },
+    } });
+    let result = input.initialResponse === undefined ? await dispatch() : input.initialResponse;
+    for (;;) {
+        const review = DaemonLocalServiceLauncherStartResponseV1Schema.safeParse(result);
+        const matchingResponse = review.success && review.data.machineId === request.machineId && review.data.targetId === request.targetId
+            ? review.data : undefined;
+        const consent = readLocalServiceSetupConsentReview(result, matchingResponse);
+        if (consent && context.reviewSetupConsent && isLocalServiceActionAdmissionCurrent(context)) {
+            const prepared = await context.reviewSetupConsent({ actionId: 'localServices.launcher.start', target, consent,
+                ...(context.signal ? { signal: context.signal } : {}) });
+            if (!prepared || !isLocalServiceActionAdmissionCurrent(context)) break;
+            result = await dispatch();
+            continue;
+        }
+        if (!review.success || review.data.machineId !== request.machineId || review.data.targetId !== request.targetId
+            || review.data.status !== 'denied' || !['project_service_effect_review_required', 'project_service_effect_changed'].includes(review.data.reasonCode ?? '')
+            || review.data.reviewedEffect === undefined || !review.data.reviewedEffectDigest || !context.reviewEffect
+            || !isLocalServiceActionAdmissionCurrent(context)) break;
+        const accepted = await context.reviewEffect({ actionId: 'localServices.launcher.start', target,
+            reviewedEffect: review.data.reviewedEffect, reviewedEffectDigest: review.data.reviewedEffectDigest,
+            ...(context.signal ? { signal: context.signal } : {}),
+        });
+        if (!accepted || !isLocalServiceActionAdmissionCurrent(context)) break;
+        request = { ...request, expectedEffectDigest: review.data.reviewedEffectDigest };
+        result = await dispatch();
+    }
+    const snapshot = readSuccessfulLocalServiceLauncherStartSnapshot(result, request);
+    if (snapshot && isLocalServiceActionAdmissionCurrent(context)) context.applyLauncherSnapshot?.(snapshot);
+    return result;
+}
+
 export function useLocalServiceLauncherStartAction(
     context: Readonly<{
         runtimeActionExecute?: RuntimeActionExecute | null;
@@ -101,7 +153,7 @@ export function useLocalServiceLauncherStartAction(
                 || (target.source === 'package_script' && !(target.workspace && target.declaration))) {
                 return undefined;
             }
-            let request = buildLocalServiceLauncherStartRequest({
+            const request = buildLocalServiceLauncherStartRequest({
                 target,
                 machineId,
                 sessionId,
@@ -112,46 +164,9 @@ export function useLocalServiceLauncherStartAction(
             if (!normalizeNonEmptyString(request.machineId) || !normalizeNonEmptyString(request.targetId)) {
                 return undefined;
             }
-            const requestServerId = target.workspace?.serverId ?? serverId;
-            const dispatch = () => executeLocalServiceActionWithAdmission({ execute: runtimeActionExecute, admission: context, request: {
-                actionId: 'localServices.launcher.start',
-                input: request,
-                context: {
-                    ...(sessionId ? { defaultSessionId: sessionId } : {}),
-                    ...(requestServerId ? { serverId: requestServerId } : {}),
-                    surface: 'ui',
-                },
-            } });
-            let result = await dispatch();
-            for (;;) {
-                const review = DaemonLocalServiceLauncherStartResponseV1Schema.safeParse(result);
-                const matchingResponse = review.success && review.data.machineId === request.machineId && review.data.targetId === request.targetId
-                    ? review.data : undefined;
-                const consent = readLocalServiceSetupConsentReview(result, matchingResponse);
-                if (consent && context.reviewSetupConsent && isLocalServiceActionAdmissionCurrent(context)) {
-                    const prepared = await context.reviewSetupConsent({ actionId: 'localServices.launcher.start', target, consent,
-                        ...(context.signal ? { signal: context.signal } : {}) });
-                    if (!prepared || !isLocalServiceActionAdmissionCurrent(context)) break;
-                    result = await dispatch();
-                    continue;
-                }
-                if (!review.success || review.data.machineId !== request.machineId || review.data.targetId !== request.targetId
-                    || review.data.status !== 'denied' || !['project_service_effect_review_required', 'project_service_effect_changed'].includes(review.data.reasonCode ?? '')
-                    || review.data.reviewedEffect === undefined || !review.data.reviewedEffectDigest || !context.reviewEffect
-                    || !isLocalServiceActionAdmissionCurrent(context)) break;
-                const accepted = await context.reviewEffect({ actionId: 'localServices.launcher.start', target,
-                    reviewedEffect: review.data.reviewedEffect, reviewedEffectDigest: review.data.reviewedEffectDigest,
-                    ...(context.signal ? { signal: context.signal } : {}),
-                });
-                if (!accepted || !isLocalServiceActionAdmissionCurrent(context)) break;
-                request = { ...request, expectedEffectDigest: review.data.reviewedEffectDigest };
-                result = await dispatch();
-            }
-            const snapshot = readSuccessfulLocalServiceLauncherStartSnapshot(result, request);
-            if (snapshot) {
-                applyLauncherSnapshot?.(snapshot);
-            }
-            return result;
+            return executeLocalServiceLauncherStartWithReview({ request, target,
+                ...(sessionId ? { defaultSessionId: sessionId } : {}),
+                context: { ...context, runtimeActionExecute, serverId, applyLauncherSnapshot } });
         };
     }, [applyLauncherSnapshot, machineId, runtimeActionExecute, serverId, sessionId, workspaceId,
         context.expectedAccountId, context.signal, context.isCurrent, context.reviewEffect, context.reviewSetupConsent, context.onApprovalPending]);

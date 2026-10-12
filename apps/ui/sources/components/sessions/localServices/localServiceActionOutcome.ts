@@ -1,8 +1,10 @@
 import * as React from 'react';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 import { Modal } from '@/modal';
 import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
+import { t } from '@/text';
 
 /**
  * The ONE outcome path for every local-service action (tunnels audit §9.2).
@@ -42,6 +44,19 @@ function readNonEmptyString(value: unknown): string | null {
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+/** Typed failures only: transport messages can contain private service or request data. */
+export function readLocalServiceActionFailureReason(result: unknown): string | null {
+    const record = asRecord(result);
+    const details = asRecord(record?.details);
+    const code = readNonEmptyString(details?.reasonCode) ?? readNonEmptyString(readRpcErrorCode(result))
+        ?? readNonEmptyString(record?.code) ?? readNonEmptyString(record?.reasonCode) ?? readNonEmptyString(record?.errorCode);
+    if (code === 'runtime_action_disabled' && typeof record?.error === 'string') {
+        const prefix = 'runtime_action_disabled:localServices:';
+        if (record.error.startsWith(prefix)) return readNonEmptyString(record.error.slice(prefix.length)) ?? code;
+    }
+    return code;
+}
+
 /**
  * Classify whatever a local-service action handler resolved to.
  *
@@ -60,6 +75,7 @@ export function readLocalServiceActionOutcome(result: unknown): LocalServiceActi
     if (result === undefined || result === null || result === false) {
         return { kind: 'failed', reasonCode: null };
     }
+    if (result instanceof Error) return { kind: 'failed', reasonCode: readLocalServiceActionFailureReason(result) };
     const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result);
     if (approval.success) return { kind: 'approval_pending', artifactId: approval.data.artifactId, actionId: approval.data.actionId };
     const record = asRecord(result);
@@ -69,27 +85,29 @@ export function readLocalServiceActionOutcome(result: unknown): LocalServiceActi
     if (record.ok === false) {
         return {
             kind: 'failed',
-            reasonCode: readNonEmptyString(record.errorCode) ?? readNonEmptyString(record.error),
+            reasonCode: readLocalServiceActionFailureReason(result),
         };
     }
     const status = readNonEmptyString(record.status);
     if (status !== null && status !== 'succeeded') {
-        return { kind: 'failed', reasonCode: readNonEmptyString(record.reasonCode) };
+        return { kind: 'failed', reasonCode: readLocalServiceActionFailureReason(result) };
     }
     return { kind: 'succeeded' };
 }
 
 /**
  * Show the failure. Title comes from the caller because only the caller knows which service and
- * which verb; the body comes from the canonical reason-code mapper so a daemon code is never
- * rendered raw, and an unmapped code still produces an actionable sentence.
+ * which verb; the body comes from the canonical reason-code mapper, with the typed cause in
+ * the existing diagnostic-copy format. Private transport messages are never displayed.
  */
 export function presentLocalServiceActionFailure(input: Readonly<{
     title: string;
     reasonCode: string | null;
 }>): void {
     const copy = resolveReasonCopy({ reasonCode: input.reasonCode, kind: 'localServiceAction' });
-    Modal.alert(input.title, copy.body);
+    Modal.alert(input.title, input.reasonCode
+        ? t('errors.errorWithCode', { message: copy.body, code: input.reasonCode })
+        : copy.body);
 }
 
 export type LocalServiceActionRunner = Readonly<{
@@ -132,10 +150,8 @@ export function useLocalServiceActionRunner(): LocalServiceActionRunner {
         let outcome: LocalServiceActionOutcome;
         try {
             outcome = readLocalServiceActionOutcome(await input.action());
-        } catch {
-            // A thrown transport error is the same product event as a returned refusal: the action
-            // did not happen and the user has to be told. It carries no daemon reason code.
-            outcome = { kind: 'failed', reasonCode: null };
+        } catch (error) {
+            outcome = { kind: 'failed', reasonCode: readLocalServiceActionFailureReason(error) };
         } finally {
             if (mountedRef.current) {
                 setPendingId((current) => (current === input.id ? null : current));

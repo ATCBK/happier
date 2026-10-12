@@ -10,11 +10,11 @@ import type {
 } from '@happier-dev/protocol';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
 import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { INSTRUMENT_SPRINGS, useMotionPreferences } from '@/components/instrument';
-import { Item } from '@/components/ui/lists/Item';
 import { QRCode } from '@/components/qr/QRCode';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -38,7 +38,7 @@ import {
 } from '@/sync/domains/local/services/publicPreview/presentation';
 import { t } from '@/text';
 
-import { useLocalServiceActionRunner } from './localServiceActionOutcome';
+import { useLocalServiceActionRunner, type LocalServiceActionRunner } from './localServiceActionOutcome';
 import type { LocalServiceCapabilityDisabledReasons } from './useLocalServicePublicPreviewFeature';
 import {
     showLocalServiceExposureSheet,
@@ -61,9 +61,6 @@ type PublicPreviewDisabledTarget = PublicPreviewTarget & Readonly<{
     subtitle: string;
 }>;
 
-/** The gap between an exposure row's controls, shared with their press frames. */
-const EXPOSURE_ACTION_GAP_PX = 8;
-
 /** Big enough to scan from a phone held at arm's length, small enough to sit inside a pane row. */
 const PUBLIC_LINK_QR_SIZE_PX = 96;
 
@@ -80,14 +77,24 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default(),
         fontSize: 12,
         color: theme.colors.text.secondary,
-        paddingHorizontal: 16,
+        paddingHorizontal: 12,
         paddingBottom: 10,
+    },
+    disabledNote: {
+        paddingTop: 12,
+    },
+    reach: {
+        ...Typography.default(),
+        flex: 1,
+        fontSize: 12,
+        lineHeight: 17,
+        color: theme.colors.text.secondary,
     },
     qrRow: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
-        paddingHorizontal: 16,
+        paddingHorizontal: 12,
         paddingBottom: 10,
     },
     qrTile: {
@@ -101,22 +108,53 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 12,
         color: theme.colors.text.secondary,
     },
+    /** One issued link: a compact card inside the expansion (lab services O): label and expiry, address, consequence. */
+    link: {
+        paddingHorizontal: 12,
+        paddingVertical: 12,
+        gap: 6,
+    },
+    linkHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+    },
+    linkLabel: {
+        ...Typography.default('semiBold'),
+        fontSize: 13,
+        color: theme.colors.text.primary,
+    },
     actionRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: EXPOSURE_ACTION_GAP_PX,
+        gap: 4,
     },
     urlRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        flexWrap: 'wrap',
+        gap: 4,
     },
     url: {
         ...Typography.mono(),
-        flexShrink: 1,
+        flex: 1,
+        minWidth: 0,
         fontSize: 12,
         color: theme.colors.text.secondary,
+    },
+    linkFooter: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+    },
+    /** The share control hosted outside the expansion's action line (the Browser's preview frame). */
+    shareRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 12,
+        gap: 8,
     },
     /**
      * The countdown. `Typography.timestamp()` already carries tabular numerals, which is what keeps
@@ -241,6 +279,89 @@ function resolveTtlChoices(maxTtlMs: number | undefined): readonly number[] {
     return [typeof maxTtlMs === 'number' && maxTtlMs > 0 ? maxTtlMs : DEFAULT_LOCAL_SERVICE_PUBLIC_PREVIEW_TTL_MS];
 }
 
+/** The modes and lifetimes the consequence sheet offers, from the server's policy. */
+function resolvePublicLinkChoices(state: LocalServicePublicPreviewState): Readonly<{
+    modeChoices: readonly LocalServiceExposureModeChoice[];
+    ttlChoices: readonly LocalServiceExposureTtlChoice[];
+}> {
+    const allowedModes = state.policy?.allowedModes ?? [];
+    return {
+        modeChoices: (allowedModes.length > 0 ? allowedModes : (['secret_link'] as const))
+            .map((mode) => ({ mode, label: modeLabel(mode) })),
+        ttlChoices: resolveTtlChoices(state.policy?.maxTtlMs)
+            .map((ttlMs) => ({ ttlMs, label: ttlChoiceLabel(ttlMs) })),
+    };
+}
+
+/**
+ * Show the consequence sheet, then create the link the person chose. One flow for the Services row's
+ * link control and the Processes port menu's "Public link…"; the exposure is created only after the
+ * sheet returns a decision, so nothing is busy while the person is still reading (UX-5, UB-4).
+ */
+async function requestPublicLink(input: Readonly<{
+    target: PublicPreviewCreatableTarget;
+    modeChoices: readonly LocalServiceExposureModeChoice[];
+    ttlChoices: readonly LocalServiceExposureTtlChoice[];
+    actions: LocalServicePublicPreviewActions;
+    run: LocalServiceActionRunner['run'];
+}>): Promise<void> {
+    const decision = await showLocalServiceExposureSheet({
+        serviceTitle: input.target.title,
+        modeChoices: input.modeChoices,
+        ttlChoices: input.ttlChoices,
+        testIDPrefix: `local-service-exposure-sheet:${input.target.previewId}`,
+    });
+    if (!decision) return;
+    await input.run({
+        id: `create:${input.target.previewId}`,
+        failureTitle: t('localServices.actions.failureTitle.expose'),
+        action: () => input.actions.create(input.target.target, decision),
+    });
+}
+
+/**
+ * What one service's public link offers elsewhere than its Services row: create one (through the
+ * same sheet and Action), or the reason it cannot. A link that already exists is the Services row's
+ * to show, so it offers nothing here. Decided by the same selectors the row's controls use.
+ */
+export type LocalServicePublicLinkOffer =
+    | Readonly<{ kind: 'create'; request: (actions: LocalServicePublicPreviewActions, run: LocalServiceActionRunner['run']) => Promise<void> }>
+    | Readonly<{ kind: 'disabled'; subtitle: string }>;
+
+function createLocalServicePublicLinkOffer(
+    target: PublicPreviewCreatableTarget,
+    state: LocalServicePublicPreviewState,
+): Extract<LocalServicePublicLinkOffer, { kind: 'create' }> {
+    const choices = resolvePublicLinkChoices(state);
+    return { kind: 'create', request: (actions, run) => requestPublicLink({ target, ...choices, actions, run }) };
+}
+
+export function resolveLocalServicePublicLinkOffer(input: Readonly<{
+    state: LocalServicePublicPreviewState | null | undefined;
+    launchTarget: LocalServiceLaunchTargetV1;
+    capabilityDisabledReasons?: LocalServiceCapabilityDisabledReasons;
+}>): LocalServicePublicLinkOffer | null {
+    const { state } = input;
+    const [target] = publicPreviewTargets([input.launchTarget]);
+    if (!state || !target || visibleExposuresForTarget(state, target).length > 0) return null;
+    const activeExposureCount = selectLocalServicePublicPreviewRows(state)
+        .filter((exposure) => exposure.state === 'active')
+        .length;
+    const createDisabledSubtitle = resolveLocalServicePublicPreviewCreateDisabledSubtitle({
+        state,
+        activeExposureCount,
+        previewId: target.previewId,
+        capabilityDisabledReasons: input.capabilityDisabledReasons?.publicPreview,
+    });
+    if (hasPreviewId(target) && !createDisabledSubtitle) {
+        return createLocalServicePublicLinkOffer(target, state);
+    }
+    const subtitle = createDisabledSubtitle ?? (hasPreviewId(target) ? null : resolveLocalServicePreviewUnavailableSubtitle({
+        capabilityDisabledReasons: input.capabilityDisabledReasons?.preview,
+    }));
+    return subtitle ? { kind: 'disabled', subtitle } : null;
+}
+
 function pad2(value: number): string {
     return value < 10 ? `0${value}` : String(value);
 }
@@ -353,63 +474,6 @@ function useExposureEntrance() {
     return { style };
 }
 
-function ExposureActions(props: Readonly<{
-    exposure: LocalServicePublicExposureV1;
-    expired: boolean;
-    revealed: boolean;
-    onToggleReveal: () => void;
-    onCopy: () => void;
-    onRevoke: () => void;
-    copied: boolean;
-    testID: string;
-}>): React.ReactElement {
-    const styles = stylesheet;
-    // Q2/F0-C3: three 28px controls in a row is exactly where the iOS/Android floor bites. The
-    // primitive grows a real box-model press frame (react-native-web ignores `hitSlop`, and the
-    // desktop app IS the web bundle) bounded by the declared neighbour gap, so the targets meet
-    // without overlapping and the drawn squares do not move.
-    const minimumTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
-    return (
-        <View style={styles.actionRow}>
-            <CopiedPill visible={props.copied} testID={`${props.testID}-copy-feedback`} />
-            <IconButton
-                testID={`${props.testID}-reveal`}
-                iconName={props.revealed ? 'eye-slash' : 'eye'}
-                accessibilityLabel={props.revealed
-                    ? t('localServices.publicPreview.hideUrlA11y')
-                    : t('localServices.publicPreview.revealUrlA11y')}
-                tooltip={props.revealed
-                    ? t('localServices.publicPreview.hideUrlA11y')
-                    : t('localServices.publicPreview.revealUrlA11y')}
-                variant="plain"
-                selected={props.revealed}
-                minimumInteractiveTargetSize={minimumTargetSize}
-                interactiveTargetGapPx={EXPOSURE_ACTION_GAP_PX}
-                onPress={props.onToggleReveal}
-            />
-            <IconButton
-                testID={`${props.testID}-copy`}
-                iconName="copy"
-                accessibilityLabel={t('common.copy')}
-                // Copying a link that has already expired hands someone a dead URL.
-                disabled={props.expired}
-                minimumInteractiveTargetSize={minimumTargetSize}
-                interactiveTargetGapPx={EXPOSURE_ACTION_GAP_PX}
-                onPress={props.onCopy}
-            />
-            <IconButton
-                testID={`${props.testID}-revoke`}
-                iconName="x-circle"
-                accessibilityLabel={t('localServices.publicPreview.revokeActionA11y')}
-                tone="danger"
-                minimumInteractiveTargetSize={minimumTargetSize}
-                interactiveTargetGapPx={EXPOSURE_ACTION_GAP_PX}
-                onPress={props.onRevoke}
-            />
-        </View>
-    );
-}
-
 function ExposureRow(props: Readonly<{
     exposure: LocalServicePublicExposureV1;
     actions: LocalServicePublicPreviewActions;
@@ -423,6 +487,9 @@ function ExposureRow(props: Readonly<{
     const entrance = useExposureEntrance();
     const copyFeedback = useTemporaryCopyFeedback();
     const [revealed, setRevealed] = React.useState(false);
+    // Q2/F0-C3: the small plain controls grow a real box-model press frame (react-native-web ignores
+    // `hitSlop`, and the desktop app IS the web bundle) bounded by the declared neighbour gap.
+    const minimumTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
 
     const onCopy = React.useCallback(() => {
         void (async () => {
@@ -464,57 +531,84 @@ function ExposureRow(props: Readonly<{
                 clock: formatCountdownClock(countdown.remainingMs),
             })
             : coarseExpiresInLabel(countdown.remainingMs);
+    const reach = exposure.mode === 'authenticated'
+        ? t('localServices.publicPreview.consequenceReachSignedIn')
+        : t('localServices.publicPreview.consequenceReach');
 
     return (
         <Animated.View style={entrance.style}>
-            <Item
-                testID={props.testID}
-                title={t('localServices.pane.publicLinkTitle')}
-                subtitle={(
-                    <View style={styles.urlRow}>
-                        <Text
-                            testID={`${props.testID}-url`}
-                            style={styles.url}
-                            numberOfLines={1}
-                            ellipsizeMode="middle"
-                        >
-                            {revealed ? exposure.publicUrl : maskPublicUrl(exposure.publicUrl)}
-                        </Text>
-                        <Text
-                            testID={`${props.testID}-countdown`}
-                            style={[
-                                styles.clock,
-                                !countdown.expired && countdown.remainingMs <= URGENT_COUNTDOWN_WINDOW_MS
-                                    ? styles.clockUrgent
-                                    : null,
-                            ]}
-                            // A value that changes on its own must announce itself politely rather
-                            // than interrupting; the deadline is not an alert.
-                            accessibilityLiveRegion="polite"
-                        >
-                            {detail}
-                        </Text>
+            <View testID={props.testID} style={styles.link}>
+                <View style={styles.linkHeader}>
+                    <Text style={styles.linkLabel}>{t('localServices.pane.publicLinkTitle')}</Text>
+                    <Text
+                        testID={`${props.testID}-countdown`}
+                        style={[
+                            styles.clock,
+                            !countdown.expired && countdown.remainingMs <= URGENT_COUNTDOWN_WINDOW_MS
+                                ? styles.clockUrgent
+                                : null,
+                        ]}
+                        // A value that changes on its own must announce itself politely rather
+                        // than interrupting; the deadline is not an alert.
+                        accessibilityLiveRegion="polite"
+                    >
+                        {detail}
+                    </Text>
+                </View>
+                <View style={styles.urlRow}>
+                    <Text
+                        testID={`${props.testID}-url`}
+                        style={styles.url}
+                        numberOfLines={1}
+                        ellipsizeMode="middle"
+                    >
+                        {revealed ? exposure.publicUrl : maskPublicUrl(exposure.publicUrl)}
+                    </Text>
+                    <View style={styles.actionRow}>
+                        <CopiedPill visible={copyFeedback.isCopied()} testID={`${props.testID}-copy-feedback`} />
+                        <IconButton
+                            testID={`${props.testID}-reveal`}
+                            iconName={revealed ? 'eye-slash' : 'eye'}
+                            accessibilityLabel={revealed
+                                ? t('localServices.publicPreview.hideUrlA11y')
+                                : t('localServices.publicPreview.revealUrlA11y')}
+                            tooltip={revealed
+                                ? t('localServices.publicPreview.hideUrlA11y')
+                                : t('localServices.publicPreview.revealUrlA11y')}
+                            variant="plain"
+                            size={24}
+                            minimumInteractiveTargetSize={minimumTargetSize}
+                            interactiveTargetGapPx={4}
+                            onPress={() => setRevealed((current) => !current)}
+                        />
+                        <IconButton
+                            testID={`${props.testID}-copy`}
+                            iconName="copy"
+                            accessibilityLabel={t('common.copy')}
+                            variant="plain"
+                            size={24}
+                            // Copying a link that has already expired hands someone a dead URL.
+                            disabled={countdown.expired}
+                            minimumInteractiveTargetSize={minimumTargetSize}
+                            interactiveTargetGapPx={4}
+                            onPress={onCopy}
+                        />
                     </View>
-                )}
-                subtitleLines={2}
-                detail={modeLabel(exposure.mode)}
-                detailTestID={`${props.testID}-mode`}
-                mode="info"
-                showChevron={false}
-                loading={props.pending}
-                rightElement={(
-                    <ExposureActions
-                        exposure={exposure}
-                        expired={countdown.expired}
-                        revealed={revealed}
-                        onToggleReveal={() => setRevealed((current) => !current)}
-                        onCopy={onCopy}
-                        onRevoke={onRevoke}
-                        copied={copyFeedback.isCopied()}
-                        testID={props.testID}
+                </View>
+                <View style={styles.linkFooter}>
+                    <Text style={styles.reach}>{reach}</Text>
+                    {/* Revoke is a deliberate, confirmed act, not an alarm: a quiet button, red only in its confirmation. */}
+                    <RoundButton
+                        testID={`${props.testID}-revoke`}
+                        size="mini"
+                        display="secondary"
+                        title={t('localServices.publicPreview.revokeConfirmCta')}
+                        accessibilityLabel={t('localServices.publicPreview.revokeActionA11y')}
+                        loading={props.pending}
+                        onPress={onRevoke}
                     />
-                )}
-            />
+                </View>
+            </View>
             {/* The QR carries the secret link, so it appears only once the user reveals the link. */}
             {revealed && !countdown.expired ? (
                 <View style={styles.qrRow}>
@@ -525,6 +619,31 @@ function ExposureRow(props: Readonly<{
                 </View>
             ) : null}
         </Animated.View>
+    );
+}
+
+/**
+ * The create control: "Share a link". Hosted by the expansion's action line next to Copy address, or
+ * by `LocalServicePublicPreviewControls` itself where the host has no action line (the Browser's
+ * preview frame). One button, one flow (`requestPublicLink`), decided by `resolveLocalServicePublicLinkOffer`.
+ */
+export function LocalServiceShareLinkButton(props: Readonly<{
+    offer: Extract<LocalServicePublicLinkOffer, { kind: 'create' }>;
+    actions: LocalServicePublicPreviewActions;
+    testID: string;
+}>): React.ReactElement {
+    const runner = useLocalServiceActionRunner();
+    const { offer, actions } = props;
+    return (
+        <RoundButton
+            testID={props.testID}
+            size="small"
+            display="secondary"
+            title={t('localServices.publicPreview.shareCta')}
+            accessibilityLabel={t('localServices.publicPreview.createActionA11y')}
+            loading={runner.pendingId !== null}
+            onPress={() => { void offer.request(actions, runner.run); }}
+        />
     );
 }
 
@@ -541,6 +660,11 @@ export function LocalServicePublicPreviewControls(props: Readonly<{
      * that has no server context keeps the previous generic copy.
      */
     capabilityDisabledReasons?: LocalServiceCapabilityDisabledReasons;
+    /**
+     * The host draws "Share a link" in its own action line (the Services expansion beside Copy
+     * address), so this block shows only issued links and the reasons a link cannot be created.
+     */
+    shareInActionLine?: boolean;
     testID?: string;
 }>): React.ReactElement | null {
     const runner = useLocalServiceActionRunner();
@@ -556,30 +680,6 @@ export function LocalServicePublicPreviewControls(props: Readonly<{
             : []),
         [actions, props.browserTarget, props.launchTargets, props.serviceTitle, state],
     );
-
-    // UX-5 + UB-4: the exposure is created only after the consequence sheet returns a decision, so
-    // the create control is not "busy" while the user is still reading. The pending state starts at
-    // dispatch, which is what `runner` owns.
-    const createExposure = React.useCallback((
-        target: PublicPreviewCreatableTarget,
-        modeChoices: readonly LocalServiceExposureModeChoice[],
-        ttlChoices: readonly LocalServiceExposureTtlChoice[],
-    ) => {
-        void (async () => {
-            const decision = await showLocalServiceExposureSheet({
-                serviceTitle: target.title,
-                modeChoices,
-                ttlChoices,
-                testIDPrefix: `local-service-exposure-sheet:${target.previewId}`,
-            });
-            if (!decision || !actions) return;
-            await runner.run({
-                id: `create:${target.previewId}`,
-                failureTitle: t('localServices.actions.failureTitle.expose'),
-                action: () => actions.create(target.target, decision),
-            });
-        })();
-    }, [actions, runner]);
 
     if (!state || !actions) {
         return null;
@@ -616,19 +716,13 @@ export function LocalServicePublicPreviewControls(props: Readonly<{
             return subtitle ? { ...row.target, subtitle } : null;
         })
         .filter((target): target is PublicPreviewDisabledTarget => Boolean(target));
-    if (exposureRows.length === 0 && creatableTargets.length === 0 && disabledTargets.length === 0) {
+    const hostedCreatableTargets = props.shareInActionLine ? [] : creatableTargets;
+    if (exposureRows.length === 0 && hostedCreatableTargets.length === 0 && disabledTargets.length === 0) {
         return null;
     }
 
     const testID = props.testID ?? 'local-service-public-preview-controls';
     const styles = stylesheet;
-
-    const allowedModes = state.policy?.allowedModes ?? [];
-    const modeChoices: readonly LocalServiceExposureModeChoice[] = (
-        allowedModes.length > 0 ? allowedModes : (['secret_link'] as const)
-    ).map((mode) => ({ mode, label: modeLabel(mode) }));
-    const ttlChoices: readonly LocalServiceExposureTtlChoice[] = resolveTtlChoices(state.policy?.maxTtlMs)
-        .map((ttlMs) => ({ ttlMs, label: ttlChoiceLabel(ttlMs) }));
 
     return (
         <View testID={testID} style={styles.block}>
@@ -642,46 +736,31 @@ export function LocalServicePublicPreviewControls(props: Readonly<{
                     testID={`${testID}-exposure:${exposure.exposureId}`}
                 />
             ))}
-            {creatableTargets.map((target) => (
-                <Item
-                    key={`create:${target.previewId}`}
-                    testID={`${testID}-target:${target.previewId}`}
-                    title={t('localServices.pane.publicLinkTitle')}
-                    subtitle={t('localServices.publicPreview.createSubtitle')}
-                    detail={modeChoices[0]?.label}
-                    detailTestID={`${testID}-target:${target.previewId}-mode`}
-                    mode="info"
-                    showChevron={false}
-                    loading={runner.pendingId === `create:${target.previewId}`}
-                    rightElement={(
-                        <IconButton
-                            testID={`${testID}-target:${target.previewId}-create`}
-                            iconName="link"
-                            accessibilityLabel={t('localServices.publicPreview.createActionA11y')}
-                            minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                            disabled={runner.pendingId === `create:${target.previewId}`}
-                            onPress={() => createExposure(target, modeChoices, ttlChoices)}
-                        />
-                    )}
-                />
+            {hostedCreatableTargets.map((target) => (
+                <View key={`create:${target.previewId}`} style={styles.shareRow}>
+                    <LocalServiceShareLinkButton
+                        testID={`${testID}-target:${target.previewId}-create`}
+                        offer={createLocalServicePublicLinkOffer(target, state)}
+                        actions={actions}
+                    />
+                </View>
             ))}
             {disabledTargets.map((target) => (
-                <Item
+                <Text
                     key={`disabled:${target.targetKey}`}
                     testID={`${testID}-target:${target.targetKey}-disabled`}
-                    title={t('localServices.pane.publicLinkTitle')}
-                    subtitle={target.subtitle}
-                    detail={modeChoices[0]?.label}
-                    detailTestID={`${testID}-target:${target.targetKey}-disabled-mode`}
-                    mode="info"
-                    showChevron={false}
-                />
+                    style={[styles.note, styles.disabledNote]}
+                >
+                    {target.subtitle}
+                </Text>
             ))}
             {/*
               * The Confirm beat's missing fact: a public link is audited, and the user is entitled
               * to know that at the moment they are looking at one.
               */}
-            <Text style={styles.note}>{t('localServices.publicPreview.groupFooter')}</Text>
+            {exposureRows.length > 0 || hostedCreatableTargets.length > 0
+                ? <Text style={styles.note}>{t('localServices.publicPreview.groupFooter')}</Text>
+                : null}
         </View>
     );
 }

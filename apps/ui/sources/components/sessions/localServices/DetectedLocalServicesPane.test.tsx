@@ -176,14 +176,15 @@ describe('DetectedLocalServicesPane', () => {
             await flushHookEffects();
             await expandRow(screen, 'worker-pane-row:worker-preview');
             const prefix = 'worker-pane-row:worker-preview-public-preview';
-            expect(screen.findByTestId(`${prefix}-target:same-preview-create`)).toBeTruthy();
+            const shareId = 'worker-pane-row:worker-preview-share';
+            expect(screen.findByTestId(shareId)).toBeTruthy();
             await act(async () => { await actions.create(workerTarget); });
             expect(screen.findByTestId(`${prefix}-exposure:same-exposure`)).toBeTruthy();
             expect(screen.getTextContent()).toContain('worker.test');
             expect(screen.getTextContent()).not.toContain('source.test');
             await act(async () => { await actions.revoke(exposure); });
             expect(screen.findAllByTestId(`${prefix}-exposure:same-exposure`)).toHaveLength(0);
-            expect(screen.findByTestId(`${prefix}-target:same-preview-create`)).toBeTruthy();
+            expect(screen.findByTestId(shareId)).toBeTruthy();
             await screen.unmount();
         } finally { resetLocalServicePublicPreviewStoreForTests(); }
     });
@@ -215,6 +216,26 @@ describe('DetectedLocalServicesPane', () => {
         expect(text).toContain('Preview what you’re building');
         expect(text).toContain('Dev servers started in this workspace show up here');
         await pressTestInstanceAsync(screen.findByTestId('local-services-pane-empty-action'), 'empty action');
+        expect(onRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('leads the empty state to where a service is declared, with re-reading as the second move', async () => {
+        const onRefresh = vi.fn();
+        const onAddService = vi.fn();
+        const screen = await renderScreen(
+            <DetectedLocalServicesPane
+                inventoryState={buildLocalServiceInventoryState({ rows: [] })}
+                machine={MACBOOK_ONLINE}
+                onRefresh={onRefresh}
+                onAddService={onAddService}
+                testID="local-services-pane"
+            />,
+        );
+        expect(screen.getTextContent()).toContain('Add a service');
+        await pressTestInstanceAsync(screen.findByTestId('local-services-pane-empty-action'), 'add a service');
+        expect(onAddService).toHaveBeenCalledTimes(1);
+        expect(onRefresh).not.toHaveBeenCalled();
+        await pressTestInstanceAsync(screen.findByTestId('local-services-pane-empty-secondary-action'), 'check again');
         expect(onRefresh).toHaveBeenCalledTimes(1);
     });
 
@@ -336,6 +357,22 @@ describe('DetectedLocalServicesPane', () => {
         expect(screen.findAllByTestId('local-services-pane-count-badge')).toHaveLength(0);
         await pressTestInstanceAsync(screen.findByTestId('local-services-pane-refresh'), 'header refresh');
         expect(onRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('claims nothing about what runs while the first scan is loading or has failed', async () => {
+        for (const refreshState of ['refreshing', 'error'] as const) {
+            const screen = await renderScreen(inHeaderHost(
+                <DetectedLocalServicesPane
+                    inventoryState={buildLocalServiceInventoryState({ rows: [], generatedAt: 0, refreshState })}
+                    machine={MACBOOK_ONLINE}
+                    testID="local-services-pane"
+                />,
+            ));
+            const header = screen.findByTestId('probe-header.subtitle');
+            expect(collectText(header)).toContain('MacBook Pro');
+            expect(collectText(header)).not.toContain('Nothing running');
+            await screen.unmount();
+        }
     });
 
     it('renders the empty state when a valid scan has no launcher targets', async () => {
@@ -626,7 +663,7 @@ describe('DetectedLocalServicesPane', () => {
     /** R2a-F13: a teammate's service names who started it from a known profile; the viewer's own does not. */
     it('names who started a service only when it is someone else the client already knows', async () => {
         const { getStorage } = await import('@/sync/domains/state/storageStore');
-        const profile = (id: string, firstName: string) => ({ id, firstName, lastName: null, avatar: null, username: firstName.toLowerCase(),
+        const profile = (id: string, name: string) => ({ id, name, firstName: null, lastName: null, avatar: null, username: name.toLowerCase(),
             bio: null, badges: [], status: 'friend', publicKey: null }) as unknown as UserProfile;
         act(() => { getStorage().getState().applyUsers({ 'ana-account': profile('ana-account', 'Ana'), 'viewer-account': profile('viewer-account', 'Me') }); });
         const managed = (id: string, startedByAccountId: string) => ({

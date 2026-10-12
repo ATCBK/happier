@@ -593,9 +593,11 @@ describe('ServiceRowView', () => {
         const screen = await renderScreen(<ServiceRowView row={row} onStartLauncherTarget={vi.fn()} machineName="devbox" testID="row" />);
         const text = screen.getTextContent();
         expect(text).toContain('yarn storybook');
-        expect(screen.findByTestId('row-source')).toBeTruthy();
-        expect(text).toContain('package.json');
-        expect(text).toContain('not started');
+        // One quiet line: the declaring file is plain text beside the command, no chip, and
+        // "Ready to start" (the section) is what says it has not started.
+        expect(screen.findAllByTestId('row-source')).toHaveLength(0);
+        expect(text).toContain('yarn storybook · package.json');
+        expect(text).not.toContain('not started');
         expect(text).not.toContain('Unavailable');
         expect(text).not.toContain("can't be started");
         expect(screen.findAllByTestId('row-dot')).toHaveLength(0);

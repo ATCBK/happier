@@ -53,6 +53,29 @@ type StartActionContextWithSnapshotApply = Readonly<{
 }>;
 
 describe('launcher start action helpers', () => {
+    it.each(['accept', 'decline', 'retire'] as const)('continues an already-returned native effect review without a pre-consent retry (%s)', async decision => {
+        const { executeLocalServiceLauncherStartWithReview } = await import('./launcherStartAction');
+        const cancellation = new AbortController();
+        const digest = 'd'.repeat(64);
+        const request = { machineId: 'machine-a', targetId: startableTarget.id, sessionId: 'session-a' };
+        const initialResponse = DaemonLocalServiceLauncherStartResponseV1Schema.parse({ protocolVersion: 1, machineId: request.machineId, targetId: request.targetId,
+            status: 'denied', reasonCode: 'project_service_effect_changed', reviewedEffect: { v: 1, purpose: 'service' },
+            reviewedEffectDigest: digest, snapshot: startedSnapshot });
+        const dispatched: Parameters<RuntimeActionExecute>[0][] = [];
+        const runtimeActionExecute: RuntimeActionExecute = async input => { dispatched.push(input); return {
+            protocolVersion: 1, machineId: request.machineId, targetId: request.targetId, status: 'succeeded', snapshot: startedSnapshot,
+        }; };
+        const reviewEffect = vi.fn(async () => { if (decision === 'retire') cancellation.abort(); return decision !== 'decline'; });
+        const outcome = await executeLocalServiceLauncherStartWithReview({ request, target: startableTarget, initialResponse,
+            context: { runtimeActionExecute, serverId: 'server-a', expectedAccountId: 'initiating-account', signal: cancellation.signal, reviewEffect } });
+        expect(reviewEffect).toHaveBeenCalledWith(expect.objectContaining({ target: startableTarget, reviewedEffectDigest: digest }));
+        expect(dispatched).toHaveLength(decision === 'accept' ? 1 : 0);
+        if (decision === 'accept') {
+            expect(dispatched[0]).toMatchObject({ actionId: 'localServices.launcher.start', input: { ...request, expectedEffectDigest: digest },
+                context: { serverId: 'server-a', expectedAccountId: 'initiating-account' } });
+            expect(outcome).toMatchObject({ status: 'succeeded' });
+        } else expect(outcome).toBe(initialResponse);
+    });
     it.each(['accept', 'decline', 'retire'] as const)('joins canonical Setup consent before Service review and retains the original Start (%s)', async decision => {
         const { useLocalServiceLauncherStartAction } = await import('./launcherStartAction');
         const cancellation = new AbortController();
