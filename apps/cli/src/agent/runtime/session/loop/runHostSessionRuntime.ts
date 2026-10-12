@@ -952,6 +952,20 @@ export async function runHostSessionRuntime(
   config: HostSessionRuntimeConfig,
   deps: HostSessionRuntimeDeps = {},
 ): Promise<void> {
+  const startupStartedAt = performance.now();
+  let startupPhaseStartedAt = startupStartedAt;
+  const recordStartupPhase = (phase: string): void => {
+    const now = performance.now();
+    logger.info(`${config.uiLogPrefix} Startup phase`, {
+      phase,
+      durationMs: Math.round(now - startupPhaseStartedAt),
+      elapsedMs: Math.round(now - startupStartedAt),
+      processUptimeMs: Math.round(process.uptime() * 1_000),
+    });
+    startupPhaseStartedAt = now;
+  };
+  recordStartupPhase('entered');
+  const startupRegistrationLifetime = new AbortController();
   let runtimeStopRequested = false;
   let runtimeStopDelegate: (() => Promise<void>) | null = null;
   let runtimeStopDispatchPromise: Promise<void> | null = null;
@@ -1109,6 +1123,7 @@ export async function runHostSessionRuntime(
   const selfProcessIdentity = await (
     deps.readProcessIdentityByPidFn ?? readProcessIdentityByPid
   )(process.pid);
+  recordStartupPhase('process_identity');
   const runnerProcessIdentity =
     selfProcessIdentity === null
     || typeof selfProcessIdentity.processStartTimeMs !== 'number'
@@ -1400,6 +1415,7 @@ export async function runHostSessionRuntime(
     opts: runtimeOpts,
     seed: canonicalStartupSeed,
   }) ?? canonicalStartupSeed;
+  recordStartupPhase('startup_seed');
   const createPreparedDeferredStartupBootstrapForRuntime:
     typeof createPreparedDeferredStartupBootstrap = async (params) =>
       await createPreparedDeferredStartupBootstrapFn({
@@ -1430,6 +1446,7 @@ export async function runHostSessionRuntime(
         })
       : null;
 
+  recordStartupPhase('deferred_bootstrap');
   if (startupBootstrap) {
     sessionIsNew = !startupBootstrap.attachedToExistingSession;
     api = startupBootstrap.api;
@@ -1447,6 +1464,7 @@ export async function runHostSessionRuntime(
       credentials: runtimeOpts.credentials,
       machineMetadata: config.machineMetadata,
     });
+    recordStartupPhase('api_context');
     const initializationApi = initializedApiContext.api;
     api = initializationApi;
     machineId = initializedApiContext.machineId;
@@ -1578,6 +1596,8 @@ export async function runHostSessionRuntime(
       attachedToExistingSession: initializedSession.attachedToExistingSession,
     };
   }
+
+  recordStartupPhase('session_construction');
 
   let claimedSessionForAuthorityPreparation: ApiSessionClient | null = null;
   let claimedSessionAuthorityPreparation:
@@ -1787,6 +1807,7 @@ export async function runHostSessionRuntime(
       });
       pendingSessionInitializedHook = null;
     }
+    recordStartupPhase('session_custody');
   currentControlRpcRegistrar = createSwapAwareRpcHandlerRegistrar(() => session.rpcHandlerManager);
   runtimeActivityProjection = createHostRuntimeActivityProjection({
     sessionId: session.sessionId,
@@ -2348,6 +2369,7 @@ export async function runHostSessionRuntime(
     });
   });
   unsubscribeSessionLiveWorkForConstructionCleanup = unsubscribeSessionLiveWork;
+  recordStartupPhase('host_input_setup');
   registerSessionProviderInputAdmissionRpc({
     consumer: inputConsumer,
     rpcHandlerRegistrar: currentControlRpcRegistrar.registrar,
@@ -2482,6 +2504,7 @@ export async function runHostSessionRuntime(
     })
     : { happierMcpServer: { stop: () => undefined }, mcpServers: {}, mcpBindingIdentities: undefined };
   mcpServerForConstructionCleanup = happierMcpServer;
+  recordStartupPhase('mcp_preparation');
   const memoryRecallGuidanceEnabled = await resolveCliMemoryRecallGuidanceEnabled();
   const messageBuffer = new MessageBuffer();
   const sessionStateBridge = createCliRuntimeSessionStateBridge({
@@ -2627,6 +2650,7 @@ export async function runHostSessionRuntime(
   if (await terminalizeBeforeAgentAdmission()) return;
   try {
     createdRuntime = await config.createSessionRuntime(sessionRuntimeParams);
+    recordStartupPhase('agent_runtime_open');
   } catch (error) {
     if (isAgentNativeResumeIdentityMismatchError(error)) {
       await invalidateTrackedNativeReturnIdentity(initialResumeId);
@@ -2643,14 +2667,21 @@ export async function runHostSessionRuntime(
   let presentationOwnsCurrentTerminalDisplay = false;
   const hookRuntime = (nativeRuntime ?? runtime) as HostSessionRuntimeHookRuntime;
   constructedRuntimeForConstructionCleanup = hookRuntime;
-  if (hookRuntime.openedWithoutConnectedServices?.()) {
-    // The accepted native open proves CS absence once at startup. Subsequent
-    // reads use only the auth lifecycle's applied registry, including failure.
-    await readAppliedParentConnectedServices({
+  const parentRegistrationStartedAt = performance.now();
+  // The accepted native open already admits ordinary input. Registration is
+  // needed by child inheritance and later auth changes, which join this same
+  // startup operation before using the daemon's applied authority.
+  const initialParentSelectionRegistration = hookRuntime.openedWithoutConnectedServices?.()
+    ? readAppliedParentConnectedServices({
       sessionId: currentLifecycleSession.sessionId, runnerPid: process.pid,
       agentId: policyAgentId, initialEmpty: true,
-    }).catch(() => ({ status: 'unavailable' as const }));
-  }
+    }, { signal: startupRegistrationLifetime.signal }).catch(() => ({ status: 'unavailable' as const })).then((result) => {
+      logger.info(`${config.uiLogPrefix} Startup parent selection registration`, {
+        status: result.status,
+        durationMs: Math.round(performance.now() - parentRegistrationStartedAt),
+      });
+    })
+    : Promise.resolve();
   if (typeof hookRuntime.setOnPromptDeliveryOutcome !== 'function') {
     throw new Error(
       'An admitted host Session runtime must provide the canonical provider delivery outcome port',
@@ -3111,11 +3142,13 @@ export async function runHostSessionRuntime(
     claimedSession,
     await preparation,
   );
+  recordStartupPhase('model_authority_publication');
   if (createdRuntime.prepareStartupPresentation) {
     const presentation = await createdRuntime.prepareStartupPresentation();
     terminalRemoteModeLoop = presentation.terminalRemoteModeLoop;
     presentationOwnsCurrentTerminalDisplay = presentation.ownsCurrentTerminalDisplay;
   }
+  recordStartupPhase('startup_presentation');
   const initialGoal = readInitialGoalFromEnv();
   if (initialGoal || commitPendingFirstInputAfterRuntimeReady) {
     startupCoordinatorStart = async () => {
@@ -3241,6 +3274,16 @@ export async function runHostSessionRuntime(
     publishOwnerMetadata: currentLifecycleSession.hasOwnerMetadataAuthority(),
   });
   if (nativeRuntime) {
+    const runtimeAuthControl = nativeRuntime.runtimeAuth;
+    const runtimeAuthControls = runtimeAuthControl
+      ? adaptAgentSessionRuntimeAuthControl({
+          apply: async (request) => {
+            await initialParentSelectionRegistration;
+            return await runtimeAuthControl.apply(request);
+          },
+          readIdentity: (request) => runtimeAuthControl.readIdentity(request),
+        })
+      : null;
     const acceptPendingMessageComposerAdmission =
       createPendingMessageComposerAdmissionAcceptedControl(
         daemonTurnContributionsBridge,
@@ -3288,6 +3331,7 @@ export async function runHostSessionRuntime(
         permissionMode: permissionModeState.getCurrentPermissionMode() ?? initialPermissionMode,
       }),
       readAppliedChildSelection: async (): Promise<ExecutionRunAppliedParentSelection> => {
+        await initialParentSelectionRegistration;
         if (!modelTransitionCoordinator) return { status: 'unavailable' };
         const before = await modelTransitionCoordinator.readAppliedTarget();
         if (before.status !== 'applied') return { status: 'unavailable' };
@@ -3347,8 +3391,8 @@ export async function runHostSessionRuntime(
       ...(typeof nativeRuntime.invalidateConnectedServiceAuthTransports === 'function'
         ? { invalidateConnectedServiceAuthTransports: nativeRuntime.invalidateConnectedServiceAuthTransports.bind(nativeRuntime) }
         : {}),
-      ...(nativeRuntime.runtimeAuth
-        ? adaptAgentSessionRuntimeAuthControl(nativeRuntime.runtimeAuth)
+      ...(runtimeAuthControls
+        ? runtimeAuthControls
         : {}),
       ...(typeof nativeRuntime.enableUsageLimitWaitResume === 'function' ? { enableUsageLimitWaitResume: nativeRuntime.enableUsageLimitWaitResume.bind(nativeRuntime) } : {}),
       ...(typeof nativeRuntime.cancelUsageLimitWaitResume === 'function' ? { cancelUsageLimitWaitResume: nativeRuntime.cancelUsageLimitWaitResume.bind(nativeRuntime) } : {}),
@@ -3428,6 +3472,7 @@ export async function runHostSessionRuntime(
   };
 
   lifecycleOwnsConstructionResources = true;
+  recordStartupPhase('runtime_controls');
   try {
     await runSessionLoopLifecycleFn({
       opts: runtimeOpts,
@@ -3515,6 +3560,7 @@ export async function runHostSessionRuntime(
         startRemoteModeStaticControlFn: deps.startRemoteModeStaticControlFn ?? deps.sessionLoopLifecycleDeps?.startRemoteModeStaticControlFn,
         remoteOnlyTerminalDisplayComponent: deps.remoteOnlyTerminalDisplayComponent ?? deps.sessionLoopLifecycleDeps?.remoteOnlyTerminalDisplayComponent,
         onBeforeSessionClose: async (params) => {
+          startupRegistrationLifetime.abort();
           await runtimeModelsPublisher?.stopAndDrain();
           await runtimeModesPublisher?.stopAndDrain();
           await deps.sessionLoopLifecycleDeps?.onBeforeSessionClose?.(params);
@@ -3587,6 +3633,7 @@ export async function runHostSessionRuntime(
     throw error;
   }
   } finally {
+    startupRegistrationLifetime.abort();
     disposeAgentSessionRealtimeVoiceRpc?.();
     providerBindingRuntimeDiagnosticRedaction.close();
   }

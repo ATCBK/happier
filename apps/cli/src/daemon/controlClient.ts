@@ -1156,9 +1156,11 @@ export async function stopDaemonSshTunnel(
  */
 export async function readAppliedParentConnectedServices(
   request: ConnectedServiceAppliedParentSelectionRequest,
+  options: Readonly<{ signal?: AbortSignal }> = {},
 ): Promise<ConnectedServiceAppliedParentSelectionResult> {
   const response = await daemonPost(CONNECTED_SERVICE_APPLIED_PARENT_SELECTION_PATH, request, {
     authScope: 'connected-service-run-materialize',
+    signal: options.signal,
   });
   const parsed = ConnectedServiceAppliedParentSelectionResultSchema.safeParse(response);
   return parsed.success ? parsed.data : { status: 'unavailable' };

@@ -163,6 +163,17 @@ export async function runBackendSessionCliCommand<Extra extends Record<string, u
   providerInfoCommandPrefixes?: readonly ProviderCliInfoCommandPrefix[];
   resolveExtraOptions?: (args: string[], parsed: ProviderSessionArgPartitionResult) => Extra;
 }): Promise<void> {
+  const startupStartedAt = performance.now();
+  let phaseStartedAt = startupStartedAt;
+  const recordStartupPhase = (phase: string): void => {
+    const now = performance.now();
+    logger.info('[session] Runner command startup phase', {
+      phase, durationMs: Math.round(now - phaseStartedAt), elapsedMs: Math.round(now - startupStartedAt),
+      processUptimeMs: Math.round(process.uptime() * 1_000),
+    });
+    phaseStartedAt = now;
+  };
+  recordStartupPhase('entered');
   return withSessionRunnerOwnership(async () => {
     let releaseForegroundAdmission: (() => void | Promise<void>) | null = null;
     const cleanupForegroundAdmission = async (): Promise<void> => {
@@ -299,6 +310,7 @@ Provider CLI Options:
       }
 
       let accountSettingsContext: AccountSettingsContext | null = null;
+      recordStartupPhase('credentials_and_machine');
       const profileAgentId =
         params.agentIdForAccountSettings
         ?? params.agentIdForDeprecatedAliases;
@@ -324,6 +336,7 @@ Provider CLI Options:
 
       const providerSessionId =
         normalizedExistingSessionId || `direct-${randomUUID()}`;
+      recordStartupPhase('account_settings');
       const catalogAgentId = params.agentIdForAccountSettings ?? null;
       const selectedProfile =
         profileQuery && accountSettingsContext && profileAgentId
@@ -507,6 +520,7 @@ Provider CLI Options:
           });
         };
         const initialAdmission = await admitForegroundRuntime();
+        recordStartupPhase('foreground_admission');
         // The daemon admitted durable Team purpose targets for this Agent; the
         // Session this process creates carries their Team slot bindings so the
         // Home admits them. An explicit binding for the same slot wins.
@@ -929,6 +943,7 @@ Provider CLI Options:
         ...(resolveLateEnvironment ? { resolveLateEnvironment } : {}),
       };
       const sessionHostBridge = getSessionHostBridge();
+      recordStartupPhase('launch_options');
       if (foregroundAdmissionClaim) {
         await sessionHostBridge.runSessionCommand(
           backendId,

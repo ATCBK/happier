@@ -171,6 +171,16 @@ async function refreshAccountSettingsForSpawn(
 export async function executeSpawnSessionRequest(
     params: ExecuteSpawnSessionRequestParams,
 ): Promise<SpawnSessionResult> {
+    const startedAt = performance.now();
+    let phaseStartedAt = startedAt;
+    const recordPreparationPhase = (phase: string): void => {
+        const now = performance.now();
+        logger.info('[DAEMON RUN] Spawn preparation phase', {
+            phase, durationMs: Math.round(now - phaseStartedAt), elapsedMs: Math.round(now - startedAt),
+        });
+        phaseStartedAt = now;
+    };
+    recordPreparationPhase('entered');
     let options = params.options;
     const requesterRuntime = options.requesterSessionBootstrap ? params.requesterSessionRuntimeContext : undefined;
     if (options.requesterSessionBootstrap) {
@@ -214,6 +224,7 @@ export async function executeSpawnSessionRequest(
                 type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
                 errorMessage: 'Requester Account settings unavailable' };
         } else await refreshAccountSettingsForSpawn(params);
+        recordPreparationPhase('account_settings');
 
         let activeAccountSettingsSnapshot = requesterRuntime?.readAccountSettingsSnapshot() ?? getActiveAccountSettingsSnapshot();
         let profilesSnapshot: Awaited<ReturnType<typeof readAccountLaunchProfiles>> | undefined;
@@ -261,6 +272,7 @@ export async function executeSpawnSessionRequest(
             },
             validateEnvVarRecordStrict,
         });
+        recordPreparationPhase('request_admission');
         if ('type' in prepared) {
             return prepared;
         }
@@ -480,6 +492,7 @@ export async function executeSpawnSessionRequest(
                 ?? options.providerBindingMetadataV1
                 ?? null;
             const appliedPluginRuntimeLease = await pluginRuntimeLease.acquire();
+            recordPreparationPhase('plugin_runtime');
             // The Provider decision runs before the workspace is created and
             // before any runner bootstrap material is written or the Agent
             // runtime contribution is activated. Cleanup can remove a bootstrap
@@ -524,6 +537,7 @@ export async function executeSpawnSessionRequest(
                     : {}),
                 processEnv: params.processEnv ?? process.env,
             });
+            recordPreparationPhase('provider_authorization');
             if (!daemonProviderLaunch.ok) {
                 return await refuseSpawn(daemonProviderLaunch.result);
             }
@@ -605,6 +619,7 @@ export async function executeSpawnSessionRequest(
                     logger.debug('[DAEMON RUN] Workspace plugin development registration failed', error);
                 }
             }
+            recordPreparationPhase('workspace');
             // Resolve the runtime-owned placement once, before either daemon
             // or runner commits the fresh Session. The selected descriptor
             // travels separately from the runner's authority identity.
@@ -645,6 +660,7 @@ export async function executeSpawnSessionRequest(
                     lease: appliedPluginRuntimeLease,
                     ...(terminalPresentation.runtimeDescriptorV1 ? { launch: { runtimeDescriptorV1: terminalPresentation.runtimeDescriptorV1 } } : {}),
                 });
+            recordPreparationPhase('runner_bootstrap');
             if (runnerAgentSessionBootstrap) {
                 launchResourceScope.register(
                     runnerAgentSessionBootstrap.cleanupBootstrapFile,
@@ -777,6 +793,7 @@ export async function executeSpawnSessionRequest(
                 repairMissingMaterializationIdentity:
                     params.repairMissingConnectedServiceMaterializationIdentityForSpawn,
             });
+            recordPreparationPhase('connected_services');
             if (!connectedServices.ok) {
                 return await refuseSpawn(connectedServices.result);
             }
@@ -1012,6 +1029,7 @@ export async function executeSpawnSessionRequest(
                 providerDiagnosticRedactionLease,
                 launchResourceScope,
             });
+            recordPreparationPhase('child_environment');
             if (!childEnvironment.ok) {
                 return await refuseSpawn(childEnvironment.result);
             }

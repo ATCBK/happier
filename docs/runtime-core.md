@@ -385,6 +385,16 @@ owner refuses inheritance. Pool references retain the pool, not its selected
 member, credential or activation. Cross-Agent Provider choices use the existing
 Provider authorization and Agent adapter owners, rather than another selector.
 
+When the accepted native open proves no applied Connected Services, the runner
+starts its initial absence registration with that daemon registry in the
+background. Ordinary prompt admission does not await it. Child inheritance and
+subsequent auth application join the same registration before using or changing
+that authority; inheritance still reads the current applied registry and refuses
+unavailable facts. Required launch authorization, credential preparation, Session
+custody and prompt preparation retain their existing admission owners. These
+are 0.3 development-source contracts; the startup phase records in the runner
+and daemon support the next loaded-runtime latency probe.
+
 Resolved safe choices stay in the existing retained Run launch record. Resume
 does not consult a changed parent or Account default. The additive
 `resolvedSelection` summary is a projection of that record, not another persisted

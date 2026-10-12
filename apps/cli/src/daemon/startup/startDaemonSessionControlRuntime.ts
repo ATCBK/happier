@@ -18034,16 +18034,37 @@ export async function startDaemonSessionControlRuntime(
       verifyRunMaterializeToken: (provided) =>
         isValidConnectedServiceRunMaterializeToken(provided, controlToken),
       readAppliedSessionConnectedServices: async (input) => {
+        const startedAt = performance.now();
+        let phaseStartedAt = startedAt;
+        let phase = 'tracked_runner';
+        const recordPhase = (completedPhase: string): void => {
+          const now = performance.now();
+          logger.info('[DAEMON RUN] Applied parent selection phase', {
+            phase: completedPhase, runnerPid: input.runnerPid, initialEmpty: input.initialEmpty === true,
+            durationMs: Math.round(now - phaseStartedAt), elapsedMs: Math.round(now - startedAt),
+          });
+          phaseStartedAt = now;
+        };
+        recordPhase('entered');
         const tracked = params.pidToTrackedSession.get(input.runnerPid);
         if (!tracked || tracked.happySessionId !== input.sessionId
           || resolveTrackedSessionCatalogAgentId(tracked) !== input.agentId) return { status: 'unavailable' };
         try {
+          phase = 'account_context';
           const accountContext = await resolveSessionAccountContext(input.sessionId);
+          recordPhase(phase);
+          phase = 'account_currentness_before_presence';
           await assertSessionAccountCurrent(input.sessionId, accountContext);
+          recordPhase(phase);
+          phase = 'runner_presence';
           if (!await isSessionRunnerActiveInDaemon({ sessionId: input.sessionId, trackedSessions: [tracked] })) {
+            recordPhase(phase);
             return { status: 'unavailable' };
           }
+          recordPhase(phase);
+          phase = 'account_currentness_after_presence';
           await assertSessionAccountCurrent(input.sessionId, accountContext);
+          recordPhase(phase);
           if (params.pidToTrackedSession.get(input.runnerPid) !== tracked) return { status: 'unavailable' };
           return await withSessionAccountHome(accountContext, () => {
             // The runner invokes this only once, after its accepted open proves
@@ -18061,6 +18082,10 @@ export async function startDaemonSessionControlRuntime(
             return connectedServiceRuntimeRegistry.readAppliedSessionBindings(input);
           });
         } catch {
+          logger.info('[DAEMON RUN] Applied parent selection unavailable', {
+            phase, runnerPid: input.runnerPid, initialEmpty: input.initialEmpty === true,
+            elapsedMs: Math.round(performance.now() - startedAt),
+          });
           return { status: 'unavailable' };
         }
       },

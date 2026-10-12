@@ -225,6 +225,13 @@ async function resolveSpawnChildEnvironmentImpl(params: {
   runtimePrerequisitesAlreadyResolved?: boolean;
   allowNativeAccountCredentials?: boolean;
 }): Promise<ResolveSpawnChildEnvironmentResult> {
+  const startedAt = performance.now();
+  let phaseStartedAt = startedAt;
+  const recordEnvironmentPhase = (phase: string): void => {
+    const now = performance.now();
+    params.logInfo(`[DAEMON RUN] Child environment phase ${phase}: durationMs=${Math.round(now - phaseStartedAt)} elapsedMs=${Math.round(now - startedAt)}`);
+    phaseStartedAt = now;
+  };
   const connectedCleanupOnFailure = params.connectedServiceAuth?.cleanupOnFailure ?? null;
   const connectedCleanupOnExit = params.connectedServiceAuth?.cleanupOnExit ?? null;
   const materializationDiagnostics = params.connectedServiceAuth?.diagnostics;
@@ -516,6 +523,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     }
   }
 
+  recordEnvironmentPhase('agent_prerequisites');
   // Provider launches enter this function once after connection/grant
   // authorization and again after their final environment is materialized.
   // Plugin decisions run for both environments: the first pass protects the
@@ -540,6 +548,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     }
   }
 
+  recordEnvironmentPhase('plugin_prerequisites');
   if (params.providerBindingPrerequisitesOnly) {
     return {
       ok: true,
@@ -586,6 +595,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
   const pluginAugmentedEnvironment = stripSessionControlEnvOverrides(
     await readPluginSpawnEnvAugmentation(),
   );
+  recordEnvironmentPhase('environment_hooks');
   Object.assign(extraEnvForChild, pluginAugmentedEnvironment);
   for (const name of Object.keys(pluginAugmentedEnvironment)) {
     literalReplacementEnvironmentKeys.add(name);
@@ -593,6 +603,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
   const lateProviderMaterialization = params.materializeProviderBindingAfterHooks
     ? await params.materializeProviderBindingAfterHooks()
     : null;
+  recordEnvironmentPhase('provider_materialization');
   if (lateProviderMaterialization && !lateProviderMaterialization.ok) {
     return {
       ok: false,
@@ -754,6 +765,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
       };
     }
   }
+  recordEnvironmentPhase('native_auth_and_state');
   if (params.options.profileId !== undefined) {
     extraEnvForChild.HAPPIER_SESSION_PROFILE_ID = params.options.profileId;
   }

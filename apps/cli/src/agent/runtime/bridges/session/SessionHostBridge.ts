@@ -342,13 +342,21 @@ export class SessionHostBridge implements SessionHostBridgeContract {
     params: unknown,
     hostOptions?: SessionHostRunOptions,
   ): Promise<void> {
+    const startedAt = performance.now();
+    logger.info('[session] Runtime bridge startup phase', { phase: 'entered', elapsedMs: 0 });
     const runtime = await this.createSessionRuntime(
       backendId,
       params,
       hostOptions,
     );
+    logger.info('[session] Runtime bridge startup phase', {
+      phase: 'runtime_plan', elapsedMs: Math.round(performance.now() - startedAt),
+    });
     await hostOptions?.beforeRuntimePlanCommit?.();
     const { runHostSessionRuntimePlan } = await import('@/agent/runtime/session/loop/lifecycle');
+    logger.info('[session] Runtime bridge startup phase', {
+      phase: 'plan_commit', elapsedMs: Math.round(performance.now() - startedAt),
+    });
     await runHostSessionRuntimePlan(runtime);
   }
 

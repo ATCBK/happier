@@ -949,7 +949,17 @@ describe('runHostSessionRuntime', () => {
     let providerOutcome: ((outcome: HostProviderInputOutcomeEvidence) => void) | null = null;
     harness.runtime.setOnPromptDeliveryOutcome = (handler: typeof providerOutcome) => { providerOutcome = handler; };
     const prompts: string[] = [];
+    let parentRegistrationPending = false;
+    let deliveredWhileParentRegistrationPending = false;
+    const registrationResponse = createDeferred<void>();
+    const registrationReceived = createDeferred<void>();
+    const registrationClosed = createDeferred<void>();
+    let registrationClosedBeforeResponse = false;
+    let registrationReceivedAt = 0;
+    let dispatchedAt = 0;
     harness.runtime.sendTurnPrompt = async (prompt: string, meta?: { localId?: string }) => {
+      dispatchedAt = performance.now();
+      deliveredWhileParentRegistrationPending = parentRegistrationPending;
       prompts.push(prompt);
       if (!meta?.localId) throw new Error('Expected the original queued input identity');
       providerOutcome?.({ type: 'input-accepted', localInputId: meta.localId, userMessageSeq: 1,
@@ -957,6 +967,7 @@ describe('runHostSessionRuntime', () => {
     };
     let completed = false;
     harness.deps.runPermissionModePromptLoopFn = async (params: Parameters<typeof runPermissionModePromptLoop>[0]) => {
+      await registrationReceived.promise;
       if (!userMessageHandler) throw new Error('Expected the real Session queue callback');
       userMessageHandler({ role: 'user', content: { type: 'text', text: 'Reply exactly QA_FIN21_REPLY.' },
         localId: 'queued-workflow-input', meta: {} });
@@ -977,7 +988,21 @@ describe('runHostSessionRuntime', () => {
           const parsed: unknown = JSON.parse(body);
           authRequests.push(parsed);
           response.statusCode = ConnectedServiceAppliedParentSelectionRequestSchema.safeParse(parsed).success ? 200 : 400;
-          response.end(JSON.stringify({ status: 'unavailable' }));
+          parentRegistrationPending = true;
+          registrationReceivedAt = performance.now();
+          registrationReceived.resolve();
+          response.on('close', () => {
+            registrationClosedBeforeResponse = parentRegistrationPending;
+            registrationClosed.resolve();
+          });
+          // Hold the HTTP response through prompt dispatch and Session close.
+          // The fixture release lets the old serial path finish cleanly.
+          const release = setTimeout(() => registrationResponse.resolve(), 2_000);
+          void registrationResponse.promise.then(() => {
+            clearTimeout(release);
+            parentRegistrationPending = false;
+            response.end(JSON.stringify({ status: 'unavailable' }));
+          });
         } else response.end(JSON.stringify({ success: true }));
       });
     });
@@ -990,16 +1015,24 @@ describe('runHostSessionRuntime', () => {
       writeDaemonState({ pid: process.pid, httpPort: address.port, startedAt: Date.now(),
         startedWithCliVersion: 'test', controlToken: 'test-token' });
       await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+      await registrationClosed.promise;
       expect(authRequests).toEqual([expect.objectContaining({ agentId: harness.config.policyAgentId,
         sessionId: harness.session.sessionId, runnerPid: process.pid, initialEmpty: true })]);
       // The real prompt owner prepends Agent instructions; the original user input remains one intact delivery.
       expect(prompts).toEqual([expect.stringMatching(/(?:^|\n\n)Reply exactly QA_FIN21_REPLY\.$/)]);
       expect(completed).toBe(true);
+      console.info('[r9-latency] parent registration → prompt dispatch', {
+        durationMs: Math.round(dispatchedAt - registrationReceivedAt),
+        registrationPending: deliveredWhileParentRegistrationPending,
+      });
+      expect(deliveredWhileParentRegistrationPending).toBe(true);
+      expect(registrationClosedBeforeResponse).toBe(true);
       expect(harness.session.observeProviderInputSettlement).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'accepted', localId: 'queued-workflow-input', userMessageSeq: 1,
         providerTurnId: 'queued-workflow-turn', providerDeliveryKind: 'newTurn',
       }));
     } finally {
+      registrationResponse.resolve();
       await clearDaemonStateForTestTeardown();
       envScope.restore();
       reloadConfiguration();
@@ -1028,11 +1061,27 @@ describe('runHostSessionRuntime', () => {
     harness.runtime.resetOrDisposeRuntime = async () => { await harness.runtime.reset(); };
     harness.runtime.readSessionIdentity = () => ({ sessionId: null });
     harness.runtime.readAppliedTeamCredentialModel = () => null;
+    harness.runtime.openedWithoutConnectedServices = () => true;
+    let registrationComplete = false;
+    let authAppliedAfterRegistration = false;
+    harness.runtime.runtimeAuth = {
+      apply: async () => {
+        authAppliedAfterRegistration = registrationComplete;
+        return { ok: true, appliedVia: 'direct_live_hot_auth' };
+      },
+      readIdentity: async () => ({ ok: false, error: 'unavailable' }),
+    };
     let controls: SessionRuntimeControls | null = null;
     harness.session.setSessionRuntimeControls = (next: SessionRuntimeControls | null) => { controls = next; };
     harness.deps.runPermissionModePromptLoopFn = async () => {
+      expect(registrationComplete).toBe(false);
       if (!controls?.readAppliedChildSelection) throw new Error('Attached parent reader was not installed');
+      const authApply = controls.applyConnectedServiceAuthGeneration?.({
+        serviceId: 'openai-codex', reason: 'manual', authGeneration: { credential: { kind: 'oauth' } },
+      });
       const parent = await controls.readAppliedChildSelection();
+      await authApply;
+      expect(authAppliedAfterRegistration).toBe(true);
       expect(parent).toMatchObject({ status: 'applied', backendTarget, modelId: 'parent-model' });
       const child = resolveExecutionRunChildSelection({ backendTarget, lifecycle: 'attached', parent });
       expect(child).toMatchObject({ selectionSource: 'inherited', inheritedFromDifferentAgent: false,
@@ -1047,8 +1096,19 @@ describe('runHostSessionRuntime', () => {
       request.on('end', () => {
         response.setHeader('content-type', 'application/json');
         if (request.url === CONNECTED_SERVICE_APPLIED_PARENT_SELECTION_PATH) {
-          ConnectedServiceAppliedParentSelectionRequestSchema.parse(JSON.parse(body));
-          response.end(JSON.stringify({ status: 'applied', connectedServices: { v: 2, bindingsByServiceId: {} } }));
+          const selection = ConnectedServiceAppliedParentSelectionRequestSchema.parse(JSON.parse(body));
+          if (selection.initialEmpty) {
+            setTimeout(() => {
+              registrationComplete = true;
+              response.end(JSON.stringify({ status: 'applied', connectedServices: { v: 2, bindingsByServiceId: {} } }));
+            }, 2_000);
+          } else {
+            // An ordinary inheritance read before registration has no applied
+            // authority, even though the parent's first prompt can proceed.
+            response.end(JSON.stringify(registrationComplete
+              ? { status: 'applied', connectedServices: { v: 2, bindingsByServiceId: {} } }
+              : { status: 'unavailable' }));
+          }
         } else response.end(JSON.stringify({ success: true }));
       });
     });
