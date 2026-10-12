@@ -49,6 +49,7 @@ import {
     TeamCredentialDirectMaterialOpenRequestV1Schema,
     TeamCredentialDirectMaterialPreparationResponseV1Schema,
     TeamCredentialDirectMaterialCensusOutputV1Schema,
+    TeamCredentialPreparationOutputV1Schema,
     TeamCredentialDirectMaterialUpsertRequestV1Schema,
     TeamCredentialDirectMaterialUpsertResponseV1Schema,
     TeamCredentialDirectMaterialWithdrawRequestV1Schema,
@@ -103,6 +104,7 @@ import { registerTeamCredentialProviderBrokerRoutes } from "./providerBrokerRout
 import {
     prepareTeamCredentialRecipientMaterialInTx,
     readTeamCredentialDirectMaterialCensusInTx,
+    readTeamCredentialPreparationInTx,
     readCurrentTeamCredentialRecipientMaterialInTx,
     upsertTeamCredentialRecipientMaterialInTx,
     withdrawTeamCredentialRecipientMaterialInTx,
@@ -569,7 +571,7 @@ export function registerTeamCredentialResourceRoutes(
             });
             if (withdrawn.ok && withdrawn.changed) await publishTeamChangedInTx(tx, { teamId: params.data.teamId });
             return withdrawn;
-        });
+        }, { isolationLevel: "Serializable" /* Material withdrawal participates in resource and recipient epoch/currentness admission. */ });
         if (!result.ok) return fail(reply, result.reason === 'source_changed' || result.reason === 'resource_changed'
             ? 'source_replaced_or_missing' : result.reason);
         return reply.send(TeamCredentialDirectMaterialWithdrawResponseV1Schema.parse({ status: 'withdrawn' }));
@@ -584,6 +586,7 @@ export function registerTeamCredentialResourceRoutes(
                 200: z.union([
                     TeamCredentialDirectMaterialPreparationResponseV1Schema,
                     TeamCredentialDirectMaterialCensusOutputV1Schema,
+                    TeamCredentialPreparationOutputV1Schema,
                 ]),
                 ...errors,
             },
@@ -593,13 +596,17 @@ export function registerTeamCredentialResourceRoutes(
         const query = TeamCredentialDirectMaterialReadQueryV1Schema.safeParse(request.query);
         if (request.validationError || !params.success || !query.success) return fail(reply, "invalid_resource_input");
         const queryData = query.data;
-        if (queryData.view === "census") {
-            const result = await inTx(tx => readTeamCredentialDirectMaterialCensusInTx(tx, {
+        if (queryData.view === "census" || queryData.view === "readiness") {
+            const result = await inTx(async tx => queryData.view === "readiness" ? await readTeamCredentialPreparationInTx(tx, {
+                actorAccountId: request.userId,
+                ...params.data,
+                authentication: readTeamOperationAuthenticationFromRequest(request),
+            }) : await readTeamCredentialDirectMaterialCensusInTx(tx, {
                 actorAccountId: request.userId,
                 ...params.data,
                 cursor: queryData.cursor ?? null,
                 authentication: readTeamOperationAuthenticationFromRequest(request),
-            }));
+            }), { isolationLevel: "Serializable" /* Credential preparation and direct-material census must share one authority snapshot. */ });
             if (!result.ok) {
                 if (result.reason === "team_authentication_required"
                     || result.reason === "team_authentication_policy_unavailable") return fail(reply, result.reason);
@@ -609,7 +616,10 @@ export function registerTeamCredentialResourceRoutes(
                             : "source_replaced_or_missing";
                 return fail(reply, error);
             }
-            return reply.send(TeamCredentialDirectMaterialCensusOutputV1Schema.parse(result));
+            const { ok: _ok, ...census } = result;
+            return reply.send(queryData.view === "readiness"
+                ? TeamCredentialPreparationOutputV1Schema.parse(census)
+                : TeamCredentialDirectMaterialCensusOutputV1Schema.parse(census));
         }
         const result = await inTx(tx => prepareTeamCredentialRecipientMaterialInTx(tx, {
             actorAccountId: request.userId,
@@ -617,7 +627,7 @@ export function registerTeamCredentialResourceRoutes(
             sourceMemberKey: queryData.sourceMemberKey,
             cursor: queryData.cursor ?? null,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }));
+        }), { isolationLevel: "Serializable" /* Recipient material preparation composes resource, audience and recipient epoch currentness. */ });
         if (!result.ok) {
             if (result.reason === "team_authentication_required"
                 || result.reason === "team_authentication_policy_unavailable") return fail(reply, result.reason);
@@ -688,7 +698,7 @@ export function registerTeamCredentialResourceRoutes(
                 },
             sessionAuthentication: readSessionAccessAuthenticationFromRequest(request),
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }));
+        }), { isolationLevel: "Serializable" /* Material disclosure composes access, source version and recipient encryption epoch. */ });
         if (!result.ok) {
             if (result.outcome === "operation_error") return fail(reply, result.error);
             return reply.send(TeamCredentialDirectMaterialMineResponseV1Schema.parse({ status: "unavailable", reason: result.reason }));
@@ -769,7 +779,7 @@ export function registerTeamCredentialResourceRoutes(
                 await publishTeamChangedInTx(tx, { teamId: params.data.teamId });
             }
             return { ok: true as const, results: itemResults };
-        });
+        }, { isolationLevel: "Serializable" /* Material writes depend on the same resource/audience and recipient epoch snapshot. */ });
         if (!results.ok) return fail(reply, results.error);
         return reply.send(TeamCredentialDirectMaterialUpsertResponseV1Schema.parse({ results: results.results }));
     });
@@ -1304,7 +1314,7 @@ export function registerTeamCredentialResourceRoutes(
             actorAccountId: request.userId,
             body: body.data,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }));
+        }), { isolationLevel: "Serializable" /* Limit mutation participates in the read-usage-then-admit quota family. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(TeamCredentialUsageLimitUpsertOutputV1Schema.parse({
             resourceId: result.resourceId,
@@ -1324,7 +1334,7 @@ export function registerTeamCredentialResourceRoutes(
             actorAccountId: request.userId,
             body: body.data,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }));
+        }), { isolationLevel: "Serializable" /* Limit removal participates in the read-usage-then-admit quota family. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send({ resourceId: result.resourceId, revision: result.revision });
     });
@@ -1370,7 +1380,7 @@ export function registerTeamCredentialResourceRoutes(
             actorAccountId: request.userId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
             ...body.data,
-        }));
+        }), { isolationLevel: "Serializable" /* Key creation participates in resource currentness and membership/audience revocation. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(TeamCredentialExternalApiKeyCreateOutputV1Schema.parse({ token: result.token, key: result.key }));
     });
@@ -1386,7 +1396,7 @@ export function registerTeamCredentialResourceRoutes(
             actorAccountId: request.userId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
             ...body.data,
-        }));
+        }), { isolationLevel: "Serializable" /* Key authorization participates in resource currentness and membership/audience revocation. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(TeamCredentialExternalApiKeyAuthorizeOutputV1Schema.parse({ key: result.key }));
     });
@@ -1419,7 +1429,7 @@ export function registerTeamCredentialResourceRoutes(
             resourceId: body.data.resourceId,
             keyId: body.data.keyId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }));
+        }), { isolationLevel: "Serializable" /* Key revocation audit and deletion must agree with the observed key state. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(TeamCredentialExternalApiKeyRevokeOutputV1Schema.parse(result));
     });
@@ -1435,7 +1445,7 @@ export function registerTeamCredentialResourceRoutes(
             actorAccountId: request.userId,
             resourceId: body.data.resourceId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }));
+        }), { isolationLevel: "Serializable" /* Bulk key revocation must include concurrently admitted keys in its resource census. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(TeamCredentialExternalApiKeyRevokeAllOutputV1Schema.parse(result));
     });
@@ -1461,7 +1471,7 @@ export function registerTeamCredentialResourceRoutes(
                     const projected = await projectTeamCredentialResourceSummaryInTx(tx, created.resourceId, request.userId);
                     if (!projected.ok) throw new TeamCredentialCreateProjectionFailure(projected.error);
                     return { ok: true as const, resource: projected.resource };
-                });
+                }, { isolationLevel: "Serializable" /* Resource creation composes source, audience, broker and recipient currentness. */ });
                 let attempted = await attempt();
                 if (!attempted.ok && attempted.error === "update_required" && body.data.requestPolicy !== null) {
                     const prepared = await inTx(tx => prepareTeamCredentialRequestPolicySupportInTx(tx, {
@@ -1532,7 +1542,7 @@ export function registerTeamCredentialResourceRoutes(
             return changed.ok
                 ? { resourceId: changed.resourceId, revision: changed.revision }
                 : changed;
-        });
+        }, { isolationLevel: "Serializable" /* Audience mutation participates in recipient material and entitlement admission. */ });
         if ('ok' in result && !result.ok) return fail(reply, result.error);
         return reply.send(TeamCredentialResourceMutationResultV1Schema.parse(result));
     });
@@ -1555,7 +1565,7 @@ export function registerTeamCredentialResourceRoutes(
             return changed.ok
                 ? { resourceId: changed.resourceId, revision: changed.revision }
                 : changed;
-        });
+        }, { isolationLevel: "Serializable" /* Resource revision changes participate in recipient/source currentness and quota admission. */ });
         let result = await attempt();
         if ("ok" in result && !result.ok && result.error === "update_required"
             && proposedRequestPolicy !== undefined && proposedRequestPolicy !== null) {
@@ -1603,7 +1613,7 @@ export function registerTeamCredentialResourceRoutes(
                 authentication: readTeamOperationAuthenticationFromRequest(request),
             });
             return deleted.ok ? { ok: true as const, result: { resourceId: body.data.resourceId, revision: body.data.expectedRevision } } : deleted;
-        });
+        }, { isolationLevel: "Serializable" /* Resource deletion composes audience/key census with source and managed-consumer admission. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.result);
     });

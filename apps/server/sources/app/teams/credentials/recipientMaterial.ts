@@ -6,6 +6,7 @@ import {
     TeamCredentialSourceBindingV1Schema,
     type TeamCredentialDirectMaterialUseV1,
     type TeamCredentialDirectMaterialStoredV1,
+    type TeamCredentialPreparationOutputV1,
 } from "@happier-dev/protocol/teams";
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
@@ -193,6 +194,27 @@ export async function readTeamCredentialDirectMaterialCensusInTx(
         recipients,
         nextCursor: membershipRows.length > 100 ? page.at(-1)?.id ?? null : null,
     };
+}
+
+/** Aggregate the existing census decisions without exporting recipient bindings. */
+export async function readTeamCredentialPreparationInTx(
+    tx: Tx,
+    input: Omit<Parameters<typeof readTeamCredentialDirectMaterialCensusInTx>[1], 'cursor'>,
+) {
+    let cursor: string | null = null;
+    let pending = 0;
+    do {
+        const census = await readTeamCredentialDirectMaterialCensusInTx(tx, { ...input, cursor });
+        if (!census.ok) return census;
+        for (const recipient of census.recipients) {
+            if (recipient.readiness !== 'ready') pending += 1;
+        }
+        cursor = census.nextCursor;
+    } while (cursor !== null);
+    const observation: TeamCredentialPreparationOutputV1 = pending === 0
+        ? { status: 'ready', reason: null, counts: { pending: 0 } }
+        : { status: 'not_ready', reason: 'preparation_pending', counts: { pending } };
+    return { ok: true as const, ...observation };
 }
 
 /**

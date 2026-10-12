@@ -3187,19 +3187,18 @@ describe("Team credential resource routes (SQLite integration)", () => {
         expect(unrelatedPage.statusCode, unrelatedPage.body).toBe(200);
         expect(unrelatedPage.json()).toEqual({ resources: [], nextCursor: null });
 
+        const readiness = await get(
+            `/v2/teams/${team.id}/credential-resources/${resource.id}/direct-material?view=readiness`, custodian.id,
+        );
+        expect(readiness.statusCode, readiness.body).toBe(200);
         const census = await get(
             `/v2/teams/${team.id}/credential-resources/${resource.id}/direct-material?view=census`, custodian.id,
         );
         expect(census.statusCode, census.body).toBe(200);
         const rows = census.json().recipients as ReadonlyArray<{ readiness: string }>;
-        const ready = rows.filter(row => row.readiness === 'ready').length;
-        const pending = rows.length - ready;
+        const pending = rows.filter(row => row.readiness !== 'ready').length;
         expect(pending).toBeGreaterThan(0);
-        const readiness = await get(
-            `/v2/teams/${team.id}/credential-resources/${resource.id}/direct-material?view=readiness`, custodian.id,
-        );
-        expect(readiness.statusCode, readiness.body).toBe(200);
-        expect(readiness.json()).toEqual({ status: 'not_ready', reason: 'preparation_pending', counts: { ready, pending } });
+        expect(readiness.json()).toEqual({ status: 'not_ready', reason: 'preparation_pending', counts: { pending } });
 
         // Cross the existing census page boundary: the observation must count
         // every entitled recipient, not just the first transport page.
@@ -3218,7 +3217,7 @@ describe("Team credential resource routes (SQLite integration)", () => {
         );
         expect(pagedReadiness.statusCode, pagedReadiness.body).toBe(200);
         expect(pagedReadiness.json()).toEqual({
-            status: 'not_ready', reason: 'preparation_pending', counts: { ready, pending: pending + 101 },
+            status: 'not_ready', reason: 'preparation_pending', counts: { pending: pending + 101 },
         });
         const emptyAudience = await db.teamCredentialResource.create({ data: {
             teamId: team.id, custodianAccountId: custodian.id, displayName: 'No direct recipients',
@@ -3229,7 +3228,7 @@ describe("Team credential resource routes (SQLite integration)", () => {
             `/v2/teams/${team.id}/credential-resources/${emptyAudience.id}/direct-material?view=readiness`, custodian.id,
         );
         expect(emptyReadiness.statusCode, emptyReadiness.body).toBe(200);
-        expect(emptyReadiness.json()).toEqual({ status: 'ready', reason: null, counts: { ready: 0, pending: 0 } });
+        expect(emptyReadiness.json()).toEqual({ status: 'ready', reason: null, counts: { pending: 0 } });
 
         await db.team.update({
             where: { id: team.id },
