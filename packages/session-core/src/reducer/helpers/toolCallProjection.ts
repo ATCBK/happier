@@ -127,6 +127,7 @@ export function applyStoredPermissionTerminalState(
 
 export function createTranscriptToolCallProjection(params: Readonly<{
     toolId: string;
+    sourceToolId?: string;
     toolName: string;
     toolInput: unknown;
     description: string | null;
@@ -142,6 +143,7 @@ export function createTranscriptToolCallProjection(params: Readonly<{
     const pendingPermission = !params.permission && params.isPendingPermissionRequest;
     const toolCall: ToolCall = {
         id: params.toolId,
+        ...(params.sourceToolId ? { sourceToolId: params.sourceToolId } : {}),
         name: params.toolName,
         state: 'running',
         input: toolInput,

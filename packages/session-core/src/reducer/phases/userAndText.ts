@@ -374,6 +374,7 @@ export function runUserAndTextPhase(params: Readonly<{
                     const permission = state.permissions.get(c.id);
                     const projection = createTranscriptToolCallProjection({
                         toolId: c.id,
+                        sourceToolId: c.sourceToolId,
                         toolName: c.name,
                         toolInput: c.input,
                         description: c.description,

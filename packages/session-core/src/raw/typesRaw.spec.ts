@@ -1946,7 +1946,7 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
             }
         });
 
-        it('keeps unknown ACP record types fail-closed', () => {
+        it('skips unknown ACP record types without treating them as assistant text', () => {
             const normalized = normalizeRawMessage('msg-acp-unknown', null, Date.now(), {
                 role: 'agent',
                 content: {
@@ -1959,15 +1959,7 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
                 },
             } as never);
 
-            expect(normalized?.role).toBe('agent');
-            if (normalized && normalized.role === 'agent') {
-                expect(normalized.content).toEqual([{
-                    type: 'text',
-                    text: '[Unsupported transcript record]',
-                    uuid: 'msg-acp-unknown',
-                    parentUUID: null,
-                }]);
-            }
+            expect(normalized).toBeNull();
         });
 
         it('parses ACP tool-call input when input is a JSON string', () => {

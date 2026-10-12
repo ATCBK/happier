@@ -91,12 +91,12 @@ describe('normalizeRawMessage legacy ACP `provider` envelope', () => {
         expect(readUnsupportedContentMeta(structured?.meta)).toBe('unparsed-agent-message');
     });
 
-    it('still yields the unparsed placeholder for a genuinely unknown content envelope', () => {
+    it('quietly skips a future content envelope without treating its provider field as ACP', () => {
         const normalized = normalizeRawMessage('msg-legacy-6', null, 1000, {
             role: 'agent',
             content: { type: 'totally-unknown-content-type', provider: 'codex', data: { type: 'message' } },
         });
 
-        expect(readUnsupportedContentMeta(normalized?.meta)).toBe('unparsed-agent-message');
+        expect(normalized).toBeNull();
     });
 });

@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { z } from "zod";
 import { applyRuntimeDescriptorSessionMetadata, normalizeLegacyAgentVocabularySessionMetadata } from "@happier-dev/agents/session/state/metadataWriters";
 import { AgentModelOptionOverrideRuleReadSchema } from '@happier-dev/protocol/models/descriptor';
@@ -52,6 +53,8 @@ const StoredConfigOptionSchema = lazyZodSchema(() => StoredModelOptionSchema.ext
     })).optional(),
 }));
 
+// This retained carrier also custodians native descriptor/facet/override bags.
+// Project its closed typed leaves, not the entire passthrough metadata tree.
 const MetadataObjectSchema = lazyZodSchema(() => z.object({
     // Cloud/system sessions may omit these fields; treat missing/null as empty.
     path: z.string().nullish().transform((value) => (typeof value === 'string' ? value : '')),
@@ -66,7 +69,7 @@ const MetadataObjectSchema = lazyZodSchema(() => z.object({
         updatedAt: z.number()
     }).optional(),
     machineId: z.string().optional(),
-    placementOrigin: MachinePoolSelectionOriginV1Schema.optional(),
+    placementOrigin: createStoredReadSchema(MachinePoolSelectionOriginV1Schema).optional(),
     sessionWorkspaceLocationV1: SessionWorkspaceLocationV1Schema.optional(),
     sessionDirectoryV1: SessionDirectoryV1ReadSchema.optional().catch(undefined),
     handoffV1: z.object({
@@ -124,7 +127,7 @@ const MetadataObjectSchema = lazyZodSchema(() => z.object({
             description: z.string().optional(),
         })),
     }).optional(),
-    sessionModesV2: SessionOwnerModeCatalogV2Schema.optional(),
+    sessionModesV2: createStoredReadSchema(SessionOwnerModeCatalogV2Schema).optional(),
     sessionModesV1: z.object({
         v: z.literal(1),
         agentId: z.string(),
@@ -160,7 +163,7 @@ const MetadataObjectSchema = lazyZodSchema(() => z.object({
         agentId: z.string(),
         updatedAt: z.number(),
         currentModelId: z.string(),
-        activeSelectionV1: SessionActiveModelSelectionV1Schema.optional(),
+        activeSelectionV1: createStoredReadSchema(SessionActiveModelSelectionV1Schema).optional(),
         availableModels: z.array(z.object({
             id: z.string(),
             name: z.string(),
@@ -224,12 +227,12 @@ const MetadataObjectSchema = lazyZodSchema(() => z.object({
      *   with `message.meta.model` retained only for providerless legacy readers
      */
     modelOverrideV1: createModelOverrideV1Schema(z).optional(),
-    modelSelectionIntentV1: SessionModelSelectionIntentV1Schema.optional(),
+    modelSelectionIntentV1: createStoredReadSchema(SessionModelSelectionIntentV1Schema).optional(),
     /** Per-session overlay for the account-owned managed MCP catalog. */
     mcpSelectionV1: SessionMcpSelectionV1Schema.optional(),
     /** Applied baseline retained only while an active runner needs a restart. */
     mcpSelectionRestartRequiredV1: SessionMcpSelectionRestartRequiredV1Schema.optional(),
-    sessionAppliedModelV1: SessionAppliedModelV1Schema.optional(),
+    sessionAppliedModelV1: createStoredReadSchema(SessionAppliedModelV1Schema).optional(),
     /**
      * Local-only markers for committed transcript messages that should be treated as discarded
      * (e.g. when the user switches to terminal control and abandons unprocessed remote messages).
@@ -265,15 +268,15 @@ const MetadataObjectSchema = lazyZodSchema(() => z.object({
         createdAtMs: z.number(),
         strategy: z.string(),
         requestId: z.string().optional(),
-        filesNotCopied: SessionForkFilesNotCopiedV1Schema.optional(),
-        visualCopies: z.array(SessionForkVisualCopyV1Schema).optional(),
+        filesNotCopied: createStoredReadSchema(SessionForkFilesNotCopiedV1Schema).optional(),
+        visualCopies: z.array(createStoredReadSchema(SessionForkVisualCopyV1Schema)).optional(),
         agentHint: z.object({
             agentId: z.string().optional(),
             backendMode: z.string().optional(),
             agentSessionId: z.string().optional(),
         }).optional(),
     }).optional(),
-    forkVisualsV1: SessionForkVisualsV1Schema.optional(),
+    forkVisualsV1: createStoredReadSchema(SessionForkVisualsV1Schema).optional(),
     /**
      * Hidden replay seed applied exactly once to the first real user prompt.
      */
@@ -302,7 +305,7 @@ const MetadataObjectSchema = lazyZodSchema(() => z.object({
         createdAtMs: z.number(),
         sourceMessageIds: z.array(z.string()).optional(),
         sourceSessionId: z.string().optional(),
-        source: SessionDiscussionSelectionSourceV1Schema.omit({ draftCorrelationId: true }).optional(),
+        source: createStoredReadSchema(SessionDiscussionSelectionSourceV1Schema.omit({ draftCorrelationId: true })).optional(),
     }).optional().catch(undefined),
 }).passthrough());
 

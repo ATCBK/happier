@@ -4,6 +4,10 @@ import { resolveTranscriptBodySessionMessageRole } from '@happier-dev/protocol/s
 import type { EmptyCanonicalTurnDiffSuppressionState, MessageStructuredPresentationV1, SessionMessageRole } from '@happier-dev/protocol';
 import { isSessionToolAnswerDeliveryMeta } from '@happier-dev/protocol/sessions/messages/sessionMessageMeta';
 import { readEmptyCanonicalTurnDiffToolCallId, shouldSuppressEmptyCanonicalTurnDiffToolCall } from '@happier-dev/protocol/sessions/messages/canonicalTurnDiffTool';
+import { SessionForkVisualOriginV1Schema } from '@happier-dev/protocol/sessions/board/forkVisualCopies';
+import { TranscriptRawAgentEventV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import type { z } from 'zod';
 
 import type { MessageMeta } from "../messages/messageMetaTypes.js";
 import { markUnsupportedContentMeta } from "../messages/unsupportedContentMeta.js";
@@ -34,6 +38,8 @@ type NormalizedAgentContent =
     } | {
         type: 'tool-call';
         id: string;
+        /** Original native correlation id, when this is an inherited source projection. */
+        sourceToolId?: string;
         name: string;
         input: any;
         description: string | null;
@@ -42,6 +48,7 @@ type NormalizedAgentContent =
     } | {
         type: 'tool-result'
         tool_use_id: string;
+        sourceToolId?: string;
         content: any;
         toolUseResult?: unknown;
         tool_use_result?: unknown;
@@ -124,6 +131,7 @@ function normalizeExplicitSidechainId(sidechainId: string | null | undefined): s
 export type RawMessageNormalizationSequenceState = EmptyCanonicalTurnDiffSuppressionState;
 
 type ContextCompactionAgentEvent = Extract<AgentEvent, { type: 'context-compaction' }>;
+const storedAgentEventSchema = createStoredReadSchema(TranscriptRawAgentEventV1Schema);
 
 function isContextCompactionPhase(value: unknown): value is ContextCompactionAgentEvent['phase'] {
     return value === 'started' || value === 'progress' || value === 'completed' || value === 'failed' || value === 'cancelled';
@@ -143,6 +151,33 @@ function readRecordString(value: unknown, key: string): string | null {
     if (!isPlainRecord(value)) return null;
     const raw = value[key];
     return typeof raw === 'string' ? raw : null;
+}
+
+/** The canonical parser, not a second kind inventory, decides whether a presentation tag is known. */
+function isUnknownPresentationKind(input: unknown, issues: readonly z.core.$ZodIssue[]): boolean {
+    return issues.length > 0 && issues.every((issue) => {
+        if (issue.code !== 'invalid_union' || issue.discriminator !== 'type' || issue.errors.length > 0) return false;
+        let value: unknown = input;
+        for (const key of issue.path) {
+            if (!isPlainRecord(value) || typeof key !== 'string') return false;
+            value = value[key];
+        }
+        return typeof value === 'string' && value.trim().length > 0;
+    });
+}
+
+function unparsedRawMessage(input: Readonly<{
+    id: string; localId: string | null; createdAt: number; seq?: number;
+    role: 'user' | 'agent'; sidechainId?: string; meta?: MessageMeta;
+}>): NormalizedMessage {
+    const { role, sidechainId, meta, ...identity } = input;
+    const kind = role === 'user' ? 'unparsed-user-message' : 'unparsed-agent-message';
+    const text = role === 'user' ? '[Unparsed user message]' : '[Unparsed agent message]';
+    return role === 'user'
+        ? { ...identity, role, ...(sidechainId ? { sidechainId } : {}), isSidechain: Boolean(sidechainId),
+            content: { type: 'text', text }, meta: markUnsupportedContentMeta(meta, kind) }
+        : { ...identity, role, isSidechain: false,
+            content: [{ type: 'text', text, uuid: input.id, parentUUID: null }], meta: markUnsupportedContentMeta(meta, kind) };
 }
 
 function readSingleTextContentBlock(value: unknown): string | null {
@@ -265,6 +300,7 @@ function normalizeRawMessageFromRaw(
     // Zod transform handles normalization during validation
     const parsed = rawRecordSchema.safeParse(rawInput);
     if (!parsed.success) {
+        if (isPlainRecord(rawInput) && rawInput.role === 'agent' && isUnknownPresentationKind(rawInput, parsed.error.issues)) return null;
         // Never log full raw messages in production: tool outputs and user text may contain secrets.
         // Keep enough context for debugging in dev builds only.
         console.error(`[typesRaw] Message validation failed (id=${id})`);
@@ -295,34 +331,11 @@ function normalizeRawMessageFromRaw(
                 callId: typeof callId === 'string' ? callId : undefined,
             });
         }
-        const unsafeRole = (rawInput as any)?.role;
-        const role = unsafeRole === 'user' ? 'user' : 'agent';
-        const text =
-            role === 'user'
-                ? '[Unparsed user message]'
-                : '[Unparsed agent message]';
-        return role === 'user'
-            ? {
-                id,
-                ...(seq !== undefined ? { seq } : {}),
-                localId,
-                createdAt,
-                role: 'user',
-                ...(sidechainId ? { sidechainId } : {}),
-                isSidechain: Boolean(sidechainId),
-                content: { type: 'text', text },
-                meta: markUnsupportedContentMeta((rawInput as any)?.meta as MessageMeta | undefined, 'unparsed-user-message'),
-            }
-            : {
-                id,
-                ...(seq !== undefined ? { seq } : {}),
-                localId,
-                createdAt,
-                role: 'agent',
-                isSidechain: false,
-                content: [{ type: 'text', text, uuid: id, parentUUID: null }],
-                meta: markUnsupportedContentMeta((rawInput as any)?.meta as MessageMeta | undefined, 'unparsed-agent-message'),
-            };
+        const raw = isPlainRecord(rawInput) ? rawInput : null;
+        return unparsedRawMessage({ id, localId, createdAt, ...(seq !== undefined ? { seq } : {}),
+            role: raw?.role === 'user' ? 'user' : 'agent', sidechainId,
+            // Unparsed metadata is retained only with the existing diagnostic marker at this read boundary.
+            meta: raw?.meta as MessageMeta | undefined });
     }
     const raw = parsed.data as RawRecord;
     if (raw.role === 'user' && isSessionToolAnswerDeliveryMeta(raw.meta)) return null;
@@ -706,28 +719,8 @@ function normalizeRawMessageFromRaw(
                     meta: raw.meta
                 }, opts?.messageRole);
             }
-            // Any other output payload should be surfaced as an opaque message rather than dropped.
-            // Name the payload type: agent CLIs keep adding record types, and an unnamed placeholder
-            // leaves nothing to grep for when one starts leaking into transcripts.
-            const unsupportedType = (raw.content.data as { type?: unknown }).type;
-            const unsupportedLabel = typeof unsupportedType === 'string' && unsupportedType.length > 0
-                ? `[Unsupported agent output: ${unsupportedType}]`
-                : '[Unsupported agent output]';
-            return filterNormalizedEventRoleOutput({
-                id,
-                ...(seq !== undefined ? { seq } : {}),
-                localId,
-                createdAt,
-                role: 'agent',
-                isSidechain: false,
-                content: [{
-                    type: 'text',
-                    text: unsupportedLabel,
-                    uuid: id,
-                    parentUUID: null,
-                }],
-                meta: markUnsupportedContentMeta(raw.meta, 'unsupported-agent-output'),
-            }, opts?.messageRole);
+            // Future provider presentation records are skippable; they are not assistant text.
+            return null;
         }
           if (raw.content.type === 'event') {
               return {
@@ -854,6 +847,27 @@ function normalizeRawMessageFromRaw(
           if (raw.content.type === 'acp') {
               const structuredSidechain = resolveStructuredContentSidechain(raw.content.data);
               const acpDataRecord = raw.content.data as unknown as Record<string, unknown>;
+
+              // The host's committed event writer uses this ACP carrier for every Agent.
+              // Decode its payload through the same event owner as top-level event records.
+              if (raw.content.data.type === 'event') {
+                  const event = storedAgentEventSchema.safeParse(acpDataRecord.data);
+                  if (!event.success) {
+                      if (isUnknownPresentationKind(acpDataRecord.data, event.error.issues)) return null;
+                      return unparsedRawMessage({ id, localId, createdAt, ...(seq !== undefined ? { seq } : {}),
+                          role: 'agent', meta: raw.meta });
+                  }
+                  return {
+                      id,
+                      ...(seq !== undefined ? { seq } : {}),
+                      localId,
+                      createdAt,
+                      role: 'event',
+                      isSidechain: false,
+                      content: event.data,
+                      meta: raw.meta,
+                  } satisfies NormalizedMessage;
+              }
 
               if (isContextCompactionAgentEvent(raw.content.data)) {
                   const agentId = typeof raw.content.data.agentId === 'string' && raw.content.data.agentId.trim().length > 0
@@ -1138,43 +1152,8 @@ function normalizeRawMessageFromRaw(
             // are status/metrics - skip normalization, they don't need UI rendering
         }
     }
-    // Default: never drop unknown/unsupported records silently. Surface an opaque placeholder instead,
-    // except for explicit status/metrics events we intentionally hide.
-    if (raw.role === 'agent') {
-        const contentType = raw.content.type;
-        if (contentType === 'codex' || contentType === 'acp') {
-            const dataType = (raw.content as any).data?.type;
-            if (
-                dataType === 'task_started'
-                || dataType === 'task_complete'
-                || dataType === 'turn_failed'
-                || dataType === 'turn_cancelled'
-                || dataType === 'turn_aborted'
-                // Claude SDK per-turn usage/cost summary (source
-                // 'claude-agent-sdk-result-usage'): transport-level metrics that
-                // feed the usage pipeline, not a visible transcript row. The
-                // human-readable result text is a separate 'message' record.
-                || dataType === 'result'
-            ) {
-                return null;
-            }
-        }
-    }
-    return {
-        id,
-        ...(seq !== undefined ? { seq } : {}),
-        localId,
-        createdAt,
-        role: 'agent',
-        isSidechain: false,
-        content: [{
-            type: 'text',
-            text: '[Unsupported transcript record]',
-            uuid: id,
-            parentUUID: null,
-        }],
-        meta: markUnsupportedContentMeta((raw as any)?.meta, 'unsupported-transcript-record'),
-    };
+    // Status/metrics and unknown future presentation records have no visible transcript row.
+    return null;
 }
 
 export function normalizeRawMessage(
@@ -1204,10 +1183,23 @@ export function normalizeRawMessage(
 
     // The public external item owns its validated sidechain identity. Provider raw data remains
     // a legacy fallback only when that explicit carrier is absent.
-    if (!explicitSidechainId || !normalized) return normalized;
+    if (explicitSidechainId && normalized) {
+        normalized = { ...normalized, sidechainId: explicitSidechainId, isSidechain: true };
+    }
+    const storedOrigin = normalized?.meta?.forkVisualOriginV1;
+    if (storedOrigin === undefined || normalized?.role !== 'agent') return normalized;
+    const origin = SessionForkVisualOriginV1Schema.safeParse(storedOrigin);
+    if (!origin.success) return normalized;
+    // Native tool ids are Session-local. Only the projection is scoped; the
+    // provider-native stored body and original id remain unchanged for replay.
+    const scope = (toolId: string) => JSON.stringify(['forkVisualOriginV1', origin.data.serverId, origin.data.sessionId, toolId]);
     return {
         ...normalized,
-        sidechainId: explicitSidechainId,
-        isSidechain: true,
+        ...(normalized.sidechainId ? { sidechainId: scope(normalized.sidechainId) } : {}),
+        content: normalized.content.map(content => content.type === 'tool-call'
+            ? { ...content, sourceToolId: content.id, id: scope(content.id) }
+            : content.type === 'tool-result'
+                ? { ...content, sourceToolId: content.tool_use_id, tool_use_id: scope(content.tool_use_id) }
+                : content),
     };
 }

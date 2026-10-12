@@ -8,6 +8,8 @@ export type ToolCall = {
     // Provider-side identifier for this tool call (e.g. ACP callId, Claude tool_use id).
     // Optional for backward compatibility with older sessions and unit tests.
     id?: string;
+    /** Original provider id retained by a source-scoped inherited projection. */
+    sourceToolId?: string;
     name: string;
     state: 'running' | 'completed' | 'error' | 'unavailable';
     input: any;

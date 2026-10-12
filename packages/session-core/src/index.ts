@@ -16,4 +16,6 @@ export type { PendingRequestFacts, SessionPendingRequest, SessionPendingRequestL
 export { createTranscriptStreamSegmentAssembler, interpretTranscriptStreamSegment } from "./live/index.js";
 export { applyReducedMessages, isSessionMessageRowCurrent, advanceSessionReceivedMessageCurrentness } from "./transcript/index.js";
 export type { OrderedTranscript } from "./transcript/index.js";
+export { readPublishedSessionVisualMessages } from "./transcript/publishedVisuals.js";
+export type { PublishedSessionVisualMessage, PublishedSessionVisualProjection } from "./transcript/publishedVisuals.js";
 export { normalizeToolCallForRendering } from "./tools/normalization/core/normalizeToolCallForRendering.js";

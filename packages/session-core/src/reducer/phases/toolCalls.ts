@@ -187,6 +187,7 @@ export function runToolCallsPhase(params: Readonly<{
                         }
                         const projection = createTranscriptToolCallProjection({
                             toolId: c.id,
+                            sourceToolId: c.sourceToolId,
                             toolName: c.name,
                             toolInput: c.input,
                             description: c.description,

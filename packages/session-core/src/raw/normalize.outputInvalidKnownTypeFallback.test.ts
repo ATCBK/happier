@@ -41,12 +41,11 @@ describe('typesRaw output schema (fail-soft)', () => {
         expect(normalizeRawMessage('msg-null-content', null, 1000, raw, { messageRole: 'event' })).toBeNull();
     });
 
-    it('keeps an unknown future output visible for an unknown message role', () => {
+    it('skips unknown future output even when its message role is unknown', () => {
         const raw = wrapOutput({ type: 'future-output', payload: { nested: true } });
         const normalized = normalizeRawMessage('msg-future', null, 1000, raw, { messageRole: 'unknown' });
 
-        expect(normalized).not.toBeNull();
-        expect(normalized?.role).toBe('agent');
+        expect(normalized).toBeNull();
     });
 
     it('materializes assistant string content as a text block (no unsupported placeholder)', () => {
@@ -73,17 +72,11 @@ describe('typesRaw output schema (fail-soft)', () => {
         );
     });
 
-    it('names the unrecognized payload type in the fallback placeholder', () => {
-        // Without the type name the placeholder is undiagnosable: new agent CLI record types
-        // render as an opaque row with nothing to grep for.
+    it('does not turn future provider records into placeholder messages', () => {
         const raw = wrapOutput({ type: 'some-future-record', uuid: 'future-1' });
 
         const normalized = normalizeRawMessage('msg-future-1', null, 1000, raw);
 
-        expect(normalized).not.toBeNull();
-        if (normalized?.role !== 'agent') throw new Error('expected normalized agent message');
-        const block = normalized.content[0];
-        expect(block?.type).toBe('text');
-        expect(block?.type === 'text' && block.text).toContain('some-future-record');
+        expect(normalized).toBeNull();
     });
 });
