@@ -346,7 +346,9 @@ export type ComposerPresentationTargetRead = Readonly<{
  * registration; resolution picks exactly one (see {@link resolveTargetRegistration}), so removing
  * the resolved one restores the next eligible presentation instead of leaving the key empty.
  */
-const targets = new Map<string, ComposerPresentationTarget[]>();
+type ComposerPresentationFocusTarget = Pick<ComposerPresentationTarget,
+    'focusComposer' | 'isCurrent' | 'isPresented' | 'readSnapshot'>;
+const targets = new Map<string | symbol, ComposerPresentationFocusTarget[]>();
 // Exact-address index over the same mounted targets. ComposerRefV1 remains the
 // public document identity, while navigation focus must distinguish Homes that
 // contain the same raw Session id.
@@ -372,7 +374,7 @@ function readRegisteredTarget(ref: ComposerRefV1): ComposerPresentationTarget | 
     return resolveRegisteredTarget(composerRefV1Key(ref));
 }
 
-function isComposerPresentationTargetCurrent(target: ComposerPresentationTarget): boolean {
+function isComposerPresentationTargetCurrent(target: ComposerPresentationFocusTarget): boolean {
     try {
         return target.isCurrent?.() !== false;
     } catch {
@@ -380,7 +382,7 @@ function isComposerPresentationTargetCurrent(target: ComposerPresentationTarget)
     }
 }
 
-function isComposerPresentationTargetPresented(target: ComposerPresentationTarget): boolean {
+function isComposerPresentationTargetPresented(target: ComposerPresentationFocusTarget): boolean {
     try {
         return target.isPresented?.() !== false;
     } catch {
@@ -393,11 +395,11 @@ function isComposerPresentationTargetPresented(target: ComposerPresentationTarge
  * and presented, else the most recently registered current one. A hidden retained presentation
  * therefore never takes commands from a visible one, whichever mounted last.
  */
-function resolveTargetRegistration(
-    registrations: readonly ComposerPresentationTarget[] | undefined,
-): ComposerPresentationTarget | null {
+function resolveTargetRegistration<T extends ComposerPresentationFocusTarget>(
+    registrations: readonly T[] | undefined,
+): T | null {
     if (!registrations) return null;
-    let latestCurrent: ComposerPresentationTarget | null = null;
+    let latestCurrent: T | null = null;
     for (let index = registrations.length - 1; index >= 0; index -= 1) {
         const target = registrations[index]!;
         if (!isComposerPresentationTargetCurrent(target)) continue;
@@ -408,17 +410,23 @@ function resolveTargetRegistration(
 }
 
 function resolveRegisteredTarget(key: string): ComposerPresentationTarget | null {
-    return resolveTargetRegistration(targets.get(key));
+    const target = resolveTargetRegistration(targets.get(key));
+    return isDocumentPresentationTarget(target) ? target : null;
+}
+
+function isDocumentPresentationTarget(target: ComposerPresentationFocusTarget | null): target is ComposerPresentationTarget {
+    return target !== null && 'readRevision' in target && typeof target.readRevision === 'function'
+        && 'replace' in target && typeof target.replace === 'function';
 }
 
 function resolveQualifiedSessionTarget(addressKey: string): ComposerPresentationTarget | null {
     return resolveTargetRegistration(qualifiedSessionTargets.get(addressKey));
 }
 
-function addTargetRegistration(
-    registry: Map<string, ComposerPresentationTarget[]>,
-    key: string,
-    target: ComposerPresentationTarget,
+function addTargetRegistration<K, T extends ComposerPresentationFocusTarget>(
+    registry: Map<K, T[]>,
+    key: K,
+    target: T,
 ): () => boolean {
     registry.set(key, [...(registry.get(key) ?? []), target]);
     return () => {
@@ -1509,7 +1517,7 @@ function readScopedMountedComposerTarget(ref: ComposerRefV1, scope: ServerAccoun
     const registrations = ref.kind === 'session'
         ? qualifiedSessionTargets.get(sessionAddressKey({ serverId: scope.serverId, sessionId: ref.sessionId }))
         : targets.get(composerRefV1Key(ref));
-    const target = resolveTargetRegistration(registrations?.filter(candidate => {
+    const target = resolveTargetRegistration(registrations?.filter(isDocumentPresentationTarget).filter(candidate => {
         if (!candidate.readScope) return ref.kind === 'session';
         try { return areServerAccountScopesEqual(candidate.readScope(), scope); }
         catch { return false; }
@@ -1591,8 +1599,19 @@ export function readComposerPresentationTarget(ref: ComposerRefV1): ComposerPres
 }
 
 /** Focuses one exact mounted composer ref through the incumbent presentation registry. */
-export function requestRegisteredComposerFocus(ref: ComposerRefV1): boolean {
-    return tryFocusVisualSessionComposer(readRegisteredTarget(ref));
+export function requestRegisteredComposerFocus(ref: ComposerRefV1 | symbol): boolean {
+    return tryFocusVisualSessionComposer(typeof ref === 'symbol'
+        ? resolveTargetRegistration(targets.get(ref)) : readRegisteredTarget(ref));
+}
+
+/**
+ * A host-local caller-input field has no addressable Composer document. Keep its
+ * exact mounted focus target in the same registry without inventing a protocol
+ * ref or exposing document/transaction authority for it.
+ */
+export function registerComposerFocusTarget(ref: symbol, target: ComposerPresentationFocusTarget): () => void {
+    const remove = addTargetRegistration(targets, ref, target);
+    return () => { remove(); };
 }
 
 /** Prompt display uses the same mounted document/address owner as focus and edits. */
@@ -1618,7 +1637,9 @@ export function requestRegisteredComposerPromptPicker(options: Readonly<{
     }
     for (const registrations of Array.from(targets.values()).reverse()) {
         for (let index = registrations.length - 1; index >= 0; index -= 1) {
-            const opened = tryOpen(registrations[index]!, true);
+            const target = registrations[index]!;
+            if (!isDocumentPresentationTarget(target)) continue;
+            const opened = tryOpen(target, true);
             if (opened) return opened;
         }
     }
@@ -2044,6 +2065,7 @@ export function createComposerPresentationHostHandlers(
             if (refusal) return refusal;
             let active: ComposerRefV1 | null = null;
             for (const targetKey of Array.from(targets.keys())) {
+                if (typeof targetKey !== 'string') continue;
                 const target = resolveRegisteredTarget(targetKey);
                 if (!target) continue;
                 const snapshot = readComposerSnapshot(target);
@@ -2541,7 +2563,7 @@ export function readSessionComposerPresentationTargetAtAddress(
     });
 }
 
-function tryFocusVisualSessionComposer(target: ComposerPresentationTarget | null): boolean {
+function tryFocusVisualSessionComposer(target: ComposerPresentationFocusTarget | null): boolean {
     if (!target?.focusComposer || target.isCurrent?.() === false || target.readSnapshot?.().state.editable === false) return false;
     try {
         return target.focusComposer() !== false;
