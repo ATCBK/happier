@@ -242,8 +242,8 @@ export function createBrowserRecordingDaemonRuntime(
     getRecordingStatus: baseRoutes.getRecordingStatus,
     listRecordingsForView: baseRoutes.listRecordingsForView,
 
-    async cleanupExpiredRecordings(cleanupInput) {
-      const result = await baseRoutes.cleanupExpiredRecordings(cleanupInput);
+    async cleanupExpiredRecordings(cleanupInput, cleanupOptions) {
+      const result = await baseRoutes.cleanupExpiredRecordings(cleanupInput, cleanupOptions);
       for (const recordingId of result.discardedRecordingIds) {
         commandMediaTargetsByRecordingId?.delete(recordingId);
       }

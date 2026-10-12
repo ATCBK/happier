@@ -166,7 +166,10 @@ describe('browser recording daemon routes', () => {
     const { createBrowserRecordingRoutes } = await import('./routes');
     const mediaWriter = {
       persistRecording: vi.fn(async () => mediaRef),
-      discardRecording: vi.fn(async () => {}),
+      // The media boundary checks admission immediately before its destructive effect.
+      discardRecording: vi.fn(async ({ beforeEffect }: { beforeEffect?: () => Promise<void> }) => {
+        await beforeEffect?.();
+      }),
     };
     const routes = createBrowserRecordingRoutes({
       service: createBrowserRecordingDaemonService({
@@ -201,6 +204,20 @@ describe('browser recording daemon routes', () => {
       navigationGenerationEnd: 8,
       expiresAtMs: 13_000,
     });
+
+    const denied = new Error('maintenance admission withdrawn');
+    await expect(routes.cleanupExpiredRecordings({}, {
+      beforeEffect: async () => { throw denied; },
+    })).resolves.toEqual({
+      discardedRecordingIds: [],
+      failedRecordingIds: [started.recording.recordingId],
+    });
+    expect(await routes.getRecordingStatus({ recordingId: started.recording.recordingId })).toMatchObject({
+      status: 'finalized',
+    });
+
+    await expect(Reflect.apply(routes.cleanupExpiredRecordings, undefined, [{ beforeEffect: async () => {} }]))
+      .rejects.toMatchObject({ name: 'ZodError' });
 
     const cleanup = await routes.cleanupExpiredRecordings({});
 

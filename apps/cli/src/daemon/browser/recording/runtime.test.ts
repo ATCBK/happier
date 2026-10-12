@@ -138,7 +138,7 @@ describe('browser recording daemon runtime', () => {
     }
   });
 
-  it('wires a PMS machine-live-stream adapter through the runtime when explicit policy and targets are supplied', async () => {
+  it('persists PMS capture and retains expired media when runtime maintenance admission is withdrawn', async () => {
     const [
       { createBrowserRecordingDaemonRuntime },
       { createMachineLiveStreamCaptureRegistry },
@@ -202,6 +202,7 @@ describe('browser recording daemon runtime', () => {
         adapter: { start: sourceStart },
       });
 
+      let nowMs = 10_000;
       const runtime = createBrowserRecordingDaemonRuntime({
         workingDirectory,
         liveStreamCaptureRegistry,
@@ -234,7 +235,7 @@ describe('browser recording daemon runtime', () => {
           browserRecordingEnabled: true,
           recordingCapabilities,
         })),
-        now: () => 10_000,
+        now: () => nowMs,
       });
 
       try {
@@ -259,6 +260,7 @@ describe('browser recording daemon runtime', () => {
           recordingId: started.recording.recordingId,
           stoppedAtMs: 12_000,
           navigationGenerationEnd: 8,
+          expiresAtMs: 13_000,
         });
 
         expect(sourceStop).toHaveBeenCalledTimes(1);
@@ -283,6 +285,26 @@ describe('browser recording daemon runtime', () => {
         );
         await expect(readFile(persistedFile)).resolves.toEqual(webmBytes);
         await expect(readFile(outputPath)).rejects.toMatchObject({ code: 'ENOENT' });
+        nowMs = 13_001;
+        await expect(runtime.routes.cleanupExpiredRecordings({}, {
+          beforeEffect: async () => { throw new Error('maintenance admission withdrawn'); },
+        })).resolves.toEqual({
+          discardedRecordingIds: [],
+          failedRecordingIds: [started.recording.recordingId],
+        });
+        await expect(readFile(persistedFile)).resolves.toEqual(webmBytes);
+        expect(await runtime.routes.getRecordingStatus({ recordingId: started.recording.recordingId }))
+          .toMatchObject({ status: 'finalized', mediaRef });
+
+        await expect(runtime.routes.cleanupExpiredRecordings({}, {
+          beforeEffect: async () => {},
+        })).resolves.toEqual({
+          discardedRecordingIds: [started.recording.recordingId],
+          failedRecordingIds: [],
+        });
+        await expect(readFile(persistedFile)).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(await runtime.routes.getRecordingStatus({ recordingId: started.recording.recordingId }))
+          .toMatchObject({ status: 'discarded' });
       } finally {
         runtime.stop();
       }

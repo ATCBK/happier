@@ -17,6 +17,7 @@ export type BrowserRecordingRoutes = Readonly<{
   listRecordingsForView(input: DaemonBrowserRecordingListInputV1): Promise<readonly BrowserRecordingSessionV1[]>;
   cleanupExpiredRecordings(
     input: DaemonBrowserRecordingCleanupInputV1,
+    options?: Readonly<{ beforeEffect?: () => Promise<void> }>,
   ): Promise<DaemonBrowserRecordingCleanupResultV1>;
 }>;
 
@@ -72,10 +73,12 @@ export function createBrowserRecordingRoutes(input: Readonly<{
       }).recordings;
     },
 
-    async cleanupExpiredRecordings(rawCleanupInput) {
+    async cleanupExpiredRecordings(rawCleanupInput, options) {
+      // Maintenance admission is an in-process effect guard, never wire request data.
       const cleanupInput = DaemonBrowserRecordingCleanupInputV1Schema.parse(rawCleanupInput);
       const result = await input.service.cleanupExpiredRecordings({
         nowMs: cleanupInput.nowMs ?? now(),
+        ...(options?.beforeEffect ? { beforeEffect: options.beforeEffect } : {}),
       });
       return DaemonBrowserRecordingCleanupResultV1Schema.parse(result);
     },
