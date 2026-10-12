@@ -41,7 +41,7 @@ export function useSessionWalkthroughReviewPresentation(params: Readonly<{
     const { review, phase, phone, scope, sessionId, onRetryReviewEngines, onAskStop, modelId } = params;
     const severityColors = useReviewSeverityColorResolver();
     const renderTriage = React.useCallback((view: WalkthroughFindingView) => {
-        if (!review || !scope) return null;
+        if (!review || !scope || !sessionId) return null;
         const snapshot = review.comments[review.reviewRunIds.indexOf(view.runId)];
         const comment = snapshot ? findCommentForFinding(snapshot.comments, view.finding, view.runId) : null;
         const decision = comment ? readReviewFindingDecision(snapshot?.pending[comment.id] ?? comment.reviewTriageStatus) : 'undecided';

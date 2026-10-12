@@ -17,7 +17,7 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
-import type { CustomModalInjectedProps } from '@/modal/types';
+import type { CustomModalChromeConfig, CustomModalInjectedProps } from '@/modal/types';
 import type { ScmReviewComparisonSelector } from '@/sync/domains/scm/diffSummary/selection';
 import {
     resolveReviewWalkthroughPlan,
@@ -258,8 +258,7 @@ export function StartReviewDialog(props: StartReviewDialogProps) {
     const [enginesError, setEnginesError] = React.useState<string | null>(null);
     const [selected, setSelected] = React.useState<readonly string[] | null>(props.preselectedEngineIds ?? null);
     const [instructions, setInstructions] = React.useState('');
-    // The native review narration producer currently admits Session-owned reviews only.
-    const [walkthrough, setWalkthrough] = React.useState(Boolean(props.sessionId && props.defaultWalkthrough));
+    const [walkthrough, setWalkthrough] = React.useState(Boolean(props.defaultWalkthrough));
     const [narratorEngineId, setNarratorEngineId] = React.useState<string | null>(null);
     const [busy, setBusy] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
@@ -327,7 +326,7 @@ export function StartReviewDialog(props: StartReviewDialogProps) {
             instructions={instructions}
             onChangeInstructions={setInstructions}
             walkthrough={walkthrough}
-            walkthroughUnavailable={!props.sessionId}
+            walkthroughUnavailable={false}
             onToggleWalkthrough={() => setWalkthrough((on) => !on)}
             narratorEngineId={narratorEngineId}
             onSelectNarrator={setNarratorEngineId}
@@ -342,19 +341,24 @@ export function StartReviewDialog(props: StartReviewDialogProps) {
     );
 }
 
+/** The dialog's modal chrome: a card on wide screens, a sheet on a phone. One owner, also drawn by the dev specimen. */
+export function startReviewDialogChrome(): CustomModalChromeConfig {
+    return {
+        kind: 'card',
+        header: 'none',
+        title: t('scmComparison.startReview'),
+        dimensions: { width: 520 },
+        phonePresentation: 'sheet',
+        testID: 'start-review-modal',
+    };
+}
+
 export function presentStartReviewDialog(props: StartReviewDialogInput): string {
     return Modal.show({
         component: StartReviewDialog,
         props,
         closeOnBackdrop: true,
-        chrome: {
-            kind: 'card',
-            header: 'none',
-            title: t('scmComparison.startReview'),
-            dimensions: { width: 520 },
-            phonePresentation: 'sheet',
-            testID: 'start-review-modal',
-        },
+        chrome: startReviewDialogChrome(),
     });
 }
 

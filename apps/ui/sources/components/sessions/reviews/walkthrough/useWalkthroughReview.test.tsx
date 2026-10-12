@@ -21,7 +21,7 @@ const scope = { serverId: 'review-home', accountId: 'review-account' };
 const comparison = ScmComparisonSchema.parse({ id: 'comparison', source: { kind: 'commit', commit: 'oid' },
     repository: { rootPath: '/repo' }, endpoints: { before: 'before', after: 'after' },
     inventory: { state: 'complete', files: [], reasons: [] } });
-const params = { sessionId: 'review-session', scope, comparison, walkthrough: null,
+const params = { host: { sessionId: 'review-session' }, cwd: '/repo', scope, comparison, walkthrough: null,
     producer: { kind: 'review' as const, reviewedRuns: [{ runId: 'review-run', callId: 'review-call', backendId: 'codex',
         status: 'succeeded' as const, hasOutput: true, comparisonId: comparison.id, reviewOutcome: 'complete' as const }] } };
 function response(withFinding: boolean) {
@@ -35,7 +35,7 @@ function response(withFinding: boolean) {
         }) } });
 }
 async function refresh() {
-    await act(async () => notifyExecutionRunActivity({ serverId: scope.serverId, sessionId: params.sessionId }, { runId: 'review-run' }));
+    await act(async () => notifyExecutionRunActivity({ serverId: scope.serverId, sessionId: params.host.sessionId }, { runId: 'review-run' }));
 }
 
 describe('a walkthrough reads findings before declaring a review complete', () => {
@@ -46,7 +46,7 @@ describe('a walkthrough reads findings before declaring a review complete', () =
             latestThinkingMessageId: null, latestThinkingMessageActivityAtMs: null, messagesVersion: 0, isLoaded: true,
         } } }));
         let renders = 0;
-        const hook = await renderHook(() => { renders += 1; return useWalkthroughReview({ ...params, sessionId, producer: null }); });
+        const hook = await renderHook(() => { renders += 1; return useWalkthroughReview({ ...params, host: { sessionId }, producer: null }); });
         const before = renders;
         for (let index = 0; index < 10; index += 1) {
             await act(async () => storage.setState((state) => ({ sessionMessages: { ...state.sessionMessages,

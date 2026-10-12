@@ -14,6 +14,9 @@ import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/reso
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useSessionMessages } from '@/sync/domains/state/storage';
 import { sessionExecutionRunGet } from '@/sync/ops/sessionExecutionRuns';
+import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import type { ScmDiffSummaryHost } from '@/sync/ops/scmDiffSummary/results';
 import { subscribeExecutionRunActivity } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -66,7 +69,8 @@ function readReviewOutcome(payload: ReviewFindingsV1 | ReviewFindingsV2 | null):
  * on the canonical Run activity signal.
  */
 export function useWalkthroughReview(params: Readonly<{
-    sessionId: string;
+    host: ScmDiffSummaryHost;
+    cwd: string;
     scope: ServerAccountScope | null;
     comparison: ScmComparison | null;
     walkthrough: Readonly<{ state: ScmDiffSummaryOutputState; value?: ScmDiffSummaryWalkthrough }> | null;
@@ -74,7 +78,9 @@ export function useWalkthroughReview(params: Readonly<{
     /** Reviewer Runs a start from this view launched, before the result names them. */
     startedReviewRunIds?: readonly string[] | null;
 }>): WalkthroughReviewState | null {
-    const { sessionId, comparison, walkthrough, producer } = params;
+    const { comparison, walkthrough, producer } = params;
+    const sessionId = params.host.sessionId ?? '';
+    const machineId = params.host.machineId ?? null;
     const serverId = params.scope?.serverId ?? null;
     const accountId = params.scope?.accountId ?? null;
     const scope = React.useMemo(() => (serverId && accountId ? { serverId, accountId } : null), [accountId, serverId]);
@@ -83,11 +89,12 @@ export function useWalkthroughReview(params: Readonly<{
         ...(params.startedReviewRunIds ?? []),
     ])].join('\u0000');
     const runIds = React.useMemo(() => (runKey ? runKey.split('\u0000') : []), [runKey]);
-    const readKey = JSON.stringify([serverId, accountId, sessionId, runKey]);
+    const readKey = JSON.stringify([serverId, accountId, sessionId, machineId, params.cwd, runKey,
+        producer?.narratedAtMs, producer?.reviewedRuns?.map(run => [run.runId, run.status, run.hasOutput])]);
 
     const [reads, setReads] = React.useState<Readonly<{ key: string; reads: readonly ReviewRunRead[] }>>({ key: '', reads: NO_READS });
     React.useEffect(() => {
-        if (!scope || runIds.length === 0) return;
+        if (!scope || runIds.length === 0 || (!sessionId && !machineId)) return;
         let current = true;
         let loading = false;
         let refreshPending = false;
@@ -99,9 +106,14 @@ export function useWalkthroughReview(params: Readonly<{
                 reads: runIds.map((runId) => ({ runId, run: null, payload: null, state: 'loading' })),
             }));
             const next = await Promise.all(runIds.map(async (runId): Promise<ReviewRunRead> => {
-                const got = await sessionExecutionRunGet(sessionId, { runId, includeStructured: true }, { serverId: scope.serverId, scope })
+                const got = await (sessionId
+                    ? sessionExecutionRunGet(sessionId, { runId, includeStructured: true }, { serverId: scope.serverId, scope })
+                    : createDefaultActionExecutor().execute('execution.run.get', { sessionId: null, runId, includeStructured: true }, {
+                        serverId: scope.serverId, expectedAccountId: scope.accountId, executionRunTargetMachineId: machineId!,
+                        externalActionTarget: { kind: 'machine', machineId: machineId!, project: { machineId: machineId!, directory: params.cwd } },
+                    }).then(result => result.ok ? ExecutionRunGetResponseSchema.parse(result.result) : null))
                     .catch(() => null);
-                const payload = got && 'run' in got ? readReviewPayload(got.structuredMeta) : null;
+                const payload = got && 'run' in got ? readReviewPayload(got.structuredMeta, got.reviewFindings) : null;
                 return got && 'run' in got
                     ? { runId, run: got.run, payload, state: payload ? 'readable' : 'unread' }
                     : { runId, run: null, payload: null, state: 'failed' };
@@ -114,19 +126,19 @@ export function useWalkthroughReview(params: Readonly<{
             if (current && refreshPending) { refreshPending = false; await load(); }
         };
         fireAndForget(load(), { tag: 'useWalkthroughReview.load' });
-        const unsubscribe = subscribeExecutionRunActivity({ serverId: scope.serverId, sessionId }, (notification) => {
+        const unsubscribe = sessionId ? subscribeExecutionRunActivity({ serverId: scope.serverId, sessionId }, (notification) => {
             if (notification.runId !== null && !runIds.includes(notification.runId)) return;
             fireAndForget(load(), { tag: 'useWalkthroughReview.refresh' });
-        });
+        }) : () => {};
         return () => { current = false; unsubscribe(); };
-    }, [runIds, readKey, scope, sessionId]);
+    }, [runIds, readKey, scope, sessionId, machineId, params.cwd]);
     const runReads = reads.key === readKey ? reads.reads : NO_READS;
 
     const commentIdsByRunId = React.useMemo(() => Object.fromEntries(runReads.map((read) => [
         read.runId, (read.payload?.findings ?? []).flatMap((finding) => finding.comment ? [finding.comment.id] : []),
     ])), [runReads]);
-    const comments = useReviewRunsComments({ scope, sessionId, runIds, commentIdsByRunId, enabled: runIds.length > 0 });
-    const { messages } = useSessionMessages(sessionId, { enabled: runIds.length > 0 });
+    const comments = useReviewRunsComments({ scope: sessionId ? scope : null, sessionId, runIds, commentIdsByRunId, enabled: Boolean(sessionId) && runIds.length > 0 });
+    const { messages } = useSessionMessages(sessionId, { enabled: Boolean(sessionId) && runIds.length > 0 });
 
     return React.useMemo(() => {
         if (!comparison || runIds.length === 0) return null;
