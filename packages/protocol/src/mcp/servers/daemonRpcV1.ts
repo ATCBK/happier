@@ -2,7 +2,9 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
 
 import { AgentIdV1Schema } from '../../agents/agentIdV1.js';
-import { McpServerBindingV1Schema, McpServerCatalogEntryTransportV1Schema, McpServerCatalogEntryV1Schema } from './settingsV1.js';
+import { McpServerRuleV1Schema, McpServerConfigOverrideFieldsV1Schema, ReachPlaceV1Schema,
+  McpServerCatalogEntryTransportV1Schema, McpServerCatalogEntryV1Schema } from './settingsV1.js';
+import { applyMcpServerConfigOverrideV1 } from './resolveMcpServerConfigForContextV1.js';
 
 /**
  * The Agent a detected MCP server was discovered for. Detection identity is
@@ -31,6 +33,8 @@ export const DetectedMcpServerV1Schema = lazyZodSchema(() => z
       .optional(),
     envKeys: z.array(z.string()),
     enabled: z.union([z.boolean(), z.null()]),
+    // Older detection producers omit this presentation fact.
+    loadedInHappierSessions: z.boolean().optional(),
     source: z.object({
       kind: z.enum(['user', 'project']),
       path: z.string().min(1),
@@ -107,13 +111,13 @@ export const DaemonMcpServersTestErrorCodeSchema = lazyZodSchema(() => z.enum([
 ]));
 export type DaemonMcpServersTestErrorCode = z.infer<typeof DaemonMcpServersTestErrorCodeSchema>;
 
-export const DaemonMcpServersTestRequestSchema = lazyZodSchema(() => z.discriminatedUnion('t', [
+export const DaemonMcpServersTestAuthoringRequestSchema = lazyZodSchema(() => z.discriminatedUnion('t', [
   z.object({
     t: z.literal('draft'),
     machineId: z.string().min(1),
     directory: z.string().min(1).max(10_000),
     server: McpServerCatalogEntryV1Schema,
-    binding: McpServerBindingV1Schema.nullish(),
+    binding: McpServerRuleV1Schema.nullish(),
   }).passthrough(),
   z.object({
     t: z.literal('byId'),
@@ -123,6 +127,25 @@ export const DaemonMcpServersTestRequestSchema = lazyZodSchema(() => z.discrimin
     bindingId: z.string().min(1).optional(),
   }).passthrough(),
 ]));
+// Exact 0.2 RPC ingress; current Actions and catalog rows never author this field.
+// Provenance: ../0.2 cd2bb4d853a259ae00ebc3e5981224e3e4bb5380,
+// daemonRpcV1.ts:98–107 and McpServerTestPanel.tsx:136–141. Remove with 0.2 client support.
+const retainedDraftTestRequest = lazyZodSchema(() => DaemonMcpServersTestAuthoringRequestSchema.options[0].extend({
+  binding: McpServerRuleV1Schema.omit({ agentId: true }).extend({
+    target: z.union([ReachPlaceV1Schema.options[0], ReachPlaceV1Schema.options[1], ReachPlaceV1Schema.options[3]]),
+    overrides: McpServerConfigOverrideFieldsV1Schema.optional(),
+  }).strict().nullish(),
+}));
+export const DaemonMcpServersTestRequestSchema = lazyZodSchema(() => z.preprocess(raw => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !('t' in raw) || raw.t !== 'draft'
+    || !('binding' in raw) || !raw.binding || typeof raw.binding !== 'object' || !('overrides' in raw.binding)) return raw;
+  const retained = retainedDraftTestRequest.safeParse(raw);
+  if (!retained.success || !retained.data.binding) return raw;
+  const { overrides, ...binding } = retained.data.binding;
+  // Draft Test supplies exactly one binding. Folding its configuration preserves
+  // the predecessor winner's effect; the sole reach owner still checks its place.
+  return { ...retained.data, server: applyMcpServerConfigOverrideV1(retained.data.server, overrides), binding };
+}, DaemonMcpServersTestAuthoringRequestSchema));
 export type DaemonMcpServersTestRequest = z.infer<typeof DaemonMcpServersTestRequestSchema>;
 
 export const DaemonMcpServersTestResponseSchema = lazyZodSchema(() => z.union([

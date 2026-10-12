@@ -9,7 +9,10 @@ import { StrictJsonValueSchema, sameStrictJsonValue, type JsonValue } from '../.
 import { isAccountScopedBlobCiphertextForKind } from '../../crypto/accountScopedCipherEnvelope.js';
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext, type AccountScopedCryptoMaterial } from '../../crypto/accountScopedCipher.js';
 import { appendSavedSecretReferencePathV1, listSavedSecretReferenceCarrierPathsV1, parseSavedSecretRefV1 } from '../../account/settings/savedSecretReferenceV1.js';
-import { McpServerCatalogEntryV1Schema, McpServerBindingV1Schema, type McpServerCatalogEntryV1, type McpServerBindingV1, type McpValueRefV1 } from './settingsV1.js';
+import { McpServerCatalogEntryV1Schema, McpServerRuleV1Schema, McpServerConfigOverrideFieldsV1Schema, isMcpPluginItemIdV1,
+  type McpServerCatalogEntryV1, type McpServerRuleV1, type McpValueRefV1 } from './settingsV1.js';
+import { normalizeReachRulesV1 } from '../../reach/reachRulesChangeV1.js';
+import { splitRetainedMcpServerConfigurationV1 } from './splitRetainedMcpServerConfigurationV1.js';
 
 export const MCP_SERVER_CATALOG_ACCOUNT_KEY_V1 = '@happier/account/mcp/v1/catalog' as const;
 export const MCP_SERVER_CATALOG_ROWS_ROUTE_V1 = '/v1/account/entity-rows/mcp' as const;
@@ -23,7 +26,9 @@ export function assertMcpServerCatalogContentForModeV1(content: StoredMcpServerC
 }
 
 const storedServer = createStoredReadSchema(McpServerCatalogEntryV1Schema);
-const storedBinding = createStoredReadSchema(McpServerBindingV1Schema);
+const storedBinding = createStoredReadSchema(McpServerRuleV1Schema);
+// Only the provenance-owned 0.2 source reader admits configuration on a rule.
+const retainedBinding = createStoredReadSchema(McpServerRuleV1Schema.extend({ overrides: McpServerConfigOverrideFieldsV1Schema.optional() }));
 
 /** Malformed independent entries remain diagnostic; they never authorize activation. */
 export function projectStoredMcpServerCatalogV1(value: unknown,
@@ -51,18 +56,20 @@ export function projectStoredMcpServerCatalogV1(value: unknown,
     } else servers.push(candidate.entry);
   }
   const serverIds = new Set(servers.map(server => server.id));
-  const parsedBindings = raw.bindings.map((binding, index) => ({ parsed: storedBinding.safeParse(binding), index }));
+  const parsedBindings = raw.bindings.map((binding, index) => ({ parsed: (authority === 'retained-source' ? retainedBinding : storedBinding).safeParse(binding), index }));
   const bindingIdCounts = new Map<string, number>();
   parsedBindings.forEach(({ parsed }) => {
     if (parsed.success) bindingIdCounts.set(parsed.data.id, (bindingIdCounts.get(parsed.data.id) ?? 0) + 1);
   });
-  const bindings: McpServerBindingV1[] = [];
+  const bindings: Array<McpServerRuleV1 & { overrides?: import('./settingsV1.js').McpServerConfigOverrideFieldsV1 }> = [];
   for (const { parsed, index } of parsedBindings) {
-    if (!parsed.success || !serverIds.has(parsed.data.serverId) || bindingIdCounts.get(parsed.data.id) !== 1) {
+    if (!parsed.success || (!serverIds.has(parsed.data.serverId) && !isMcpPluginItemIdV1(parsed.data.serverId)) || bindingIdCounts.get(parsed.data.id) !== 1) {
       diagnostics.push({ path: `bindings[${index}]`, reason: 'invalid-stored-content' });
     } else bindings.push(parsed.data);
   }
-  const catalog: McpServerCatalogV1 = { v: 1, servers, bindings };
+  const normalizedBindings = [...new Set(bindings.map(rule => rule.serverId))].flatMap(serverId => normalizeReachRulesV1(bindings.filter(rule => rule.serverId === serverId)));
+  const catalog: McpServerCatalogV1 = { v: 1, ...(authority === 'retained-source'
+    ? splitRetainedMcpServerConfigurationV1(servers, normalizedBindings) : { servers, bindings: normalizedBindings }) };
   if (authority === 'active') for (const reference of listMcpServerCatalogSavedSecretRefsV1(catalog)) {
     try {
       if (parseSavedSecretRefV1(reference.secretId).kind === 'shared_resource') continue;
@@ -78,11 +85,15 @@ export function projectStoredMcpServerCatalogV1(value: unknown,
     }
   });
   parsedBindings.forEach(({ parsed, index }) => {
+    if (authority === 'retained-source' && parsed.success) {
+      for (const path of listSavedSecretReferenceCarrierPathsV1(parsed.data, { initialPath: `bindings[${index}]` })) admittedPaths.add(path);
+    }
     if (parsed.success) for (const ref of listMcpServerCatalogSavedSecretRefsV1({ v: 1, servers: [], bindings: [parsed.data] })) {
       admittedPaths.add(ref.path.replace(/^bindings\[0\]/u, `bindings[${index}]`));
     }
   });
   for (const path of listSavedSecretReferenceCarrierPathsV1(raw)) {
+    if (authority === 'active' && /^bindings\[\d+\]\.overrides(?:\.|\[|$)/u.test(path)) continue;
     if (!admittedPaths.has(path)) diagnostics.push({ path, reason: 'unclassified-reference' });
   }
   return diagnostics.length ? { status: 'partial', catalog, diagnostics } : { status: 'opened', catalog };
@@ -191,10 +202,10 @@ export function listMcpServerCatalogSavedSecretRefsV1(catalog: McpServerCatalogV
   };
   catalog.servers.forEach((entry, index) => {
     visit(entry.env, `servers[${index}].env`); visit(entry.remote?.headers, `servers[${index}].remote.headers`);
-  });
-  catalog.bindings.forEach((binding, index) => {
-    visit(binding.overrides?.envPatch, `bindings[${index}].overrides.envPatch`);
-    visit(binding.overrides?.remote?.headersPatch, `bindings[${index}].overrides.remote.headersPatch`);
+    entry.configOverrides?.forEach((override, overrideIndex) => {
+      visit(override.envPatch, `servers[${index}].configOverrides[${overrideIndex}].envPatch`);
+      visit(override.remote?.headersPatch, `servers[${index}].configOverrides[${overrideIndex}].remote.headersPatch`);
+    });
   });
   return refs;
 }
@@ -206,12 +217,13 @@ export function remapMcpServerCatalogSavedSecretReferencesV1(catalog: McpServerC
     Object.fromEntries(Object.entries(input).map(([key, value]) => [key, rewrite(value)]));
   return McpServerCatalogV1Schema.parse({ ...catalog,
     servers: catalog.servers.map(entry => ({ ...entry, env: values(entry.env),
-      ...(entry.remote ? { remote: { ...entry.remote, headers: values(entry.remote.headers) } } : {}) })),
-    bindings: catalog.bindings.map(binding => ({ ...binding, ...(binding.overrides ? { overrides: { ...binding.overrides,
-      ...(binding.overrides.envPatch ? { envPatch: values(binding.overrides.envPatch) } : {}),
-      ...(binding.overrides.remote ? { remote: { ...binding.overrides.remote,
-        ...(binding.overrides.remote.headersPatch ? { headersPatch: values(binding.overrides.remote.headersPatch) } : {}) } } : {}),
-    } } : {}) })),
+      ...(entry.remote ? { remote: { ...entry.remote, headers: values(entry.remote.headers) } } : {}),
+      ...(entry.configOverrides ? { configOverrides: entry.configOverrides.map(override => ({ ...override,
+        ...(override.envPatch ? { envPatch: values(override.envPatch) } : {}),
+        ...(override.remote ? { remote: { ...override.remote,
+          ...(override.remote.headersPatch ? { headersPatch: values(override.remote.headersPatch) } : {}) } } : {}),
+      })) } : {}),
+    })),
   });
 }
 export function rewriteMcpServerCatalogSavedSecretRefsV1(catalog: McpServerCatalogV1, from: string, to: string): McpServerCatalogV1 {

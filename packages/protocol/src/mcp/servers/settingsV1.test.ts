@@ -97,7 +97,7 @@ describe('McpServersSettingsV1Schema', () => {
     expect(res.success).toBe(false);
   });
 
-  it('rejects remote MCP URL fragments in catalog entries and binding overrides', () => {
+  it('rejects remote MCP URL fragments in catalog entries and configuration overrides', () => {
     const base = {
       v: 1 as const,
       strictMode: false,
@@ -128,19 +128,13 @@ describe('McpServersSettingsV1Schema', () => {
     }).success).toBe(false);
     expect(McpServersSettingsV1Schema.safeParse({
       ...base,
-      bindings: [{
-        id: 'b1',
-        serverId: 's1',
-        enabled: true,
-        target: { t: 'allMachines' as const },
-        overrides: {
+      servers: [{ ...base.servers[0]!, configOverrides: [{
+        target: { t: 'machine', machineId: 'm' },
           remote: {
             url: 'https://mcp.example.com/override#section',
           },
-        },
-        createdAt: 0,
-        updatedAt: 0,
-      }],
+      }] }],
+      bindings: [],
     }).success).toBe(false);
   });
 

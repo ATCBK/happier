@@ -53,6 +53,12 @@ export const SessionMcpSelectionV1Schema = lazyZodSchema(() => z
 
 export type SessionMcpSelectionV1 = z.infer<typeof SessionMcpSelectionV1Schema>;
 
+/** Closed metadata writes; the stored marker reader below keeps the released shape. */
+export const SessionMcpSelectionRestartRequiredAuthoringV1Schema = lazyZodSchema(() => z.object({
+  v: z.literal(1),
+  appliedSelection: SessionMcpSelectionAuthoringV1Schema,
+}).strict());
+
 export const SessionMcpSelectionRestartRequiredV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),
   appliedSelection: SessionMcpSelectionV1Schema,

@@ -1,35 +1,32 @@
-import { McpServerCatalogMutationV1Schema, McpServerCatalogScopeV1Schema, unavailableReasonSchema } from "./catalogSchemasV1.js";
+import { McpServerCatalogMutationV1Schema, unavailableReasonSchema } from "./catalogSchemasV1.js";
 import type { McpServerCatalogMutationV1, McpServerCatalogSnapshotV1, McpServerCatalogUnavailableReasonV1,
-  McpServerCatalogScopeV1, McpServerBindingEnabledReversalV1, McpServerCatalogMutationResponseV1 } from "./catalogSchemasV1.js";
+  McpServerCatalogScopeV1, McpServerCatalogMutationResponseV1 } from "./catalogSchemasV1.js";
 export { McpServerCatalogMutationV1Schema, McpServerCatalogSnapshotV1Schema } from "./catalogSchemasV1.js";
 export type { McpServerCatalogMutationV1, McpServerCatalogSnapshotV1, McpServerCatalogUnavailableReasonV1, McpServerCatalogSourceCleanupV1,
-  McpServerCatalogScopeV1, McpServerBindingEnabledReversalV1, McpServerCatalogMutationResponseV1 } from "./catalogSchemasV1.js";
+  McpServerCatalogScopeV1, McpServerCatalogMutationResponseV1 } from "./catalogSchemasV1.js";
 import type { AccountScopedCryptoMaterial } from '../../crypto/accountScopedCipher.js';
 import { projectStoredMcpServerCatalogV1, openMcpServerCatalogContentV1, type McpServerCatalogV1, type McpServerCatalogRowReadResponseV1, type McpServerCatalogRowMutationResponseV1, McpServerCatalogV1Schema } from './serverRowsV1.js';
-import { type McpServersSettingsV1 } from './settingsV1.js';
+import type { McpServersSettingsV1 } from './settingsV1.js';
+import { applyReachRulesChangeV1, type ReachRulesWriteContextV1 } from '../../reach/reachRulesChangeV1.js';
 
 export { listMcpServerCatalogSavedSecretRefsV1, rewriteMcpServerCatalogSavedSecretRefsV1,
   remapMcpServerCatalogSavedSecretReferencesV1 } from './serverRowsV1.js';
 
 
-class McpServerCatalogMutationRefusalV1 extends Error {
-  constructor(readonly code: 'binding-conflict' | 'server_scope_mismatch' | 'not_authenticated') { super(code); }
-}
-
 /** Definitions and their bindings share one validation and one durable row CAS. */
 export function applyMcpServerCatalogMutationV1(catalog: McpServerCatalogV1, rawChange: McpServerCatalogMutationV1,
-  scope?: McpServerCatalogScopeV1 | null): McpServerCatalogV1 {
+  ctx?: ReachRulesWriteContextV1): McpServerCatalogV1 {
   McpServerCatalogV1Schema.parse(catalog);
   const change = McpServerCatalogMutationV1Schema.parse(rawChange);
   if (change.kind === 'server-create-batch') {
-    for (const { entry, bindings } of change.entries) {
-      for (const binding of bindings) {
+    for (const { entry, rules } of change.entries) {
+      for (const binding of rules) {
         if (binding.serverId !== entry.id) throw new Error(`Binding serverId mismatch: ${binding.serverId}`);
       }
     }
     return McpServerCatalogV1Schema.parse({ ...catalog,
       servers: [...catalog.servers, ...change.entries.map(item => item.entry)],
-      bindings: [...catalog.bindings, ...change.entries.flatMap(item => item.bindings)],
+      bindings: [...catalog.bindings, ...change.entries.flatMap(item => item.rules)],
     });
   }
   if (change.kind === 'server-remove') {
@@ -40,75 +37,55 @@ export function applyMcpServerCatalogMutationV1(catalog: McpServerCatalogV1, raw
     return { ...catalog, servers: catalog.servers.filter(entry => entry.id !== change.serverId),
       bindings: catalog.bindings.filter(binding => binding.serverId !== change.serverId) };
   }
-  if (change.kind === 'binding-remove') {
-    if (!catalog.bindings.some(binding => binding.id === change.bindingId)) return catalog;
-    return { ...catalog, bindings: catalog.bindings.filter(binding => binding.id !== change.bindingId) };
-  }
-  if (change.kind === 'binding-enabled') {
-    if (change.expectedScope || change.captureBefore) {
-      if (!McpServerCatalogScopeV1Schema.safeParse(scope).success) throw new McpServerCatalogMutationRefusalV1('not_authenticated');
-      if (change.expectedScope && (change.expectedScope.serverId !== scope?.serverId
-        || change.expectedScope.accountId !== scope?.accountId)) throw new McpServerCatalogMutationRefusalV1('server_scope_mismatch');
-    }
-    const binding = catalog.bindings.find(binding => binding.id === change.bindingId);
-    if (!binding) throw new Error(`Binding not found: ${change.bindingId}`);
-    if (change.expectedEnabled !== undefined && binding.enabled !== change.expectedEnabled) {
-      throw new McpServerCatalogMutationRefusalV1('binding-conflict');
-    }
-    return { ...catalog, bindings: catalog.bindings.map(binding => binding.id === change.bindingId ? { ...binding, enabled: change.enabled } : binding) };
-  }
-  if ('binding' in change) {
-    const exists = catalog.bindings.some(binding => binding.id === change.binding.id);
-    if (change.kind === 'binding-create' && exists) throw new Error(`Duplicate binding id: ${change.binding.id}`);
-    if (change.kind === 'binding-update' && !exists) throw new Error(`Binding not found: ${change.binding.id}`);
-    return McpServerCatalogV1Schema.parse({ ...catalog, bindings: exists
-      ? catalog.bindings.map(binding => binding.id === change.binding.id ? change.binding : binding)
-      : [...catalog.bindings, change.binding] });
+  if (change.kind === 'rules-change') {
+    if (!ctx) throw new Error('Rules changes require the catalog write context');
+    const serverIds = [...new Set(change.serverIds)];
+    if (change.change.kind === 'replace' && serverIds.length !== 1) throw new Error('replace_needs_one_item');
+    const ids = new Set(serverIds);
+    const next = serverIds.flatMap(serverId => {
+      // Stored plugin ids are reserved shapes, not live items. Their write
+      // admission co-lands with the plugin item producer in P2 U8 / P7 U7.5.
+      if (!catalog.servers.some(server => server.id === serverId)) throw new Error(`Server not found: ${serverId}`);
+      return applyReachRulesChangeV1(catalog.bindings.filter(rule => rule.serverId === serverId), change.change, ctx).map(rule => ({ ...rule, serverId }));
+    });
+    return McpServerCatalogV1Schema.parse({ ...catalog, bindings: [...catalog.bindings.filter(rule => !ids.has(rule.serverId)), ...next] });
   }
   const exists = catalog.servers.some(entry => entry.id === change.entry.id);
   if (change.kind === 'server-create' && exists) throw new Error(`Duplicate server id: ${change.entry.id}`);
-  if (change.kind === 'server-update' && !exists) throw new Error(`Server not found: ${change.entry.id}`);
+  if ((change.kind === 'server-update' || change.kind === 'server-upsert') && !exists) throw new Error(`Server not found: ${change.entry.id}`);
   if (change.kind === 'server-duplicate') {
     if (!catalog.servers.some(entry => entry.id === change.serverId)) throw new Error(`Server not found: ${change.serverId}`);
     if (exists || change.serverId === change.entry.id) throw new Error(`Duplicate server id: ${change.entry.id}`);
   }
-  for (const binding of change.bindings) {
+  const rules = 'rules' in change ? change.rules : [];
+  for (const binding of rules) {
     if (binding.serverId !== change.entry.id) throw new Error(`Binding serverId mismatch: ${binding.serverId}`);
   }
   return McpServerCatalogV1Schema.parse({ ...catalog,
     servers: exists ? catalog.servers.map(entry => entry.id === change.entry.id ? change.entry : entry) : [...catalog.servers, change.entry],
-    bindings: [...catalog.bindings.filter(binding => binding.serverId !== change.entry.id), ...change.bindings],
+    bindings: [...catalog.bindings, ...rules],
   });
 }
 
 /** Capture, comparison and acknowledgement all belong to the same row mutation. */
 export async function commitMcpServerCatalogMutationV1(input: Readonly<{
   catalog: McpServerCatalogV1; revision: number; change: McpServerCatalogMutationV1; scope: McpServerCatalogScopeV1 | null;
+  ctx?: ReachRulesWriteContextV1;
   writeCatalog(value: Readonly<{ catalog: McpServerCatalogV1; expectedRevision: number }>): Promise<McpServerCatalogRowMutationResponseV1>;
 }>): Promise<McpServerCatalogMutationResponseV1> {
   let catalog: McpServerCatalogV1;
   let change: McpServerCatalogMutationV1;
   try {
     change = McpServerCatalogMutationV1Schema.parse(input.change);
-    catalog = applyMcpServerCatalogMutationV1(input.catalog, change, input.scope);
+    catalog = applyMcpServerCatalogMutationV1(input.catalog, change, input.ctx);
   } catch (error) {
-    if (error instanceof McpServerCatalogMutationRefusalV1) {
-      if (error.code === 'binding-conflict') return { status: 'conflict', revision: input.revision };
-      throw error;
-    }
     throw Object.assign(new Error('MCP catalog mutation is invalid'), { code: 'invalid-mutation', cause: error });
   }
-  let reversal: Omit<McpServerBindingEnabledReversalV1, 'revision'> | undefined;
-  if (change.kind === 'binding-enabled' && change.captureBefore) {
-    const before = input.catalog.bindings.find(binding => binding.id === change.bindingId)?.enabled;
-    // The reducer above proved the binding and scope before any durable effect.
-    if (before === undefined) throw Object.assign(new Error('Binding unavailable'), { code: 'invalid-mutation' });
-    reversal = { scope: McpServerCatalogScopeV1Schema.parse(input.scope), bindingId: change.bindingId,
-      before, applied: change.enabled };
-  }
+  const rulesFor = (value: McpServerCatalogV1, serverId: string) => value.bindings.filter(rule => rule.serverId === serverId).map(({ serverId: _serverId, ...rule }) => rule);
+  const items = change.kind === 'rules-change' ? [...new Set(change.serverIds)].map(serverId => ({ serverId,
+    rules: rulesFor(catalog, serverId), previous: rulesFor(input.catalog, serverId) })) : undefined;
   const result = await input.writeCatalog({ catalog, expectedRevision: input.revision });
-  return result.status === 'updated' && reversal
-    ? { ...result, reversal: { ...reversal, revision: result.revision } } : result;
+  return result.status === 'updated' && items ? { ...result, items } : result;
 }
 
 /** The same readiness contract crosses UI, CLI and typed Actions. */

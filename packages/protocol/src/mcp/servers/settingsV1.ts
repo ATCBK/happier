@@ -2,6 +2,11 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
 
 import { McpRemoteUrlV1Schema } from '../remoteUrlV1.js';
+import { ReachPlaceV1Schema } from '../../reach/reachPlaceV1.js';
+import { ReachRuleV1Schema } from '../../reach/reachRuleV1.js';
+import { reachRuleKeyV1 } from '../../reach/reachRulesChangeV1.js';
+export { ReachPlaceV1Schema } from '../../reach/reachPlaceV1.js';
+export type { ReachPlaceV1 } from '../../reach/reachPlaceV1.js';
 
 const SERVER_NAME_REGEX = /^[a-z0-9_-]+$/;
 const RESERVED_SERVER_NAMES = new Set(['happier', '__proto__', 'prototype', 'constructor']);
@@ -22,6 +27,18 @@ const McpHeaderKeyV1Schema = lazyZodSchema(() => z.string().regex(HEADER_KEY_REG
 
 export const McpServerCatalogEntryTransportV1Schema = lazyZodSchema(() => z.enum(['stdio', 'http', 'sse']));
 export type McpServerCatalogEntryTransportV1 = z.infer<typeof McpServerCatalogEntryTransportV1Schema>;
+
+const McpValueRefOrNullV1Schema = lazyZodSchema(() => z.union([McpValueRefV1Schema, z.null()]));
+export const McpServerConfigOverrideFieldsV1Schema = lazyZodSchema(() => z.object({
+  stdio: z.object({ command: z.string().min(1).optional(), args: z.array(z.string()).optional() }).strict().optional(),
+  remote: z.object({ url: McpRemoteUrlV1Schema.optional(), headersPatch: z.record(McpHeaderKeyV1Schema, McpValueRefOrNullV1Schema).optional() }).strict().optional(),
+  envPatch: z.record(McpEnvVarKeyV1Schema, McpValueRefOrNullV1Schema).optional(),
+}).strict());
+export type McpServerConfigOverrideFieldsV1 = z.infer<typeof McpServerConfigOverrideFieldsV1Schema>;
+export const McpServerConfigOverrideV1Schema = lazyZodSchema(() => McpServerConfigOverrideFieldsV1Schema.extend({
+  target: z.union([ReachPlaceV1Schema.options[1], ReachPlaceV1Schema.options[3]]),
+}).strict());
+export type McpServerConfigOverrideV1 = z.infer<typeof McpServerConfigOverrideV1Schema>;
 
 export const McpServerCatalogEntryV1Schema = lazyZodSchema(() => z
   .object({
@@ -44,9 +61,11 @@ export const McpServerCatalogEntryV1Schema = lazyZodSchema(() => z
       .object({
         url: McpRemoteUrlV1Schema,
         headers: z.record(McpHeaderKeyV1Schema, McpValueRefV1Schema),
+        auth: z.object({ kind: z.literal('oauth') }).strict().optional(),
       }).strict()
       .optional(),
     env: z.record(McpEnvVarKeyV1Schema, McpValueRefV1Schema),
+    configOverrides: z.array(McpServerConfigOverrideV1Schema).optional(),
     createdAt: z.number(),
     updatedAt: z.number(),
   }).strict()
@@ -70,60 +89,16 @@ export const McpServerCatalogEntryV1Schema = lazyZodSchema(() => z
 
 export type McpServerCatalogEntryV1 = z.infer<typeof McpServerCatalogEntryV1Schema>;
 
-function isAbsolutePath(value: string): boolean {
-  if (!value) return false;
-  if (value.startsWith('/')) return true;
-  if (/^[A-Za-z]:[\\/]/.test(value)) return true;
-  if (value.startsWith('\\\\')) return true;
-  return false;
-}
-
-export const McpServerBindingTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('allMachines') }).strict(),
-  z.object({ t: z.literal('machine'), machineId: z.string().min(1) }).strict(),
-  z.object({
-    t: z.literal('workspace'),
-    machineId: z.string().min(1),
-    workspaceRoot: z.string().min(1).refine(isAbsolutePath, 'workspaceRoot must be an absolute path'),
-  }).strict(),
-]));
-
-export type McpServerBindingTargetV1 = z.infer<typeof McpServerBindingTargetV1Schema>;
-
-const McpValueRefOrNullV1Schema = lazyZodSchema(() => z.union([McpValueRefV1Schema, z.null()]));
-
-export const McpServerBindingOverridesV1Schema = lazyZodSchema(() => z.object({
-  stdio: z
-    .object({
-      command: z.string().min(1).optional(),
-      args: z.array(z.string()).optional(),
-    }).strict()
-    .optional(),
-  remote: z
-    .object({
-      url: McpRemoteUrlV1Schema.optional(),
-      headersPatch: z.record(McpHeaderKeyV1Schema, McpValueRefOrNullV1Schema).optional(),
-    }).strict()
-    .optional(),
-  envPatch: z.record(McpEnvVarKeyV1Schema, McpValueRefOrNullV1Schema).optional(),
-}).strict());
-
-export type McpServerBindingOverridesV1 = z.infer<typeof McpServerBindingOverridesV1Schema>;
-
-export const McpServerBindingV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
+export const McpServerRuleV1Schema = lazyZodSchema(() => ReachRuleV1Schema.extend({
   serverId: z.string().min(1),
-  enabled: z.boolean(),
-  target: McpServerBindingTargetV1Schema,
-  overrides: McpServerBindingOverridesV1Schema.optional(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
 }).strict());
-
-export type McpServerBindingV1 = z.infer<typeof McpServerBindingV1Schema>;
+export type McpServerRuleV1 = z.infer<typeof McpServerRuleV1Schema>;
+export function mcpPluginItemIdV1(input: Readonly<{ pluginId: string; localId: string }>): string { return `plugin:${input.pluginId}/${input.localId}`; }
+export function isMcpPluginItemIdV1(value: string): boolean { return /^plugin:[^/]+\/[^/]+$/.test(value); }
+export type McpPluginItemV1 = Readonly<{ itemId: string; name: string; title?: string; config: McpServerCatalogEntryV1; rules: readonly McpServerRuleV1[] }>;
 
 export function refineMcpServerCatalogV1(value: Readonly<{
-  servers: readonly McpServerCatalogEntryV1[]; bindings: readonly McpServerBindingV1[];
+  servers: readonly McpServerCatalogEntryV1[]; bindings: readonly McpServerRuleV1[];
 }>, ctx: z.RefinementCtx): void {
   const serverIds = new Set<string>();
   const serverNames = new Set<string>();
@@ -133,9 +108,13 @@ export function refineMcpServerCatalogV1(value: Readonly<{
     serverIds.add(server.id); serverNames.add(server.name);
   }
   const bindingIds = new Set<string>();
+  const ruleKeys = new Set<string>();
   for (const [i, binding] of value.bindings.entries()) {
     if (bindingIds.has(binding.id)) ctx.addIssue({ code: 'custom', message: `Duplicate binding id: ${binding.id}`, path: ['bindings', i, 'id'] });
-    if (!serverIds.has(binding.serverId)) ctx.addIssue({ code: 'custom', message: `Server not found: ${binding.serverId}`, path: ['bindings', i, 'serverId'] });
+    if (!serverIds.has(binding.serverId) && !isMcpPluginItemIdV1(binding.serverId)) ctx.addIssue({ code: 'custom', message: `Server not found: ${binding.serverId}`, path: ['bindings', i, 'serverId'] });
+    const key = JSON.stringify([binding.serverId, reachRuleKeyV1(binding)]);
+    if (ruleKeys.has(key)) ctx.addIssue({ code: 'custom', message: 'Duplicate reach rule', path: ['bindings', i] });
+    ruleKeys.add(key);
     bindingIds.add(binding.id);
   }
 }
@@ -151,7 +130,7 @@ export const McpServersSettingsV1Schema = lazyZodSchema(() => z
         v: z.literal(1).default(1),
         strictMode: z.boolean().default(false),
         servers: z.array(McpServerCatalogEntryV1Schema).default([]),
-        bindings: z.array(McpServerBindingV1Schema).default([]),
+        bindings: z.array(McpServerRuleV1Schema).default([]),
       })
       .superRefine(refineMcpServerCatalogV1),
   ));

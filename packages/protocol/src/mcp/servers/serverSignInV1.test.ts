@@ -1,0 +1,157 @@
+import { describe, expect, it } from 'vitest';
+import { createMcpServerActionExecuteV1 } from './serverActionsV1.js';
+import { loadMcpServerCatalogV1, commitMcpServerCatalogMutationV1 } from './serverCatalogV1.js';
+import type { McpServerCatalogV1 } from './serverRowsV1.js';
+import { executeConnectedServiceConfigurationActionV1, prepareConnectedServiceRevokeInputV1, type ConnectedServiceConfigurationActionHostV1 } from '../../connect/executeConfigurationActionV1.js';
+import { ConnectedAccountDaemonControlResponseSchema } from '../../connect/connectedAccountDaemonRpcV1.js';
+import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 as service } from '../../connect/qualifiedConnectedAccountPersistence.js';
+
+const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
+const mode = { id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'https://app.happier.dev/oauth/mcp/callback',
+  pkce: 'required', outcomeReconciliation: 'none' } as const;
+const custody = { occurrenceId: 'host-occurrence', sourceCustody: { kind: 'host' } } as const;
+
+function harness(options: { online?: boolean; revokeFails?: boolean; conflict?: boolean; reconnect?: boolean;
+  waitingSignal?: AbortSignal; onRead?: () => void } = {}) {
+  let catalog: McpServerCatalogV1 = { v: 1, bindings: [], servers: [{ id: 'server', name: 'linear', transport: 'http',
+    remote: { url: 'https://resource.example.test/mcp', headers: {}, auth: { kind: 'oauth' } }, env: {}, createdAt: 1, updatedAt: 1 }] };
+  let revision = 9;
+  let values: Record<string, unknown> = options.reconnect ? { issuer: 'https://issuer.example.test',
+    registrations: { 'https://issuer.example.test': { clientId: 'cached-client' } }, stepUpScopes: ['tasks:write'] } : {};
+  const commands: unknown[] = [];
+  // RPC/persisted rows are system boundaries. Connected Services normalization,
+  // configuration CAS interpretation, revoke and MCP orchestration remain real.
+  const host: ConnectedServiceConfigurationActionHostV1 = {
+    assertCurrent() {}, async request() { throw new Error('unexpected HTTP'); }, async mutatePurposeBindings() {},
+    async resolveAgent() { return null; }, async resetQuota() {},
+    async authenticationCommand(machineId, command) {
+      commands.push({ machineId, command });
+      if (command.operation === 'beginConnect') return { status: 'configurationRequired', attemptId: 'attempt',
+        target: { kind: 'attempt', attemptId: 'attempt', service, modeId: 'oauth' }, missingFieldIds: ['serverId', 'resource'] };
+      if (command.operation === 'continueConnect' || command.operation === 'beginReconnect') return { status: 'starting', attemptId: 'attempt' };
+      if (command.operation === 'cancel') return { status: 'cancelled', attemptId: command.attemptId };
+      if (command.operation === 'read' && options.waitingSignal) {
+        options.onRead?.();
+        return await new Promise<never>((_resolve, reject) => {
+          const signal = options.waitingSignal!;
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          if (signal.aborted) reject(signal.reason);
+        });
+      }
+      if (command.operation === 'read' && command.waitForProviderStart === true) return { status: 'awaitingOAuth', attemptId: 'attempt',
+        authorizationUrl: 'https://issuer.example.test/authorize?state=attempt.nonce', callbackUrl: mode.callbackUrl, expiresAtMs: 5000 };
+      throw new Error('Unexpected authentication command');
+    },
+    async controlCommand(machineId, command) {
+      commands.push({ machineId, command });
+      if (command.operation === 'describeService') return { status: 'described', service,
+        descriptor: { id: service.localId, title: 'MCP sign-in', authentication: { defaultModeId: 'oauth', modes: [mode] } },
+        accounts: options.revokeFails === undefined && !options.reconnect ? [] : [{ ref: { service, accountId: 'server' }, status: 'connected',
+          authenticationModeId: 'oauth', configurationReady: true, configurationRevision: 'config-1', scopes: options.reconnect ? ['tasks:read'] : [],
+          revisionSemantics: 'revisioned', credentialRevision: 'csr_1234567890123456789012' }], operationTransport: { kind: 'v4' }, ...custody };
+      if (command.operation === 'readConfiguration' || command.operation === 'replaceConfiguration') {
+        if (command.operation === 'replaceConfiguration') values = { ...command.values };
+        return { status: command.operation === 'readConfiguration' ? 'configuration' : 'configurationCommitted',
+          target: options.reconnect ? { kind: 'account', account: { service, accountId: 'server' }, modeId: 'oauth' }
+            : { kind: 'attempt', attemptId: 'attempt', service, modeId: 'oauth' }, mode, ...custody,
+          configuration: { status: 'ready', revision: command.operation === 'readConfiguration' ? options.reconnect ? 'config-before' : null : 'config-1',
+            values, configuredSecretFieldIds: options.reconnect ? ['clientSecrets'] : [], missingFieldIds: [] } };
+      }
+      if (command.operation === 'revokeAccount') return options.revokeFails ? { status: 'unavailable', code: 'network_unavailable' }
+        : { status: 'revoked', account: command.account, remoteStatus: 'remoteUnsupported' };
+      throw new Error('Unexpected control command');
+    },
+  };
+  const ports = {
+    readCatalog: () => loadMcpServerCatalogV1({ mode: 'plain', material: null,
+      readRow: async () => ({ status: 'present', revision, content: { t: 'plain', v: catalog } }) }),
+    mutate: (change: Parameters<typeof commitMcpServerCatalogMutationV1>[0]['change'], expectedRevision: number | 'absent') =>
+      commitMcpServerCatalogMutationV1({ catalog, revision, change, scope: null, writeCatalog: async candidate => {
+        if (options.conflict || expectedRevision !== revision) return { status: 'conflict', revision };
+        catalog = candidate.catalog;
+        return { status: 'updated', revision: ++revision, cursor: revision };
+      } }),
+    machine: async () => { throw new Error('Unexpected MCP test'); },
+    resolveAdministrationMachine: async () => options.online === false ? null : 'machine',
+    describeConnectedService: async (machineId: string) => ConnectedAccountDaemonControlResponseSchema.parse(
+      await host.controlCommand!(machineId, { operation: 'describeService', service })),
+    connectedServiceAction: Object.assign(async (request: Parameters<NonNullable<import('../../actions/executor/types.js').ActionExecutorDeps['connectedServiceAction']>>[0]) =>
+      executeConnectedServiceConfigurationActionV1(host, request.actionId, request.input), {
+        prepareInput: async (request: { input: unknown }) => prepareConnectedServiceRevokeInputV1(host, request.input),
+      }),
+  };
+  return { execute: createMcpServerActionExecuteV1(ports), commands, read: () => ({ catalog, values }) };
+}
+
+describe('MCP sign-in through canonical Connected Services', () => {
+  it('admits the OAuth marker in the canonical Account catalog', async () => {
+    const owner = harness();
+    expect(await owner.execute({ actionId: 'mcp.servers.read', input: { serverId: 'server' }, context }))
+      .toMatchObject({ ok: true, result: { status: 'present', authority: 'active', server: { remote: { auth: { kind: 'oauth' } } } } });
+  });
+  it('starts an account-specific attempt and configures only its draft before OAuth admission', async () => {
+    const owner = harness();
+    expect(await owner.execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server', stepUp: true }, context }))
+      .toEqual({ ok: true, result: { attemptId: 'attempt', machineId: 'machine', expiresAtMs: 5000,
+        authorizationUrl: 'https://issuer.example.test/authorize?state=attempt.nonce' } });
+    expect(owner.read().values).toMatchObject({ serverId: 'server', resource: 'https://resource.example.test/mcp', stepUp: true });
+    expect(owner.commands).toContainEqual({ machineId: 'machine', command: { operation: 'continueConnect',
+      attemptId: 'attempt', expectedConfigurationRevision: 'config-1' } });
+    expect(owner.commands).not.toContainEqual(expect.objectContaining({ command: expect.objectContaining({ target: { kind: 'service' } }) }));
+  });
+  it('returns a typed no-machine refusal without creating an attempt', async () => {
+    const owner = harness({ online: false });
+    expect(await owner.execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server' }, context }))
+      .toEqual({ ok: false, errorCode: 'no_machine_online', error: 'no_machine_online' });
+    expect(owner.commands).toEqual([]);
+  });
+  it('reconnects the exact grant with configuration CAS while retaining issuer registration and granted scopes', async () => {
+    const owner = harness({ reconnect: true });
+    expect(await owner.execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server', stepUp: true }, context }))
+      .toMatchObject({ ok: true, result: { attemptId: 'attempt', machineId: 'machine' } });
+    expect(owner.read().values).toMatchObject({ issuer: 'https://issuer.example.test',
+      registrations: { 'https://issuer.example.test': { clientId: 'cached-client' } },
+      serverId: 'server', resource: 'https://resource.example.test/mcp', grantedScopes: ['tasks:read'], stepUpScopes: ['tasks:write'], stepUp: true });
+    expect(owner.commands).toContainEqual({ machineId: 'machine', command: { operation: 'replaceConfiguration',
+      target: { kind: 'account', account: { service, accountId: 'server' } }, expectedRevision: 'config-before',
+      values: owner.read().values, secretValues: {} } });
+    expect(owner.commands).toContainEqual({ machineId: 'machine', command: { operation: 'beginReconnect',
+      account: { service, accountId: 'server' }, expectedConfigurationRevision: 'config-1' } });
+  });
+  it('cancels the owned attempt if the caller interrupts before provider start returns its URL', async () => {
+    const controller = new AbortController();
+    let readEntered = false;
+    let enterRead!: () => void;
+    const entered = new Promise<void>(resolve => { enterRead = resolve; });
+    const owner = harness({ waitingSignal: controller.signal, onRead: () => { readEntered = true; enterRead(); } });
+    const response = owner.execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server' },
+      context: { ...context, signal: controller.signal } }).catch((error: unknown) => error);
+    await Promise.race([entered, response]);
+    controller.abort();
+    await response;
+    expect(readEntered).toBe(true);
+    expect(owner.commands).toContainEqual({ machineId: 'machine', command: { operation: 'cancel', attemptId: 'attempt' } });
+  });
+  it.each([false, true])('retains the catalog delete ACK and reports revocation pending=%s', async revokeFails => {
+    const owner = harness({ revokeFails });
+    expect(await owner.execute({ actionId: 'mcp.servers.delete', input: { serverId: 'server', expectedRevision: 9, removeBindings: true }, context }))
+      .toMatchObject({ ok: true, result: { status: 'updated', revision: 10, signOut: revokeFails
+        ? { status: 'pending' } : { status: 'revoked', remoteStatus: 'remoteUnsupported' } } });
+    expect(owner.read().catalog.servers).toEqual([]);
+    expect(owner.commands).toContainEqual({ machineId: 'machine', command: { operation: 'revokeAccount',
+      account: { service, accountId: 'server' }, cleanupGroupReferences: true, expectedCredentialRevision: 'csr_1234567890123456789012' } });
+  });
+  it('never revokes when the catalog CAS conflicts', async () => {
+    const owner = harness({ conflict: true });
+    expect(await owner.execute({ actionId: 'mcp.servers.delete', input: { serverId: 'server', expectedRevision: 9, removeBindings: true }, context }))
+      .toMatchObject({ ok: true, result: { status: 'conflict' } });
+    expect(owner.read().catalog.servers).toHaveLength(1);
+    expect(owner.commands).toEqual([]);
+  });
+  it('deletes a server without a grant without claiming sign-out is pending', async () => {
+    const owner = harness();
+    expect(await owner.execute({ actionId: 'mcp.servers.delete', input: { serverId: 'server', expectedRevision: 9, removeBindings: true }, context }))
+      .toMatchObject({ ok: true, result: { status: 'updated', signOut: { status: 'not_connected' } } });
+    expect(owner.commands).not.toContainEqual(expect.objectContaining({ command: expect.objectContaining({ operation: 'revokeAccount' }) }));
+  });
+});

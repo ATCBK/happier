@@ -11,29 +11,37 @@ const newReference = formatSharedSavedSecretRefV1('new');
 
 const catalog: McpServerCatalogV1 = { v: 1, servers: [{ id: 'server', name: 'server', transport: 'http',
   remote: { url: 'http://127.0.0.1:1234/mcp', headers: { Authorization: { t: 'savedSecret', secretId: oldReference } } },
-  env: { REGION: { t: 'literal', v: 'local' } }, createdAt: 1, updatedAt: 2 }], bindings: [{
+  env: { REGION: { t: 'literal', v: 'local' } }, createdAt: 1, updatedAt: 2,
+  configOverrides: [{ target: { t: 'workspace', machineId: 'machine', workspaceRoot: 'C:\\Users\\alice\\project' },
+    envPatch: { TOKEN: { t: 'savedSecret', secretId: oldReference }, REMOVED: null }, remote: { headersPatch: { Authorization: null } } }],
+  }], bindings: [{
   id: 'binding', serverId: 'server', enabled: true,
   target: { t: 'workspace', machineId: 'machine', workspaceRoot: 'C:\\Users\\alice\\project' },
-  overrides: { envPatch: { TOKEN: { t: 'savedSecret', secretId: oldReference }, REMOVED: null },
-    remote: { headersPatch: { Authorization: null } } }, createdAt: 1, updatedAt: 2,
+  createdAt: 1, updatedAt: 2,
 }] };
+const retainedCatalog = { ...catalog,
+  servers: catalog.servers.map(({ configOverrides: _overrides, ...server }) => server),
+  bindings: catalog.bindings.map(rule => {
+    const { target: _target, ...overrides } = catalog.servers[0]!.configOverrides![0]!;
+    return { ...rule, overrides };
+  }),
+};
 
 describe('MCP catalog row authority', () => {
   it('preserves attested references through catalog admission and secret rewrites', () => {
     const source: McpServerCatalogV1 = { ...catalog,
       servers: catalog.servers.map(server => ({ ...server, remote: { ...server.remote!, headers: {
         ...server.remote!.headers, Sender: { t: 'sessionAttested', field: 'externalPrincipalId' },
-      } } })),
-      bindings: catalog.bindings.map(binding => ({ ...binding, overrides: { ...binding.overrides,
+      } }, configOverrides: server.configOverrides?.map(override => ({ ...override,
         remote: { headersPatch: { Message: { t: 'sessionAttested', field: 'sourceMessageId' }, Removed: null } },
-      } })),
+      })) })),
     };
     expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: source } }))
       .toEqual({ status: 'opened', catalog: source });
     expect(listMcpServerCatalogSavedSecretRefsV1(source).map(ref => ref.secretId)).toEqual([oldReference, oldReference]);
     const rewritten = remapMcpServerCatalogSavedSecretReferencesV1(source, { [oldReference]: newReference });
     expect(rewritten.servers[0]?.remote?.headers.Sender).toEqual({ t: 'sessionAttested', field: 'externalPrincipalId' });
-    expect(rewritten.bindings[0]?.overrides?.remote?.headersPatch).toEqual({
+    expect(rewritten.servers[0]?.configOverrides?.[0]?.remote?.headersPatch).toEqual({
       Message: { t: 'sessionAttested', field: 'sourceMessageId' }, Removed: null,
     });
     expect(listMcpServerCatalogSavedSecretRefsV1(rewritten).map(ref => ref.secretId)).toEqual([newReference, newReference]);
@@ -91,9 +99,10 @@ describe('MCP catalog row authority', () => {
     }
     const source = { ...catalog, servers: catalog.servers.map(entry => ({ ...entry,
       remote: { ...entry.remote!, headers: { Authorization: { t: 'savedSecret' as const, secretId: 'personal-source' } } } })) };
+    const retainedSource = { ...source, servers: source.servers.map(({ configOverrides: _overrides, ...server }) => server), bindings: retainedCatalog.bindings };
     const retained = await loadMcpServerCatalogV1({ mode: 'plain', material: null,
       readRow: async () => ({ status: 'absent' }), transfer: {
-        readSourceSnapshot: async () => ({ version: 2, raw: { mcpServersSettingsV1: { ...source, strictMode: false } } }),
+        readSourceSnapshot: async () => ({ version: 2, raw: { mcpServersSettingsV1: { ...retainedSource, strictMode: false } } }),
         initializeCatalog: async () => { throw new Error('Without source CAS this read must remain inactive'); },
       } });
     expect(retained).toMatchObject({ status: 'ready', authority: 'inactive', revision: 'absent', catalog: source });
@@ -111,7 +120,7 @@ describe('MCP catalog row authority', () => {
   it('shows valid retained neighbors with diagnostics but never activates an incomplete inventory', async () => {
     const loaded = await loadMcpServerCatalogV1({ mode: 'plain', material: null, readRow: async () => ({ status: 'absent' }), transfer: {
       readSourceSnapshot: async () => ({ version: 2, raw: { mcpServersSettingsV1: {
-        ...catalog, strictMode: false, servers: [...catalog.servers, { id: 'bad', name: 'bad', transport: 'stdio' }],
+        ...retainedCatalog, strictMode: false, servers: [...retainedCatalog.servers, { id: 'bad', name: 'bad', transport: 'stdio' }],
       } } }),
       initializeCatalog: async () => { throw new Error('Incomplete source must remain authoritative'); },
     } });
@@ -120,7 +129,7 @@ describe('MCP catalog row authority', () => {
     expect(loaded.diagnostics).toContainEqual({ path: 'servers[1]', reason: 'invalid-stored-content' });
   });
   it('extracts strict policy before row activation, then removes source and sanitizes cleanup-created history', async () => {
-    let raw: Record<string, unknown> = { mcpServersSettingsV1: { ...catalog, strictMode: true }, unrelated: 7 };
+    let raw: Record<string, unknown> = { mcpServersSettingsV1: { ...retainedCatalog, strictMode: true }, unrelated: 7 };
     let version = 8;
     let row: { status: 'absent' } | { status: 'present'; revision: number; content: ReturnType<typeof sealMcpServerCatalogContentV1> } = { status: 'absent' };
     const effects: string[] = [];
@@ -155,14 +164,14 @@ describe('MCP catalog row authority', () => {
   it('never reseeds a deleted destination from a retained source', async () => {
     const loaded = await loadMcpServerCatalogV1({ mode: 'plain', material: null, readRow: async () => ({ status: 'deleted', revision: 4 }),
       transfer: {
-        readSourceSnapshot: async () => ({ raw: { mcpServersSettingsV1: { ...catalog, strictMode: true }, mcpServersStrictMode: false }, version: 3 }),
+        readSourceSnapshot: async () => ({ raw: { mcpServersSettingsV1: { ...retainedCatalog, strictMode: true }, mcpServersStrictMode: false }, version: 3 }),
         initializeCatalog: async () => { throw new Error('Deleted authority must never initialize'); },
       } });
     expect(loaded).toMatchObject({ status: 'ready', authority: 'active', revision: 4, catalog: { v: 1, servers: [], bindings: [] } });
   });
 
   it('preserves genuine retained policy when an already-active destination contracts its source', async () => {
-    let raw: Readonly<Record<string, unknown>> = { mcpServersSettingsV1: { ...catalog, strictMode: true }, unrelated: 7 };
+    let raw: Readonly<Record<string, unknown>> = { mcpServersSettingsV1: { ...retainedCatalog, strictMode: true }, unrelated: 7 };
     const loaded = await loadMcpServerCatalogV1({ mode: 'plain', material: null,
       readRow: async () => ({ status: 'deleted', revision: 4 }), transfer: {
         readSourceSnapshot: async () => ({ raw, version: 3 }),
@@ -192,8 +201,8 @@ describe('MCP catalog row authority', () => {
     expect(listMcpServerCatalogSavedSecretRefsV1(catalog).map(ref => ref.secretId)).toEqual([oldReference, oldReference]);
     const remapped = remapMcpServerCatalogSavedSecretReferencesV1(catalog, { [oldReference]: newReference });
     expect(listMcpServerCatalogSavedSecretRefsV1(remapped).map(ref => ref.secretId)).toEqual([newReference, newReference]);
-    expect(remapped.bindings[0]?.overrides?.envPatch?.REMOVED).toBeNull();
-    expect(remapped.bindings[0]?.overrides?.remote?.headersPatch?.Authorization).toBeNull();
+    expect(remapped.servers[0]?.configOverrides?.[0]?.envPatch?.REMOVED).toBeNull();
+    expect(remapped.servers[0]?.configOverrides?.[0]?.remote?.headersPatch?.Authorization).toBeNull();
     expect(remapped.servers[0]?.env.REGION).toEqual({ t: 'literal', v: 'local' });
     expect(() => applyMcpServerCatalogMutationV1(catalog, { kind: 'server-remove', serverId: 'server', removeBindings: false })).toThrow(/binding/i);
     expect(applyMcpServerCatalogMutationV1(catalog, { kind: 'server-remove', serverId: 'server', removeBindings: true }))
@@ -221,26 +230,46 @@ describe('MCP catalog row authority', () => {
   it('applies a typed definition-and-binding change atomically with name and target integrity', () => {
     const entry = { ...catalog.servers[0]!, id: 'another', name: 'another' };
     const binding = { ...catalog.bindings[0]!, id: 'another-binding', serverId: entry.id };
-    const next = applyMcpServerCatalogMutationV1(catalog, { kind: 'server-create', entry, bindings: [binding] });
+    const next = applyMcpServerCatalogMutationV1(catalog, { kind: 'server-create', entry, rules: [binding] });
     expect(next.servers).toEqual([...catalog.servers, entry]);
     expect(next.bindings).toEqual([...catalog.bindings, binding]);
     expect(() => applyMcpServerCatalogMutationV1(catalog, {
-      kind: 'server-create', entry: { ...entry, name: 'server' }, bindings: [binding],
+      kind: 'server-create', entry: { ...entry, name: 'server' }, rules: [binding],
     })).toThrow();
     expect(() => applyMcpServerCatalogMutationV1(catalog, {
-      kind: 'server-create', entry, bindings: [{ ...binding, serverId: 'missing' }],
+      kind: 'server-create', entry, rules: [{ ...binding, serverId: 'missing' }],
     })).toThrow();
     expect(catalog.servers).toHaveLength(1);
     expect(catalog.bindings).toHaveLength(1);
   });
 
-  it('updates nullable binding patches and enablement without changing its platform-qualified target or definition', () => {
-    const binding = { ...catalog.bindings[0]!, overrides: { envPatch: { TOKEN: null } } };
-    const edited = applyMcpServerCatalogMutationV1(catalog, { kind: 'binding-update', binding });
-    const disabled = applyMcpServerCatalogMutationV1(edited, { kind: 'binding-enabled', bindingId: binding.id, enabled: false });
+  it('changes and inherits rules without changing their platform-qualified target or definition', () => {
+    const binding = catalog.bindings[0]!;
+    const ctx = { nowMs: 3, newId: () => 'new' };
+    const disabled = applyMcpServerCatalogMutationV1(catalog, { kind: 'rules-change', serverIds: ['server'],
+      change: { kind: 'write', write: { place: binding.target, state: 'off' } } }, ctx);
     expect(disabled.servers).toEqual(catalog.servers);
-    expect(disabled.bindings).toEqual([{ ...binding, enabled: false }]);
-    expect(applyMcpServerCatalogMutationV1(disabled, { kind: 'binding-remove', bindingId: binding.id }))
+    expect(disabled.bindings).toEqual([{ ...binding, enabled: false, updatedAt: 3 }]);
+    expect(applyMcpServerCatalogMutationV1(disabled, { kind: 'rules-change', serverIds: ['server'],
+      change: { kind: 'write', write: { place: binding.target, state: 'inherit' } } }, ctx))
       .toEqual({ ...catalog, bindings: [] });
+  });
+
+  it('refuses unsupported plugin rule writes before producing a catalog mutation', () => {
+    const source: McpServerCatalogV1 = { ...catalog, bindings: [...catalog.bindings, {
+      id: 'reserved-plugin-rule', serverId: 'plugin:unknown/item', enabled: true,
+      target: { t: 'allMachines' }, createdAt: 1, updatedAt: 2,
+    }] };
+    // Reserved stored shapes do not establish a live plugin item producer.
+    expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: source } }))
+      .toEqual({ status: 'opened', catalog: source });
+    expect(() => applyMcpServerCatalogMutationV1(source, {
+      kind: 'rules-change', serverIds: ['server', 'plugin:unknown/item'],
+      change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'off' } },
+    }, { nowMs: 3, newId: () => 'new-rule' })).toThrow('Server not found');
+    expect(source.bindings).toEqual([...catalog.bindings, {
+      id: 'reserved-plugin-rule', serverId: 'plugin:unknown/item', enabled: true,
+      target: { t: 'allMachines' }, createdAt: 1, updatedAt: 2,
+    }]);
   });
 });

@@ -2,11 +2,13 @@ import { z } from 'zod';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
-import { McpServerCatalogEntryV1Schema, McpServerBindingV1Schema, refineMcpServerCatalogV1 } from './settingsV1.js';
+import { McpServerCatalogEntryV1Schema, McpServerRuleV1Schema, refineMcpServerCatalogV1 } from './settingsV1.js';
+import { ReachRuleV1Schema } from '../../reach/reachRuleV1.js';
+import { ReachRulesChangeV1Schema, type ReachRulesChangeV1 } from '../../reach/reachRulesChangeV1.js';
 
 
 export const McpServerCatalogV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1), servers: z.array(McpServerCatalogEntryV1Schema), bindings: z.array(McpServerBindingV1Schema),
+  v: z.literal(1), servers: z.array(McpServerCatalogEntryV1Schema), bindings: z.array(McpServerRuleV1Schema),
 }).strict().superRefine(refineMcpServerCatalogV1));
 export type McpServerCatalogV1 = z.infer<typeof McpServerCatalogV1Schema>;
 export const StoredMcpServerCatalogV1Schema = createStoredReadSchema(McpServerCatalogV1Schema);
@@ -68,20 +70,10 @@ export const McpServerCatalogScopeV1Schema = lazyZodSchema(() => z.object({
 }).strict());
 export type McpServerCatalogScopeV1 = z.infer<typeof McpServerCatalogScopeV1Schema>;
 
-/** An exact enabled-state reversal carries no binding configuration or credentials. */
-export const McpServerBindingEnabledReversalV1Schema = lazyZodSchema(() => z.object({
-  scope: McpServerCatalogScopeV1Schema, bindingId: z.string().min(1), before: z.boolean(), applied: z.boolean(), revision,
-}).strict());
-export type McpServerBindingEnabledReversalV1 = z.infer<typeof McpServerBindingEnabledReversalV1Schema>;
-
 /** Semantic receipts extend the domain result, never the durable row HTTP response. */
 export const McpServerCatalogMutationResponseV1Schema = lazyZodSchema(() => z.union([
-  McpServerCatalogRowMutationResponseV1Schema.options[0].extend({ reversal: McpServerBindingEnabledReversalV1Schema.optional() })
-    .strict().superRefine((result, context) => {
-      if (result.reversal && result.reversal.revision !== result.revision) {
-        context.addIssue({ code: 'custom', path: ['reversal', 'revision'], message: 'Reversal requires the committed row revision' });
-      }
-    }),
+  McpServerCatalogRowMutationResponseV1Schema.options[0].extend({ items: z.array(z.object({ serverId: z.string().min(1),
+    rules: z.array(ReachRuleV1Schema), previous: z.array(ReachRuleV1Schema) }).strict()).optional() }).strict(),
   McpServerCatalogRowMutationResponseV1Schema.options[1],
   McpServerCatalogRowMutationResponseV1Schema.options[2],
   McpServerCatalogRowMutationResponseV1Schema.options[3],
@@ -98,31 +90,24 @@ export type AccountEncryptionMigrateMcpServerCatalogResultV1 = z.infer<typeof Ac
 
 export const McpServerCatalogCreateBatchV1Schema = lazyZodSchema(() => z.object({
   kind: z.literal('server-create-batch'), entries: z.array(z.object({
-    entry: McpServerCatalogEntryV1Schema, bindings: z.array(McpServerBindingV1Schema),
+    entry: McpServerCatalogEntryV1Schema, rules: z.array(McpServerRuleV1Schema),
   }).strict()),
 }).strict());
 
 export const McpServerCatalogMutationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('server-create'), entry: McpServerCatalogEntryV1Schema,
-    bindings: z.array(McpServerBindingV1Schema).default([]) }).strict(),
+    rules: z.array(McpServerRuleV1Schema) }).strict(),
   McpServerCatalogCreateBatchV1Schema,
-  z.object({ kind: z.literal('server-update'), entry: McpServerCatalogEntryV1Schema,
-    bindings: z.array(McpServerBindingV1Schema).default([]) }).strict(),
-  z.object({ kind: z.literal('server-upsert'), entry: McpServerCatalogEntryV1Schema,
-    bindings: z.array(McpServerBindingV1Schema).default([]) }).strict(),
+  z.object({ kind: z.literal('server-update'), entry: McpServerCatalogEntryV1Schema }).strict(),
+  z.object({ kind: z.literal('server-upsert'), entry: McpServerCatalogEntryV1Schema }).strict(),
   z.object({ kind: z.literal('server-duplicate'), serverId: z.string().min(1),
-    entry: McpServerCatalogEntryV1Schema, bindings: z.array(McpServerBindingV1Schema).default([]) }).strict(),
+    entry: McpServerCatalogEntryV1Schema, rules: z.array(McpServerRuleV1Schema) }).strict(),
   z.object({ kind: z.literal('server-remove'), serverId: z.string().min(1), removeBindings: z.boolean().default(false) }).strict(),
-  z.object({ kind: z.literal('binding-create'), binding: McpServerBindingV1Schema }).strict(),
-  z.object({ kind: z.literal('binding-update'), binding: McpServerBindingV1Schema }).strict(),
-  z.object({ kind: z.literal('binding-upsert'), binding: McpServerBindingV1Schema }).strict(),
-  z.object({ kind: z.literal('binding-remove'), bindingId: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('binding-enabled'), bindingId: z.string().min(1), enabled: z.boolean(),
-    captureBefore: z.boolean().optional(), expectedEnabled: z.boolean().optional(),
-    expectedScope: McpServerCatalogScopeV1Schema.optional() }).strict(),
+  z.object({ kind: z.literal('rules-change'), serverIds: z.array(z.string().min(1)).min(1), change: ReachRulesChangeV1Schema }).strict(),
 ]));
 
-export type McpServerCatalogMutationV1 = z.infer<typeof McpServerCatalogMutationV1Schema>;
+export type McpServerCatalogMutationV1 = Exclude<z.infer<typeof McpServerCatalogMutationV1Schema>, { kind: 'rules-change' }>
+  | Readonly<{ kind: 'rules-change'; serverIds: readonly string[]; change: ReachRulesChangeV1 }>;
 
 const unavailableReasons = ['account-not-found', 'account-inconsistent', 'account-mode-mismatch',
   'encryption-material-unavailable', 'invalid-stored-content', 'invalid-reference', 'unauthorized', 'forbidden',
