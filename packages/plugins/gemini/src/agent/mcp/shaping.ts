@@ -1,27 +1,10 @@
-import { createSecureTempDirectorySync } from '@happier-dev/plugin-sdk/fs';
+import { createSecureTempDirectorySync, linkDirectoryChildren } from '@happier-dev/plugin-sdk/fs';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-type GeminiMcpEnvironmentReader = Readonly<{
-  list(): Readonly<Record<string, string>>;
-}>;
-
-type GeminiMcpTempDirectory = Readonly<{
-  path: string;
-  cleanup(): void | Promise<void>;
-}>;
-
-type GeminiMcpFileSystem = Readonly<{
-  createTempDirectory(input?: Readonly<{ prefix?: string }>): Promise<GeminiMcpTempDirectory>;
-}>;
 import { resolveGeminiConfigPaths } from '../utils/configPaths.js';
 
 type EnvLike = Readonly<Record<string, string | undefined>>;
 type JsonObject = Record<string, unknown>;
-
-export type GeminiMcpShapingContext = Readonly<{
-  env: GeminiMcpEnvironmentReader;
-  fs: GeminiMcpFileSystem;
-}>;
 
 const GEMINI_ALLOWED_SOURCE_FILE_SELECTORS = [
   (paths: ReturnType<typeof resolveGeminiConfigPaths>) => paths.userConfigPath,
@@ -143,30 +126,6 @@ function scrubCopiedGeminiSettingsMcpServers(targetEnv: EnvLike): void {
   writeFileSync(targetPaths.userSettingsPath, JSON.stringify(nextSettings, null, 2), 'utf8');
 }
 
-export async function prepareGeminiMcpShaping(ctx: GeminiMcpShapingContext) {
-  const tempDir = await ctx.fs.createTempDirectory({ prefix: 'happier-gemini-mcp-home-' });
-  const cliHomeDir = tempDir.path;
-
-  const baseEnv = {
-    GEMINI_CLI_HOME: cliHomeDir,
-    HOME: cliHomeDir,
-    XDG_CONFIG_HOME: join(cliHomeDir, '.config'),
-  };
-
-  const processEnv = ctx.env.list();
-
-  copyKnownGeminiConfigFiles({
-    sourceEnv: processEnv,
-    targetEnv: baseEnv,
-  });
-  scrubCopiedGeminiSettingsMcpServers(baseEnv);
-
-  return {
-    env: baseEnv,
-    cleanup: () => tempDir.cleanup(),
-  };
-}
-
 /** Native sessions own this temporary home for exactly their composer lifetime. */
 export async function prepareGeminiNativeMcpShaping(
   sourceEnv: EnvLike = process.env,
@@ -179,8 +138,22 @@ export async function prepareGeminiNativeMcpShaping(
     XDG_CONFIG_HOME: join(cliHomeDir, '.config'),
   };
 
-  copyKnownGeminiConfigFiles({ sourceEnv, targetEnv: baseEnv });
-  scrubCopiedGeminiSettingsMcpServers(baseEnv);
+  try {
+    copyKnownGeminiConfigFiles({ sourceEnv, targetEnv: baseEnv });
+    scrubCopiedGeminiSettingsMcpServers(baseEnv);
+    const sourceHome = resolveGeminiConfigPaths(sourceEnv).cliHomeDir;
+    await Promise.all([
+      ['.gemini', 'skills'],
+      ['.agents', 'skills'],
+      ['.gemini', 'extensions'],
+    ].map((segments) => linkDirectoryChildren({
+      source: join(sourceHome, ...segments),
+      destination: join(cliHomeDir, ...segments),
+    })));
+  } catch (error) {
+    tempDirectory.cleanup();
+    throw error;
+  }
 
   let cleaned = false;
   return {
