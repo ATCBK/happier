@@ -14,7 +14,7 @@ import { resolveJavaScriptRuntimeExecutable } from '@/packagedRuntime/js/resolve
 import { readPositiveIntEnv } from '@/utils/readPositiveIntEnv';
 import { defaultNameFromUrl, defaultWebappUrlFromServerUrl } from '@/cli/commands/server/commandUtilities';
 import { isServerIdFilesystemSafe } from '@/server/serverId';
-import { applyDaemonServiceInstallPlan, runDaemonServiceCommands } from './apply';
+import { applyDaemonServiceInstallPlan, assertDaemonServiceCommandsAvailable, runDaemonServiceCommands } from './apply';
 import { buildServiceCommandEnv } from '@happier-dev/cli-common/service';
 import { describeBackgroundServiceTargetMode } from '@happier-dev/cli-common/happierRuntime';
 
@@ -750,17 +750,18 @@ async function assertExpectedDaemonServiceOwnership(params: Readonly<{
 async function withManualRelayTakeoverRecovery<T>(params: Readonly<{
   shouldTakeOverManualOwner: boolean;
   action: 'install' | 'start' | 'restart';
-  run: () => Promise<T> | T;
+  run: (beforeApply: () => Promise<void>) => Promise<T> | T;
 }>): Promise<T> {
-  if (!params.shouldTakeOverManualOwner) {
-    return await params.run();
-  }
-
-  await stopDaemon();
-
+  let stoppedManualOwner = false;
   try {
-    return await params.run();
+    return await params.run(async () => {
+      if (!params.shouldTakeOverManualOwner) return;
+      await stopDaemon();
+      stoppedManualOwner = true;
+    });
   } catch (error) {
+    // Preflight errors must preserve both the owner and their typed public error.
+    if (!stoppedManualOwner) throw error;
     const restored = await restartDaemonAndWait({ takeover: true }).catch(() => ({ ok: false }));
     const restoredOk = typeof restored === 'boolean' ? restored : restored.ok;
     const originalMessage = error instanceof Error ? error.message : String(error);
@@ -1405,6 +1406,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
     }
   }
 
+  try {
   if (flags.help) {
       if (flags.json) {
         await printJson({
@@ -1689,17 +1691,20 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
       await withManualRelayTakeoverRecovery({
         shouldTakeOverManualOwner: takeoverNotice !== null,
         action: 'install',
-        run: async () => {
+        run: async (beforeApply) => {
           await installDaemonService({
             managedBy: requestedManagedBy,
             autostart: flags.autostart ?? undefined,
             bundleId: requestedBundleId,
-            beforeApply: () => stopCurrentWindowsServiceOwnerIfNeeded({
-              platform: installRuntime.platform,
-              ownership,
-              expectedServiceLabel: paths.label,
-              action: 'install',
-            }),
+            beforeApply: async () => {
+              await beforeApply();
+              await stopCurrentWindowsServiceOwnerIfNeeded({
+                platform: installRuntime.platform,
+                ownership,
+                expectedServiceLabel: paths.label,
+                action: 'install',
+              });
+            },
             platform: installRuntime.platform,
             uid: installRuntime.uid ?? undefined,
             userHomeDir: installRuntime.userHomeDir,
@@ -2009,6 +2014,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
             expectedContents: expectedFile.content,
           });
           if (!matches) {
+            assertDaemonServiceCommandsAvailable(expectedPlan.commands);
             process.stderr.write('Refreshing background service definition (drifted from current template).\n');
             await applyDaemonServiceInstallPlan(expectedPlan, { runCommands: false });
             refreshedInstalledServiceDefinition = true;
@@ -2129,7 +2135,9 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
       await withManualRelayTakeoverRecovery({
         shouldTakeOverManualOwner: takeoverNotice !== null,
         action,
-        run: async () => {
+        run: async (beforeApply) => {
+          assertDaemonServiceCommandsAvailable(plan.commands);
+          await beforeApply();
           await stopCurrentWindowsServiceOwnerIfNeeded({
             platform: runtime.platform,
             ownership,
@@ -2401,4 +2409,14 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
     json: { ok: false, error: 'invalid_subcommand', message: msg },
     humanLines: [msg],
   }, flags.json);
+  } catch (error) {
+    if (flags.json && error instanceof Error && 'code' in error && error.code === 'service_manager_unavailable') {
+      await reportDaemonServiceCliFailure({
+        json: { ok: false, error: error.code, message: error.message, platform: runtime.platform },
+        humanLines: [error.message],
+      }, true);
+      return;
+    }
+    throw error;
+  }
 }

@@ -13,6 +13,7 @@ import { type DaemonStartupSource, isDaemonStartupSourceServiceManaged } from '@
 import { happierHomeDirsMatch } from '@/daemon/ownership/happierHomeDirComparableKey';
 import { type DaemonServiceCliRuntime, type DaemonServiceListEntry } from '@/daemon/service/paths';
 import type { DaemonServiceMode } from '@/daemon/service/plan';
+import { commandExistsInPath } from '@/daemon/service/commandExistsInPath';
 import { readBackgroundServiceActivity, type BackgroundServiceActivity } from '@/daemon/service/readBackgroundServiceHealth';
 
 function resolveDiscoveryModes(platform: DaemonServiceCliRuntime['platform']): readonly DaemonServiceMode[] {
@@ -237,6 +238,13 @@ export async function evaluateDaemonStartupServiceConflict(params: Readonly<{
 
   const services = await resolveInstalledDaemonServiceInventoryForCurrentRelay(params.runtime);
   if (services.length === 0) {
+    return { kind: 'none' };
+  }
+
+  // A readable unit alone does not block manual recovery when systemctl is unavailable in PATH.
+  // Live daemon ownership is checked separately; unreadable inventory still fails above.
+  if (params.runtime.platform === 'linux'
+    && !commandExistsInPath({ cmd: 'systemctl', envPath: process.env.PATH, platform: params.runtime.platform })) {
     return { kind: 'none' };
   }
 

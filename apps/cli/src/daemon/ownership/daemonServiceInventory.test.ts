@@ -31,6 +31,7 @@ describe('daemonServiceInventory', () => {
         'HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR',
         'HAPPIER_DAEMON_SERVICE_CHANNEL',
         'HAPPIER_DAEMON_SERVICE_TARGET_MODE',
+        'PATH',
     ]);
 
     afterEach(() => {
@@ -189,7 +190,7 @@ describe('daemonServiceInventory', () => {
             });
             vi.resetModules();
 
-            const { resolveInstalledDaemonServiceInventoryForCurrentRelay } = await import('./daemonServiceInventory');
+            const { resolveInstalledDaemonServiceInventoryForCurrentRelay, evaluateDaemonStartupServiceConflict } = await import('./daemonServiceInventory');
 
             mkdirSync(serviceCliHomeDir, { recursive: true });
             writeFileSync(
@@ -240,6 +241,12 @@ describe('daemonServiceInventory', () => {
             );
 
             await expect(resolveInstalledDaemonServiceInventoryForCurrentRelay(runtime)).resolves.toHaveLength(1);
+            envScope.patch({ PATH: userHomeDir });
+            expect(await evaluateDaemonStartupServiceConflict({ startupSource: 'manual', runtime })).toEqual({ kind: 'none' });
+            writeFileSync(join(userHomeDir, 'systemctl'), 'fixture', 'utf8');
+            expect(await evaluateDaemonStartupServiceConflict({ startupSource: 'manual', runtime })).toMatchObject({
+                kind: 'installed-background-service-conflict',
+            });
         });
     });
 
