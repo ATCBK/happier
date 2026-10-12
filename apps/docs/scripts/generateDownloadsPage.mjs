@@ -108,10 +108,29 @@ session is running somewhere else.
 | --- | --- |
 ${desktopRows}
 
-Every desktop build is listed on the [releases page](${m.desktopReleases}) if
-you need an older one or a different architecture. The desktop app is
+Every immutable desktop build is listed on the [releases page](${m.desktopReleases}),
+together with checksums and minisign signatures. Linux desktop downloads are
+currently x64. The desktop app is
 versioned separately from the CLI, so its number will not match
 \`happier --version\`.
+
+### Linux AppImage prerequisites
+
+Make the downloaded AppImage executable, then run it from your graphical desktop
+session. The AppImage still needs the host's EGL and OpenGL ES libraries, and
+FUSE 2 to mount itself. On Debian 13 or Ubuntu 24.04, install them with:
+
+\`\`\`bash
+sudo apt install libegl1 libgles2 libfuse2t64
+chmod +x happier-ui-desktop-linux-x86_64.AppImage
+./happier-ui-desktop-linux-x86_64.AppImage
+\`\`\`
+
+If startup reports missing \`libEGL.so.1\` or \`libGLESv2.so.2\`, the relevant
+packages are \`libegl1\` and \`libgles2\`. Debian 12 and Ubuntu 22.04 call the
+FUSE 2 library package \`libfuse2\`; keep your existing FUSE 3 installation.
+See the [AppImage FUSE guide](https://docs.appimage.org/user-guide/troubleshooting/fuse.html)
+for other distributions and systems where mounting is unavailable.
 
 ## On the machine that runs your agents
 

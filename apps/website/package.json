@@ -22,7 +22,7 @@
     "assert:crawlable": "node scripts/assert-crawlable.mjs",
     "assert:locale-links": "node scripts/assert-locale-links.mjs",
     "assert:perf": "node scripts/assert-perf-budget.mjs",
-    "check:links": "node scripts/check-download-links.mjs",
+    "check:links": "node --experimental-strip-types scripts/check-download-links.mjs",
     "preview": "vite preview",
     "test": "../stack/bin/hstack-exec --script=test:local",
     "pretest:local": "yarn -s prepare:workspace-deps",

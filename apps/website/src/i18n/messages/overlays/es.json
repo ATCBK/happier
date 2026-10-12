@@ -671,6 +671,7 @@
   "pageProse.PAGE_PROSE.downloadBadges.p7": "Escritorio",
   "pageProse.PAGE_PROSE.downloadBadges.p8": "Descargar para {platform}",
   "pageProse.PAGE_PROSE.downloadBadges.p9": "Ver las opciones de descarga para escritorio",
+  "pageProse.PAGE_PROSE.downloadBadges.p12": "Requisitos del AppImage de Linux",
   "pageProse.PAGE_PROSE.enterprisePage.p0": "Conviene tener clara la forma antes de la lista. Las sesiones se ejecutan en los propios ordenadores de tus desarrolladores, contra las CLI de proveedor que ya tienen. El relay lleva los mensajes entre esos ordenadores y sus teléfonos, navegadores y escritorios. Es la única pieza que tiene que ser accesible desde fuera, y es la pieza que se te pide alojar.",
   "pageProse.PAGE_PROSE.enterprisePage.p1": "Todo lo de abajo es configuración de servidor: variables de entorno en ese contenedor, aplicadas por ese contenedor, sin ningún servicio operado por Happier en el camino. La postura por defecto de un servidor recién instalado es almacenamiento cifrado de extremo a extremo y registro abierto, dando por hecho que la mayoría lo pone detrás de Tailscale. Si estás leyendo esta página, casi con seguridad quieres lo contrario de la segunda mitad de esa frase.",
   "pageProse.PAGE_PROSE.enterprisePage.p10": "SSO: organizaciones de GitHub, grupos de OIDC y certificados de cliente",

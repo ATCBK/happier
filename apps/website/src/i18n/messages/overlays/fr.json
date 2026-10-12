@@ -671,6 +671,7 @@
   "pageProse.PAGE_PROSE.downloadBadges.p7": "Bureau",
   "pageProse.PAGE_PROSE.downloadBadges.p8": "Télécharger pour {platform}",
   "pageProse.PAGE_PROSE.downloadBadges.p9": "Voir les options de téléchargement pour bureau",
+  "pageProse.PAGE_PROSE.downloadBadges.p12": "Prérequis de l’AppImage Linux",
   "pageProse.PAGE_PROSE.enterprisePage.p0": "Autant clarifier la forme avant la liste. Les sessions tournent sur les ordinateurs de tes développeurs, avec les CLI de providers qu’ils ont déjà. Le relay transporte les messages entre ces ordinateurs et leurs téléphones, navigateurs et desktops. C’est la seule pièce qui doit être joignable depuis l’extérieur, et c’est la pièce qu’on te demande d’héberger.",
   "pageProse.PAGE_PROSE.enterprisePage.p1": "Tout ce qui suit relève de la configuration du serveur : des variables d’environnement sur ce conteneur, appliquées par ce conteneur, sans aucun service opéré par Happier sur le chemin. La posture par défaut d’un serveur neuf, c’est un stockage chiffré de bout en bout et une inscription ouverte, en partant du principe que la plupart des gens le placent derrière Tailscale. Si tu lis cette page, tu veux presque certainement l’inverse de la seconde moitié de cette phrase.",
   "pageProse.PAGE_PROSE.enterprisePage.p10": "SSO : orgs GitHub, groupes OIDC et certificats client",

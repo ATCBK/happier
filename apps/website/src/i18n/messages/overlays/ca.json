@@ -671,6 +671,7 @@
   "pageProse.PAGE_PROSE.downloadBadges.p7": "Escriptori",
   "pageProse.PAGE_PROSE.downloadBadges.p8": "Descarrega per a {platform}",
   "pageProse.PAGE_PROSE.downloadBadges.p9": "Mostra les opcions de descàrrega per a escriptori",
+  "pageProse.PAGE_PROSE.downloadBadges.p12": "Requisits de l’AppImage de Linux",
   "pageProse.PAGE_PROSE.enterprisePage.p0": "Val la pena aclarir la forma abans de la llista. Les sessions s'executen als ordinadors dels teus desenvolupadors, contra les CLI de proveïdor que ja tenen. El relay transporta missatges entre aquells ordinadors i els seus telèfons, navegadors i escriptoris. És l'única peça que ha de ser accessible des de fora, i és la peça que se't demana que allotgis.",
   "pageProse.PAGE_PROSE.enterprisePage.p1": "Tot el que ve a continuació és configuració de servidor: variables d'entorn en aquell contenidor, aplicades per aquell contenidor, sense cap servei operat per Happier pel mig. La postura predeterminada d'un servidor acabat d'instal·lar és emmagatzematge xifrat d'extrem a extrem i registre obert, partint de la base que la majoria de gent el posa darrere de Tailscale. Si estàs llegint aquesta pàgina, gairebé segur que vols el contrari de la segona meitat d'aquesta frase.",
   "pageProse.PAGE_PROSE.enterprisePage.p10": "SSO: organitzacions de GitHub, grups d'OIDC i certificats de client",

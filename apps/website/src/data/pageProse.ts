@@ -114,6 +114,7 @@ export const PAGE_PROSE = {
         p9: "Show desktop download options",
         p10: "Show Android download options",
         p11: "Get it on",
+        p12: "Linux AppImage requirements",
     },
     downloadStats: {
         p0: "downloads",

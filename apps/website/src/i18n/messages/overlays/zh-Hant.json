@@ -671,6 +671,7 @@
   "pageProse.PAGE_PROSE.downloadBadges.p7": "桌面版",
   "pageProse.PAGE_PROSE.downloadBadges.p8": "下載 {platform} 版",
   "pageProse.PAGE_PROSE.downloadBadges.p9": "顯示桌面版下載選項",
+  "pageProse.PAGE_PROSE.downloadBadges.p12": "Linux AppImage 執行需求",
   "pageProse.PAGE_PROSE.enterprisePage.p0": "在進入清單之前，先把形狀弄清楚是值得的。工作階段跑在你的開發者自己的電腦上，用他們已經有的供應商 CLI。中繼站在那些電腦和他們的手機、瀏覽器與桌面之間傳遞訊息。它是唯一必須從外部連得上的部分，也是我們請你自行架設的那一塊。",
   "pageProse.PAGE_PROSE.enterprisePage.p1": "以下全部都是伺服器設定：那個容器上的環境變數，由那個容器強制執行，路徑中沒有任何由 Happier 營運的服務。全新伺服器的預設姿態是端對端加密儲存加上開放註冊，前提假設是多數人會把它放在 Tailscale 後面。如果你正在讀這一頁，你幾乎肯定想要這句話後半段的相反。",
   "pageProse.PAGE_PROSE.enterprisePage.p10": "SSO：GitHub 組織、OIDC 群組和用戶端憑證",

@@ -21,7 +21,10 @@ const DESKTOP_ASSET_BASE =
 export const DESKTOP_RELEASES_PAGE =
     'https://github.com/happier-dev/happier/releases/tag/ui-desktop-stable';
 
-export type DesktopPlatformId = 'mac-arm64' | 'mac-x86_64' | 'win-x86_64' | 'linux-x86_64';
+export const LINUX_APPIMAGE_REQUIREMENTS_URL =
+    'https://docs.happier.dev/getting-started/get-the-apps#linux-appimage-prerequisites';
+
+export type DesktopPlatformId = 'mac-arm64' | 'mac-x86_64' | 'win-x86_64' | 'linux-x86_64' | 'linux-x86_64-deb' | 'linux-x86_64-rpm';
 
 export type DesktopPlatform = {
     id: DesktopPlatformId;
@@ -58,6 +61,18 @@ export const DESKTOP_PLATFORMS: ReadonlyArray<DesktopPlatform> = [
         label: 'Linux',
         sublabel: 'x64 · AppImage',
         href: desktopAsset('happier-ui-desktop-linux-x86_64.AppImage'),
+    },
+    {
+        id: 'linux-x86_64-deb',
+        label: 'Linux',
+        sublabel: 'x64 · DEB',
+        href: desktopAsset('happier-ui-desktop-linux-x86_64.deb'),
+    },
+    {
+        id: 'linux-x86_64-rpm',
+        label: 'Linux',
+        sublabel: 'x64 · RPM',
+        href: desktopAsset('happier-ui-desktop-linux-x86_64.rpm'),
     },
 ];
 

@@ -671,6 +671,7 @@
   "pageProse.PAGE_PROSE.downloadBadges.p7": "桌面版",
   "pageProse.PAGE_PROSE.downloadBadges.p8": "下载 {platform} 版",
   "pageProse.PAGE_PROSE.downloadBadges.p9": "显示桌面版下载选项",
+  "pageProse.PAGE_PROSE.downloadBadges.p12": "Linux AppImage 运行要求",
   "pageProse.PAGE_PROSE.enterprisePage.p0": "在看清单之前，先把形态弄清楚是值得的。会话运行在你的开发者自己的电脑上，用的是他们已经有的服务方 CLI。relay 在这些电脑和他们的手机、浏览器、桌面之间传递消息。它是唯一一个必须从外部可达的部件，也正是我们请你托管的那个部件。",
   "pageProse.PAGE_PROSE.enterprisePage.p1": "下面的所有内容都是服务器配置：那个容器上的环境变量，由那个容器强制执行，路径中没有任何由 Happier 运营的服务。全新服务器的默认姿态是端到端加密存储加开放注册，前提假设是大多数人会把它放在 Tailscale 后面。如果你在读这一页，你几乎肯定想要的是这句话后半段的反面。",
   "pageProse.PAGE_PROSE.enterprisePage.p10": "SSO：GitHub 组织、OIDC 群组和客户端证书",

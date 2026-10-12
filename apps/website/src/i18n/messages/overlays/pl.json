@@ -671,6 +671,7 @@
   "pageProse.PAGE_PROSE.downloadBadges.p7": "Komputer",
   "pageProse.PAGE_PROSE.downloadBadges.p8": "Pobierz dla {platform}",
   "pageProse.PAGE_PROSE.downloadBadges.p9": "Pokaż opcje pobierania na komputer",
+  "pageProse.PAGE_PROSE.downloadBadges.p12": "Wymagania Linux AppImage",
   "pageProse.PAGE_PROSE.enterprisePage.p0": "Warto ustawić sobie kształt całości przed listą. Sesje działają na własnych komputerach twoich programistów, na CLI dostawców, które już mają. Relay przenosi wiadomości między tymi komputerami a ich telefonami, przeglądarkami i desktopami. To jedyny element, który musi być osiągalny z zewnątrz, i to ten element prosimy cię hostować.",
   "pageProse.PAGE_PROSE.enterprisePage.p1": "Wszystko poniżej to konfiguracja serwera: zmienne środowiskowe na tym kontenerze, egzekwowane przez ten kontener, bez żadnej usługi prowadzonej przez Happier na tej drodze. Domyślna postawa świeżego serwera to przechowywanie szyfrowane end-to-end i otwarta rejestracja, przy założeniu, że większość osób stawia go za Tailscale. Jeśli czytasz tę stronę, prawie na pewno chcesz odwrotności drugiej połowy tego zdania.",
   "pageProse.PAGE_PROSE.enterprisePage.p10": "SSO: organizacje GitHub, grupy OIDC i certyfikaty klienta",

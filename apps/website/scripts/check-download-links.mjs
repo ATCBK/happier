@@ -9,47 +9,46 @@
  * because they were string literals inside JSX. This script is the missing
  * check. Run it before every deploy:
  *
- *     node scripts/check-download-links.mjs
+ *     node --experimental-strip-types scripts/check-download-links.mjs
  *
  * It is deliberately NOT a vitest: it needs the network, and a unit suite that
  * fails when GitHub has a bad minute is a suite people learn to ignore.
  */
 
+import * as downloads from '../src/data/downloads.ts';
+
 const TARGETS = [
-    // Desktop — unversioned rolling aliases; must match src/data/downloads.ts.
-    'https://github.com/happier-dev/happier/releases/download/ui-desktop-stable/happier-ui-desktop-darwin-aarch64.dmg',
-    'https://github.com/happier-dev/happier/releases/download/ui-desktop-stable/happier-ui-desktop-darwin-x86_64.dmg',
-    'https://github.com/happier-dev/happier/releases/download/ui-desktop-stable/happier-ui-desktop-windows-x86_64.exe',
-    'https://github.com/happier-dev/happier/releases/download/ui-desktop-stable/happier-ui-desktop-linux-x86_64.AppImage',
-    'https://github.com/happier-dev/happier/releases/tag/ui-desktop-stable',
+    ...downloads.DESKTOP_PLATFORMS.map(({ href }) => href),
+    downloads.DESKTOP_RELEASES_PAGE,
+    downloads.LINUX_APPIMAGE_REQUIREMENTS_URL,
 
     // Mobile. The Play listing is also the target of the /playstore short link
     // (public/_redirects, printed as a QR code on marketing assets), the App
     // Store URL is /appstore's, and the stable APK is /apk's — a pulled listing
     // or asset must fail this check.
-    'https://apps.apple.com/app/happier-claude-codex-opencode/id6758554297',
-    'https://github.com/happier-dev/happier/releases/download/ui-mobile-stable/happier-android.apk',
-    'https://play.google.com/store/apps/details?id=dev.happier.app',
+    downloads.APP_STORE_URL,
+    downloads.ANDROID_APK_URL,
+    downloads.ANDROID_PLAY_URL,
 
     // Installer + trust surface
     'https://happier.dev/install',
-    'https://happier.dev/install.sh',
-    'https://happier.dev/install.ps1',
-    'https://happier.dev/happier-release.pub',
+    downloads.INSTALL_SCRIPT_URL,
+    downloads.INSTALL_SCRIPT_PS1_URL,
+    downloads.RELEASE_PUBKEY_URL,
 
     // Product surfaces
-    'https://cloud.happier.dev/',
-    'https://docs.happier.dev/',
+    downloads.WEB_APP_URL,
+    downloads.DOCS_URL,
     'https://docs.happier.dev/security',
     'https://docs.happier.dev/providers',
-    'https://docs.happier.dev/releases',
+    downloads.CHANGELOG_URL,
     'https://docs.happier.dev/getting-started/onboarding',
     'https://docs.happier.dev/deployment/self-host-runtime',
-    'https://guides.happier.dev/',
+    downloads.GUIDES_URL,
 
     // Repo — note the British spelling; /LICENSE is a 404.
-    'https://github.com/happier-dev/happier',
-    'https://github.com/happier-dev/happier/blob/main/LICENCE',
+    downloads.GITHUB_REPO_URL,
+    downloads.LICENSE_URL,
     'https://github.com/happier-dev/happier/graphs/contributors',
 
     // Published stats the counters read.

@@ -671,6 +671,7 @@
   "pageProse.PAGE_PROSE.downloadBadges.p7": "デスクトップ",
   "pageProse.PAGE_PROSE.downloadBadges.p8": "{platform} 版をダウンロード",
   "pageProse.PAGE_PROSE.downloadBadges.p9": "デスクトップ版のダウンロード方法を表示",
+  "pageProse.PAGE_PROSE.downloadBadges.p12": "Linux AppImage の必要条件",
   "pageProse.PAGE_PROSE.enterprisePage.p0": "リストに入る前に、形をはっきりさせておく価値があります。セッションは開発者自身のコンピュータで、彼らがすでに持っているプロバイダの CLI に対して動きます。リレーは、それらのコンピュータと、彼らの携帯電話、ブラウザ、デスクトップの間でメッセージを運びます。外から到達可能である必要があるのはそれだけで、ホストをお願いしているのもその部分です。",
   "pageProse.PAGE_PROSE.enterprisePage.p1": "以下はすべてサーバーの設定です。そのコンテナ上の環境変数で、そのコンテナが適用し、経路の中に Happier が運用するサービスはありません。新しいサーバーの既定の姿勢は、エンドツーエンド暗号化されたストレージとオープンなサインアップで、これはほとんどの人がそれを Tailscale の背後に置くという前提に基づいています。このページを読んでいるなら、その文の後半についてはほぼ確実に逆を望んでいるはずです。",
   "pageProse.PAGE_PROSE.enterprisePage.p10": "SSO: GitHub の組織、OIDC のグループ、クライアント証明書",

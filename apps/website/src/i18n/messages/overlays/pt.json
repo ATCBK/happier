@@ -671,6 +671,7 @@
   "pageProse.PAGE_PROSE.downloadBadges.p7": "Desktop",
   "pageProse.PAGE_PROSE.downloadBadges.p8": "Baixar para {platform}",
   "pageProse.PAGE_PROSE.downloadBadges.p9": "Mostrar as opções de download para desktop",
+  "pageProse.PAGE_PROSE.downloadBadges.p12": "Requisitos do AppImage para Linux",
   "pageProse.PAGE_PROSE.enterprisePage.p0": "Vale a pena perceber o formato antes da lista. As sessões correm nos computadores dos seus programadores, contra as CLIs dos fornecedores que eles já têm. O relay leva mensagens entre esses computadores e os telemóveis, navegadores e desktops deles. É a única peça que tem de estar acessível a partir de fora, e é a peça que lhe estamos a pedir para alojar.",
   "pageProse.PAGE_PROSE.enterprisePage.p1": "Tudo o que vem abaixo é configuração do servidor: variáveis de ambiente nesse contentor, aplicadas por esse contentor, sem nenhum serviço operado pelo Happier no caminho. A postura predefinida de um servidor novo é armazenamento encriptado de ponta a ponta e registo aberto, no pressuposto de que a maioria das pessoas o põe atrás do Tailscale. Se está a ler esta página, é quase certo que quer o oposto da segunda metade dessa frase.",
   "pageProse.PAGE_PROSE.enterprisePage.p10": "SSO: organizações do GitHub, grupos OIDC e certificados de cliente",
