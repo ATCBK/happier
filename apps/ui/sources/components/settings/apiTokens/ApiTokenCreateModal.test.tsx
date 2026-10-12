@@ -424,10 +424,14 @@ describe('ApiTokenCreateModal', () => {
             acknowledged: false,
         }));
 
+        const setChrome = vi.fn<(chrome: CustomModalChromeCardConfig | null) => void>();
         const screen = await renderScreen(
-            <ApiTokenCreateModal controller={controller} onClose={vi.fn()} setChrome={vi.fn()} />,
+            <ApiTokenCreateModal controller={controller} onClose={vi.fn()} setChrome={setChrome} />,
         );
 
+        // The band clears its create subtitle: the chrome merge keeps an omitted (`undefined`) field.
+        const chrome = setChrome.mock.calls.at(-1)?.[0];
+        expect(chrome && 'subtitle' in chrome && chrome.subtitle).toBeNull();
         expect(runtime.announceAccessibilityMessage).toHaveBeenCalledWith(ACCESSIBILITY_ANNOUNCEMENT);
         const copy = screen.findByTestId('settings-api-tokens-reveal-copy');
         expect(copy?.props.accessibilityRole).toBe('button');
@@ -480,7 +484,7 @@ describe('ApiTokenCreateModal', () => {
         const chrome = setChrome.mock.calls.at(-1)?.[0];
         expect(chrome?.kind).toBe('card');
         // The body says "shown once" a single time; the title band does not repeat it.
-        expect(chrome?.subtitle).toBeUndefined();
+        expect(chrome?.subtitle).toBeNull();
         const footerScreen = await renderScreen(<>{chrome?.footer}</>);
         expect(footerScreen.findByTestId('settings-api-tokens-reveal-stage-done')).toBeTruthy();
     });

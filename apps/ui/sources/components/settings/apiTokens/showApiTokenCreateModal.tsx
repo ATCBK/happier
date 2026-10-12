@@ -4,7 +4,7 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 
 import type { ApiTokenSettingsController } from './apiTokenSettingsController';
-import { ApiTokenCreateModal } from './ApiTokenCreateModal';
+import { ApiTokenCreateModal, type ApiTokenRevealCopy } from './ApiTokenCreateModal';
 
 type ApiTokenCreateModalHost = Pick<IModal, 'show' | 'confirm'>;
 
@@ -12,7 +12,7 @@ export function showApiTokenCreateModal(
     controller: ApiTokenSettingsController,
     modal: ApiTokenCreateModalHost = Modal,
     onHostUnmount?: () => void,
-    options?: Readonly<{ revealAccessory?: ReactNode }>,
+    options?: Readonly<{ revealAccessory?: ReactNode; revealCopy?: ApiTokenRevealCopy }>,
 ): string {
     if (!controller.getState().reveal) void controller.refreshEncryptionAvailability();
     const confirmRevealDismiss = async (): Promise<boolean> => {

@@ -21,36 +21,58 @@ import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 const stepMotion = slideTransitionTokens.routine.timed;
 
+/**
+ * Starts an entrance that always ends at rest. A JS-driven Animated value stops for good when the view
+ * it drives detaches mid-run (a frozen or re-suspended screen, a modal re-presented on a resize), and
+ * the stopped stagger left the reveal at opacity 0 for as long as it stayed open. Anything that
+ * interrupts the entrance other than its own cleanup settles it at its resting state instead.
+ */
+function startEntrance(animation: Animated.CompositeAnimation, settle: () => void): () => void {
+    let cleanedUp = false;
+    animation.start((result) => {
+        if (result?.finished !== true && !cleanedUp) settle();
+    });
+    return () => {
+        cleanedUp = true;
+        animation.stop();
+    };
+}
+
 const stylesheet = StyleSheet.create((theme) => ({
     error: {
-        ...Typography.default(),
         color: theme.colors.state.danger.foreground,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
     },
     revealHero: {
         alignItems: 'center',
-        gap: 8,
-        paddingTop: 4,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s4,
     },
     revealTitle: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 22,
-        lineHeight: 28,
+        ...Typography.variant('title'),
         textAlign: 'center',
     },
     revealBody: {
-        ...Typography.default(),
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
         textAlign: 'center',
-        lineHeight: 20,
     },
     secretSurface: {
         backgroundColor: theme.colors.surface.inset,
         borderRadius: 12,
-        padding: 12,
-        gap: 10,
+        padding: theme.space.s12,
+        gap: theme.space.s10,
+    },
+    // Copy (and a domain's secondary copy) side by side under the secret, each half the surface.
+    secretActions: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: theme.space.s8,
+    },
+    secretAction: {
+        flexGrow: 1,
+        flexBasis: 160,
     },
     secret: {
         ...Typography.mono(),
@@ -87,10 +109,10 @@ export function ApiTokenRevealDone(props: Readonly<{
             () => setRevealed(true),
             motionTokens.durationMs.fast * 3 + stepMotion.durationMs.enter,
         );
-        animation.start();
+        const stopEntrance = startEntrance(animation, () => progress.setValue(1));
         return () => {
             clearTimeout(revealTimer);
-            animation.stop();
+            stopEntrance();
         };
     }, [progress, props.reducedMotion, props.revealKey]);
 
@@ -148,9 +170,9 @@ function ApiTokenRevealStages(props: Readonly<{
                 useNativeDriver: true,
             });
             activeAnimationRef.current = animation;
-            animation.start();
+            const stopEntrance = startEntrance(animation, () => reducedOpacity.setValue(1));
             return () => {
-                animation.stop();
+                stopEntrance();
                 if (activeAnimationRef.current === animation) activeAnimationRef.current = null;
             };
         }
@@ -167,9 +189,9 @@ function ApiTokenRevealStages(props: Readonly<{
             })),
         );
         activeAnimationRef.current = animation;
-        animation.start();
+        const stopEntrance = startEntrance(animation, () => stageProgresses.forEach((progress) => progress.setValue(1)));
         return () => {
-            animation.stop();
+            stopEntrance();
             if (activeAnimationRef.current === animation) activeAnimationRef.current = null;
         };
     }, [props.reducedMotion, props.revealKey, reducedOpacity, secretProgress, successProgress, warningProgress]);
@@ -214,6 +236,10 @@ export function ApiTokenRevealBody(props: Readonly<{
     token: string;
     reducedMotion: boolean;
     onCopied: () => void;
+    /** A domain's wording for the one-time warning and Copy (an embed's key); defaults to the token's. */
+    copy?: Readonly<{ shownOnce: string; copy: string; successTitle?: string | null }>;
+    /** A secondary copy action beside Copy, inside the secret surface (an embed's ".env line"). */
+    accessory?: React.ReactNode;
 }>) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
@@ -221,7 +247,7 @@ export function ApiTokenRevealBody(props: Readonly<{
     const [copyError, setCopyError] = React.useState(false);
     const { onCopied, token } = props;
     const copied = copyFeedback.isCopied('token');
-    const copyLabel = copied ? t('settingsApiTokens.reveal.copied') : t('settingsApiTokens.reveal.copy');
+    const copyLabel = copied ? t('settingsApiTokens.reveal.copied') : props.copy?.copy ?? t('settingsApiTokens.reveal.copy');
 
     // The shared button owns the in-flight (busy) state and same-tick reentry while the clipboard
     // write settles; only a real copy acknowledges the reveal.
@@ -242,22 +268,30 @@ export function ApiTokenRevealBody(props: Readonly<{
             success={(
                 <View style={styles.revealHero}>
                     <Icon name="check-circle" size={34} color={theme.colors.state.success.foreground} />
-                    <Text style={styles.revealTitle}>{t('settingsApiTokens.reveal.successTitle')}</Text>
+                    {/* A domain whose band already names what is ready (an embed) shows only the mark. */}
+                    {props.copy && props.copy.successTitle === undefined ? null : (
+                        <Text style={styles.revealTitle}>{props.copy?.successTitle ?? t('settingsApiTokens.reveal.successTitle')}</Text>
+                    )}
                 </View>
             )}
-            warning={<Text style={styles.revealBody}>{t('settingsApiTokens.reveal.shownOnce')}</Text>}
+            warning={<Text style={styles.revealBody}>{props.copy?.shownOnce ?? t('settingsApiTokens.reveal.shownOnce')}</Text>}
             secret={(
                 <View style={styles.secretSurface}>
                     <Text selectable testID="settings-api-tokens-reveal-secret" style={styles.secret}>{token}</Text>
-                    <RoundButton
-                        testID="settings-api-tokens-reveal-copy"
-                        size="normal"
-                        display="secondary"
-                        title={copyLabel}
-                        accessibilityLabel={copyLabel}
-                        leading={<Icon name={copied ? 'check' : 'copy'} size={18} color={theme.colors.text.primary} />}
-                        action={copy}
-                    />
+                    <View style={styles.secretActions}>
+                        <View style={styles.secretAction}>
+                            <RoundButton
+                                testID="settings-api-tokens-reveal-copy"
+                                size="normal"
+                                display={props.accessory ? 'default' : 'secondary'}
+                                title={copyLabel}
+                                accessibilityLabel={copyLabel}
+                                leading={<Icon name={copied ? 'check' : 'copy'} size={18} color={props.accessory ? theme.colors.button.primary.tint : theme.colors.text.primary} />}
+                                action={copy}
+                            />
+                        </View>
+                        {props.accessory ? <View style={styles.secretAction}>{props.accessory}</View> : null}
+                    </View>
                     {copyError ? (
                         <Text accessibilityLiveRegion="assertive" style={styles.error} testID="settings-api-tokens-copy-error">
                             {t('settingsApiTokens.errors.copyFailed')}

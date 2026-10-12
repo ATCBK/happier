@@ -42,9 +42,9 @@ import { useApiTokenSettingsControllerState } from './useApiTokenSettingsControl
 
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
-        paddingHorizontal: 20,
+        paddingHorizontal: theme.space.s20,
         paddingTop: 18,
-        paddingBottom: 24,
+        paddingBottom: theme.space.s24,
         gap: 18,
     },
     stack: {
@@ -54,39 +54,35 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         justifyContent: 'flex-end',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     footerNote: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minWidth: 0,
     },
     footerNoteText: {
-        ...Typography.default(),
         flexShrink: 1,
         color: theme.colors.state.warning.foreground,
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
     },
     guidanceRow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        columnGap: 4,
-        paddingHorizontal: 2,
+        columnGap: theme.space.s4,
+        paddingHorizontal: theme.space.s2,
     },
     guidanceText: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 19,
+        ...Typography.variant('body'),
     },
     actionSettingsLink: {
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 4,
+        paddingHorizontal: theme.space.s4,
         borderRadius: 8,
     },
     link: {
@@ -94,10 +90,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         textDecorationLine: 'underline',
     },
     error: {
-        ...Typography.default(),
         color: theme.colors.state.danger.foreground,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
     },
     secret: {
         ...Typography.mono(),
@@ -109,6 +103,8 @@ const stylesheet = StyleSheet.create((theme) => ({
 
 type CreateStage = 'basics' | 'access';
 
+export type ApiTokenRevealCopy = Readonly<{ title: string; shownOnce: string; copy: string }>;
+
 /**
  * Create an API token (label, access, expiry, content and Team access; then, for limited access, the
  * grant editor), reveal it once — or, in `editAccess` mode, edit an existing token's grant. The
@@ -119,12 +115,14 @@ export function ApiTokenCreateModal(props: Readonly<{
     mode?: 'create' | 'editAccess';
     /** Domain-specific copy actions can accompany the canonical one-time reveal. */
     revealAccessory?: React.ReactNode;
+    /** A domain's wording for the reveal (an embed's key): the band title, warning and Copy. */
+    revealCopy?: ApiTokenRevealCopy;
 }> & CustomModalInjectedProps) {
     if (props.mode === 'editAccess') return <ApiTokenEditAccessContent {...props} />;
     return <ApiTokenCreateContent {...props} />;
 }
 
-function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsController; revealAccessory?: React.ReactNode }> & CustomModalInjectedProps) {
+function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsController; revealAccessory?: React.ReactNode; revealCopy?: ApiTokenRevealCopy }> & CustomModalInjectedProps) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const router = useRouter();
@@ -201,17 +199,20 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
     useModalCardChrome(props.setChrome, React.useMemo(() => ({
         kind: 'card' as const,
         title: reveal
-            ? t('settingsApiTokens.reveal.title')
+            ? props.revealCopy?.title ?? t('settingsApiTokens.reveal.title')
             : onAccessStage ? t('settingsApiTokens.create.accessTitle') : t('settingsApiTokens.create.title'),
-        // The reveal body already says the token is shown once; the band does not repeat it.
-        subtitle: reveal ? undefined : onAccessStage ? draft.label.trim() : t('settingsApiTokens.create.subtitle'),
+        // The reveal body already says the token is shown once; the band does not repeat it. `null`
+        // clears the band (chrome merges `undefined` as "keep", which left the create subtitle up).
+        subtitle: reveal ? null : onAccessStage ? draft.label.trim() : t('settingsApiTokens.create.subtitle'),
         testID: 'settings-api-tokens-create-modal',
         closeButtonTestID: 'settings-api-tokens-create-close',
         phonePresentation: 'sheet' as const,
-        scrollHost: 'body' as const,
+        // The form keeps one height while its steps change; the one-time reveal is a short final
+        // step, so the card fits it instead of leaving an empty void under the warning (lab T8).
+        scrollHost: reveal ? 'overlay' as const : 'body' as const,
         dimensions: { width: 600, maxHeightRatio: 0.9, size: 'md' as const },
         footer,
-    }), [draft.label, footer, onAccessStage, reveal]));
+    }), [draft.label, footer, onAccessStage, props.revealCopy?.title, reveal]));
 
     return (
         <ScrollView
@@ -228,8 +229,13 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
             >
                 {reveal ? (
                     <>
-                        <ApiTokenRevealBody token={reveal.token} reducedMotion={reducedMotion} onCopied={props.controller.acknowledgeReveal} />
-                        {props.revealAccessory}
+                        <ApiTokenRevealBody
+                            token={reveal.token}
+                            reducedMotion={reducedMotion}
+                            onCopied={props.controller.acknowledgeReveal}
+                            copy={props.revealCopy}
+                            accessory={props.revealAccessory}
+                        />
                     </>
                 ) : onAccessStage ? (
                     <View style={styles.stack}>
@@ -359,7 +365,7 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
                     </Text>
                 ) : null}
                 {state.recoveryTokenId ? (
-                    <View testID="settings-api-tokens-create-recovery" style={{ gap: 10 }}>
+                    <View testID="settings-api-tokens-create-recovery" style={{ gap: theme.space.s10 }}>
                         <Text style={styles.guidanceText}>{t('settingsApiTokens.encryption.outcomeUnknown')}</Text>
                         <Text selectable style={styles.secret}>{state.recoveryTokenId}</Text>
                         <RoundButton size="normal" display="inverted" title={t('common.refresh')}
