@@ -123,7 +123,9 @@ read_test_temp_root_users() {
     if ! {
       while IFS= read -r -d '' binding; do
         case "$binding" in HAPPIER_TEST_TEMP_ROOTS=*) test_temp_root_users="$test_temp_root_users
-${binding#HAPPIER_TEST_TEMP_ROOTS=}" ;; esac
+${binding#HAPPIER_TEST_TEMP_ROOTS=}" ;;
+        TMPDIR=/*) test_temp_root_users="$test_temp_root_users
+${binding#TMPDIR=}" ;; esac
       done < "/proc/$observed_pid/environ"
     } 2>/dev/null; then
       [ ! -d "/proc/$observed_pid" ] && continue
@@ -182,6 +184,11 @@ if [ "$mode" = reap-temp-roots ]; then
   exec node "${BASH_SOURCE[0]%/*}/historical_temp_roots.mjs" "${TMPDIR:-/tmp}"
 fi
 
+if [ "$mode" = reap-test-temp-roots ]; then
+  reap_test_temp_roots
+  exit 0
+fi
+
 if [ "$mode" = test-temp-users ]; then
   # Test producers ask the same custody owner before deleting their root during
   # teardown. Only this non-secret binding is emitted; unknown observation
@@ -198,12 +205,19 @@ if [ "$mode" = cancel ]; then cancel_record; exit 0; fi
 # The existing execution record lives beneath the configured worker CLI home.
 # Use that disk-backed owner for default scratch, not RAM-backed /tmp quotas.
 # Explicit TMPDIR remains caller-owned; never relocate an active scratch tree.
+command_temp=
+command_temp_parent=
+command_temp_token=
+command_temp_group=
 if [ -z "${TMPDIR-}" ]; then
   TMPDIR="${pid_file%/remote-exec/*}/tmp"
   mkdir -p -m 700 -- "$TMPDIR" || exit 1
+  if [ -d /proc/self ]; then
+    command_temp_parent=$TMPDIR
+  fi
   export TMPDIR
 fi
-reap_test_temp_roots
+# Shared historical/test scratch is explicit maintenance, not launch work.
 
 # Legacy native records lack a lifetime pipe. Reap only a positively identified
 # execution whose remote controller has been reparented to init; live SSH jobs
@@ -234,7 +248,23 @@ cleanup() {
   rm -f -- "$pid_file"
   [ -z "$control_pipe" ] || { exec 4>&-; rm -f -- "$control_pipe"; }
   [ -z "$lifetime_pid" ] || kill -TERM "$lifetime_pid" 2>/dev/null || true
-  reap_test_temp_roots
+  [ -z "$lifetime_pid" ] || wait "$lifetime_pid" 2>/dev/null || true
+  if [ -n "$command_temp" ]; then
+    # Positive producer custody: all payload descendants inherit TMPDIR. Like
+    # test-root teardown, unknown newer bindings or a live group retain it.
+    # Older unreadable processes cannot have inherited this unique allocation.
+    local snapshot binding
+    case "$command_temp_token" in ''|*[!0-9]*) return ;; esac
+    case "$command_temp" in *$'\n'*|*$'\r'*) return ;; esac
+    snapshot=$(ps -eo pid=,pgid=,stat=,uid=) || return
+    read_test_temp_root_users "$snapshot" "$command_temp_token" || return
+    while IFS= read -r binding; do
+      case "$binding" in "$command_temp"|"$command_temp"/*) return ;; esac
+    done <<< "$test_temp_root_users"
+    printf '%s\n' "$snapshot" | awk -v group="$command_temp_group" '$2 == group && $3 !~ /^Z/ {found=1} END {exit !found}' && return
+    [ -d "$command_temp" ] && [ ! -L "$command_temp" ] && [ -O "$command_temp" ] || return
+    rm -rf -- "$command_temp"
+  fi
 }
 terminate_command() {
   [ -n "$remote_child_pid" ] || return 0
@@ -268,6 +298,13 @@ terminate_command() {
 cancel() { trap '' HUP INT TERM; terminate_command; exit 130; }
 trap cleanup EXIT
 trap cancel HUP INT TERM
+if [ -n "$command_temp_parent" ]; then
+  # Acquire scratch only after its teardown traps are installed. Keep the name
+  # short for consumers with Unix socket paths beneath TMPDIR.
+  command_temp=$(mktemp -d "$command_temp_parent/hstack-XXXXXX") || exit 1
+  command_temp_token=$(heavyweight_process_token "$$")
+  TMPDIR=$command_temp
+fi
 set -m
 if [ "$lifetime_stdin" = 1 ]; then
   exec 3<&0
@@ -283,6 +320,7 @@ else
   "$@" <&0 &
 fi
 remote_child_pid=$!
+command_temp_group=$remote_child_pid
 printf '%s\n%s\n%s\n' "$$" "$remote_child_pid" "$(heavyweight_process_token "$$")" > "$pid_file"
 if [ "$lifetime_stdin" = 1 ]; then
   (

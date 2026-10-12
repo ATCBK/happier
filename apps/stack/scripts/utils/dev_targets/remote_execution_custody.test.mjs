@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
+import { performance } from 'node:perf_hooks';
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
@@ -29,15 +30,47 @@ test('routed scratch defaults beneath the disk-backed worker home and preserves 
         import { tmpdir } from 'node:os';
         import { join } from 'node:path';
         const scratch = mkdtempSync(join(tmpdir(), 'hstack-payload-scratch-'));
+        mkdtempSync(join(tmpdir(), 'yarn--'));
         console.log(scratch);
         rmSync(scratch, { recursive: true });
       `], { env: invocationEnv, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(dirname(result.stdout.trim()), tmpdir || join(workerHome, 'tmp'));
+    const scratchParent = dirname(result.stdout.trim());
+    if (tmpdir || process.platform !== 'linux') assert.equal(scratchParent, tmpdir || join(workerHome, 'tmp'));
+    else {
+      assert.equal(dirname(scratchParent), join(workerHome, 'tmp'));
+      assert.match(scratchParent, /hstack-/);
+      await assert.rejects(access(scratchParent), { code: 'ENOENT' }, result.stderr);
+    }
   }
 });
 
-test('dispatch reclaims marked dead temp owners while retaining live groups, reused PIDs and unmarked neighbors', { skip: process.platform !== 'linux' }, async t => {
+test('default command scratch admits Chromium singleton sockets on the disk-backed worker path', { skip: process.platform !== 'linux' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-socket-', parentDir: '/tmp' });
+  const env = { ...process.env };
+  delete env.TMPDIR;
+  const result = spawnSync('/bin/bash', [custody, 'run', join(root, 'worker-home/remote-exec/socket.pid'), 'socket',
+    process.execPath, '--input-type=module', '-e', `
+      import { mkdtempSync, accessSync, rmSync } from 'node:fs';
+      import { createServer } from 'node:net';
+      import { tmpdir } from 'node:os';
+      import { join } from 'node:path';
+      // Exercise the observed Chromium pathname at the real OS boundary.
+      const singleton = mkdtempSync(join(tmpdir(), 'org.chromium.Chromium.'));
+      const server = createServer();
+      try {
+        await new Promise((resolve, reject) => {
+          server.once('error', reject);
+          server.listen(join(singleton, 'SingletonSocket'), resolve);
+        });
+        accessSync(join(singleton, 'SingletonSocket'));
+        await new Promise(resolve => server.close(resolve));
+      } finally { rmSync(singleton, { recursive: true, force: true }); }
+    `], { env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('explicit maintenance reclaims marked dead temp owners while retaining live groups, reused PIDs and unmarked neighbors', { skip: process.platform !== 'linux' }, async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-temp-custody-' });
   const bootId = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
   const identity = new URL('../proc/native_process_identity.sh', import.meta.url).pathname;
@@ -59,12 +92,51 @@ test('dispatch reclaims marked dead temp owners while retaining live groups, reu
     if (owner) await writeFile(join(directory, '.happier-test-temp-owner'), owner);
     roots[name] = directory;
   }
-  const result = spawnSync('/bin/bash', [custody, 'run', join(root, 'remote-exec/next.pid'), 'next', '/usr/bin/true'], { env: { ...process.env, TMPDIR: root }, encoding: 'utf8' });
+  const result = spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], { env: { ...process.env, TMPDIR: root }, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   await assert.rejects(access(roots['happier-stack-unit-dead']), { code: 'ENOENT' });
   await assert.rejects(access(roots['happier-dev-test-reused']), { code: 'ENOENT' });
   for (const name of ['happier-external-hooks-config-live', 'docs-check-child', 'docs-check-unmarked', 'unrelated-scratch']) await access(roots[name]);
   assert.ok(running(liveGroup.pid), 'temp reclamation signaled a live child group');
+});
+
+test('dispatch cost does not scale with retained temporary roots sharing one process inventory', { skip: process.platform !== 'linux' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-temp-inventory-' });
+  const bootId = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+  const identity = new URL('../proc/native_process_identity.sh', import.meta.url).pathname;
+  const token = spawnSync('/bin/bash', ['-c', '. "$1"; heavyweight_process_token "$2"', 'identity', identity, String(process.pid)], { encoding: 'utf8' }).stdout;
+  const directories = Array.from({ length: 64 }, (_, index) => join(root, `happier-stack-unit-retained-${index}`));
+  // A surviving OS process is the genuine custody boundary. The synthetic
+  // environment makes repeated /proc scans dominate launch noise on small hosts.
+  const holder = spawn('/bin/sleep', ['300'], { detached: true, stdio: 'ignore', env: {
+    ...process.env, HAPPIER_TEST_TEMP_ROOTS: directories.join('\n'), HAPPIER_CUSTODY_SCAN_FIXTURE: 'x'.repeat(64 * 1024),
+  } });
+  t.after(() => holder.kill('SIGTERM'));
+  const createRoot = async directory => {
+    await mkdir(directory);
+    await writeFile(join(directory, '.happier-test-temp-owner'), `happier-test-temp-v1\n${bootId}\n2147483647\n${token}\n2147483647\n`);
+  };
+  const dispatch = () => {
+    const started = performance.now();
+    const result = spawnSync('/bin/bash', [custody, 'run', join(root, 'remote-exec/inventory.pid'), 'inventory', '/usr/bin/true'], {
+      env: { ...process.env, TMPDIR: root }, encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return performance.now() - started;
+  };
+  await createRoot(directories[0]);
+  const oneRoot = dispatch();
+  for (const directory of directories.slice(1)) await createRoot(directory);
+  const deadNeighbor = join(root, 'happier-stack-unit-dead-neighbor');
+  await createRoot(deadNeighbor);
+  const manyRoots = dispatch();
+  t.diagnostic(`retained-root dispatch: one=${oneRoot.toFixed(0)}ms, 64=${manyRoots.toFixed(0)}ms`);
+  await access(deadNeighbor); // Dispatch must not sweep shared scratch at all.
+  for (const directory of directories) await access(directory);
+  assert.ok(running(holder.pid), 'retained-root inventory signaled its live holder');
+  // This is a relative scaling contract, not a launch timeout: a 64x root
+  // increase must not multiply the process-environment work by the same factor.
+  assert.ok(manyRoots < oneRoot * 8, `retained-root dispatch scaled from ${oneRoot.toFixed(0)}ms to ${manyRoots.toFixed(0)}ms`);
 });
 
 test('SIGKILL temp creator retains its root until its surviving child group exits', { skip: process.platform !== 'linux' }, async t => {
@@ -88,7 +160,7 @@ test('SIGKILL temp creator retains its root until its surviving child group exit
   const closed = once(creator, 'close');
   creator.kill('SIGKILL');
   await closed;
-  const dispatch = () => spawnSync('/bin/bash', [custody, 'run', join(root, 'remote-exec/next.pid'), 'next', '/usr/bin/true'], { env: { ...process.env, TMPDIR: root }, encoding: 'utf8' });
+  const dispatch = () => spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], { env: { ...process.env, TMPDIR: root }, encoding: 'utf8' });
   assert.equal(dispatch().status, 0);
   await access(directory);
   assert.ok(running(childPid), 'the reaper killed a surviving temp owner');
@@ -100,12 +172,18 @@ test('SIGKILL temp creator retains its root until its surviving child group exit
 
 test('remote cancellation removes roots created by its payload after the group stops', { skip: process.platform !== 'linux' }, async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-temp-cancel-' });
+  const env = { ...process.env };
+  delete env.TMPDIR;
   const child = spawn('/bin/bash', [custody, 'run', join(root, 'remote-exec/cancel.pid'), 'cancel', process.execPath, '--input-type=module', '-e', `
     import { createTestTempDirectory } from ${JSON.stringify(tempHelper)};
     const fixture = createTestTempDirectory('happier-dev-test-bin-');
+    import { mkdtempSync } from 'node:fs';
+    import { tmpdir } from 'node:os';
+    import { join } from 'node:path';
+    mkdtempSync(join(tmpdir(), 'yarn--'));
     console.log(fixture.root);
     setInterval(() => {}, 1000);
-  `], { env: { ...process.env, TMPDIR: root }, stdio: ['ignore', 'pipe', 'pipe'] });
+  `], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '', error = '';
   child.stdout.on('data', chunk => { output += chunk; });
   child.stderr.on('data', chunk => { error += chunk; });
@@ -114,7 +192,20 @@ test('remote cancellation removes roots created by its payload after the group s
   await waitFor(() => output.includes('\n'), 'payload did not publish its temp root');
   child.kill('SIGTERM');
   assert.deepEqual(await closed, [130, null], error);
-  await assert.rejects(access(output.trim()), { code: 'ENOENT' });
+  await assert.rejects(access(output.trim()), { code: 'ENOENT' }, error);
+  await assert.rejects(access(dirname(output.trim())), { code: 'ENOENT' }, error);
+  const escaped = spawnSync('/bin/bash', [custody, 'run', join(root, 'remote-exec/escaped.pid'), 'escaped', process.execPath, '--input-type=module', '-e', `
+    import { spawn } from 'node:child_process';
+    import { tmpdir } from 'node:os';
+    const child = spawn('/bin/sleep', ['300'], { detached: true, stdio: 'ignore' });
+    child.unref();
+    console.log(JSON.stringify({ root: tmpdir(), pid: child.pid }));
+  `], { env, encoding: 'utf8' });
+  assert.equal(escaped.status, 0, escaped.stderr);
+  const inheritor = JSON.parse(escaped.stdout.trim());
+  t.after(() => { try { process.kill(inheritor.pid, 'SIGTERM'); } catch {} });
+  await access(inheritor.root);
+  assert.ok(running(inheritor.pid), 'command teardown touched a detached scratch consumer');
 });
 
 test('detached descendants retain inherited temporary roots after their creator and its group exit', { skip: process.platform !== 'linux' }, async t => {
@@ -138,7 +229,7 @@ test('detached descendants retain inherited temporary roots after their creator 
   const closed = once(creator, 'close');
   creator.kill('SIGKILL');
   await closed;
-  const dispatch = () => spawnSync('/bin/bash', [custody, 'run', join(root, 'remote-exec/detached.pid'), 'detached', '/usr/bin/true'], { env: { ...process.env, TMPDIR: root }, encoding: 'utf8' });
+  const dispatch = () => spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], { env: { ...process.env, TMPDIR: root }, encoding: 'utf8' });
   assert.equal(dispatch().status, 0);
   await access(directory);
   assert.ok(running(childPid), 'the reaper signaled an escaped temp owner');
@@ -304,7 +395,7 @@ test('delayed group cancellation reports unavailable identity without signaling 
   const signals = join(root, 'signals');
   const tokenReads = join(root, 'token-reads');
   await writeFile(pidFile, `${process.pid}\n${leader.pid}\n`);
-  // ps, kernel-token reads and signals are the OS boundary. Simulate reuse
+    // ps, kernel-token reads and signals are the OS boundary. Simulate reuse
   // during TERM grace without creating or signaling any unrelated real group.
   for (const identityState of ['reused', 'unavailable']) {
     const bootstrap = `
@@ -316,16 +407,19 @@ test('delayed group cancellation reports unavailable identity without signaling 
         '-eo pid=,pgid=') printf '%s %s\\n' ${leader.pid} ${leader.pid} ;;
       esac
     }
-    awk() {
-      if [ "$1" = -v ]; then printf '%s\\n' ${leader.pid}; return; fi
-      case "$2" in
-        /proc/${leader.pid}/stat)
-          ${identityState === 'unavailable' ? 'printf unavailable' : `if [ -f ${quote(tokenReads)} ]; then printf 202; else : > ${quote(tokenReads)}; printf 101; fi`} ;;
-        *) printf 303 ;;
+    read() {
+      builtin read "$@" || return
+      [ "$#" = 2 ] && [ "$1" = -r ] && [ "$2" = heavyweight_stat_line ] || return 0
+      # Native identity now reads procfs with Bash rather than awk. Substitute
+      # only this OS stat record, keeping its real parser and guards active.
+      case "\${heavyweight_stat_line-}" in
+        '${leader.pid} ('*)
+          ${identityState === 'unavailable' ? 'heavyweight_stat_line=unavailable' : `if [ -f ${quote(tokenReads)} ]; then fixture_token=202; else : > ${quote(tokenReads)}; fixture_token=101; fi
+          heavyweight_stat_line="${leader.pid} (fixture) S ${Array(18).fill('0').join(' ')} $fixture_token"`} ;;
       esac
     }
     kill() { printf '%s\\n' "$*" >> ${quote(signals)}; }
-    export -f ps awk kill
+    export -f ps read kill
     exec /bin/bash ${quote(custody)} cancel ${quote(pidFile)} identity-execution
     `;
     const result = spawnSync('/bin/bash', ['-c', bootstrap], { encoding: 'utf8' });

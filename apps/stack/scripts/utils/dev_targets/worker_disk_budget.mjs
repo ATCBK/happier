@@ -1,4 +1,4 @@
-import { lstatSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -45,6 +45,31 @@ function protectedRepositories(repoDir) {
   return repositories;
 }
 
+function reapRetiredRuntimeBuildRoots(cacheBaseDir, procRoot, ownerUid) {
+  // The former remote runtime producer wrote per-stack source generations and
+  // private artifact stores here. Current builds use custody-owned temporary
+  // roots and import final artifacts into the controller's retained store.
+  // Retire only that known old layout; custody owns age, inode and live-use proof.
+  const parent = join(dirname(cacheBaseDir), 'runtime-build');
+  const result = { reclaimedBytes: 0, reclaimedRoots: 0, retainedRoots: 0, observationUnavailable: null };
+  try {
+    if (!directory(parent) || lstatSync(parent).uid !== ownerUid) return result;
+    for (const scope of readdirSync(parent)) {
+      const generationParent = join(parent, scope);
+      if (!directory(generationParent) || lstatSync(generationParent).uid !== ownerUid) continue;
+      const candidateNames = readdirSync(generationParent).filter(name =>
+        /^(?:linux|darwin|win32)-(?:x64|arm64)$/.test(name)
+        || name === 'store' || name.startsWith('.incoming-happier-runtime-build-'));
+      const sweep = reapHistoricalTempRoots(generationParent, procRoot, { ownerUid, candidateNames });
+      for (const key of ['reclaimedBytes', 'reclaimedRoots', 'retainedRoots']) result[key] += sweep[key];
+      result.observationUnavailable ??= sweep.observationUnavailable;
+    }
+  } catch (error) {
+    result.observationUnavailable = `retired runtime-build observation unavailable (${error.code ?? error.name})`;
+  }
+  return result;
+}
+
 // Refuse already-exhausted write filesystems. Resident dependencies, caches
 // and other jobs' existing outputs do not establish this operation's future
 // writes. No additional-write peak is measured, so do not invent a reservation.
@@ -77,6 +102,7 @@ export async function admitWorkerDiskBudget({ repoDir, cacheBaseDir, commandClas
   // spends time reclaiming when the measured containing filesystem is short.
   if ((!initial.admitted || maintenance) && process.platform === 'linux') {
     const steps = [
+      ['runtime-build', () => reapRetiredRuntimeBuildRoots(cacheBaseDir, procRoot, ownerUid)],
       ['packages', () => pruneWorkerYarnCache({ cacheBaseDir, repositoryDirectories: protectedRepositories(repoDir), procRoot, ownerUid })],
       ['scratch', () => directory(scratchRoot) ? reapHistoricalTempRoots(scratchRoot, procRoot, { ownerUid }) : { reclaimedBytes: 0, reclaimedRoots: 0 }],
     ];

@@ -12,6 +12,7 @@ test('worker Yarn retention preserves all protected lock resolutions, live holde
   await writeFile(join(procRoot, '42', 'status'), 'State:\tS (sleeping)\n');
   await symlink(root, join(procRoot, '42', 'cwd'));
   await writeFile(join(procRoot, '42', 'maps'), '');
+  await writeFile(join(procRoot, '42', 'environ'), '');
   const repositories = [join(root, '0.3'), join(root, '0.2')];
   for (const [index, dir] of repositories.entries()) {
     await mkdir(dir);

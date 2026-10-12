@@ -20,7 +20,7 @@ test('package-specific compiler classes inspect the same write filesystems', asy
   }
 });
 
-test('disk budget reclaims obsolete packages and unused final scratch without scanning retired source staging', async t => {
+test('disk maintenance retires unused legacy runtime generations and incoming roots through canonical custody', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-disk-budget-' });
   const repoDir = join(root, 'repo'), cacheBaseDir = join(root, 'cli/cache');
   const retiredStage = join(root, 'cli/runtime-build/old/linux-x64');
@@ -32,10 +32,16 @@ test('disk budget reclaims obsolete packages and unused final scratch without sc
   await writeFile(join(retiredStage, 'source-files.json'), '[]');
   await mkdir(scratchRoot);
   await mkdir(procRoot);
+  const incoming = join(root, 'cli/runtime-build/old/.incoming-happier-runtime-build-abandoned');
+  const unknown = join(root, 'cli/runtime-build/old/unrelated');
+  await mkdir(incoming);
+  await mkdir(unknown);
   const old = new Date(Date.now() - 48 * 3600000);
   await utimes(join(retiredStage, 'repo'), old, old);
   await utimes(join(retiredStage, 'source-files.json'), old, old);
   await utimes(retiredStage, old, old);
+  await utimes(incoming, old, old);
+  await utimes(unknown, old, old);
   const obsolete = join(cacheBaseDir, 'yarn/v6/npm-obsolete/node_modules/obsolete');
   await mkdir(obsolete, { recursive: true });
   await writeFile(join(obsolete, '.yarn-metadata.json'), JSON.stringify({ remote: { resolved: 'https://example/obsolete.tgz#hash' } }));
@@ -45,11 +51,41 @@ test('disk budget reclaims obsolete packages and unused final scratch without sc
   const result = await admitWorkerDiskBudget({ repoDir, cacheBaseDir, scratchRoot, procRoot, commandClass: 'runtime-build',
     observeFilesystem: () => ({ device: 'fixture', availableBytes: 0, totalBytes: 1e9 }) });
   assert.equal(result.admitted, false);
-  assert.deepEqual(result.reclamation.map(step => step.kind), ['packages', 'scratch']);
-  await access(retiredStage);
+  assert.deepEqual(result.reclamation.map(step => step.kind), ['runtime-build', 'packages', 'scratch']);
+  await assert.rejects(access(retiredStage), { code: 'ENOENT' });
+  await assert.rejects(access(incoming), { code: 'ENOENT' });
+  await access(unknown);
   await assert.rejects(access(obsolete), { code: 'ENOENT' });
   await assert.rejects(access(join(scratchRoot, 'happier-runtime-build-old')), { code: 'ENOENT' });
   assert.equal(result.reason, 'worker write filesystem exhausted');
+});
+
+test('roomy-worker maintenance preserves held, fresh and unknown runtime-build children', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-runtime-retention-' });
+  const repoDir = join(root, 'repo'), cacheBaseDir = join(root, 'cli/cache');
+  const parent = join(root, 'cli/runtime-build/stack'), procRoot = join(root, 'proc');
+  await mkdir(repoDir);
+  await mkdir(join(cacheBaseDir, 'yarn/v6'), { recursive: true });
+  await mkdir(join(procRoot, '42/fd'), { recursive: true });
+  await writeFile(join(procRoot, '42/status'), `State:\tS\nUid:\t${Array(4).fill(process.getuid()).join('\t')}\n`);
+  await writeFile(join(procRoot, '42/environ'), '');
+  await writeFile(join(procRoot, '42/maps'), '');
+  const old = new Date(Date.now() - 48 * 3600000);
+  for (const name of ['linux-x64', 'darwin-arm64', 'store', '.incoming-happier-runtime-build-old', 'unrelated']) {
+    await mkdir(join(parent, name), { recursive: true });
+    await utimes(join(parent, name), old, old);
+  }
+  await writeFile(join(parent, 'store/fresh-artifact'), 'recently built');
+  await symlink(join(parent, 'linux-x64'), join(procRoot, '42/cwd'));
+  await symlink(join(parent, 'unrelated'), join(parent, 'win32-x64'));
+  const { admitWorkerDiskBudget } = await import('./worker_disk_budget.mjs');
+  const result = await admitWorkerDiskBudget({ repoDir, cacheBaseDir, scratchRoot: join(root, 'absent'), procRoot,
+    commandClass: 'runtime-build', maintenance: true,
+    observeFilesystem: () => ({ device: 'fixture', availableBytes: 1e9, totalBytes: 2e9 }) });
+  assert.equal(result.admitted, true);
+  assert.equal(result.reclamation.find(step => step.kind === 'runtime-build')?.reclaimedRoots, 2);
+  for (const name of ['linux-x64', 'store', 'unrelated', 'win32-x64']) await access(join(parent, name));
+  for (const name of ['darwin-arm64', '.incoming-happier-runtime-build-old']) await assert.rejects(access(join(parent, name)), { code: 'ENOENT' });
 });
 
 test('runtime build disk admission observes the mirror, cache and final scratch instead of retired source staging', async t => {
@@ -94,6 +130,7 @@ test('unknown same-user visibility retains scratch, but other-user processes do 
   await mkdir(join(procRoot, '43/fd'), { recursive: true });
   await writeFile(join(procRoot, '43/status'), `State:\tS\nUid:\t${Array(4).fill(process.getuid()).join('\t')}\n`);
   await writeFile(join(procRoot, '43/maps'), '');
+  await writeFile(join(procRoot, '43/environ'), '');
   await symlink(held, join(procRoot, '43/cwd'));
   // Procfs inode ownership can differ from the process UID (dumpability).
   // Foreign status UIDs, not this same-user fixture directory, decide visibility.
