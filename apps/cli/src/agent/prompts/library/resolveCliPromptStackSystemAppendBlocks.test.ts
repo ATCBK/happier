@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   ARTIFACT_PLAIN_DATA_KEY_MARKER,
@@ -186,6 +186,27 @@ async function profiles(homes: readonly Awaited<ReturnType<typeof home>>[]) {
   );
 }
 describe('CLI qualified current Artifact prompt preparation', () => {
+  it('prepares an empty effective stack without resolving an unavailable Home', async () => {
+    const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
+    const args = { surface: 'coding' as const, serverId: 'missing-home' };
+    expect(await resolve(args)).toEqual({ blocks: [], admittedEntries: [] });
+    expect(await resolve({ ...args, accountEntries: [entry('disabled')],
+      disabledInheritedEntryIds: ['disabled'] })).toEqual({ blocks: [], admittedEntries: [] });
+    expect(await resolve({ ...args, sessionEntries: [{ ...entry('disabled-session'), enabled: false }] }))
+      .toEqual({ blocks: [], admittedEntries: [] });
+  });
+
+  it('keeps a configured prompt unavailable when its Home cannot be resolved', async () => {
+    const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
+    const { classifyPrimarySessionRuntimeIssue } = await import('@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue');
+    const failure = await resolve({ surface: 'coding', serverId: 'missing-home', accountEntries: [entry('required')] })
+      .catch((error: unknown) => error);
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: failure }))
+      .toMatchObject({ code: 'profile_missing', source: 'dependency_failure' });
+    expect(JSON.stringify(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: failure })))
+      .not.toContain('missing-home');
+  });
+
   describe('ordinary Instructions birth admission', () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'alpha' })).toString('base64url')}.signature`;
     let a: Awaited<ReturnType<typeof home>>;
@@ -323,10 +344,48 @@ describe('CLI qualified current Artifact prompt preparation', () => {
       accountEntries: [entry('doc')],
     })).toMatchObject({ blocks: ['unsaved current Home'] });
     const previousRequests = [...current.requests];
-    await expect(resolve({ surface: 'coding', credentials,
+    const { logger } = await import('@/ui/logger');
+    const diagnostic = vi.spyOn(logger, 'infoFile');
+    const failure = await resolve({ surface: 'coding', credentials, memoryEnabled: false,
       accountEntries: [entry('doc', 'unknown-foreign-home')],
-    })).rejects.toMatchObject({ status: 'preparation_pending', reason: 'unavailable' });
+    }).catch((error: unknown) => error);
+    const { classifyPrimarySessionRuntimeIssue } = await import('@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue');
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: failure })).toMatchObject({
+      code: 'profile_missing', source: 'dependency_failure',
+    });
+    expect(diagnostic).toHaveBeenCalledWith('Prompt library read failed', {
+      operation: 'header', errorCode: 'profile_missing', httpStatus: null,
+      qualifiedHome: true, privateRequester: false,
+    });
+    diagnostic.mockRestore();
     expect(current.requests).toEqual(previousRequests);
+  });
+  it.each([true, false])('continues with required local context when an optional saved Home is missing (memory=%s)', async memoryEnabled => {
+    const a = await home('alpha', 'active-token');
+    await profiles([a]);
+    a.set('required', 'Required local instructions');
+    const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
+    const optional = { ...entry('foreign', 'missing-home'), required: false };
+    const args = { surface: 'coding' as const, credentials: { token: 'active-token', encryption: null }, memoryEnabled };
+    expect(await resolve({ ...args, accountEntries: [optional, entry('required')] })).toMatchObject({
+      blocks: ['Required local instructions'],
+      admittedEntries: [
+        { entryId: 'foreign', outcome: 'unavailable', reason: 'not_found', revision: null },
+        { entryId: 'required', outcome: 'ready' },
+      ],
+    });
+    expect(a.requests.some(path => path.includes('foreign'))).toBe(false);
+    await expect(resolve({ ...args, accountEntries: [optional, { ...optional, id: 'required-foreign', required: true }] }))
+      .rejects.toMatchObject({ reason: 'not_found', cause: { code: 'profile_missing' } });
+  });
+  it('retains transient failures even for optional context', async () => {
+    const a = await home('alpha', 'active-token');
+    await profiles([a]);
+    a.set('optional', 'Optional local context');
+    a.fail(503);
+    const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
+    await expect(resolve({ surface: 'coding', accountEntries: [{ ...entry('optional'), required: false }] }))
+      .rejects.toMatchObject({ status: 'preparation_pending', reason: 'unavailable' });
   });
   it('qualifies identical ids to distinct Homes without forwarding active credentials', async () => {
     const a = await home('alpha', 'active-token');
@@ -366,11 +425,24 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     const { resolveCliPromptStackSystemAppendBlocks: resolve } =
       await import('./resolveCliPromptStackSystemAppendBlocks');
     const args = { surface: 'coding' as const, accountEntries: [entry('doc')] };
+    const { logger } = await import('@/ui/logger');
+    const diagnostic = vi.spyOn(logger, 'infoFile');
     a.fail(503);
     await expect(resolve(args)).rejects.toMatchObject({
       status: 'preparation_pending',
       reason: 'unavailable',
     });
+    expect(diagnostic).toHaveBeenCalledWith('Prompt library read failed', {
+      operation: 'artifact', errorCode: 'artifact_read_unavailable', httpStatus: 503,
+      qualifiedHome: false, privateRequester: false,
+    });
+    logger.flushSync();
+    const evidence = (await readFile(logger.getLogPath(), 'utf8')).split('\n')
+      .find(line => line.includes('Prompt library read failed'));
+    expect(evidence).toMatch(/"httpStatus"\s*:\s*503/u);
+    expect(evidence).not.toContain('active-token');
+    expect(evidence).not.toContain(a.url);
+    diagnostic.mockRestore();
     a.fail(404);
     await expect(resolve(args)).rejects.toMatchObject({
       status: 'attachment_unavailable',

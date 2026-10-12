@@ -3,7 +3,8 @@ import type { AccountRoleOverridesReadV1 } from '@happier-dev/protocol/prompts/r
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { beginActivePromptLibraryCatalogRefresh, commitActivePromptLibraryCatalog, getActiveAccountSettingsSnapshot,
-  getActiveAccountSettingsSnapshotLifetimeToken, readActiveAccountRoleOverrides } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+  getActiveAccountSettingsSnapshotLifetimeToken, readActiveAccountRoleOverrides, readAccountRoleOverridesFromSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { createCliPromptLibraryStore } from './promptLibraryStore';
 export { readActivePromptLibraryCatalog } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
@@ -18,6 +19,7 @@ type CapturedPromptAccount = Readonly<{ scopeKey: string; lifetimeToken: number 
 export type ActivePromptLibraryDemand = Readonly<{
   credentials: StoredCredentials; scopeKey: string; lifetimeToken: number;
   key: 'coding' | 'voice' | 'role-overrides'; signal?: AbortSignal;
+  operationContext?: SavedSecretOperationContextV1;
 }>;
 export type ActivePromptLibraryRecordRead = ReturnType<typeof readPromptLibraryCatalogRecordV1>
   | Readonly<{ status: 'unavailable'; reason: 'catalog-unobserved' }>;
@@ -25,6 +27,25 @@ export type ActivePromptLibraryRecordRead = ReturnType<typeof readPromptLibraryC
 /** One existing-loader demand for a real key in the caller's captured Account lifetime. */
 export async function prepareActivePromptLibraryRecord(input: ActivePromptLibraryDemand): Promise<ActivePromptLibraryRecordRead> {
   input.signal?.throwIfAborted();
+  const operation = input.operationContext;
+  if (operation) {
+    if (operation.credentials.token !== input.credentials.token || !await operation.isCurrent()
+      || operation.readSnapshot()?.scopeKey !== input.scopeKey) return { status: 'unavailable', reason: 'scope-retired' };
+    const store = createCliPromptLibraryStore(input);
+    const publish = async (catalog: PromptLibraryCatalogSnapshotV1) => {
+      const snapshot = operation.readSnapshot();
+      if (!snapshot || !await operation.commitPromptLibraryCatalog({ expectedSettingsVersion: snapshot.settingsVersion, catalog })) {
+        throw Object.assign(new Error('Captured Prompt library Account retired'), { code: 'scope-retired' });
+      }
+    };
+    await publish(await store.readPromptLibraryCatalog(publish));
+    input.signal?.throwIfAborted();
+    const snapshot = operation.readSnapshot();
+    if (!snapshot || !await operation.isCurrent()) return { status: 'unavailable', reason: 'scope-retired' };
+    return snapshot.promptLibraryCatalog ? readPromptLibraryCatalogRecordV1({ catalog: snapshot.promptLibraryCatalog,
+      key: input.key, rawSettings: snapshot.source === 'none' ? undefined : snapshot.rawSettings })
+      : { status: 'unavailable', reason: 'catalog-unobserved' };
+  }
   const current = getActiveAccountSettingsSnapshot();
   if (current?.scopeKey !== input.scopeKey || resolveAccountSettingsScopeKey(input.credentials) !== input.scopeKey
     || getActiveAccountSettingsSnapshotLifetimeToken() !== input.lifetimeToken) return { status: 'unavailable', reason: 'scope-retired' };
@@ -64,6 +85,10 @@ export async function prepareActivePromptLibraryRecord(input: ActivePromptLibrar
 export async function prepareActiveAccountRoleOverrides(input: Omit<ActivePromptLibraryDemand, 'key'>): Promise<AccountRoleOverridesReadV1> {
   const read = await prepareActivePromptLibraryRecord({ ...input, key: 'role-overrides' });
   if (read.status !== 'ready') return read;
+  if (input.operationContext) {
+    const snapshot = input.operationContext.readSnapshot();
+    return snapshot ? readAccountRoleOverridesFromSnapshot(snapshot) : { status: 'unavailable', reason: 'scope-retired' };
+  }
   return readActiveAccountRoleOverrides(input);
 }
 

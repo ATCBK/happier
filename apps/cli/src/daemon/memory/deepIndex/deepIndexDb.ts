@@ -8,6 +8,11 @@ import { tokenizeMemoryText } from '../tokenizeMemoryText';
 import { createMemoryFtsIndex, type MemoryFtsSearchFilter } from '../memoryFtsIndex';
 import type { AccountArtifactRevision } from '../../../api/artifacts/accountArtifactStore';
 import { MemoryDocumentSearchHitV1Schema, MemorySourceV1Schema, MemoryExternalTranscriptSourceV1Schema, type MemoryDocumentSearchHitV1, type MemorySourceV1, type MemoryExternalTranscriptSourceV1 } from '@happier-dev/protocol/memory/memorySearch';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+
+const StoredDocumentLocationSchema = createStoredReadSchema(MemoryDocumentSearchHitV1Schema.shape.location);
+const StoredExternalTranscriptSourceSchema = createStoredReadSchema(MemoryExternalTranscriptSourceV1Schema);
+const StoredMemorySourceSchema = createStoredReadSchema(MemorySourceV1Schema);
 
 export type DeepIndexDocumentRef = Readonly<{ serverId: string; artifactId: string }>;
 export type DeepIndexDocumentIdentity = Readonly<{
@@ -182,7 +187,7 @@ function serializeDocumentLocation(location: DeepIndexDocumentEntry['location'])
 function deserializeDocumentLocation(location: string): DeepIndexDocumentEntry['location'] {
   const legacy = MemoryDocumentSearchHitV1Schema.shape.location.safeParse(location);
   if (legacy.success) return legacy.data;
-  return MemoryDocumentSearchHitV1Schema.shape.location.parse(JSON.parse(location));
+  return StoredDocumentLocationSchema.parse(JSON.parse(location));
 }
 
 type IndexedDocumentRow = Readonly<{
@@ -446,7 +451,7 @@ export function openDeepIndexDb(args: Readonly<{ dbPath: string }>): DeepIndexDb
   // source projection (after removal/clear/replacement) starts complete.
   const setExternalStateStmt = db.prepare('INSERT INTO external_source_state(sessionId,source,cursor,nextOrdinal,coverageComplete) VALUES (?,?,?,?,1) ON CONFLICT(sessionId) DO UPDATE SET source=excluded.source,cursor=excluded.cursor,nextOrdinal=excluded.nextOrdinal;');
   const markExternalCoverageIncompleteStmt = db.prepare('UPDATE external_source_state SET coverageComplete=0 WHERE sessionId=?;');
-  const readExternalState = (row: ExternalSourceStateRow): ExternalSourceState => ({ source: MemoryExternalTranscriptSourceV1Schema.parse(JSON.parse(row.source)), cursor: row.cursor, nextOrdinal: row.nextOrdinal, coverageComplete: row.coverageComplete === 1 });
+  const readExternalState = (row: ExternalSourceStateRow): ExternalSourceState => ({ source: StoredExternalTranscriptSourceSchema.parse(JSON.parse(row.source)), cursor: row.cursor, nextOrdinal: row.nextOrdinal, coverageComplete: row.coverageComplete === 1 });
   const selectOldestChunkKeysStmt = db.prepare(`
     SELECT chunkId, sessionId, seqFrom, seqTo
     FROM message_chunks
@@ -921,7 +926,7 @@ export function openDeepIndexDb(args: Readonly<{ dbPath: string }>): DeepIndexDb
         .slice(skip, skip + limit).map((row) => ({
           sessionId: row.sessionId, seqFrom: row.seqFrom, seqTo: row.seqTo,
           createdAtFromMs: row.createdAtFromMs, createdAtToMs: row.createdAtToMs, text: row.text,
-          ...(row.source ? { source: MemorySourceV1Schema.parse(JSON.parse(row.source)) } : {}),
+          ...(row.source ? { source: StoredMemorySourceSchema.parse(JSON.parse(row.source)) } : {}),
           ...(row.sourceItemId ? { sourceItemId: row.sourceItemId } : {}),
           ...(row.sourceCursor ? { sourceCursor: row.sourceCursor } : {}),
           rank: row.rank, matchedQuery,

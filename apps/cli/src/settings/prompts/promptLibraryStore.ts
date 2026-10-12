@@ -20,37 +20,53 @@ import { normalizeAccountSettingsHistoryClientV1 } from '@happier-dev/protocol/a
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
 import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { randomBytes } from 'node:crypto';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 
 /** Captures the incumbent Home/Account/key lifetime, without a parallel Settings publication. */
-export function createCliPromptLibraryStore(input: Readonly<{ credentials: StoredCredentials; signal?: AbortSignal }>) {
-  const base = resolveServerHttpBaseUrl().replace(/\/+$/, '');
-  const scopeKey = resolveAccountSettingsScopeKey(input.credentials);
+export function createCliPromptLibraryStore(input: Readonly<{
+  credentials: StoredCredentials; signal?: AbortSignal; operationContext?: SavedSecretOperationContextV1;
+}>) {
+  const operation = input.operationContext;
+  const base = (operation?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl()).replace(/\/+$/, '');
+  const scopeKey = runWithServerHttpBaseUrl(base, () => resolveAccountSettingsScopeKey(input.credentials));
   const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+  const readSnapshot = () => operation ? operation.readSnapshot() : getActiveAccountSettingsSnapshot();
   const headers = { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${input.credentials.token}`,
     'Content-Type': 'application/json' };
   const assertCurrent = () => {
     input.signal?.throwIfAborted();
-    if (getActiveAccountSettingsSnapshot()?.scopeKey !== scopeKey || getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) {
+    if (readSnapshot()?.scopeKey !== scopeKey || (operation
+      ? operation.credentials.token !== input.credentials.token
+      : getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken)) {
       throw Object.assign(new Error('Captured Prompt library Account retired'), { code: 'scope-retired' });
     }
   };
-  const publishObservedSource = (raw: Readonly<Record<string, unknown>>, version: number): void => {
-    const incumbent = getActiveAccountSettingsSnapshot();
+  const assertCredentialCurrent = async () => {
+    assertCurrent();
+    if (operation && !await operation.isCurrent()) {
+      throw Object.assign(new Error('Captured Prompt library Account retired'), { code: 'scope-retired' });
+    }
+    assertCurrent();
+  };
+  const publishObservedSource = async (raw: Readonly<Record<string, unknown>>, version: number): Promise<void> => {
+    const incumbent = readSnapshot();
     // A network read or durable cleanup receipt advances the existing Settings
     // owner, never a retired Account lifetime or an already newer winner.
-    if (incumbent?.scopeKey !== scopeKey || getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) return;
-    commitActiveAccountSettingsSnapshot({ ...incumbent, source: 'network', rawSettings: raw,
-      settings: accountSettingsParse(raw), settingsVersion: version, loadedAtMs: Date.now() });
+    if (incumbent?.scopeKey !== scopeKey || (!operation && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken)) return;
+    const next = { ...incumbent, source: 'network' as const, rawSettings: raw,
+      settings: accountSettingsParse(raw), settingsVersion: version, loadedAtMs: Date.now() };
+    if (operation) await operation.replaceAccountSettings(next);
+    else commitActiveAccountSettingsSnapshot(next);
   };
   const requestResponse = async (path: string, body?: unknown): Promise<Readonly<{ status: number; data: unknown }>> => {
-    assertCurrent();
+    await assertCredentialCurrent();
     const options = { headers, ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true };
     const response = body === undefined ? await axios.get(`${base}${path}`, options) : await axios.post(`${base}${path}`, body, options).catch((error: unknown) => {
       throw Object.assign(new Error('Prompt library mutation transport failed'), { code: classifyHomeDomainHttpMutationFailureV1({
         error, issued: true, aborted: input.signal?.aborted === true,
       }), cause: error });
     });
-    if (body === undefined) assertCurrent();
+    if (body === undefined) await assertCredentialCurrent();
     if (response.status < 200 || response.status >= 300 && response.status !== 409) {
       throw Object.assign(new Error('Prompt library Account transport unavailable'), { code:
         response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden'
@@ -60,11 +76,13 @@ export function createCliPromptLibraryStore(input: Readonly<{ credentials: Store
   };
   const request = async (path: string, body?: unknown): Promise<unknown> => (await requestResponse(path, body)).data;
   const readStorageContext = async () => {
-    assertCurrent();
-    return await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base,
+    await assertCredentialCurrent();
+    const context = await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base,
       signal: input.signal, shouldContinue: () => { assertCurrent(); return true; }, authorizationHeaders: headers });
+    await assertCredentialCurrent();
+    return context;
   };
-  const readPromptLibraryCatalog = async (onReady?: (catalog: PromptLibraryCatalogSnapshotV1) => void) => {
+  const readPromptLibraryCatalog = async (onReady?: (catalog: PromptLibraryCatalogSnapshotV1) => void | Promise<void>) => {
     const context = await readStorageContext();
     const catalog = await loadPromptLibraryCatalogV1({ ...context, signal: input.signal,
       readRows: async () => PromptLibraryRowsListResponseV1Schema.parse(await request(PROMPT_LIBRARY_ROWS_ROUTE_V1)),
@@ -72,7 +90,7 @@ export function createCliPromptLibraryStore(input: Readonly<{ credentials: Store
         const admitted = await readStorageContext();
         assertCurrent();
         if (admitted.mode !== context.mode) throw Object.assign(new Error('Account mode changed'), { code: 'account-mode-mismatch' });
-        onReady(catalog);
+        await onReady(catalog);
       } } : {}),
       transfer: {
         readSourceSnapshot,
@@ -86,8 +104,8 @@ export function createCliPromptLibraryStore(input: Readonly<{ credentials: Store
               resolveAccountEncryptionMode: async () => current.mode,
               updateSettings: async mutation => AccountSettingsV2UpdateResponseSchema.parse(await request('/v2/account/settings', mutation)),
             } });
-          if (response.success) publishObservedSource(value.raw, response.version);
-          assertCurrent();
+          if (response.success) await publishObservedSource(value.raw, response.version);
+          await assertCredentialCurrent();
           return response.success ? { status: 'applied', settingsVersion: response.version }
             : response.error === 'version-mismatch' ? { status: 'conflict', currentSettingsVersion: response.currentVersion }
               : { status: 'rejected' };
@@ -99,8 +117,8 @@ export function createCliPromptLibraryStore(input: Readonly<{ credentials: Store
           const artifacts = createCredentialedAccountArtifactStore(input.credentials);
           const receipts = await retainLegacyRoleArtifactsV1({ rawSettings: raw, accountId, signal: input.signal, artifactStore: {
             ...artifacts,
-            read: async (...args) => { assertCurrent(); const result = await artifacts.read(...args); assertCurrent(); return result; },
-            create: async value => { assertCurrent(); return await artifacts.create(value); },
+            read: async (...args) => { await assertCredentialCurrent(); const result = await artifacts.read(...args); await assertCredentialCurrent(); return result; },
+            create: async value => { await assertCredentialCurrent(); return await artifacts.create(value); },
           } });
           assertCurrent();
           return receipts;
@@ -109,7 +127,7 @@ export function createCliPromptLibraryStore(input: Readonly<{ credentials: Store
           request: (path, value) => requestResponse(path, value.body),
           readCurrentness: () => fetchAccountEncryptionCurrentness({ token: input.credentials.token, serverBaseUrl: base,
             authorizationHeaders: headers, signal: input.signal }),
-          isCurrent: () => { try { assertCurrent(); return true; } catch { return false; } },
+          isCurrent: async () => { try { await assertCredentialCurrent(); return true; } catch { return false; } },
           resolveTransferMaterial: async mode => {
             const current = await readStorageContext();
             if (current.mode !== mode) throw new Error('Account history mode changed');
@@ -140,7 +158,7 @@ export function createCliPromptLibraryStore(input: Readonly<{ credentials: Store
       fetchSettings: async () => AccountSettingsV2GetResponseSchema.parse(await request('/v2/account/settings')),
     } });
     assertCurrent();
-    publishObservedSource(source.raw, source.version);
+    await publishObservedSource(source.raw, source.version);
     return { ...source, ...context };
   };
   const writeRecord = async (value: Readonly<{ record: PromptLibraryRecordV1; expectedRevision: number | 'absent'; sourceSettingsVersion?: number }>) => {
@@ -177,7 +195,11 @@ export function createCliPromptLibraryStore(input: Readonly<{ credentials: Store
       // Publication has its incumbent lifetime owner; its refusal never turns an
       // already acknowledged effect into a replayable failure.
       try {
-        await refreshActivePromptLibraryCatalogAfterChange({ credentials: input.credentials, scopeKey, lifetimeToken });
+        if (operation) {
+          const updated = await readPromptLibraryCatalog();
+          const snapshot = operation.readSnapshot();
+          if (snapshot) await operation.commitPromptLibraryCatalog({ expectedSettingsVersion: snapshot.settingsVersion, catalog: updated });
+        } else await refreshActivePromptLibraryCatalogAfterChange({ credentials: input.credentials, scopeKey, lifetimeToken });
       } catch { /* A failed projection cannot undo an acknowledged effect or authorize replay. */ }
     },
   };

@@ -28,6 +28,7 @@ import type { NotificationChannelCatalogSnapshotV1 } from '@happier-dev/protocol
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import type { ProviderConnectionsCatalogSnapshotV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import type { ConnectedAccountCatalogSnapshotV1 } from '@happier-dev/protocol/connect/connectedAccountCatalogV1';
+import type { PromptLibraryCatalogSnapshotV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import type { ConnectedAccountCatalogKeyV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { loadAiLaunchProfileArtifacts, resolveProfileCatalogAuthorityV1, removeTransferredProfileSourcesV1, listTransferredProfileIdsV1,
   readEffectiveProfileSecretBindingsV1 } from '@happier-dev/protocol/profiles/read';
@@ -123,6 +124,7 @@ export type SavedSecretOperationContextV1 = Readonly<{
   commitAcpCatalog(input: Readonly<{ catalog: AcpCatalogSnapshotV1 }>): Promise<boolean>;
   commitProviderConnectionsCatalog(input: Readonly<{ expectedSettingsVersion: number; catalog: ProviderConnectionsCatalogSnapshotV1 }>): Promise<boolean>;
   commitConnectedAccountCatalog(input: Readonly<{ key: ConnectedAccountCatalogKeyV1; catalog: ConnectedAccountCatalogSnapshotV1 }>): Promise<boolean>;
+  commitPromptLibraryCatalog(input: Readonly<{ expectedSettingsVersion: number; catalog: PromptLibraryCatalogSnapshotV1 }>): Promise<boolean>;
   beginRefresh(): boolean;
   commitCatalog(input: Readonly<{ resources: readonly SavedSecretCatalogResourceInputV1[]; state: SavedSecretCatalogState }>): boolean;
   withdrawCatalog(): void;
@@ -210,6 +212,11 @@ export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
       if (!await isCurrent() || !snapshot || snapshot.settingsVersion !== notification.expectedSettingsVersion) return false;
       snapshot = replaceNotificationChannelCatalogInSnapshot(snapshot, notification.catalog);
       return await isCurrent() && snapshot !== null && snapshot.settingsVersion === notification.expectedSettingsVersion;
+    },
+    commitPromptLibraryCatalog: async ({ catalog, expectedSettingsVersion }: Parameters<SavedSecretOperationContextV1['commitPromptLibraryCatalog']>[0]) => {
+      if (!await isCurrent() || !snapshot || snapshot.settingsVersion !== expectedSettingsVersion) return false;
+      if (!isDeepStrictEqual(snapshot.promptLibraryCatalog, catalog)) snapshot = { ...snapshot, promptLibraryCatalog: catalog };
+      return true;
     },
     commitCatalog: (catalog: Parameters<SavedSecretOperationContextV1['commitCatalog']>[0]) => {
       if (!snapshot) return false;

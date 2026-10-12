@@ -85,6 +85,10 @@ describe('deepIndexDb', () => {
       db.insertChunk({ sessionId: 'native-storage-id', seqFrom: 0, seqTo: 0, createdAtFromMs: 10, createdAtToMs: 10, text: 'native searchable content', source, sourceItemId: 'message-id', sourceCursor: 'opaque-page' });
       db.setExternalSourceState({ sessionId: 'native-storage-id', source, cursor: 'opaque-frontier', nextOrdinal: 1 });
       db.close();
+      const stored = openSqliteDatabaseSync(dbPath);
+      stored.prepare('UPDATE external_source_state SET source=?').run(JSON.stringify({ ...source, retired: true }));
+      stored.prepare('UPDATE message_chunks SET source=?').run(JSON.stringify({ ...source, retired: true }));
+      stored.close();
       db = openDeepIndexDb({ dbPath });
       expect(db.getExternalSourceState({ sessionId: 'native-storage-id' })).toEqual({ source, cursor: 'opaque-frontier', nextOrdinal: 1, coverageComplete: true });
       expect(db.getDeepIndexStats()).toMatchObject({ searchableSessionCount: 0, externalTranscriptCount: 1, externalChunkCount: 1 });

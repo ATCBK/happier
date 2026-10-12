@@ -21,6 +21,14 @@ import {
 import { resolveCliHomeTarget, resolveCurrentCliHomeTarget } from '@/server/homeTarget';
 import { getServerProfile } from '@/server/serverProfiles';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
+import { logger } from '@/ui/logger';
+
+const promptReadErrorCodes = new Set([
+  'artifact_read_unavailable', 'artifact_read_invalid', 'artifact_encryption_material_unavailable',
+  'artifact_account_mode_mismatch', 'account_encryption_mode_unavailable', 'artifact_content_unavailable',
+  'content_unavailable', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT', 'ERR_NETWORK',
+]);
 
 export type CliPromptLibraryArtifactReader = Required<
   Pick<PromptStackSystemAppendInputV1, 'readArtifact' | 'readArtifactHeader'>
@@ -32,7 +40,7 @@ export type CliPromptLibraryArtifactReaderOptions = Readonly<{
 }>;
 export type CliPromptStackSystemAppendInput = Omit<
   PromptStackSystemAppendInputV1,
-  'readArtifact' | 'readArtifactHeader' | 'promptStacksV1'
+  'readArtifact' | 'readArtifactHeader' | 'readScope' | 'promptStacksV1'
 > &
   Partial<Omit<CliPromptLibraryArtifactReader, 'readScope'>> &
   CliPromptLibraryArtifactReaderOptions &
@@ -108,8 +116,35 @@ export async function withCliPromptLibraryArtifactReader<T>(
     return { serverId, pending };
   };
   const storeFor = (ref: PromptArtifactRefV1) => storeForHome(ref.serverId?.trim() || defaultServerId);
+  const read = async <T>(operation: 'scope' | 'artifact' | 'header', ref: PromptArtifactRefV1 | undefined,
+    load: () => Promise<T>): Promise<T> => {
+    try { return await load(); }
+    catch (error) {
+      options?.signal?.throwIfAborted();
+      const code: unknown = error && typeof error === 'object'
+        ? Object.getOwnPropertyDescriptor(error, 'code')?.value : undefined;
+      const status: unknown = error && typeof error === 'object'
+        ? Object.getOwnPropertyDescriptor(error, 'status')?.value : undefined;
+      // Never carry raw error text, HTTP payload/config, credentials, refs or Account ids into diagnostics.
+      logger.infoFile('Prompt library read failed', {
+        operation,
+        errorCode: error instanceof HomeTargetResolutionError ? error.code
+          : typeof code === 'string' && promptReadErrorCodes.has(code) ? code : 'unclassified',
+        httpStatus: typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599 ? status : null,
+        qualifiedHome: Boolean(ref?.serverId),
+        privateRequester: Boolean(options?.credentials?.requesterSessionCredentialScope),
+      });
+      if (error instanceof HomeTargetResolutionError) {
+        // Keep the typed configuration cause across Protocol preparation without
+        // publishing the private Home/reference carried in its error text.
+        const reason = operation !== 'scope' && error.code === 'profile_missing' ? 'not_found' : 'unavailable';
+        throw Object.assign(new PromptStackPreparationError(reason, ref), { cause: error });
+      }
+      throw error;
+    }
+  };
   return run({
-    readScope: async () => {
+    readScope: async () => read('scope', undefined, async () => {
       const { pending } = storeForHome(defaultServerId);
       const bound = await pending;
       options?.signal?.throwIfAborted();
@@ -117,8 +152,8 @@ export async function withCliPromptLibraryArtifactReader<T>(
       // another Account when Protocol qualifies the formerly omitted Home.
       stores.set(bound.serverId, pending);
       return bound.accountId ? { serverId: bound.serverId, accountId: bound.accountId } : null;
-    },
-    readArtifact: async (ref) => {
+    }),
+    readArtifact: async (ref) => read('artifact', ref, async () => {
       const { pending } = storeFor(ref);
       const { serverUrl, store } = await pending;
       if (!store) throw new ArtifactEncryptionMaterialUnavailableError();
@@ -133,8 +168,8 @@ export async function withCliPromptLibraryArtifactReader<T>(
             body: typeof artifact.body === 'string' ? artifact.body : null,
           }
         : null;
-    },
-    readArtifactHeader: async (ref) => {
+    }),
+    readArtifactHeader: async (ref) => read('header', ref, async () => {
       const { serverId, pending } = storeFor(ref);
       let inventory = headers.get(serverId);
       if (!inventory) {
@@ -161,7 +196,7 @@ export async function withCliPromptLibraryArtifactReader<T>(
       if (artifact && Object.keys(artifact.header).length === 0)
         throw new ArtifactEncryptionMaterialUnavailableError();
       return artifact ? { header: artifact.header } : null;
-    },
+    }),
   });
 }
 
@@ -178,24 +213,16 @@ export async function resolveCliPromptStackSystemAppendBlocks(
   const promptStacksV1 = PromptStacksV1Schema.parse(
     args.promptStacksV1 ?? Reflect.get(settings, 'promptStacksV1'),
   );
-  const resolve = async (reader: CliPromptLibraryArtifactReader) => {
-    let scope = args.scope;
-    if (scope === undefined && (!args.readArtifact || args.credentials)) {
-      try { scope = await reader.readScope(); }
-      catch (error) {
-        args.signal?.throwIfAborted();
-        if (error instanceof PromptStackPreparationError) throw error;
-        throw new PromptStackPreparationError('unavailable');
-      }
-      if (scope && args.profileId?.trim()) scope = { ...scope, profileId: args.profileId.trim() };
-    }
-    return resolvePromptStackSystemAppendBlocksV1({
+  const resolve = async (reader: CliPromptLibraryArtifactReader) =>
+    resolvePromptStackSystemAppendBlocksV1({
       ...args,
-      scope,
+      readScope: !args.readArtifact || args.credentials ? async () => {
+        const scope = await reader.readScope();
+        return scope && args.profileId?.trim() ? { ...scope, profileId: args.profileId.trim() } : scope;
+      } : undefined,
       promptStacksV1,
       readArtifact: args.readArtifact ?? reader.readArtifact,
       readArtifactHeader: args.readArtifact ? args.readArtifactHeader : args.readArtifactHeader ?? reader.readArtifactHeader,
     });
-  };
   return withCliPromptLibraryArtifactReader(resolve, { ...args, serverId: args.scope?.serverId ?? args.serverId });
 }

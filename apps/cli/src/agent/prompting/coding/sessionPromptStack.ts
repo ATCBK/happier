@@ -1,6 +1,6 @@
 import type { ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
-import type { PromptStackScopeV1 } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
+import { assertPromptStackArtifactHeaderV1, PromptStackPreparationError, type PromptStackScopeV1 } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { migrateRetainedSessionWorkContextV1, readSessionMemoryEnabledV1, SessionDisabledInheritedEntryIdsV1Schema,
   SessionPromptStackV1Schema } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
@@ -13,6 +13,42 @@ import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifet
   isActiveAccountSettingsSnapshotLifetimeCurrent,
   type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveSessionProjectPromptStack } from './sessionProjectPromptStack';
+import { withCliPromptLibraryArtifactReader } from '@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks';
+
+/** Birth copies Session memory attachments, not document bodies or the lead's instructions/identity.
+ * Account/Profile/Project context continues to resolve through the worker's own composition. */
+export async function prepareSessionMemoryInheritance(input: Readonly<{
+  metadata: Readonly<Record<string, unknown>> | null;
+  credentials?: StoredCredentials;
+  serverId?: string;
+  signal?: AbortSignal;
+}>): Promise<Readonly<{ memoryEnabled: boolean; promptStack: PromptStackEntryV1[] }>> {
+  input.signal?.throwIfAborted();
+  const memoryEnabled = readSessionMemoryEnabledV1(input.metadata);
+  const work = migrateRetainedSessionWorkContextV1(input.metadata?.work);
+  const entries = createStoredReadSchema(SessionPromptStackV1Schema).parse(work.promptStack ?? [])
+    .filter(entry => entry.ref.kind === 'doc' && entry.id !== 'session.instructions');
+  if (entries.length === 0) return { memoryEnabled, promptStack: [] };
+  // Birth inheritance must read with its Session owner's material, never the
+  // ambient Account selected by the generic prompt-library reader.
+  if (!input.credentials) throw Object.assign(new Error('context_source_unavailable'), { code: 'context_source_unavailable' });
+  return withCliPromptLibraryArtifactReader(async reader => {
+    const scope = await reader.readScope();
+    if (!scope) throw Object.assign(new Error('context_source_unavailable'), { code: 'context_source_unavailable' });
+    const promptStack: PromptStackEntryV1[] = [];
+    for (const entry of entries) {
+      const ref = { ...entry.ref, serverId: entry.ref.serverId ?? scope.serverId };
+      // Birth inheritance is same-Home/Account only. Never select saved credentials for another Home.
+      if (ref.serverId !== scope.serverId) throw new PromptStackPreparationError('unavailable', ref);
+      const artifact = await reader.readArtifactHeader(ref);
+      if (!artifact) throw new PromptStackPreparationError('unavailable', ref);
+      assertPromptStackArtifactHeaderV1(ref, artifact.header, { layer: 'session', entryId: entry.id, memoryEnabled });
+      if (artifact.header?.kind === 'memory_doc.v1') promptStack.push({ ...entry, ref });
+    }
+    input.signal?.throwIfAborted();
+    return { memoryEnabled, promptStack };
+  }, input);
+}
 
 /** The Session producer retains its original Account lifetime and supplies its legacy Settings basis. */
 export type SessionPromptStackAccountContext = Readonly<{
