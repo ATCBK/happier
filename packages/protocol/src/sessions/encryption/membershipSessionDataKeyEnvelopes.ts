@@ -122,7 +122,7 @@ function hasUniqueSessionIds(entries: ReadonlyArray<{ sessionId: string }>): boo
  * Sessions are not actionable without disclosing anything about Sessions the
  * caller cannot inspect. The two buckets do not overlap, and neither is work.
  */
-const MembershipSessionDataKeyEnvelopeExceptionsV1Schema = z.object({
+export const MembershipSessionDataKeyEnvelopeExceptionsV1Schema = z.object({
   callerVisibleNonTransferableSessionCount: z.number().int().nonnegative(),
   callerEnvelopeRepairRequiredCount: z.number().int().nonnegative(),
 }).strict();
