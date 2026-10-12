@@ -7,8 +7,8 @@ describe('Prompt library Account catalog rows', () => {
     const rule = { id: 'rule', skillId: 'skill', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 };
     const record = { key: 'skill-rules', value: { v: 1, rules: [rule] } };
     expect(PromptLibraryRecordV1Schema.safeParse(record).success).toBe(true);
-    expect(PromptLibraryRecordV1Schema.safeParse({ ...record, value: { v: 1, rules: [rule, { ...rule, id: 'other' }] } } }).success).toBe(false);
-    expect(PromptLibraryRecordV1Schema.safeParse({ ...record, value: { v: 1, rules: [rule, { ...rule, id: 'other', agentId: 'codex' }] } } }).success).toBe(true);
+    expect(PromptLibraryRecordV1Schema.safeParse({ ...record, value: { v: 1, rules: [rule, { ...rule, id: 'other' }] } }).success).toBe(false);
+    expect(PromptLibraryRecordV1Schema.safeParse({ ...record, value: { v: 1, rules: [rule, { ...rule, id: 'other', agentId: 'codex' }] } }).success).toBe(true);
     expect(StoredPromptLibraryRecordV1Schema.parse({ ...record, future: true, value: { ...record.value, future: true,
       rules: [{ ...rule, future: true, target: { ...rule.target, future: true } }] } })).toEqual(record);
   });
