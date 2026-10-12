@@ -73,6 +73,7 @@ import {
   readConversationPermissionMediationSourceCurrentnessForInvocation,
 } from './outwardDelivery.js';
 import { createConversationOutwardDeliverySupervisor } from './outwardDeliverySupervisor.js';
+import { waitForChannelsAccountRows } from './waitForAccountRows.js';
 import { createConversationPairingResourceRuntime } from './pairingResource.js';
 import {
   listConversationProviderConnectionsForInvocation,
@@ -324,10 +325,14 @@ function createChannelsPlugin() {
   });
 
   async function runConversationIngressSupervisor(context: BackgroundServiceContext): Promise<void> {
+    await waitForChannelsAccountRows(context);
+    if (context.signal.aborted) return;
     await requireActiveChannelsPluginRuntime().ingressSupervisor.run(context);
   }
 
   async function runConversationOutwardDeliverySupervisor(context: BackgroundServiceContext): Promise<void> {
+    await waitForChannelsAccountRows(context);
+    if (context.signal.aborted) return;
     await requireActiveChannelsPluginRuntime().outwardDeliverySupervisor.run(context);
   }
 
