@@ -24,6 +24,7 @@ describe('daemon control server: local service inventory endpoints', () => {
         } as const;
         const refreshed = { ...snapshot, generatedAt: 2_000 };
         const localServicesInventory: LocalServiceInventoryRoutes = {
+            readCurrentSnapshot: () => snapshot,
             getSnapshot: vi.fn(async () => snapshot),
             refreshSnapshot: vi.fn(async () => refreshed),
             // The control server never watches; the double still satisfies the whole route contract.

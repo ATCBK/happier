@@ -88,6 +88,7 @@ import { SessionRunnerStatusGetRequestV1Schema, SessionRunnerRuntimeStateV1Schem
 import { SessionRunnerRuntimeStatusV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV2';
 import { SessionCreationTerminalSpawnErrorDetailSchema, SpawnSessionErrorCodeSchema } from '@happier-dev/protocol/spawnSession';
 import { SessionUsageLimitRecoveryResumePromptModeV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
+import { SessionMetadataPublisherPreconditionV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { SshTunnelEnsureRequestSchema, SshTunnelProbeRequestSchema, SshTunnelReleaseRequestSchema, SshTunnelStopRequestSchema } from '@happier-dev/protocol/ssh/tunnels';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { createUnavailableRuntimeActionExecutor } from '@happier-dev/protocol/actions/executor/dispatch';
@@ -245,11 +246,14 @@ type DaemonSelfRestartRequest = Readonly<{
 }>;
 type DaemonExternalActionApi = Readonly<{
   currentServerId: string;
+  currentAccountId?: string;
   currentServerHttpBaseUrl?: string;
   terminalPolicyScope?: TerminalPresentUserPolicyScope;
   verifyPat: DaemonPatVerifier;
   readEncryptionAccess?: AccountServerPatEncryptionAccessReader;
   executor: ExternalActionExecutor;
+  acquirePluginRuntimeRegistryLease?: Parameters<typeof executeExternalAction>[0]['acquirePluginRuntimeRegistryLease'];
+  resolvePluginExecutionOriginContext?: Parameters<typeof executeExternalAction>[0]['resolvePluginExecutionOriginContext'];
   resolvePatExecutor?: Parameters<typeof registerDaemonExternalActionRoute>[1]['resolvePatExecutor'];
   mintExecutionAuthorization?: Parameters<typeof registerDaemonExternalActionRoute>[1]['mintExecutionAuthorization'];
   externalActionMachineRequestPrivateKey?: Parameters<typeof registerDaemonExternalActionRoute>[1]['externalActionMachineRequestPrivateKey'];
@@ -612,10 +616,7 @@ const SessionStartedSuccessReportSchema = z.object({
     operationId: z.string().trim().min(1).max(256),
     attemptId: z.string().trim().min(1).max(256),
     phase: z.enum(['admit', 'runtime_bound']).optional(),
-    publisherPrecondition: z.object({
-      machineId: z.string().trim().min(1).max(256),
-      committedFenceMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-    }).strict(),
+    publisherPrecondition: SessionMetadataPublisherPreconditionV1Schema,
   }).strict().optional(),
 }).strict();
 
@@ -854,6 +855,7 @@ export function createDaemonControlApp({
   });
   registerDaemonControlRequestTiming(app, {
     debug: (message, data) => logger.debug(message, data),
+    warn: (message, data) => logger.warnLocalFile(message, data),
   });
 
   // Set up Zod type provider
@@ -1195,8 +1197,11 @@ export function createDaemonControlApp({
             surface,
             currentMachineId: machineId,
             currentServerId: externalActionApi.currentServerId,
+            currentAccountId: externalActionApi.currentAccountId,
             resolveTarget: externalActionApi.resolveTarget,
             executor: externalActionApi.executor,
+            acquirePluginRuntimeRegistryLease: externalActionApi.acquirePluginRuntimeRegistryLease,
+            resolvePluginExecutionOriginContext: externalActionApi.resolvePluginExecutionOriginContext,
             signal: lifetime.signal,
           });
           if (execution.kind === 'invalid_request') {
@@ -1391,8 +1396,9 @@ export function createDaemonControlApp({
         );
       },
       ...(pluginActionCurrentIntent ? { requestCurrentIntent: pluginActionCurrentIntent } : {}),
-      readCatalogSnapshot: async () => await readCurrentDaemonPluginCatalogSnapshot({
+      readCatalogSnapshot: async (request) => await readCurrentDaemonPluginCatalogSnapshot({
         reloadController: pluginReloadController,
+        selection: request?.selection,
       }),
       ...(readPluginCatalogProjection ? { readCatalogProjection: readPluginCatalogProjection } : {}),
     });
@@ -2512,6 +2518,7 @@ export function createDaemonControlApp({
           result: z.object({
             activationId: z.string().uuid(),
             env: z.record(z.string(), z.string()),
+            unsetEnvKeys: z.array(z.string()).optional(),
             connectedServicesBindings: z.unknown(),
             registration: ExecutionRunConnectedServicesRegistrationV1Schema,
           }),
@@ -2933,6 +2940,7 @@ export function createDaemonControlApp({
       };
     }
     const releasesNewWork = request.body.operation.kind === 'turn.admission.authorize'
+      || request.body.operation.kind === 'mcp.request_auth.open'
       || request.body.operation.kind === 'session.input.admit'
       || request.body.operation.kind === 'managed_server.supervision.authorize';
     if (releasesNewWork ? isDaemonQuiescing() : admissionDrain.isPublicationQuiescing()) {

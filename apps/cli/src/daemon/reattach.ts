@@ -176,7 +176,7 @@ export function adoptSessionsFromMarkers(params: {
     const liveProcess = happyPidToProcess.get(marker.pid);
     if (liveProcess && !daemonProcessMatchesCurrentScope(liveProcess)) continue;
     // Safety: avoid PID reuse adopting an unrelated process. Only adopt if PID currently looks
-    // like a Happy session process (best-effort cross-platform via ps-list classification).
+    // like a Happy session process (best-effort classification over the process census).
     const procType = happyPidToType.get(marker.pid);
     if (!procType || !ALLOWED_HAPPY_SESSION_PROCESS_TYPES.has(procType)) {
       continue;

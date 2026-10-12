@@ -1,7 +1,7 @@
 /**
  * Opt-in daemon reattach integration tests.
  *
- * These tests spawn real processes and rely on `ps-list` classification.
+ * These tests spawn real processes and classify their census observations.
  *
  * Enable with: `HAPPIER_CLI_DAEMON_REATTACH_INTEGRATION=1`
  */

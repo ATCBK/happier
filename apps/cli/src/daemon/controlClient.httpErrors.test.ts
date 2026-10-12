@@ -4,6 +4,7 @@ import { reloadConfiguration } from '@/configuration';
 import { writeDaemonState, clearDaemonStateForTestTeardown } from '@/persistence';
 import { resolveDaemonSpawnSessionByNonce, spawnDaemonSession } from '@/daemon/controlClient';
 import * as controlClient from '@/daemon/controlClient';
+import { handleDaemonCliCommand } from '@/cli/commands/daemon';
 import {
   buildProviderAccountUsageRecordId,
   type ProviderAccountUsageSnapshotV1,
@@ -77,6 +78,14 @@ describe('daemon control client (HTTP error responses)', () => {
     }
   });
 
+  it('rejects session listing when there is no daemon instead of returning an empty inventory', async () => {
+    tmpHomeDir = await createTempDir('happier-daemon-list-no-state-');
+    envScope.patch({ HAPPIER_HOME_DIR: tmpHomeDir });
+    reloadConfiguration();
+
+    await expect(controlClient.listDaemonSessions()).rejects.toThrow('No daemon running');
+  });
+
   it.each([
     { cancelled: false, httpTimeout: '100', expected: { status: 'recorded' } },
     { cancelled: true, httpTimeout: '1000', expected: { status: 'unavailable', reason: 'daemon_unavailable' } },
@@ -115,6 +124,36 @@ describe('daemon control client (HTTP error responses)', () => {
       if (responseTimer) clearTimeout(responseTimer);
       server.closeAllConnections();
       await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+
+  it('rejects session listing when daemon control returns an HTTP failure', async () => {
+    const server = http.createServer((_req, res) => {
+      res.statusCode = 503;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: 'control unavailable' }));
+    });
+
+    try {
+      const { port } = await listen(server);
+      tmpHomeDir = await createTempDir('happier-daemon-list-http-error-');
+      envScope.patch({ HAPPIER_HOME_DIR: tmpHomeDir });
+      reloadConfiguration();
+      writeDaemonState({
+        pid: process.pid,
+        httpPort: port,
+        startedAt: Date.now(),
+        startedWithCliVersion: 'test',
+        controlToken: 'test-token',
+      });
+
+      await expect(handleDaemonCliCommand({
+        args: ['daemon', 'list'],
+        rawArgv: [],
+        terminalRuntime: null,
+      })).rejects.toThrow('HTTP 503');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 
@@ -350,12 +389,12 @@ describe('daemon control client (HTTP error responses)', () => {
         existingSessionId: 'sess-existing',
         spawnNonce: 'spawn-nonce-1',
         transcriptStorage: 'direct',
-        mcpSelection: {
+        capabilitySelection: { mcp: {
           v: 1,
           managedServersEnabled: false,
           forceIncludeServerIds: ['server-portable'],
           forceExcludeServerIds: ['server-disabled'],
-        },
+        } },
         connectedServices: {
           v: 1,
           bindingsByServiceId: {
@@ -636,12 +675,12 @@ describe('daemon control client (HTTP error responses)', () => {
         spawnNonce: 'spawn-nonce-legacy-compat',
         backendTarget: { kind: 'backend', backendId: 'opencode', sourceKind: 'built_in' },
         transcriptStorage: 'direct',
-        mcpSelection: {
+        capabilitySelection: { mcp: {
           v: 1,
           managedServersEnabled: false,
           forceIncludeServerIds: ['server-portable'],
           forceExcludeServerIds: ['server-disabled'],
-        },
+        } },
         connectedServices: {
           v: 1,
           bindingsByServiceId: {

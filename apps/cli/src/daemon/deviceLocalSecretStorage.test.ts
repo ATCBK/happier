@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
@@ -32,6 +32,11 @@ describe('deviceLocalSecretStorage', () => {
         purpose: 'external_session_transcript_refresh_cursor',
         value: 'authority-and-cursor',
       });
+      const persisted = JSON.parse(await readFile(path, 'utf8'));
+      await writeFile(path, JSON.stringify({ ...persisted, retired: true }));
+      const restarted = await readOrCreateDeviceLocalSecretStorage({ path });
+      expect(restarted.openJson({ purpose: 'session_respawn_environment', ciphertext: sealed }))
+        .toEqual({ OPENAI_API_KEY: 'secret' });
       expect(cursorIdentity).toMatch(/^[0-9a-f]{64}$/);
       for (const store of stores) {
         expect(store.deriveOpaqueIdentity({

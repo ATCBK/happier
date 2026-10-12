@@ -638,7 +638,7 @@ export async function requestDaemonSignedRootActionExecution(
 }
 
 export async function readDaemonPluginCatalog(
-  options: DaemonControlRequestOptions = {},
+  options: DaemonControlRequestOptions & import('@/plugins/daemon/catalogProjection').DaemonPluginCatalogReadRequest = {},
 ): Promise<
   | Readonly<{
       kind: 'available';
@@ -648,8 +648,18 @@ export async function readDaemonPluginCatalog(
     }>
   | Readonly<{ kind: 'unavailable'; code: string }>
 > {
-  const result = await daemonPost(PLUGIN_CATALOG_READ_PATH, {}, options);
+  const { selection, ...transportOptions } = options;
+  const result = await daemonPost(PLUGIN_CATALOG_READ_PATH, selection ? { selection } : {}, transportOptions);
   if (result && typeof result === 'object' && typeof result.error === 'string') {
+    // The catalog route carries its typed refusal in a service-unavailable
+    // body. HTTP transport retains that body under `response`; preserve the
+    // catalog owner's code rather than replacing it with a transport label.
+    const response: unknown = result.response;
+    if (response && typeof response === 'object' && 'kind' in response
+      && response.kind === 'unavailable' && 'code' in response
+      && typeof response.code === 'string') {
+      return { kind: 'unavailable', code: response.code };
+    }
     return { kind: 'unavailable', code: result.errorCode ?? 'daemon_unavailable' };
   }
   const parsed = result as
@@ -900,6 +910,9 @@ export async function notifyDaemonProviderAccountUsageAdoption(
 
 export async function listDaemonSessions(): Promise<any[]> {
   const result = await daemonPost('/list');
+  if (result?.error) {
+    throw new Error(String(result.error));
+  }
   return result.children || [];
 }
 
@@ -1169,7 +1182,7 @@ export async function readAppliedParentConnectedServices(
 export async function requestExecutionRunConnectedServicesMaterialization(
   request: ConnectedServiceRunMaterializeRequest,
 ): Promise<
-  | { ok: true; result: { activationId: string; env: Record<string, string>; connectedServicesBindings: unknown; registration: ExecutionRunConnectedServicesRegistrationV1 } }
+  | { ok: true; result: { activationId: string; env: Record<string, string>; unsetEnvKeys?: readonly string[]; connectedServicesBindings: unknown; registration: ExecutionRunConnectedServicesRegistrationV1 } }
   | { ok?: false; error?: string; errorCode?: string; errorMessage?: string }
 > {
   return await daemonPost(CONNECTED_SERVICE_RUN_MATERIALIZE_PATH, request, {

@@ -175,6 +175,7 @@ describe('daemon control server: /spawn-session', () => {
             publisherPrecondition: {
               machineId: 'machine_local',
               committedFenceMs: 1,
+              publisherGeneration: '1',
             },
           },
         }),
@@ -418,12 +419,12 @@ describe('daemon control server: /spawn-session', () => {
           backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
           experimentalCodexAcp: true,
           transcriptStorage: 'direct',
-          mcpSelection: {
+          capabilitySelection: { mcp: {
             v: 1,
             managedServersEnabled: false,
             forceIncludeServerIds: ['server-portable'],
             forceExcludeServerIds: ['server-disabled'],
-          },
+          } },
           terminal: {
             mode: 'tmux',
             tmux: { sessionName: 'happy-e2e', isolated: true, tmpDir: '/tmp/happy-tmux' },
@@ -456,12 +457,12 @@ describe('daemon control server: /spawn-session', () => {
         backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
         codexBackendMode: 'acp',
         transcriptStorage: 'direct',
-        mcpSelection: {
+        capabilitySelection: { mcp: {
           v: 1,
           managedServersEnabled: false,
           forceIncludeServerIds: ['server-portable'],
           forceExcludeServerIds: ['server-disabled'],
-        },
+        } },
         terminal: {
           mode: 'tmux',
           tmux: { sessionName: 'happy-e2e', isolated: true, tmpDir: '/tmp/happy-tmux' },

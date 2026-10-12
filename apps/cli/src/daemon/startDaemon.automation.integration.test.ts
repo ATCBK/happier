@@ -52,6 +52,7 @@ const harness = vi.hoisted(() => {
     stop: connectedServiceQuotasStop,
     pause: connectedServiceQuotasPause,
     resume: connectedServiceQuotasResume,
+    wake: vi.fn(),
   }));
 
   const apiMachine = {
@@ -275,10 +276,6 @@ vi.mock('@/configuration', () => ({
   },
 }));
 
-vi.mock('@/integrations/caffeinate', () => ({
-  startCaffeinate: vi.fn(() => false),
-  stopCaffeinate: vi.fn(async () => {}),
-}));
 
 vi.mock('@/ui/doctor', () => ({
   getEnvironmentInfo: vi.fn(() => ({})),

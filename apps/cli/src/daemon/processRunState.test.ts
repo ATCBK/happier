@@ -63,13 +63,10 @@ describe.skipIf(process.platform === 'win32')('readProcessRunState (posix)', () 
     await expect(readProcessRunState(pid)).resolves.toBe('stopped');
   });
 
-  it('still reports a SIGSTOPped process as stopped when the event loop stalls past the ps budget', async () => {
-    // `ps` completes in milliseconds and its row is buffered in the pipe. Handing that budget to
-    // `child_process.execFile` destroys the buffered row from the timers phase — which runs BEFORE
-    // poll — and then reports `code 0, signal null`: a SUCCESS carrying empty stdout. The empty
-    // state char classifies as "no ps row" and this function falls back to `alive -> servable`,
-    // re-opening the incident it exists to prevent: the daemon refuses a resume as "already
-    // running" while the runner is SIGSTOPped and can serve nothing.
+  it('still reports a SIGSTOPped process as stopped when the event loop stalls past the previous ps budget', async () => {
+    // The former per-PID ps probe could discard a completed row when its timer fired before poll
+    // after a stall. Preserve this regression through the census owner: losing the state row
+    // would fall back to alive -> servable and refuse a resume while the runner cannot serve.
     const pid = spawnSleeper();
     process.kill(pid, 'SIGSTOP');
     await waitFor(async () => (await readProcessRunState(pid)) === 'stopped');
@@ -100,5 +97,32 @@ describe('readProcessRunState (win32 semantics)', () => {
   it('maps alive to servable and not-alive to dead', async () => {
     await expect(readProcessRunState(1234, { platform: 'win32', isPidAlive: () => true })).resolves.toBe('servable');
     await expect(readProcessRunState(1234, { platform: 'win32', isPidAlive: () => false })).resolves.toBe('dead');
+  });
+});
+
+describe('readProcessRunState census states', () => {
+  it.each([['T', 'stopped'], ['Z', 'zombie'], ['S', 'servable']] as const)(
+    'reads procfs %s through the census as %s even when the signal probe disagrees', async (state, expected) => {
+      await expect(readProcessRunState(777, {
+        platform: 'linux', isPidAlive: () => false,
+        linuxBoundary: {
+          readFile: async (path) => path.endsWith('/stat')
+            ? `777 (runner) ${state} 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 12345 22`
+            : path.endsWith('/status') ? 'Uid: 1000 1000 1000 1000' : '',
+          readdir: async () => [], readlink: async () => '/repo',
+        },
+      })).resolves.toBe(expected);
+    },
+  );
+
+  it('refreshes the signal probe after an unavailable census without declaring an alive pid dead', async () => {
+    let observations = 0;
+    await expect(readProcessRunState(777, {
+      platform: 'linux', isPidAlive: () => ++observations !== 1,
+      linuxBoundary: {
+        readFile: async () => { throw new Error('procfs unavailable'); },
+        readdir: async () => [], readlink: async () => { throw new Error('unavailable'); },
+      },
+    })).resolves.toBe('servable');
   });
 });

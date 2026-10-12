@@ -4,14 +4,10 @@ import { dirname } from 'node:path';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
+import { spawnInlineNodeTestProcess, waitForProcessExit } from '@/testkit/process/spawn';
 
-const { psListMock, crossSpawnSyncMock } = vi.hoisted(() => ({
-  psListMock: vi.fn(),
+const { crossSpawnSyncMock } = vi.hoisted(() => ({
   crossSpawnSyncMock: vi.fn(),
-}));
-
-vi.mock('ps-list', () => ({
-  default: psListMock,
 }));
 
 vi.mock('cross-spawn', () => ({
@@ -31,7 +27,6 @@ describe.sequential('doctor clean process custody', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.resetModules();
-    psListMock.mockReset();
     crossSpawnSyncMock.mockReset();
     envScope.restore();
     envScope = createEnvKeyScope([
@@ -44,7 +39,6 @@ describe.sequential('doctor clean process custody', () => {
 
   it('does not signal a discovered daemon PID after its exact lifecycle proof is no longer available', async () => {
     const homeDir = createTempDirSync('happier-doctor-clean-pid-reuse-');
-    const daemonPid = 999_999_999;
     const realKill = process.kill.bind(process);
     envScope.patch({
       HAPPIER_HOME_DIR: homeDir,
@@ -52,16 +46,8 @@ describe.sequential('doctor clean process custody', () => {
       HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID: 'cloud',
       HAPPIER_SERVER_URL: 'https://api.happier.dev',
     });
-    // The command must be recognizable to `classifyHappyProcess` from any working
-    // directory: deriving it from `process.cwd()` only classifies when the checkout
-    // path happens to contain a recognized marker, so the fixture silently stopped
-    // exercising the custody rule under other roots (repo root vs execution mirror).
-    // `cli-dist-snapshot/src/index.ts` is the canonical source-snapshot daemon shape.
-    psListMock.mockResolvedValue([{
-      pid: daemonPid,
-      name: 'node',
-      cmd: `${process.execPath} /opt/happier-test/cli-dist-snapshot/src/index.ts daemon start-sync`,
-    }]);
+    const child = spawnInlineNodeTestProcess('/* /opt/happier-test/cli-dist-snapshot/src/index.ts daemon start-sync */ setInterval(() => {}, 1000)');
+    const daemonPid = child.pid!;
 
     try {
       vi.resetModules();
@@ -81,18 +67,19 @@ describe.sequential('doctor clean process custody', () => {
         if (signal === 0) return undefined as any;
         throw Object.assign(new Error(`reused daemon PID received ${String(signal)}`), { code: 'ESRCH' });
       }) as any);
-      const { clearProcessSnapshotCacheForTests } = await import('./processSnapshotCache');
-      clearProcessSnapshotCacheForTests();
-      const { killRunawayHappyProcesses } = await import('./doctor');
+      const { stopStaleDaemonForDoctor } = await import('./doctor');
 
-      const result = await killRunawayHappyProcesses();
+      const result = await stopStaleDaemonForDoctor();
 
-      expect(result.killed).toBe(0);
-      expect(result.errors).toEqual([expect.objectContaining({ pid: daemonPid })]);
+      expect(result.stopped).toBe(0);
+      expect(result.errors).toEqual(expect.arrayContaining([expect.objectContaining({ pid: daemonPid })]));
       expect(killSpy.mock.calls.map(([, signal]) => signal)).not.toContain('SIGTERM');
       expect(killSpy.mock.calls.map(([, signal]) => signal)).not.toContain('SIGKILL');
       expect(crossSpawnSyncMock).not.toHaveBeenCalled();
     } finally {
+      vi.restoreAllMocks();
+      child.kill();
+      await waitForProcessExit(daemonPid);
       removeTempDirSync(homeDir);
     }
   });

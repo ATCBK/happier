@@ -6,6 +6,7 @@ import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/pro
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import * as z from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { CATALOG_AGENT_IDS } from '@/agent/catalog/ids';
 import {
   SessionRunnerRespawnDescriptorV1Schema,
@@ -42,6 +43,7 @@ const DaemonSessionMarkerSchema = z.object({
   flavor: z.enum(CATALOG_AGENT_IDS).optional(),
   startedBy: z.enum(['daemon', 'terminal']).optional(),
   cwd: z.string().optional(),
+  linuxLaunchUnit: z.string().refine(unit => unit.startsWith('happier-') && !unit.includes('/') && unit.endsWith('.scope')).optional(),
   requesterWorkAttributionV1: RequesterWorkAttributionStoredReadV1Schema.optional(),
   // Legacy positive-classification witness and diagnostic snapshot. Mutable command text is not process generation.
   processCommandHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -50,7 +52,7 @@ const DaemonSessionMarkerSchema = z.object({
   // 0.2 predecessor marker witness. Read for adoption safety; new writes use
   // processStartTimeMs from the current process-identity owner.
   processInstanceFingerprint: z.string().trim().min(1).max(512).optional(),
-  // Optional debug-only sample of the observed command (best-effort; may be truncated by ps-list).
+  // Optional debug-only sample of the observed command; not an identity witness.
   processCommand: z.string().optional(),
   metadata: z.any().optional(),
   // Safe daemon respawn inputs (no secrets). Used to reconstruct SpawnSessionOptions after reattach.
@@ -99,6 +101,7 @@ const DaemonSessionMarkerSchema = z.object({
 });
 
 export type DaemonSessionMarker = z.infer<typeof DaemonSessionMarkerSchema>;
+const DaemonSessionMarkerStoredReadSchema = createStoredReadSchema(DaemonSessionMarkerSchema);
 type AgentRuntimeDaemonServiceActiveAdmission = Readonly<{
   turnId: string;
   inputId: string;
@@ -314,7 +317,7 @@ async function writeSessionMarkerUnlocked(
   let existingMarkerFromDisk: DaemonSessionMarker | null = null;
   try {
     const raw = await readFile(filePath, 'utf-8');
-    const existing = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
+    const existing = DaemonSessionMarkerStoredReadSchema.safeParse(JSON.parse(raw));
     if (existing.success) {
       existingMarkerFromDisk = existing.data;
       createdAtFromDisk = existing.data.createdAt;
@@ -501,8 +504,14 @@ async function writeSessionMarkerUnlocked(
     throw new Error('session_marker_requester_attribution_conflict');
   }
   const requesterWorkAttributionV1 = incomingRequesterAttribution ?? existingRequesterAttribution;
+  const retainedLinuxLaunchUnit = existingMarkerFromDisk?.linuxLaunchUnit
+    && marker.processStartTimeMs !== undefined
+    && (canonicalAdoptionRequested || sessionMarkerProcessOwnershipMatches(existingMarkerFromDisk, {
+      happySessionId: marker.happySessionId, processStartTimeMs: marker.processStartTimeMs,
+    })) ? existingMarkerFromDisk.linuxLaunchUnit : undefined;
   const payload: DaemonSessionMarker = DaemonSessionMarkerSchema.parse({
     ...marker,
+    ...(marker.linuxLaunchUnit ?? retainedLinuxLaunchUnit ? { linuxLaunchUnit: marker.linuxLaunchUnit ?? retainedLinuxLaunchUnit } : {}),
     ...(requesterWorkAttributionV1 ? { requesterWorkAttributionV1 } : {}),
     ...(preservedConnectedServiceRestartIntent
       ? { connectedServiceRestartIntent: preservedConnectedServiceRestartIntent }
@@ -940,7 +949,7 @@ async function removeSessionMarkerUnlocked(
       let marker: DaemonSessionMarker | null = null;
       try {
         const raw = await readFile(filePath, 'utf-8');
-        const parsed = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
+        const parsed = DaemonSessionMarkerStoredReadSchema.safeParse(JSON.parse(raw));
         if (parsed.success && parsed.data.happyHomeDir === configuration.happyHomeDir) {
           marker = parsed.data;
         }
@@ -1168,7 +1177,7 @@ export async function readSessionMarkerForPid(pid: number,
     const filePath = join(dir, `pid-${pid}.json`);
     try {
       const raw = await readFile(filePath, 'utf-8');
-      const parsed = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
+      const parsed = DaemonSessionMarkerStoredReadSchema.safeParse(JSON.parse(raw));
       if (parsed.success && parsed.data.happyHomeDir === scope.happyHomeDir) {
         return parsed.data;
       }
@@ -1224,6 +1233,7 @@ export async function updateSessionMarkerActiveTurn(params: Readonly<{
   pid: number;
   sessionId: string;
   activeTurnId: string | null;
+  expectedActiveTurnId?: string;
   agentRuntimeDaemonServiceActiveAdmission?:
     AgentRuntimeDaemonServiceActiveAdmission;
   expectedAgentRuntimeDaemonServiceActiveAdmission?:
@@ -1239,6 +1249,9 @@ export async function updateSessionMarkerActiveTurn(params: Readonly<{
   return await runWithSessionMarkerMutationLock(params.pid, async () => {
     const existing = await readSessionMarkerForPid(params.pid);
     if (!existing || existing.happySessionId !== params.sessionId) return false;
+    if (params.expectedActiveTurnId !== undefined && existing.activeTurnId !== params.expectedActiveTurnId) {
+      return false;
+    }
     if (
       params.expectedAgentRuntimeDaemonServiceActiveAdmission
       && !agentRuntimeDaemonServiceActiveAdmissionsEqual(
@@ -1326,7 +1339,7 @@ export async function listSessionMarkers(options: Readonly<{
       const full = join(dir, name);
       try {
         const raw = await readFile(full, 'utf-8');
-        const parsed = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
+        const parsed = DaemonSessionMarkerStoredReadSchema.safeParse(JSON.parse(raw));
         if (!parsed.success) {
           if (options.requireComplete) throw parsed.error;
           logger.debug(`[sessionRegistry] Failed to parse session marker ${name}`, parsed.error);

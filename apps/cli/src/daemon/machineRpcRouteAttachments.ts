@@ -6,6 +6,11 @@ import type { BrowserDiagnosticsRoutes } from './browser/diagnostics/routes';
 import type { BrowserRecordingRoutes } from './browser/recording/routes';
 import type { SimulatorPreviewRoutes } from './devices/simulator/previewRoutes.types';
 import type { DaemonLocalServicesMachineRpcRoutes } from '@/rpc/handlers/daemonLocalServices';
+import type { DaemonMachineVitalsRoutes } from '@/rpc/handlers/daemonMachineVitals';
+import type { DaemonProcessesRoutes } from '@/rpc/handlers/daemonProcesses';
+import type { DaemonMachineResourcesPolicyRoutes } from '@/rpc/handlers/daemonMachineResourcesPolicy';
+import type { DaemonMachineGuardRoutes } from '@/rpc/handlers/daemonMachineGuard';
+import type { DaemonStorageRoutes } from '@/rpc/handlers/storage';
 import type { LocalServicePreviewRoutes } from './local/services/preview/routes';
 import type { ConnectedAccountDaemonRuntime } from './connectedServices/ConnectedAccountDaemonRuntime';
 import type { ConnectedServicePoolSelectionRead } from '@/api/machine/rpcHandlers.connectedAccounts';
@@ -14,6 +19,11 @@ export type DaemonMachineRpcRouteRegistrar = Pick<
   ApiMachineClient,
   | 'registerLocalServicesPreviewRoutes'
   | 'registerLocalServicesRoutes'
+  | 'registerMachineVitalsRoutes'
+  | 'registerMachineProcessesRoutes'
+  | 'registerMachineResourcesPolicyRoutes'
+  | 'registerMachineGuardRoutes'
+  | 'registerStorageRoutes'
   | 'registerBrowserControlRoutes'
   | 'registerBrowserContextRoutes'
   | 'registerBrowserDiagnosticsRoutes'
@@ -31,6 +41,11 @@ type DaemonMachineConnectedAccountPurposeBindingRuntime = Parameters<
 export type DaemonMachineRpcRouteAttachmentCache = Readonly<{
   attachLocalServicesPreviewRoutes(routes: LocalServicePreviewRoutes): void;
   attachLocalServicesRoutes(routes: DaemonLocalServicesMachineRpcRoutes): void;
+  attachMachineVitalsRoutes(routes: DaemonMachineVitalsRoutes): void;
+  attachMachineProcessesRoutes(routes: DaemonProcessesRoutes): void;
+  attachMachineResourcesPolicyRoutes(routes: DaemonMachineResourcesPolicyRoutes): void;
+  attachMachineGuardRoutes(routes: DaemonMachineGuardRoutes): void;
+  attachStorageRoutes(routes: DaemonStorageRoutes): void;
   attachBrowserControlRoutes(routes: BrowserDaemonControlRoutes): void;
   attachBrowserContextRoutes(routes: BrowserContextRoutes): void;
   attachBrowserDiagnosticsRoutes(routes: BrowserDiagnosticsRoutes): void;
@@ -50,6 +65,11 @@ export function createDaemonMachineRpcRouteAttachmentCache(input: Readonly<{
 }>): DaemonMachineRpcRouteAttachmentCache {
   let localServicesPreviewRoutes: LocalServicePreviewRoutes | null = null;
   let localServicesRoutes: DaemonLocalServicesMachineRpcRoutes | null = null;
+  let machineVitalsRoutes: DaemonMachineVitalsRoutes | null = null;
+  let machineProcessesRoutes: DaemonProcessesRoutes | null = null;
+  let machineResourcesPolicyRoutes: DaemonMachineResourcesPolicyRoutes | null = null;
+  let machineGuardRoutes: DaemonMachineGuardRoutes | null = null;
+  let storageRoutes: DaemonStorageRoutes | null = null;
   let browserControlRoutes: BrowserDaemonControlRoutes | null = null;
   let browserContextRoutes: BrowserContextRoutes | null = null;
   let browserDiagnosticsRoutes: BrowserDiagnosticsRoutes | null = null;
@@ -118,6 +138,26 @@ export function createDaemonMachineRpcRouteAttachmentCache(input: Readonly<{
   }
 
   return {
+    attachStorageRoutes(routes) {
+      storageRoutes = routes;
+      input.getApiMachineForSessions()?.registerStorageRoutes(routes);
+    },
+    attachMachineResourcesPolicyRoutes(routes) {
+      machineResourcesPolicyRoutes = routes;
+      input.getApiMachineForSessions()?.registerMachineResourcesPolicyRoutes(routes);
+    },
+    attachMachineGuardRoutes(routes) {
+      machineGuardRoutes = routes;
+      input.getApiMachineForSessions()?.registerMachineGuardRoutes(routes);
+    },
+    attachMachineVitalsRoutes(routes) {
+      machineVitalsRoutes = routes;
+      input.getApiMachineForSessions()?.registerMachineVitalsRoutes(routes);
+    },
+    attachMachineProcessesRoutes(routes) {
+      machineProcessesRoutes = routes;
+      input.getApiMachineForSessions()?.registerMachineProcessesRoutes(routes);
+    },
     attachLocalServicesPreviewRoutes(routes) {
       localServicesPreviewRoutes = routes;
       if (localServicesRoutes?.localServicesPreview === routes) return;
@@ -198,6 +238,21 @@ export function createDaemonMachineRpcRouteAttachmentCache(input: Readonly<{
       const registrationRoutes = localServicesRoutesForCombinedRegistration();
       if (registrationRoutes) {
         apiMachineForSessions.registerLocalServicesRoutes(registrationRoutes);
+      }
+      if (machineVitalsRoutes) {
+        apiMachineForSessions.registerMachineVitalsRoutes(machineVitalsRoutes);
+      }
+      if (machineProcessesRoutes) {
+        apiMachineForSessions.registerMachineProcessesRoutes(machineProcessesRoutes);
+      }
+      if (machineResourcesPolicyRoutes) {
+        apiMachineForSessions.registerMachineResourcesPolicyRoutes(machineResourcesPolicyRoutes);
+      }
+      if (machineGuardRoutes) {
+        apiMachineForSessions.registerMachineGuardRoutes(machineGuardRoutes);
+      }
+      if (storageRoutes) {
+        apiMachineForSessions.registerStorageRoutes(storageRoutes);
       }
       if (browserControlRoutes) {
         apiMachineForSessions.registerBrowserControlRoutes(browserControlRoutes);

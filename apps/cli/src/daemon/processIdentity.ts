@@ -1,33 +1,14 @@
-import { readFile, readdir, readlink } from 'node:fs/promises';
-
-import { execFileWithDeadline } from '@happier-dev/cli-common/process';
 import { compareNumericProcessGenerationIdentities } from '@happier-dev/cli-common/processInstance';
 
 import { parseProcessCustodyStartIdentity } from '@/subprocess/supervision/processCustody';
-import {
-    readDarwinProcessFacts,
-    type DarwinExecFileBoundary,
-} from './local/services/inventory/platform/darwin';
-import {
-    readLinuxProcessFacts,
-    type LinuxProcfsBoundary,
-} from './local/services/inventory/platform/linux';
-import {
-    type WindowsExecFileBoundary,
-} from './local/services/inventory/platform/windows';
+import { createProcessCensusReader, readProcessCensus, type ProcessCensusDependencies } from '@/processes/census/processCensus';
+import { censusRowToProcessFact } from '@/processes/census/processFacts';
 import type { LocalServiceProcessFact } from './local/services/inventory/provenance';
-import {
-    readWindowsProcessInventory,
-    type WindowsProcessInventoryFact,
-} from './platform/windows/windowsProcessInventory';
 
 type SupportedProcessIdentityPlatform = 'darwin' | 'linux' | 'win32';
 
-export type ReadProcessIdentityByPidDependencies = Readonly<{
-    platform?: NodeJS.Platform;
-    linuxBoundary?: LinuxProcfsBoundary;
-    execFile?: DarwinExecFileBoundary & WindowsExecFileBoundary;
-}>;
+export type ReadProcessIdentityByPidDependencies = Pick<ProcessCensusDependencies,
+    'platform' | 'linuxBoundary' | 'execFile' | 'helperExecutablePath'>;
 
 function isSupportedPlatform(platform: NodeJS.Platform): platform is SupportedProcessIdentityPlatform {
     return platform === 'darwin' || platform === 'linux' || platform === 'win32';
@@ -106,31 +87,6 @@ export function compareProcessGenerationIdentities(
     return compareNumericProcessGenerationIdentities(expectedIdentity, observedIdentity, platform);
 }
 
-function normalizeExactProcessIdentity(
-    requestedPid: number,
-    processIdentity:
-        | LocalServiceProcessFact
-        | WindowsProcessInventoryFact
-        | null,
-): (LocalServiceProcessFact & { name?: string }) | null {
-    if (!processIdentity || processIdentity.pid !== requestedPid) return null;
-    const processStartTimeMs = processIdentity.processStartTimeMs;
-    const command = processIdentity.command?.trim() ?? '';
-    if (
-        !Number.isFinite(processStartTimeMs)
-        || !Number.isInteger(processStartTimeMs)
-        || (processStartTimeMs ?? -1) < 0
-    ) {
-        return null;
-    }
-    return {
-        ...processIdentity,
-        processStartTimeMs,
-        // Exec transitions can expose birth evidence before cmdline is available.
-        command: command.toLowerCase() === 'unknown' ? '' : command,
-    };
-}
-
 export async function readProcessIdentityByPid(
     pid: number,
     dependencies: ReadProcessIdentityByPidDependencies = {},
@@ -141,23 +97,14 @@ export async function readProcessIdentityByPid(
     if (!isSupportedPlatform(platform)) return null;
 
     try {
-        if (platform === 'linux') {
-            const processes = await readLinuxProcessFacts(
-                dependencies.linuxBoundary ?? { readFile, readdir, readlink },
-                [pid],
-            );
-            return normalizeExactProcessIdentity(pid, processes.get(pid) ?? null);
-        }
-
-        // A `child_process` `timeout` reports a killed `ps`/`powershell` as a SUCCESS with empty
-        // stdout on a stalled loop, which lands here as "this pid has no process row" — the same
-        // answer as a dead pid. Every generation check downstream (reattach, runner lock,
-        // heartbeat, spawn markers) then reads a live runner as unidentifiable.
-        const execFileBoundary = dependencies.execFile ?? execFileWithDeadline;
-        const processes = platform === 'darwin'
-            ? await readDarwinProcessFacts({ execFile: execFileBoundary, pids: [pid] })
-            : await readWindowsProcessInventory({ execFile: execFileBoundary, pids: [pid] });
-        return normalizeExactProcessIdentity(pid, processes.get(pid) ?? null);
+        const read = Object.keys(dependencies).length ? createProcessCensusReader(dependencies) : readProcessCensus;
+        // Preserve foreign-principal birth evidence for PID safety; the census withholds its private fields.
+        const snapshot = await read({ freshness: 'fresh', pids: [pid, process.pid], scope: 'all' });
+        if (snapshot.status !== 'ok') return null;
+        const row = snapshot.rows.find(candidate => candidate.pid === pid);
+        if (!row) return null;
+        const selfPrincipal = snapshot.rows.find(candidate => candidate.pid === process.pid)?.principal ?? null;
+        return censusRowToProcessFact(row, selfPrincipal);
     } catch {
         return null;
     }

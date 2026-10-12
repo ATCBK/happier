@@ -2,6 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { classifyHappyProcess } from './doctor';
 
 describe('classifyHappyProcess', () => {
+  it.each([
+    '/home/happier/.happier/dev-targets/nl1/stack-state/source-bundles/bundle-a/apps/cli/src/index.mjs',
+    'C:\\happier\\stack-state\\source-bundles\\bundle-a\\apps\\cli\\src\\index.mjs',
+  ])('recognizes the built Stack Session runner entrypoint %s', entrypoint => {
+    expect(classifyHappyProcess({ pid: 123, name: 'MainThread',
+      cmd: `node "${entrypoint}" claude --happy-starting-mode remote --started-by daemon`,
+    })).toMatchObject({ type: 'daemon-spawned-session' });
+    expect(classifyHappyProcess({ pid: 123, name: 'node',
+      cmd: `node "${entrypoint}" daemon start-sync`,
+    })).toMatchObject({ type: 'daemon' });
+  });
+
+  it.each(['/repo/apps/other/src/index.mjs', '/repo/apps/cli/src/index.mjs.extra'])('rejects unrelated built entrypoints %s', entrypoint => {
+    expect(classifyHappyProcess({ pid: 123, name: 'node', cmd: `node ${entrypoint} --started-by daemon` })).toBeNull();
+  });
   it('should ignore unrelated processes with "happy" in the name', () => {
     const res = classifyHappyProcess({ pid: 123, name: 'happy-hour', cmd: 'happy-hour --serve' });
     expect(res).toBeNull();
@@ -27,7 +42,7 @@ describe('classifyHappyProcess', () => {
     expect(res!.type).toBe('daemon-spawned-session');
   });
 
-  it('should detect a daemon-spawned session process from package-dist when ps-list reports MainThread', () => {
+  it('should detect a daemon-spawned session process from package-dist when the census reports MainThread', () => {
     const res = classifyHappyProcess({
       pid: 123,
       name: 'MainThread',
@@ -47,7 +62,7 @@ describe('classifyHappyProcess', () => {
     expect(res!.type).toBe('dev-daemon-spawned');
   });
 
-  it('should detect a packaged Windows daemon-spawned session process when ps-list reports happier.exe', () => {
+  it('should detect a packaged Windows daemon-spawned session process when the census reports happier.exe', () => {
     const res = classifyHappyProcess({
       pid: 123,
       name: 'happier.exe',

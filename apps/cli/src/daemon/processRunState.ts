@@ -1,12 +1,13 @@
-import { execFileWithDeadline, isPidPresent } from '@happier-dev/cli-common/process';
+import { isPidPresent } from '@happier-dev/cli-common/process';
+import { createProcessCensusReader, readProcessCensus, type ProcessCensusDependencies } from '@/processes/census/processCensus';
 
 /**
  * Coarse process run state for daemon liveness decisions.
  *
  * A session runner must be ABLE TO SERVE (consume its pending queue, answer RPC) for the daemon
  * to refuse a resume as "already running". `process.kill(pid, 0)` alone lies for two classes:
- * - `stopped`: SIGSTOPped/traced (`ps` state `T`/`t`) — alive, holds its lock, serves nothing.
- * - `zombie`: defunct (`ps` state `Z`) — signalable on some platforms, permanently dead.
+ * - `stopped`: SIGSTOPped/traced — alive, holds its lock, serves nothing.
+ * - `zombie`: defunct — signalable on some platforms, permanently dead.
  *
  * Incident class: daemon log 2026-06-12 "Resume requested ... but session is already running"
  * while the runner cannot serve; the user message is materialized into the pending queue and
@@ -14,20 +15,13 @@ import { execFileWithDeadline, isPidPresent } from '@happier-dev/cli-common/proc
  */
 export type ProcessRunState = 'dead' | 'servable' | 'stopped' | 'zombie';
 
-function classifyPosixStateChar(stateOutput: string): ProcessRunState | null {
-  const stateChar = stateOutput.trim().charAt(0);
-  if (!stateChar) return null;
-  if (stateChar === 'T' || stateChar === 't') return 'stopped';
-  if (stateChar === 'Z') return 'zombie';
-  return 'servable';
-}
-
 /**
  * Reads the run state of a process. Fail-closed: when the process is alive but its state cannot
- * be inspected (ps failure, unsupported platform), it is reported `servable` so callers keep the
+ * be inspected (census failure, unsupported platform), it is reported `servable` so callers keep the
  * existing duplicate-spawn protection. Windows has no SIGSTOP/zombie semantics → alive = servable.
  */
-export async function readProcessRunState(pid: number, deps?: Readonly<{
+export async function readProcessRunState(pid: number, deps?: Pick<ProcessCensusDependencies,
+  'platform' | 'linuxBoundary' | 'execFile' | 'helperExecutablePath'> & Readonly<{
   isPidAlive?: (pid: number) => boolean;
   platform?: NodeJS.Platform;
 }>): Promise<ProcessRunState> {
@@ -41,20 +35,18 @@ export async function readProcessRunState(pid: number, deps?: Readonly<{
   }
 
   try {
-    // `execFileWithDeadline`, not a `child_process` `timeout`: the latter destroys the buffered
-    // `ps` row from the timers phase and reports success with empty stdout, which classifies as
-    // "no ps row" and collapses `stopped`/`zombie` into `servable` on exactly the stalled daemon
-    // this function was written to protect.
-    const { stdout } = await execFileWithDeadline('ps', ['-p', String(Math.floor(pid)), '-o', 'state='], {
-      timeout: 5_000,
-    });
-    const classified = classifyPosixStateChar(String(stdout));
-    if (classified) return classified;
+    const read = deps ? createProcessCensusReader(deps) : readProcessCensus;
+    const snapshot = await read({ freshness: 'fresh', pids: [Math.floor(pid)], scope: 'all', fields: [] });
+    if (snapshot.status === 'ok') {
+      const row = snapshot.rows.find(candidate => candidate.pid === Math.floor(pid));
+      if (row?.state === 'stopped' || row?.state === 'zombie') return row.state;
+      if (row?.state) return 'servable';
+    }
   } catch {
-    // ps exits non-zero when the pid does not exist; fall through to the signal probe.
+    // Failed census observations preserve the signal-probe fallback.
   }
-  // No ps row: trust the signal probe (a pid can be unobservable to ps but still signalable in
+  // No census state: trust the signal probe (a pid can be unobservable but still signalable in
   // rare sandboxed setups — stay fail-closed and treat alive as servable).
-  // The process may exit while ps is pending; a pre-probe observation is not current liveness.
+  // The process may exit while the census is pending; refresh the pre-probe observation.
   return isPidAlive(pid) ? 'servable' : 'dead';
 }

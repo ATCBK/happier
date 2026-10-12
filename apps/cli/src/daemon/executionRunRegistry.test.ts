@@ -677,7 +677,7 @@ describe('executionRunRegistry', () => {
     expect(tmpPaths[tmpPaths.length - 1]).not.toEqual(tmpPaths[tmpPaths.length - 2]);
   });
 
-  it('allows a newer resumed occurrence marker to replace the prior terminal marker', async () => {
+  it('allows an admitted successful resume marker to replace the prior terminal marker without clock inference', async () => {
     const { configuration } = await import('@/configuration');
     const { writeExecutionRunMarker } = await import('./executionRunRegistry');
 
@@ -705,16 +705,16 @@ describe('executionRunRegistry', () => {
       backendTarget: { kind: 'backend', backendId: 'claude' },
       status: 'running',
       startedAtMs: 1,
-      updatedAtMs: 3,
-    });
+      updatedAtMs: 2,
+    }, { allowTerminalToRunning: true });
 
     const filePath = join(configuration.happyHomeDir, 'tmp', 'daemon-execution-runs', 'run-run_terminal_wins.json');
     const parsed = JSON.parse(readFileSync(filePath, 'utf-8'));
     expect(parsed.status).toBe('running');
-    expect(parsed.updatedAtMs).toBe(3);
+    expect(parsed.updatedAtMs).toBe(2);
   });
 
-  it('does not allow an older late running marker to overwrite a terminal marker', async () => {
+  it('does not allow ordinary late running markers to overwrite a terminal marker even with a newer clock', async () => {
     const { configuration } = await import('@/configuration');
     const { writeExecutionRunMarker } = await import('./executionRunRegistry');
 
@@ -735,6 +735,7 @@ describe('executionRunRegistry', () => {
       finishedAtMs: 3,
     });
     await writeExecutionRunMarker({ ...base, status: 'running', updatedAtMs: 2 });
+    await writeExecutionRunMarker({ ...base, status: 'running', updatedAtMs: 4 });
 
     const filePath = join(configuration.happyHomeDir, 'tmp', 'daemon-execution-runs', 'run-run_terminal_stays_current.json');
     const parsed = JSON.parse(readFileSync(filePath, 'utf-8'));

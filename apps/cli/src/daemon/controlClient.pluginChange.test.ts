@@ -385,6 +385,43 @@ describe('daemon control client plugin changes', () => {
     }
   });
 
+  it('preserves the catalog refusal code carried by an HTTP service-unavailable response', async () => {
+    const server = http.createServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        response.statusCode = 503;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ kind: 'unavailable', code: 'plugin_catalog_runtime_unavailable' }));
+      });
+    });
+    try {
+      const { port } = await listen(server);
+      const client = await import('./controlClient');
+
+      await expect(client.readDaemonPluginCatalog({
+        target: { pid: process.pid, httpPort: port, controlToken: 'control-token' },
+      })).resolves.toEqual({ kind: 'unavailable', code: 'plugin_catalog_runtime_unavailable' });
+      home = await createTempDir('happier-plugin-catalog-refusal-');
+      envScope.patch({ HAPPIER_HOME_DIR: home });
+      reloadConfiguration();
+      writeDaemonState({
+        pid: process.pid, httpPort: port, startedAt: Date.now(),
+        startedWithCliVersion: 'test', controlToken: 'control-token',
+      });
+      const { executePluginDevLoopAction } = await import('@/plugins/devLoop/actions');
+      await expect(executePluginDevLoopAction({ actionId: 'plugins.list', input: {} }))
+        .resolves.toMatchObject({
+          ok: false,
+          kind: 'plugins_list',
+          diagnostics: [{
+            code: 'plugin_catalog_runtime_unavailable',
+          }],
+        });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('refuses MCP startup with a typed dependency failure when the daemon catalog is unavailable', async () => {
     const server = http.createServer((request, response) => {
       request.resume();

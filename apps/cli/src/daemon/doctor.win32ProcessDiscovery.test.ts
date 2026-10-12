@@ -1,129 +1,74 @@
+import { ChildProcess } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const psListMock = vi.fn();
-const execFileSyncMock = vi.fn();
-
-vi.mock('ps-list', () => ({
-    default: psListMock,
+const { censusOutput, execFileMock } = vi.hoisted(() => ({
+  censusOutput: { value: '' },
+  execFileMock: vi.fn(),
 }));
 
-vi.mock('node:child_process', () => ({
-    execFileSync: execFileSyncMock,
+// Native executable presence and process output are genuine OS boundaries.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: (path: string) => path.endsWith('happier-process-custody.exe') || actual.existsSync(path) };
+});
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  execFile: execFileMock,
 }));
 
-describe('doctor win32 process discovery', () => {
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+describe('doctor Windows census discovery', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  const executable = String.raw`C:\Program Files\Happier\happier.exe`;
+  const entrypoint = String.raw`C:\Program Files\Happier\package-dist\index.mjs`;
+  const command = `"${executable}" "${entrypoint}" codex --started-by daemon`;
 
-    beforeEach(() => {
-        vi.resetModules();
-        psListMock.mockReset();
-        execFileSyncMock.mockReset();
-        if (originalPlatformDescriptor) {
-            Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'win32' });
-        }
+  beforeEach(() => {
+    vi.resetModules();
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    execFileMock.mockImplementation((_command, _args, _options, callback) => {
+      const child = new ChildProcess();
+      queueMicrotask(() => {
+        Object.defineProperty(child, 'exitCode', { value: 0 });
+        child.emit('exit', 0, null);
+        callback(null, censusOutput.value, '');
+        child.emit('close', 0, null);
+      });
+      return child;
     });
+    censusOutput.value = JSON.stringify({ v: 1, capturedAtMs: Date.now(), logicalCpus: 4, rows: [
+      { pid: process.pid, ppid: 1, name: 'node.exe', start: { startTimeMs: 1000 }, principal: { kind: 'sid', value: 'S-1-5-21-1' }, memory: null, cpuTimeUs: null },
+      { pid: 26316, ppid: 17692, name: 'MainThread', commandLine: command,
+        argv: [executable, entrypoint, 'codex', '--started-by', 'daemon'],
+        start: { startTimeMs: 2000 }, principal: { kind: 'sid', value: 'S-1-5-21-1' }, memory: { bytes: 1024, kind: 'private' }, cpuTimeUs: 500 },
+    ] });
+  });
 
-    afterEach(() => {
-        if (originalPlatformDescriptor) {
-            Object.defineProperty(process, 'platform', originalPlatformDescriptor);
-        }
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', platform);
+    execFileMock.mockReset();
+  });
+
+  it('recognizes a packaged session from the native command and preserves exact command bytes', async () => {
+    const { findHappyProcessByPid } = await import('./doctor');
+    await expect(findHappyProcessByPid(26316)).resolves.toEqual({
+      pid: 26316, command, type: 'daemon-spawned-session',
     });
+  });
 
-    it('enriches generic MainThread candidates with Win32_Process command lines during startup discovery', async () => {
-        psListMock.mockResolvedValue([
-            { pid: 17692, ppid: 1, name: 'happier.exe' },
-            { pid: 26316, ppid: 17692, name: 'MainThread' },
-            { pid: 99999, ppid: 1, name: 'notepad.exe' },
-        ]);
-        execFileSyncMock.mockReturnValue(
-            JSON.stringify([
-                {
-                    ProcessId: 17692,
-                    Name: 'happier.exe',
-                    CommandLine: '"C:\\hq\\windetachedfix-015\\happier-v0.2.4-windows-x64\\happier.exe" daemon start-sync',
-                },
-                {
-                    ProcessId: 26316,
-                    Name: 'MainThread',
-                    CommandLine:
-                        '"C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\happier.exe" "C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\package-dist\\index.mjs" opencode --happy-starting-mode remote --started-by daemon',
-                },
-            ]),
-        );
+  it('does not reinterpret unavailable native facts as an unrelated process', async () => {
+    censusOutput.value = 'truncated-json';
+    const { classifyProcessByPid } = await import('./doctor');
+    await expect(classifyProcessByPid(26316)).resolves.toEqual({ kind: 'unknown' });
+  });
 
-        const { findAllHappyProcesses } = await import('./doctor');
-
-        await expect(findAllHappyProcesses()).resolves.toEqual([
-            {
-                pid: 17692,
-                command: '"C:\\hq\\windetachedfix-015\\happier-v0.2.4-windows-x64\\happier.exe" daemon start-sync',
-                type: 'daemon',
-            },
-            {
-                pid: 26316,
-                command:
-                    '"C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\happier.exe" "C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\package-dist\\index.mjs" opencode --happy-starting-mode remote --started-by daemon',
-                type: 'daemon-spawned-session',
-            },
-        ]);
-    });
-
-    it('falls back to a broader Win32_Process snapshot when startup discovery still classifies zero Happy processes', async () => {
-        psListMock.mockResolvedValue([
-            { pid: 26316, ppid: 17692, name: 'MainThread' },
-        ]);
-        execFileSyncMock
-            .mockReturnValueOnce('')
-            .mockReturnValueOnce(
-                JSON.stringify([
-                    {
-                        ProcessId: 17692,
-                        Name: 'happier.exe',
-                        CommandLine: '"C:\\hq\\windetachedfix-017\\happier-v0.2.4-windows-x64\\happier.exe" daemon start-sync',
-                    },
-                    {
-                        ProcessId: 26316,
-                        Name: 'happier.exe',
-                        CommandLine:
-                            '"C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\happier.exe" "C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\package-dist\\index.mjs" opencode --happy-starting-mode remote --started-by daemon',
-                    },
-                ]),
-            );
-
-        const { findAllHappyProcesses } = await import('./doctor');
-
-        await expect(findAllHappyProcesses()).resolves.toEqual([
-            {
-                pid: 17692,
-                command: '"C:\\hq\\windetachedfix-017\\happier-v0.2.4-windows-x64\\happier.exe" daemon start-sync',
-                type: 'daemon',
-            },
-            {
-                pid: 26316,
-                command:
-                    '"C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\happier.exe" "C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\package-dist\\index.mjs" opencode --happy-starting-mode remote --started-by daemon',
-                type: 'daemon-spawned-session',
-            },
-        ]);
-    });
-
-    it('enriches single-pid inspection with Win32_Process command lines for PID safety', async () => {
-        execFileSyncMock.mockReturnValue(
-            JSON.stringify({
-                ProcessId: 26316,
-                Name: 'MainThread',
-                CommandLine:
-                    '"C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\happier.exe" "C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\package-dist\\index.mjs" opencode --happy-starting-mode remote --started-by daemon --existing-session session-123',
-            }),
-        );
-
-        const { findHappyProcessByPid } = await import('./doctor');
-
-        await expect(findHappyProcessByPid(26316)).resolves.toEqual({
-            pid: 26316,
-            command:
-                '"C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\happier.exe" "C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\package-dist\\index.mjs" opencode --happy-starting-mode remote --started-by daemon --existing-session session-123',
-            type: 'daemon-spawned-session',
-        });
-    });
+  it('keeps an empty command during an exec transition unknown', async () => {
+    const envelope = JSON.parse(censusOutput.value) as { rows: Array<{ pid: number; name: string; argv?: string[]; commandLine?: string }> };
+    const row = envelope.rows.find(row => row.pid === 26316)!;
+    row.name = 'node.exe';
+    row.argv = [];
+    delete row.commandLine;
+    censusOutput.value = JSON.stringify(envelope);
+    const { classifyProcessByPid } = await import('./doctor');
+    await expect(classifyProcessByPid(26316)).resolves.toEqual({ kind: 'unknown' });
+  });
 });

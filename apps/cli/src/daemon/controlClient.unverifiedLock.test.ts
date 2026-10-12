@@ -1,8 +1,11 @@
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { configuration } from '@/configuration';
 import { spawnSleepyDetachedProcess, withConfiguredDaemonTestHome } from './testkit/fakeDaemonLifecycle.testkit';
+import * as doctor from './doctor';
+import * as controlClient from './controlClient';
+import * as multiDaemon from './multiDaemon';
 
 const probe = vi.hoisted(() => ({ deniedPid: 0 }));
 
@@ -12,6 +15,12 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return {
     ...actual,
+    open: (...args: Parameters<typeof actual.open>) => {
+      if (String(args[0]) === `/proc/${probe.deniedPid}/cmdline`) {
+        throw Object.assign(new Error('command line unavailable'), { code: 'EACCES' });
+      }
+      return actual.open(...args);
+    },
     readFile: (...args: Parameters<typeof actual.readFile>) => {
       if (String(args[0]) === `/proc/${probe.deniedPid}/cmdline`) {
         throw Object.assign(new Error('command line unavailable'), { code: 'EACCES' });
@@ -33,26 +42,15 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-vi.mock('ps-list', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('ps-list')>();
-  return {
-    ...actual,
-    default: async (): Promise<Awaited<ReturnType<typeof actual.default>>> => {
+vi.mock('@happier-dev/cli-common/process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@happier-dev/cli-common/process')>();
+  return { ...actual, execFileWithDeadline: async (...args: Parameters<typeof actual.execFileWithDeadline>) => {
+    if (probe.deniedPid && args[1]?.[0] === 'process-census') {
       throw Object.assign(new Error('process inventory unavailable'), { code: 'EACCES' });
-    },
-  };
+    }
+    return await actual.execFileWithDeadline(...args);
+  } };
 });
-
-let doctor: typeof import('./doctor');
-let controlClient: typeof import('./controlClient');
-let multiDaemon: typeof import('./multiDaemon');
-
-beforeAll(async () => {
-  // Load the real dependency graph before the process-lifecycle assertion budget.
-  [doctor, controlClient, multiDaemon] = await Promise.all([
-    import('./doctor'), import('./controlClient'), import('./multiDaemon'),
-  ]);
-}, 300_000);
 
 describe('unverified daemon startup ownership', () => {
   it('keeps stale unreadable legacy ownership fail-closed through the persistence owner', async () => {

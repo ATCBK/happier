@@ -25,7 +25,7 @@ import type { InstallableKey, InstallablesRegistry } from '@happier-dev/protocol
 import { resolveAgentCliCommand } from '@/packagedRuntime/managedTools/agentCliResolution';
 import { buildAgentCliLaunchSpecFromResolution } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
 import { getRuntimeInstallableAdapter } from '@/packagedRuntime/installables/registry';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 
 export type DaemonResolvedToolV1 = AgentDaemonResolvedToolV1;
 export type DaemonRunToolResultV1 = AgentDaemonRunToolResultV1;
@@ -127,7 +127,7 @@ async function terminatePreflightProcess(
   signal?: string,
 ): Promise<void> {
   try {
-    await killProcessTree(child, { graceMs: 250 });
+    await terminateProcessTree(child, { graceMs: 250 });
   } catch {
     try {
       child.kill(signal as NodeJS.Signals | undefined);

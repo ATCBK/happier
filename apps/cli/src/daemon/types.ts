@@ -29,6 +29,7 @@ import type {
 } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
 import type { RequesterWorkAttributionV1 } from './lifecycle/requesterWorkAttribution';
 import type { RequesterSessionRuntimeContext } from './sessionEncryption/requesterSessionCredentials';
+import type { OwnerRemainderCapture } from './processes/endOwnerRemainder';
 
 export type DaemonSpawnStartupReadinessFailure = Extract<
   SpawnSessionResult,
@@ -60,6 +61,8 @@ export type RunnerAgentBootstrapIdentity = Readonly<
  * Session tracking for daemon
  */
 export interface TrackedSession {
+  /** Generation-bound pre-exit chain observations; ephemeral evidence, never marker-persisted. */
+  ownerRemainderCapture?: OwnerRemainderCapture;
   /** Live private Account ports; never serialized in a marker or respawn descriptor. */
   requesterSessionRuntimeContext?: RequesterSessionRuntimeContext;
   /** Safe admitted launch facts, restored only through verified process adoption. */
@@ -161,6 +164,10 @@ export interface TrackedSession {
   hostedTerminal?: Metadata['terminal'];
   /** In-memory-only exact packaged executable/argv evidence for one Windows Terminal launch. */
   windowsTerminalLaunchCustody?: WindowsTerminalLaunchCustody;
+  /** Exact physical Linux scope basename; retained in the existing accepted-runner marker. */
+  linuxLaunchUnit?: string;
+  /** Same-address Guard receipt; only exact exit custody may publish observed stopped. */
+  guardStopReceipt?: import('./guard/sessionStopReceipt').GuardSessionStopReceipt;
   /** In-memory-only runner PID and generation captured by canonical session-report correlation. */
   runnerProcessIdentity?: Readonly<Required<ProcessIdentityWitness>>;
   /** One-shot in-memory bridge from exact webhook capture to the existing accepted-marker owner. */
@@ -220,6 +227,8 @@ export interface TrackedSession {
    * of racing the in-flight stop.
    */
   stopRequestedAtMs?: number;
+  /** Person-requested process Kill; uses the same stopping fact, never a restart intent. */
+  stopRequestedReason?: 'user_process_kill';
   /**
    * Exact nested terminal attachment whose servable projection this daemon has published.
    * Prevents repeated capability probes when the runner reports unrelated metadata later.

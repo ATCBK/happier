@@ -214,6 +214,7 @@ describe('createDaemonControlApp /session-started body limit', () => {
                         publisherPrecondition: {
                             machineId: 'machine-1',
                             committedFenceMs: 1,
+                            publisherGeneration: '1',
                         },
                     },
                 },
@@ -230,6 +231,7 @@ describe('createDaemonControlApp /session-started body limit', () => {
                 publisherPrecondition: {
                     machineId: 'machine-1',
                     committedFenceMs: 1,
+                    publisherGeneration: '1',
                 },
                 signal: expect.any(AbortSignal),
             });
@@ -297,6 +299,7 @@ describe('createDaemonControlApp /session-started body limit', () => {
                     publisherPrecondition: {
                         machineId: 'machine-1',
                         committedFenceMs: 1,
+                        publisherGeneration: '1',
                     },
                 },
             });
@@ -360,6 +363,7 @@ describe('createDaemonControlApp /session-started body limit', () => {
                         publisherPrecondition: {
                             machineId: 'machine-1',
                             committedFenceMs: 1,
+                            publisherGeneration: '1',
                         },
                     },
                 },

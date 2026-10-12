@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { API_TOKEN_FULL_GRANT_V1, createActionExecutor } from '@happier-dev/protocol';
+import axios from 'axios';
+import { API_TOKEN_FULL_GRANT_V1, createActionExecutor, deriveSessionCreationTagV1 } from '@happier-dev/protocol';
 
 const terminalPolicy = vi.hoisted(() => ({ value: 'allowed' as 'allowed' | 'disallowed' }));
 vi.mock('@/configuration', async (importOriginal) => {
@@ -9,10 +10,6 @@ vi.mock('@/configuration', async (importOriginal) => {
   } };
 });
 
-vi.mock('@/plugins/daemon/currentCatalog', () => ({
-  readCurrentDaemonPluginCatalogSnapshot: vi.fn(async () => ({ plugins: [] })),
-}));
-
 import type { DaemonPatVerifier } from './auth/daemonPatVerifier';
 import type {
   ExternalActionExecutor,
@@ -20,9 +17,11 @@ import type {
 } from './externalActions/executeExternalAction';
 import { createDaemonControlApp } from './controlServer';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { createDaemonExternalActionTargetResolver } from './externalActions/daemonExternalActionTargetResolver';
 
 type ExternalActionApi = Readonly<{
   currentServerId: string;
+  currentAccountId?: string;
   verifyPat: DaemonPatVerifier;
   executor: ExternalActionExecutor;
   resolveTarget: ResolveExternalActionTarget;
@@ -61,6 +60,62 @@ function createApp(
 }
 
 describe('createDaemonControlApp external Action ingress', () => {
+  it.each(['account-local', undefined])('binds narrowed terminal creation to the daemon Account without granting human authority (%s)', async (currentAccountId) => {
+    const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: 'account-local' })).toString('base64url')}.signature`, encryption: null };
+    const preparedTags: Array<string | undefined> = [];
+    // Real Home HTTP is unavailable in this fixture; no credential leaves it.
+    const get = vi.spyOn(axios, 'get').mockRejectedValue(new Error('Fixture Home is offline'));
+    const post = vi.spyOn(axios, 'post').mockRejectedValue(new Error('Fixture Home is offline'));
+    const app = createApp({
+      currentServerId: 'server-local', currentAccountId,
+      verifyPat: vi.fn(),
+      resolveTarget: createDaemonExternalActionTargetResolver({ credentials }),
+      // Only HTTP and daemon process transports are substituted. Both Action
+      // owners and target/creation identity preparation remain real.
+      executor: createActionExecutor(createCliActionDeps({
+        token: credentials.token, credentials, serverId: 'server-local',
+        sessionId: '', mode: 'plain', ctx: null,
+        sessionSpawnDirectTargetTransport: {
+          machineId: 'machine-local',
+          prepare: async (input) => {
+            preparedTags.push(input.sessionCreationTag);
+            return { ok: true, directory: '/fixture/managed', directoryKind: 'managed',
+              directoryCreationRequired: false, checkout: null };
+          },
+          spawn: async () => { throw new Error('Fixture daemon cannot spawn processes'); },
+        },
+      })),
+    });
+    const headers = { 'x-happier-daemon-token': 'private-control-token',
+      'x-happier-authority-ceiling': 'account_automation' };
+    try {
+      const response = await app.inject({ method: 'POST', url: '/actions/root/execute', headers,
+        payload: { actionId: 'session.spawn_new', input: {
+          creationKey: 'narrowed-terminal-create',
+          executionTarget: { serverId: 'server-local', machineId: 'machine-local' },
+          directory: { kind: 'managed' },
+          connectedServices: { v: 2, bindingsByServiceId: {} },
+          agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+        } },
+      });
+      if (currentAccountId) {
+        expect(response.json().errorCode).toBeUndefined();
+        expect(response.json()).toMatchObject({ ok: true,
+          result: { type: 'error', code: 'spawn_failed', retryable: true } });
+        expect(preparedTags).toContain(deriveSessionCreationTagV1({
+          callerCreationNamespace: JSON.stringify(['cli', 'server-local', currentAccountId]),
+          creationKey: 'narrowed-terminal-create',
+        }));
+      } else {
+        expect(response.json()).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+        expect(preparedTags.every(tag => tag === undefined)).toBe(true);
+      }
+      const approval = await app.inject({ method: 'POST', url: '/actions/root/execute', headers,
+        payload: { actionId: 'approval.request.decide', input: { artifactId: 'missing', decision: 'approve' } },
+      });
+      expect(approval.json()).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    } finally { get.mockRestore(); post.mockRestore(); await app.close(); }
+  });
   it('refuses root approval decisions when terminal policy is disallowed and admits them when allowed', async () => {
     const app = createApp({
       currentServerId: 'server-local', verifyPat: vi.fn(), resolveTarget: async () => ({ kind: 'machine', machineId: 'machine-local' }),

@@ -4,6 +4,8 @@ import {
   createHmac,
   randomBytes as nodeRandomBytes,
 } from 'node:crypto';
+import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import {
   publishPrivateBearerFileIfAbsent,
@@ -14,6 +16,8 @@ const DEVICE_LOCAL_KEY_BYTES = 32;
 const DEVICE_LOCAL_NONCE_BYTES = 12;
 const DEVICE_LOCAL_AUTH_TAG_BYTES = 16;
 const DEVICE_LOCAL_CIPHERTEXT_PREFIX = 'v1';
+const DeviceLocalKeyFileSchema = z.object({ version: z.literal(1), key: z.string() }).strict();
+const DeviceLocalKeyFileStoredReadSchema = createStoredReadSchema(DeviceLocalKeyFileSchema);
 
 export type DeviceLocalSecretPurpose = 'session_respawn_environment' | 'execution_run_worker_update' | 'execution_run_state' | 'usage_accounting_capture';
 export type DeviceLocalOpaqueIdentityPurpose =
@@ -44,18 +48,7 @@ export type DeviceLocalSecretStorage = Readonly<{
 
 function parseKeyFile(raw: string, path: string): Buffer {
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('expected object');
-    }
-    const record = parsed as Record<string, unknown>;
-    if (
-      Object.keys(record).length !== 2
-      || record.version !== 1
-      || typeof record.key !== 'string'
-    ) {
-      throw new Error('unexpected shape');
-    }
+    const record = DeviceLocalKeyFileStoredReadSchema.parse(JSON.parse(raw));
     const key = Buffer.from(record.key, 'base64url');
     if (key.byteLength !== DEVICE_LOCAL_KEY_BYTES) {
       throw new Error('unexpected key length');

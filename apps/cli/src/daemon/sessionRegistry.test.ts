@@ -133,6 +133,24 @@ describe('sessionRegistry', () => {
     expect((await listSessionMarkers())[0]).not.toHaveProperty('requesterWorkAttributionV1');
   });
 
+  it('drops retired nested admission fields while preserving the Session marker across an update', async () => {
+    const { listSessionMarkers, writeSessionMarker } = await import('./sessionRegistry');
+    const ownership = { pid: 12348, happySessionId: 'session', processStartTimeMs: 1234 };
+    await writeSessionMarker(ownership);
+    const markerPath = join(happyHomeDir, 'tmp', 'daemon-sessions', 'pid-12348.json');
+    const raw = JSON.parse(readFileSync(markerPath, 'utf8'));
+    const admission = { turnId: 'turn', inputId: 'input', userMessageSeq: null, userMessageSeqs: [] };
+    writeFileSync(markerPath, JSON.stringify({ ...raw, retired: true, activeTurnId: 'turn',
+      agentRuntimeDaemonServiceActiveAdmission: { ...admission, retired: true },
+    }));
+    const markers = await listSessionMarkers();
+    expect(markers).toHaveLength(1);
+    expect(markers[0].agentRuntimeDaemonServiceActiveAdmission).toEqual(admission);
+    expect(markers[0]).not.toHaveProperty('retired');
+    await writeSessionMarker(ownership);
+    expect((await listSessionMarkers())[0].createdAt).toBe(raw.createdAt);
+  });
+
   it('persists only the stable runner daemon-service authority path', async () => {
     const {
       listSessionMarkers,
@@ -632,7 +650,7 @@ describe('sessionRegistry', () => {
     const spec = await buildCgroupSelfMigratingHappyCliLaunchSpec({
       launchSpec: { runtime: 'node', filePath: process.execPath, args: ['-e', 'console.log(process.pid);setInterval(()=>{},1000)'] },
     });
-    expect(spec?.filePath).toBe('systemd-run');
+    expect(spec?.filePath).toMatch(/\/systemd-run$/);
     const launchProbe = spawnSync(spec!.filePath, [...spec!.args.slice(0, spec!.args.indexOf('--') + 1), 'true']);
     if (launchProbe.status !== 0) {
       context.skip(`Owner systemd launch unavailable: ${String(launchProbe.stderr).trim()}`);
@@ -929,6 +947,18 @@ describe('sessionRegistry', () => {
         respawn,
       }),
     ]);
+  });
+
+  it('refuses recovered terminal settlement when the marker already holds a newer active turn', async () => {
+    const { writeSessionMarker, readSessionMarkerForPid, updateSessionMarkerActiveTurn } = await import('./sessionRegistry');
+    await writeSessionMarker({ pid: 4321, happySessionId: 'session-recovered', startedBy: 'daemon',
+      activeTurnId: 'new-turn' });
+    await expect(updateSessionMarkerActiveTurn({ pid: 4321, sessionId: 'session-recovered',
+      activeTurnId: null, expectedActiveTurnId: 'old-turn' })).resolves.toBe(false);
+    expect((await readSessionMarkerForPid(4321))?.activeTurnId).toBe('new-turn');
+    await expect(updateSessionMarkerActiveTurn({ pid: 4321, sessionId: 'session-recovered',
+      activeTurnId: null, expectedActiveTurnId: 'new-turn' })).resolves.toBe(true);
+    expect((await readSessionMarkerForPid(4321))?.activeTurnId).toBeUndefined();
   });
 
   it('persists and clears only the exact active turn and causal input custody for the matching session marker', async () => {
@@ -1557,10 +1587,11 @@ describe('sessionRegistry', () => {
     ]);
   });
 
-  it('persists a lossy configured V1 projection beside its canonical V2 marker identity', async () => {
+  it('persists and reads the exact configured Agent definition in its marker', async () => {
     const { configuration } = await import('@/configuration');
     const {
       buildSessionRunnerRespawnDescriptorV1FromSpawnOptions,
+      SessionRunnerRespawnDescriptorV1Schema,
     } = await import('./processSupervision/sessionRunnerRespawnDescriptor');
     const { listSessionMarkers, writeSessionMarker } = await import('./sessionRegistry');
     const respawn = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions({
@@ -1584,17 +1615,17 @@ describe('sessionRegistry', () => {
 
     const expectedRespawn = {
       version: 1,
-      backendTarget: { kind: 'configuredAcpBackend', backendId: 'kiro' },
-      backendTargetV2: {
-        kind: 'backend',
-        backendId: 'customAcpRuntimeCarrier',
-        configuredBackendId: 'kiro',
-        sourceKind: 'configured',
+      agentTarget: {
+        kind: 'agent',
+        identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+        definitionId: 'kiro',
       },
     };
     const filePath = join(configuration.happyHomeDir, 'tmp', 'daemon-sessions', 'pid-54324.json');
     const raw = JSON.parse(readFileSync(filePath, 'utf-8')) as { respawn?: unknown };
+    expect(SessionRunnerRespawnDescriptorV1Schema.safeParse(raw.respawn).success).toBe(true);
     expect(raw.respawn).toMatchObject(expectedRespawn);
+    expect(raw.respawn).not.toHaveProperty('agentIdentity');
     await expect(listSessionMarkers()).resolves.toEqual([
       expect.objectContaining({
         respawn: expect.objectContaining(expectedRespawn),

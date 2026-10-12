@@ -1,64 +1,26 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { execFileSyncMock, psListMock } = vi.hoisted(() => ({
-  execFileSyncMock: vi.fn(() => ''),
-  psListMock: vi.fn(),
-}));
+import { spawnInlineNodeTestProcess } from '@/testkit/process/spawn';
 
-vi.mock('node:child_process', () => ({
-  execFileSync: execFileSyncMock,
-}));
+describe.skipIf(process.platform !== 'linux')('doctor census snapshots', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.resetModules(); });
 
-vi.mock('ps-list', () => ({
-  default: psListMock,
-}));
-
-describe('findAllHappyProcesses', () => {
-  afterEach(async () => {
-    const { clearProcessSnapshotCacheForTests } = await import('./processSnapshotCache');
-    clearProcessSnapshotCacheForTests();
+  it('never adopts a departed root from an earlier classified snapshot', async () => {
     vi.resetModules();
-    execFileSyncMock.mockReset();
-    psListMock.mockReset();
-  });
-
-  it('coalesces concurrent classified process snapshots and reuses the fresh raw snapshot cache', async () => {
-    let resolveProcessSnapshot!: (processes: unknown[]) => void;
-    psListMock.mockImplementationOnce(
-      () => new Promise((resolve) => {
-        resolveProcessSnapshot = resolve;
-      }),
-    );
-
-    const { findAllHappyProcesses } = await import('./doctor');
-    const first = findAllHappyProcesses();
-    const second = findAllHappyProcesses();
-
-    await Promise.resolve();
-    expect(psListMock).toHaveBeenCalledTimes(1);
-
-    resolveProcessSnapshot([
-      {
-        pid: 123,
-        name: 'node',
-        cmd: '/usr/bin/node /repo/dist/index.mjs daemon start-sync',
-      },
-    ]);
-
-    const expected = [{
-      pid: 123,
-      command: '/usr/bin/node /repo/dist/index.mjs daemon start-sync',
-      type: 'daemon',
-    }];
-    await expect(Promise.all([first, second])).resolves.toEqual([expected, expected]);
-
-    psListMock.mockResolvedValueOnce([]);
-    await expect(findAllHappyProcesses()).resolves.toEqual(expected);
-    expect(psListMock).toHaveBeenCalledTimes(1);
-
-    const { clearProcessSnapshotCacheForTests } = await import('./processSnapshotCache');
-    clearProcessSnapshotCacheForTests();
-    await expect(findAllHappyProcesses()).resolves.toEqual([]);
-    expect(psListMock).toHaveBeenCalledTimes(2);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    const child = spawnInlineNodeTestProcess('/* /repo/dist/index.mjs daemon start-sync */ setInterval(() => {}, 1000)');
+    try {
+      const { findAllHappyProcesses, classifyProcessByPid } = await import('./doctor');
+      const snapshots = await Promise.all([findAllHappyProcesses(), findAllHappyProcesses()]);
+      expect(snapshots[0]).toEqual(snapshots[1]);
+      expect(snapshots[0].some(row => row.pid === child.pid)).toBe(true);
+      const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+      child.kill();
+      await exited;
+      await expect(classifyProcessByPid(child.pid!)).resolves.toEqual({ kind: 'unknown' });
+    } finally {
+      clock.mockRestore();
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    }
   });
 });

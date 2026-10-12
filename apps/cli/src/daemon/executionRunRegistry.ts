@@ -28,6 +28,7 @@ import type { ExecutionRunState } from '@/agent/runtime/bridges/executionRun/exe
 import { composeExecutionRunWorkerUpdate } from '@/agent/runtime/bridges/executionRun/executionRunWorkerUpdate';
 import type { LiveWorkItemV1, LiveWorkProducerV1 } from './lifecycle/managedActivity';
 import { resolveExecutionRunLifecycle } from '@/agent/runtime/bridges/executionRun/resolveExecutionRunLifecycle';
+import { projectExecutionRunPublicState } from '@/agent/runtime/bridges/executionRun/publicState';
 import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from './lifecycle/requesterWorkAttribution';
 
 const liveWorkListeners = new Set<() => void>();
@@ -286,12 +287,14 @@ export async function reconcileRetainedExecutionRunRecords(params: Readonly<{
           next = projectExecutionRunHostLoss(record, params.nowMs);
           await writeRetainedExecutionRunRecord(next);
           const run = next.state;
+          const { resolvedSelection } = projectExecutionRunPublicState(run);
           await writeExecutionRunMarker({
             pid: record.ownerPid, happySessionId: run.sessionId, runId: run.runId, callId: run.callId,
             ...(next.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: next.requesterWorkAttributionV1 } : {}),
             sidechainId: run.sidechainId, intent: run.intent, backendTarget: readBackendTargetRefV2(run.backendTarget),
             permissionMode: run.permissionMode, retentionPolicy: run.retentionPolicy, runClass: run.runClass,
             ioMode: run.ioMode, status: run.status, startedAtMs: run.startedAtMs,
+            ...(resolvedSelection ? { resolvedSelection } : {}),
             updatedAtMs: params.nowMs, finishedAtMs: params.nowMs, errorCode: 'execution_run_host_lost',
           });
         }
@@ -491,26 +494,25 @@ function isRunningMarker(marker: ExecutionRunMarker): boolean {
   return marker.status === 'running' && typeof marker.finishedAtMs !== 'number';
 }
 
-async function shouldSkipOverwriteForTerminalMarker(filePath: string, next: ExecutionRunMarker): Promise<boolean> {
+async function shouldSkipOverwriteForTerminalMarker(filePath: string, next: ExecutionRunMarker, allowTerminalToRunning = false): Promise<boolean> {
   try {
     const raw = await readFile(filePath, 'utf8');
     const parsed = ExecutionRunMarkerPersistenceReadSchema.safeParse(JSON.parse(raw));
     if (!parsed.success) return false;
     if (parsed.data.happyHomeDir !== undefined && parsed.data.happyHomeDir !== configuration.happyHomeDir) return false;
-    if (isTerminalMarker(parsed.data) && isRunningMarker(next)
-      && next.updatedAtMs <= parsed.data.updatedAtMs) return true;
+    if (isTerminalMarker(parsed.data) && isRunningMarker(next) && !allowTerminalToRunning) return true;
   } catch {
     // ignore read/parse issues
   }
   return false;
 }
 
-async function writeJsonAtomic(filePath: string, value: DaemonExecutionRunMarkerOwnerWrite): Promise<void> {
+async function writeJsonAtomic(filePath: string, value: DaemonExecutionRunMarkerOwnerWrite, allowTerminalToRunning = false): Promise<void> {
   const tmpPath = `${filePath}.tmp-${randomUUID()}`;
   try {
     await writeFile(tmpPath, JSON.stringify(value, null, 2), 'utf-8');
     try {
-      if (await shouldSkipOverwriteForTerminalMarker(filePath, value)) {
+      if (await shouldSkipOverwriteForTerminalMarker(filePath, value, allowTerminalToRunning)) {
         try {
           await unlink(tmpPath);
         } catch {
@@ -522,7 +524,7 @@ async function writeJsonAtomic(filePath: string, value: DaemonExecutionRunMarker
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       if (err?.code === 'EEXIST' || err?.code === 'EPERM') {
-        if (await shouldSkipOverwriteForTerminalMarker(filePath, value)) {
+        if (await shouldSkipOverwriteForTerminalMarker(filePath, value, allowTerminalToRunning)) {
           try {
             await unlink(tmpPath);
           } catch {
@@ -550,12 +552,12 @@ async function writeJsonAtomic(filePath: string, value: DaemonExecutionRunMarker
   }
 }
 
-export async function writeExecutionRunMarker(marker: DaemonExecutionRunMarkerOwnerWrite): Promise<void> {
+export async function writeExecutionRunMarker(marker: DaemonExecutionRunMarkerOwnerWrite, options?: Readonly<{ allowTerminalToRunning?: boolean }>): Promise<void> {
   const dir = resolveExecutionRunMarkerDir();
   await mkdir(dir, { recursive: true });
 
   const payload = ExecutionRunMarkerOwnerWriteSchema.parse(marker);
-  await writeJsonAtomic(resolveExecutionRunMarkerPath(payload.runId), payload);
+  await writeJsonAtomic(resolveExecutionRunMarkerPath(payload.runId), payload, options?.allowTerminalToRunning === true);
   notifyExecutionRunLiveWorkChanged();
 }
 

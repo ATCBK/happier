@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { hashProcessCommand } from '@happier-dev/cli-common/processInstance';
+import type { ProcessCensusRow } from '@/processes/census/processCensus';
 
 import {
   compareProcessGenerationIdentities,
@@ -17,157 +19,137 @@ describe('process generation identity', () => {
   });
 });
 
-describe('readProcessIdentityByPid', () => {
-  it('reads one exact Windows process identity through the bounded CIM command boundary', async () => {
-    const execFile = vi.fn(async () => ({
-      stdout: JSON.stringify({
-        ProcessId: 777,
-        ParentProcessId: 12,
-        CreationDate: '20250630123456.123000+000',
-        CommandLine: '  provider.exe serve --hostname=127.0.0.1 --port=43111  ',
-        ExecutablePath: 'C:\\Tools\\provider.exe',
-      }),
-    }));
+function helperSnapshot(rows: readonly unknown[]): string {
+  return JSON.stringify({ v: 1, capturedAtMs: 1000, logicalCpus: 8, rows: [
+    { pid: process.pid, ppid: 1, start: { startTimeMs: 1000 }, principal: { kind: 'sid', value: 'S-1-5-21-1' }, name: 'daemon', memory: null, cpuTimeUs: null },
+    ...rows,
+  ] });
+}
 
-    await expect(readProcessIdentityByPid(777, {
-      platform: 'win32',
-      execFile,
-    })).resolves.toEqual({
-      pid: 777,
-      ppid: 12,
-      processStartTimeMs: Date.UTC(2025, 5, 30, 12, 34, 56, 123),
-      command: 'provider.exe serve --hostname=127.0.0.1 --port=43111',
-      // `readProcessIdentityByPid` spreads the raw Windows CIM row, which still carries an
-      // executable path of its own; only the local-services `LocalServiceProcessFact` field
-      // (which had no reader) was removed.
-      executablePath: 'C:\\Tools\\provider.exe',
+function helperRow(overrides: Partial<ProcessCensusRow> = {}): ProcessCensusRow {
+  return { pid: 777, ppid: 12, start: { startTimeMs: Date.UTC(2025, 5, 30, 12, 34, 56, 123) },
+    principal: { kind: 'sid', value: 'S-1-5-21-1' }, name: 'provider.exe', memory: null, cpuTimeUs: null, ...overrides };
+}
+
+describe('readProcessIdentityByPid', () => {
+  it('preserves native Windows millisecond identity and original command hashing input', async () => {
+    const commandLine = '  "C:\\Tools\\provider.exe" serve --hostname=127.0.0.1 --port=43111  ';
+    const execFile = vi.fn(async () => ({ stdout: helperSnapshot([helperRow({
+      commandLine, argv: ['C:\\Tools\\provider.exe', 'serve'], executablePath: 'C:\\Tools\\provider.exe',
+    })]) }));
+    const identity = await readProcessIdentityByPid(777, {
+      platform: 'win32', execFile, helperExecutablePath: '/helper',
     });
-    expect(execFile).toHaveBeenCalledWith(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        expect.stringContaining('Get-CimInstance Win32_Process -Filter "ProcessId = 777"'),
-      ],
-      {
-        timeout: 5_000,
-        maxBuffer: 1024 * 1024,
-      },
-    );
+    expect(identity).toMatchObject({
+      pid: 777, ppid: 12, processStartTimeMs: Date.UTC(2025, 5, 30, 12, 34, 56, 123),
+      command: commandLine.trim(), executablePath: 'C:\\Tools\\provider.exe',
+      processOwnership: 'self', ownerSid: 'S-1-5-21-1', currentUserSid: 'S-1-5-21-1',
+    });
+    expect(hashProcessCommand(identity!.command)).toBe(hashProcessCommand(commandLine.trim()));
+    expect(hashProcessCommand(identity!.command)).not.toBe(hashProcessCommand('C:\\Tools\\provider.exe serve'));
   });
 
   it.each([
     ['access denied', Object.assign(new Error('Access is denied'), { code: 'EACCES' })],
     ['timeout', Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' })],
     ['cancellation', Object.assign(new Error('aborted'), { name: 'AbortError' })],
-  ])('fails closed when Windows process identity lookup reports %s', async (_label, error) => {
+  ])('fails closed when native process identity lookup reports %s', async (_label, error) => {
     await expect(readProcessIdentityByPid(777, {
-      platform: 'win32',
-      execFile: async () => {
-        throw error;
-      },
+      platform: 'win32', helperExecutablePath: '/helper', execFile: async () => { throw error; },
     })).resolves.toBeNull();
   });
 
-  it('fails closed when the requested PID is not present in otherwise valid CIM evidence', async () => {
+  it('fails closed when the requested PID is missing', async () => {
     await expect(readProcessIdentityByPid(777, {
-      platform: 'win32',
-      execFile: async () => ({
-        stdout: JSON.stringify({
-          ProcessId: 778,
-          CreationDate: '20250630123456.123000+000',
-          CommandLine: 'unrelated.exe',
-        }),
-      }),
+      platform: 'win32', helperExecutablePath: '/helper',
+      execFile: async () => ({ stdout: helperSnapshot([helperRow({ pid: 778 })]) }),
     })).resolves.toBeNull();
   });
 
-  it.each([
-    [
-      'start time is unavailable',
-      {
-        ProcessId: 777,
-        CommandLine: 'provider.exe serve',
-        ExecutablePath: 'C:\\Tools\\provider.exe',
-      },
-    ],
-  ])('fails closed when exact Windows %s', async (_label, row) => {
+  it('fails closed when the census has no reading process', async () => {
     await expect(readProcessIdentityByPid(777, {
-      platform: 'win32',
-      execFile: async () => ({ stdout: JSON.stringify(row) }),
+      platform: 'win32', helperExecutablePath: '/helper',
+      execFile: async () => ({ stdout: JSON.stringify({ v: 1, capturedAtMs: 1000, logicalCpus: 8, rows: [helperRow()] }) }),
     })).resolves.toBeNull();
   });
 
-  it('retains Windows birth evidence when command and executable path are unavailable', async () => {
+  it('fails closed when a native row has no birth evidence', async () => {
+    const { start: _start, ...row } = helperRow();
     await expect(readProcessIdentityByPid(777, {
-      platform: 'win32',
-      execFile: async () => ({ stdout: JSON.stringify({
-        ProcessId: 777,
-        CreationDate: '20250630123456.123000+000',
-      }) }),
-    })).resolves.toMatchObject({
-      pid: 777,
-      processStartTimeMs: Date.UTC(2025, 5, 30, 12, 34, 56, 123),
-      command: '',
-    });
+      platform: 'win32', helperExecutablePath: '/helper',
+      execFile: async () => ({ stdout: helperSnapshot([row]) }),
+    })).resolves.toBeNull();
   });
 
-  it.each(['', 'unknown'])('retains Linux birth evidence without an observed command (%s)', async (command) => {
+  it('retains Windows birth evidence without command or executable path', async () => {
     await expect(readProcessIdentityByPid(777, {
-      platform: 'linux',
-      linuxBoundary: {
+      platform: 'win32', helperExecutablePath: '/helper',
+      execFile: async () => ({ stdout: helperSnapshot([helperRow()]) }),
+    })).resolves.toMatchObject({ pid: 777, processStartTimeMs: Date.UTC(2025, 5, 30, 12, 34, 56, 123), command: '' });
+  });
+
+  it('keeps an observed foreign principal identifiable without private enrichment', async () => {
+    await expect(readProcessIdentityByPid(777, {
+      platform: 'win32', helperExecutablePath: '/helper',
+      execFile: async () => ({ stdout: helperSnapshot([helperRow({ principal: { kind: 'sid', value: 'S-1-5-21-2' } })]) }),
+    })).resolves.toMatchObject({ pid: 777, processStartTimeMs: Date.UTC(2025, 5, 30, 12, 34, 56, 123), command: '', processOwnership: 'other' });
+  });
+
+  it.each(['', 'unknown'])('retains Linux birth evidence without a command (%s)', async (command) => {
+    await expect(readProcessIdentityByPid(777, {
+      platform: 'linux', linuxBoundary: {
         readFile: async (path) => path.endsWith('/stat')
           ? '777 (runner) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 12345 22'
-          : path.endsWith('/cmdline') ? command : '',
-        readdir: async () => [],
-        readlink: async () => '/repo',
+          : path.endsWith('/status') ? 'Uid: 1000 1000 1000 1000' : path.endsWith('/cmdline') ? command : '',
+        readdir: async () => [], readlink: async () => '/repo',
       },
     })).resolves.toMatchObject({ pid: 777, processStartTimeMs: 190, command: '' });
   });
 
-  it('retains Darwin birth evidence when the ps row has no command', async () => {
+  it('refuses a Linux table that has the target birth evidence but omits the reading process', async () => {
     await expect(readProcessIdentityByPid(777, {
-      platform: 'darwin',
-      execFile: async () => ({ stdout: '777 1 1000 Mon Jun 30 12:34:56 2025    \n' }),
-    })).resolves.toMatchObject({ pid: 777, processStartTimeMs: Date.parse('Mon Jun 30 12:34:56 2025'), command: '' });
+      platform: 'linux', linuxBoundary: {
+        readFile: async (path) => {
+          if (path === '/proc/777/stat') return '777 (runner) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 12345 22';
+          throw Object.assign(new Error('missing process'), { code: 'ENOENT' });
+        }, readdir: async () => [], readlink: async () => '/repo',
+      },
+    })).resolves.toBeNull();
   });
 
-  it('keeps Linux process identity stable when procfs boot wall time shifts, but detects new start ticks', async () => {
+  it('preserves Darwin whole-second birth time independently of native subsecond generation', async () => {
+    await expect(readProcessIdentityByPid(777, {
+      platform: 'darwin', helperExecutablePath: '/helper', execFile: async () => ({ stdout: helperSnapshot([helperRow({
+        start: { startTimeMs: Date.UTC(2025, 5, 30, 12, 34, 56), native: 'darwin-proc:777:1751286896:123456' }, argv: [],
+      })]) }),
+    })).resolves.toMatchObject({ pid: 777, processStartTimeMs: Date.UTC(2025, 5, 30, 12, 34, 56), command: '' });
+  });
+
+  it('keeps Linux generation stable across boot wall-time shifts and detects changed start ticks', async () => {
     const files = new Map<string, string>([
       ['/proc/stat', 'cpu  1 2 3\nbtime 1717171000\n'],
       ['/proc/777/stat', '777 (provider) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 12345 22'],
       ['/proc/777/cmdline', 'provider\u0000serve\u0000--port=43111\u0000'],
     ]);
-
     const dependencies = {
-      platform: 'linux',
-      linuxBoundary: {
+      platform: 'linux', linuxBoundary: {
         readFile: async (path) => {
+          if (path.endsWith('/status')) return 'Uid: 1000 1000 1000 1000';
+          if (path === `/proc/${process.pid}/stat`) return files.get('/proc/777/stat')!;
           const value = files.get(path);
           if (value === undefined) throw new Error(`missing ${path}`);
           return value;
-        },
-        readdir: async () => [],
-        readlink: async (path) => {
+        }, readdir: async () => [], readlink: async (path) => {
           if (path === '/proc/777/cwd') return '/repo';
           throw new Error(`missing ${path}`);
         },
       },
     } satisfies ReadProcessIdentityByPidDependencies;
     const first = await readProcessIdentityByPid(777, dependencies);
-    expect(first).toEqual({
-      pid: 777,
-      ppid: 1,
-      processStartTimeMs: 190,
-      command: 'provider serve --port=43111',
-      cwd: '/repo',
-    });
+    expect(first).toMatchObject({ pid: 777, ppid: 1, processStartTimeMs: 190, command: 'provider serve --port=43111', cwd: '/repo' });
     files.set('/proc/stat', 'cpu  1 2 3\nbtime 1717170999\n');
     const afterClockStep = await readProcessIdentityByPid(777, dependencies);
-    expect(afterClockStep?.processStartTimeMs).toBe(first?.processStartTimeMs);
     expect(processGenerationMatches(first?.processStartTimeMs, afterClockStep?.processStartTimeMs)).toBe(true);
-
     files.set('/proc/777/stat', '777 (provider) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 20 12345 22');
     const reusedPid = await readProcessIdentityByPid(777, dependencies);
     expect(processGenerationProvesReuse(first?.processStartTimeMs, reusedPid?.processStartTimeMs)).toBe(true);

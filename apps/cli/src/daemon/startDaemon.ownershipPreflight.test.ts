@@ -151,10 +151,9 @@ describe('startDaemon ownership preflight', () => {
 
             await expect(startDaemon()).resolves.toBeUndefined();
             expect(exitSpy).toHaveBeenCalledTimes(1);
-            expect(exitSpy).toHaveBeenCalledWith(0);
-
             logger.flushSync();
             const logContent = await readFile(logger.logFilePath, 'utf8');
+            expect(exitSpy, logContent).toHaveBeenCalledWith(0);
             expect(logContent).toContain('Relay ownership conflict prevented daemon startup');
             expect(logContent).not.toContain('[DAEMON RUN][FATAL] Failed somewhere unexpectedly');
             exitSpy.mockRestore();

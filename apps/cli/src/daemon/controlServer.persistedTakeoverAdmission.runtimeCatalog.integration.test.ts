@@ -83,6 +83,7 @@ accountCurrentnessMocks.fetchAccountEncryptionCurrentness.mockResolvedValue(
 const publisherPrecondition = Object.freeze({
   machineId: 'machine-1',
   committedFenceMs: 1,
+  publisherGeneration: '1',
 });
 
 function persistedAdmissionWaiterCorrelation<T extends Readonly<{
