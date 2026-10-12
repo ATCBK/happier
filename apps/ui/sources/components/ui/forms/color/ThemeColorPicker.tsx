@@ -150,7 +150,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     container: {
         alignItems: 'center',
         flexDirection: 'row',
-        gap: 8,
+        gap: theme.space.s8,
         minWidth: 0,
         maxWidth: '100%',
         flexShrink: 1,
@@ -163,16 +163,16 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRadius: 10,
         backgroundColor: theme.colors.input.background,
         color: theme.colors.input.text,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s8,
     },
     pickerSurface: {
-        gap: 10,
+        gap: theme.space.s10,
         minWidth: 240,
-        padding: 4,
+        padding: theme.space.s4,
     },
     picker: {
-        gap: 8,
+        gap: theme.space.s8,
         width: '100%',
     },
     panel: {
@@ -183,7 +183,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRadius: 999,
     },
     pickerSwatches: {
-        gap: 6,
+        gap: theme.space.s6,
         justifyContent: 'flex-start',
     },
     pickerSwatch: {
@@ -194,7 +194,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     recentRow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 6,
+        gap: theme.space.s6,
     },
     recentColor: {
         width: 22,

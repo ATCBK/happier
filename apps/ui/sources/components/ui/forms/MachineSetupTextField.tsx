@@ -8,17 +8,17 @@ import { Typography } from '@/constants/Typography';
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     label: {
         ...Typography.default('semiBold'),
         color: theme.colors.text.secondary,
     },
     support: {
-        ...Typography.default(),
+
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
+
     },
     error: {
         color: theme.colors.state.danger.foreground,
@@ -29,11 +29,19 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         borderRadius: 10,
         borderWidth: 0.5,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
         ...SETTINGS_TEXT_INPUT_METRICS,
     },
 }));
+
+/** A form field's label and its one line of help: the field draws them, and a control that is not a text input (a choice) uses them too. */
+export function MachineSetupFieldLabel(props: Readonly<{ children: string }>) {
+    return <Text style={styles.label}>{props.children}</Text>;
+}
+export function MachineSetupFieldSupport(props: Readonly<{ children: string }>) {
+    return <Text style={styles.support}>{props.children}</Text>;
+}
 
 export type MachineSetupTextFieldProps = Readonly<{
     editable?: boolean;
@@ -62,7 +70,7 @@ export const MachineSetupTextField = React.memo(React.forwardRef<React.ElementRe
     const describedByProps = supportText ? { accessibilityDescribedBy: supportId } : {};
     return (
         <View style={[styles.container, props.style]}>
-            <Text style={styles.label}>{props.label}</Text>
+            <MachineSetupFieldLabel>{props.label}</MachineSetupFieldLabel>
             <TextInput
                 ref={ref}
                 testID={props.testID}

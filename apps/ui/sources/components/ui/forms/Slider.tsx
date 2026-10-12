@@ -9,6 +9,7 @@ import {
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
+import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useItemRowAccessibleName } from '@/components/ui/lists/ItemRowAccessibleName';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
@@ -38,7 +39,7 @@ export type SliderProps = Readonly<{
 
 const TRACK_HEIGHT_PX = 4;
 const THUMB_SIZE_PX = 18;
-/** The press target around the thin track, so it meets the minimum hit area. */
+/** Retain the web track frame; touch platforms expand it through the shared target policy. */
 const TRACK_HIT_HEIGHT_PX = 40;
 /** Page Up/Down move a tenth of the range, at least one step. */
 const PAGE_FRACTION = 0.1;
@@ -72,6 +73,7 @@ export function Slider(props: SliderProps) {
     const reducedMotion = useReducedMotionPreference();
     const rowAccessibleName = useItemRowAccessibleName();
     const { min, max, step, disabled } = props;
+    const trackHitHeight = Math.max(TRACK_HIT_HEIGHT_PX, resolveMinimumInteractiveTargetSize());
     const value = snapToStep(props.value, min, max, step);
     const progress = max > min ? (value - min) / (max - min) : 0;
     const [focused, setFocused] = React.useState(false);
@@ -196,6 +198,7 @@ export function Slider(props: SliderProps) {
                 onResponderTerminate={handleRelease}
                 style={[
                     styles.trackHitArea,
+                    { height: trackHitHeight },
                     props.trackWidth === undefined ? styles.trackHitAreaFill : { width: props.trackWidth },
                 ]}
             >
@@ -207,6 +210,7 @@ export function Slider(props: SliderProps) {
                     style={[
                         styles.thumb,
                         {
+                            top: (trackHitHeight - THUMB_SIZE_PX) / 2,
                             left: percent,
                             backgroundColor: theme.colors.text.primary,
                             borderColor: theme.colors.surface.base,
@@ -241,7 +245,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     root: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
         borderRadius: 8,
         // The thumb draws the ring.
         ...HAPPIER_FOCUS_RING_DELEGATED_STYLE,
@@ -258,7 +262,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     trackHitArea: {
-        height: TRACK_HIT_HEIGHT_PX,
         justifyContent: 'center',
         // The thumb overhangs both ends by half its width at the extremes.
         marginHorizontal: THUMB_SIZE_PX / 2,
@@ -279,7 +282,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     thumb: {
         position: 'absolute',
-        top: (TRACK_HIT_HEIGHT_PX - THUMB_SIZE_PX) / 2,
         width: THUMB_SIZE_PX,
         height: THUMB_SIZE_PX,
         marginLeft: -THUMB_SIZE_PX / 2,

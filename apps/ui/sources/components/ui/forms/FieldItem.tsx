@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Platform, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -21,8 +22,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     label: {
-        fontSize: 12,
-        fontWeight: '700',
+        ...Typography.variant('meta', 'semiBold'),
+
         color: theme.colors.text.secondary,
         letterSpacing: 0.6,
         marginBottom: Platform.select({ ios: 4, default: 5 }),

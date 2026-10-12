@@ -55,12 +55,6 @@ vi.mock('@/components/ui/text/Text', () => ({
     React.createElement('Text', props, props.children),
 }));
 
-vi.mock('@/constants/Typography', () => ({
-  Typography: {
-    default: () => ({}),
-  },
-}));
-
 describe('SelectionTiles', () => {
   it('keeps a four-option visual fill picker to two readable columns', async () => {
     const { SelectionTiles } = await import('./SelectionTiles');

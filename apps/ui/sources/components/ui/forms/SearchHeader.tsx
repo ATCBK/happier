@@ -55,8 +55,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         backgroundColor: theme.colors.input.background,
         borderRadius: INPUT_BORDER_RADIUS,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
         minHeight: SEARCH_INPUT_MIN_HEIGHT,
     },
     textInput: {
@@ -69,7 +69,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingVertical: 0,
     },
     clearIcon: {
-        marginLeft: 8,
+        marginLeft: theme.space.s8,
     },
 }));
 
@@ -99,7 +99,7 @@ export function SearchHeader({
                             name="magnifying-glass"
                             size={20}
                             color={theme.colors.text.secondary}
-                            style={{ marginRight: 8 }}
+                            style={{ marginRight: theme.space.s8 }}
                         />,
                     )}
                     <TextInput

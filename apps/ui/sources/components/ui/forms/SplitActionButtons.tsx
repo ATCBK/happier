@@ -32,7 +32,7 @@ export const SplitActionButtons = React.memo(function SplitActionButtons(props: 
                         style={({ pressed }) => ({
                             backgroundColor: paintColor(theme.colors.surface.base),
                             borderRadius: 10,
-                            paddingVertical: 12,
+                            paddingVertical: theme.space.s12,
                             alignItems: 'center',
                             opacity: pressed ? motionTokens.press.opacitySubtle : 1,
                         })}
@@ -59,7 +59,7 @@ export const SplitActionButtons = React.memo(function SplitActionButtons(props: 
                     style={({ pressed }) => ({
                         backgroundColor: paintColor(theme.colors.button.primary.background, undefined, 'solidControl'),
                         borderRadius: 10,
-                        paddingVertical: 12,
+                        paddingVertical: theme.space.s12,
                         alignItems: 'center',
                         opacity: props.primaryDisabled ? 0.5 : (pressed ? motionTokens.press.opacitySubtle : 1),
                     })}

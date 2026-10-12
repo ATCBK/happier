@@ -107,15 +107,13 @@ export function InlineAddExpander({
 
 const stylesheet = StyleSheet.create((theme) => ({
     expandedContainer: {
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 16,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s16,
     },
     helpText: {
         color: theme.colors.text.secondary,
-        fontSize: 14,
-        lineHeight: 20,
-        marginBottom: 12,
-        ...Typography.default(),
+        marginBottom: theme.space.s12,
+        ...Typography.variant('body'),
     },
 }));

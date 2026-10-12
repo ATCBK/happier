@@ -17,7 +17,7 @@ type FieldBoxTheme = Readonly<{
         edge: RaisedEdgeColors;
         shadowLevels: ShadowLevels;
         text: Readonly<{ primary: string }>;
-        input: Readonly<{ placeholder: string }>;
+        input: Readonly<{ placeholder: string; background: string }>;
         border: Readonly<{ strong: string; focus: string }>;
         state: Readonly<{ danger: Readonly<{ foreground: string }> }>;
     }>;
@@ -41,7 +41,22 @@ export type FieldBoxColors = Readonly<{
  * focus); a select trigger whose box carries the ring passes `focused`. The box
  * stands on its raised edge; an invalid box sits flat so its danger border speaks alone.
  */
-export function resolveFieldBoxColors(theme: FieldBoxTheme, state: FieldBoxState = 'idle'): FieldBoxColors {
+export function resolveFieldBoxColors(
+    theme: FieldBoxTheme,
+    state: FieldBoxState = 'idle',
+    presentation: 'field' | 'document' = 'field',
+): FieldBoxColors {
+    if (presentation === 'document') {
+        // Prose edited in place: the input fill as a soft card, no border or raised edge until it is invalid.
+        return {
+            borderColor: state === 'invalid' ? theme.colors.state.danger.foreground : 'transparent',
+            backgroundColor: theme.colors.input.background,
+            valueColor: theme.colors.text.primary,
+            placeholderColor: theme.colors.input.placeholder,
+            edge: null,
+            focusRing: null,
+        } as const;
+    }
     return {
         borderColor: state === 'invalid' ? theme.colors.state.danger.foreground : theme.colors.border.strong,
         backgroundColor: theme.colors.edge.fill,

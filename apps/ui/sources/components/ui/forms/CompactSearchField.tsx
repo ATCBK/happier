@@ -55,8 +55,19 @@ export const CompactSearchField = React.memo(function CompactSearchField(props: 
     /** `false` while the list behind the field cannot be searched (for example, offline). */
     editable?: boolean;
     placement?: 'inline' | 'page';
+    /**
+     * One control on the field's row, after the field (a page's filter chip). The field keeps the
+     * remaining width, so the pair spans exactly the content column.
+     */
+    accessory?: React.ReactNode;
 } & CompactSearchFieldInputOptions>) {
-    const field = <CompactSearchFieldFrame {...props} />;
+    const frame = <CompactSearchFieldFrame {...props} />;
+    const field = props.accessory ? (
+        <View style={compactSearchFieldStyles.accessoryRow}>
+            <View style={compactSearchFieldStyles.accessoryField}>{frame}</View>
+            {props.accessory}
+        </View>
+    ) : frame;
     return props.placement === 'page' ? (
         <PageSearchColumn testID={props.testID ? `${props.testID}.column` : undefined}>{field}</PageSearchColumn>
     ) : field;
@@ -93,6 +104,12 @@ type CompactSearchFieldInputOptions = Readonly<{
     onKeyPress?: React.ComponentProps<typeof TextInput>['onKeyPress'];
     onFocus?: () => void;
     onBlur?: () => void;
+    /** Web composite-list relationships, owned by the searchable collection. */
+    role?: 'combobox';
+    'aria-autocomplete'?: 'list';
+    'aria-controls'?: string;
+    'aria-expanded'?: boolean;
+    'aria-activedescendant'?: string;
 }>;
 
 const CompactSearchFieldFrame = React.memo(function CompactSearchFieldFrame(props: Readonly<{
@@ -142,6 +159,13 @@ const CompactSearchFieldFrame = React.memo(function CompactSearchFieldFrame(prop
                     onFocus={props.onFocus}
                     onBlur={props.onBlur}
                     accessibilityLabel={props.accessibilityLabel ?? props.placeholder}
+                    {...(Platform.OS === 'web' ? {
+                        role: props.role,
+                        'aria-autocomplete': props['aria-autocomplete'],
+                        'aria-controls': props['aria-controls'],
+                        'aria-expanded': props['aria-expanded'],
+                        'aria-activedescendant': props['aria-activedescendant'],
+                    } : {})}
                     style={styles.input}
                 />
             </HappierSearchFieldBox>
@@ -161,9 +185,18 @@ const compactSearchFieldStyles = StyleSheet.create((theme) => ({
     pageBand: {
         alignSelf: 'stretch',
         alignItems: 'center',
-        paddingTop: 12,
+        paddingTop: theme.space.s12,
     },
     pageColumn: {
         width: '100%',
+    },
+    accessoryRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s8,
+    },
+    accessoryField: {
+        flex: 1,
+        minWidth: 0,
     },
 }));
