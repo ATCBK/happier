@@ -56,6 +56,24 @@ function createManualBridge() {
 }
 
 describe('createSystemTaskRunner', () => {
+    it('admits Account cancellation only for the task’s captured Home and Account and preserves terminal state', async () => {
+        const { createSystemTaskRunner } = await import('./createSystemTaskRunner');
+        const manual = createManualBridge();
+        const runner = createSystemTaskRunner({ bridge: manual.bridge });
+        const accountScope = { serverId: 'home-a', accountId: 'alice' };
+        const taskId = await runner.start(createSpec({ kind: 'relay.runtime.start.v1' }), undefined, { accountScope });
+        expect(await runner.cancelForAccount?.(taskId, { serverId: 'home-a', accountId: 'bob' })).toBe('scope_mismatch');
+        expect(await runner.cancelForAccount?.(taskId, { serverId: 'home-b', accountId: 'alice' })).toBe('scope_mismatch');
+        expect(manual.cancelMock).not.toHaveBeenCalled();
+        expect(await runner.cancelForAccount?.(taskId, accountScope)).toBe('cancellation_requested');
+        expect(runner.getSnapshot(taskId)).toMatchObject({ status: 'canceling', result: null });
+        manual.emitResult(taskId, { protocolVersion: 1, taskId, ok: true });
+        expect(await runner.cancelForAccount?.(taskId, accountScope)).toBe('already_settled');
+        expect(await runner.cancelForAccount?.('missing', accountScope)).toBe('not_found');
+        const draftTaskId = await runner.start(createSpec({ kind: 'relay.runtime.start.v1' }));
+        expect(await runner.cancelForAccount?.(draftTaskId, accountScope)).toBe('scope_mismatch');
+        expect(manual.cancelMock).toHaveBeenCalledTimes(1);
+    });
     it('admits one scoped setup before native start returns and permits a new run after settlement or launch failure', async () => {
         const { createSystemTaskRunner } = await import('./createSystemTaskRunner');
         const manual = createManualBridge();

@@ -15,7 +15,7 @@ describe('CLI acquisition presentation', () => {
         const presentation = presentCliAcquisitionEvent(sample);
         expect(presentation).toEqual({
             status: t('cliAcquisitionProgress.acquisitionDownloadingStatus'),
-            downloadProgress: t('cliAcquisitionProgress.acquisitionDownloadBytes', { received: '1.0 KB' }),
+            downloadProgress: t('cliAcquisitionProgress.acquisitionDownloadBytes', { received: '1.02 KB' }),
         });
         expect(createPlanChecklistLogEntryFromSystemTaskEvent(sample, () => 'Install tools', 0)).toMatchObject({
             message: presentation?.status, details: presentation?.downloadProgress,

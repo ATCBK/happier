@@ -1,5 +1,5 @@
 import { t } from '@/text';
-import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
+import { resolveHomeDisplayNameForRelayUrl } from '@/components/settings/server/homeDisplayName';
 
 import type { PlanChecklistItem } from '@/components/systemTasks/planChecklist';
 import type { ThisComputerSetupPreflight } from '@/components/onboarding/checklists/setupThisComputer/types';
@@ -51,13 +51,13 @@ function relayStageSubtitle(preflight: ThisComputerSetupPreflight): string {
     }
     if (preflight.serverMismatch) {
         return t('setupOnboarding.thisComputerStages.useRelayServerMismatchSubtitle', {
-            activeRelayUrl: preflight.activeRelayUrl ? toServerUrlDisplay(preflight.activeRelayUrl) : t('status.unknown'),
-            daemonRelayUrl: preflight.daemonServerUrl ? toServerUrlDisplay(preflight.daemonServerUrl) : t('status.unknown'),
+            activeRelayUrl: resolveHomeDisplayNameForRelayUrl(preflight.activeRelayUrl ?? '') ?? t('settingsAccount.thisHomeTitle'),
+            daemonRelayUrl: resolveHomeDisplayNameForRelayUrl(preflight.daemonServerUrl ?? '') ?? t('settingsAccount.thisHomeTitle'),
         });
     }
     if (preflight.activeRelayUrl) {
         return t('setupOnboarding.thisComputerStages.useRelayConnectedSubtitle', {
-            relayUrl: toServerUrlDisplay(preflight.activeRelayUrl),
+            relayUrl: resolveHomeDisplayNameForRelayUrl(preflight.activeRelayUrl) ?? t('settingsAccount.thisHomeTitle'),
         });
     }
     return t('setupOnboarding.thisComputerStages.useRelayMissingSubtitle');
@@ -95,7 +95,7 @@ function resolveBackgroundServiceDecisionDetails(prompt: BackgroundServiceSetupP
         ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join('\n');
     }
 
-    const serviceLabels = prompt.services.map((service) => `${service.label} • ${service.serverUrl}`).join('\n');
+    const serviceLabels = prompt.services.map((service) => `${service.label} • ${resolveHomeDisplayNameForRelayUrl(service.serverUrl) ?? t('settingsAccount.thisHomeTitle')}`).join('\n');
     return [
         `${prompt.targetReleaseChannel} • ${prompt.targetServerUrl}`,
         serviceLabels,
@@ -162,13 +162,13 @@ function resolveRelayChildDetails(preflight: ThisComputerSetupPreflight): string
     }
     if (preflight.serverMismatch) {
         return t('setupOnboarding.thisComputerStages.useRelayServerMismatchSubtitle', {
-            activeRelayUrl: preflight.activeRelayUrl ? toServerUrlDisplay(preflight.activeRelayUrl) : t('status.unknown'),
-            daemonRelayUrl: preflight.daemonServerUrl ? toServerUrlDisplay(preflight.daemonServerUrl) : t('status.unknown'),
+            activeRelayUrl: resolveHomeDisplayNameForRelayUrl(preflight.activeRelayUrl ?? '') ?? t('settingsAccount.thisHomeTitle'),
+            daemonRelayUrl: resolveHomeDisplayNameForRelayUrl(preflight.daemonServerUrl ?? '') ?? t('settingsAccount.thisHomeTitle'),
         });
     }
     if (preflight.activeRelayUrl) {
         return t('setupOnboarding.thisComputerStages.useRelayConnectedSubtitle', {
-            relayUrl: toServerUrlDisplay(preflight.activeRelayUrl),
+            relayUrl: resolveHomeDisplayNameForRelayUrl(preflight.activeRelayUrl) ?? t('settingsAccount.thisHomeTitle'),
         });
     }
     return t('setupOnboarding.thisComputerStages.useRelayMissingSubtitle');
@@ -191,7 +191,7 @@ function configureRelayChildDetails(preflight: ThisComputerSetupPreflight): stri
     }
     if (preflight.activeRelayUrl) {
         return t('setupOnboarding.thisComputerStages.useRelayConnectedSubtitle', {
-            relayUrl: toServerUrlDisplay(preflight.activeRelayUrl),
+            relayUrl: resolveHomeDisplayNameForRelayUrl(preflight.activeRelayUrl) ?? t('settingsAccount.thisHomeTitle'),
         });
     }
     return t('setupOnboarding.thisComputerStages.useRelayDetails');

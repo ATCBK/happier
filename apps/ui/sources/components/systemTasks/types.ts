@@ -79,25 +79,38 @@ export type SystemTaskBridge = Readonly<{
 
 export type SystemTasksBridge = SystemTaskBridge;
 
+/** Invocation custody stays on this runner's task record, never in native task parameters. */
+export type SystemTaskAccountScope = Readonly<{ serverId: string; accountId: string }>;
+export type SystemTaskStartOptions = Readonly<{ adoptExisting?: boolean; accountScope?: SystemTaskAccountScope }>;
+export type SystemTaskAccountCancellation = 'cancellation_requested' | 'already_settled' | 'not_found' | 'scope_mismatch';
+
 export type SystemTaskRunner = Readonly<{
     mode: SystemTaskRunnerMode;
     capabilities?: SystemTaskBridgeCapabilities;
     start: (
         spec: SystemTaskSpec,
         continuation?: SystemTaskPromptContinuation,
-        options?: Readonly<{ adoptExisting?: boolean }>,
+        options?: SystemTaskStartOptions,
     ) => Promise<string>;
     /** One admitted setup, published before native launch returns its task id. */
     getActiveSetupTask: () => ActiveSetupTask | null;
     subscribeActiveSetupTask: (listener: () => void) => () => void;
     cancel: (taskId: string) => Promise<void>;
+    /** Account Actions can cancel only tasks admitted for their captured Home and Account. */
+    cancelForAccount?: (taskId: string, scope: SystemTaskAccountScope) => Promise<SystemTaskAccountCancellation>;
     respond: (taskId: string, answer: unknown) => Promise<void>;
     /**
      * Bind a prompt answerer to a started task for the rest of that task's life.
      * Continuations outlive any view that started the task, so navigating away
      * cannot strand a task waiting on an answer.
+     * Preserve an admitted continuation when supplying a fallback on remount;
+     * registration retries its current prompt through the runner's replay guards.
      */
-    registerPromptContinuation?: (taskId: string, continuation: SystemTaskPromptContinuation) => void;
+    registerPromptContinuation?: (
+        taskId: string,
+        continuation: SystemTaskPromptContinuation,
+        options?: Readonly<{ preserveExisting?: boolean }>,
+    ) => void;
     /** Tasks that are still running with a registered continuation, so a remounted surface can rediscover them. */
     listPromptContinuations?: () => readonly SystemTaskPromptContinuationRegistration[];
     /** Tasks this runner started that have no result yet — the one fact of what is in flight. */

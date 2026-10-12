@@ -4,6 +4,10 @@ import type { SystemTaskPromptEnvelope, SystemTaskRunState } from '../types';
 
 export type { SystemTaskPromptEnvelope };
 
+export function getSystemTaskPromptSignature(prompt: SystemTaskPromptEnvelope): string {
+    return `${prompt.kind}:${JSON.stringify(prompt.data)}`;
+}
+
 export function readLatestSystemTaskPrompt(snapshot: SystemTaskRunState | null): SystemTaskPromptEnvelope | null {
     if (!snapshot) {
         return null;

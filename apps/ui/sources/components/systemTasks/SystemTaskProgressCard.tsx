@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { Linking, View } from 'react-native';
 
 import { Item } from '@/components/ui/lists/Item';
@@ -8,6 +9,10 @@ import { SetupSteps, setupStepTestID, type SetupStep, type SetupStepState } from
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { isDesktopHost, invokeDesktopHost } from '@/utils/platform/desktopHost';
+import { useLocalRuntimeActionExecution } from '@/components/approvals/useLocalRuntimeActionExecution';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { createUiHomeRuntimeActionClient } from '@/sync/ops/actions/homeRuntimeActionClient';
 
 import type { SystemTaskRunState } from './types';
 import { presentActiveCliAcquisition, presentCliAcquisitionEvent } from './cliAcquisitionPresentation';
@@ -141,24 +146,66 @@ function resolvePromptAction(snapshot: SystemTaskRunState): PromptAction | null 
     return null;
 }
 
-async function openDesktopSystemTaskLogs(): Promise<void> {
+class NativeSystemTaskLogsOpenError extends Error {}
+
+async function openDesktopSystemTaskLogs(openPath: (path: string) => Promise<void>): Promise<void> {
     const { homeDir, join } = await import('@tauri-apps/api/path');
     const home = await homeDir();
     const logsPath = await join(home, '.happier', 'logs');
     const rootPath = await join(home, '.happier');
 
     try {
-        await invokeDesktopHost('system_tasks_open_log_path', { path: logsPath });
+        await openPath(logsPath);
         return;
-    } catch {
+    } catch (firstError) {
+        // Admission/approval/currentness refusal is not a missing native path.
+        // It cannot authorize a second request or a second approval.
+        if (!(firstError instanceof NativeSystemTaskLogsOpenError)) {
+            Modal.alert(t('common.error'), firstError instanceof Error ? firstError.message : t('settings.systemTaskOpenLogsFailed'));
+            return;
+        }
         try {
-            await invokeDesktopHost('system_tasks_open_log_path', { path: rootPath });
+            await openPath(rootPath);
             return;
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error ?? '');
             Modal.alert(t('common.error'), message || t('settings.systemTaskOpenLogsFailed'));
         }
     }
+}
+
+/** Observe credentials/policy only where the desktop native port is visible. */
+function DesktopSystemTaskLogsControl() {
+    const router = useRouter();
+    const execution = useLocalRuntimeActionExecution();
+    const action = React.useMemo(() => createUiHomeRuntimeActionClient(undefined, execution.execute), [execution.execute]);
+    const openLogs = React.useCallback(async () => {
+        await openDesktopSystemTaskLogs(async path => {
+            if (!execution.requiresAction) {
+                await execution.runSignedOutDraft(async () => {
+                    try { await invokeDesktopHost('system_tasks_open_log_path', { path }); }
+                    catch (error) {
+                        if (readRpcRequestDisposition(error) === 'outcomeUnknown') throw error;
+                        throw new NativeSystemTaskLogsOpenError(t('settings.systemTaskOpenLogsFailed'));
+                    }
+                });
+                return;
+            }
+            const outcome = await action('relay.runtime.open_path', { path });
+            if (!('status' in outcome) || outcome.status !== 'completed') {
+                if ('reason' in outcome && outcome.reason === 'native_path_open_failed') throw new NativeSystemTaskLogsOpenError(t('settings.systemTaskOpenLogsFailed'));
+                throw new Error('reason' in outcome ? outcome.reason : t('settings.systemTaskOpenLogsFailed'));
+            }
+        });
+    }, [action, execution.requiresAction, execution.runSignedOutDraft]);
+    return <>
+        <Item testID="system-task-progress-open-logs" title={t('settings.systemTaskOpenLogs')} onPress={openLogs}
+            disabled={!execution.ready || execution.approval.approvalPending} showChevron={false} />
+        {execution.approval.approvalPending && execution.approval.approvalId && execution.binding ? <ActionApprovalPendingNotice
+            testID="system-task-logs-approval" message={t('secrets.catalog.approvalPending')}
+            onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(execution.approval.approvalId!)}?serverId=${encodeURIComponent(execution.binding!.serverId)}`)}
+        /> : null}
+    </>;
 }
 
 export const SystemTaskProgressCard = React.memo(function SystemTaskProgressCard(props: Readonly<{
@@ -193,12 +240,6 @@ export const SystemTaskProgressCard = React.memo(function SystemTaskProgressCard
     ), [checklistSteps, showStepMessages]);
     const promptAction = React.useMemo(() => resolvePromptAction(props.snapshot), [props.snapshot]);
     const canOpenLogs = showOpenLogs && isDesktopHost();
-    const handleOpenLogs = React.useCallback(async () => {
-        if (!canOpenLogs) {
-            return;
-        }
-        await openDesktopSystemTaskLogs();
-    }, [canOpenLogs]);
     const handlePromptAction = React.useCallback(async () => {
         if (!promptAction) {
             return;
@@ -257,14 +298,7 @@ export const SystemTaskProgressCard = React.memo(function SystemTaskProgressCard
                         <SetupSteps variant="checklist" steps={presentedChecklistSteps} />
                     </SectionContentRow>
                 ) : null}
-                {canOpenLogs ? (
-                    <Item
-                        testID="system-task-progress-open-logs"
-                        title={t('settings.systemTaskOpenLogs')}
-                        onPress={handleOpenLogs}
-                        showChevron={false}
-                    />
-                ) : null}
+                {canOpenLogs ? <DesktopSystemTaskLogsControl /> : null}
                 {promptAction ? (
                     <Item
                         testID="system-task-progress-prompt-action"

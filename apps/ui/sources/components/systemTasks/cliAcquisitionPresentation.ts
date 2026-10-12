@@ -2,7 +2,7 @@ import { CLI_ACQUISITION_PROGRESS_EVENT, parseCliAcquisitionProgress, readCliAcq
 import type { SystemTaskEvent } from '@happier-dev/protocol/system/tasks/spec';
 
 import { t, type TranslationKeyNoParams } from '@/text';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import type { SystemTaskRunState } from './types';
 
 const STATUS_KEYS = {
@@ -45,9 +45,9 @@ export function presentCliAcquisitionEvent(event: SystemTaskEvent | undefined): 
     const downloadProgress = progress.phase === 'downloading' && progress.receivedBytes !== undefined
         ? progress.totalBytes !== undefined
             ? t('cliAcquisitionProgress.acquisitionDownloadBytesTotal', {
-                received: formatByteSize(progress.receivedBytes), total: formatByteSize(progress.totalBytes),
+                received: formatHappierDataBytes(progress.receivedBytes, { kind: 'storage' }), total: formatHappierDataBytes(progress.totalBytes, { kind: 'storage' }),
             })
-            : t('cliAcquisitionProgress.acquisitionDownloadBytes', { received: formatByteSize(progress.receivedBytes) })
+            : t('cliAcquisitionProgress.acquisitionDownloadBytes', { received: formatHappierDataBytes(progress.receivedBytes, { kind: 'storage' }) })
         : undefined;
     return { status: t(STATUS_KEYS[progress.phase]), downloadProgress };
 }

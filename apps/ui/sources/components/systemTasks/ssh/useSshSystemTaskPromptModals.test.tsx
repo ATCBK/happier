@@ -1,7 +1,7 @@
 import { createManualSystemTaskRunner } from '@/dev/testkit/harness/manualSystemTaskRunner';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 
 import type { SystemTaskPromptEnvelope } from '../prompts/readLatestSystemTaskPrompt';
 
@@ -35,7 +35,7 @@ async function renderPrompt(prompt: SystemTaskPromptEnvelope) {
     const { useSshSystemTaskPromptModals } = await import('./useSshSystemTaskPromptModals');
     const manual = createManualSystemTaskRunner('dev');
     const taskId = await manual.runner.start({ protocolVersion: 1, kind: 'relay.runtime.status.v1', params: {} });
-    manual.emitEvent(taskId, { type: 'prompt', message: prompt.message, data: { ...prompt.data, kind: prompt.kind } });
+    manual.emitEvent(taskId, { type: 'prompt', ...(prompt.message ? { message: prompt.message } : {}), data: { ...prompt.data, kind: prompt.kind } });
     await renderHook(() => useSshSystemTaskPromptModals({
         runner: manual.runner,
         taskId,
@@ -55,6 +55,90 @@ afterEach(() => {
 });
 
 describe('useSshSystemTaskPromptModals', () => {
+    it('retries a failed native answer after remount while retaining the admitted continuation', async () => {
+        const { useSshSystemTaskPromptModals } = await import('./useSshSystemTaskPromptModals');
+        const manual = createManualSystemTaskRunner('dev');
+        const taskId = await manual.runner.start({ protocolVersion: 1, kind: 'relay.runtime.status.v1', params: {} });
+        modalSpies.prompt.mockResolvedValue('password');
+        manual.bridge.respond.mockRejectedValueOnce(new Error('Native transport disconnected'));
+        manual.bridge.respond.mockImplementation(async () => {
+            manual.emitResult(taskId, { protocolVersion: 1, taskId, ok: true, data: {} });
+            return undefined;
+        });
+        const mount = () => renderHook(() => useSshSystemTaskPromptModals({
+            runner: manual.runner, taskId, snapshot: manual.runner.getSnapshot(taskId), prompt: null,
+        }));
+        const hook = await mount();
+        manual.emitEvent(taskId, { type: 'prompt', data: { kind: 'ssh.password', promptId: 'password-1' } });
+        await flushHookEffects();
+        await hook.unmount();
+        await mount();
+        expect(manual.runner.getSnapshot(taskId)?.status).toBe('succeeded');
+    });
+
+    it('preserves an admitted continuation authority check when a task surface mounts', async () => {
+        const { createSshSystemTaskPromptContinuation } = await import('./answerSshSystemTaskPrompt');
+        const { useSshSystemTaskPromptModals } = await import('./useSshSystemTaskPromptModals');
+        const manual = createManualSystemTaskRunner('dev');
+        const taskId = await manual.runner.start({ protocolVersion: 1, kind: 'relay.runtime.status.v1', params: {} });
+        manual.runner.registerPromptContinuation?.(taskId, createSshSystemTaskPromptContinuation(manual.runner, taskId, () => false));
+        const prompt = { kind: 'ssh.password', message: '', data: { kind: 'ssh.password', promptId: 'password-1' } };
+        manual.emitEvent(taskId, { type: 'prompt', data: prompt.data });
+        await renderHook(() => useSshSystemTaskPromptModals({
+            runner: manual.runner, taskId, snapshot: manual.runner.getSnapshot(taskId), prompt,
+        }));
+        expect(modalSpies.prompt).not.toHaveBeenCalled();
+        expect(manual.bridge.respond).not.toHaveBeenCalled();
+    });
+
+    it('withholds a secure answer when its captured invocation authority retires during the modal', async () => {
+        const { createSshSystemTaskPromptContinuation } = await import('./answerSshSystemTaskPrompt');
+        const manual = createManualSystemTaskRunner('dev');
+        const taskId = await manual.runner.start({ protocolVersion: 1, kind: 'relay.runtime.status.v1', params: {} });
+        let current = true;
+        const password = createDeferred<string | null>();
+        modalSpies.prompt.mockReturnValueOnce(password.promise);
+        manual.runner.registerPromptContinuation?.(taskId, createSshSystemTaskPromptContinuation(manual.runner, taskId, () => current));
+        manual.emitEvent(taskId, { type: 'prompt', data: { kind: 'ssh.password', promptId: 'password-1' } });
+        await flushHookEffects();
+        expect(modalSpies.prompt).toHaveBeenCalled();
+        current = false;
+        password.resolve('secret');
+        await flushHookEffects();
+        expect(manual.bridge.respond).not.toHaveBeenCalled();
+        expect(manual.bridge.cancel).not.toHaveBeenCalled();
+    });
+
+    it('cancels native provisioning on human refusal without manufacturing approval', async () => {
+        const { createSshSystemTaskPromptContinuation } = await import('./answerSshSystemTaskPrompt');
+        const manual = createManualSystemTaskRunner('dev');
+        const taskId = await manual.runner.start({ protocolVersion: 1, kind: 'relay.runtime.status.v1', params: {} });
+        manual.runner.registerPromptContinuation?.(taskId, createSshSystemTaskPromptContinuation(manual.runner, taskId));
+        manual.emitEvent(taskId, { type: 'prompt', data: { kind: 'auth.approveRemoteProvisioning', promptId: 'approval-1' } });
+        await flushHookEffects();
+        expect(manual.bridge.cancel).toHaveBeenCalledWith(taskId);
+        expect(manual.bridge.respond).not.toHaveBeenCalled();
+        manual.emitResult(taskId, { protocolVersion: 1, taskId, ok: false, error: { code: 'canceled', message: 'Canceled' } });
+        expect(manual.runner.getSnapshot(taskId)?.status).toBe('canceled');
+    });
+
+    it('does not submit a late passphrase to a newer native prompt', async () => {
+        const { useSshSystemTaskPromptModals } = await import('./useSshSystemTaskPromptModals');
+        const manual = createManualSystemTaskRunner('dev');
+        const taskId = await manual.runner.start({ protocolVersion: 1, kind: 'relay.runtime.status.v1', params: {} });
+        const passphrase = createDeferred<string | null>();
+        modalSpies.prompt.mockReturnValueOnce(passphrase.promise).mockResolvedValueOnce('new-password');
+        const prompt = { kind: 'ssh.privateKeyPassphrase', message: '', data: { kind: 'ssh.privateKeyPassphrase', promptId: 'key-1' } };
+        manual.emitEvent(taskId, { type: 'prompt', data: prompt.data });
+        await renderHook(() => useSshSystemTaskPromptModals({
+            runner: manual.runner, taskId, snapshot: manual.runner.getSnapshot(taskId), prompt,
+        }));
+        manual.emitEvent(taskId, { type: 'prompt', data: { kind: 'ssh.password', promptId: 'password-2' } });
+        passphrase.resolve('old-secret');
+        await flushHookEffects();
+        expect(manual.bridge.respond).not.toHaveBeenCalledWith(taskId, { passphrase: 'old-secret' });
+    });
+
     it('keeps answering SSH prompts through terminal settlement after the starting view unmounts', async () => {
         const { useSshSystemTaskPromptModals } = await import('./useSshSystemTaskPromptModals');
         const manual = createManualSystemTaskRunner('dev');

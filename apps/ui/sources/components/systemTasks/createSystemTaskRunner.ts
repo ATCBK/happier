@@ -1,7 +1,7 @@
 import { CLI_ACQUISITION_PROGRESS_EVENT, parseCliAcquisitionProgress } from '@happier-dev/protocol/system/tasks/acquisitionProgress';
 import { SystemTaskEventSchema, SystemTaskResultSchema, SystemTaskSpecSchema, type SystemTaskEvent, type SystemTaskResult, type SystemTaskSpec } from '@happier-dev/protocol/system/tasks/spec';
 
-import { readLatestSystemTaskPrompt } from './prompts/readLatestSystemTaskPrompt';
+import { getSystemTaskPromptSignature, readLatestSystemTaskPrompt } from './prompts/readLatestSystemTaskPrompt';
 import { matchesThisComputerSetupScope, readThisComputerSetupScope } from './thisComputerSetup/thisComputerSetupScope';
 import type {
     ActiveSetupTask,
@@ -12,6 +12,8 @@ import type {
     SystemTaskRunStatus,
     SystemTasksBridge,
     SystemTaskBridgeListenerSet,
+    SystemTaskAccountScope,
+    SystemTaskStartOptions,
 } from './types';
 
 type MutableSystemTaskRunState = {
@@ -27,6 +29,7 @@ type MutableSystemTaskRunState = {
 
 type TaskRecord = {
     spec: SystemTaskSpec;
+    accountScope: SystemTaskAccountScope | null;
     state: SystemTaskRunState;
     listeners: Set<() => void>;
     unlistenBridge: (() => void) | null;
@@ -172,7 +175,7 @@ export function createSystemTaskRunner(options: Readonly<{
         if (!prompt) {
             return;
         }
-        const signature = `${prompt.kind}:${JSON.stringify(prompt.data)}`;
+        const signature = getSystemTaskPromptSignature(prompt);
         if (record.answeredPromptSignatures.has(signature) || record.inFlightPromptSignatures.has(signature)) {
             return;
         }
@@ -188,7 +191,7 @@ export function createSystemTaskRunner(options: Readonly<{
             record.answeredPromptSignatures.add(signature);
         })().catch(() => {
             // Publication and bridge failures are retryable. The prompt remains
-            // current and a remounted owner may register a fresh continuation.
+            // current and a remounted owner may register its continuation again.
             console.warn('[systemTasks] Prompt continuation failed; the current prompt can be retried', {
                 taskId, promptKind: prompt.kind,
             });
@@ -259,11 +262,14 @@ export function createSystemTaskRunner(options: Readonly<{
         record.unlistenBridge = null;
     };
 
-    const startTask = async (parsedSpec: SystemTaskSpec, continuation?: SystemTaskPromptContinuation): Promise<string> => {
+    const startTask = async (parsedSpec: SystemTaskSpec, continuation?: SystemTaskPromptContinuation,
+        accountScope?: SystemTaskAccountScope): Promise<string> => {
+        const admittedScope = accountScope ? { ...accountScope } : null;
         const taskId = await options.bridge.start(parsedSpec);
         if (tasks.has(taskId)) return taskId;
         const record: TaskRecord = {
             spec: parsedSpec,
+            accountScope: admittedScope,
             state: createInitialTaskState(taskId),
             listeners: new Set(),
             unlistenBridge: null,
@@ -296,14 +302,22 @@ export function createSystemTaskRunner(options: Readonly<{
         return taskId;
     };
 
+    const cancelTask = async (taskId: string): Promise<void> => {
+        const record = tasks.get(taskId);
+        if (!record || record.state.result) return;
+        record.state = { ...record.state, status: 'canceling', awaitingInput: false, cancelRequested: true };
+        notifyTask(taskId);
+        await options.bridge.cancel(taskId);
+    };
+
     return {
         mode: options.mode ?? 'tauri',
         capabilities: options.bridge.capabilities,
         async start(spec: SystemTaskSpec, continuation?: SystemTaskPromptContinuation,
-            startOptions?: Readonly<{ adoptExisting?: boolean }>): Promise<string> {
+            startOptions?: SystemTaskStartOptions): Promise<string> {
             const parsedSpec = SystemTaskSpecSchema.parse(spec);
             const scope = readThisComputerSetupScope(parsedSpec);
-            if (!scope) return startTask(parsedSpec, continuation);
+            if (!scope) return startTask(parsedSpec, continuation, startOptions?.accountScope);
             if (activeSetupTask && setupStart) {
                 if (startOptions?.adoptExisting !== false && matchesThisComputerSetupScope(activeSetupTask.spec, scope)) return setupStart;
                 throw Object.assign(new Error('system_task_setup_in_progress'), {
@@ -311,7 +325,7 @@ export function createSystemTaskRunner(options: Readonly<{
                 });
             }
             activeSetupTask = { taskId: null, spec: parsedSpec };
-            setupStart = startTask(parsedSpec, continuation).catch((error: unknown) => {
+            setupStart = startTask(parsedSpec, continuation, startOptions?.accountScope).catch((error: unknown) => {
                 if (activeSetupTask?.spec === parsedSpec) {
                     activeSetupTask = null;
                     setupStart = null;
@@ -327,30 +341,30 @@ export function createSystemTaskRunner(options: Readonly<{
             setupListeners.add(listener);
             return () => { setupListeners.delete(listener); };
         },
-        async cancel(taskId: string): Promise<void> {
+        cancel: cancelTask,
+        async cancelForAccount(taskId, scope) {
             const record = tasks.get(taskId);
-            if (!record || record.state.result) {
-                return;
-            }
-
-            record.state = {
-                ...record.state,
-                status: 'canceling',
-                awaitingInput: false,
-                cancelRequested: true,
-            };
-            notifyTask(taskId);
-            await options.bridge.cancel(taskId);
+            if (!record) return 'not_found';
+            if (record.accountScope?.serverId !== scope.serverId || record.accountScope.accountId !== scope.accountId) return 'scope_mismatch';
+            if (record.state.result) return 'already_settled';
+            await cancelTask(taskId);
+            return 'cancellation_requested';
         },
         async respond(taskId: string, answer: unknown): Promise<void> {
             await respondToTask(taskId, answer);
         },
-        registerPromptContinuation(taskId: string, continuation: SystemTaskPromptContinuation): void {
+        registerPromptContinuation(
+            taskId: string,
+            continuation: SystemTaskPromptContinuation,
+            registrationOptions?: Readonly<{ preserveExisting?: boolean }>,
+        ): void {
             const record = tasks.get(taskId);
             if (!record || record.state.result) {
                 return;
             }
-            record.promptContinuation = continuation;
+            if (!registrationOptions?.preserveExisting || !record.promptContinuation) {
+                record.promptContinuation = continuation;
+            }
             continuePrompt(taskId);
         },
         listActiveTasks() {

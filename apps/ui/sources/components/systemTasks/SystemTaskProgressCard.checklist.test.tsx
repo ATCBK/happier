@@ -1,11 +1,17 @@
 import * as React from 'react';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SystemTaskEvent } from '@happier-dev/protocol';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { SystemTaskRunState } from './types';
+
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+beforeEach(async () => { await home.reset(); });
+afterEach(async () => { await home.reset(); });
 
 (
     globalThis as typeof globalThis & {
@@ -65,8 +71,10 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock().module;
 });
 
-vi.mock('@/utils/platform/desktopHost', () => ({
+vi.mock('@/utils/platform/desktopHost', async importOriginal => ({
+    ...await importOriginal<typeof import('@/utils/platform/desktopHost')>(),
     isDesktopHost: isDesktopHostMock,
+    desktopHostKind: () => isDesktopHostMock() ? 'tauri' : null,
     invokeDesktopHost: invokeDesktopHostMock,
 }));
 
@@ -220,11 +228,13 @@ describe('SystemTaskProgressCard checklist rendering', () => {
     });
 
     it('shows Open logs only on desktop and invokes the tauri command with an absolute path', async () => {
+        await home.addHome({ name: 'Signed-out native draft', serverUrl: 'https://checklist-logs.fixture.test', accountId: null });
         isDesktopHostMock.mockReturnValue(true);
         invokeDesktopHostMock.mockResolvedValueOnce(undefined);
         const { SystemTaskProgressCard } = await import('./SystemTaskProgressCard');
         const screen = await renderScreen(React.createElement(SystemTaskProgressCard, { snapshot: createSnapshot() }));
 
+        await waitForHomeGovernance(() => expect(screen.findAllByTestId('system-task-progress-open-logs').some(node => node.props.disabled === false)).toBe(true));
         await screen.pressByTestIdAsync('system-task-progress-open-logs');
 
         expect(invokeDesktopHostMock).toHaveBeenCalledWith('system_tasks_open_log_path', {
