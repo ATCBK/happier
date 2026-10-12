@@ -11,6 +11,7 @@ import {
     type UseSessionListRowInteractionsInput,
 } from './useSessionListRowInteractions';
 import { treeRowId } from './drop-resolution/treeRowId';
+import type { UseSessionInlineDragResolvedDrop } from './useSessionInlineDrag';
 import { invokeSessionListOrganizationAction } from './drag/sessionListOrganizationAction';
 import { getStorage } from '@/sync/domains/state/storage';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -18,6 +19,11 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+
+// This suite statically imports the mounted Sync consumer; install its external transport first.
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 installDisconnectedServerSocketBoundary();
 
@@ -119,6 +125,158 @@ describe('useSessionListRowInteractions', () => {
     function renderInteractions(overrides: Partial<UseSessionListRowInteractionsInput> = {}) {
         return renderHook(() => useSessionListRowInteractions(buildInteractionsInput(overrides)));
     }
+
+    it('scrolls an offscreen staged destination into view even for a row taller than the viewport and hides a refused step', async () => {
+        const scrollToOffset = vi.fn();
+        const initialInput = buildInteractionsInput({ listItems: twoSessionListItems, scrollToOffset });
+        const hook = await renderHook((input: UseSessionListRowInteractionsInput) => useSessionListRowInteractions(input), { initialProps: initialInput });
+        const sessionKey = sessionAddressKey({ serverId: 'server-a', sessionId: 's2' });
+        try {
+            await act(async () => {
+                hook.getCurrent().handleTreeViewportMeasure({ measureInWindow: callback => callback(0, 0, 300, 300) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session('server-a', 's1'), { measureInWindow: callback => callback(0, 1000, 300, 500) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session('server-a', 's2'), { measureInWindow: callback => callback(0, 160, 300, 40) });
+                hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Two', key: ' ' });
+            });
+            await act(async () => { hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Two', key: 'ArrowUp' }); });
+            expect(scrollToOffset).toHaveBeenCalled();
+            expect(hook.getCurrent().dropOverlayShared.overlayVisible.value).toBe(0);
+            await act(async () => { hook.getCurrent().handleTreeScroll({ nativeEvent: { contentOffset: { y: 900 } } }); });
+            expect(hook.getCurrent().dropOverlayShared.overlayVisible.value).toBe(1);
+            expect(hook.getCurrent().dropOverlayShared.overlayTop.value).toBe(99);
+            await hook.rerender({ ...initialInput, sessionListOrderingModeV1: 'created' });
+            expect(hook.getCurrent().dropOverlayShared.overlayVisible.value).toBe(0);
+            act(() => { hook.getCurrent().stagedMove.cancel(); });
+            expect(initialInput.setSessionListGroupOrderV1).not.toHaveBeenCalled();
+        } finally { await hook.unmount(); }
+    });
+
+    it('reports ordering refusals and the relation verdict for list-only Session rows', async () => {
+        getStorage().setState({ sessions: {} });
+        const initialInput = buildInteractionsInput({ listItems: twoSessionListItems, sessionListOrderingModeV1: 'created' });
+        const hook = await renderHook((input: UseSessionListRowInteractionsInput) => useSessionListRowInteractions(input), { initialProps: initialInput });
+        const sessionKey = sessionAddressKey({ serverId: 'server-a', sessionId: 's2' });
+        try {
+            await act(async () => {
+                hook.getCurrent().handleTreeViewportMeasure({ measureInWindow: callback => callback(0, 0, 300, 300) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session('server-a', 's1'), { measureInWindow: callback => callback(0, 100, 300, 40) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session('server-a', 's2'), { measureInWindow: callback => callback(0, 160, 300, 40) });
+                hook.getCurrent().handleDragStart(sessionKey);
+            });
+            act(() => { hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', dataIndex: 2, pointer: { x: 10, y: 105 } }); });
+            expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'ordering-mode' } });
+            await hook.rerender({ ...initialInput, sessionListOrderingModeV1: 'custom' });
+            act(() => { hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', dataIndex: 2, pointer: { x: 10, y: 120 } }); });
+            expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'unavailable' }, preview: { target: 's1' } });
+            expect(initialInput.setSessionListGroupOrderV1).not.toHaveBeenCalled();
+        } finally {
+            act(() => hook.getCurrent().handleDragCancel());
+            await hook.unmount();
+        }
+    });
+
+    it.each(['workspace-root', 'folder'] as const)('outlines the admitted lead row for pointer Put under in a %s, including after scrolling', async containerKind => {
+        await loadSyncSingletonForTests();
+        const account = await restoreServerAccountForTest({ serverUrl: 'https://pointer-put-under.test', accountId: ACTIVE_SCOPE.accountId,
+            credentials: { token: createAccountTokenForTests(ACTIVE_SCOPE.accountId) }, request: async (url, init) => {
+                const path = new URL(String(url)).pathname;
+                if (path.endsWith('/reports-to/options')) {
+                    const input = JSON.parse(String(init?.body)) as { candidateSessionIds: string[] };
+                    return Response.json({ sessionId: 's2', currentLeadSessionId: null,
+                        candidates: input.candidateSessionIds.map(sessionId => ({ sessionId, allowed: true })) });
+                }
+                if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+                if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+                if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+                if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: ACTIVE_SCOPE.accountId });
+                if (path === AUTHORING_MEMORY_ROUTE_V1) return Response.json({ rows: [] });
+                if (path === '/v1/artifacts') return Response.json([]);
+                return Response.json({});
+            } });
+        const serverId = account.home.id;
+        const sessions = Object.fromEntries(['s1', 's2'].map(id => [id, createSessionFixture({ id, serverId })]));
+        getStorage().setState({ profileScope: { serverId, accountId: ACTIVE_SCOPE.accountId }, sessions } as never);
+        const currentWorkspace = { ...workspace, serverId };
+        const folderGroupKey = buildSessionFolderGroupKey({ serverId, workspace: currentWorkspace, folderId: 'folder-a' });
+        const items = twoSessionListItems.flatMap<SessionListIndexItem>(item => {
+            if (item.type === 'session') return [{ ...item, serverId, workspace: currentWorkspace,
+                ...(containerKind === 'folder' ? { folderId: 'folder-a', folderDepth: 1, groupKey: folderGroupKey } : {}) }];
+            const header = { ...item, serverId, workspace: currentWorkspace };
+            return containerKind === 'folder' ? [header, {
+                type: 'header', title: 'Folder A', headerKind: 'folder', folderId: 'folder-a', folderDepth: 0,
+                groupKey: folderGroupKey, workspace: currentWorkspace, serverId,
+            }] : [header];
+        });
+        const hook = await renderInteractions({ listItems: items, sessionFoldersV1: containerKind === 'folder'
+            ? { v: 1, folders: [{ id: 'folder-a', name: 'Folder A', workspace: currentWorkspace,
+                parentId: null, createdAt: 1, updatedAt: 1 }] } : DEFAULT_SESSION_FOLDERS_V1 });
+        const sessionKey = sessionAddressKey({ serverId, sessionId: 's2' });
+        const groupKey = containerKind === 'folder' ? folderGroupKey : 'project-a';
+        const dataIndex = containerKind === 'folder' ? 3 : 2;
+        try {
+            await act(async () => {
+                hook.getCurrent().handleTreeViewportMeasure({ measureInWindow: callback => callback(0, 50, 300, 300) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.workspaceRoot('project-a'), { measureInWindow: callback => callback(0, 50, 300, 40) });
+                if (containerKind === 'folder') hook.getCurrent().registerTreeRowBounds(treeRowId.folder(serverId, 'folder-a'),
+                    { measureInWindow: callback => callback(0, 100, 300, 40) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session(serverId, 's1'), { measureInWindow: callback => callback(0, 150, 300, 40) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session(serverId, 's2'), { measureInWindow: callback => callback(0, 210, 300, 40) });
+                hook.getCurrent().handleDragStart(sessionKey);
+            });
+            await vi.waitFor(() => {
+                let resolved: UseSessionInlineDragResolvedDrop | undefined;
+                act(() => { resolved = hook.getCurrent().resolveDropResult({ sessionKey, groupKey, dataIndex, pointer: { x: 10, y: 170 } }); });
+                expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission).toMatchObject({ status: 'allowed',
+                    effect: { actionId: 'session.reports_to.set', input: { sessionId: 's2', leadSessionId: 's1' } } });
+                expect(resolved!.geometry).toMatchObject({ kind: 'outline', targetId: treeRowId.session(serverId, 's1'),
+                    geometry: { top: 100, height: 40 } });
+            });
+            await act(async () => { hook.getCurrent().handleTreeScroll({ nativeEvent: { contentOffset: { y: 80 } } }); });
+            let scrolled: UseSessionInlineDragResolvedDrop | undefined;
+            act(() => { scrolled = hook.getCurrent().resolveDropResult({ sessionKey, groupKey, dataIndex, pointer: { x: 10, y: 90 } }); });
+            expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission?.status).toBe('allowed');
+            expect(scrolled!.geometry).toMatchObject({ kind: 'outline', targetId: treeRowId.session(serverId, 's1'),
+                geometry: { top: 20, height: 40 } });
+        } finally {
+            act(() => hook.getCurrent().handleDragCancel());
+            await hook.unmount();
+            await account.dispose();
+        }
+    });
+
+    it('reports the first-gap Put under refusal through the same entity admission and leaves no overlay', async () => {
+        const hook = await renderInteractions({ listItems: twoSessionListItems });
+        const sessionKey = sessionAddressKey({ serverId: 'server-a', sessionId: 's2' });
+        try {
+            await act(async () => { hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Two', key: ' ' }); });
+            await act(async () => { hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Two', key: 'ArrowUp' }); });
+            await act(async () => { hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Two', key: 'ArrowRight' }); });
+            expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission)
+                .toMatchObject({ status: 'refused', reason: { code: 'no-row-above' } });
+            expect(hook.getCurrent().dropOverlayShared.overlayVisible.value).toBe(0);
+            expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission?.status).not.toBe('allowed');
+            act(() => hook.getCurrent().stagedMove.cancel());
+        } finally { await hook.unmount(); }
+    });
+
+    it('draws the existing list overlay for a staged keyboard move and hides it on cancel', async () => {
+        const hook = await renderInteractions({ listItems: twoSessionListItems });
+        const sessionKey = sessionAddressKey({ serverId: 'server-a', sessionId: 's2' });
+        try {
+            await act(async () => {
+                hook.getCurrent().handleTreeViewportMeasure({ measureInWindow: callback => callback(0, 0, 300, 300) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session('server-a', 's1'), { measureInWindow: callback => callback(0, 100, 300, 40) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session('server-a', 's2'), { measureInWindow: callback => callback(0, 160, 300, 40) });
+                hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Second', key: ' ' });
+            });
+            await act(async () => { hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Second', key: 'ArrowUp' }); });
+            expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission?.status).toBe('allowed');
+            expect(hook.getCurrent().dropOverlayShared.overlayVisible.value).toBe(1);
+            expect(hook.getCurrent().dropOverlayShared.overlayTop.value).toBe(99);
+            act(() => { hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Second', key: 'Escape' }); });
+            expect(hook.getCurrent().dropOverlayShared.overlayVisible.value).toBe(0);
+        } finally { await hook.unmount(); }
+    });
 
     it('keeps final native release geometry and source topology through asynchronous pre-dispatch measurement', async () => {
         await loadSyncSingletonForTests();
