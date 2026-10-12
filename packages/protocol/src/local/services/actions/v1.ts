@@ -105,25 +105,6 @@ export const LocalServiceActionRequestV1Schema = lazyZodSchema(() => z
       || request.target.inventoryEntryId !== request.undoKey)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['undoKey'], message: 'Undo must target the same detected service suppression key.' });
     }
-    if (
-      (request.action === 'stop_managed'
-        || request.action === 'restart_managed'
-        || request.action === 'terminate_detected')
-      && !request.confirmationNonce
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['confirmationNonce'],
-        message: 'Managed and destructive local service actions require a confirmationNonce.',
-      });
-    }
-    if (request.force && !request.confirmationNonce) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['confirmationNonce'],
-        message: 'Force actions require a confirmationNonce.',
-      });
-    }
   }));
 export type LocalServiceActionRequestV1 = z.infer<typeof LocalServiceActionRequestV1Schema>;
 

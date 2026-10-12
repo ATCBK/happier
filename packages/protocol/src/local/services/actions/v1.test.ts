@@ -113,12 +113,12 @@ describe('LocalServiceActionRequestV1Schema', () => {
     expect(LocalServiceActionRequestV1Schema.safeParse({ ...request, target: { ...request.target, inventoryEntryId: 'another-entry' } }).success).toBe(false);
   });
 
-  it('requires managed and destructive actions to carry a confirmation nonce', () => {
-    expect(() => LocalServiceActionRequestV1Schema.parse({
+  it('accepts semantic managed and destructive intents before the Action owner decides approval', () => {
+    expect(LocalServiceActionRequestV1Schema.parse({
       requestId: 'request-a',
       target: { kind: 'managed_service', managedServiceId: 'managed-a', machineId: 'machine-a' },
       action: 'stop_managed',
-    })).toThrow();
+    }).confirmationNonce).toBeUndefined();
 
     expect(LocalServiceActionRequestV1Schema.parse({
       requestId: 'request-a',
@@ -134,13 +134,13 @@ describe('LocalServiceActionRequestV1Schema', () => {
     }).confirmationNonce).toBe('nonce-a');
   });
 
-  it('requires force actions to carry a second-confirmation nonce', () => {
-    expect(() => LocalServiceActionRequestV1Schema.parse({
+  it('accepts explicit force intent without a schema-owned second approval floor', () => {
+    expect(LocalServiceActionRequestV1Schema.parse({
       requestId: 'request-a',
       target: { kind: 'inventory_entry', inventoryEntryId: 'inventory-a', machineId: 'machine-a' },
       action: 'terminate_detected',
       force: true,
-    })).toThrow();
+    }).force).toBe(true);
 
     expect(LocalServiceActionRequestV1Schema.parse({
       requestId: 'request-a',
