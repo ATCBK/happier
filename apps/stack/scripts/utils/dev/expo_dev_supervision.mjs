@@ -1,3 +1,6 @@
+import { channel } from 'node:diagnostics_channel';
+import { getHeapStatistics } from 'node:v8';
+
 const DEFAULT_MAX_RESTART_ATTEMPTS = 3;
 const DEFAULT_RESTART_BASE_DELAY_MS = 1_000;
 const DEFAULT_RESTART_MAX_DELAY_MS = 30_000;
@@ -91,4 +94,51 @@ export function computeExpoRestartDelayMs({ attempt, policy } = {}) {
   const baseDelayMs = parsePositiveInteger(policy?.baseDelayMs, DEFAULT_RESTART_BASE_DELAY_MS);
   const maxDelayMs = parsePositiveInteger(policy?.maxDelayMs, DEFAULT_RESTART_MAX_DELAY_MS);
   return Math.min(maxDelayMs, baseDelayMs * (2 ** Math.max(0, safeAttempt - 1)));
+}
+
+export const EXPO_HEAP_RECYCLE_PREFIX = 'HSTACK_EXPO_QUIET_HEAP_RECYCLE ';
+
+export function startExpoHeapGuard({
+  readHeapStatistics = getHeapStatistics,
+  heapLimitBytes = null,
+  intervalMs = DEFAULT_RESTART_BASE_DELAY_MS,
+  onRecycle,
+} = {}) {
+  const servers = new Set();
+  let activeRequests = 0;
+  let recycling = false;
+  const check = () => {
+    if (recycling || activeRequests > 0 || servers.size === 0) return;
+    const heap = readHeapStatistics();
+    const limit = heapLimitBytes ?? heap.heap_size_limit;
+    // Temporary leak mitigation: reserve the last 10% of the configured heap
+    // for completing current requests. Remove this guard when the leak is fixed.
+    const thresholdBytes = Math.floor(limit * 0.9);
+    if (!(limit > 0) || heap.used_heap_size < thresholdBytes) return;
+    recycling = true;
+    // At this synchronous point no HTTP request is in flight. Stop accepting
+    // more before notifying the owning supervisor to replace this process.
+    for (const server of servers) server.close();
+    onRecycle?.({ usedHeapBytes: heap.used_heap_size, heapLimitBytes: limit, thresholdBytes });
+  };
+  const requests = channel('http.server.request.start');
+  const onRequest = ({ server, response }) => {
+    servers.add(server);
+    activeRequests++;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      activeRequests--;
+      response.off('finish', finish);
+      response.off('close', finish);
+      check();
+    };
+    response.once('finish', finish);
+    response.once('close', finish);
+  };
+  requests.subscribe(onRequest);
+  const timer = setInterval(check, intervalMs);
+  timer.unref?.();
+  return { close() { recycling = true; clearInterval(timer); requests.unsubscribe(onRequest); } };
 }

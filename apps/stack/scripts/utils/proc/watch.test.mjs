@@ -41,6 +41,18 @@ test('watchDebounced preserves fatal construction errors instead of silently dis
     (actual) => actual === error);
 });
 
+test('watchDebounced releases earlier native handles if a later root cannot be watched', () => {
+  const error = Object.assign(new Error('watch capacity exhausted'), { code: 'ENOSPC' });
+  let closed = false;
+  assert.throws(() => watchDebounced({ paths: ['/repo/one', '/repo/two'], onChange() {},
+    watchImpl(path) {
+      if (path === '/repo/two') throw error;
+      return { close() { closed = true; } };
+    },
+  }), actual => actual === error);
+  assert.equal(closed, true, 'failed setup must release its partial native resources');
+});
+
 test('watchDebounced gives the native watcher the same ignore policy used by observation', () => {
   const ignorePath = (path) => path.includes('.scratch-');
   const changes = [];
@@ -237,6 +249,7 @@ test('watchDebounced does not carry handled status into a later debounce window'
   const watcher = watchDebounced({
     paths: ['/tmp/hstack-watch-observation-reset-test'],
     debounceMs: 500,
+    queueCapacity: 0,
     onObservation() {
       return handled;
     },

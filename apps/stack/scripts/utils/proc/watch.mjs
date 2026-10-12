@@ -1,4 +1,4 @@
-import { watch } from 'node:fs';
+import { watch, readFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 function skipWatchSubpathError(error, watchPath, logger) {
@@ -11,16 +11,16 @@ function skipWatchSubpathError(error, watchPath, logger) {
   return true;
 }
 
-function safeWatch(path, handler, { watchImpl, ignorePath, logger }) {
+function safeWatch(path, handler, { watchImpl, ignorePath, logger, persistent }) {
   let watcher;
   try {
-    watcher = watchImpl(path, { recursive: true, ...(ignorePath ? { ignore: ignorePath } : {}) }, handler);
+    watcher = watchImpl(path, { recursive: true, persistent, ...(ignorePath ? { ignore: ignorePath } : {}) }, handler);
   } catch (error) {
     // Retain the non-recursive fallback only for unsupported recursion or a skipped
     // descendant. Resource exhaustion and failure of the watched root are fatal.
     if (error?.code !== 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' && !skipWatchSubpathError(error, path, logger)) throw error;
     try {
-      watcher = watchImpl(path, ignorePath ? { ignore: ignorePath } : {}, handler);
+      watcher = watchImpl(path, { persistent, ...(ignorePath ? { ignore: ignorePath } : {}) }, handler);
     } catch (fallbackError) {
       if (!skipWatchSubpathError(fallbackError, path, logger)) throw fallbackError;
       return null;
@@ -43,9 +43,16 @@ export function watchDebounced({
   ignorePath = null,
   logger = console,
   onObservation = null,
+  onSourceEvent = null,
   onChange,
   readSignature = null,
+  recoverSignature = readSignature,
+  queueCapacity = process.platform === 'linux'
+    ? Number(readFileSync('/proc/sys/fs/inotify/max_queued_events', 'utf8')) : 0,
+  now = Date.now,
+  shouldPoll = null,
   pollIntervalMs = 0,
+  persistent = true,
   watchImpl = watch,
   setIntervalImpl = setInterval,
   clearIntervalImpl = clearInterval,
@@ -58,6 +65,9 @@ export function watchDebounced({
 
   let closed = false;
   let t = null;
+  let burstTimer = null;
+  let burstEvents = 0;
+  let lastNativeEventAt = null;
   let pendingSignatureInitializedAtObservation = null;
   let pendingObservationHandled = false;
   const watchers = [];
@@ -115,13 +125,46 @@ export function watchDebounced({
     }, debounceMs);
   };
 
-  for (const p of list) {
-    const w = safeWatch(
-      p,
-      (eventType, filename) => trigger(eventType, filename, { watchPath: p }),
-      { watchImpl, ignorePath, logger },
-    );
-    if (w) watchers.push(w);
+  // Count before reload filtering: ignored events can occupy the same kernel
+  // queue as source events. Half the actual capacity leaves room for undelivered
+  // callbacks; a saturated queue must still deliver enough evidence to recrawl.
+  const observeNativeEvent = (eventType, filename, watchPath) => {
+    if (closed) return;
+    onSourceEvent?.({ eventType, filename, watchPath });
+    if (queueCapacity > 0) {
+      const observedAt = now();
+      if (lastNativeEventAt === null || observedAt - lastNativeEventAt > debounceMs) burstEvents = 0;
+      lastNativeEventAt = observedAt;
+      burstEvents++;
+      if (burstEvents >= Math.ceil(queueCapacity / 2)) {
+        if (burstTimer) clearTimeoutImpl(burstTimer);
+        burstTimer = setTimeoutImpl(() => {
+          burstTimer = null;
+          burstEvents = 0;
+          if (closed) return;
+          logger.warn?.('[local] watch: native event burst risks queue loss; reconciling source inputs.');
+          onSourceEvent?.({ eventType: 'recrawl', filename: null });
+          trigger('recrawl', null);
+        }, debounceMs);
+      }
+    }
+    trigger(eventType, filename, { watchPath });
+  };
+  try {
+    for (const p of list) {
+      const w = safeWatch(
+        p,
+        (eventType, filename) => observeNativeEvent(eventType, filename, p),
+        { watchImpl, ignorePath, logger, persistent },
+      );
+      if (w) watchers.push(w);
+    }
+  } catch (error) {
+    closed = true;
+    if (t) clearTimeoutImpl(t);
+    if (burstTimer) clearTimeoutImpl(burstTimer);
+    for (const w of watchers) w.close();
+    throw error;
   }
 
   const pollMs = Number(pollIntervalMs);
@@ -129,7 +172,7 @@ export function watchDebounced({
   let polling = false;
   if (typeof readSignature === 'function' && Number.isFinite(pollMs) && pollMs > 0 && typeof setIntervalImpl === 'function') {
     const pollForSignatureChange = async () => {
-      if (closed || polling) return;
+      if (closed || polling || shouldPoll?.() === false) return;
       polling = true;
       try {
         if (initialSignaturePromise) {
@@ -137,7 +180,7 @@ export function watchDebounced({
           initialSignaturePromise = null;
           if (closed) return;
         }
-        const nextSignature = await readSignature();
+        const nextSignature = await recoverSignature();
         if (!signatureInitialized) {
           lastSignature = nextSignature;
           signatureInitialized = true;
@@ -163,6 +206,7 @@ export function watchDebounced({
     close() {
       closed = true;
       if (t) clearTimeoutImpl(t);
+      if (burstTimer) clearTimeoutImpl(burstTimer);
       pendingSignatureInitializedAtObservation = null;
       pendingObservationHandled = false;
       for (const w of watchers) {

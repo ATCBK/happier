@@ -397,7 +397,7 @@ test('real app and Prisma descriptor changes select migrations independently', a
     let readWatcherSignature = null;
     const plans = [];
     const coordinator = startDevReloadCoordinator({
-      descriptors: createDevServerReloadDescriptors({ serverDir }),
+      descriptors: await createDevServerReloadDescriptors({ serverDir }),
       executors: [{
         target: 'server',
         createPlan(context) {
@@ -420,9 +420,9 @@ test('real app and Prisma descriptor changes select migrations independently', a
 
     await readWatcherSignature();
     await writeFile(join(prismaDir, 'schema.prisma'), 'model A { id Int @id; next Int? }\n');
-    await onChange();
+    await onChange({ eventType: 'change', filename: 'schema.prisma', watchPath: prismaDir });
     await writeFile(join(sourcesDir, 'start.ts'), 'export const app = 22;\n');
-    await onChange();
+    await onChange({ eventType: 'change', filename: 'start.ts', watchPath: sourcesDir });
 
     assert.deepEqual(plans, [
       {

@@ -3,6 +3,13 @@
 const DEFAULT_EXPO_MAX_OLD_SPACE_SIZE_MB = 8192;
 const MAX_OLD_SPACE_SIZE_REGEX = /(^|\s)--max-old-space-size(=|\s)\d+(\s|$)/g;
 
+export function resolveExpoConfiguredHeapLimitBytes({ env = process.env, execArgv = process.execArgv } = {}) {
+  const flags = `${env.NODE_OPTIONS ?? ''} ${execArgv.join(' ')}`;
+  const limits = [...flags.matchAll(/(?:^|\s)--max[-_]old[-_]space[-_]size(?:=|\s+)(\d+)(?=\s|$)/g)];
+  const megabytes = Number(limits.at(-1)?.[1]);
+  return megabytes > 0 ? megabytes * 1024 * 1024 : null;
+}
+
 function coercePositiveInt(value) {
   const parsed = Number(String(value ?? '').trim());
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;

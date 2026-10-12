@@ -83,7 +83,7 @@ function resolveMetroWaitTimeoutMsFromEnv(env = process.env) {
   return 120_000;
 }
 
-function resolveMetroWaitIntervalMsFromEnv(env = process.env) {
+export function resolveMetroWaitIntervalMsFromEnv(env = process.env) {
   const raw = (env.HAPPIER_STACK_EXPO_METRO_WAIT_INTERVAL_MS ?? '').toString().trim();
   const n = raw ? Number(raw) : null;
   if (Number.isFinite(n) && n > 0) return Math.floor(n);

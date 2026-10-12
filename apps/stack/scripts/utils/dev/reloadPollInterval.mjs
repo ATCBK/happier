@@ -1,7 +1,6 @@
-// fs.watch is the primary reload signal. Keep the recursive signature sweep as a
-// low-frequency recovery path so an idle stack does not continuously traverse
-// the full CLI/server source closure.
-const DEFAULT_DEV_RELOAD_POLL_INTERVAL_MS = 10_000;
+// Native events are primary; queue-risk bursts recrawl after settling. The rare
+// safety check reconciles indexed metadata, without recursively reading trees.
+const DEFAULT_DEV_RELOAD_POLL_INTERVAL_MS = 300_000;
 
 export function resolveDevReloadPollIntervalMs(
   env = process.env,
