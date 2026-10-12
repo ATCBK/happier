@@ -31,7 +31,7 @@ export const ConnectedAccountRenamePopover = React.memo(function ConnectedAccoun
     if (!props.open) return null;
     const save = async () => {
         const next = value.trim();
-        if (next.length === 0 || saving) return;
+        if (saving) return;
         setSaving(true);
         try { await props.onSave(next); }
         catch { /* The write owner presents its failure; leave the draft available for retry. */ }
@@ -75,7 +75,7 @@ export const ConnectedAccountRenamePopover = React.memo(function ConnectedAccoun
                                 testID={`${props.testID}:save`}
                                 size="small"
                                 title={t('common.save')}
-                                disabled={value.trim().length === 0 || saving}
+                                disabled={saving}
                                 onPress={save}
                             />
                         </View>
@@ -91,23 +91,19 @@ const styles = StyleSheet.create((theme) => ({
         width: 320,
         maxWidth: '100%',
         padding: 14,
-        gap: 10,
+        gap: theme.space.s10,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 14,
-        lineHeight: 19,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     note: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     actions: {
         flexDirection: 'row',
         justifyContent: 'flex-end',
-        gap: 8,
+        gap: theme.space.s8,
     },
 }));
