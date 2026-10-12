@@ -87,7 +87,20 @@ function readDiagnosticsDoctorSnapshot(diagnostics: unknown): unknown | null {
     return 'doctorSnapshot' in diagnostics ? (diagnostics as { doctorSnapshot?: unknown }).doctorSnapshot ?? null : null;
 }
 
-export async function fetchMachineDoctorSnapshot(input: FetchMachineDoctorSnapshotInput): Promise<MachineDoctorSnapshotState> {
+const inFlightSnapshots = new Map<string, Promise<MachineDoctorSnapshotState>>();
+
+export function fetchMachineDoctorSnapshot(input: FetchMachineDoctorSnapshotInput): Promise<MachineDoctorSnapshotState> {
+    const key = buildMachineDoctorSnapshotCollectionKey(input);
+    const existing = inFlightSnapshots.get(key);
+    if (existing) return existing;
+    // Navigation joins the current daemon read; settled results still use the
+    // existing cache and explicit refresh path.
+    const pending = collectMachineDoctorSnapshot(input).finally(() => { inFlightSnapshots.delete(key); });
+    inFlightSnapshots.set(key, pending);
+    return pending;
+}
+
+async function collectMachineDoctorSnapshot(input: FetchMachineDoctorSnapshotInput): Promise<MachineDoctorSnapshotState> {
     const diagnostics = await machineCollectBugReportDiagnostics(input.machineId, {
         timeoutMs: input.timeoutMs,
         serverId: input.serverId,

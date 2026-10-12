@@ -181,9 +181,7 @@ export function useMachineDoctorSnapshotCollection(input: UseMachineDoctorSnapsh
     }, [fetchMachineDoctorSnapshot, timeoutMs]);
 
     const fetchMachineDoctorSnapshots = React.useCallback(async (targets: readonly MachineDoctorSnapshotTarget[]) => {
-        for (const target of targets) {
-            await fetchMachineDoctorSnapshotForTarget(target);
-        }
+        await Promise.all(targets.map(fetchMachineDoctorSnapshotForTarget));
     }, [fetchMachineDoctorSnapshotForTarget]);
 
     React.useEffect(() => {
