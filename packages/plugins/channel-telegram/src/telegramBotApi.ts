@@ -1,4 +1,4 @@
-import { MAX_CONVERSATION_RETRY_AFTER_MS } from '@happier-dev/channels-protocol/v1';
+import { countConversationTextUnits, MAX_CONVERSATION_RETRY_AFTER_MS } from '@happier-dev/channels-protocol/v1';
 import type { HttpService } from '@happier-dev/plugin-sdk/http';
 
 const TELEGRAM_BOT_API_BASE_URL = 'https://api.telegram.org';
@@ -8,10 +8,8 @@ const TELEGRAM_API_REQUEST_TIMEOUT_MS = 15_000;
 export const TELEGRAM_MAX_LONG_POLL_TIMEOUT_SECONDS = 50;
 const TELEGRAM_LONG_POLL_DEADLINE_OVERHEAD_MS = 10_000;
 /**
- * Telegram's per-message ceiling. The send path chunks against it and the
- * setup fact publishes it to the Channels core as this connection's
- * `outboundTextLimit`, so both read this one constant: a core that chunked to
- * a different size than the send path enforces would fail at the provider.
+ * Telegram's native per-message ceiling. Setup publishes it to the Channels
+ * chunking owner, and the Bot API adapter rejects an oversized single message.
  */
 export const TELEGRAM_MAX_MESSAGE_CODE_POINTS = 4_096;
 const TELEGRAM_BOT_USERNAME = /^[A-Za-z0-9_]{5,32}$/;
@@ -240,33 +238,6 @@ function parseOffset(value: string, allowInitialTail = false): number | null {
 /** Shared by the opaque Channel checkpoint decoder and the Bot API request owner. */
 export function isTelegramUpdateOffset(value: string): boolean {
   return parseOffset(value) !== null;
-}
-
-function countTelegramCodePoints(value: string): number {
-  return Array.from(value).length;
-}
-
-export function splitTelegramPlainText(value: string): readonly string[] | null {
-  if (!value) return [];
-  const graphemes = [...new Intl.Segmenter('und', { granularity: 'grapheme' }).segment(value)]
-    .map(({ segment }) => segment);
-  const chunks: string[] = [];
-  let current = '';
-  let currentCodePoints = 0;
-  for (const grapheme of graphemes) {
-    const graphemeCodePoints = countTelegramCodePoints(grapheme);
-    if (graphemeCodePoints > TELEGRAM_MAX_MESSAGE_CODE_POINTS) return null;
-    if (currentCodePoints + graphemeCodePoints > TELEGRAM_MAX_MESSAGE_CODE_POINTS) {
-      chunks.push(current);
-      current = grapheme;
-      currentCodePoints = graphemeCodePoints;
-      continue;
-    }
-    current += grapheme;
-    currentCodePoints += graphemeCodePoints;
-  }
-  if (current) chunks.push(current);
-  return chunks;
 }
 
 function parseTextEntities(value: unknown, text: string | null): readonly TelegramTextEntity[] | null {
@@ -538,7 +509,8 @@ export function createTelegramBotApi(input: Readonly<{
     },
 
     async sendMessage(sendInput, options) {
-      if (!sendInput.chatId || !sendInput.text || countTelegramCodePoints(sendInput.text) > TELEGRAM_MAX_MESSAGE_CODE_POINTS) {
+      if (!sendInput.chatId || !sendInput.text
+        || countConversationTextUnits(sendInput.text, 'unicodeCodePoints') > TELEGRAM_MAX_MESSAGE_CODE_POINTS) {
         return { kind: 'notSent', retry: 'never', diagnostic: 'Invalid Telegram message.' };
       }
       const replyToMessageId = sendInput.replyToMessageId ? parseOffset(sendInput.replyToMessageId) : null;

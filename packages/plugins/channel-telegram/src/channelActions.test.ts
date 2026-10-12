@@ -1,4 +1,3 @@
-import { MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES } from '@happier-dev/channels-protocol/v1';
 import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -104,6 +103,16 @@ function botIdentity() {
 }
 
 describe('Telegram Channel provider actions', () => {
+  it('refuses unsupported new threads before any Telegram request', async () => {
+    const http = { request: vi.fn(async () => { throw new Error('Unsupported starts must not call Telegram'); }) };
+    await expect(deliverTelegramMessage({
+      ...connection, endpoint: { kind: 'direct', audience: 'direct', id: '456' },
+      content: { text: 'Brief', html: '<p>Brief</p>' }, deliveryKey: 'start-1',
+      newThread: { recipients: ['456'], subject: 'Brief' },
+      mentionPolicy: 'suppress', linkPreviewPolicy: 'suppress',
+    }, coreContext(http))).resolves.toEqual({ kind: 'notReady', reason: 'unsupported' });
+    expect(http.request).not.toHaveBeenCalled();
+  });
   it('deletes a conflicting webhook only through the exact selected bot account without dropping pending updates', async () => {
     const materialize = vi.fn(async () => ({
       kind: 'environment' as const,
@@ -380,7 +389,7 @@ describe('Telegram Channel provider actions', () => {
                     date: 1_700_000_004,
                     chat: { id: 456, type: 'private' },
                     from: { id: 789, is_bot: false },
-                    text: 'x'.repeat(MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES + 1),
+                    text: 'x'.repeat(65536 + 1),
                   },
                 },
               ],
@@ -442,9 +451,8 @@ describe('Telegram Channel provider actions', () => {
         },
         {
           observation: {
-            kind: 'routableNonAdmission',
-            reason: 'messageTooLarge',
-            shell: { occurrenceId: 'telegram:update:47', message: { id: '5' } },
+            kind: 'fullText',
+            observation: { occurrenceId: 'telegram:update:47', message: { id: '5', text: 'x'.repeat(65536 + 1) } },
           },
         },
       ],
@@ -848,7 +856,7 @@ describe('Telegram Channel provider actions', () => {
     });
   });
 
-  it('delivers a private-chat thread endpoint with its Telegram message thread ID', async () => {
+  it.each([undefined, '17', '456:17'])('delivers a private-chat thread endpoint with thread relation %s', async (threadId) => {
     const http = {
       request: vi.fn(async (input: TelegramHttpRequestInput) => {
         if (input.url.endsWith('/getMe')) return response(botIdentity());
@@ -863,8 +871,9 @@ describe('Telegram Channel provider actions', () => {
     await expect(deliverTelegramMessage({
       ...connection,
       endpoint: { kind: 'thread', audience: 'direct', id: '456:17', parentId: '456' },
-      content: 'topic reply',
+      content: { text: 'topic reply' },
       deliveryKey: 'delivery-1',
+      ...(threadId === undefined ? {} : { replyContext: { threadId, replyToMessageId: '7' } }),
       mentionPolicy: 'suppress',
       linkPreviewPolicy: 'suppress',
     }, coreContext(http))).resolves.toEqual({ kind: 'delivered', providerMessageIds: ['88'] });
@@ -873,6 +882,41 @@ describe('Telegram Channel provider actions', () => {
     expect(JSON.parse(new TextDecoder().decode(sendMessage?.body))).toMatchObject({
       chat_id: '456',
       message_thread_id: 17,
+      ...(threadId === undefined ? {} : { reply_parameters: { message_id: 7 } }),
+    });
+  });
+
+  it.each([undefined, 0, 1])('keeps thread addressing while replying only on the first core chunk %s', async (chunkIndex) => {
+    const http = {
+      request: vi.fn(async (input: TelegramHttpRequestInput) => {
+        if (input.url.endsWith('/getMe')) return response(botIdentity());
+        if (input.url.endsWith('/getChat')) {
+          return response({ ok: true, result: { id: 456, type: 'private', first_name: 'Ada' } });
+        }
+        if (input.url.endsWith('/sendMessage')) return response({ ok: true, result: { message_id: 88 } });
+        throw new Error(`Unexpected Telegram request: ${input.url}`);
+      }),
+    };
+
+    await expect(deliverTelegramMessage({
+      ...connection,
+      endpoint: { kind: 'thread', audience: 'direct', id: '456:17', parentId: '456' },
+      content: { text: 'one core chunk' },
+      deliveryKey: 'delivery-1',
+      ...(chunkIndex === undefined ? {} : { chunkIndex }),
+      replyContext: { threadId: '17', replyToMessageId: '7' },
+      mentionPolicy: 'suppress',
+      linkPreviewPolicy: 'suppress',
+    }, coreContext(http))).resolves.toEqual({ kind: 'delivered', providerMessageIds: ['88'] });
+
+    const sends = http.request.mock.calls.filter(([input]) => input.url.endsWith('/sendMessage'));
+    expect(sends).toHaveLength(1);
+    expect(JSON.parse(new TextDecoder().decode(sends[0]?.[0].body))).toEqual({
+      chat_id: '456',
+      text: 'one core chunk',
+      message_thread_id: 17,
+      link_preview_options: { is_disabled: true },
+      ...((chunkIndex ?? 0) === 0 ? { reply_parameters: { message_id: 7 } } : {}),
     });
   });
 
@@ -899,7 +943,7 @@ describe('Telegram Channel provider actions', () => {
       await expect(deliverTelegramMessage({
         ...connection,
         endpoint,
-        content: 'wrong audience',
+        content: { text: 'wrong audience' },
         deliveryKey: `delivery-${endpoint.id}`,
         mentionPolicy: 'suppress',
         linkPreviewPolicy: 'suppress',
@@ -926,7 +970,7 @@ describe('Telegram Channel provider actions', () => {
     await expect(deliverTelegramMessage({
       ...connection,
       endpoint: { kind: 'thread', audience: 'direct', id: '456:17:extra', parentId: '456' },
-      content: 'must not be redirected',
+      content: { text: 'must not be redirected' },
       deliveryKey: 'delivery-malformed-thread',
       mentionPolicy: 'suppress',
       linkPreviewPolicy: 'suppress',
@@ -1031,7 +1075,7 @@ describe('Telegram Channel provider actions', () => {
       await expect(deliverTelegramMessage({
         ...connection,
         endpoint: { kind: 'direct', audience: 'direct', id: '456' },
-        content: 'reply',
+        content: { text: 'reply' },
         deliveryKey: `delivery-${scenario.name}`,
         mentionPolicy: 'suppress',
         linkPreviewPolicy: 'suppress',
@@ -1076,7 +1120,7 @@ describe('Telegram Channel provider actions', () => {
       await expect(deliverTelegramMessage({
         ...connection,
         endpoint: { kind: 'direct', audience: 'direct', id: '456' },
-        content: 'reply',
+        content: { text: 'reply' },
         deliveryKey: `delivery-materialize-${scenario.name}`,
         mentionPolicy: 'suppress',
         linkPreviewPolicy: 'suppress',
@@ -1116,7 +1160,7 @@ describe('Telegram Channel provider actions', () => {
       await expect(deliverTelegramMessage({
         ...connection,
         endpoint: { kind: 'direct', audience: 'direct', id: '456' },
-        content: 'reply',
+        content: { text: 'reply' },
         deliveryKey: `delivery-materialize-${scenario.name}`,
         mentionPolicy: 'suppress',
         linkPreviewPolicy: 'suppress',
@@ -1319,7 +1363,7 @@ describe('Telegram Channel provider actions', () => {
             },
       )),
     };
-    const committedCheckpoint = { v: 1, offset: '42', caughtUpAtMs: Date.now() } as const;
+    const committedCheckpoint = { v: 1, offset: '42', caughtUpAtMs: Date.now(), retiredOffsetHint: '999' } as const;
 
     const first = await pollTelegramObservations({
       ...connection,
@@ -1442,6 +1486,8 @@ describe('Telegram Channel provider actions', () => {
     vi.setSystemTime(new Date('2026-08-10T12:00:00.000Z'));
     try {
       for (const checkpoint of [
+        { v: 1, offset: '-1', caughtUpAtMs: Date.now(), retiredOffsetHint: '42' },
+        { v: 1, offset: '42', caughtUpAtMs: -1, retiredOffsetHint: '42' },
         { v: 1, offset: '42', caughtUpAtMs: Date.now() - 86_400_000 },
         { v: 1, offset: '42', observedAtMs: Date.now() },
         '42',
@@ -1655,7 +1701,7 @@ describe('Telegram Channel provider actions', () => {
     expect(getUpdates?.timeoutMs).toBe(60_000);
   });
 
-  it('retains accepted chunk evidence when a later Telegram delivery cannot be safely retried', async () => {
+  it('refuses an oversized core delivery instead of splitting it into Telegram effects', async () => {
     const http = {
       request: vi.fn(async (input: TelegramHttpRequestInput) => {
         if (input.url.endsWith('/getMe')) return response(botIdentity());
@@ -1677,16 +1723,15 @@ describe('Telegram Channel provider actions', () => {
     await expect(deliverTelegramMessage({
       ...connection,
       endpoint: { kind: 'direct', audience: 'direct', id: '456' },
-      content: `${'a'.repeat(4_096)}b`,
+      content: { text: `${'a'.repeat(4_096)}b` },
       deliveryKey: 'delivery-1',
       mentionPolicy: 'suppress',
       linkPreviewPolicy: 'suppress',
     }, coreContext(http))).resolves.toEqual({
-      kind: 'partial',
-      providerMessageIds: ['70'],
-      failedChunk: 1,
-      retrySafe: false,
+      kind: 'notDelivered',
+      retry: 'never',
     });
+    expect(http.request.mock.calls.some(([request]) => request.url.endsWith('/sendMessage'))).toBe(false);
   });
 
   it('does not rewrite an aborted outbound Telegram call as a safe retry', async () => {
@@ -1708,7 +1753,7 @@ describe('Telegram Channel provider actions', () => {
     await expect(deliverTelegramMessage({
       ...connection,
       endpoint: { kind: 'direct', audience: 'direct', id: '456' },
-      content: 'reply',
+      content: { text: 'reply' },
       deliveryKey: 'delivery-1',
       mentionPolicy: 'suppress',
       linkPreviewPolicy: 'suppress',

@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   createTelegramBotApi,
   createTelegramPairingDeepLink,
-  splitTelegramPlainText,
 } from './telegramBotApi.js';
 
 type RecordedRequest = Readonly<{
@@ -33,15 +32,6 @@ describe('Telegram Bot API adapter', () => {
       'https://t.me/HappierBot?start=ABCD2345',
     );
     expect(createTelegramPairingDeepLink({ username: 'HappierBot', token: 'not valid' })).toBeNull();
-  });
-
-  it('chunks outbound plain text on grapheme boundaries within Telegram’s code-point limit', () => {
-    const text = `${'a'.repeat(4_095)}😀e\u0301`;
-
-    expect(splitTelegramPlainText(text)).toEqual([
-      `${'a'.repeat(4_095)}😀`,
-      'e\u0301',
-    ]);
   });
 
   it('reports a getUpdates 409 as the exclusive-poll conflict without claiming a retry hint Telegram did not send', async () => {

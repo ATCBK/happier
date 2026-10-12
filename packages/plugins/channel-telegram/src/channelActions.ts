@@ -1,8 +1,8 @@
 import {
   CONVERSATION_CORE_PLUGIN_ID_V1,
   CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1,
-  MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES,
   ConversationConnectionTestInputV1Schema,
+  classifyConversationProviderMaterializationFailureV1,
   ConversationConnectionTestResultV1Schema,
   ConversationDeliveryInputV1Schema,
   ConversationDeliveryResultV1Schema,
@@ -33,18 +33,23 @@ import {
   type ConversationBindingInputModeV1,
   type ConversationResolvedEndpointV1,
 } from '@happier-dev/channels-protocol/v1';
-import { isPluginError, PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import {
   QualifiedConnectedAccountRefSchema,
   type ConnectedAccountRef,
 } from '@happier-dev/plugin-sdk/connected-accounts';
 import type { PluginEventAutomationSetupResultV1 } from '@happier-dev/plugin-sdk/events';
-import { defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
+import {
+  createProtocolStoredReadSchema,
+  defineProtocolLiteral,
+  defineProtocolNumber,
+  defineProtocolObject,
+  defineProtocolString,
+} from '@happier-dev/plugin-sdk/protocol';
 
 import {
   createTelegramBotApi,
   isTelegramUpdateOffset,
-  splitTelegramPlainText,
   TELEGRAM_MAX_LONG_POLL_TIMEOUT_SECONDS,
   type TelegramBotApi,
   type TelegramBotIdentity,
@@ -85,6 +90,11 @@ type TelegramCheckpoint = Readonly<{
   offset: string;
   caughtUpAtMs: number;
 }>;
+const storedTelegramCheckpointSchema = createProtocolStoredReadSchema(defineProtocolObject({
+  v: defineProtocolLiteral(1),
+  offset: defineProtocolString(),
+  caughtUpAtMs: defineProtocolNumber({ integer: true, minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+}, { policy: 'closed' }));
 type ConversationPollHistoryGapResultV1 = Extract<ConversationPollResultV1, {
   kind: 'historyGap';
 }>;
@@ -124,32 +134,7 @@ function isTelegramCredential(credentialRef: ConnectedAccountRef | null): creden
     && credentialRef.service.localId === TELEGRAM_BOT_CONNECTED_ACCOUNT_ID;
 }
 
-function throwIfAborted(signal: AbortSignal): void {
-  if (!signal.aborted) return;
-  throw signal.reason ?? new Error('Telegram Channel provider operation was cancelled.');
-}
 
-function materializationFailure(error: unknown): ConversationProviderFailureV1 {
-  if (isPluginError(error)) {
-    // The exact-account host uses this refusal when the invocation generation
-    // is no longer current. It cannot become an independent delivery retry.
-    if (error.code === 'plugin_final_generation_retired') throw error;
-    // The host's unavailable Connected Accounts service has not reached
-    // Telegram. Its default error is non-retryable, so retain the known
-    // no-effect delivery boundary rather than treating it as bad credentials.
-    if (error.retryable || error.code === 'plugin_service_unavailable') {
-      return { kind: 'notReady', reason: 'network' };
-    }
-    return {
-      kind: 'notReady',
-      reason: 'credentialInvalid',
-      diagnostic: 'The selected Telegram bot account could not be materialized.',
-    };
-  }
-  // No Telegram request began, so an unclassified materializer failure is
-  // still safe for the delivery owner to retry.
-  return { kind: 'notReady', reason: 'network' };
-}
 
 function readFailure(result: TelegramGetUpdatesResult): ConversationProviderFailureV1 {
   if (result.kind === 'providerConflict') {
@@ -187,26 +172,11 @@ function readTelegramCheckpoint(
   value: ConversationPollInputV1['checkpoint'],
 ): TelegramCheckpoint | null | ConversationPollHistoryGapResultV1 {
   if (value === null) return null;
-  if (
-    !isRecord(value)
-    || Object.keys(value).length !== 3
-    || !Object.hasOwn(value, 'v')
-    || !Object.hasOwn(value, 'offset')
-    || !Object.hasOwn(value, 'caughtUpAtMs')
-    || value.v !== 1
-    || typeof value.offset !== 'string'
-    || !isTelegramUpdateOffset(value.offset)
-    || typeof value.caughtUpAtMs !== 'number'
-    || !Number.isSafeInteger(value.caughtUpAtMs)
-    || value.caughtUpAtMs < 0
-  ) {
+  const parsed = storedTelegramCheckpointSchema.safeParse(value);
+  if (!parsed.success || !isTelegramUpdateOffset(parsed.data.offset)) {
     return historyGap('The persisted Telegram checkpoint cannot be safely continued; an authenticated baseline reset is required.');
   }
-  return {
-    v: 1,
-    offset: value.offset,
-    caughtUpAtMs: value.caughtUpAtMs,
-  };
+  return parsed.data;
 }
 
 function checkpointHistoryGap(checkpoint: TelegramCheckpoint, nowMs: number): ConversationPollHistoryGapResultV1 | null {
@@ -272,7 +242,7 @@ async function createExactTelegramBotApi(
       // plugin may only compare that current host-owned binding.
       { signal: context.signal, expectedAccount: credentialRef },
     );
-    throwIfAborted(context.signal);
+    context.signal.throwIfAborted();
     const token = materialized.kind === 'environment'
       ? materialized.env[TELEGRAM_BOT_TOKEN_ENVIRONMENT_KEY]?.trim()
       : undefined;
@@ -281,8 +251,8 @@ async function createExactTelegramBotApi(
     }
     return createTelegramBotApi({ token, http: context.services.http });
   } catch (error) {
-    if (context.signal.aborted) throw error;
-    return materializationFailure(error);
+    return classifyConversationProviderMaterializationFailureV1(error, context.signal,
+      'The selected Telegram bot account could not be materialized.');
   }
 }
 
@@ -295,7 +265,7 @@ async function readyConnection(
   const api = await createExactTelegramBotApi(context, input.credentialRef!);
   if ('kind' in api) return api;
   const identity = await api.getMe({ signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if ('kind' in identity) return readFailure(identity);
   const configuredIdentity = parseConnectionKey(input.providerConnectionKey);
   if (configuredIdentity !== identity.id) {
@@ -314,7 +284,7 @@ async function inspectTelegramPollingPrerequisite(
   signal: AbortSignal,
 ): Promise<TelegramPollingPrerequisite> {
   const webhook = await api.getWebhookInfo({ signal });
-  throwIfAborted(signal);
+  signal.throwIfAborted();
   if ('kind' in webhook) return { kind: 'notReady', failure: readFailure(webhook) };
   return webhook.url.trim().length > 0
     ? { kind: 'requiresRemediation' }
@@ -425,9 +395,6 @@ function normalizedIngressFromUpdate(
   const commandText = commandTextFromMessage(message, identity);
   if (commandText === null) {
     return { kind: 'routableNonAdmission', shell, reason: 'unsupportedContent' };
-  }
-  if (telegramTextEncoder.encode(commandText).byteLength > MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES) {
-    return { kind: 'routableNonAdmission', shell, reason: 'messageTooLarge' };
   }
   return {
     kind: 'fullText',
@@ -541,7 +508,7 @@ export async function setupTelegramChannels(
     throw new PluginError({ code: `telegram_bot_${api.reason}`, message: api.diagnostic ?? 'Telegram is unavailable.' });
   }
   const identity = await api.getMe({ signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if ('kind' in identity) {
     const failure = readFailure(identity);
     throw new PluginError({ code: `telegram_bot_${failure.reason}`, message: failure.diagnostic ?? 'Telegram is unavailable.' });
@@ -570,6 +537,8 @@ export async function setupTelegramChannels(
     recommendedTransport: 'checkpointedPull',
     overlapSafety: 'providerExclusive',
     replayContinuity: 'checkpointed',
+    // Bot API update retention: https://core.telegram.org/bots/api#getting-updates
+    recommendedMaximumObservationAgeMs: 86_400_000,
     outboundTextLimit: { maximum: TELEGRAM_MAX_MESSAGE_CODE_POINTS, unit: 'unicodeCodePoints' },
     // The authenticated delivery truth travels with the connection instead of
     // being discarded into the opaque provider configuration.
@@ -592,7 +561,7 @@ export async function remediateTelegramWebhook(
   // A retired host invocation must not even materialize credentials, let alone
   // dispatch a remote delete. The host also carries cancellation through the
   // request itself once it has admitted this Action.
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   const setupInput = readSetupInput(input);
   if (!isTelegramCredential(setupInput.credentialRef)) {
     throw new PluginError({
@@ -604,7 +573,7 @@ export async function remediateTelegramWebhook(
   if ('kind' in api) return ConversationProviderSetupRemediationResultV1Schema.parse(api);
 
   const result = await api.deleteWebhook({ signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if (result.kind === 'deleted') {
     return ConversationProviderSetupRemediationResultV1Schema.parse({ kind: 'remediated' });
   }
@@ -655,7 +624,7 @@ export async function resolveTelegramEndpoint(input: unknown, context: PluginInv
   const chat = await ready.api.getChat({
     chatId: threadAddress?.chatId ?? request.query,
   }, { signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if ('kind' in chat) return readFailure(chat);
   const candidate = endpointFromChat({
     chatId: chat.id,
@@ -689,7 +658,7 @@ export async function setupTelegramChatEventSource(
     });
   }
   const identity = await api.getMe({ signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if ('kind' in identity) {
     throw new PluginError({
       code: 'telegram_automation_source_unavailable',
@@ -707,7 +676,7 @@ export async function setupTelegramChatEventSource(
       { signal: context.signal },
     );
   } catch (error) {
-    throwIfAborted(context.signal);
+    context.signal.throwIfAborted();
     throw new PluginError({
       code: 'telegram_automation_channels_connection_unavailable',
       message: 'Happier could not verify the Telegram Channels connection. Try again after Channels is available.',
@@ -740,7 +709,7 @@ export async function setupTelegramChatEventSource(
     });
   }
   const chat = await api.getChat({ chatId: input.chatId }, { signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if ('kind' in chat) {
     throw new PluginError({
       code: 'telegram_automation_chat_not_found',
@@ -763,7 +732,7 @@ export async function setupTelegramChatEventSource(
 export async function pollTelegramObservations(input: unknown, context: PluginInvocationContext): Promise<ConversationPollResultV1> {
   assertTelegramChannelsCoreCaller(context);
   const request = ConversationPollInputV1Schema.parse(input);
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   const invalid = readConnectionConfig(request);
   if (invalid) return finalizeTelegramPollResult(request, invalid, context);
   const checkpoint = readTelegramCheckpoint(request.checkpoint);
@@ -782,7 +751,7 @@ export async function pollTelegramObservations(input: unknown, context: PluginIn
     limit: request.limit,
     timeoutSeconds: Math.min(TELEGRAM_MAX_LONG_POLL_TIMEOUT_SECONDS, Math.ceil(request.waitMs / 1_000)),
   }, { signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if (poll.kind !== 'updates') return finalizeTelegramPollResult(request, readFailure(poll), context);
   // An underfull page proves Telegram had no further update at this point. A
   // full page proves only forward progress, so it must retain the prior proof
@@ -831,6 +800,7 @@ export async function pollTelegramObservations(input: unknown, context: PluginIn
 export async function deliverTelegramMessage(input: unknown, context: PluginInvocationContext): Promise<ConversationDeliveryResultV1> {
   assertTelegramChannelsCoreCaller(context);
   const request = ConversationDeliveryInputV1Schema.parse(input);
+  if (request.newThread !== undefined) return { kind: 'notReady', reason: 'unsupported' };
   const ready = await readyConnection(context, request);
   if ('kind' in ready) return preSendFailureResult(ready);
   const address = telegramEndpointAddress(request.endpoint);
@@ -846,64 +816,32 @@ export async function deliverTelegramMessage(input: unknown, context: PluginInvo
     (messageThreadId === undefined && requestedThreadId !== undefined)
     || (messageThreadId !== undefined
       && requestedThreadId !== undefined
-      && requestedThreadId !== messageThreadId)
+      && requestedThreadId !== messageThreadId
+      && requestedThreadId !== request.endpoint.id)
   ) {
     return { kind: 'notDelivered', retry: 'never' };
   }
   const chat = await ready.api.getChat({ chatId }, { signal: context.signal });
-  throwIfAborted(context.signal);
+  context.signal.throwIfAborted();
   if ('kind' in chat) return preSendFailureResult(readFailure(chat));
   if (!endpointMatches(request.endpoint, chat)) return { kind: 'notDelivered', retry: 'never' };
-  const chunks = splitTelegramPlainText(request.content);
-  if (chunks === null || chunks.length === 0) return { kind: 'notDelivered', retry: 'never' };
-  const providerMessageIds: string[] = [];
-  for (const [index, text] of chunks.entries()) {
-    if (context.signal.aborted) {
-      if (providerMessageIds.length === 0) return { kind: 'notDelivered', retry: 'safe' };
-      return ConversationDeliveryResultV1Schema.parse({
-        kind: 'partial',
-        providerMessageIds,
-        failedChunk: index,
-        retrySafe: false,
-      });
-    }
-    let result: Awaited<ReturnType<TelegramBotApi['sendMessage']>>;
-    try {
-      result = await ready.api.sendMessage({
-        chatId,
-        text,
-        suppressLinkPreview: request.linkPreviewPolicy === 'suppress',
-        ...(index === 0 && replyToMessageId !== undefined
-          ? { replyToMessageId }
-          : {}),
-        ...(messageThreadId === undefined ? {} : { messageThreadId }),
-      }, { signal: context.signal });
-    } catch {
-      // A cancellation or transport loss after an outbound request began has no
-      // proof of absence. Preserve every accepted chunk and force custody to
-      // resolve the rest as ambiguous instead of dispatching again.
-      return ConversationDeliveryResultV1Schema.parse({
-        kind: 'outcomeUnknown',
-        ...(providerMessageIds.length === 0 ? {} : { providerMessageIds }),
-      });
-    }
-    if (result.kind === 'sent') {
-      providerMessageIds.push(result.messageId);
-      continue;
-    }
-    if (result.kind === 'outcomeUnknown') {
-      return ConversationDeliveryResultV1Schema.parse({
-        kind: 'outcomeUnknown',
-        ...(providerMessageIds.length === 0 ? {} : { providerMessageIds }),
-      });
-    }
-    if (providerMessageIds.length === 0) return retryResult(result);
-    return ConversationDeliveryResultV1Schema.parse({
-      kind: 'partial',
-      providerMessageIds,
-      failedChunk: index,
-      retrySafe: false,
-    });
+  if (context.signal.aborted) return { kind: 'notDelivered', retry: 'safe' };
+  let result: Awaited<ReturnType<TelegramBotApi['sendMessage']>>;
+  try {
+    result = await ready.api.sendMessage({
+      chatId,
+      text: request.content.text,
+      suppressLinkPreview: request.linkPreviewPolicy === 'suppress',
+      ...((request.chunkIndex ?? 0) === 0 && replyToMessageId !== undefined
+        ? { replyToMessageId }
+        : {}),
+      ...(messageThreadId === undefined ? {} : { messageThreadId }),
+    }, { signal: context.signal });
+  } catch {
+    // Cancellation or transport loss after sending has no proof of absence.
+    return { kind: 'outcomeUnknown' };
   }
-  return ConversationDeliveryResultV1Schema.parse({ kind: 'delivered', providerMessageIds });
+  if (result.kind === 'sent') return { kind: 'delivered', providerMessageIds: [result.messageId] };
+  if (result.kind === 'outcomeUnknown') return { kind: 'outcomeUnknown' };
+  return retryResult(result);
 }
