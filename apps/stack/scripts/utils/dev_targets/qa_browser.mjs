@@ -123,13 +123,18 @@ export function resolveQaBrowserUrl(url, extraUrls = []) {
   return url;
 }
 
-export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki = '', input = process.stdin, env = process.env,
+export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki = '', fakeAudio = '', gpu = false, input = process.stdin, env = process.env,
   writeReady = value => process.stdout.write(`${READY_MARKER}${JSON.stringify(value)}\n`),
 }, { capture = runCaptureResult, signalSource = process } = {}) {
   requireSessionName(sessionName);
   const profile = await mkdtemp(join(tmpdir(), 'hstack-qa-browser-'));
   const session = `hstack-${sessionName}-${randomUUID()}`;
   const browserEnv = { ...env, AGENT_BROWSER_SESSION: session, AGENT_BROWSER_RESTORE_SAVE: 'never',
+    // Chromium's singleton socket is rooted in TMPDIR, independently of its
+    // profile. Remote command scratch paths can exceed AF_UNIX's path limit.
+    // Keep the owned profile/custody in place and use POSIX's short temp root
+    // only for Chromium/agent-browser's own temporary IPC files.
+    ...(process.platform === 'win32' ? {} : { TMPDIR: '/tmp' }),
     AGENT_BROWSER_IDLE_TIMEOUT_MS: '0' };
   let resolveClosed;
   const closed = new Promise(resolve => { resolveClosed = resolve; });
@@ -139,16 +144,29 @@ export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki
   const lifetime = setInterval(() => {}, 2_147_483_647);
   const lifetimeAbort = new AbortController();
   const close = () => { resolveClosed(); lifetimeAbort.abort(); };
+  let resolveAudio;
+  const audio = fakeAudio === 'file' ? new Promise(resolve => { resolveAudio = resolve; }) : null;
   const control = createInterface({ input });
-  control.on('line', line => { if (line === 'close') close(); });
+  control.on('line', line => {
+    if (line === 'close') close();
+    else if (resolveAudio && line.startsWith('fake-audio:')) resolveAudio(Buffer.from(line.slice('fake-audio:'.length), 'base64'));
+  });
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) signalSource.on(signal, close);
   let opened = false;
   try {
+    const audioPath = audio ? join(profile, 'fake-audio.wav') : null;
+    if (audio) {
+      const wav = await Promise.race([audio, closed.then(() => null)]);
+      if (wav === null || lifetimeAbort.signal.aborted) return;
+      await writeFile(audioPath, wav, { mode: 0o600 });
+      if (lifetimeAbort.signal.aborted) return;
+    }
     const proxyPort = proxy ? await unusedPort() : null;
     // OpenSSH's reverse SOCKS route resolves destinations on the controller,
     // where the canonical Stack/Expo ingress already lives. Chromium must also
     // proxy loopback addresses; its default bypass would reach the worker instead.
     const launchArgs = ['--remote-debugging-port=0', '--no-sandbox',
+      ...(gpu ? ['--disable-software-rasterizer'] : []),
       ...(trustSpki ? [`--ignore-certificate-errors-spki-list=${trustSpki}`] : []), ...(proxy ? [
       `--proxy-server=socks5://127.0.0.1:${proxyPort}`, '--proxy-bypass-list=<-loopback>',
     ] : [])];
@@ -157,7 +175,7 @@ export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki
     // Let its canonical detector select Chromium, observe that executable via
     // public CDP, then append the intact Blink switch at the executable boundary.
     // Both launches stay in this worker's owned profile and cleanup lifecycle.
-    const discovery = await capture('agent-browser', ['--session', session, '--profile', profile,
+    const discovery = await capture('agent-browser', ['--session', session, '--profile', profile, ...(gpu ? ['--headed'] : []),
       '--args', [...launchArgs, '--enable-automation'].join(','), 'open', 'about:blank'], { env: browserEnv });
     if (!discovery.ok) throw new Error(`[dev-targets] QA browser launch failed: ${discovery.err || discovery.error?.message || discovery.exitCode}`);
     if (lifetimeAbort.signal.aborted) return;
@@ -170,10 +188,16 @@ export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki
     if (lifetimeAbort.signal.aborted) return;
     const wrapper = join(profile, 'chromium-desktop');
     const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
-    await writeFile(wrapper, `#!/bin/sh\nexec ${quote(executable)} "$@" ${quote(DESKTOP_BLINK_SETTINGS)}\n`, { mode: 0o700 });
+    // Keep file paths (including commas) out of agent-browser's --args parser.
+    // Fake devices do not auto-grant microphone permission.
+    const executableArgs = [DESKTOP_BLINK_SETTINGS,
+      ...(['device', 'file'].includes(fakeAudio) ? ['--use-fake-device-for-media-stream'] : []),
+      ...(audioPath ? [`--use-file-for-fake-audio-capture=${audioPath}`] : []),
+    ];
+    await writeFile(wrapper, `#!/bin/sh\nexec ${quote(executable)} "$@" ${executableArgs.map(quote).join(' ')}\n`, { mode: 0o700 });
     if (lifetimeAbort.signal.aborted) return;
     opened = true;
-    const launch = await capture('agent-browser', ['--session', session, '--profile', profile,
+    const launch = await capture('agent-browser', ['--session', session, '--profile', profile, ...(gpu ? ['--headed'] : []),
       '--executable-path', wrapper, '--args', launchArgs.join(','), 'open', 'about:blank'], { env: browserEnv });
     if (!launch.ok) throw new Error(`[dev-targets] QA browser launch failed: ${launch.err || launch.error?.message || launch.exitCode}`);
     const { port, debuggerPath } = await readQaBrowserEndpoint(profile);
@@ -259,7 +283,7 @@ export async function stopStackQaBrowsers({ stackName, baseDir, sourceDir, env }
     warnings: results.filter(result => result.value.warning).map(result => result.value.warning) };
 }
 
-export async function runQaBrowserSession({ target, stackName, stackBaseDir, sessionName, url, extraUrls = [], trustCertPath,
+export async function runQaBrowserSession({ target, stackName, stackBaseDir, sessionName, url, extraUrls = [], trustCertPath, fakeAudio = false, gpu = false,
   env = process.env, onReady = value => process.stdout.write(`${JSON.stringify(value)}\n`),
 }, { signalSource = process, capture = runCaptureResult, spawnProcess = spawnProc,
   stopProcess = child => killProcessTree(child, 'SIGINT', { graceMs: 2_000 }),
@@ -268,6 +292,11 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
   requireSessionName(sessionName);
   if (!target || target.platform !== 'posix') throw new Error('[dev-targets] QA browser requires a selected remote POSIX host');
   url = resolveQaBrowserUrl(url, extraUrls);
+  let audioBytes;
+  if (typeof fakeAudio === 'string') {
+    try { audioBytes = await readFile(fakeAudio); }
+    catch { throw new Error('[dev-targets] browser --fake-audio requires a readable WAV file'); }
+  }
   let trustSpki = '';
   if (trustCertPath !== undefined) {
     try {
@@ -380,7 +409,9 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
   };
   try {
     const args = ['./apps/stack/scripts/utils/dev_targets/qa_browser.mjs', '--worker', sessionName, 'remote'];
-    if (trustSpki) args.push(trustSpki);
+    if (trustSpki || fakeAudio || gpu) args.push(trustSpki);
+    if (fakeAudio || gpu) args.push(fakeAudio ? (audioBytes ? 'file' : 'device') : '');
+    if (gpu) args.push('gpu');
     if (cancelled) return;
     const result = await runDevTargetCommand({ target, stackBaseDir, commandArgs: ['node', ...args],
       environment: workerEnv, env, onLine, silent: true, controlStdin: true, signal: executionAbort.signal, workspacePreparation: 'skip', dependencyAdmission: 'skip', provenance: 'skip',
@@ -399,6 +430,15 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
           executionAbort.abort();
         });
         if (cancelled || failure) closeWorker();
+        else if (audioBytes) {
+          // Reuse custody's lifetime control pipe: the controller path never
+          // leaves this process, and the worker owns the copied WAV's cleanup.
+          worker.stdin.write(`fake-audio:${audioBytes.toString('base64')}\n`, error => {
+            if (!error) return;
+            failure ??= new Error(`[dev-targets] QA browser audio transfer failed: ${error.message}`);
+            executionAbort.abort();
+          });
+        }
         return worker;
       },
       stopProcess,
@@ -419,7 +459,7 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--worker') {
-  await runQaBrowserWorker({ sessionName: process.argv[3], proxy: process.argv[4] === 'remote', trustSpki: process.argv[5] });
+  await runQaBrowserWorker({ sessionName: process.argv[3], proxy: process.argv[4] === 'remote', trustSpki: process.argv[5], fakeAudio: process.argv[6], gpu: process.argv[7] === 'gpu' });
 }
 if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--cleanup') {
   requireSessionName(process.argv[3]);

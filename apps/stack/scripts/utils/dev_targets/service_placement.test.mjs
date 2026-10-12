@@ -79,6 +79,30 @@ test('remote QA daemon browser ranks the pool without moving its fixed Machine',
   });
 });
 
+test('explicit browser target selects a configured macOS host without moving the Machine or falling back', async () => {
+  await withQaPlacementFixture(async ({ root, config, env }) => {
+    const path = join(root, 'qa', 'dev-targets.json');
+    await writeJsonAtomic(path, { ...config, runtimePlacement: { daemon: { mode: 'local' } } });
+    const before = await readFile(path);
+    const probes = [];
+    const boundaries = { logger: { warn() {} }, runCaptureResult: async (_command, args) => {
+      probes.push(args.find(arg => arg.startsWith('--target=')));
+      return { ok: true, out: 'HSTACK_QA_HOST={"platform":"darwin","arch":"arm64","remote":true}\n', err: '' };
+    } };
+    const result = await placement.resolveControlledQaBrowserTarget({ stackName: 'qa', sourceDir: '/repo',
+      targetName: 'mac-host', env }, boundaries);
+    assert.equal(result.target.name, 'mac-host');
+    assert.deepEqual(probes, ['--target=mac-host']);
+    assert.deepEqual(await readFile(path), before);
+    await assert.rejects(placement.resolveControlledQaBrowserTarget({ stackName: 'qa', sourceDir: '/repo',
+      targetName: 'missing', env }, boundaries), /configured targets/);
+    await assert.rejects(placement.resolveControlledQaBrowserTarget({ stackName: 'qa', sourceDir: '/repo',
+      targetName: 'mac-host', env }, { logger: { warn() {} },
+      runCaptureResult: async () => ({ ok: false, exitCode: 255, err: 'unavailable' }) }), /no QA browser host/);
+    assert.deepEqual(await readFile(path), before);
+  });
+});
+
 test('local QA daemon browser never falls back to the controller when no pool host is usable', async () => {
   await withQaPlacementFixture(async ({ root, config, env }) => {
     const path = join(root, 'qa', 'dev-targets.json');

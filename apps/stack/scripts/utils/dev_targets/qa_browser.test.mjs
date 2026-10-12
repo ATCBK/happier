@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { createHash, X509Certificate } from 'node:crypto';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,11 +11,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import { rootCertificates } from 'node:tls';
 import { createServer } from 'node:http';
+import { createServer as createSocketServer } from 'node:net';
 import { resolveQaBrowserUrl, runQaBrowserSession, runQaBrowserWorker, stopQaBrowsers, stopStackQaBrowsers } from './qa_browser.mjs';
 import { resolveRemoteStackStatePaths } from './remote_commands.mjs';
 import { runCaptureResult, spawnProc, killProcessTree } from '../proc/proc.mjs';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
+import { parseVoiceWavContainer } from '../../../../../packages/tests/src/testkit/voice/voiceWavParser.mjs';
 
 // Real CDP transport at the external Chromium boundary; the worker's launch,
 // executable adaptation and cleanup remain real.
@@ -325,6 +327,43 @@ test('QA browser retains the selected Home and borrowed Expo origins without lea
   assert.throws(() => resolveQaBrowserUrl(url, ['http://operator:secret@localhost:4050']), /without credentials/);
 });
 
+test('QA browser launches under a long remote scratch path without exceeding the Unix socket path boundary', { skip: process.platform === 'win32' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: `hstack-remote-command-${'x'.repeat(70)}-` });
+  const previousTmpdir = process.env.TMPDIR;
+  const chromePort = await fakeChromeCommandLine(t);
+  const signals = new EventEmitter();
+  process.env.TMPDIR = root;
+  try {
+    await runQaBrowserWorker({ sessionName: 'long-scratch', input: new PassThrough(),
+      writeReady: () => signals.emit('SIGINT') }, {
+      signalSource: signals,
+      // Chromium is the external boundary. Exercise its actual AF_UNIX socket
+      // constraint rather than mocking the worker's temp-directory decision.
+      capture: async (_command, args, options) => {
+        if (!args.includes('open')) return { ok: true, exitCode: 0, out: '', err: '' };
+        const ipcRoot = await mkdtemp(join(options.env.TMPDIR ?? tmpdir(), 'org.chromium.Chromium.'));
+        const socket = createSocketServer();
+        try {
+          await new Promise((resolve, reject) => {
+            socket.once('error', reject);
+            socket.listen(join(ipcRoot, 'SingletonSocket'), resolve);
+          });
+          await writeFile(join(args[args.indexOf('--profile') + 1], 'DevToolsActivePort'), `${chromePort}\n/devtools/browser/fixture-browser\n`);
+          return { ok: true, exitCode: 0, out: '', err: '' };
+        } catch (error) {
+          return { ok: false, exitCode: 1, out: '', err: `Chromium singleton socket: ${error.code}` };
+        } finally {
+          if (socket.listening) await new Promise(resolve => socket.close(resolve));
+          await rm(ipcRoot, { recursive: true, force: true });
+        }
+      },
+    });
+  } finally {
+    if (previousTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmpdir;
+  }
+});
+
 test('closing a browser during CDP readiness interrupts the wait and retires its worker', async () => {
   const signalSource = new EventEmitter();
   let resolveExited;
@@ -496,6 +535,36 @@ test('QA browser does not resurrect a deliberately terminated SSH forward', asyn
   assert.equal(forwards, 1, 'Stack retirement must not create replacement listeners');
 });
 
+test('GPU QA browser uses headed Chromium in the existing profile and SIGINT cleanup lifecycle', { skip: process.platform === 'win32' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-qa-gpu-' });
+  const { binDir } = writeFakeBin({ root, name: 'chromium', content: `#!${process.execPath}\nconsole.log(JSON.stringify(process.argv.slice(2)));\n` });
+  const port = await fakeChromeCommandLine(t, join(binDir, 'chromium'));
+  const signals = new EventEmitter();
+  const input = new PassThrough();
+  const launches = [];
+  let profile;
+  const completion = runQaBrowserWorker({ sessionName: 'gpu', gpu: true, proxy: true, input,
+    writeReady: value => { profile = value.profile; signals.emit('SIGINT'); } }, {
+    signalSource: signals,
+    // Only the external agent-browser process is replaced; launch adaptation and custody stay real.
+    capture: async (_command, args) => {
+      if (args.at(-1) === 'about:blank') {
+        launches.push(args);
+        const directory = args[args.indexOf('--profile') + 1];
+        await writeFile(join(directory, 'DevToolsActivePort'), `${port}\n/devtools/browser/fixture-browser\n`);
+      }
+      return { ok: true, exitCode: 0, out: '', err: '' };
+    },
+  });
+  await completion;
+  assert.equal(launches.length, 2);
+  for (const args of launches) {
+    assert.ok(args.includes('--headed'), 'GPU launches must use the real display compositor');
+    assert.ok(args[args.indexOf('--args') + 1].includes('--disable-software-rasterizer'), 'GPU mode must not substitute SwiftShader');
+  }
+  await assert.rejects(access(profile), { code: 'ENOENT' });
+});
+
 test('each QA browser lifetime preserves canonical Home origins through its own SOCKS route and cleans only its profile', { skip: process.platform === 'win32' }, async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-qa-browser-pointer-' });
   const { binDir } = writeFakeBin({ root, name: 'chromium', content: `#!${process.execPath}\nconsole.log(JSON.stringify(process.argv.slice(2)));\n` });
@@ -519,6 +588,8 @@ test('each QA browser lifetime preserves canonical Home origins through its own 
         assert.equal(launched.ok, true, launched.err);
         assert.ok(JSON.parse(launched.out).includes('--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2'),
           'the launched Chromium must receive desktop pointer and hover as one intact argument');
+        assert.ok(!JSON.parse(launched.out).some(arg => arg.includes('fake-') || arg.includes('fake_audio')),
+          'ordinary QA browsers must retain real devices and permission prompts');
         instances.push({ launchArgs, proxyPort: proxy ? Number(proxy.split(':').at(-1)) : null });
       }
       const profile = args[args.indexOf('--profile') + 1];
@@ -569,6 +640,126 @@ test('each QA browser lifetime preserves canonical Home origins through its own 
   }
   assert.deepEqual(instances.map(instance => instance.proxyPort).sort(), [a.proxyPort, b.proxyPort].sort());
   assert.notEqual(a.proxyPort, b.proxyPort);
+});
+
+for (const fileBacked of [false, true]) test(`opt-in fake audio ${fileBacked ? 'copies speech into the worker profile' : 'uses Chromium devices'} without granting permission`, { skip: process.platform === 'win32' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: "hstack-audio, quote'-" });
+  const wav = await readFile(new URL('../../../../../packages/tests/fixtures/voice/phrases/short-command.24k.wav', import.meta.url));
+  const { binDir } = writeFakeBin({ root, name: 'chromium', content: `#!${process.execPath}\nconsole.log(JSON.stringify(process.argv.slice(2)));\n` });
+  const chromePort = await fakeChromeCommandLine(t, join(binDir, 'chromium'));
+  const previousTmpdir = process.env.TMPDIR;
+  process.env.TMPDIR = root;
+  const input = new PassThrough();
+  const signals = new EventEmitter();
+  let profile, launchedArgs;
+  try {
+    // The existing lifetime control pipe carries bytes, not a controller path.
+    if (fileBacked) input.write(`fake-audio:${wav.toString('base64')}\n`);
+    await runQaBrowserWorker({ sessionName: 'fake-audio', fakeAudio: fileBacked ? 'file' : 'device', input,
+      writeReady: value => { profile = value.profile; signals.emit('SIGINT'); } }, {
+      signalSource: signals,
+      capture: async (_command, args) => {
+        if (args.includes('open')) {
+          profile = args[args.indexOf('--profile') + 1];
+          const splitArgs = args[args.indexOf('--args') + 1].split(',');
+          if (args.includes('--executable-path')) {
+            const launched = await runCaptureResult(args[args.indexOf('--executable-path') + 1], splitArgs);
+            assert.equal(launched.ok, true, launched.err);
+            launchedArgs = JSON.parse(launched.out);
+            assert.ok(launchedArgs.includes('--use-fake-device-for-media-stream'));
+            assert.ok(!launchedArgs.includes('--use-fake-ui-for-media-stream'));
+            const audioArg = launchedArgs.find(arg => arg.startsWith('--use-file-for-fake-audio-capture='));
+            if (fileBacked) {
+              assert.equal(audioArg, `--use-file-for-fake-audio-capture=${join(profile, 'fake-audio.wav')}`);
+              assert.deepEqual(await readFile(audioArg.slice('--use-file-for-fake-audio-capture='.length)), wav);
+            } else assert.equal(audioArg, undefined);
+          }
+          await writeFile(join(profile, 'DevToolsActivePort'), `${chromePort}\n/devtools/browser/fixture-browser\n`);
+        }
+        return { ok: true, exitCode: 0, out: '', err: '' };
+      },
+    });
+    assert.ok(launchedArgs);
+    await assert.rejects(access(profile), { code: 'ENOENT' });
+  } finally {
+    if (previousTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmpdir;
+  }
+});
+
+test('file-backed fake audio reaches the remote worker through existing custody and cleans with its profile', { skip: process.platform === 'win32' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: "hstack-audio, controller'-" });
+  const source = join(root, "speech, ' $(false).wav");
+  const wav = await readFile(new URL('../../../../../packages/tests/fixtures/voice/phrases/short-command.24k.wav', import.meta.url));
+  assert.ok(parseVoiceWavContainer(wav).dataBytes.some(byte => byte !== 0), 'the QA speech fixture must contain nonzero PCM energy');
+  await writeFile(source, wav);
+  const chromePort = await fakeChromeCommandLine(t);
+  const observed = join(root, 'observed.json');
+  const { binDir } = writeFakeBin({ root, name: 'agent-browser', content: `#!${process.execPath}
+const fs=require('node:fs');const path=require('node:path');const a=process.argv.slice(2);
+if(a.includes('open')){
+if(a.includes('--executable-path')){
+const script=fs.readFileSync(a[a.indexOf('--executable-path')+1],'utf8');
+const profile=a[a.indexOf('--profile')+1];
+fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify({script,profile,audio:fs.readFileSync(path.join(profile,'fake-audio.wav')).toString('base64')}));
+}
+fs.writeFileSync(path.join(a[a.indexOf('--profile')+1],'DevToolsActivePort'),${JSON.stringify(`${chromePort}\n/devtools/browser/fixture-browser\n`)});
+}
+` });
+  const signals = new EventEmitter();
+  let resolveTunnel, ready;
+  const tunnel = { completion: new Promise(resolve => { resolveTunnel = resolve; }) };
+  await runQaBrowserSession({
+    target: { name: 'absent', platform: 'posix', ssh: 'fixture',
+      repoDir: fileURLToPath(new URL('../../../../../', import.meta.url)), cliHomeDir: root,
+      remotePath: [binDir, dirname(process.execPath)] },
+    stackName: 'agent-qa-browser', stackBaseDir: root, sessionName: 'file-audio',
+    url: 'http://localhost:3025', fakeAudio: source, env: { ...process.env, TMPDIR: root },
+    onReady: value => { ready = value; signals.emit('SIGINT'); },
+  }, {
+    signalSource: signals, capture: captureReadyRemote,
+    spawnProcess: (label, _command, args, env, options) => label.startsWith('browser-forward:')
+      ? tunnel : spawnProc(label, '/bin/bash', ['-c', args.at(-1)], env, options),
+    stopProcess: async child => {
+      assert.equal(child, tunnel);
+      resolveTunnel({ code: 0 });
+    },
+    fetchImpl: async () => ({ ok: true, json: async () => ({ webSocketDebuggerUrl: 'ws://localhost/devtools/browser/fixture-browser' }) }),
+  });
+  const result = JSON.parse(await readFile(observed, 'utf8'));
+  assert.equal(result.audio, wav.toString('base64'));
+  assert.ok(result.script.includes('--use-file-for-fake-audio-capture='));
+  assert.equal(result.profile, ready.profile);
+  await assert.rejects(access(ready.profile), { code: 'ENOENT' });
+  assert.deepEqual(await readFile(source), wav);
+});
+
+test('unreadable fake-audio file fails before any remote browser allocation', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-audio-missing-' });
+  let remoteCalls = 0;
+  await assert.rejects(runQaBrowserSession({
+    target: { name: 'absent', platform: 'posix', ssh: 'fixture' },
+    stackName: 'agent-qa-browser', stackBaseDir: root, sessionName: 'missing-audio',
+    url: 'http://localhost:3025', fakeAudio: join(root, 'missing.wav'),
+  }, { capture: async () => { remoteCalls++; return { ok: false, exitCode: 255 }; } }), /fake-audio requires a readable WAV file/);
+  assert.equal(remoteCalls, 0);
+});
+
+test('closing while awaiting fake audio cleans the owned profile without launching Chromium', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-audio-cancel-' });
+  const previousTmpdir = process.env.TMPDIR;
+  process.env.TMPDIR = root;
+  const input = new PassThrough();
+  input.write('close\n');
+  try {
+    await runQaBrowserWorker({ sessionName: 'cancel-audio', fakeAudio: 'file', input,
+      writeReady: () => assert.fail('cancelled audio transfer cannot publish readiness'),
+    }, { signalSource: new EventEmitter(), capture: async () => assert.fail('cancelled audio transfer cannot launch Chromium') });
+    assert.deepEqual(await readdir(root), []);
+  } finally {
+    if (previousTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmpdir;
+  }
 });
 
 for (const failure of ['invalid executable', 'discovery close', 'cancel query']) {

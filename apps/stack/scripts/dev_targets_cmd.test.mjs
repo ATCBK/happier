@@ -66,6 +66,23 @@ test('QA browser refuses an unconfigured browser pool before launching a browser
   assert.match(result.stderr, /no QA browser host.*controller-local browser fallback is disabled/);
 });
 
+test('GPU QA browser requires an explicit configured target before any browser allocation', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'hstack-qa-browser-gpu-target-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'agent-qa-browser'), { recursive: true });
+  await writeFile(join(root, 'agent-qa-browser', 'dev-targets.json'), JSON.stringify({ version: 3,
+    targets: [], runtimePlacement: { daemon: { mode: 'local' } }, commandExecution: { mode: 'local' } }));
+  const command = ['browser', 'start', 'gpu-lane', '--stack=agent-qa-browser', '--url=http://localhost:3021', '--gpu'];
+  const unselected = await runRaw(command, root);
+  assert.equal(unselected.code, 1);
+  assert.match(unselected.stderr, /--gpu requires --target/);
+  assert.equal(unselected.stdout, '');
+  const unknown = await runRaw([...command, '--target=missing'], root);
+  assert.equal(unknown.code, 1);
+  assert.match(unknown.stderr, /QA browser hosts must be configured targets/);
+  assert.equal(unknown.stdout, '');
+});
+
 test('QA browser keeps worker failure diagnostics on stderr without polluting readiness stdout', async t => {
   const root = await mkdtemp(join(tmpdir(), 'hstack-qa-browser-error-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -78,9 +95,9 @@ test('QA browser keeps worker failure diagnostics on stderr without polluting re
   await chmod(executorPath, 0o755);
   await mkdir(join(root, 'agent-qa-browser'), { recursive: true });
   await writeFile(join(root, 'agent-qa-browser', 'dev-targets.json'), JSON.stringify({ version: 3,
-    targets: [{ name: 'linux', platform: 'posix', ssh: 'fixture-worker', repoDir: '/fixture/repo', cliHomeDir: '/fixture/home' }],
-    runtimePlacement: { daemon: { mode: 'prefer-target', target: 'linux' } }, commandExecution: { mode: 'local' } }));
-  await writeFile(join(root, 'agent-qa-browser', 'env'), 'HAPPIER_STACK_QA_DAEMON_TARGETS=linux\n');
+    targets: ['linux', 'nl1'].map(name => ({ name, platform: 'posix', ssh: 'fixture-worker', repoDir: '/fixture/repo', cliHomeDir: '/fixture/home' })),
+    runtimePlacement: { daemon: { mode: 'prefer-target', target: 'nl1' } }, commandExecution: { mode: 'local' } }));
+  await writeFile(join(root, 'agent-qa-browser', 'env'), 'HAPPIER_STACK_QA_DAEMON_TARGETS=nl1\nHAPPIER_STACK_QA_BROWSER_TARGETS=linux\n');
   const { binDir } = writeFakeBin({ root, name: 'mutagen', content:
     '#!/bin/sh\nif [ "$1 $2" = "sync list" ]; then case "$*" in *json*) printf \'[{"name":"happier-linux","paused":false,"status":"watching","successfulCycles":1,"alpha":{"connected":true,"scanned":true},"beta":{"connected":true,"scanned":true}}]\\n\' ;; *) printf "happier-linux|Watching|false|true|1|0/0|0/0|true|1|0/0|0/0|active|1|ok|0|0\\n" ;; esac; fi\n' });
   // SSH is the external process boundary; retain the real command, executor,

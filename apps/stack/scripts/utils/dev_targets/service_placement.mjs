@@ -11,8 +11,20 @@ import { hasRetainedServerData } from './retained_server_data.mjs';
 
 export const DEFAULT_QA_TARGET_NAMES = Object.freeze(['nl1', 'nl2', 'linux3', 'linux2', 'linux1']);
 
-function qaTargetNames(env, defaultTargets = []) {
-  const configured = String(env.HAPPIER_STACK_QA_DAEMON_TARGETS ?? '').split(',').map(name => name.trim()).filter(Boolean);
+/** Commands follow the service's observed placement, including local fallback. */
+export function resolveObservedDevTargetService({ config, runtimeState, service }) {
+  const name = runtimeState?.placement?.[service]
+    ?? (config.runtimePlacement?.[service]?.mode === 'prefer-target' ? config.runtimePlacement[service].target : 'local');
+  if (['local', 'disabled', 'borrowed'].includes(name)) return null;
+  const target = config.targets.find(candidate => candidate.name === name);
+  if (!target) throw new Error(`[dev-targets] ${service} target ${name} is not configured.`);
+  const runtimeMode = runtimeState?.remoteTargets?.[name]?.runtimeMode
+    ?? runtimeState?.runtimeMode ?? 'source';
+  return { target, runtimeMode };
+}
+
+function qaTargetNames(env, defaultTargets = [], envKey = 'HAPPIER_STACK_QA_DAEMON_TARGETS') {
+  const configured = String(env[envKey] ?? '').split(',').map(name => name.trim()).filter(Boolean);
   return configured.length ? configured : defaultTargets;
 }
 
@@ -77,18 +89,20 @@ export async function loadControlledRuntimeConfig({ stackName, sourceDir, preser
 
 /** Select a QA host for this browser lifetime using current available memory;
  * the Machine pin remains independent and is never initialized or moved. */
-export async function resolveControlledQaBrowserTarget({ stackName, sourceDir, env = process.env },
+export async function resolveControlledQaBrowserTarget({ stackName, sourceDir, targetName, env = process.env },
   { logger = console, runCaptureResult: runCaptureResultImpl = runCaptureResult } = {}) {
   const loaded = await loadControlledRuntimeConfig({ stackName, sourceDir,
     initializeQaDaemonPlacement: false, env }, { logger, runCaptureResult: runCaptureResultImpl });
   const daemon = loaded.config.runtimePlacement.daemon;
   if (!['prefer-target', 'local'].includes(daemon.mode)) throw new Error('[dev-targets] QA browser requires one fixed daemon host or a local daemon');
-  const names = qaTargetNames(env, DEFAULT_QA_TARGET_NAMES.filter(name => loaded.config.targets.some(target => target.name === name)));
+  const names = targetName ? [targetName] : qaTargetNames(env,
+    qaTargetNames(env, DEFAULT_QA_TARGET_NAMES.filter(name => loaded.config.targets.some(target => target.name === name))),
+    'HAPPIER_STACK_QA_BROWSER_TARGETS');
   assertQaPoolEligibility(loaded.config.targets, names, 'browser');
   sourceDir ||= getRepoDir(getRootDir(import.meta.url), env);
   const selected = await selectControlledTarget({ loaded, config: loaded.config,
     qa: { mode: 'prefer-target', targets: names }, retained: null,
-    authorityLabel: 'browser', selectMostAvailableMemory: true,
+    authorityLabel: 'browser', selectMostAvailableMemory: !targetName,
     sourceDir, env, logger, runCaptureResultImpl });
   if (!selected) throw new Error('[dev-targets] no QA browser host has a valid available-memory observation; controller-local browser fallback is disabled');
   return { ...loaded, ...selected };
