@@ -6,13 +6,14 @@ import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHub
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUtils';
-import { storage } from '@/sync/domains/state/storage';
-import { Item } from '@/components/ui/lists/Item';
-import { ConnectedAccountPurposeTargetChooser } from './ConnectedAccountPurposeTargetChooser';
 
 installDisconnectedServerSocketBoundary();
 
 it('does not present an unread purpose selection as Native when its catalog is unavailable', async () => {
+    // Runtime consumers load after the socket boundary is installed (testkit contract).
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { Item } = await import('@/components/ui/lists/Item');
+    const { ConnectedAccountPurposeTargetChooser } = await import('./ConnectedAccountPurposeTargetChooser');
     const bridge = await loadSyncSingletonForTests();
     const previous = storage.getState();
     const http = createHomeHubArtifactHttpBoundary('purpose-chooser');
