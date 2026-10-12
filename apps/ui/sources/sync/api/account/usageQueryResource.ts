@@ -651,22 +651,35 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                     decodedValues.set(content, retainUsageQueryResultReferences(reconciled, current ? decodeUsageQueryResource(current) : undefined));
                     return content;
                 };
-                let progressContent = Promise.resolve();
+                let queuedProgress: UsageQueryBatchResult | null = null;
+                let progressContent: Promise<void> | null = null;
+                const drainProgress = (): void => {
+                    if (progressContent) return;
+                    progressContent = (async () => {
+                        while (queuedProgress) {
+                            const batch = queuedProgress;
+                            queuedProgress = null;
+                            const content = await contentFor(batch);
+                            options?.onProgress?.(content);
+                        }
+                    })().finally(() => { progressContent = null; });
+                    // The final read awaits the same drain. Observe a prompt
+                    // rejection now so a slow producer cannot turn an eventual
+                    // read failure into an unhandled one.
+                    void progressContent.catch(() => {});
+                };
                 const result = await executeUsageAction('usage.query', reference.input, {
                     query: (input, actionContext) => readUiUsageQueryBatch(sharedContext, input, actionContext.signal, previous,
                         { onProgress: batch => {
-                            progressContent = progressContent.then(async () => {
-                                const content = await contentFor(batch);
-                                options?.onProgress?.(content);
-                            });
-                            // The final read awaits the same chain. Observe a
-                            // prompt rejection now so a slow producer cannot
-                            // turn an eventual read failure into an unhandled one.
-                            void progressContent.catch(() => {});
+                            queuedProgress = batch;
+                            drainProgress();
                         } }),
                 }, { signal: options?.signal });
                 requireCurrent(sharedContext, options?.signal);
                 if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
+                // The final value supersedes any progress revision that has not
+                // started materializing yet. Finish only the in-flight digest.
+                queuedProgress = null;
                 await progressContent;
                 return await contentFor(UsageQueryBatchResultSchema.parse(result.result));
             },

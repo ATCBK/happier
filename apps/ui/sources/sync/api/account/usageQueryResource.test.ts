@@ -92,6 +92,29 @@ describe('usage query captured Resource adapter', () => {
     } finally { digestGate.resolve(); release(); }
   });
 
+  it('coalesces superseded progress while an asynchronous digest is pending', async () => {
+    const captured = await context(request => request.path === '/v2/usage/query' ? Response.json(value) : undefined);
+    storage.setState({ profileScope: captured.accountLifetime.scope,
+      profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId }) });
+    const digestGate = createDeferred<void>();
+    const originalDigest = platformDigest.digest;
+    const digest = vi.spyOn(platformDigest, 'digest').mockImplementation(async (algorithm, bytes) => {
+      if (digest.mock.calls.length === 1) await digestGate.promise;
+      return await originalDigest(algorithm, bytes);
+    });
+    const entry = getUsageQueryResourceStore(captured)
+      .getEntry({ hostRead: 'usage.query', input: { queries: [{ period: { relative: '7days' } }] } });
+    const release = entry.subscribe(() => {}, false);
+    try {
+      await expect.poll(() => digest.mock.calls.length).toBe(1);
+      await flushHookEffects();
+      digestGate.resolve();
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      expect(digest).toHaveBeenCalledTimes(2);
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.accounting).toMatchObject(value);
+    } finally { digestGate.resolve(); release(); }
+  });
+
   it('re-prices retained history when captured Account price settings change without altering reported costs', async () => {
     const tokens = { input: 1_000_000, output: 500_000, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1_500_000 };
     const cost = { reportedUsd: 7, estimatedUsd: 3, currency: 'USD' };
