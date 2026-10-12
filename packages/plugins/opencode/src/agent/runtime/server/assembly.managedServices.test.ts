@@ -393,6 +393,7 @@ describe('OpenCode server managed-service assembly', () => {
         happierSessionId: 'happy-session-opencode2-request-auth',
         endpoint: { mode: 'managed-spawn' },
         env: materialized.env,
+        configParts: materialized.configPart === undefined ? [] : [materialized.configPart],
         request: {
           kind: 'create',
           sessionId: 'happy-session-opencode2-request-auth',
@@ -622,8 +623,10 @@ describe('OpenCode server managed-service assembly', () => {
       });
 
       const superviseSpec = vi.mocked(ctx.managedServices.supervise).mock.calls[0]?.[0];
-      expect(superviseSpec?.mode.kind === 'spawn' ? superviseSpec.mode.launch.env : null).toMatchObject({
-        OPENCODE_CONFIG_CONTENT: configContent,
+      const launchEnv = superviseSpec?.mode.kind === 'spawn' ? superviseSpec.mode.launch.env : undefined;
+      expect(JSON.parse(launchEnv?.OPENCODE_CONFIG_CONTENT ?? '{}')).toEqual({
+        ...JSON.parse(configContent),
+        provider: { ambient: {}, ...JSON.parse(configContent).provider },
       });
     } finally {
       await assembly?.dispose();

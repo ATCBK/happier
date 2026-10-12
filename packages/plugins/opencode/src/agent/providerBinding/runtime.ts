@@ -7,10 +7,11 @@ import type {
 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { OPENCODE_PROVIDER_CONFIG_RELATIVE_PATH } from './adapter.js';
+import { readOpenCodeConfigPart, type OpenCodeConfigPart } from '../runtime/server/opencodeConfigContent.js';
 
-export async function readOpenCodeProviderConfigContent(
+export async function readOpenCodeProviderConfigPart(
   request: AgentSessionOpenRequest | AgentExecutionRunOpenRequest,
-): Promise<string | undefined> {
+): Promise<OpenCodeConfigPart | undefined> {
   const materialization = request.providerBinding?.materialization;
   if (materialization === undefined) return undefined;
   if (
@@ -20,32 +21,8 @@ export async function readOpenCodeProviderConfigContent(
   ) {
     throw new Error('OpenCode Provider binding requires its canonical config-file materialization');
   }
-  return readFile(
+  return readOpenCodeConfigPart(await readFile(
     join(materialization.rootPath, OPENCODE_PROVIDER_CONFIG_RELATIVE_PATH),
     'utf8',
-  );
-}
-
-export async function withOpenCodeProviderConfigLaunchEnvironment(
-  request: AgentSessionOpenRequest,
-): Promise<AgentSessionOpenRequest>;
-export async function withOpenCodeProviderConfigLaunchEnvironment(
-  request: AgentExecutionRunOpenRequest,
-): Promise<AgentExecutionRunOpenRequest>;
-export async function withOpenCodeProviderConfigLaunchEnvironment(
-  request: AgentSessionOpenRequest | AgentExecutionRunOpenRequest,
-): Promise<AgentSessionOpenRequest | AgentExecutionRunOpenRequest> {
-  const providerConfigContent = await readOpenCodeProviderConfigContent(request);
-  if (providerConfigContent === undefined) return request;
-  return {
-    ...request,
-    launchEnvironment: {
-      values: {
-        ...(request.launchEnvironment?.values ?? {}),
-        OPENCODE_CONFIG_CONTENT: providerConfigContent,
-      },
-      unset: (request.launchEnvironment?.unset ?? [])
-        .filter((key) => key !== 'OPENCODE_CONFIG_CONTENT'),
-    },
-  };
+  ));
 }

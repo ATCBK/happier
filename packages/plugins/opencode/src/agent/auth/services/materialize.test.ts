@@ -111,7 +111,7 @@ describe('OpenCode connected-account auth materialization', () => {
       ]);
       await writeFile(legacyCapabilityPath, '{"token":"legacy"}', 'utf8');
 
-      const { env } = await materializeOpenCodeAuthEnvironment({
+      const { env, configPart } = await materializeOpenCodeAuthEnvironment({
         openaiCodex: buildOauth('openai-codex', 'profile-a', 'account-a'),
         connectedAccountMaterializationAuthority: 'qualified',
         materializationId: 'request-auth-openai',
@@ -129,7 +129,8 @@ describe('OpenCode connected-account auth materialization', () => {
       expect(env.HAPPIER_OPENCODE_BROKER_REFRESH_TOKEN_PATH).toBeUndefined();
       expect(env.OPENAI_API_KEY).toBe('');
       expect(env.XDG_CONFIG_HOME).toBe(configHome);
-      expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT)).toEqual({
+      expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+      expect(configPart).toEqual({
         providers: { openai: {} },
         plugins: [resolveOpenCodeRequestAuthV2PluginDir(configHome, 'openai')],
       });
@@ -274,7 +275,8 @@ describe('OpenCode connected-account auth materialization', () => {
         openai: { type: 'api', key: 'sk-openai' },
         anthropic: { type: 'api', key: 'sk-anthropic' },
       });
-      expect(JSON.parse(direct.env.OPENCODE_CONFIG_CONTENT)).toEqual({
+      expect(direct.env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+      expect(direct.configPart).toEqual({
         providers: {
           openai: { settings: { apiKey: 'sk-openai' } },
           anthropic: { settings: { apiKey: 'sk-anthropic' } },

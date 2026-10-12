@@ -9,9 +9,10 @@ import type {
 } from '@happier-dev/plugin-sdk/connected-accounts';
 
 import { OPENCODE_CONNECTED_SERVICE_SELECTION_IDENTITY_ENV } from '../../../runtime/server/managedServerState.js';
+import type { OpenCodeConfigPart } from '../../../runtime/server/opencodeConfigContent.js';
 import {
   ensureOpenCodeRequestAuthPluginAssets,
-  buildOpenCodeV2ConnectedAuthConfigContent,
+  buildOpenCodeV2ConnectedAuthConfigPart,
   OPEN_CODE_REQUEST_AUTH_CAPABILITY_PATH_ENV,
   readOpenCodeRequestAuthMaterialization,
   retireCompetingOpenCodeAuthAssets,
@@ -224,7 +225,7 @@ export function buildOpenCodeAuthContent(input: OpenCodeAuthMaterializationInput
 
 export async function materializeOpenCodeAuthEnvironment(
   input: OpenCodeAuthEnvironmentInput,
-): Promise<Readonly<{ env: Readonly<Record<string, string>> }>> {
+): Promise<Readonly<{ env: Readonly<Record<string, string>>; configPart?: OpenCodeConfigPart }>> {
   const projectedRequestAuth = readProjectedRequestAuth(input);
   const materialized = materializeAuth(input, projectedRequestAuth);
   const env: Record<string, string> = {
@@ -243,7 +244,7 @@ export async function materializeOpenCodeAuthEnvironment(
   const configHome = resolveOpenCodeConnectedConfigHomeDir(rootDir);
   await retireCompetingOpenCodeAuthAssets(rootDir, configHome);
   env.XDG_CONFIG_HOME = configHome;
-  env.OPENCODE_CONFIG_CONTENT = buildOpenCodeV2ConnectedAuthConfigContent({
+  const configPart = buildOpenCodeV2ConnectedAuthConfigPart({
     configHome,
     requestAuthProviders: materialized.requestAuthProviders,
     directApiKeys: readDirectApiKeys(materialized),
@@ -271,5 +272,5 @@ export async function materializeOpenCodeAuthEnvironment(
     env[OPEN_CODE_REQUEST_AUTH_CAPABILITY_PATH_ENV] = projectedRequestAuth.capabilityPath;
   }
 
-  return { env };
+  return { env, configPart };
 }

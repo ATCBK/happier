@@ -11,6 +11,11 @@ import {
 import type { OpenCodeSystemToolId } from '../../systemTool.js';
 import { OPEN_CODE_MANAGED_SERVER_STARTUP_TIMEOUT_MS } from './timeoutPolicy.js';
 import { openCodeServerHealthPath, type OpenCodeServerDialect } from './dialect.js';
+import {
+  mergeOpenCodeConfigContent,
+  readOpenCodeConfigPart,
+  type OpenCodeConfigPart,
+} from './opencodeConfigContent.js';
 
 /**
  * The complete ambient environment an owned `opencode serve` child may inherit.
@@ -42,22 +47,38 @@ export const OPENCODE_DATA_ROOT_OVERRIDE_ENV_KEYS = Object.freeze([
   'HOME',
 ] as const);
 
+export function buildOpenCodeConfigLaunchEnvironment(
+  env: Readonly<Record<string, string>> | undefined,
+  configParts: readonly OpenCodeConfigPart[] = [],
+): Readonly<Record<string, string>> {
+  const { OPENCODE_CONFIG_CONTENT: baseContent, ...values } = env ?? {};
+  const parts = [
+    ...(baseContent === undefined ? [] : [readOpenCodeConfigPart(baseContent)]),
+    ...configParts,
+  ];
+  return Object.freeze({
+    ...values,
+    ...(parts.length === 0 ? {} : { OPENCODE_CONFIG_CONTENT: mergeOpenCodeConfigContent(parts) }),
+  });
+}
+
 export function buildOpenCodeManagedLaunchEnvironment(
   env: Readonly<Record<string, string>> | undefined,
   permissionMode: string | null | undefined,
-  providerConfigContent: string | undefined,
+  configParts: readonly OpenCodeConfigPart[] = [],
   additionalEnv?: Readonly<Record<string, string>>,
 ): Readonly<Record<string, string>> {
-  return Object.freeze({
+  const { OPENCODE_CONFIG_CONTENT: additionalContent, ...additionalValues } = additionalEnv ?? {};
+  return buildOpenCodeConfigLaunchEnvironment({
     ...Object.fromEntries(OPENCODE_CHILD_LAUNCH_ENV_KEYS.flatMap((key) => (
       typeof env?.[key] === 'string' ? [[key, env[key]]] : []
     ))),
-    ...(providerConfigContent === undefined
-      ? {}
-      : { OPENCODE_CONFIG_CONTENT: providerConfigContent }),
     ...buildOpenCodePermissionEnv(permissionMode),
-    ...(additionalEnv ?? {}),
-  });
+    ...additionalValues,
+  }, [
+    ...configParts,
+    ...(additionalContent === undefined ? [] : [readOpenCodeConfigPart(additionalContent)]),
+  ]);
 }
 
 /**
@@ -78,7 +99,7 @@ export function buildOpenCodeManagedServerSpawnSpec(params: Readonly<{
   systemToolId: OpenCodeSystemToolId;
   env?: Readonly<Record<string, string>>;
   permissionMode?: string | null;
-  providerConfigContent?: string;
+  configParts?: readonly OpenCodeConfigPart[];
   additionalEnv?: Readonly<Record<string, string>>;
   durableLog?: boolean;
 }>): ManagedServiceSpec {
@@ -100,7 +121,7 @@ export function buildOpenCodeManagedServerSpawnSpec(params: Readonly<{
         env: buildOpenCodeManagedLaunchEnvironment(
           params.env,
           params.permissionMode,
-          params.providerConfigContent,
+          params.configParts,
           params.additionalEnv,
         ),
       },

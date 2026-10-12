@@ -21,7 +21,8 @@ import {
 import { resolveOpenCodeManagedServerDialect } from './managedServerDialect.js';
 import { buildOpenCodeManagedServerAttachSpec } from './attachSpec.js';
 import { buildOpenCodeManagedServerSpawnSpec } from './spawnSpec.js';
-import { readOpenCodeProviderConfigContent } from '../../providerBinding/runtime.js';
+import { readOpenCodeProviderConfigPart } from '../../providerBinding/runtime.js';
+import type { OpenCodeConfigPart } from './opencodeConfigContent.js';
 import {
   buildOpenCodeSessionMcpProjection,
   disconnectOpenCodeMcpServers,
@@ -105,7 +106,8 @@ async function resolveOpenCodeServer(params: Readonly<{
   directory: string;
   endpoint: OpenCodeServerEndpoint;
   env?: Readonly<Record<string, string>>;
-  providerConfigContent?: string;
+  providerConfigPart?: OpenCodeConfigPart;
+  configParts?: readonly OpenCodeConfigPart[];
   permissionMode?: string | null;
   signal?: AbortSignal;
   systemToolId: OpenCodeSystemToolId;
@@ -118,7 +120,7 @@ async function resolveOpenCodeServer(params: Readonly<{
     if (params.requestAuthRequested) {
       throw new Error('OpenCode request authentication requires a managed server');
     }
-    if (params.providerConfigContent !== undefined) {
+    if (params.providerConfigPart !== undefined) {
       throw new Error('OpenCode Provider binding requires a managed server');
     }
     if (
@@ -160,9 +162,10 @@ async function resolveOpenCodeServer(params: Readonly<{
     ...(params.permissionMode === undefined
       ? {}
       : { permissionMode: params.permissionMode }),
-    ...(params.providerConfigContent === undefined
-      ? {}
-      : { providerConfigContent: params.providerConfigContent }),
+    configParts: [
+      ...(params.providerConfigPart === undefined ? [] : [params.providerConfigPart]),
+      ...(params.configParts ?? []),
+    ],
   });
   const managedService = await params.ctx.managedServices.supervise(
     spec,
@@ -182,6 +185,7 @@ type OpenCodeServerRuntimeAssemblyCommon = Readonly<{
   directory: string;
   endpoint: OpenCodeServerEndpoint;
   env?: Readonly<Record<string, string>>;
+  configParts?: readonly OpenCodeConfigPart[];
   permissionMode?: string | null;
   mcpServers?: unknown;
   signal?: AbortSignal;
@@ -219,7 +223,7 @@ export async function createOpenCodeServerRuntimeAssembly(
   let managedServiceObservation: Disposable | null = null;
   let disposed = false;
   try {
-    const providerConfigContent = await readOpenCodeProviderConfigContent(params.request);
+    const providerConfigPart = await readOpenCodeProviderConfigPart(params.request);
     const launchValues: Readonly<Record<string, unknown>> = {
       ...(params.ctx.config?.values ?? {}),
       ...(params.env ?? {}),
@@ -238,7 +242,8 @@ export async function createOpenCodeServerRuntimeAssembly(
       directory: params.directory,
       endpoint: params.endpoint,
       env: params.env,
-      providerConfigContent,
+      providerConfigPart,
+      configParts: params.configParts,
       permissionMode: params.permissionMode,
       signal: params.signal,
       systemToolId,

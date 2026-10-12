@@ -8,6 +8,7 @@ import {
 } from '@happier-dev/plugin-sdk/connected-accounts';
 
 import type { OpenCodeRequestAuthPurposeMap } from './env.js';
+import type { OpenCodeConfigPart } from '../../../runtime/server/opencodeConfigContent.js';
 import {
   buildOpenCodeRequestAuthPluginSource,
   buildOpenCodeRequestAuthV2PluginSource,
@@ -46,24 +47,11 @@ export function resolveOpenCodeRequestAuthV2PluginSourcePath(
   return join(resolveOpenCodeRequestAuthV2PluginDir(configHome, provider), 'index.js');
 }
 
-export function buildOpenCodeV2ConnectedAuthConfigContent(input: Readonly<{
+export function buildOpenCodeV2ConnectedAuthConfigPart(input: Readonly<{
   configHome: string;
   requestAuthProviders: readonly OpenCodeRequestAuthProvider[];
   directApiKeys: Readonly<Partial<Record<OpenCodeRequestAuthProvider, string>>>;
-  baseContent?: string;
-}>): string {
-  const parsed = typeof input.baseContent === 'string' && input.baseContent.trim().length > 0
-    ? JSON.parse(input.baseContent) as unknown
-    : {};
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('OpenCode config content must be a JSON object');
-  }
-  const config = { ...(parsed as Record<string, unknown>) };
-  const legacyPlugins = Array.isArray(config.plugin) ? config.plugin : [];
-  const nativePlugins = Array.isArray(config.plugins) ? config.plugins : [];
-  const configuredProviders = config.providers && typeof config.providers === 'object' && !Array.isArray(config.providers)
-    ? config.providers as Record<string, unknown>
-    : {};
+}>): OpenCodeConfigPart {
   const connectedProviders: Record<string, unknown> = {};
   for (const provider of ['openai', 'anthropic'] as const) {
     const directKey = input.directApiKeys[provider];
@@ -73,18 +61,14 @@ export function buildOpenCodeV2ConnectedAuthConfigContent(input: Readonly<{
       connectedProviders[provider] = {};
     }
   }
-  delete config.plugin;
-  return JSON.stringify({
-    ...config,
-    providers: { ...configuredProviders, ...connectedProviders },
+  return {
+    providers: connectedProviders,
     plugins: [
-      ...legacyPlugins,
-      ...nativePlugins,
       ...input.requestAuthProviders.map((provider) => (
         resolveOpenCodeRequestAuthV2PluginDir(input.configHome, provider)
       )),
     ],
-  });
+  };
 }
 
 export async function retireCompetingOpenCodeAuthAssets(

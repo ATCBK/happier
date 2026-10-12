@@ -24,7 +24,8 @@ import {
   createOpenCodeNativeSessionControls,
   type OpenCodeActiveSkillsReaderRegistrar,
 } from './controls.js';
-import { withOpenCodeProviderConfigLaunchEnvironment } from '../providerBinding/runtime.js';
+import { readOpenCodeProviderConfigPart } from '../providerBinding/runtime.js';
+import { buildOpenCodeConfigLaunchEnvironment } from './server/spawnSpec.js';
 import { prepareOpenCodeQualifiedConnectedAccounts } from '../auth/services/qualifiedPurposeLaunch.js';
 import { openCodeHandoffSurface } from '../surfaces/sessions/handoff/descriptor.js';
 import { resolveOpenCodeReplayChildLaunch } from '../surfaces/sessions/fork/descriptor.js';
@@ -62,11 +63,29 @@ function readOpenCodeSystemToolId(
   );
 }
 
+async function withOpenCodeConfigLaunchEnvironment<
+  Request extends AgentSessionOpenRequest | AgentExecutionRunOpenRequest,
+>(request: Request): Promise<Request> {
+  const providerConfigPart = await readOpenCodeProviderConfigPart(request);
+  if (providerConfigPart === undefined) return request;
+  const values = buildOpenCodeConfigLaunchEnvironment(
+    request.launchEnvironment?.values,
+    [providerConfigPart],
+  );
+  return {
+    ...request,
+    launchEnvironment: {
+      values,
+      unset: (request.launchEnvironment?.unset ?? []).filter((key) => !(key in values)),
+    },
+  };
+}
+
 async function openOpenCodeAcpExecutionRun(
   request: AgentExecutionRunOpenRequest,
   context: AgentExecutionRunRuntimeContextV1,
 ): Promise<AgentExecutionRunRuntime> {
-  const launchRequest = await withOpenCodeProviderConfigLaunchEnvironment(request);
+  const launchRequest = await withOpenCodeConfigLaunchEnvironment(request);
   return await context.protocols.acp.openExecutionRunV1(launchRequest, {
     transport: {
       kind: 'stdio',
@@ -106,7 +125,7 @@ async function openOpenCodeAcpSession(
   request: AgentSessionOpenRequest,
   context: AgentRuntimeContext,
 ) {
-  const launchRequest = await withOpenCodeProviderConfigLaunchEnvironment(request);
+  const launchRequest = await withOpenCodeConfigLaunchEnvironment(request);
   return context.protocols.acp.open(launchRequest, {
     transport: {
       kind: 'stdio',
