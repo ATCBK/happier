@@ -119,7 +119,14 @@ A few rules keep that claim predictable:
   `readableSchemaVersions`.
 - Any schema, index, or query change needs a new `schemaVersion`. A changed
   declaration under the same `schemaVersion` is refused and the current writer
-  stays in place.
+  stays in place. This includes changes to JSON Schemas imported from another
+  package. In 0.3 development source, the daemon retains the typed
+  `plugin_collection_contract_conflict` for unchanged claim inputs, so repeated
+  Collection operations do not resend the manifest or make an unavailable
+  Collection look empty. Update the plugin's `schemaVersion` and migration,
+  then reload the corrected plugin. Changed declarations, plugin occurrences,
+  Accounts or Account Availability invalidations allow a fresh claim; network
+  and 5xx server failures still retry on the next operation.
 - In 0.3 development source, moving an empty Collection to a new `schemaVersion`
   is immediate. For populated Collections that need a migration, the daemon
   loads the declaring plugin's exported `collectionMigrations` and uses the same candidate
@@ -131,6 +138,20 @@ A few rules keep that claim predictable:
   unchanged; a later operation can retry. Data erasure is not an upgrade step.
   The existing release-path shortcut for optional private-field additions can
   adopt the new identity directly after validating retained rows.
+
+## Portable migration entries
+
+In 0.3 development source, a Collection's `migrationArtifact` selects a portable
+entry whose zero-argument `collectionMigrations()` returns the callback map keyed
+by Collection id. Share those migration arrays with the Collection definitions
+so both paths use the same callbacks and migration identities.
+
+Keep that entry and its dependencies pure. Importing the full daemon plugin
+definition can pull in Node APIs and make the artifact fail to compile. The
+Plugin UI build supplies the complete manifest it captured for discovery; authors
+do not copy or rebuild a second manifest in the migration entry. The compiled
+export returns `{ manifest, collectionMigrations }` for the candidate loader's
+existing validation. Node built-ins remain unsupported in portable artifacts.
 
 ## Writing more rows than one batch carries
 

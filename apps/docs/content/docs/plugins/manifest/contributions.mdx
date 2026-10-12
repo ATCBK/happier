@@ -82,13 +82,28 @@ reusable primitive or semantic inputs for Action forms, Workflow inputs and
 widgets. Each plugin-local descriptor has a `title`, `semantic` identity and
 self-contained `valueSchema`; it can reference a declared options Resource and
 an existing picker in `ui.renderers`. Fields refer to the type through its
-qualified `{ pluginId, localId }` identity. Typed fields currently reject
-field-level static choices, and contributed typed fields cannot declare a
-different `optionsSourceId` from their type source. Broader authored constraints
-are not yet supported across executable consumers. Workflow inputs retain their
-existing exclusion between a type and an explicit source or enum, and public
-plugin Action hints retain their narrower source grammar. Choice discovery
+qualified `{ pluginId, localId }` identity. Typed fields may declare static
+`options` containing schema-admitted JSON values to narrow the available choices;
+options never widen the type schema or its declared Resource choices. If a type
+has an options Resource, field choices intersect that Resource and fail closed
+while it is unavailable. Neutral widget fields may instead use an explicit
+`optionsSourceId`; its resolved choices also narrow the schema and declared
+Resource choices. Pickers, mounted values and
+headless contributed Action submissions share this validation, including
+disabled-choice rejection and comparison before host normalization. Workflow
+inputs retain their existing exclusion between a type and an explicit source or
+enum, and public plugin Action hints still reject arbitrary `optionsSourceId`.
+Choice discovery
 still requires the admitted consuming descriptor and its existing grants.
+
+Fields share one input-hints contract. Keep `title` as a short noun, such as
+`Repository`, and optionally declare `prompt: 'Which repository?'` for the
+setup question. Widget setup, group Inputs, saved-group Add and shared
+Action/Workflow forms show `prompt` when present and otherwise use `title`.
+The optional prompt supports the same localization as the title; it changes
+presentation only, leaving input values, validation, requiredness and authority
+unchanged. Summaries continue to use the noun title. This field is part of the
+current 0.3 development authoring contract.
 
 For personal usage in **0.3 development authoring**, a field can instead declare
 `inputType: { hostType: 'usageQuery' }`. This is a host semantic reference, not a
@@ -101,6 +116,13 @@ selected accounting sections as JSON, CSV or text file bytes. Its `asOfMs` is th
 source timestamp, or `null` when freshness is unknown; saving or sharing
 those bytes is a separate explicit client operation. See the generated
 [host Actions](/plugins/api/host-actions) for the exact Action projection.
+
+Built-in Usage scope inputs share the toolbar's accounting choices, including
+standalone Home copies; an empty selection means all. Ordinary Usage widgets
+offer one **Group by** choice without changing the query's array-valued breakdown
+contract. Previously saved multi-dimension arrays remain selectable, while the
+Breakdowns widget explicitly offers several dimensions. Advanced query callers
+can still request every supported breakdown dimension.
 
 `connectedAccountOptions: true` is a separate marker for a `select` field, not
 an `inputType`. Do not combine it with static options, `optionsSourceId` or
