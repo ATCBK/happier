@@ -17,6 +17,42 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 }
 
 describe('discoverLocalServiceRunTargets', () => {
+    it('names detected listeners from one matching declaration in their own accepted checkout without granting managed custody', async () => {
+        const root = await makeRepo();
+        try {
+            await mkdir(join(root, '.happier'));
+            await writeJson(join(root, '.happier/project.json'), { version: 1, services: {
+                api: { source: { kind: 'command', command: 'node api.js' }, port: 3005 },
+                commandOnly: { source: { kind: 'command', command: 'node web.js' } },
+                duplicateA: { source: { kind: 'command', command: 'node a.js' }, port: 6006 },
+                duplicateB: { source: { kind: 'command', command: 'node b.js' }, port: 6006 },
+            } });
+            const runTargets = await discoverLocalServiceRunTargets({ roots: [root], acceptedWorkspaceRefs: [{
+                id: 'accepted', serverId: 'home', machineId: 'machine', rootPath: root, createdAtMs: 1,
+            }] });
+            const entry = (id: string, port: number, cwd: string, command: string) => ({
+                id, machineId: 'machine', address: { kind: 'wildcard' as const, host: '::', family: 'ipv6' as const },
+                port, protocol: 'tcp' as const, detectedAt: 1, lastSeenAt: 1, state: 'listening' as const,
+                source: 'detected' as const, labels: [], confidence: 'high' as const,
+                processOwnershipConfidence: 'medium' as const, workspaceAssociationConfidence: 'high' as const,
+                diagnostics: [], presentation: { addressLabel: `localhost:${port}`, displayName: 'node' },
+                provenance: { process: { pid: port, lineagePids: [port], command, cwd, redacted: true as const } },
+            });
+            const snapshot = LocalServiceLauncherSnapshotV1Schema.parse(buildLocalServiceLauncherSnapshot({
+                machineId: 'machine', updatedAt: 1, runTargets, previewResources: [], inventoryEntries: [
+                    entry('api', 3005, root, 'node api.js'),
+                    entry('command', 5173, root, 'node web.js'),
+                    entry('ambiguous', 6006, root, 'node unrelated.js'),
+                    entry('foreign', 3005, `${root}-other`, 'node api.js'),
+                ],
+            }));
+            expect(snapshot.targets.filter(target => target.source === 'inventory_entry').map(target => [target.id, target.title]))
+                .toEqual([['inventory:api', 'api'], ['inventory:foreign', 'node'],
+                    ['inventory:command', 'commandOnly'], ['inventory:ambiguous', 'node']]);
+            expect(snapshot.targets.filter(target => target.source === 'inventory_entry')
+                .every(target => !target.declaration && !target.actions.includes('manage'))).toBe(true);
+        } finally { await rm(root, { recursive: true, force: true }); }
+    });
     it('keeps accepted package presentation on the same contained manager selection as native execution', async () => {
         const parent = await makeRepo();
         const root = join(parent, 'accepted');

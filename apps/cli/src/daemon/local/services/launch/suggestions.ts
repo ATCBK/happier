@@ -5,7 +5,7 @@ import type {
     LocalServiceLaunchTargetV1,
     LocalServicePreviewResourceV1,
 } from '@happier-dev/protocol';
-import { LOCAL_SERVICE_LAUNCH_TARGET_TITLE_MAX_LENGTH } from '@happier-dev/protocol/local/services/launcher/v1';
+import { LOCAL_SERVICE_LAUNCH_TARGET_TITLE_MAX_LENGTH, LOCAL_SERVICE_LAUNCH_TARGET_COMMAND_PREVIEW_MAX_LENGTH } from '@happier-dev/protocol/local/services/launcher/v1';
 
 import type { LocalServiceLauncherRunTarget } from './runTargets';
 import type { NormalizedLocalServiceInventoryEntry } from '../inventory/scanner';
@@ -15,9 +15,13 @@ import { resolveLocalServiceActionEligibility } from '../actions/policy';
 /** Bound display text without changing the source/declaration used for admission. */
 export function formatLocalServiceLauncherTitle(value: string): string {
     const title = value.trim() || JSON.stringify(value);
-    if (title.length <= LOCAL_SERVICE_LAUNCH_TARGET_TITLE_MAX_LENGTH) return title;
+    return clipLauncherText(title, LOCAL_SERVICE_LAUNCH_TARGET_TITLE_MAX_LENGTH);
+}
+
+function clipLauncherText(value: string, maxLength: number): string {
+    if (value.length <= maxLength) return value;
     // Avoid leaving half a UTF-16 pair when the wire's string-length bound clips a label.
-    return `${title.slice(0, LOCAL_SERVICE_LAUNCH_TARGET_TITLE_MAX_LENGTH - 1).replace(/[\uD800-\uDBFF]$/u, '')}…`;
+    return `${value.slice(0, maxLength - 1).replace(/[\uD800-\uDBFF]$/u, '')}…`;
 }
 
 export type BuildLocalServiceLauncherSnapshotInput = Readonly<{
@@ -79,8 +83,25 @@ function entryTitle(entry: NormalizedLocalServiceInventoryEntry): string {
 }
 
 function entryCommandPreview(entry: NormalizedLocalServiceInventoryEntry): string | undefined {
-    const command = entry.provenance?.process?.command;
-    return command && command !== 'unknown' ? command : undefined;
+    const command = entry.provenance?.process?.command?.trim();
+    return command && command !== 'unknown'
+        ? clipLauncherText(command, LOCAL_SERVICE_LAUNCH_TARGET_COMMAND_PREVIEW_MAX_LENGTH) : undefined;
+}
+
+function declarationTitleForEntry(
+    entry: NormalizedLocalServiceInventoryEntry,
+    runTargets: readonly LocalServiceLauncherRunTarget[],
+): string | undefined {
+    const cwd = entry.provenance?.process?.cwd ?? entry.provenance?.workspace?.path;
+    if (!cwd) return undefined;
+    const command = entry.provenance?.process?.command?.trim();
+    const matches = runTargets.filter(target => 'declaration' in target && target.workspace.machineId === entry.machineId
+        && isWorkspacePathWithin(target.cwd, cwd) && target.displayMatch
+        && (target.displayMatch.port === entry.port
+            || command && target.displayMatch.command?.trim() === command));
+    // A shared port/command is not enough to choose between two declarations.
+    const [match] = matches;
+    return matches.length === 1 && match && 'declaration' in match ? formatLocalServiceLauncherTitle(match.title) : undefined;
 }
 
 function previewMatchesEntry(
@@ -215,6 +236,7 @@ function targetFromInventoryEntry(
     entry: NormalizedLocalServiceInventoryEntry,
     preview: LocalServicePreviewResourceV1 | undefined,
     terminateDetectedEnabled: boolean,
+    declarationTitle?: string,
 ): LocalServiceLaunchTargetV1 {
     const attributedSessionId = entry.provenance?.session?.id;
     if (entry.state !== 'listening') {
@@ -227,7 +249,7 @@ function targetFromInventoryEntry(
             },
             machineId: entry.machineId,
             ...(attributedSessionId ? { sessionId: attributedSessionId } : {}),
-            title: entryTitle(entry),
+            title: declarationTitle ?? entryTitle(entry),
             subtitle: addressLabel(entry),
             kind: entry.classification?.kind,
             commandPreview: entryCommandPreview(entry),
@@ -261,7 +283,7 @@ function targetFromInventoryEntry(
         },
         machineId: entry.machineId,
         ...(attributedSessionId ? { sessionId: attributedSessionId } : {}),
-        title: entryTitle(entry),
+        title: declarationTitle ?? entryTitle(entry),
         subtitle: addressLabel(entry),
         kind: entry.classification?.kind,
         cwd: entry.provenance?.process?.cwd,
@@ -352,7 +374,8 @@ export function buildLocalServiceLauncherSnapshot(
 
     for (const entry of availableInventoryEntries) {
         const preview = previews.find((candidate) => previewMatchesEntry(candidate, entry));
-        targets.push(targetFromInventoryEntry(entry, preview, input.terminateDetectedEnabled === true));
+        targets.push(targetFromInventoryEntry(entry, preview, input.terminateDetectedEnabled === true,
+            declarationTitleForEntry(entry, input.runTargets)));
     }
 
     for (const target of input.runTargets) {
@@ -374,7 +397,8 @@ export function buildLocalServiceLauncherSnapshot(
 
     for (const entry of unavailableInventoryEntries) {
         const preview = previews.find((candidate) => previewMatchesEntry(candidate, entry));
-        targets.push(targetFromInventoryEntry(entry, preview, input.terminateDetectedEnabled === true));
+        targets.push(targetFromInventoryEntry(entry, preview, input.terminateDetectedEnabled === true,
+            declarationTitleForEntry(entry, input.runTargets)));
     }
 
     return {

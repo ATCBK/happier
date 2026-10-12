@@ -119,6 +119,7 @@ export type LocalServiceLaunchTargetStateV1 = z.infer<typeof LocalServiceLaunchT
 
 /** Presentation bound only; declaration identity remains lossless. */
 export const LOCAL_SERVICE_LAUNCH_TARGET_TITLE_MAX_LENGTH = 256;
+export const LOCAL_SERVICE_LAUNCH_TARGET_COMMAND_PREVIEW_MAX_LENGTH = 1_000;
 
 export const LocalServiceLaunchTargetV1Schema = lazyZodSchema(() => z
   .object({
@@ -141,7 +142,7 @@ export const LocalServiceLaunchTargetV1Schema = lazyZodSchema(() => z
     title: z.string().trim().min(1).max(LOCAL_SERVICE_LAUNCH_TARGET_TITLE_MAX_LENGTH),
     subtitle: z.string().trim().min(1).max(512).optional(),
     kind: z.string().trim().min(1).max(128).optional(),
-    commandPreview: z.string().trim().min(1).max(1_000).optional(),
+    commandPreview: z.string().trim().min(1).max(LOCAL_SERVICE_LAUNCH_TARGET_COMMAND_PREVIEW_MAX_LENGTH).optional(),
     confidence: LocalServiceInventoryConfidenceV1Schema,
     state: LocalServiceLaunchTargetStateV1Schema,
     unavailableReason: z.string().trim().min(1).max(256).optional(),

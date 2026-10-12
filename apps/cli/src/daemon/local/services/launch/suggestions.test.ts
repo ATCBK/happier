@@ -57,6 +57,19 @@ function inventoryEntry(overrides: Partial<NormalizedLocalServiceInventoryEntry>
 
 
 describe('buildLocalServiceLauncherSnapshot', () => {
+    it('projects a long observed process command into the existing preview bound without losing the listener', () => {
+        const command = `node server.js --description ${'x'.repeat(1_500)}`;
+        const snapshot = buildLocalServiceLauncherSnapshot({ machineId: 'machine-a', updatedAt: 1,
+            runTargets: [], previewResources: [], inventoryEntries: [inventoryEntry({
+                provenance: { process: { pid: 400, lineagePids: [400], cwd: '/repo/web', command, redacted: true } },
+            })],
+        });
+        const parsed = LocalServiceLauncherSnapshotV1Schema.parse(snapshot);
+        expect(parsed.targets).toHaveLength(1);
+        expect(parsed.targets[0]?.commandPreview?.endsWith('…')).toBe(true);
+        expect(command.startsWith(parsed.targets[0]?.commandPreview?.slice(0, -1) ?? '')).toBe(true);
+        expect(parsed.targets[0]?.sourceClass).toEqual({ kind: 'inventory_entry', inventoryEntryId: 'inventory-a' });
+    });
     it('preserves preview access both with and before observed listener evidence', () => {
         const preview = {
             previewId: 'preview-a', sessionId: 'session-a', machineId: 'machine-a',

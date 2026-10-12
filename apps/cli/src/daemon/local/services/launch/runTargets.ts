@@ -32,6 +32,8 @@ export type LocalServiceDeclarationRunTarget = Readonly<{
     workspace: WorkspaceAddressV1;
     declaration: ProjectServiceDeclarationRefV1;
     title: string;
+    /** Naming evidence only; it never gives a detected process managed custody. */
+    displayMatch?: Readonly<{ port?: number; command?: string }>;
     packageScript?: Readonly<{ packageName: string; packageManager: LocalServicePackageManager; scriptName: string }>;
 }>;
 export type LocalServiceLauncherRunTarget = LocalServiceRunTarget | LocalServiceDeclarationRunTarget;
@@ -147,8 +149,10 @@ export async function discoverLocalServiceRunTargets(input: Readonly<{
         }
         const manifest = await readProjectManifest({ root: workspace.rootPath });
         if (manifest.document?.status === 'valid') {
-            for (const name of Object.keys(manifest.document.manifest.services ?? {})) {
-                declarations.push(declarationTarget(workspace, { kind: 'manifest', name }));
+            for (const [name, service] of Object.entries(manifest.document.manifest.services ?? {})) {
+                declarations.push({ ...declarationTarget(workspace, { kind: 'manifest', name }),
+                    displayMatch: { ...(service.port !== undefined ? { port: service.port } : {}),
+                        ...(service.source.kind === 'command' ? { command: service.source.command } : {}) } });
             }
         }
         const detected = await inspectProjectDefinitions(workspace.rootPath);
