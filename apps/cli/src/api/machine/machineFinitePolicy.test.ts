@@ -7,8 +7,32 @@ import { decodePlainMachineStoredContent, encodePlainMachineStoredContent, MACHI
 import { MachineUpdateMetadataRequestSchema } from '@happier-dev/protocol/machines/metadataUpdate';
 import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import type { Machine } from '../types';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
+import { ApiClient } from '../api';
 
 describe('Machine metadata finite policy carrier', () => {
+  it.each(['get', 'set'] as const)('emits the registered Machine worker policy %s contract through real metadata decoding/CAS', async operation => {
+    let row = MachinePublishedRowV1Schema.parse({ id: 'target-世界', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+      metadata: encodePlainMachineStoredContent({ host: 'worker-世界', platform: 'linux', happyCliVersion: 'dev',
+        homeDir: '/h/世界', happyHomeDir: '/h/世界/.happier', happyLibDir: '/lib', privateCollectorField: 'ignored' }),
+      metadataVersion: 1, daemonState: null, daemonStateVersion: 0 });
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => ({ status: 200,
+      data: url.endsWith('/v1/account/encryption') ? { mode: 'plain', updatedAt: 1 } : { machine: row },
+    }));
+    onTestFinished(() => get.mockRestore());
+    const api = await ApiClient.create({ token: 'policy-contract-token', encryption: null });
+    const client = createMachineFinitePolicyClient({ machineId: row.id, readMachine: () => api.getMachine(row.id),
+      // The metadata socket ACK is the network boundary; codec/CAS owners stay real.
+      updateMetadata: async request => {
+        row = { ...row, metadata: request.metadata, metadataVersion: row.metadataVersion + 1 };
+        return { result: 'success', version: row.metadataVersion, metadata: row.metadata! };
+      },
+    });
+    const output = operation === 'get' ? await client.get() : await client.set({ expectedMetadataVersion: 1,
+      expectedPolicy: { accepting: true, runAtMost: null }, policy: { accepting: false, runAtMost: 2 } });
+    assertActionOutputContract(operation === 'get' ? 'machines.worker.policy.get' : 'machines.worker.policy.set', output);
+    expect(output).toMatchObject({ status: operation === 'get' ? 'ready' : 'applied' });
+  });
   it('retains finite admission policy when opening metadata', () => {
     expect(MachineMetadataSchema.parse({
       host: 'worker', platform: 'linux', happyCliVersion: 'dev',

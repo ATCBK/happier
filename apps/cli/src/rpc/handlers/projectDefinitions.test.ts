@@ -15,6 +15,7 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { reloadConfiguration } from '@/configuration';
 import { updateSettings } from '@/persistence';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -25,22 +26,50 @@ async function setup(nativeIo?: ProjectNativeCommandIo, reviewInput?: (root: str
   roots.push(root);
   const workspace = { serverId: homeId, machineId: 'machine-a', workspaceId: 'workspace-a', rootPath: root };
   const handlers = new Map<string, (input: unknown, context?: RpcHandlerContext) => Promise<unknown>>();
-  const executor = createActionExecutor({ ...createCliActionDeps({ token: 'fixture-token', mode: 'plain', ctx: null,
-    sessionId: 'project-definition-fixture', serverId: profileId, serverHttpBaseUrl: 'https://project-definition.example' }),
-    projectDefinitionAction: createProjectDefinitionAction({
+  const producer = createProjectDefinitionAction({
     serverId: profileId, machineId: workspace.machineId, workingDirectory: root,
     accessPolicy: { kind: 'restrictedRoots', roots: [root] },
     ...(nativeIo ? { nativeIo } : {}),
     ...(reviewInput ? { inspectSetupReadiness: async () => inspectProjectSetupReadiness(reviewInput(root)) } : {}),
-  }) });
+  });
+  const executor = createActionExecutor({ ...createCliActionDeps({ token: 'fixture-token', mode: 'plain', ctx: null,
+    sessionId: 'project-definition-fixture', serverId: profileId, serverHttpBaseUrl: 'https://project-definition.example' }),
+    projectDefinitionAction: producer });
   registerProjectDefinitionHandlers({
     rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } },
     machineId: workspace.machineId, actionExecutor: executor,
   });
-  return { root, workspace, handlers };
+  return { root, workspace, handlers, producer };
 }
 
 describe('project definition Actions through registered Machine RPC', () => {
+  it.each(['projects.inspect', 'projects.manifest.update'] as const)('emits the registered %s contract from real files with unicode, long commands and unknown author fields', async actionId => {
+    const h = await setup({ resolveTool: async tool => tool === 'make' ? { executablePath: '/installed/make' } : null });
+    await writeFile(join(h.root, 'Makefile'), 'check:\n\techo 世界\n');
+    await writeFile(join(h.root, 'package.json'), JSON.stringify({ scripts: {
+      'test:世界': `echo ${'🚀'.repeat(800)}`, dev: 'node server.js --host=0.0.0.0',
+    } }));
+    const bytes = JSON.stringify({ version: 1, futureAuthorField: { label: '界🚀' }, scripts: {
+      'verify:世界': { source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } },
+    } });
+    if (actionId === 'projects.inspect') {
+      await mkdir(join(h.root, '.happier'));
+      await writeFile(join(h.root, '.happier/project.json'), bytes);
+    }
+    const input = actionId === 'projects.inspect' ? { workspace: h.workspace }
+      : { workspace: h.workspace, expectedBasis: { kind: 'absent' as const }, bytes };
+    // Inspect the producer before terminal Action validation can hide a malformed payload.
+    const output = await h.producer({ actionId, input, context: { serverId: h.workspace.serverId } });
+    assertActionOutputContract(actionId, output);
+    expect(output).toMatchObject(actionId === 'projects.inspect'
+      ? { detection: { entries: expect.any(Array) }, commands: [{ name: 'verify:世界' }] }
+      : { status: 'saved' });
+    const rpcOutput = await h.handlers.get(actionId === 'projects.inspect'
+      ? 'daemon.projects.inspect.v1' : 'daemon.projects.manifest.update.v1')!(input);
+    assertActionOutputContract(actionId, rpcOutput);
+    expect(rpcOutput).toMatchObject(actionId === 'projects.inspect' ? { definition: { document: { status: 'valid' } } }
+      : { status: 'conflict' });
+  });
   it('admits portable Home definition inspection and mutation without widening filesystem access or lost bindings', async () => {
     const home = await mkdtemp(join(tmpdir(), 'definition-portable-home-')); roots.push(home);
     const scope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);

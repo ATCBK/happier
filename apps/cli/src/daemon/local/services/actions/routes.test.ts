@@ -7,6 +7,7 @@ import type { NormalizedLocalServiceInventorySnapshot } from '../inventory/scann
 import { createManagedServicesOwner, type ProjectManagedServiceSupervisionInput } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
 import { authorizeResolvedProjectExecLaunchForHost, createProjectNativeEnvironmentIoForHost } from '@/plugins/runtime/invocation/services/exec';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 
 const inventorySnapshot: NormalizedLocalServiceInventorySnapshot = {
     v: 1,
@@ -146,6 +147,7 @@ describe('createLocalServiceActionRoutes', () => {
                     ? 'plugin_managed_service_unavailable'
                     : 'plugin_managed_server_termination_incomplete';
                 const result = await routes.execute(confirmed);
+                assertActionOutputContract('localServices.actions.stopManaged', result);
                 expect(result).toMatchObject({ status: 'failed', reasonCode });
                 expect(result.auditEvents.at(-1)).toMatchObject({ result: 'failed', reasonCode });
                 expect(nativeStopped).toBe(false);
@@ -155,7 +157,9 @@ describe('createLocalServiceActionRoutes', () => {
                 expect(owner.readRetainedSemanticCustodyCount()).toBe(1);
 
                 stoppable = true;
-                expect(await routes.execute(confirmed)).toMatchObject({ status: 'succeeded' });
+                const stopped = await routes.execute(confirmed);
+                assertActionOutputContract('localServices.actions.stopManaged', stopped);
+                expect(stopped).toMatchObject({ status: 'succeeded' });
                 expect(nativeStopped).toBe(true);
                 expect(handle.snapshot().state).toBe('stopped');
                 expect(owner.resolveProjectService(target)).toEqual({ status: 'unknown' });

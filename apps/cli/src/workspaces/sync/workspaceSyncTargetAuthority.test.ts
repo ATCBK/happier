@@ -32,6 +32,7 @@ import { buildActionExecutorContextForRpc } from '@/rpc/handlers/_actionDispatch
 import * as installationStore from '@/daemon/identity/store';
 import { verifyExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { SOCKET_RPC_EVENTS, WorkspaceSyncTargetRoutingV1Schema } from '@happier-dev/protocol/socketRpc';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 
 const socketIo = vi.hoisted(() => vi.fn());
 // Genuine transport boundary; the exact-Machine codec and managed observation reader remain real.
@@ -1258,6 +1259,36 @@ describe('committed-copy retirement at the target authority', () => {
       await rm(fixture, { recursive: true, force: true });
     }
   });
+  it.each(['owned copy', '世界🚀'.repeat(500)])('emits the registered copy-inspect contract from the real filesystem/receipt owner (payload %#)', async copyBytes => {
+    const fixture = await realpath(await mkdtemp(join(tmpdir(), 'workspace-copy-output-')));
+    const source = join(fixture, 'source');
+    const target = join(fixture, 'copy');
+    await mkdir(source);
+    const current = snapshot(source, target);
+    const receiver = createAuthorityHarness({ getProjectSnapshot: () => current });
+    const request = { kind: 'preview' as const, workspace: { serverId: 'server-1', refId: 'workspace-alpha' },
+      machineId: 'machine-a', expectedRelationship: current.relationships[0]!,
+      targetMachineId: 'machine-b', targetWorkspaceRefId: 'workspace-beta' };
+    try {
+      await mkdir(receiver.materializationDirectory, { recursive: true });
+      const receiptPath = workspaceSyncMaterializationReceiptPath(receiver.materializationDirectory, relationshipId, 'beta');
+      const materialization = await beginWorkspaceTargetMaterialization({ targetPath: target,
+        backupDirectoryPrefix: '.happier-sync-backup', receiptPath });
+      await mkdir(target);
+      await writeFile(join(target, '世界.txt'), copyBytes);
+      await materialization.custody.bindPromotedTarget();
+      await materialization.custody.commit();
+      const output = await receiver.authority.previewCommittedCopyAtTarget(request);
+      assertActionOutputContract('projects.worker.copy.inspect', output);
+      expect(output).toMatchObject({ ok: true, preview: { sizeBytes: Buffer.byteLength(copyBytes),
+        targetMachineId: request.targetMachineId, workspaceRefId: request.targetWorkspaceRefId } });
+      await rename(receiptPath, join(receiver.materializationDirectory, 'retained-receipt.json'));
+      const unowned = await receiver.authority.previewCommittedCopyAtTarget(request);
+      assertActionOutputContract('projects.worker.copy.inspect', unowned);
+      expect(unowned).toEqual({ ok: false, errorCode: 'workspace_copy_not_owned' });
+    } finally { await receiver.cleanup(); await rm(fixture, { recursive: true, force: true }); }
+  });
+
   it('discovers the owned-copy review fingerprint through current personal ingress without an approval or filesystem writes', async () => {
     const fixture = await realpath(await mkdtemp(join(tmpdir(), 'workspace-copy-preview-')));
     const source = join(fixture, 'source');

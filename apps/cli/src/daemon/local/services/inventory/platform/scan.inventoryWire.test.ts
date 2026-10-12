@@ -31,13 +31,15 @@ const pid = 1234567;
 const workspace = { id: 'accepted-checkout', serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo/web', createdAtMs: 1 };
 const tcpHeader = 'sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode';
 
-function installScan(command: readonly string[], bind: string) {
+function installScan(command: readonly string[], bind: string, ipv6 = false) {
     const rows = [{ pid, command, cwd: workspace.rootPath }];
     installLocalServiceCensusFixture(rows);
     const processFiles = localServiceProcfsFixture(rows);
     vi.mocked(fs.readFile).mockImplementation(async path => {
-        if (String(path) === '/proc/net/tcp') return `${tcpHeader}\n0: ${bind}:1435 00000000:0000 0A 0:0 00:0 0 501 0 12345`;
-        if (String(path) === '/proc/net/tcp6') return tcpHeader;
+        if (String(path) === '/proc/net/tcp') return ipv6 ? tcpHeader
+            : `${tcpHeader}\n0: ${bind}:1435 00000000:0000 0A 0:0 00:0 0 501 0 12345`;
+        if (String(path) === '/proc/net/tcp6') return ipv6
+            ? `${tcpHeader}\n0: ${bind}:1435 00000000000000000000000000000000:0000 0A 0:0 00:0 0 501 0 12345` : tcpHeader;
         return processFiles.readFile(String(path));
     });
     vi.mocked(fs.readdir).mockImplementation(async path => (
@@ -54,8 +56,9 @@ describe('Linux inventory scan to Inventory V1 RPC', () => {
         { name: 'long unicode command and wildcard bind', command: ['node', 'serve', '界🚀'.repeat(700)], bind: '00000000' },
         { name: 'empty argv and loopback bind', command: [], bind: '0100007F' },
         { name: 'ordinary listener with missing optional facts', command: ['node', 'vite'], bind: '0100007F' },
-    ])('emits registered inventory/refresh/launcher outputs for $name without leaking collector fields', async ({ command, bind }) => {
-        installScan(command, bind);
+        { name: 'IPv6 wildcard bind', command: ['node', 'serve', '世界'], bind: '00000000000000000000000000000000', ipv6: true },
+    ])('emits registered inventory/refresh/launcher outputs for $name without leaking collector fields', async ({ command, bind, ipv6 }) => {
+        installScan(command, bind, ipv6);
         const runtime = createLocalServicesDaemonRuntime({ machineId: workspace.machineId, startLoop: false,
             processEnv: {}, now: () => 1_000, scan: scanPlatformLocalServices,
             resolveServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({

@@ -6,6 +6,7 @@ import { createActionOperationRunner } from '@/daemon/actionOperations/actionOpe
 import { createActionOperationStore } from '@/daemon/actionOperations/actionOperationStore';
 import type { PluginProcessHandle, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 import { createProjectServiceRelocation, type ProjectServiceRelocationPorts } from './projectServiceRelocation';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 
 const declaration = { workspaceRefId: 'old-ref', selection: { kind: 'manifest' as const, name: 'worker' } };
 const oldTarget = { kind: 'managed_service' as const, managedServiceId: 'old-native', machineId: 'old', workspaceId: 'old-ref', cwd: '/old', declaration };
@@ -65,6 +66,17 @@ async function harness(stopStatus: 'stopped' | 'accepted' | 'unsupported' | 'ter
 }
 
 describe('confirmed service relocation', () => {
+  it.each(['stopped', 'accepted'] as const)('emits the registered relocation result or refusal from real native supervision (%s)', async nativeStop => {
+    const h = await harness(nativeStop);
+    const output = await createProjectServiceRelocation(h.ports)(h.request);
+    if (nativeStop === 'accepted') {
+      expect(output).toMatchObject({ ok: false, errorCode: 'stop_unconfirmed' });
+    } else {
+      expect(output).toMatchObject({ ok: true, result: { status: 'moved', currentTarget: h.newTarget } });
+      if (!output.ok) throw new Error('Confirmed Move did not settle');
+      assertActionOutputContract('projects.service.relocate', output.result);
+    }
+  });
   it('returns the source-owned operation when stopping starts, joins replay, and retains the exact unknown Auto destination', async () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });

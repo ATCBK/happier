@@ -6,6 +6,8 @@ import { AccountSettingsSchema } from '@happier-dev/protocol';
 import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { clearActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 
 const workspace = { serverId: 'home-a', refId: 'checkout-a' };
 const preference = { enabled: false as const, unavailable: 'ask' as const, allowAdHoc: false, scriptOverrides: {} };
@@ -18,6 +20,38 @@ const response = (data: unknown, status = 200) => ({ data, status, statusText: '
 afterEach(() => vi.restoreAllMocks());
 
 describe('captured Account workspace preference carrier', () => {
+  it.each(['projects.worker.preferences.get', 'projects.worker.preferences.set', 'projects.worker.preferences.reset',
+    'projects.service.placement.get', 'projects.service.placement.set'] as const)(
+    'emits the registered %s contract through the real Account carrier and config projection', async actionId => {
+    let row: unknown = { t: 'plain', v: { ...preference, services: {} } };
+    let revision = 1;
+    vi.spyOn(axios, 'request').mockImplementation(async config => {
+      if (config.url?.endsWith('/v1/account/encryption')) return response({ mode: 'plain', updatedAt: 1 });
+      if (config.url?.endsWith('/read')) return response(row === null ? { status: 'absent' }
+        : { status: 'present', revision, content: row });
+      if (!config.url?.endsWith('/mutate')) throw new Error(`Unexpected HTTP ${config.url}`);
+      row = config.data.content;
+      return response({ status: 'updated', revision: ++revision, cursor: revision });
+    });
+    // Actual placement has no accepted checkout rows; this is unavailable, not fabricated custody.
+    vi.spyOn(axios, 'post').mockResolvedValue(response({ status: 'listed', coverage: 'complete', rows: [] }));
+    vi.spyOn(axios, 'get').mockResolvedValue(response([]));
+    const producer = createAccountServerActionDeps({ token: input.token,
+      credentials: { token: input.token, encryption: null }, serverId: workspace.serverId,
+      serverHttpBaseUrl: input.serverHttpBaseUrl }).projectWorkerAction!;
+    const serviceName = '服务🚀'.repeat(400);
+    const actionInput = actionId === 'projects.worker.preferences.get' ? { workspace }
+      : actionId === 'projects.worker.preferences.set' ? { workspace, expectedRevision: 1,
+        expected: { kind: 'value', value: preference }, next: { ...preference, allowAdHoc: true } }
+      : actionId === 'projects.worker.preferences.reset' ? { workspace, expectedRevision: 1, expected: { kind: 'value', value: preference } }
+      : actionId === 'projects.service.placement.get' ? { workspace, serviceName }
+      : { workspace, serviceName, expectedRevision: 1, expected: { kind: 'absent' },
+        value: { runsOn: { kind: 'workers', destination: { kind: 'machine', machineId: 'worker-世界' } }, unavailable: 'fail' } };
+    const output = await producer({ actionId, input: actionInput, context: input.context });
+    assertActionOutputContract(actionId, output);
+    expect(output).toMatchObject({ status: actionId.endsWith('.get') ? 'ready'
+      : actionId === 'projects.worker.preferences.reset' ? 'unchanged' : 'applied' });
+  });
   it('awaits requester HTTP authorization and keeps invocation settings independent of daemon Account retirement', async () => {
     let current = true;
     const credentials = { token: 'bob', encryption: null };

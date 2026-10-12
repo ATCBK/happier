@@ -20,6 +20,7 @@ import { updateSettings } from '@/persistence';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -37,6 +38,47 @@ function workerHomeGetData(url: string) {
 }
 
 describe('exact target worker status Action', () => {
+  it.each(['eligible', 'memory_insufficient', 'policy_unavailable', 'worker_copy_missing'] as const)(
+    'emits the registered status contract from real row/placement/admission owners (%s)', async observation => {
+    await withTempDir('worker-output-contract-', async rootPath => {
+      const credentials = { token: `worker-contract-${observation}`, encryption: null };
+      const source = { id: 'source-世界', serverId: 'home', machineId: 'source', rootPath: '/source/世界', createdAtMs: 1 };
+      const target = { ...source, id: 'copy-世界', machineId: 'target', rootPath };
+      const policy = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
+      const relationship = { v: 1, relationshipId: 'source-copy', controllerMachineId: 'source',
+        alphaWorkspaceRefId: source.id, betaWorkspaceRefId: target.id, mode: 'keep_synced', enabled: true,
+        contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) }, createdAtMs: 1, updatedAtMs: 1,
+        provenance: { kind: 'worker_clean_copy', sourceWorkspaceRefId: source.id, targetWorkspaceRefId: target.id } };
+      const rows = (observation === 'worker_copy_missing' ? [source] : [source, target]).map(value => {
+        const key = { kind: 'workspace-ref', serverId: 'home', id: value.id };
+        return { key, revision: 0, content: { t: 'plain', v: { key, value } } };
+      });
+      const graphKey = { kind: 'relationship-graph' };
+      vi.spyOn(axios, 'get').mockImplementation(async url => ({ status: 200, data: workerHomeGetData(url) }));
+      vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete', rows: [
+        ...rows, { key: graphKey, revision: 0, content: { t: 'plain', v: {
+          key: graphKey, value: { relationships: observation === 'worker_copy_missing' ? [] : [relationship] },
+        } } },
+      ] } });
+      // The controller's missing clean-time observation is a network boundary.
+      vi.spyOn(machineRpcTransport, 'callMachineRpc').mockRejectedValue(new Error('controller offline'));
+      const admission = createProjectWorkerAdmission({ machineId: 'target', admissionDrain: createDaemonAdmissionDrain(),
+        readPolicy: async () => observation === 'policy_unavailable' ? { status: 'unavailable' }
+          : { status: 'ready', policy: { accepting: true, runAtMost: 1 }, source: 'stored', metadataVersion: 1 },
+        readMemory: () => ({ totalBytes: 100, availableBytes: observation === 'memory_insufficient' ? 5 : 100 }),
+      });
+      const producer = createProjectWorkerAction({ machineId: 'target', serverId: 'home',
+        serverHttpBaseUrl: 'https://home.invalid', credentials, admission, isFiniteExecutionLive: () => true });
+      const output = await producer({ actionId: 'projects.worker.status', input: {
+        workspace: { serverId: 'home', refId: source.id }, destination: { kind: 'machine', machineId: 'target' },
+        purpose: 'finite', memoryDemand: { bytes: observation === 'memory_insufficient' ? 101 : 10, basis: { kind: 'declared' } },
+      }, context: { serverId: 'home' } });
+      assertActionOutputContract('projects.worker.status', output);
+      expect(output).toMatchObject({ eligible: observation === 'eligible', explanation: observation });
+      expect(output).not.toHaveProperty('lastCleanSyncAtMs');
+      expect(admission.dependencies()).toEqual([]);
+    });
+  });
   it('admits portable Home worker Status at the installed host without widening requester or lost Home bindings', async () => {
     await withTempDir('worker-portable-home-', async home => {
       const scope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
@@ -254,7 +296,7 @@ describe('exact target worker status Action', () => {
     }
   });
 
-  it.each(['confirmed', 'lost_ack'] as const)('binds retirement to its reviewed WorkspaceRef and reports unknown settlement (%s)', async settlement => {
+  it.each(['retired', 'confirmed', 'lost_ack'] as const)('emits registered retirement or truthful unknown settlement through the real graph owner (%s)', async settlement => {
     const credentials = { token: `worker-owner-token-${settlement}`, encryption: null, credentialProvenance: 'stored_session' as const };
     const ref = { id: 'worker-copy', serverId: 'home', machineId: 'target', rootPath: '/worker-copy', createdAtMs: 1 };
     const source = { ...ref, id: 'source', machineId: 'controller', rootPath: '/source' };
@@ -270,7 +312,7 @@ describe('exact target worker status Action', () => {
       return { key, revision: 0, content: { t: 'plain', v: { key, value } } };
     });
     const graphKey = { kind: 'relationship-graph' };
-    const networkRows = [...rows, { key: graphKey, revision: 0,
+    let networkRows: unknown[] = [...rows, { key: graphKey, revision: 0,
       content: { t: 'plain', v: { key: graphKey, value: { relationships: [relationship] } } } }];
     vi.spyOn(axios, 'get').mockImplementation(async url => ({ status: 200,
       data: url.endsWith('/v2/account/settings')
@@ -280,15 +322,16 @@ describe('exact target worker status Action', () => {
     let writes = 0;
     let graphRetired = false;
     vi.spyOn(axios, 'post').mockImplementation(async (url, raw) => {
-      if (graphRetired) return { status: 503, data: { status: 'unavailable' } };
+      if (graphRetired && settlement !== 'retired') return { status: 503, data: { status: 'unavailable' } };
       if (url.endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows: networkRows } };
       writes++;
       const mutation = ProjectAccountRowMutationRequestV1Schema.parse(raw);
       graphRetired = true;
       if (settlement === 'lost_ack') throw new Error('Home mutation acknowledgement lost');
-      return { status: 200, data: ProjectAccountRowMutationResponseV1Schema.parse({ status: 'updated', cursor: 1,
-        rows: mutation.mutations.map(row => ({ key: row.key,
-          revision: row.expectedRevision === 'absent' ? 0 : row.expectedRevision + 1, content: row.content })) }) };
+      const changed = mutation.mutations.map(row => ({ key: row.key,
+        revision: row.expectedRevision === 'absent' ? 0 : row.expectedRevision + 1, content: row.content }));
+      networkRows = [...rows, ...changed];
+      return { status: 200, data: ProjectAccountRowMutationResponseV1Schema.parse({ status: 'updated', cursor: 1, rows: changed }) };
     });
     const admission = createProjectWorkerAdmission({ machineId: 'controller', admissionDrain: createDaemonAdmissionDrain(),
       readPolicy: async () => ({ status: 'unavailable' }) });
@@ -298,7 +341,8 @@ describe('exact target worker status Action', () => {
       readProjectSnapshot: () => readProjectAccountRows({ credentials, serverId: 'home' }),
       readRelationshipDependencies: async () => admission.dependencies(),
       ensureRelationship: unused, flushRelationship: unused, commitRelationshipTarget: unused,
-      terminateRelationshipRuntime: unused,
+      // The external Sync process has no running handle in this fixture.
+      terminateRelationshipRuntime: async () => {},
       waitForProjectReconciliation: async () => { await readProjectAccountRows({ credentials, serverId: 'home' }); } });
     const executor = createCliActionExecutorFromCredentials({ credentials, serverId: 'home', serverApiUrl: 'https://home.invalid', machineId: 'controller',
       pluginActionExecutionOwner: 'current_process', projectWorkerAction: createProjectWorkerAction({
@@ -317,6 +361,12 @@ describe('exact target worker status Action', () => {
       presentUserConfirmation: { actionId: 'projects.worker.copy.retire' } });
     expect(graphRetired).toBe(true);
     expect(writes).toBe(1);
+    if (settlement === 'retired') {
+      expect(settledDefinition).toEqual({ ok: true, result: { status: 'retired' } });
+      if (!settledDefinition.ok) throw new Error('Retirement did not settle');
+      assertActionOutputContract('projects.worker.copy.retire', settledDefinition.result);
+      return;
+    }
     // The post-commit HTTP 503 body is not a canonical row response. Preserve
     // the existing boundary fallback and the confirmed-retirement marker.
     expect(settledDefinition).toMatchObject({ ok: false, errorCode: settlement === 'confirmed' ? 'workspace_sync_unavailable' : 'indeterminate',
